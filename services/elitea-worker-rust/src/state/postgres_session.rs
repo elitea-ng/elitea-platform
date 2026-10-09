@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use adk_rust::session::{
     AppendEventRequest, CreateRequest, DeleteRequest, Events, GetRequest, ListRequest, Session,
@@ -37,6 +38,16 @@ const MAX_JSON_NODES: usize = 65_536;
 const MAX_TENANT_BYTES: usize = 256;
 const MAX_THREAD_BYTES: usize = 512;
 const MAX_IDENTITY_BYTES: usize = 256;
+/// A session transaction waits at most this long for a writer or row lock.
+/// Holders keep these locks for single statements, so a longer wait means a
+/// stalled holder; the waiter fails with a retryable typed error instead.
+const WRITER_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_WRITER_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
+/// PostgreSQL ends a session transaction left idle this long while holding
+/// writer locks, so a stalled holder cannot block takeover indefinitely.
+const IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
+const MIN_SESSION_TIMEOUT: Duration = Duration::from_millis(1);
 pub(super) const APPLICATION_CAPABILITY_ID: &str = "agent.execute.application.v1";
 const ADHOC_CAPABILITY_ID: &str = "agent.execute.adhoc.v1";
 
@@ -49,6 +60,8 @@ pub struct SessionLimits {
     pub max_retained_event_bytes: usize,
     pub max_json_depth: usize,
     pub max_json_nodes: usize,
+    pub writer_lock_timeout: Duration,
+    pub idle_transaction_timeout: Duration,
 }
 
 impl Default for SessionLimits {
@@ -60,6 +73,8 @@ impl Default for SessionLimits {
             max_retained_event_bytes: MAX_RETAINED_EVENT_BYTES,
             max_json_depth: MAX_JSON_DEPTH,
             max_json_nodes: MAX_JSON_NODES,
+            writer_lock_timeout: WRITER_LOCK_TIMEOUT,
+            idle_transaction_timeout: IDLE_TRANSACTION_TIMEOUT,
         }
     }
 }
@@ -78,11 +93,34 @@ impl SessionLimits {
             || self.max_json_depth > MAX_JSON_DEPTH
             || self.max_json_nodes == 0
             || self.max_json_nodes > MAX_JSON_NODES
+            || !(MIN_SESSION_TIMEOUT..=MAX_WRITER_LOCK_TIMEOUT).contains(&self.writer_lock_timeout)
+            || !(MIN_SESSION_TIMEOUT..=MAX_IDLE_TRANSACTION_TIMEOUT)
+                .contains(&self.idle_transaction_timeout)
         {
             return Err(PostgresSessionError::InvalidConfiguration);
         }
         Ok(self)
     }
+
+    /// `BEGIN` plus transaction-local bounds in one round trip. Only validated
+    /// integer milliseconds are formatted in, never caller text.
+    fn begin_statement(self) -> String {
+        format!(
+            "BEGIN; SET LOCAL lock_timeout = {}; SET LOCAL idle_in_transaction_session_timeout = {}",
+            self.writer_lock_timeout.as_millis(),
+            self.idle_transaction_timeout.as_millis()
+        )
+    }
+}
+
+/// Every session transaction carries the lock-wait and idle bounds.
+pub(super) async fn begin_bounded(
+    pool: &PgPool,
+    limits: SessionLimits,
+) -> Result<Transaction<'static, Postgres>, PostgresSessionError> {
+    pool.begin_with(limits.begin_statement())
+        .await
+        .map_err(storage_error)
 }
 
 /// Stable, data-free failure at the Elitea session boundary.
@@ -381,7 +419,7 @@ impl PostgresSessionService {
         state_writer_lease
             .ensure_current()
             .map_err(|_| PostgresSessionError::WriterNotCurrent)?;
-        let mut transaction = pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&pool, limits).await?;
         if let Some(parent) = &parent {
             parent.lock_writer_row(&mut transaction, false).await?;
         }
@@ -528,7 +566,7 @@ impl PostgresSessionService {
         validate_state(&user_state, self.limits)?;
         validate_state(&session_state, self.limits)?;
         let now = Utc::now();
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&self.pool, self.limits).await?;
         self.lock_current_writer(&mut transaction, true).await?;
         upsert_app_state(
             &mut transaction,
@@ -597,7 +635,7 @@ INSERT INTO elitea_runtime.agent_sessions (
         {
             return Err(PostgresSessionError::ResourceExhausted);
         }
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&self.pool, self.limits).await?;
         self.lock_current_writer(&mut transaction, false).await?;
         let session_row = self.load_session_row(&mut transaction).await?;
         let events = self
@@ -748,7 +786,7 @@ WHERE tenant_id = $1
         validate_state(&user_delta, self.limits)?;
         validate_state(&session_delta, self.limits)?;
 
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&self.pool, self.limits).await?;
         self.lock_current_writer(&mut transaction, true).await?;
         let exact_existing = sqlx::query_scalar::<_, bool>(
             r"
@@ -1040,11 +1078,8 @@ impl SessionService for PostgresSessionService {
         req.try_identity()?;
         self.require_identity(&req.app_name, &req.user_id, &req.session_id)
             .map_err(PostgresSessionError::into_adk)?;
-        let mut transaction = self
-            .pool
-            .begin()
+        let mut transaction = begin_bounded(&self.pool, self.limits)
             .await
-            .map_err(storage_error)
             .map_err(PostgresSessionError::into_adk)?;
         self.lock_current_writer(&mut transaction, true)
             .await
@@ -1113,11 +1148,8 @@ WHERE tenant_id = $1
     }
 
     async fn health_check(&self) -> adk_rust::Result<()> {
-        let mut transaction = self
-            .pool
-            .begin()
+        let mut transaction = begin_bounded(&self.pool, self.limits)
             .await
-            .map_err(storage_error)
             .map_err(PostgresSessionError::into_adk)?;
         self.lock_current_writer(&mut transaction, false)
             .await
@@ -1637,7 +1669,7 @@ fn storage_error(source: sqlx::Error) -> PostgresSessionError {
         sqlx::Error::Database(database)
             if matches!(
                 database.code().as_deref(),
-                Some("40001" | "40P01" | "55P03" | "57P01" | "57P02" | "57P03")
+                Some("25P03" | "40001" | "40P01" | "55P03" | "57P01" | "57P02" | "57P03")
             ) =>
         {
             PostgresSessionError::StorageUnavailable { source }

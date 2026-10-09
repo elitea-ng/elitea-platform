@@ -5,6 +5,7 @@ use super::scope_receipts::{
 };
 use super::scoped_applications::PipelineApplicationScope;
 use crate::agents::application_tools::{ApplicationEventSignal, application_signal_event};
+use crate::agents::driven::DrivenTask;
 use crate::agents::events::{
     APPLICATION_BRANCH_ROOT, DESCENDANT_CHECKPOINT_THREAD_KEY, DESCENDANT_CONTAINER_INVOCATION_KEY,
     DESCENDANT_PARENT_CALL_KEY,
@@ -238,18 +239,24 @@ impl PipelineApplicationNodeRuntime {
         )?;
         let receiver_owner = self.applications.event_receiver().ok_or_else(failure)?;
         let mut receiver = receiver_owner.take().await.map_err(|_| failure())?;
-        let future = tool.execute(tool_context, arguments);
-        tokio::pin!(future);
+        // Driven on its own task: forwarding a child event (a bounded send the
+        // Runner drains by persisting it) must never leave the child parked
+        // mid-append holding the root session writer.
+        let tool = Arc::clone(tool);
+        let mut future =
+            DrivenTask::spawn(async move { tool.execute(tool_context, arguments).await });
         let mut terminal = None;
         let result = loop {
             tokio::select! {
-                value = &mut future => break value.map_err(|_|failure()),
+                value = &mut future => break match value { Ok(Ok(value)) => Ok(value), _ => Err(failure()) },
                 signal = receiver.recv() => match signal {
                     Some(signal) => if let Err(error) = self.drain(signal,&receipt,graph_scope.as_ref(),parent.invocation_id(),&mut terminal).await { break Err(error); },
                     None => break Err(failure()),
                 }
             }
         };
+        // A drain failure stops the tool task before the queue drain below.
+        future.cancel().await;
         // Once tool polling stops no child sender may remain active. Drain its bounded queue.
         let mut result = result;
         while let Ok(signal) = receiver.try_recv() {

@@ -55,7 +55,6 @@ pub(crate) use static_pause::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use adk_rust::futures::StreamExt as _;
 use adk_rust::graph::interrupt::{GraphInterruptPayload, INTERRUPT_METADATA_KEY};
 use adk_rust::graph::{Checkpoint, Checkpointer, MemoryCheckpointer, State};
 use adk_rust::{Agent, Content, Event, Part, ReadonlyContext as _, Tool, ToolContext};
@@ -1556,7 +1555,10 @@ impl ApplicationPipelineTool {
                 "discarded node events left over from an earlier call of this pipeline tool"
             );
         }
-        let mut stream = agent.run(child_context).await?;
+        // Driven on its own task: forwarding a node event must never leave the
+        // child parked mid-append holding the root session writer.
+        let mut stream =
+            crate::agents::driven::DrivenEventStream::new(agent.run(child_context).await?);
         let mut node_events_open = true;
         let mut result_text = None;
         loop {

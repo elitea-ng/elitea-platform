@@ -922,3 +922,185 @@ async fn model_history_snapshots_release_capacity_without_losing_controls_or_rep
     );
     database.pool.close().await;
 }
+
+fn bounded_limits(writer_lock: Duration, idle: Duration) -> SessionLimits {
+    SessionLimits {
+        writer_lock_timeout: writer_lock,
+        idle_transaction_timeout: idle,
+        ..SessionLimits::default()
+    }
+}
+
+#[tokio::test]
+async fn session_timeouts_are_bounded_at_activation() {
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(300))
+        .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+        .expect("lazy pool");
+    // Each bound at limit + 1 (and zero) is refused.
+    for (writer_lock, idle) in [
+        (Duration::ZERO, Duration::from_secs(30)),
+        (Duration::from_millis(60_001), Duration::from_secs(30)),
+        (Duration::from_secs(10), Duration::ZERO),
+        (Duration::from_secs(10), Duration::from_millis(300_001)),
+    ] {
+        let refused = PostgresSessionService::activate(
+            pool.clone(),
+            authority(),
+            bounded_limits(writer_lock, idle),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await;
+        assert!(
+            matches!(refused, Err(PostgresSessionError::InvalidConfiguration)),
+            "{writer_lock:?}/{idle:?} must be refused before any database work"
+        );
+    }
+    // At the limits validation passes and the lazy pool is reached instead.
+    for (writer_lock, idle) in [
+        (Duration::from_millis(1), Duration::from_millis(1)),
+        (Duration::from_secs(60), Duration::from_secs(300)),
+    ] {
+        let reached = PostgresSessionService::activate(
+            pool.clone(),
+            authority(),
+            bounded_limits(writer_lock, idle),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await;
+        assert!(matches!(
+            reached,
+            Err(PostgresSessionError::StorageUnavailable { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL session lock-bound test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_schema(&database.pool).await;
+    let lock_timeout = Duration::from_millis(250);
+    let service = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-1", 1, 1, [0x22; 32]),
+        bounded_limits(lock_timeout, Duration::from_secs(30)),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate session writer");
+    let session = service
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: Some("session-1".to_owned()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("create durable session");
+    let identity = session.try_identity().expect("identity");
+    let mut event = Event::with_id("bounded-event", "invocation-1");
+    event.author = "user".to_owned();
+    event.llm_response.content = Some(Content::new("user").with_text("hello"));
+
+    // A stalled holder of the root writer row (the incident's backend A).
+    let mut holder = database.pool.begin().await.expect("begin holder");
+    sqlx::query(
+        "SELECT 1 FROM elitea_runtime.agent_session_writers WHERE session_id = 'session-1' FOR UPDATE",
+    )
+    .fetch_one(&mut *holder)
+    .await
+    .expect("hold root writer");
+    let started = std::time::Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        service.append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event: event.clone(),
+        }),
+    )
+    .await
+    .expect("the session write must not wait forever")
+    .expect_err("a stalled writer lock fails the write");
+    let waited = started.elapsed();
+    assert_eq!(error.code, "session.storage_unavailable");
+    assert!(waited >= lock_timeout, "{waited:?}");
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    holder.rollback().await.expect("release holder");
+
+    // The typed failure is retryable: the same event then lands exactly once.
+    for _ in 0..2 {
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: event.clone(),
+            })
+            .await
+            .expect("retry after the holder released");
+    }
+    let stored = service
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("reload");
+    assert_eq!(stored.events().len(), 1);
+}
+
+#[tokio::test]
+async fn an_idle_session_transaction_releases_its_writer_locks() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL session idle-bound test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_schema(&database.pool).await;
+    let limits = bounded_limits(Duration::from_millis(250), Duration::from_millis(300));
+    let service = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-1", 1, 1, [0x22; 32]),
+        limits,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate session writer");
+    drop(service);
+    let mut stalled = super::postgres_session::begin_bounded(&database.pool, limits)
+        .await
+        .expect("bounded transaction");
+    let lock_timeout = sqlx::query_scalar::<_, String>("SHOW lock_timeout")
+        .fetch_one(&mut *stalled)
+        .await
+        .expect("show lock_timeout");
+    assert_eq!(lock_timeout, "250ms");
+    sqlx::query(
+        "SELECT 1 FROM elitea_runtime.agent_session_writers WHERE session_id = 'session-1' FOR UPDATE",
+    )
+    .fetch_one(&mut *stalled)
+    .await
+    .expect("lock root writer");
+    // Never polled again, like the suspended append in the incident.
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    let mut contender = database.pool.begin().await.expect("begin contender");
+    sqlx::query(
+        "SELECT 1 FROM elitea_runtime.agent_session_writers WHERE session_id = 'session-1' FOR UPDATE NOWAIT",
+    )
+    .fetch_one(&mut *contender)
+    .await
+    .expect("PostgreSQL ended the idle holder and released the writer row");
+    contender.rollback().await.expect("release contender");
+    assert!(
+        sqlx::query("SELECT 1")
+            .execute(&mut *stalled)
+            .await
+            .is_err(),
+        "the idle holder's connection was terminated"
+    );
+}
