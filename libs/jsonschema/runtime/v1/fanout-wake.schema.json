@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-wake.v1",
+  "title": "fanout_wake continuation marker",
+  "description": "payload.meta.fanout_wake_v1 of a continuation admitted by Main for a parked execution. It carries no decisions; the continuation fetches them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "response_message_id",
+    "decision_revision"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-wake.v1"
+    },
+    "response_message_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "decision_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    }
+  }
+}
