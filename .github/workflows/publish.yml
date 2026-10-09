@@ -882,6 +882,12 @@ jobs:
         run: |
           CHART_DIR="deploy/helm/${{ matrix.chart }}"
           if [ "$(yq -r '.dependencies // [] | length' "${CHART_DIR}/Chart.yaml")" -gt 0 ]; then
+            # dependency build refuses an http(s) repository it has no
+            # definition for, so register each one the chart names first.
+            yq -r '.dependencies[].repository // ""' "${CHART_DIR}/Chart.yaml" \
+              | grep -E '^https?://' | sort -u | while read -r repo; do
+                  helm repo add "dep-$(printf '%s' "$repo" | sha256sum | cut -c1-12)" "$repo" --force-update
+                done
             helm dependency build "$CHART_DIR"
           else
             echo "no dependencies declared"

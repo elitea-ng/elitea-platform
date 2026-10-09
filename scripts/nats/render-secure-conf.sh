@@ -23,6 +23,9 @@ values="${2:-${chart}/values-scale1.yaml}"
 HELM="${HELM:-helm}"
 
 if ! ls "${chart}"/charts/nats-*.tgz >/dev/null 2>&1; then
+  # `helm dependency build` refuses an http(s) repository it has no definition
+  # for ("no repository definition for ..."); register the subchart's first.
+  "$HELM" repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update >/dev/null
   "$HELM" dependency build "$chart" >/dev/null
 fi
 
