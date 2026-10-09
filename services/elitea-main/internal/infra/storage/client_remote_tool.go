@@ -101,8 +101,10 @@ type RemoteToolGrant struct {
 //     call them too — and nothing a turn of the parent could not reach.
 //   - The version is frozen with the SAME freeze a cloud turn uses (the 5a
 //     projection's), so the toolkit must be one of its frozen tools and the
-//     tool one of that toolkit's frozen selected_tools. An empty selection
-//     means every tool of the toolkit, as the SDK reads it.
+//     tool one of that toolkit's frozen selected_tools, exactly the selection
+//     the 5a document carries. A selection the author left empty means every
+//     tool of the toolkit, as the SDK reads it (all_tools); one the freeze
+//     emptied by removing blocked names means none.
 //   - A toolkit or tool the guardrails policy blocks (the freeze's predicates,
 //     ToolkitBlocked and ToolBlocked) is refused as blocked.
 //   - The toolkit_ref must be the one 5a hands out for this toolkit of this
@@ -180,10 +182,12 @@ func (service *ClientApplicationVersionService) AuthorizeRemoteTool(
 	if subtle.ConstantTimeCompare([]byte(want), []byte(request.ToolkitRef)) != 1 {
 		return RemoteToolGrant{}, ErrRemoteToolkitRefMismatch
 	}
-	// Membership is decided on the SAVED selection, not the frozen one: the
-	// freeze removes blocked names, and a selection it emptied that way would
-	// read as "every tool" below. Blocked names were refused above.
-	if len(savedTool.selected) > 0 && !containsExact(savedTool.selected, request.ToolName) {
+	// Membership is decided on the SAME selection the desktop's document
+	// carries (clientToolkitSelection): the frozen one, where a selection the
+	// freeze emptied means no tool, not every tool. Blocked names were refused
+	// above as blocked.
+	selected, allTools := clientToolkitSelection(savedTool.selected, frozenTool.selected)
+	if !allTools && !containsExact(selected, request.ToolName) {
 		return RemoteToolGrant{}, ErrRemoteToolNotInAgent
 	}
 	grant := RemoteToolGrant{ToolkitType: frozenTool.toolkitType, ToolkitName: frozenTool.toolkitName}
@@ -315,15 +319,7 @@ func findClientToolkit(document json.RawMessage, toolkitID int64) (clientToolkit
 		} else if name, ok := tool["name"].(string); ok {
 			entry.toolkitName = name
 		}
-		if settings, ok := tool["settings"].(map[string]any); ok {
-			if values, ok := settings["selected_tools"].([]any); ok {
-				for _, value := range values {
-					if name, ok := value.(string); ok && name != "" {
-						entry.selected = append(entry.selected, name)
-					}
-				}
-			}
-		}
+		entry.selected = selectedToolNames(tool)
 		return entry, true, nil
 	}
 	return clientToolkitEntry{}, false, nil

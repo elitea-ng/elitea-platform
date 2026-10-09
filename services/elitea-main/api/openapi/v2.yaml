@@ -3679,7 +3679,7 @@ components:
       description: >-
         One tool of a resolved version. `kind` is `remote_toolkit`,
         `application` or `platform_mcp`. NOTE(W2):
-        internal/infra/storage/client_application_version.go:283
+        internal/infra/storage/client_application_version.go:297
         (`projectClientTool`).
       required: [kind, type]
       properties:
@@ -3701,14 +3701,25 @@ components:
             additionalProperties: true
             x-elitea-passthrough: >-
               NOTE(W2): one skill a nested agent carries, as the freeze recorded
-              it (internal/infra/storage/client_application_version.go:321).
+              it (internal/infra/storage/client_application_version.go:335).
         server_name:
           type: string
           description: A `platform_mcp` tool's server.
         selected_tools:
           type: array
           items: { type: string }
-          description: A `remote_toolkit`'s tools the version selects; empty means all.
+          description: >-
+            A `remote_toolkit`'s tools the version may call, after the
+            guardrails removed blocked ones. Read it with `all_tools`: an empty
+            list means every tool only when `all_tools` is true.
+        all_tools:
+          type: boolean
+          description: >-
+            A `remote_toolkit`'s: true when the author selected no tool, which
+            means every tool of the toolkit (as in chat; the guardrails still
+            block theirs). False with an empty `selected_tools` means the
+            guardrails blocked every selected tool: the agent may call none.
+            executeRemoteToolkitTool admits exactly this selection.
         toolkit_ref:
           $ref: '#/components/schemas/ResolvedToolkitRef'
     ResolvedToolkitRef:
@@ -3718,7 +3729,7 @@ components:
         version in this project. `ref` is stable for that attachment, carries
         no credential and grants nothing: executeRemoteToolkitTool recomputes
         it from the version a call names and refuses a mismatch. NOTE(W2):
-        internal/infra/storage/client_application_version.go:270
+        internal/infra/storage/client_application_version.go:284
         (`ClientToolkitRef`).
       required: [toolkit_id, project_id, ref]
       properties:
