@@ -110,7 +110,13 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
             let tokens = TokenEndpoint::new(env!("CARGO_PKG_VERSION"))?;
-            // Read once, on first use, then served from memory.
+            // Read once, on first use, then served from memory. Deliberately NO
+            // migration from the old keychain item (`ai.elitea.desktop` /
+            // `device-session`): touching the keychain is what prompted for the
+            // login password on every build (owner decision). People sign in once
+            // more; the old device session is revoked from Settings > Devices on
+            // the web, or idles out server-side (README, "Upgrading from a
+            // keychain build").
             let credentials = CredentialsFile::new(config_dir.clone());
             let auth = AuthService::new(AuthConfig {
                 store: Arc::new(credentials.slot(SESSION_SLOT)),

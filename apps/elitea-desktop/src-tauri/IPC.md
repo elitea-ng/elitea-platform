@@ -37,6 +37,12 @@ The web client (`shared/desktop/workspaceIpc.ts`) turns it into a
 | `host_sign_out` | — | `boolean`: `true` when the server confirmed the revoke; `false` means it is kept (credentials file) and retried at the next launch |
 | `host_wipe` | — | `null` |
 
+The session lives in the credentials file only. A build that used the OS
+keychain is not migrated (the host never touches the keychain): after an
+upgrade `host_state` reports signed out, and the old device session is revoked
+from the web's Settings › Devices or idles out (README, "Upgrading from a
+keychain build").
+
 ## Workspaces (`src/local_commands.rs`, `src/workspaces.rs`)
 
 ```ts

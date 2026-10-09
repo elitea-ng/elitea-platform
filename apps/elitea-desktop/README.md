@@ -156,8 +156,7 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   as it can read your AWS or SSH credentials. In exchange an unsigned or
   ad-hoc-signed build (every dev build) no longer asks for the login password
   on every keychain read. The keychain item older builds wrote is never read
-  (reading it is what prompted); sign in once more after upgrading, and delete
-  the stale `ai.elitea.desktop` item in Keychain Access if you like.
+  (reading it is what prompted); see "Upgrading from a keychain build".
 
 - The window loads **only bundled assets**. `on_navigation` refuses every other
   origin, so remote content never sits next to the IPC commands.
@@ -190,6 +189,23 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   process: an origin connected earlier stays reachable until the app
   restarts. The bearer token is still attached only to the current origin
   (checked in the webview's HTTP core and SSE client).
+
+### Upgrading from a keychain build
+
+Builds before the credentials file kept the device session in the OS keychain
+(service `ai.elitea.desktop`, account `device-session`). The app does not read
+or migrate that item, by design: any keychain access is what asked for the
+login password on every launch of a re-signed build. After upgrading:
+
+1. **Sign in again.** The new build starts signed out.
+2. **Revoke the old device session** (optional, recommended): on the web, open
+   **Settings › Devices** (`/settings/devices`) and revoke the older entry for
+   this computer (`DELETE /auth/native/devices/{id}`); an admin can do the same
+   from **Users › Devices**. Left alone, its refresh token stops working once
+   it has been idle for the server's refresh idle TTL
+   (`ELITEA_NATIVE_REFRESH_IDLE_TTL`, default 30 days, `720h`), or earlier when
+   `ELITEA_NATIVE_SESSION_MAX_LIFETIME` is set.
+3. Delete the stale `ai.elitea.desktop` item in Keychain Access if you like.
 
 ## Develop
 
