@@ -23,6 +23,7 @@ use crate::d0::turn::{AgentHost, PolicySource, TurnError, TurnRequest, TurnStart
 use crate::error::HostError;
 use crate::settings::SettingsFiles;
 use crate::workspaces::{Workspace, WorkspaceStore};
+use elitea_local_tools::find::FoundPath;
 
 pub struct LocalState {
     pub workspaces: Arc<WorkspaceStore>,
@@ -193,6 +194,7 @@ pub async fn agent_turn_start(
     version_id: i64,
     prompt: String,
     plan_mode: bool,
+    mentions: Option<Vec<String>>,
 ) -> Result<TurnStarted, IpcError> {
     Ok(state
         .agents
@@ -204,8 +206,29 @@ pub async fn agent_turn_start(
             version_id,
             prompt,
             plan_mode,
+            mentions: mentions.unwrap_or_default(),
         })
         .await?)
+}
+
+/// The "@" picker: files and folders of the workspace matching `query`
+/// (`.gitignore`, `.git` and `path_deny` left out, symlinks never listed or
+/// followed), best first, at most `limit` (default 50, at most 200). Walks
+/// off the main thread.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn workspace_files(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    query: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<FoundPath>, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        agents.workspace_files(&workspace_id, query.as_deref().unwrap_or_default(), limit)
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "the file lookup stopped unexpectedly"))?
+    .map_err(IpcError::from)
 }
 
 #[tauri::command(rename_all = "snake_case")]

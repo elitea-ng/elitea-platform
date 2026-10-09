@@ -17,12 +17,14 @@
 //! * [`tools`] — the per-tool events, steps and before-images;
 //! * [`recorder`] — what the commit and the changed-files card report;
 //! * [`events`] — the `agent://event` stream;
+//! * [`mentions`] — the "@" file picker and a turn's referenced paths;
 //! * [`turn`] — the assembler and the host's turn table.
 
 pub mod api;
 pub mod approvals;
 pub mod definition;
 pub mod events;
+pub mod mentions;
 pub mod model;
 pub mod recorder;
 pub mod remote_tools;

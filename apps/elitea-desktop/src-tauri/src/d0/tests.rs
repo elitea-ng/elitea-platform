@@ -297,6 +297,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         version_id: 9,
         prompt: "Write notes and file a bug".into(),
         plan_mode: false,
+        mentions: Vec::new(),
     }
 }
 
@@ -912,6 +913,128 @@ async fn an_unbound_workspace_runs_no_turn() {
     assert_eq!(
         h.host.bind_project("nope", 1).unwrap_err().code,
         "workspace_unknown"
+    );
+}
+
+#[tokio::test]
+async fn referenced_files_are_listed_under_the_prompt_never_inlined() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::create_dir_all(h.folder.path().join("src")).unwrap();
+    std::fs::write(h.folder.path().join("src/main.rs"), "SECRET_BODY").unwrap();
+    let mut with_mentions = request(&h.workspace_id);
+    with_mentions.mentions = vec!["src/main.rs".into(), "src".into(), "src/main.rs".into()];
+    h.host.start(with_mentions).await.unwrap();
+    until_done(&h.emitter).await;
+    let expected =
+        "Write notes and file a bug\n\nFiles the user referenced:\n- src/main.rs\n- src/";
+    let start = &seen(&h.server, "/local_turn/prompt_lib/1/42")[0];
+    let start_body: Value = serde_json::from_str(&start.body).unwrap();
+    assert_eq!(start_body["user_input"], expected);
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["user_message"]["content"], expected);
+    assert!(!commit.body.contains("SECRET_BODY") && !start.body.contains("SECRET_BODY"));
+}
+
+#[tokio::test]
+async fn agents_md_is_applied_after_the_agents_instructions_and_reported() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("agents.md"), "Run task test.").unwrap();
+    std::fs::create_dir_all(h.folder.path().join("apps/web")).unwrap();
+    std::fs::write(h.folder.path().join("apps/web/AGENTS.md"), "Use pnpm.").unwrap();
+    std::fs::write(h.folder.path().join("apps/web/main.ts"), "x").unwrap();
+    let mut req = request(&h.workspace_id);
+    req.mentions = vec!["apps/web/main.ts".into()];
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h.emitter).await;
+    let running = events
+        .iter()
+        .find(|e| e.kind == "status" && e.payload["phase"] == "running")
+        .unwrap();
+    assert_eq!(
+        running.payload["project_instructions"],
+        json!(["agents.md", "apps/web/AGENTS.md"])
+    );
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    let system = first["messages"][0]["content"].as_str().unwrap();
+    let agent = system.find("Be brief.").unwrap();
+    let root = system.find("Run task test.").unwrap();
+    let nested = system.find("Use pnpm.").unwrap();
+    assert!(agent < root && root < nested, "{system}");
+
+    // Read fresh at the next start: an edit applies to the next turn.
+    std::fs::remove_file(h.folder.path().join("agents.md")).unwrap();
+    let before = h.emitter.all().len();
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    for _ in 0..500 {
+        if h.emitter.all()[before..].iter().any(|e| e.kind == "done") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let second = h.emitter.all()[before..]
+        .iter()
+        .find(|e| e.kind == "status" && e.payload["phase"] == "running")
+        .cloned()
+        .unwrap();
+    assert!(second.payload.get("project_instructions").is_none());
+}
+
+#[tokio::test]
+async fn a_mention_outside_the_workspace_is_refused_before_any_request() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(
+        server,
+        Some(json!({"allowed": true, "shell": true, "max_sandbox_mode": "workspace-write", "path_deny": ["*.pem"]})),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    std::fs::write(h.folder.path().join("key.pem"), "k").unwrap();
+    for bad in ["../outside.txt", "/etc/passwd", "key.pem", "missing.rs"] {
+        let mut req = request(&h.workspace_id);
+        req.mentions = vec![bad.into()];
+        let error = h.host.start(req).await.unwrap_err();
+        assert_eq!(error.code, "invalid_request", "{bad}");
+    }
+    assert!(h.server.seen().is_empty(), "refused before any request");
+}
+
+#[tokio::test]
+async fn the_file_picker_lists_the_workspace_under_its_policy() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(
+        server,
+        Some(json!({"allowed": true, "shell": true, "max_sandbox_mode": "workspace-write", "path_deny": ["*.pem"]})),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    std::fs::write(h.folder.path().join(".gitignore"), "build/\n").unwrap();
+    std::fs::create_dir_all(h.folder.path().join("build")).unwrap();
+    std::fs::write(h.folder.path().join("build/out.txt"), "x").unwrap();
+    std::fs::write(h.folder.path().join("notes.md"), "x").unwrap();
+    std::fs::write(h.folder.path().join("key.pem"), "k").unwrap();
+    let found = h.host.workspace_files(&h.workspace_id, "", None).unwrap();
+    let paths: Vec<&str> = found.iter().map(|f| f.path.as_str()).collect();
+    // Shallower, then shorter, first.
+    assert_eq!(paths, ["notes.md", ".gitignore"]);
+    assert_eq!(
+        h.host.workspace_files("nope", "", None).unwrap_err().code,
+        "workspace_unknown"
+    );
+    h.policy.set(None);
+    assert_eq!(
+        h.host
+            .workspace_files(&h.workspace_id, "", None)
+            .unwrap_err()
+            .code,
+        "local_work_disabled"
     );
 }
 

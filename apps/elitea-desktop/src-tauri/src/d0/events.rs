@@ -98,6 +98,16 @@ impl TurnEvents {
         self.send("status", payload);
     }
 
+    /// `status` `running`, naming the AGENTS.md files the turn applies
+    /// (`project_instructions`, only when there are some).
+    pub fn running(&self, project_instructions: &[String]) {
+        let mut payload = json!({ "phase": Phase::Running.as_str() });
+        if !project_instructions.is_empty() {
+            payload["project_instructions"] = json!(project_instructions);
+        }
+        self.send("status", payload);
+    }
+
     pub fn text_delta(&self, text: &str) {
         if !text.is_empty() {
             self.send("text_delta", json!({ "text": text }));

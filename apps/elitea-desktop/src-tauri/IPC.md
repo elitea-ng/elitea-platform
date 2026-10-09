@@ -55,6 +55,7 @@ type Workspace = {
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints) and its turns; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
+| `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
@@ -63,7 +64,7 @@ inside the folder.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[]}` | `{turn_id, execution_id}` |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
@@ -98,6 +99,36 @@ ends `cancelled` → `done`, `committed: false`) and forget every workspace
 session and kept turn: an earlier turn then answers `turn_unknown`.
 
 `plan_mode: true` offers read-only local tools only and no remote toolkits.
+
+`mentions` are the workspace-relative paths the person referenced with "@"
+(a folder may end with `/`; at most 50). Each must resolve inside the
+workspace, exist as a file or folder (not a symlink) and not match
+`path_deny`, else the start is refused with `invalid_request` before any
+request. The checked paths are added to the user message, deduplicated, as
+
+```text
+<prompt>
+
+Files the user referenced:
+- src/main.rs
+- docs/
+```
+
+and that message is what the turn starts, runs and commits with. File
+contents are never inlined: the agent reads them with its own tools.
+
+**AGENTS.md.** At every turn start (plan mode included) the host reads the
+workspace's root `AGENTS.md` (name matched case-insensitively; an exact
+`AGENTS.md` wins over another spelling in the same folder) and, for each
+mention, the `AGENTS.md` of every folder between it and the root, nearest
+first, deduplicated. Reads go through the confined workspace: a symlinked
+file or folder is not read and a `path_deny` match is refused. All files
+together are capped at 32 KiB; a cut file ends with a truncation note and
+files past the cap are skipped. They are appended to the agent's system
+instructions, after the agent's own instructions (which keep priority, as
+the section's header says) and before the memory splice, as one
+`## Project instructions (AGENTS.md)` section with one
+`<agents_md path="…">` block per file. Edits apply from the next turn.
 
 ```ts
 type FileChange = {
@@ -139,7 +170,7 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string}` |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[]}` — `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order |
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |

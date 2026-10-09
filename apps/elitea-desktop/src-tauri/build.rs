@@ -16,6 +16,7 @@ fn main() {
             "workspace_list",
             "workspace_remove",
             "workspace_bind_project",
+            "workspace_files",
             "agent_turn_start",
             "agent_turn_cancel",
             "agent_turn_status",

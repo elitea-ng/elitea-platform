@@ -20,7 +20,7 @@
 //! assembly without touching the hosts' adapters.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -39,7 +39,9 @@ use elitea_agent_runtime::request::{
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
 use elitea_local_tools::approvals::{JsonFileChoices, WorkspaceSettings};
+use elitea_local_tools::find::FoundPath;
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
+use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
 use elitea_local_tools::provider::{LocalToolProvider, TOOLSET_NAME as LOCAL_TOOLSET};
 use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
 use futures::StreamExt as _;
@@ -49,6 +51,7 @@ use super::api::{ApiError, Credentials, LocalTurnStarted, PinnedCredentials, Pla
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::definition::{self, Admitted};
 use super::events::{EventEmitter, Phase, TurnEvents};
+use super::mentions;
 use super::model::GatewayTransport;
 use super::recorder::{FileChange, Recorder};
 use super::remote_tools::{RemoteContext, RemoteToolProvider, RetryPolicy};
@@ -75,7 +78,7 @@ pub struct TurnError {
 }
 
 impl TurnError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_owned(),
             message: message.into(),
@@ -109,6 +112,9 @@ pub struct TurnRequest {
     pub version_id: i64,
     pub prompt: String,
     pub plan_mode: bool,
+    /// Workspace-relative paths the person referenced with "@" (checked,
+    /// then listed under the prompt; contents are never inlined).
+    pub mentions: Vec<String>,
 }
 
 /// `agent_turn_start`'s answer.
@@ -346,6 +352,40 @@ pub struct AgentHost {
     turns: Mutex<TurnTable>,
 }
 
+/// The agent's instructions, then the workspace's AGENTS.md files as one
+/// delimited section (unchanged without any). The agent's own
+/// instructions come first and keep priority; the section says so.
+#[must_use]
+pub fn with_project_instructions(instructions: &str, project: &ProjectInstructions) -> String {
+    if project.files.is_empty() {
+        return instructions.to_owned();
+    }
+    let mut section = String::from(
+        "## Project instructions (AGENTS.md)\n\
+         The workspace's AGENTS.md files follow. The agent's own instructions \
+         above take priority where they disagree; a nested AGENTS.md applies \
+         to files in its folder and is more specific than the root one.",
+    );
+    for file in &project.files {
+        section.push_str(&format!(
+            "\n\n<agents_md path=\"{}\">\n{}",
+            file.path,
+            file.text.trim_end()
+        ));
+        if file.truncated {
+            section.push('\n');
+            section.push_str(TRUNCATED_NOTE);
+        }
+        section.push_str("\n</agents_md>");
+    }
+    section.push_str("\n## End of project instructions");
+    if instructions.is_empty() {
+        section
+    } else {
+        format!("{instructions}\n\n{section}")
+    }
+}
+
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
 /// services/elitea-main/internal/application/agentexecution/memories.go):
 /// authored text, one blank line, the recall.
@@ -517,6 +557,32 @@ impl AgentHost {
             .map_err(storage)
     }
 
+    /// `workspace_files`: the "@" picker's matches in a workspace, under
+    /// the same policy (`local_work_disabled`, `path_deny`) as its turns.
+    /// Not under the workspace's claim: it only lists names, so it also
+    /// answers while a turn runs.
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`,
+    /// or the list cannot be read.
+    pub fn workspace_files(
+        &self,
+        workspace_id: &str,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<FoundPath>, TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        let folder = mentions::open(Path::new(&workspace.path), &policy.path_deny)?;
+        mentions::files(&folder, query, limit)
+    }
+
     /// `agent_turn_start`: resolve, check, start; the run continues in the
     /// background. Every refusal is also an `error` event of the turn.
     ///
@@ -569,8 +635,22 @@ impl AgentHost {
             return Err(TurnError::new("invalid_request", "The message is empty."));
         }
         // Checked first, so a refusal costs no request; again under the claim.
-        self.bound_workspace(request)?;
+        let bound = self.bound_workspace(request)?;
         let policy = self.policy()?;
+        // The "@" references, checked against the folder the way the
+        // session sees it (path_deny included), become part of the prompt
+        // every later step (start, run, commit) carries.
+        // AGENTS.md (the root's and the referenced paths' nested ones) is
+        // read fresh here, at every turn start, through the same view.
+        let folder = mentions::open(Path::new(&bound.path), &policy.path_deny)?;
+        let checked = mentions::check(&folder, &request.mentions)?;
+        let project = project_instructions::load(&folder, &checked);
+        drop(folder);
+        let request = &TurnRequest {
+            prompt: mentions::with_mentions(&request.prompt, &checked),
+            mentions: Vec::new(),
+            ..request.clone()
+        };
         // Every request of the turn, from here to its commit, goes out under
         // the session signed in now, or not at all (`identity_changed`).
         let credentials: Arc<dyn Credentials> =
@@ -627,6 +707,7 @@ impl AgentHost {
             .await;
         let started = started?;
         Ok(Prepared {
+            project,
             request: request.clone(),
             events: events.clone(),
             workspace: workspace_session,
@@ -645,6 +726,7 @@ impl AgentHost {
         mut guard: LocalExecutionGuard,
     ) {
         let Prepared {
+            project,
             request,
             events,
             workspace,
@@ -662,11 +744,11 @@ impl AgentHost {
         let session = workspace.session.clone();
         session.set_plan_mode(request.plan_mode);
         session.begin_turn(&checkpoint_label(&request.prompt));
-        events.status(Phase::Running, None);
+        events.running(&project.paths());
 
         let sink = Arc::new(TurnSink::default());
         let run = self.run_agent(
-            &request, &events, &workspace, &admitted, &started, &recorder, &sink, &api,
+            &request, &events, &workspace, &admitted, &project, &started, &recorder, &sink, &api,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -786,6 +868,7 @@ impl AgentHost {
         events: &Arc<TurnEvents>,
         workspace: &Arc<WorkspaceSession>,
         admitted: &Admitted,
+        project: &ProjectInstructions,
         started: &LocalTurnStarted,
         recorder: &Arc<Recorder>,
         sink: &Arc<TurnSink>,
@@ -805,7 +888,7 @@ impl AgentHost {
                 model_project_id: u32::try_from(request.project_id).unwrap_or_default(),
                 model_name: admitted.model.model_name.clone(),
                 system_instruction: splice_memory(
-                    &admitted.instructions,
+                    &with_project_instructions(&admitted.instructions, project),
                     &started.memory_recall.text,
                 ),
                 max_tokens: admitted.model.max_tokens,
@@ -1090,6 +1173,8 @@ impl AgentHost {
 }
 
 struct Prepared {
+    /// The workspace's AGENTS.md files, read at the start.
+    project: ProjectInstructions,
     request: TurnRequest,
     events: Arc<TurnEvents>,
     workspace: Arc<WorkspaceSession>,
@@ -1252,6 +1337,46 @@ impl EventSink for TurnSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agents_md_follows_the_agents_own_instructions() {
+        use elitea_local_tools::project_instructions::InstructionFile;
+        let none = ProjectInstructions::default();
+        assert_eq!(with_project_instructions("Be brief.", &none), "Be brief.");
+        let project = ProjectInstructions {
+            files: vec![
+                InstructionFile {
+                    path: "AGENTS.md".into(),
+                    text: "Run task test.\n".into(),
+                    truncated: false,
+                },
+                InstructionFile {
+                    path: "apps/web/AGENTS.md".into(),
+                    text: "Use pnpm.".into(),
+                    truncated: true,
+                },
+            ],
+            skipped: Vec::new(),
+        };
+        let assembled = with_project_instructions("Be brief.", &project);
+        let agent = assembled.find("Be brief.").unwrap();
+        let header = assembled
+            .find("## Project instructions (AGENTS.md)")
+            .unwrap();
+        let root = assembled.find("Run task test.").unwrap();
+        let nested = assembled.find("Use pnpm.").unwrap();
+        assert!(
+            agent < header && header < root && root < nested,
+            "{assembled}"
+        );
+        assert!(assembled.contains("take priority"), "{assembled}");
+        assert!(assembled.contains("<agents_md path=\"apps/web/AGENTS.md\">"));
+        assert!(assembled.contains(TRUNCATED_NOTE));
+        assert!(assembled.ends_with("## End of project instructions"));
+        // Memory is spliced after the whole of it.
+        let spliced = splice_memory(&assembled, "Memory");
+        assert!(spliced.ends_with("## End of project instructions\n\nMemory"));
+    }
 
     #[test]
     fn the_memory_splice_is_the_clouds() {
