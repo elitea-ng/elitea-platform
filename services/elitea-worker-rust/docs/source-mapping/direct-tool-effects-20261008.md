@@ -154,6 +154,18 @@ from this branch.
 | Approve in the turn after a block | Normal result; no stale stop message (exec `d9b3e7ea…` → `29ab358b…`) | +2 |
 | LLM node calling effectful `echo` | `MOCK: tool echo said {"output":"dtfx-llm-echo"}`; persists after reload (exec `2114adab…`) | +1 |
 
+**Re-run after run-root fencing (2026-10-09).** The worker image was rebuilt from `f6da68fa` (`sha256:77558f3b…`). The
+binary contains the branch-only strings and the run-root `FOR SHARE` (3 occurrences, against 2 on `main`). The same
+`elitea-dtfx` stack and fixtures were used. The worker log shows no `writer_not_current` or node-recovery failures for
+the current owner.
+
+| Case | Result | `tools/call` delta | Execution |
+|---|---|---|---|
+| Sensitive `reverse`: pause → reload → reject | Card persists; "Pipeline stopped … blocked by user" | 0 | `a3743ab1…` → `e0bae93d…` |
+| Sensitive `reverse`: approve | `{"output":"dtfx-downstream"}`; persists after reload, which adds no calls | +2 | `3ddb5ef3…` → `cf9da487…` |
+| LLM node calling effectful `echo` | `MOCK: tool echo said {"output":"dtfx-fenced-llm"}` | +1 | `eab54be4…` |
+| Direct `echo` | `{"output":"dtfx-echo-one"}`; persists after reload | +1 | `b76c6089…` |
+
 **Found during verification and fixed in this PR.** A blocked pipeline answered with the `{}` default of a
 terminal output instead of its stop message. `select_pipeline_result` now prefers `_pipeline_blocked`, proven by
 `compiler_tests::blocked_pipeline_answers_with_its_stop_message_not_unwritten_outputs`.
