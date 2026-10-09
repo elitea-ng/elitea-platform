@@ -21,13 +21,20 @@
 //
 // Usage:
 //   node scripts/i18n-backfill.mjs [--check]
+//
+// Two catalogues (ADR-0029): src/shared/i18n/en.json, which every entry
+// ships, and src/entries/desktop/i18n/en.desktop.json, which only the desktop
+// entry loads. A key whose every call site is in a desktop-only module
+// (`isDesktopOnlyPath`) belongs to the desktop one. --check fails on a key in
+// the wrong catalogue or in both; the default mode adds new keys to the right
+// one and moves misplaced keys across (their text unchanged).
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { checkFloors } from './lib/gate-floor.mjs';
-import { extractCallSites, planBackfill } from './lib/i18n-backfill-core.mjs';
+import { extractCallSites, planBackfill, planCatalogueSplit, routeNewKeys } from './lib/i18n-backfill-core.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, '..');
@@ -156,7 +163,11 @@ function reportFlagged(flagged, existingEn) {
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   const enPath = join(appRoot, 'src/shared/i18n/en.json');
-  const existingEn = JSON.parse(readFileSync(enPath, 'utf8'));
+  const desktopPath = join(appRoot, 'src/entries/desktop/i18n/en.desktop.json');
+  const sharedEn = JSON.parse(readFileSync(enPath, 'utf8'));
+  const desktopEn = JSON.parse(readFileSync(desktopPath, 'utf8'));
+  // Every call site resolves against both: which one a key sits in is the split check's question.
+  const existingEn = { ...sharedEn, ...desktopEn };
 
   const allEntries = [];
   const allFlagged = [];
@@ -182,7 +193,7 @@ function main() {
   const floors = checkFloors('i18n-backfill', [
     { subject: 'source files scanned under src/', observed: fileCount, floor: MIN_SOURCE_FILES },
     { subject: 't() call sites bound to @/shared/i18n', observed: allEntries.length, floor: MIN_CALL_SITES },
-    { subject: 'keys shipped in src/shared/i18n/en.json', observed: Object.keys(existingEn).length, floor: MIN_EN_KEYS },
+    { subject: 'keys shipped in src/shared/i18n/en.json', observed: Object.keys(sharedEn).length, floor: MIN_EN_KEYS },
   ]);
   for (const line of floors.lines) console.log(line);
   if (!floors.ok) {
@@ -195,21 +206,46 @@ function main() {
   const { unresolvedInterpolated, parseErrors } = reportFlagged(allFlagged, existingEn);
 
   const hasUnresolvedConflicts = plan.conflicts.length > 0 || plan.drifted.length > 0 || unresolvedInterpolated.length > 0;
+  const split = planCatalogueSplit(sharedEn, desktopEn, allEntries);
+  for (const { key, sites } of split.toDesktop) {
+    console.log(`MISPLACED "${key}" — in en.json but called only from desktop-only modules; belongs in en.desktop.json  <- ${formatSites(sites)}`);
+  }
+  for (const { key, sites } of split.toShared) {
+    console.log(`MISPLACED "${key}" — in en.desktop.json but called from a module the web build ships; belongs in en.json  <- ${formatSites(sites)}`);
+  }
+  for (const key of split.duplicated) {
+    console.log(`DUPLICATE "${key}" — in both en.json and en.desktop.json`);
+  }
+  const misplaced = split.toDesktop.length + split.toShared.length + split.duplicated.length;
 
   if (opts.check) {
     if (addedKeys.length > 0) {
       console.log(`i18n-backfill --check: ${addedKeys.length} missing key(s) would be added: ${addedKeys.join(', ')}`);
     }
-    const fail = addedKeys.length > 0 || hasUnresolvedConflicts || parseErrors.length > 0;
+    const fail = addedKeys.length > 0 || hasUnresolvedConflicts || parseErrors.length > 0 || misplaced > 0;
     console.log(fail ? 'i18n-backfill --check: FAIL' : 'i18n-backfill --check: OK');
     process.exit(fail ? 1 : 0);
   }
 
-  if (addedKeys.length > 0) {
-    const merged = { ...existingEn };
-    for (const key of addedKeys) merged[key] = plan.toAdd[key];
-    writeFileSync(enPath, `${JSON.stringify(merged, null, 2)}\n`);
-    console.log(`i18n-backfill: wrote ${addedKeys.length} new key(s) to en.json: ${addedKeys.join(', ')}`);
+  const routed = routeNewKeys(plan.toAdd, allEntries);
+  const nextShared = { ...sharedEn };
+  const nextDesktop = { ...desktopEn };
+  for (const { key } of split.toDesktop) {
+    nextDesktop[key] = sharedEn[key];
+    delete nextShared[key];
+  }
+  for (const { key } of split.toShared) {
+    nextShared[key] = desktopEn[key];
+    delete nextDesktop[key];
+  }
+  for (const key of split.duplicated) delete nextDesktop[key];
+  for (const key of Object.keys(routed.shared).sort()) nextShared[key] = routed.shared[key];
+  for (const key of Object.keys(routed.desktop).sort()) nextDesktop[key] = routed.desktop[key];
+
+  if (addedKeys.length > 0 || misplaced > 0) {
+    writeFileSync(enPath, `${JSON.stringify(nextShared, null, 2)}\n`);
+    writeFileSync(desktopPath, `${JSON.stringify(nextDesktop, null, 2)}\n`);
+    console.log(`i18n-backfill: wrote ${addedKeys.length} new key(s) (${Object.keys(routed.desktop).length} to en.desktop.json), moved ${misplaced} misplaced key(s): ${addedKeys.join(', ')}`);
   } else {
     console.log('i18n-backfill: no missing keys to add');
   }

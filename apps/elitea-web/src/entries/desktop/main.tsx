@@ -16,11 +16,15 @@ import { createRoot } from 'react-dom/client';
 import { createHostBridge, tauriInvoke } from '@/shared/desktop/hostBridge';
 
 import { DesktopShell } from './DesktopShell';
+import { registerDesktopCatalogue } from './i18n/registerDesktopCatalogue';
 
 const container = document.getElementById('root');
 if (!container) {
   throw new Error('elitea-web desktop: #root container missing from index.html');
 }
+
+// Before the first render: the shell and the workspace screens read desktop-only keys.
+registerDesktopCatalogue();
 
 const invoke = tauriInvoke();
 const bridge = invoke === undefined ? undefined : createHostBridge(invoke);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractCallSites, planBackfill } from './i18n-backfill-core.mjs';
+import { extractCallSites, isDesktopOnlyPath, planBackfill, planCatalogueSplit, routeNewKeys } from './i18n-backfill-core.mjs';
 
 /** Table-driven coverage of every decision this module makes (same
  * 100%-of-decision-logic floor F2's scripts/lib/*-core.mjs modules carry). */
@@ -327,5 +327,52 @@ describe('planBackfill', () => {
         variants: [{ fallback: 'New Text', sites: [{ filename: 'X.tsx', line: 5 }] }],
       },
     ]);
+  });
+});
+
+describe('desktop catalogue split', () => {
+  const entry = (key, filename) => ({ key, fallback: key, filename, line: 1 });
+
+  it('treats the desktop modules as desktop-only, and the web door to them as shared', () => {
+    expect(isDesktopOnlyPath('src/pages/workspace/WorkspacesPage.tsx')).toBe(true);
+    expect(isDesktopOnlyPath('src/features/workspace/ui/TurnTranscript.tsx')).toBe(true);
+    expect(isDesktopOnlyPath('src/widgets/desktop-shell/ui/DesktopFrame.tsx')).toBe(true);
+    expect(isDesktopOnlyPath('src\\entries\\desktop\\DesktopShell.tsx')).toBe(true);
+    expect(isDesktopOnlyPath('src/pages/workspace/desktopEntry.tsx')).toBe(false);
+    expect(isDesktopOnlyPath('src/pages/chat/ChatPage.tsx')).toBe(false);
+  });
+
+  it('flags a shared key used only by desktop code, a desktop key the web uses, and a key in both', () => {
+    const entries = [
+      entry('ws.only', 'src/features/workspace/a.tsx'),
+      entry('both.sides', 'src/features/workspace/a.tsx'),
+      entry('both.sides', 'src/pages/chat/b.tsx'),
+      entry('web.only', 'src/pages/chat/b.tsx'),
+    ];
+    const split = planCatalogueSplit(
+      { 'ws.only': 'x', 'web.only': 'y', dup: 'z' },
+      { 'both.sides': 'w', dup: 'z' },
+      entries,
+    );
+    expect(split.toDesktop.map((m) => m.key)).toEqual(['ws.only']);
+    expect(split.toShared).toEqual([{ key: 'both.sides', sites: [{ filename: 'src/pages/chat/b.tsx', line: 1 }] }]);
+    expect(split.duplicated).toEqual(['dup']);
+  });
+
+  it('leaves a correctly split catalogue alone', () => {
+    const split = planCatalogueSplit({ 'web.only': 'y' }, { 'ws.only': 'x' }, [
+      entry('ws.only', 'src/shared/desktop/c.ts'),
+      entry('web.only', 'src/app/App.tsx'),
+    ]);
+    expect(split).toEqual({ toDesktop: [], toShared: [], duplicated: [] });
+  });
+
+  it('routes a new key to the desktop catalogue only when every call site is desktop-only', () => {
+    const routed = routeNewKeys({ a: 'A', b: 'B', c: 'C' }, [
+      entry('a', 'src/pages/workspace/X.tsx'),
+      entry('b', 'src/pages/workspace/X.tsx'),
+      entry('b', 'src/widgets/sidebar/Y.tsx'),
+    ]);
+    expect(routed).toEqual({ shared: { b: 'B', c: 'C' }, desktop: { a: 'A' } });
   });
 });
