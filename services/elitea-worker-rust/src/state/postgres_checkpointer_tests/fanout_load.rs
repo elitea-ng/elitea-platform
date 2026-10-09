@@ -497,6 +497,7 @@ async fn batched_preparation_costs_two_transactions_and_refuses_a_superseded_cla
 /// admitted application threads. All families activate in one transaction and
 /// only the branch roots' receipts are read.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One family lifecycle: prepare, fencing, receipt read.
 async fn application_families_prepare_in_two_transactions_and_keep_their_own_threads() {
     let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL application family test: set {TEST_DATABASE_URL}");
