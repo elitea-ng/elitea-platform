@@ -68,7 +68,21 @@ CERT_FILE = os.environ.get("MOCK_MCP_CERT", "/opt/mock-mcp/tls/server-chain.crt"
 KEY_FILE = os.environ.get("MOCK_MCP_KEY", "/opt/mock-mcp/tls/server.key")
 # Bounded so a long soak run cannot grow the process without a limit; the
 # oldest entries are the ones dropped, as in the mock LLM's journal.
-MAX_JOURNAL_ENTRIES = int(os.environ.get("MOCK_MCP_JOURNAL_LIMIT", "500"))
+MAX_JOURNAL_LIMIT = 100_000
+
+
+def _journal_limit(raw: str) -> int:
+    """MOCK_MCP_JOURNAL_LIMIT as a whole number in [1, MAX_JOURNAL_LIMIT]; anything else refuses to start."""
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"MOCK_MCP_JOURNAL_LIMIT must be a whole number, got {raw!r}") from None
+    if not 1 <= value <= MAX_JOURNAL_LIMIT:
+        raise ValueError(f"MOCK_MCP_JOURNAL_LIMIT must be between 1 and {MAX_JOURNAL_LIMIT}, got {value}")
+    return value
+
+
+MAX_JOURNAL_ENTRIES = _journal_limit(os.environ.get("MOCK_MCP_JOURNAL_LIMIT", "500").strip() or "500")
 # How much of a `tools/call` text argument the journal keeps.
 MAX_MARKER_CHARS = 64
 JOURNAL_PATH = "/__journal"

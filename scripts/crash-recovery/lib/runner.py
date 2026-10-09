@@ -239,7 +239,8 @@ def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False):
             payload = ({'expect': 'answer', 'answer_contains': fixture['answer_contains']}
                        if scenario['expect'].get('settlement', 'SUCCEEDED') == 'SUCCEEDED' and rec['answer']['oracle_ok']
                        else {'expect': 'failure', 'message_id': response_message_id,
-                             'error_code': ((rec['final']['product']['settlements'] or [{}])[-1]).get('error_code')})
+                             # The chat shows the projected failure code; the settlement column can be NULL.
+                             'error_code': ((rec['final']['product']['replay']['terminal'] or [{}])[-1]).get('code')})
             br.release(payload)
         time.sleep(scenario['expect'].get('cleanup_grace_s', CLEANUP_GRACE_S))
         jobs = col.agentstate(exec_id, last_claim, t_takeover)

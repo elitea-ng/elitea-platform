@@ -62,6 +62,7 @@ def cmd_up(args):
 
 def cmd_seed(args):
     stack = Stack(args.stack_dir)
+    stack.refresh_reader_grants()
     client = _client(stack)
     token_uuid = client.mint_token(f'crash-seed-{int(time.time())}')
     try:

@@ -56,22 +56,6 @@ def code_runtime_running(ctx, params):
     return False, {'reason': 'no running Code job inside the window'}
 
 
-def preparer_running(ctx, params):
-    """The first sandbox job of the run (dependency preparation) is dispatched and running, no bundle yet,
-    and no second job exists (user Code has not started)."""
-    if not _live_execution(ctx):
-        return False, {'reason': 'execution not live'}
-    jobs = _jobs(ctx)
-    if len(jobs) != 1:
-        return False, {'reason': f'{len(jobs)} jobs'}
-    job = jobs[0]
-    if job.get('phase') != 'dispatched' or job.get('has_preparation_bundle') or job.get('has_result'):
-        return False, {'reason': 'preparation not pending'}
-    if not job.get('runtime_id') or not ctx.collector.container_running(job['runtime_id']):
-        return False, {'reason': 'preparer container not running'}
-    return True, {'job_key': job['job_key'], 'runtime_id': job['runtime_id'], 'job_age_s': _job_age_s(job)}
-
-
 PREPARATION_AUDIENCE = 'dns:elitea-sandbox-preparation'
 
 
@@ -187,7 +171,7 @@ def claim_attempt_at_least(ctx, params):
     return attempt >= params['attempt'], {'claim_attempt': attempt}
 
 
-PREDICATES = {f.__name__: f for f in (admitted, code_runtime_running, preparer_running, streaming,
+PREDICATES = {f.__name__: f for f in (admitted, code_runtime_running, streaming,
                                       preparation_resolving, hydration_running, prepared_execution_running,
                                       model_request_pending, queued, snapshot_publishing, claim_attempt_at_least)}
 

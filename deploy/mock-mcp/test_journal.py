@@ -120,5 +120,13 @@ class JournalRouteTest(unittest.TestCase):
         self.assertEqual(self.request("GET", "/healthz")[0], 200)
 
 
+
+class JournalLimitTest(unittest.TestCase):
+    def test_limit_is_bounded(self):
+        self.assertEqual(server._journal_limit("500"), 500)
+        for bad in ("0", "-1", "1.5", "x", str(server.MAX_JOURNAL_LIMIT + 1)):
+            with self.assertRaises(ValueError, msg=bad):
+                server._journal_limit(bad)
+
 if __name__ == "__main__":
     unittest.main()

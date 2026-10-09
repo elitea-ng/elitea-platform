@@ -76,8 +76,9 @@ def apply(stack, ctx, step):
             record['command'] = ['docker', action, '<container>']
             record['rc'] = run(['docker', action, cid], check=False).returncode
         elif action == 'replace_worker':
-            # Pod-replacement emulation (D2): a new container on a new, empty spool volume. The old container
-            # and its spool stay for evidence; they are removed only by `crashctl down`.
+            # Pod-replacement emulation (D2): a new container on a new, empty spool volume. Compose allows one
+            # container per service, so the killed container is removed; its identity (id, PID, StartedAt, exit)
+            # is in this step's `before` record. Its spool volume is kept until `crashctl down --volumes`.
             if record['before'].get('running'):
                 raise HarnessError('replace_worker needs the Worker stopped or killed first')
             spool = stack.rotate_spool()

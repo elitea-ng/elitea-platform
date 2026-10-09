@@ -393,10 +393,22 @@ class Stack:
         refuse_if_kind_running()
         self.ensure_preparation_network()
         run(['bash', 'deploy/scripts/standalone-stack.sh', 'up'], cwd=REPO, env=self.env(), timeout=1800)
+        self.refresh_reader_grants()
+
+    def refresh_reader_grants(self):
+        """Grant crash_reader SELECT on tables and tenant schemas created since the last grant."""
+        self.compose('up', '--force-recreate', '--no-deps', 'crash-reader-init', timeout=180)
 
     def down(self, volumes=False):
         args = ['down', '--remove-orphans'] + (['-v'] if volumes else [])
         self.compose(*args, timeout=600)
+        if volumes:
+            # Created outside the current compose config: retired spools (rotate_spool) and the resolver bridge.
+            for name in self.state().get('retired_spools', []):
+                run(['docker', 'volume', 'rm', name], check=False)
+            if run(['docker', 'network', 'inspect', PREPARATION_NETWORK, '--format',
+                    '{{index .Labels "io.elitea.crash.stack"}}'], check=False).stdout.decode().strip() == self.project:
+                run(['docker', 'network', 'rm', PREPARATION_NETWORK], check=False)
 
     def is_up(self):
         out = run(['docker', 'ps', '-q', '--filter', f'label=com.docker.compose.project={self.project}'],

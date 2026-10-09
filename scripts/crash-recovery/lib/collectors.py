@@ -19,6 +19,7 @@ class Collector:
     def __init__(self, stack):
         self.stack = stack
         self._pg = None
+        self._original_visits = None
 
     # ---- SQL -----------------------------------------------------------------------------------------------
     def sql(self, db, name, **binds):
@@ -50,8 +51,10 @@ class Collector:
         }
         if chat_schema:
             out['chat_answers'] = self.sql('product', 'chat_answers', exec_id=exec_id, chat_schema=chat_schema)
-        pre = self.sql('product', 'preflight', since='1970-01-01T00:00:00Z')
-        if pre.get('original_code_visits_table'):
+        if self._original_visits is None:
+            self._original_visits = bool(self.sql('product', 'preflight', since='1970-01-01T00:00:00Z')
+                                         .get('original_code_visits_table'))
+        if self._original_visits:
             out['original_code_visits'] = self.sql('product', 'original_code_visits', exec_id=exec_id)
         return out
 

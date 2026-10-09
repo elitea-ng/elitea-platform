@@ -207,6 +207,17 @@ class VerdictTest(unittest.TestCase):
         result = verdict.evaluate(scenario, run)
         self.assertEqual((result['invariants']['I2P']['status'], result['observed']), ('violated', 'L'))
 
+    def test_stop_may_delete_the_empty_answer_group(self):
+        run = _run()
+        p = run['final']['product']
+        p['settlements'][0]['disposition'] = 'CANCELLED'
+        p['chat_answers'] = []
+        scenario = dict(SCENARIO, expect=dict(SCENARIO['expect'], settlement='CANCELLED'))
+        result = verdict.evaluate(scenario, run)
+        self.assertEqual((result['invariants']['I1']['status'], result['observed']), ('hold', 'R'))
+        p['settlements'][0]['disposition'] = 'SUCCEEDED'
+        self.assertEqual(verdict.evaluate(SCENARIO, run)['invariants']['I1']['status'], 'violated')
+
     def test_inconclusive_is_never_credited(self):
         result = verdict.evaluate(SCENARIO, {'inconclusive': 'trigger code_runtime_running timeout'})
         self.assertEqual(result['verdict'], 'INCONCLUSIVE')

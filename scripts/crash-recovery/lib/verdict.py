@@ -26,9 +26,12 @@ def i1_one_execution(run):
              'settlements': len(settlements), 'terminal_projections': len(terminal),
              'chat_answer_groups': len(answers),
              'chat_streaming_left': sum(1 for a in answers if a['is_streaming'])}
+    # A Stop deletes an empty response group on purpose (configuration_validation_results.go:493-499), so a
+    # CANCELLED run may leave no answer group; it may never leave two.
+    cancelled = any(s['disposition'] == 'CANCELLED' for s in settlements)
+    groups_ok = facts['chat_answer_groups'] in ((0, 1) if cancelled else (1,))
     ok = (facts['executions'] == 1 and facts['same_question_executions'] == 1 and facts['settlements'] == 1
-          and facts['terminal_projections'] == 1 and facts['chat_answer_groups'] == 1
-          and facts['chat_streaming_left'] == 0)
+          and facts['terminal_projections'] == 1 and groups_ok and facts['chat_streaming_left'] == 0)
     return _inv(HOLD if ok else VIOLATED, **facts)
 
 

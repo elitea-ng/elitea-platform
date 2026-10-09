@@ -77,7 +77,9 @@ services:
         END $$do$$;
         ALTER ROLE crash_reader SET default_transaction_read_only = on;
         SQL
-          psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d $$db -At -c "SELECT format('GRANT USAGE ON SCHEMA %I TO crash_reader; GRANT SELECT ON ALL TABLES IN SCHEMA %I TO crash_reader;', nspname, nspname) FROM pg_namespace WHERE nspname = 'elitea_runtime' OR nspname ~ '^p_[0-9]+$$'" \
+          # Existing tables now, and tables the migrating role creates later in these schemas. A schema created
+          # later (a new project's p_<id>) needs this job again: `crashctl up` and `seed` re-run it.
+          psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d $$db -At -c "SELECT format('GRANT USAGE ON SCHEMA %I TO crash_reader; GRANT SELECT ON ALL TABLES IN SCHEMA %I TO crash_reader; ALTER DEFAULT PRIVILEGES FOR ROLE elitea IN SCHEMA %I GRANT SELECT ON TABLES TO crash_reader;', nspname, nspname, nspname) FROM pg_namespace WHERE nspname = 'elitea_runtime' OR nspname ~ '^p_[0-9]+$$'" \
             | psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d $$db
           psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d $$db -c "GRANT CONNECT ON DATABASE $$db TO crash_reader"
         done
