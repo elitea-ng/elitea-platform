@@ -149,10 +149,14 @@ func (runtime *CurrentConfigurationsRuntime) NewToolkitSettingsValidator(
 }
 
 // NewClientApplicationVersionService composes the desktop's resolved
-// definition (ADR-0029 decision 5a) from the SAME freezer and the same
-// tenant-schema reader the interactive start path and the worker's nested
-// child route are built from, so the three cannot disagree on what a version
-// resolves to. It has no materializer: nothing here can redeem a secret.
+// definition (ADR-0029 decision 5a) over its own freezer and version reader,
+// built by the SAME constructors production uses (newCurrentAgentVersionFreezer,
+// NewCurrentNestedApplicationVersionRepository). Production does not call it:
+// composition.go reuses the interactive start path's freezer INSTANCE and
+// calls composeClientApplicationVersions directly. Both go through that one
+// function, so the integration test over this constructor covers the
+// production wiring (the guardrails source included). It has no
+// materializer: nothing here can redeem a secret.
 func NewClientApplicationVersionService(
 	pool *pgxpool.Pool,
 	configurations *CurrentConfigurationsRuntime,
@@ -165,6 +169,18 @@ func NewClientApplicationVersionService(
 	if err != nil {
 		return nil, err
 	}
+	return composeClientApplicationVersions(pool, versions, freezer)
+}
+
+// composeClientApplicationVersions is the resolved definition's service over a
+// version reader and a freezer, with the guardrails source the remote toolkit
+// call (5b) refuses blocked and flags sensitive tools from: the same
+// platform_config adapter the freeze reads.
+func composeClientApplicationVersions(
+	pool *pgxpool.Pool,
+	versions storage.CurrentApplicationVersionSource,
+	freezer agentexecutionapp.CurrentApplicationVersionFreezer,
+) (*storage.ClientApplicationVersionService, error) {
 	service, err := storage.NewClientApplicationVersionService(versions, freezer)
 	if err != nil {
 		return nil, err
