@@ -541,6 +541,68 @@ pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
     Ok(deleted > 0)
 }
 
+/// What [`import`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Imported {
+    /// The graph was saved at this revision.
+    Saved { revision: i64 },
+    /// Nothing was written: native ingestion state exists for the graph
+    /// (source status rows, document versions) and replacing it was not
+    /// asked for.
+    HasIngestionState { sources: i64, documents: i64 },
+}
+
+/// Store an imported graph (`import-graph`) in one transaction: refused
+/// while the graph has native ingestion state, unless `replace_state`, which
+/// deletes that state with the old graph. Without the refusal a re-import
+/// over a natively ingested graph would keep document versions that claim
+/// files the new graph never read (the next run would skip them) and ACL
+/// rows for documents it does not hold.
+///
+/// # Errors
+///
+/// See [`save`].
+pub async fn import(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    replace_state: bool,
+) -> Result<Imported> {
+    let mut transaction = pool.begin().await?;
+    lock(&mut transaction, key).await?;
+    let mut counts = [0i64; 2];
+    for (count, table) in counts
+        .iter_mut()
+        .zip(["inventory_graph.sources", "inventory_graph.documents"])
+    {
+        *count = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM {table} WHERE project_id = $1 AND application_id = $2"
+        ))
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if replace_state {
+            sqlx::query(&format!(
+                "DELETE FROM {table} WHERE project_id = $1 AND application_id = $2"
+            ))
+            .bind(key.project_id)
+            .bind(key.application_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+    }
+    if !replace_state && counts.iter().any(|count| *count > 0) {
+        return Ok(Imported::HasIngestionState {
+            sources: counts[0],
+            documents: counts[1],
+        });
+    }
+    let revision = write_graph(&mut transaction, key, graph).await?;
+    transaction.commit().await?;
+    Ok(Imported::Saved { revision })
+}
+
 fn object(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(fields) => fields,

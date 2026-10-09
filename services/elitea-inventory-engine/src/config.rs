@@ -109,7 +109,7 @@ impl Settings {
             Some("native") => RunnerKind::Native,
             Some("legacy") => {
                 return Err(ConfigError(format!(
-                    "{ENV_PREFIX}RUNNER=legacy names the Python engine, which this native image does not contain; use the elitea-inventory image for it, or fixture here"
+                    "{ENV_PREFIX}RUNNER=legacy named the retired Python engine, which no longer exists; use native (the engine over PostgreSQL), or fixture for the canned graph"
                 )));
             }
             Some(other) => {
@@ -310,6 +310,11 @@ mod tests {
                 "{name}={value}: {refused:?}"
             );
         }
+        assert!(
+            settings(&[("ELITEA_INVENTORY_RUNNER", "legacy")])
+                .is_err_and(|e| e.0.contains("use native")),
+            "the retired runner points at the native one"
+        );
         assert_eq!(
             settings(&[
                 ("ELITEA_INVENTORY_RUNNER", "fixture"),

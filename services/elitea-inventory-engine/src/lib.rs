@@ -12,6 +12,7 @@
 //! * [`investigate`] — the model agent over the graph and its sources;
 //! * [`graph`] — the knowledge graph, with the Python graph's semantics;
 //! * [`store`] — the graph's PostgreSQL storage;
+//! * [`transfer`] — `graph.json` imported into and exported from the store;
 //! * [`ingest`] — a source's files into the graph;
 //! * [`extract`] — what a model reads out of a file;
 //! * [`communities`] — the graph's communities, labelled by a model;
@@ -31,6 +32,7 @@ pub mod retrieval;
 pub mod runner;
 pub mod store;
 pub mod tools;
+pub mod transfer;
 
 use config::{ConfigError, RunnerKind, Settings};
 use fixture::FixtureGraph;

@@ -3,8 +3,10 @@
 //!
 //! Every tool of both families: `run_ingestion` (clone, parsers, model,
 //! communities, embeddings — `crate::ingest`), the status tools,
-//! `remove_source_entities`, `investigate` (`crate::investigate`), and the
-//! read tools (`crate::retrieval`). A tool the dispatch does not know is
+//! `remove_source_entities`, `smart_normalize_types` (a model maps the
+//! graph's stray types onto the canonical set, written back to the store),
+//! `investigate` (`crate::investigate`), and the read tools
+//! (`crate::retrieval`). A tool the dispatch does not know is
 //! refused by name, never answered empty (a test holds the tables to it).
 
 // The reports are built line by line, as the Python handlers built them.
@@ -155,6 +157,7 @@ impl NativeRunner {
                     .await
             }
             "remove_source_entities" => self.remove_source(key, params).await,
+            "smart_normalize_types" => self.smart_normalize(key, params, context).await,
             other => {
                 self.read(other, family, key, params, &caller_of(arguments))
                     .await
@@ -195,6 +198,117 @@ impl NativeRunner {
         Ok(crate::retrieval::answer(format!(
             "Removed {removed} entities from toolkit {toolkit_id}"
         )))
+    }
+
+    /// `smart_normalize_types` (`crate::retrieval::admin_tools`): the
+    /// toolkit's model maps the types that qualify onto the canonical set,
+    /// one batch at a time, through a forced call of Python's structured-
+    /// output tool; unless `dry_run`, the mapping is applied to the stored
+    /// graph under the ingestion lease and saved in one transaction.
+    ///
+    /// A batch the model cannot answer refuses the run, nothing written.
+    async fn smart_normalize(
+        &self,
+        key: GraphKey,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::retrieval::admin_tools::{self as admin, Applied, SmartStep};
+        let store_error =
+            |e: crate::store::StoreError| EngineError::new(ErrorType::Runtime, e.to_string());
+        context.thinking("Loading graph and analyzing types...");
+        let stored = self
+            .views
+            .view(&self.pool, key)
+            .await
+            .map_err(store_error)?
+            .unwrap_or_default();
+        let plan = match admin::smart_plan(&stored.graph, params)? {
+            SmartStep::Answer(text) => return Ok(crate::retrieval::answer(text)),
+            SmartStep::Map(plan) => plan,
+        };
+        context.thinking(format!(
+            "Found {} types to normalize...",
+            plan.candidates.len()
+        ));
+        let model_name = Self::model_name(params).ok_or_else(|| {
+            invalid("no LLM model is configured for this Inventory toolkit; set llm_model in the toolkit configuration")
+        })?;
+        let settings = Self::model_settings(params, &model_name)?;
+        let client = ChatClient::new(self.transport.clone(), settings);
+        let stop = context.stop_signal();
+        let batches: Vec<Vec<String>> = plan.batches().collect();
+        let mut mappings = indexmap::IndexMap::new();
+        for (index, batch) in batches.iter().enumerate() {
+            context.checkpoint()?;
+            context.thinking(format!(
+                "Processing batch {}/{} ({} types)...",
+                index + 1,
+                batches.len(),
+                batch.len()
+            ));
+            let pairs = ask_batch(
+                &client,
+                &stop,
+                &model_name,
+                batch,
+                (index + 1, batches.len()),
+            )
+            .await?;
+            admin::merge_batch(&mut mappings, batch, pairs);
+        }
+        context.thinking(format!("Generated {} type mappings...", mappings.len()));
+        if plan.dry_run {
+            return Ok(crate::retrieval::answer(admin::smart_report(
+                &plan,
+                &mappings,
+                None,
+                &model_name,
+            )));
+        }
+        context.checkpoint()?;
+        context.thinking("Applying type mappings to graph...");
+        let Some(_lease) = sources::lease(&self.pool, key).await.map_err(store_error)? else {
+            return Err(EngineError::new(
+                ErrorType::Runtime,
+                "an ingestion of this Inventory toolkit is running; normalise the types when it finishes",
+            ));
+        };
+        // The graph as stored now, not as planned: a run may have saved since.
+        let mut graph = store::load(&self.pool, key)
+            .await
+            .map_err(store_error)?
+            .map(|(graph, _)| graph)
+            .unwrap_or_default();
+        let entities_normalized = admin::apply_mappings(&mut graph, &mappings);
+        store::save(&self.pool, key, &graph)
+            .await
+            .map_err(store_error)?;
+        let applied = Applied {
+            types_after: admin::graph_entity_types(&graph).len(),
+            entities_normalized,
+        };
+        Ok(crate::retrieval::answer(admin::smart_report(
+            &plan,
+            &mappings,
+            Some(applied),
+            &model_name,
+        )))
+    }
+
+    /// The toolkit's chat model: `llm_model` (either spelling), else
+    /// `llm_settings.model_name`.
+    fn model_name(params: &Map<String, Value>) -> Option<String> {
+        text_param(params, &["llm_model", "toolkit_configuration_llm_model"])
+            .map(str::to_owned)
+            .or_else(|| {
+                params
+                    .get("llm_settings")
+                    .and_then(|s| s.get("model_name"))
+                    .and_then(Value::as_str)
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_owned)
+            })
     }
 
     /// The source a `remove_source_entities` call names: the expanded
@@ -311,17 +425,7 @@ impl NativeRunner {
         let Some(question) = Question::from_params(params) else {
             return Ok(crate::retrieval::answer(agent::missing_question()));
         };
-        let model_name = text_param(params, &["llm_model", "toolkit_configuration_llm_model"])
-            .map(str::to_owned)
-            .or_else(|| {
-                params
-                    .get("llm_settings")
-                    .and_then(|s| s.get("model_name"))
-                    .and_then(Value::as_str)
-                    .filter(|m| !m.is_empty())
-                    .map(str::to_owned)
-            })
-            .ok_or_else(|| {
+        let model_name = Self::model_name(params).ok_or_else(|| {
                 invalid("no LLM model is configured for this Inventory toolkit; set llm_model in the toolkit configuration")
             })?;
         let settings = Self::model_settings(params, &model_name)?;
@@ -398,7 +502,7 @@ impl NativeRunner {
             Err(EngineError::new(
                 ErrorType::FileNotFound,
                 format!(
-                    "'{tool}' is not served by the native Inventory engine yet (ADR-0027 P4); run the deployment with ELITEA_INVENTORY_RUNNER=legacy for it"
+                    "'{tool}' has no handler in the native Inventory engine; this is a defect of the engine's tool table, not of the request"
                 ),
             ))
         })
@@ -637,6 +741,79 @@ fn source_caller(
     )
 }
 
+/// One smart-normalisation batch through the model: Python's prompt, its
+/// structured-output tool forced, the reply as `(original, canonical)`
+/// pairs. `position` is `(batch, of)`, for the refusal.
+async fn ask_batch(
+    client: &ChatClient,
+    stop: &StopSignal,
+    model_name: &str,
+    batch: &[String],
+    position: (usize, usize),
+) -> Result<Vec<(String, String)>, EngineError> {
+    use crate::retrieval::admin_tools as admin;
+    use elitea_model_client::chat::{
+        ChatMessage, ChatRequest, Sampling, ToolChoice, ToolDefinition,
+    };
+    let (tool_name, description, schema) = admin::mapping_tool();
+    let mut request = ChatRequest::new(vec![ChatMessage::User(admin::smart_prompt(batch))]);
+    request.tools = vec![ToolDefinition {
+        name: tool_name.to_owned(),
+        description: description.to_owned(),
+        parameters: schema,
+    }];
+    request.tool_choice = Some(ToolChoice::Function(tool_name.to_owned()));
+    request.sampling = Sampling::Deterministic;
+    request.max_tokens = Some(4096);
+    let refuse = |reason: String| {
+        EngineError::new(
+            ErrorType::Runtime,
+            format!(
+                "smart_normalize_types: batch {} of {} got no usable type mapping from {model_name} ({reason}); nothing was changed",
+                position.0, position.1
+            ),
+        )
+    };
+    let response = client.complete(&request, stop).await.map_err(|e| {
+        if e == EngineError::cancelled() {
+            e
+        } else {
+            refuse(e.message)
+        }
+    })?;
+    let reply = mapping_reply(&response).map_err(&refuse)?;
+    admin::mappings_from_reply(&reply).map_err(&refuse)
+}
+
+/// A smart-normalisation batch's reply: the forced tool call's arguments,
+/// or, from a model that answered in text instead, that text as JSON (a
+/// fenced block is unwrapped).
+fn mapping_reply(response: &elitea_model_client::chat::ChatResponse) -> Result<Value, String> {
+    use crate::retrieval::admin_tools::MAPPING_TOOL;
+    if let Some(call) = response
+        .tool_calls
+        .iter()
+        .find(|call| call.name == MAPPING_TOOL)
+    {
+        return call
+            .parsed_arguments()
+            .map(Value::Object)
+            .map_err(|e| e.message);
+    }
+    let text = response.content.trim();
+    let text = text
+        .strip_prefix("```json")
+        .or_else(|| text.strip_prefix("```"))
+        .and_then(|rest| rest.trim_end().strip_suffix("```"))
+        .unwrap_or(text);
+    serde_json::from_str::<Value>(text.trim())
+        .ok()
+        .filter(Value::is_object)
+        .ok_or_else(|| {
+            "the answer is neither a TypeMappingResponse call nor a JSON object".to_owned()
+        })
+}
+
 /// `_ingestion_report`, from the run's outcome (or its failure).
 fn report(
     name: &str,
@@ -776,12 +953,13 @@ mod tests {
     use super::*;
 
     /// The tools `run` answers itself, before the read dispatch.
-    const RUN_TOOLS: [&str; 5] = [
+    const RUN_TOOLS: [&str; 6] = [
         "run_ingestion",
         "get_sources_status",
         "get_ingestion_status",
         "investigate",
         "remove_source_entities",
+        "smart_normalize_types",
     ];
 
     #[test]
@@ -805,6 +983,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_mapping_reply_is_the_tool_call_or_json_text() {
+        use elitea_model_client::chat::{ChatResponse, ToolCall};
+        let call = ChatResponse {
+            content: "ignored".to_owned(),
+            tool_calls: vec![ToolCall {
+                id: "c1".to_owned(),
+                name: "TypeMappingResponse".to_owned(),
+                arguments: r#"{"mappings": []}"#.to_owned(),
+            }],
+            ..ChatResponse::default()
+        };
+        assert_eq!(mapping_reply(&call), Ok(json!({"mappings": []})));
+        let fenced = ChatResponse {
+            content: "```json\n{\"mappings\": [1]}\n```".to_owned(),
+            ..ChatResponse::default()
+        };
+        assert_eq!(mapping_reply(&fenced), Ok(json!({"mappings": [1]})));
+        let prose = ChatResponse {
+            content: "I think widget is a fact".to_owned(),
+            ..ChatResponse::default()
+        };
+        assert!(mapping_reply(&prose).is_err());
     }
 
     #[test]

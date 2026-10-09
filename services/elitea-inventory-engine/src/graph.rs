@@ -376,6 +376,12 @@ impl Graph {
         self.nodes.iter().map(|(id, node)| (id.as_str(), node))
     }
 
+    /// Every node, mutable, in insertion order (maintenance that rewrites
+    /// an attribute in place, such as `smart_normalize_types`).
+    pub fn nodes_mut(&mut self) -> impl Iterator<Item = (&str, &mut Map<String, Value>)> {
+        self.nodes.iter_mut().map(|(id, node)| (id.as_str(), node))
+    }
+
     /// Every edge `(source, target, attributes)`, in export order.
     pub fn edges(&self) -> impl Iterator<Item = (&str, &str, &Map<String, Value>)> {
         self.nodes.keys().flat_map(move |source| {

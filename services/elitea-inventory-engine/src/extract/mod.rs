@@ -410,8 +410,12 @@ pub struct ModelExtraction {
 }
 
 /// The code-like extensions that get the code fact prompt
-/// (`_is_code_file or _is_code_like_file`).
-fn is_code_like(path: &str) -> bool {
+/// (`_is_code_file or _is_code_like_file`). A code-like file without a
+/// parser (`crate::ingest::parse::language_of` is `None`: `.sh`, `.rb`,
+/// `.lua`, C, …) is what Python's `run()` gave its file node and the model
+/// stage, and nothing else (`tests/code_like.rs`).
+#[must_use]
+pub fn is_code_like(path: &str) -> bool {
     let extension = elitea_engine_core::pystr::suffix(path).to_lowercase();
     let name = elitea_engine_core::pystr::file_name(path).to_lowercase();
     matches!(name.as_str(), "makefile" | "gnumakefile")

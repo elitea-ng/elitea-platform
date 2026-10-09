@@ -75,19 +75,95 @@ on purpose:
 - **Entity ids match Python's.** They are held to ids computed by Python's own
   `_generate_entity_id` (`tests/fixtures/ingest/generate.py`).
 
+## Maintenance writes
+
+`smart_normalize_types` is the one read-family tool that writes: the
+toolkit's model (`llm_model`, through the gateway in `llm_settings`) maps
+each type below `threshold` entities that is not canonical onto the
+canonical set, `batch_size` types per call, with Python's prompt and a
+forced call of the structured-output tool its handler bound. Unless
+`dry_run`, the mapping is applied under the ingestion lease and the graph
+saved in one transaction (its revision bumps, so cached views reload). It
+differs from Python where Python damaged graphs: a batch the model cannot
+answer refuses the run with nothing written (Python mapped the batch to
+`fact` and saved), and a mapping applies only to a type the batch asked
+about. `tests/fixtures/smart_normalize/generate.py` records the Python
+handler's prompts and saved graph.
+
+A code file without a parser (`.sh`, `.rb`, `.lua`, C, …) gets its file
+node and the model stage with the code fact prompt, as Python's `run()` did.
+Python's `TextParser` "hybrid fallback" is not ported: only the never-served
+`delta_update` reached it, and it raised on the first reference it found
+(`tests/fixtures/code_like/generate.py` records both).
+
+## Operator runbook: moving Python graphs in, and out (issue #1129)
+
+The Python engine kept each toolkit's graph as `graph.json` in its artifact
+bucket; this engine keeps it in PostgreSQL. Nothing moves the graphs
+automatically. When a deployment switches to the native engine, an operator
+imports them once:
+
+1. Point `ELITEA_INVENTORY_DATABASE_URL` at the engine's database (the
+   commands run `migrate` first, so the schema is created if needed).
+2. For every Inventory toolkit, download `graph.json` from its bucket
+   (`bucket` / `toolkit_configuration_bucket`, default `graphs`) and note the
+   project id and the toolkit (application) id.
+3. Import it — idempotent, a re-run replaces the graph and bumps its revision:
+
+   ```bash
+   elitea-inventory-engine import-graph --project-id 3 --application-id 42 --file graph.json
+   # or from standard input
+   elitea-inventory-engine import-graph --project-id 3 --application-id 42 - < graph.json
+   ```
+
+   The report (standard error) gives the entity and relation counts and the
+   embedding model the graph was embedded with.
+4. Spot-check: `SELECT count(*) FROM inventory_graph.entities WHERE
+   project_id = 3 AND application_id = 42` equals the file's node count.
+
+What is refused, with nothing written (exit 1): a file that is not JSON, an
+undirected graph, a multigraph, a node or link without a string id, and text
+holding a NUL character (PostgreSQL `jsonb` cannot store it; the message
+names where). Report such graphs; do not skip them silently. A graph that
+already has native ingestion state (source status rows, document versions)
+is refused too, since importing over it would leave versions and ACLs that
+describe another graph; `--replace-ingestion-state` deletes that state with
+the old graph. An import while an ingestion of that toolkit runs is refused.
+
+Caveats: `sources_status.json` and the `.ingestion-checkpoint-*.json`
+objects are not imported, so the first native ingestion of each source
+re-reads every file (use `full_rebuild` where a changed file's old citation
+must not linger). A graph embedded with a model other than the one now
+configured needs re-embedding before semantic search. Edge provenance (an
+edge's own `source`: `parser`, `llm`) was already lost in Python's file:
+networkx overwrote it with the source node id on save.
+
+`export-graph` writes the stored graph as Python-compatible `graph.json`
+(`json.dump(indent=2)` layout), the on-demand export ADR-0027 §3 promises:
+
+```bash
+elitea-inventory-engine export-graph --project-id 3 --application-id 42 --file graph.json   # or to stdout
+```
+
+An import followed by an export gives the imported document back, except
+`_metadata.last_saved` (the export's time) and the order of ids inside
+`_indices` (node order; Python's was string-hash order). `tests/transfer.rs`
+holds both commands to two Python-written graphs. Neither is a socket tool:
+the Go host admits only the descriptor's tools.
+
 ## Settings
 
 | Variable | Default | |
 |---|---|---|
 | `ELITEA_INVENTORY_ENGINE_SOCKET` | `/run/inventory/engine.sock` | the Unix socket the host dials |
-| `ELITEA_INVENTORY_RUNNER` | `unavailable` | `unavailable` or `fixture` (`legacy` names the Python image and is refused) |
+| `ELITEA_INVENTORY_RUNNER` | `unavailable` | `unavailable`, `fixture` or `native` (`legacy` named the retired Python engine and is refused) |
 | `ELITEA_INVENTORY_FIXTURE_STEP_SECONDS` | `0` | pause between the fixture's progress lines |
 | `ELITEA_INVENTORY_FIXTURES` | packaged | a directory holding `spi/graph.json`, instead of the packaged copy |
 | `ELITEA_INVENTORY_SOURCE_TYPES` | `github,ado_repos` | the source types ingestion reads |
 | `ELITEA_INVENTORY_GIT_ALLOWLIST` | unset (no host) | the git hosts a clone may reach |
 | `ELITEA_INVENTORY_MAX_CLONE_BYTES` / `_MAX_FILE_COUNT` / `_MAX_FILE_BYTES` / `_MAX_PARSED_BYTES` / `_CLONE_TIMEOUT_SECONDS` | `elitea-repo-ingest` defaults | clone limits |
 | `ELITEA_INVENTORY_SCRATCH_PATH` | `/var/scratch/inventory` | where a run clones (removed after) |
-| `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store (`migrate`, and required by `native`; `postgresql://` URL form). PostgreSQL with the pgvector extension available: migration 0004 creates it, and semantic search ranks there |
+| `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store (`migrate`, `import-graph`, `export-graph`, and required by `native`; `postgresql://` URL form). PostgreSQL with the pgvector extension available: migration 0004 creates it, and semantic search ranks there |
 | `ELITEA_INVENTORY_CALLBACK_CA_FILE` | unset | a PEM bundle the model transport trusts besides the platform roots |
 | `OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT` | unset | span export (`elitea-engine-sidecar::telemetry`) |
 

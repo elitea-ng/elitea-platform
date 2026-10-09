@@ -28,14 +28,31 @@
 //!   For a graph whose types are canonical, `normalize_types` is Python's
 //!   answer byte for byte (its rule-based pass changes nothing, and smart
 //!   normalisation ran only above `len(CANONICAL_TYPES)` types — when it
-//!   would have run, the report says it was skipped). `rebuild_indices`
+//!   would have run, the report says it was skipped and names
+//!   `smart_normalize_types`, which does it). A graph imported from a
+//!   Python `graph.json` (`crate::transfer`) keeps the types the file
+//!   holds; `smart_normalize_types` re-normalises every type when it
+//!   applies a mapping. `rebuild_indices`
 //!   fixes one Python defect: its `entity_count` / `relation_count` read
 //!   stats keys that do not exist (`entity_count` instead of `node_count`)
 //!   and were always 0; here they are the counts.
 //! * `smart_normalize_types` — when no type qualifies, Python's "No types
-//!   to normalize" answer (no model is called). Otherwise refused: mapping
-//!   types through a model and rewriting stored entities is not done
-//!   outside an ingestion.
+//!   to normalize" answer (no model is called). Otherwise it WRITES, so the
+//!   native runner serves it (`crate::native`) with the pieces here:
+//!   [`smart_plan`], [`smart_prompt`] and [`mapping_tool`] (Python's prompt
+//!   and the tool `LangChain`'s `with_structured_output` bound for its
+//!   pydantic `TypeMappingResponse`), [`mappings_from_reply`],
+//!   [`apply_mappings`] and [`smart_report`], held to what the Python
+//!   handler answered and saved (`tests/fixtures/smart_normalize`).
+//!   Deliberate differences, each a way Python damaged a graph: a batch the
+//!   model cannot answer REFUSES the whole run with nothing written (Python
+//!   mapped every type of that batch to `fact` and saved); a mapping is
+//!   applied only to a type the batch asked about (Python applied whatever
+//!   `original` the model named, so a model answering
+//!   `{"original": "class", …}` rewrote every class); and a `batch_size`
+//!   below 1 is refused (Python divided by it). Served without a native
+//!   runner (this dispatch, over a read-only view), a graph that has types
+//!   to map is refused.
 //! * `remove_source_entities` is NOT served here ([`handle`] returns
 //!   `None`): it writes, and handlers receive a read-only view. It belongs
 //!   in `native.rs` with store access, with these semantics (the Python
@@ -58,6 +75,7 @@
 
 use super::view::GraphView;
 use super::{Call, Handled, answer};
+use crate::graph::Graph;
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::pyjson::dumps;
 use elitea_engine_core::pyvalue::{py_repr, py_str, py_truthy};
@@ -223,8 +241,15 @@ pub fn cleanup_cache(params: &Map<String, Value>) -> String {
 /// `get_stats()['entity_types']`: each node's `type`, counted in first-seen
 /// order.
 fn entity_types(view: &GraphView) -> IndexMap<String, usize> {
+    graph_entity_types(&view.graph)
+}
+
+/// `get_stats()['entity_types']` of a graph: each node's `type`, counted
+/// in first-seen order.
+#[must_use]
+pub fn graph_entity_types(graph: &Graph) -> IndexMap<String, usize> {
     let mut counts = IndexMap::new();
-    for (_, node) in view.graph.nodes() {
+    for (_, node) in graph.nodes() {
         if let Some(kind) = node.get("type") {
             *counts.entry(py_str(kind)).or_insert(0) += 1;
         }
@@ -254,7 +279,7 @@ pub fn normalize_types(view: &GraphView, params: &Map<String, Value>) -> String 
     let message = format!(
         "Normalized entity types: {count} -> {count} unique types (rule-based: {count}, smart: {count})"
     );
-    let skipped = "smart normalization maps types through a model, which the native Inventory engine does only during an ingestion; re-run run_ingestion to re-normalise";
+    let skipped = "smart normalization maps types through a model and rewrites the stored graph, which normalize_types does not do here; run smart_normalize_types for it";
     if wants_json(params, "json") {
         let mut result = json!({
             "success": true,
@@ -360,8 +385,324 @@ fn py_int_param(value: &Value) -> Result<i128, EngineError> {
     }
 }
 
-/// `smart_normalize_types`: Python's answer when no type qualifies,
-/// otherwise refused (see the module docs).
+/// A smart normalisation to run: its parameters and the types to map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmartPlan {
+    /// Types per batch (`batch_size`, default 100).
+    pub batch_size: usize,
+    /// `dry_run`: report the mapping, change nothing.
+    pub dry_run: bool,
+    /// Every type of the graph and its entity count, in first-seen order.
+    pub types: IndexMap<String, usize>,
+    /// The types to map: fewer than `threshold` entities and not canonical.
+    pub candidates: IndexMap<String, usize>,
+    /// Whether the answer is JSON (`output_format`, default `json`).
+    pub json: bool,
+}
+
+impl SmartPlan {
+    /// The candidate types, batch by batch.
+    pub fn batches(&self) -> impl Iterator<Item = Vec<String>> + '_ {
+        let names: Vec<String> = self.candidates.keys().cloned().collect();
+        let size = self.batch_size;
+        (0..names.len().div_ceil(size))
+            .map(move |index| names[index * size..((index + 1) * size).min(names.len())].to_vec())
+    }
+}
+
+/// What `smart_normalize_types` does for a graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SmartStep {
+    /// Nothing qualifies: Python's answer, no model is called.
+    Answer(String),
+    /// Types to map through the model.
+    Map(SmartPlan),
+}
+
+/// `smart_normalize_types` up to the model call: the parameters as Python
+/// read them, and either its "No types to normalize" answer or the plan.
+///
+/// # Errors
+///
+/// `threshold` or `batch_size` is not an integer (Python's `int()`
+/// errors), or `batch_size` is below 1.
+pub fn smart_plan(graph: &Graph, params: &Map<String, Value>) -> Result<SmartStep, EngineError> {
+    let threshold = py_int_param(params.get("threshold").unwrap_or(&json!(1000)))?;
+    let batch_size = py_int_param(params.get("batch_size").unwrap_or(&json!(100)))?;
+    let batch_size = usize::try_from(batch_size)
+        .ok()
+        .filter(|size| *size >= 1)
+        .ok_or_else(|| {
+            EngineError::new(
+                ErrorType::Value,
+                format!("batch_size must be a positive integer, got {batch_size}"),
+            )
+        })?;
+    let dry_run = params
+        .get("dry_run")
+        .map_or_else(|| "false".to_owned(), py_str)
+        .to_lowercase()
+        == "true";
+    let canonical = &tables().canonical_types;
+    let types = graph_entity_types(graph);
+    let candidates: IndexMap<String, usize> = types
+        .iter()
+        .filter(|(kind, count)| {
+            i128::try_from(**count).is_ok_and(|count| count < threshold)
+                && !canonical.contains(kind)
+        })
+        .map(|(kind, count)| (kind.clone(), *count))
+        .collect();
+    let json_answer = wants_json(params, "json");
+    if candidates.is_empty() {
+        let message = format!(
+            "No types to normalize (all types either have count >= {threshold} or are already canonical)"
+        );
+        if json_answer {
+            return Ok(SmartStep::Answer(dumps(&json!({
+                "success": true,
+                "message": message,
+                "types_checked": types.len(),
+                "canonical_types": canonical.len(),
+            }))));
+        }
+        return Ok(SmartStep::Answer(message));
+    }
+    Ok(SmartStep::Map(SmartPlan {
+        batch_size,
+        dry_run,
+        types,
+        candidates,
+        json: json_answer,
+    }))
+}
+
+/// The name of the structured-output tool the model is made to call.
+pub const MAPPING_TOOL: &str = "TypeMappingResponse";
+
+/// The tool `LangChain`'s `with_structured_output(TypeMappingResponse)`
+/// binds (`convert_to_openai_tool` of the handler's pydantic model):
+/// `(name, description, JSON schema)`.
+#[must_use]
+pub fn mapping_tool() -> (&'static str, &'static str, Value) {
+    (
+        MAPPING_TOOL,
+        "Response containing all type mappings.",
+        json!({
+            "properties": {
+                "mappings": {
+                    "description": "List of type mappings",
+                    "items": {
+                        "description": "Mapping of original type to canonical type.",
+                        "properties": {
+                            "original": {"description": "The original entity type name", "type": "string"},
+                            "canonical": {"description": "The canonical type to map to", "type": "string"},
+                            "confidence": {"description": "Confidence score 0-1", "maximum": 1, "minimum": 0, "type": "number"},
+                        },
+                        "required": ["original", "canonical", "confidence"],
+                        "type": "object",
+                    },
+                    "type": "array",
+                },
+            },
+            "required": ["mappings"],
+            "type": "object",
+        }),
+    )
+}
+
+/// The Python handler's prompt for one batch of types.
+#[must_use]
+pub fn smart_prompt(batch: &[String]) -> String {
+    let mut canonical: Vec<&str> = tables()
+        .canonical_types
+        .iter()
+        .map(String::as_str)
+        .collect();
+    canonical.sort_unstable();
+    let types = elitea_engine_core::pyjson::dumps_with(&json!(batch), Some(2), true);
+    format!(
+        r#"You are a knowledge graph type normalizer. Map each entity type to the most appropriate canonical type.
+
+CANONICAL TYPES (you MUST map to one of these):
+{}
+
+RULES:
+1. Map each type to the SINGLE most appropriate canonical type from the list above
+2. Consider semantic meaning, not just string similarity
+3. Types ending in _rule, _policy, _constraint → "rule"
+4. Types ending in _requirement → "requirement"
+5. Types ending in _step, _procedure → "process" or "step"
+6. Types ending in _example, _sample → "example"
+7. Types ending in _guide, _guideline, _note, _documentation → "documentation"
+8. Types ending in _parameter, _field, _attribute → "parameter"
+9. Types ending in _feature, _capability → "feature"
+10. Types ending in _config, _setting, _option → "configuration"
+11. Types about facts, behaviors, details, info → "fact"
+12. Types about UI, interaction, presentation → "component" or "feature"
+13. Unknown or unclear types → "fact" (safest default)
+
+TYPES TO NORMALIZE:
+{types}
+
+Map each type to exactly one canonical type. Be aggressive in consolidation - we want fewer unique types."#,
+        canonical.join(", ")
+    )
+}
+
+/// One batch's reply (the tool call's arguments) as `(original, canonical)`
+/// pairs, validated as pydantic validated `TypeMappingResponse`.
+///
+/// # Errors
+///
+/// The reply is not a `TypeMappingResponse`: the reason.
+pub fn mappings_from_reply(reply: &Value) -> Result<Vec<(String, String)>, String> {
+    let mappings = reply
+        .get("mappings")
+        .and_then(Value::as_array)
+        .ok_or("it has no `mappings` list")?;
+    mappings
+        .iter()
+        .enumerate()
+        .map(|(index, mapping)| {
+            let text = |key: &str| {
+                mapping
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("mapping {index} has no string `{key}`"))
+            };
+            let confidence = mapping.get("confidence").and_then(Value::as_f64);
+            if !confidence.is_some_and(|c| (0.0..=1.0).contains(&c)) {
+                return Err(format!(
+                    "mapping {index} has no `confidence` between 0 and 1"
+                ));
+            }
+            Ok((text("original")?, text("canonical")?))
+        })
+        .collect()
+}
+
+/// Add one batch's mappings to `all`: a canonical answer as given, anything
+/// else `fact` (Python's rule); a type the batch did not ask about is
+/// ignored (see the module docs).
+pub fn merge_batch(
+    all: &mut IndexMap<String, String>,
+    batch: &[String],
+    pairs: Vec<(String, String)>,
+) {
+    let canonical = &tables().canonical_types;
+    for (original, target) in pairs {
+        if !batch.contains(&original) {
+            continue;
+        }
+        let target = if canonical.contains(&target) {
+            target
+        } else {
+            "fact".to_owned()
+        };
+        all.insert(original, target);
+    }
+}
+
+/// Map the graph's types (`node['type'] = mapping`), then re-normalise
+/// every type as Python's `_rebuild_indices` did. Returns how many
+/// entities were mapped.
+pub fn apply_mappings(graph: &mut Graph, mappings: &IndexMap<String, String>) -> usize {
+    let mut mapped = 0;
+    for (_, node) in graph.nodes_mut() {
+        let Some(Value::String(kind)) = node.get("type") else {
+            continue;
+        };
+        if let Some(target) = mappings.get(kind) {
+            node.insert("type".to_owned(), json!(target));
+            mapped += 1;
+        }
+        if let Some(Value::String(kind)) = node.get("type")
+            && !kind.is_empty()
+        {
+            let normalized = crate::extract::types::normalize_graph(kind);
+            if normalized != *kind {
+                node.insert("type".to_owned(), json!(normalized));
+            }
+        }
+    }
+    mapped
+}
+
+/// What an applied run changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Applied {
+    /// Distinct types after the run.
+    pub types_after: usize,
+    /// Entities whose type was mapped.
+    pub entities_normalized: usize,
+}
+
+/// The handler's answer: the dry-run preview (`applied` is `None`) or the
+/// applied run's report.
+#[must_use]
+pub fn smart_report(
+    plan: &SmartPlan,
+    mappings: &IndexMap<String, String>,
+    applied: Option<Applied>,
+    llm_model: &str,
+) -> String {
+    let Some(applied) = applied else {
+        let affected: usize = mappings
+            .keys()
+            .map(|kind| plan.candidates.get(kind).copied().unwrap_or(0))
+            .sum();
+        let message = format!(
+            "DRY RUN: Would normalize {} types affecting {affected} entities",
+            mappings.len()
+        );
+        if !plan.json {
+            return message;
+        }
+        let mut distribution: IndexMap<&str, usize> = IndexMap::new();
+        for (original, target) in mappings {
+            *distribution.entry(target.as_str()).or_insert(0) +=
+                plan.candidates.get(original).copied().unwrap_or(0);
+        }
+        let targets: std::collections::HashSet<&String> = mappings.values().collect();
+        let preview: IndexMap<&String, &String> = mappings.iter().take(50).collect();
+        return dumps(&json!({
+            "success": true,
+            "dry_run": true,
+            "types_to_normalize": mappings.len(),
+            "entities_affected": affected,
+            "target_types": targets.len(),
+            "mapping_preview": preview,
+            "target_type_distribution": distribution,
+            "message": message,
+        }));
+    };
+    let before = plan.types.len();
+    let message = format!(
+        "Smart normalization complete: {before} → {} types ({} entities updated)",
+        applied.types_after, applied.entities_normalized
+    );
+    if !plan.json {
+        return message;
+    }
+    #[allow(clippy::cast_possible_wrap, reason = "type counts")]
+    let reduced = before as i64 - applied.types_after as i64;
+    dumps(&json!({
+        "success": true,
+        "dry_run": false,
+        "types_before": before,
+        "types_after": applied.types_after,
+        "types_reduced": reduced,
+        "entities_normalized": applied.entities_normalized,
+        "mappings_applied": mappings.len(),
+        "llm_model": llm_model,
+        "message": message,
+    }))
+}
+
+/// `smart_normalize_types` over a read-only view: Python's answer when no
+/// type qualifies, otherwise refused (the native runner serves the rest).
 ///
 /// # Errors
 ///
@@ -370,41 +711,20 @@ pub fn smart_normalize_types(
     view: &GraphView,
     params: &Map<String, Value>,
 ) -> Result<String, EngineError> {
-    let threshold = py_int_param(params.get("threshold").unwrap_or(&json!(1000)))?;
-    py_int_param(params.get("batch_size").unwrap_or(&json!(100)))?;
-    let canonical = &tables().canonical_types;
-    let types = entity_types(view);
-    let candidates: Vec<&String> = types
-        .iter()
-        .filter(|(kind, count)| {
-            i128::try_from(**count).is_ok_and(|count| count < threshold)
-                && !canonical.contains(kind)
-        })
-        .map(|(kind, _)| kind)
-        .collect();
-    if !candidates.is_empty() {
-        let names: Vec<&str> = candidates.iter().map(|kind| kind.as_str()).collect();
-        return Err(EngineError::new(
-            ErrorType::Runtime,
-            format!(
-                "smart_normalize_types would map {} entity type(s) through a model ({}); the native Inventory engine normalises types only during an ingestion, onto the canonical set, and does not rewrite a stored graph outside one. Re-run run_ingestion to re-normalise.",
-                names.len(),
-                names.join(", ")
-            ),
-        ));
+    match smart_plan(&view.graph, params)? {
+        SmartStep::Answer(text) => Ok(text),
+        SmartStep::Map(plan) => {
+            let names: Vec<&str> = plan.candidates.keys().map(String::as_str).collect();
+            Err(EngineError::new(
+                ErrorType::Runtime,
+                format!(
+                    "smart_normalize_types would map {} entity type(s) through a model ({}), which only the native runner (ELITEA_INVENTORY_RUNNER=native) does",
+                    names.len(),
+                    names.join(", ")
+                ),
+            ))
+        }
     }
-    let message = format!(
-        "No types to normalize (all types either have count >= {threshold} or are already canonical)"
-    );
-    if wants_json(params, "json") {
-        return Ok(dumps(&json!({
-            "success": true,
-            "message": message,
-            "types_checked": types.len(),
-            "canonical_types": canonical.len(),
-        })));
-    }
-    Ok(message)
 }
 
 #[cfg(test)]
