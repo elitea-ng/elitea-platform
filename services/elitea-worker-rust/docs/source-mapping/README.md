@@ -46,6 +46,7 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Helm master-key render test 2026-10-09](helm-master-key-render-test-20261009.md) makes `render-main-master-key.sh` declare the network-policy decision #1176 requires, so its 9 checks reach the master-key logic again; registers it as `task helm:main-master-key`, with mutation proof.
 - [Dependency advisories 2026-10-08](dependency-advisories-20261008.md) raises the Go standard-library floor to go1.25.13/go1.26.6, updates h2 and chacha20, and proves the MySQL TLS guard that keeps the rsa (RUSTSEC-2023-0071) path unreachable.
 - [Go 1.26 toolchain for the go.work modules](go-1-26-toolchain-20261009.md) moves every go.work module, its builder images and CI to Go 1.26 with a go1.26.9 floor, takes x/net v0.60.0 and x/crypto v0.57.0, drops `x/crypto/ssh` from the advisory guard, and records govulncheck before and after.
 
@@ -458,6 +459,8 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Access hardening](access-hardening-20261008.md) records project-scoped reads and pins, unlock admission, the mandatory vault master key and the Web CSP and sanitiser, with tests and follow-ups.
 - [Social feedback in the shared table](social-feedback-shared-table-20261009.md) records the fix for the 500 on the social feedback listing (shared `centry.social_feedbacks` with a project column instead of a missing tenant table), project-scoped listing with membership inside the SQL, the real-PostgreSQL tests, browser evidence, recovery rows and follow-ups.
 - [Edge identity propagation](edge-identity-propagation-20261008.md) records the signed edge identity projection, edge strip and NetworkPolicy hardening, its tests and recovery rows.
+- [Post-merge verification of main 1ab920dde](post-merge-verification-1ab920dde-20261009.md) records the local suites and the real-model browser pass for the second 2026-10-09 batch (#1174–#1178), the findings and the follow-ups.
 - [MCP/toolkit picker paging and standalone discovery default](mcp-picker-paging-discovery-default-20261009.md) records the server-side `mcp`/`query` filter on the toolkit listing, per-section picker paging, discovery on by default in the standalone compose stacks with a readable message where it is off, real-PostgreSQL and browser evidence, and follow-ups.
 - [Browser sessions refused on a standalone stack](browser-session-cookie-host-20261009.md) records why the post-merge `session_unknown` refusals on 1ab920dde were two local stacks sharing the `localhost` cookie host (not a Main regression), the opt-in `STANDALONE_HOST`, the real-PostgreSQL session journey test and browser evidence.
 - [Pipeline nodes on an attached artifact toolkit](pipeline-artifact-toolkit-nodes-20261009.md) records why a root pipeline refused direct nodes on an artifact toolkit as "outside its frozen scope" (the claim was never lent to the family), the fix, the journal and real-PostgreSQL proofs, browser evidence and the nested-position follow-ups.
+- [Post-merge verification of main c0f2e5f9b](post-merge-verification-c0f2e5f9b-20261009.md) records the local suites, including secured NATS on Go 1.26.9, and the browser pass for the third 2026-10-09 batch (#1179–#1186).

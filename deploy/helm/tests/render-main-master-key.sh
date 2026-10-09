@@ -18,8 +18,14 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 CHART="$REPO/deploy/helm/elitea"
+# noExternalIngress=true is the decision guards.yaml demands of every render
+# with networkPolicies.enabled (the default) about who may reach elitea-main.
+# Without it every render stops at that guard before any master-key logic runs.
+# It changes only elitea-main's NetworkPolicy, never its env; the guard itself
+# is asserted by render-network-policies.sh.
 ONLY_MAIN=(--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false
-  --set otelCollector.enabled=false --set worker.enabled=false)
+  --set otelCollector.enabled=false --set worker.enabled=false
+  --set networkPolicies.main.noExternalIngress=true)
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -50,6 +56,11 @@ refuses() {
   local output
   if output="$(helm template test-release "$CHART" "${ONLY_MAIN[@]}" "$@" 2>&1)"; then
     fail "the chart rendered $description, and elitea-main would then refuse to start"
+  elif grep -q 'networkPolicies\.' <<<"$output"; then
+    # A network-policy guard stopped the render before the master-key guard
+    # ran, so this refusal proves nothing about the master key.
+    fail "the chart refuses $description, but at a network-policy guard:
+$output"
   elif grep -qE "$expected" <<<"$output"; then
     pass "the chart refuses $description while it renders"
   else
@@ -105,9 +116,9 @@ fi
 # 4. Refusals.
 refuses "a plaintext SECRETS_MASTER_KEY in main.env" 'main\.env\.SECRETS_MASTER_KEY' \
   --set-string main.env.SECRETS_MASTER_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-refuses "a master key reference with no Secret name" 'main\.secrets\.SECRETS_MASTER_KEY' \
+refuses "a master key reference with no Secret name" 'needs both secretName and key' \
   --set main.secrets.SECRETS_MASTER_KEY.secretName= --set main.secrets.SECRETS_MASTER_KEY.key=k
-refuses "no master key source at all" 'SECRETS_MASTER_KEY' \
+refuses "no master key source at all" 'has no SECRETS_MASTER_KEY source' \
   --set llmGateway.secrets.SECRETS_MASTER_KEY=null
 
 # 5. With no key source the opt-out is the one way through.
