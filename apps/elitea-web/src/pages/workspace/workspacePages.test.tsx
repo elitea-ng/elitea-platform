@@ -31,7 +31,8 @@ const globals = globalThis as unknown as Record<string, unknown>;
 
 const FOLDER: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: null, is_git: true };
 
-function mount(ipc: FakeWorkspaceIpc, path: string): void {
+/** Mounts the pages at `path`; answers a function that opens another folder's session. */
+function mount(ipc: FakeWorkspaceIpc, path: string): (workspaceId: string) => Promise<void> {
   const rootRoute = createRootRoute();
   const list = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces', component: WorkspacesPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage });
@@ -47,6 +48,7 @@ function mount(ipc: FakeWorkspaceIpc, path: string): void {
       </WorkspaceIpcProvider>
     </AppProviders>,
   );
+  return (workspaceId) => router.navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
 }
 
 beforeEach(() => {
@@ -270,6 +272,32 @@ describe('WorkspaceSessionPage', () => {
     await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
     expect(ipc.calls.started.map((r) => r.conversation_id)).toEqual(['77', '77']);
     expect(created).toBe(1);
+  });
+
+  it('starts afresh in another folder: the first folder\'s running turn does not follow', async () => {
+    serveProject();
+    const other: Workspace = { id: 'w2', path: '/Users/me/code/lib', name: 'lib', project_id: 42, is_git: false };
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }, other] });
+    const user = userEvent.setup();
+    const openFolder = mount(ipc, '/workspaces/w1');
+
+    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
+    await user.click(await screen.findByRole('option', { name: 'Coder' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await user.type(screen.getByLabelText('What should the agent do?'), 'go');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+    ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'text_delta', payload: { text: 'working in app' } });
+    expect(await screen.findByText('working in app')).toBeInTheDocument();
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+
+    await act(() => openFolder('w2'));
+    expect(await screen.findByText('/Users/me/code/lib')).toBeInTheDocument();
+    expect(screen.queryByText('working in app')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.getByRole('combobox', { name: 'Agent' })).not.toHaveTextContent('Coder');
+    // One listener: the old session's was removed with it.
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
   });
 
   it('cancels the running turn from the transcript', async () => {

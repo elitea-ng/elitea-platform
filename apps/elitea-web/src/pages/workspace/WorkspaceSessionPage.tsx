@@ -89,7 +89,9 @@ function Session({ ipc, workspaceId }: { ipc: WorkspaceIpc; workspaceId: string 
   if (list.isPending) return <Typography>{t('workspace.loading', 'Loading workspaces')}</Typography>;
   if (workspace === undefined) return <Alert severity="warning">{t('workspace.notFound', 'This folder is no longer in your workspaces.')}</Alert>;
   if (workspace.project_id === null) return <Alert severity="info">{t('workspace.needsProject', 'Bind a project to this folder first.')}</Alert>;
-  return <BoundSession ipc={ipc} workspace={workspace} projectId={workspace.project_id} />;
+  // Keyed: another folder (or another project bound to it) is a new session —
+  // its own turn, event subscription, agent pick and pending conversation.
+  return <BoundSession key={`${workspace.id}:${String(workspace.project_id)}`} ipc={ipc} workspace={workspace} projectId={workspace.project_id} />;
 }
 
 export default function WorkspaceSessionPage(): React.JSX.Element {
