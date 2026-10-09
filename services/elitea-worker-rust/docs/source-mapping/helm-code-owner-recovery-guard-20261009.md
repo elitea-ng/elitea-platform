@@ -41,10 +41,10 @@ Why the chart did not catch it:
 
 | Path | Change |
 | --- | --- |
-| `deploy/helm/elitea/templates/_code-nodes.tpl:111-124` | New `elitea.codeNodes.validateWorker`. It fails when `worker.enabled` and `worker.runtime.agentNodeRecovery` is boolean `true` and `worker.runtime.sandboxRuntimes` is non-empty and `main.runtime.codeOwnerRecovery.enabled` is not `true`. The message says that Code nodes would be refused without original-Code owner recovery, before any sandbox dispatch, and names the three ways out. |
+| `deploy/helm/elitea/templates/_code-nodes.tpl:111-134` | New `elitea.codeNodes.validateWorker`. It fails when `worker.enabled` and `worker.runtime.agentNodeRecovery` is boolean `true` and `worker.runtime.sandboxRuntimes` is non-empty and `main.runtime.codeOwnerRecovery.enabled` is not `true`. The message says that Code nodes would be refused without original-Code owner recovery, before any sandbox dispatch, and names the three ways out. With owner recovery on, it also fails for every `sandboxRuntimes[].audience` that has no `codeOwnerRecovery.supervisors` entry, because Main signs original-Code intents only for its owner supervisors' audiences (`services/elitea-main/internal/runtimecomposition/code_owner_config.go:100-110`, `services/elitea-main/internal/infra/db/repos/code_sandbox_intent.go:414`). That check was added after code review. |
 | `deploy/helm/elitea/templates/guards.yaml:13` | Includes it next to `elitea.compiledSnapshots.validate`, so every render runs it whichever templates are shown. |
 | `deploy/helm/elitea/values.yaml:3726-3728` | The `agentNodeRecovery` comment states the pairing with `main.runtime.codeOwnerRecovery`. Values unchanged. |
-| `deploy/helm/tests/render-worker-node-recovery.sh:31-38,176-247` | Header rule and 6 new assertions (12 → 18; derived floor). |
+| `deploy/helm/tests/render-worker-node-recovery.sh:31-40,176-276` | Header rule and 8 new assertions (12 → 20; derived floor). |
 | `deploy/helm/tests/render-worker-sandbox.sh:7-19,67-73` | Its fixture is now a valid deployment: owner recovery for both supervisor audiences. A new check shows that the same fixture with owner recovery off is refused with the new message. CI runs this script (`.github/workflows/helm-lint.yml:248`); CI is not changed. |
 | `deploy/runtime/sandbox-deployment.md:199-200` | Operator note: the journal with sandbox runtimes needs `main.runtime.codeOwnerRecovery`. |
 | `services/elitea-worker-rust/docs/recovery-guarantees.md` D1 | Line references refreshed (`values.yaml:3712-3713`, `:3714-3730`). New bullet: the Code owner contract, the guard, the proofs, the compose caveat, and a link to G-ADV-01. The stale "the chart has no key for it" now reads: the key exists since `00b8a259b` and defaults to false, so G-WORKER-01 is "default off", not "no key". |
@@ -87,8 +87,11 @@ so it was removed as redundant.
 
 Local: helm v4.1.0+g4553a0a, Python 3 with PyYAML, macOS arm64, `f7c6a6028` plus this change.
 
-TDD: the 6 new assertions were written first. Before the guard: 18 ran, 16 passed, 2 failed (both refusal cases
-rendered). After it: 18/18.
+TDD:
+- The first 6 new assertions were written before the guard: 18 ran, 16 passed, 2 failed (both refusal cases rendered).
+  With the guard: 18/18.
+- The per-audience pair was added after code review, also test first: 20 ran, 19 passed, 1 failed (an owner
+  supervisor missing for `dns:sandbox-rust` rendered). With the audience check: 20/20.
 
 `render-worker-node-recovery.sh`, new cases:
 
@@ -99,6 +102,8 @@ rendered). After it: 18/18.
 | Rust, journal, no sandbox runtimes, owner off | renders, `agent_node_recovery: true` |
 | Rust, sandbox runtimes, no journal, owner off | renders, no `agent_node_recovery` key |
 | Rust, journal + sandbox runtimes + owner recovery | renders. The Worker gets both, and Main's ConfigMap has `ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"` |
+| Rust, journal, two sandbox runtimes, owner supervisor only for `dns:sandbox-python` | refused: no `codeOwnerRecovery` supervisor for audience `"dns:sandbox-rust"` |
+| Rust, the same two runtimes and owner, no journal | renders (no original-Code visit is made) |
 | Python, journal + sandbox runtimes | refused as Rust-only ("require the Rust worker"), not as a Code owner gap |
 
 `render-worker-sandbox.sh`: the existing checks pass with the corrected fixture, and the refusal check passes.
@@ -112,6 +117,7 @@ Mutation proof (each applied to the template, run, then restored):
 | sandboxRuntimes condition dropped | node-recovery: "rust, true" and "journal without sandbox runtimes" FAIL |
 | owner condition dropped | node-recovery: "journal, sandbox runtimes and owner recovery" FAIL; sandbox: FAIL |
 | `isRust` condition dropped | **not caught**, so it was redundant; removed from the change (see above) |
+| per-audience loop absent (the state before code review) | node-recovery: "owner recovery for one of two sandbox audiences" FAIL |
 
 Also checked by hand: `worker.enabled=false` with the same worker values renders (the guard is inert without a Worker).
 
@@ -121,7 +127,7 @@ Full Helm run with the final change:
 | --- | --- |
 | All 21 `deploy/helm/tests/render-*.sh` + `render-compiled-snapshots.py` | 22/22 pass |
 | ... including the 4 not wired into CI: `render-main-master-key.sh`, `render-network-policies.sh`, `render-platform-edge-identity.sh`, `render-sandbox-images.sh` | pass |
-| `render-worker-node-recovery.sh` | 18/18 |
+| `render-worker-node-recovery.sh` | 20/20 |
 | `render-worker.sh` | 8/8 |
 | `render-bf0-2b.sh` | 23/23 |
 | `render-nats-security.sh` | 264 assertions, 0 failed |
@@ -139,7 +145,7 @@ Skips:
 
 Not applicable at run time: render-time template logic only. The default render is unchanged; every existing render
 script passes byte-for-byte assertions such as `render-worker.sh`. The guard is one `if` over four already-loaded
-values. The 18-case script runs in about 1-2 s locally.
+values. The 20-case script runs in about 1-2 s locally.
 
 ## Durability
 
@@ -172,11 +178,28 @@ values. The 18-case script runs in about 1-2 s locally.
 - **Fail-closed config:** improved (the new render refusal).
 - **Supply chain:** no dependency change, so no `govulncheck`, `cargo deny` or `npm audit` delta is possible.
 
+## Reviews
+
+`code-review` (high) on `origin/main...fix/helm-code-owner-recovery-guard` reported 6 findings:
+
+| Finding | Outcome |
+| --- | --- |
+| The guard checked only `codeOwnerRecovery.enabled`, not that each sandbox runtime's audience has an owner supervisor. Main refuses intents for other audiences. | **Fixed**: per-audience check plus 2 assertions (above). |
+| With no `isRust` condition, the Python case's message depends on Helm's template order. | Kept. A Python worker with these options is refused either way. The "python, journal and sandbox runtimes" assertion pins today's message, so an order change shows up as a test failure, not as an accepted install. |
+| The guard reads this release's `main.runtime` even when `main.enabled=false`. | No change. The chart already treats `main.runtime` as the Worker's Main whatever `main.enabled` says (`guards.yaml:70-72` requires `main.runtime.enabled` for any Worker). |
+| Root cause at run time (bare 404 leading to `INTERNAL`) and compose are not fixed. | Deferred and recorded: see the Decision section and Follow-ups. The files involved belong to #1084. |
+| Sandbox/owner fixtures are duplicated between the two scripts. | Kept. Each script stays self-contained, as the other render scripts are; the shapes are tiny. |
+| The "all three" failure prints only the render's `.err` tail. | Kept. Diagnostic only; a failure is still reported and counted. |
+
+`security-review`: the skill reviews the session's own repository, not this worktree, so it was not run as a skill.
+The manual security pass is the Security section above. There is no route, parser, query, egress, secret or
+dependency in the diff.
+
 ## Recovery guarantee rows
 
 | Component × phase | Before | After | Enforcing code | Proof |
 | --- | --- | --- | --- | --- |
-| Worker (Kubernetes, Helm) × P09-P12 (Code), journal on, owner off | not R or I: every Code node fails at admission, before dispatch, as `INTERNAL`; installable | **not installable**: refused at render | `_code-nodes.tpl:111-124`, `guards.yaml:13` | `render-worker-node-recovery.sh` refusal cases; `render-worker-sandbox.sh` |
+| Worker (Kubernetes, Helm) × P09-P12 (Code), journal on, owner off or missing the runtime's audience | not R or I: every Code node fails at admission, before dispatch, as `INTERNAL`; installable | **not installable**: refused at render | `_code-nodes.tpl:111-134`, `guards.yaml:13` | `render-worker-node-recovery.sh` refusal cases; `render-worker-sandbox.sh` |
 | Worker (Kubernetes, Helm) × P09-P12, journal + owner on | R (container) / F (pod replacement, D2) as recorded | unchanged | — | "journal, sandbox runtimes and owner recovery" case |
 | Worker (compose) × P09-P12, journal on, `docker-compose.code-consumers.yml` not layered | F (typed admission refusal shown as `INTERNAL`) | **unchanged** (no render step) | — | follow-up |
 

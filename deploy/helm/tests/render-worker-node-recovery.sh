@@ -34,8 +34,10 @@
 #     sandbox runtimes and owner recovery off is refused: every Code node would
 #     fail at admission, before any sandbox dispatch, as the generic "The
 #     runtime operation failed." (_code-nodes.tpl, codeNodes.validateWorker).
-#     The journal without sandbox runtimes, sandbox runtimes without the
-#     journal, and all three together render.
+#     Each sandbox runtime's audience needs its own owner supervisor: Main
+#     signs original-Code intents only for those audiences. The journal
+#     without sandbox runtimes, sandbox runtimes without the journal, and all
+#     three together render.
 #
 # Run: deploy/helm/tests/render-worker-node-recovery.sh
 # Needs: helm, python3 with PyYAML. No cluster, no network.
@@ -241,6 +243,33 @@ render rust-journal-code-owner --set worker.implementation=rust --set worker.run
     -f "$TMP/sandbox.yaml" -f "$TMP/owner.yaml" \
   && ok "rust, journal, sandbox runtimes and owner recovery: renders, and Main gets owner recovery" \
   || bad "rust, journal, sandbox runtimes and owner recovery: $(tail -1 "$TMP/rust-journal-code-owner.err")"
+# A second backend whose supervisor audience has no owner supervisor: Main
+# signs original-Code intents only for its owner supervisors' audiences.
+cat >"$TMP/sandbox-two.yaml" <<'YAML'
+worker:
+  runtime:
+    sandboxRuntimes:
+      - language: python
+        target: sandbox-python:9446
+        audience: dns:sandbox-python
+        image_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy_revision: python-js-v1
+        timeout_seconds: 120
+      - language: rust
+        target: sandbox-rust:9447
+        audience: dns:sandbox-rust
+        image_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        policy_revision: rust-v1
+        timeout_seconds: 120
+YAML
+refuses 'no main.runtime.codeOwnerRecovery supervisor for audience "dns:sandbox-rust"' \
+  --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+  -f "$TMP/sandbox-two.yaml" -f "$TMP/owner.yaml" \
+  && ok "rust, journal, owner recovery for one of two sandbox audiences: refused for the uncovered audience" \
+  || bad "rust, journal, owner recovery missing one sandbox audience: not refused for dns:sandbox-rust"
+render rust-code-two-no-journal --set worker.implementation=rust -f "$TMP/sandbox-two.yaml" -f "$TMP/owner.yaml" \
+  && ok "rust, the same audiences without the journal: renders (no original-Code visit)" \
+  || bad "rust, the same audiences without the journal: $(tail -1 "$TMP/rust-code-two-no-journal.err")"
 refuses 'require the Rust worker' --set worker.implementation=python --set worker.runtime.agentNodeRecovery=true \
   -f "$TMP/sandbox.yaml" \
   && ok "python, journal and sandbox runtimes: refused as Rust-only, not as a Code owner gap" \
