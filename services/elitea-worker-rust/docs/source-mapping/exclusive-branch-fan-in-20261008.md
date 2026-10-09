@@ -200,6 +200,20 @@ same stack and fixtures were reused.
 - The full Worker suite on the merged tree (`--offline`, PG18): 1,680 passed, 0 failed, 63 ignored. The count is
   lower because `main` moved tests into `elitea-agent-runtime`.
 
+**Re-run after the #1161 merge (2026-10-09).** The branch was merged with `main` at `15e5fdd9`, which includes
+#1161 (last-writer pipeline result and its result trace) and #1158. Worker, Main and Web were rebuilt from that head
+and the same stack, fixtures and chat were reused.
+- Images:
+  - Worker `sha256:f31fdc18aeae…`;
+  - Main `sha256:2740c29f9d81…`;
+  - Web `sha256:c727abb81719…`.
+- Binary guard: the Worker binary (SHA-256 `741eb5774f65bd4a…`) contains `compiler::exclusive_transitions`
+  (5 matches) and #1161's `result_trace_outputs` (46 matches).
+- In chat 1, `left`, `plain` and `right` answered `LEFT via ONCE`, `PLAIN via ONCE` and `RIGHT via ONCE`. The
+  answers are message groups 14, 16 and 18, execution ids `e2302c84…`, `299d615f…` and `923d8ab5…`.
+- All 9 turns were present and identical after reload.
+- Worker library suite on this head (`--offline`): 1,634 passed, 0 failed, 63 ignored. CI runs the PG-backed suite.
+
 A negative control on a `main` Worker image was not run in the browser. The red tests above are the before-fix
 evidence.
 
