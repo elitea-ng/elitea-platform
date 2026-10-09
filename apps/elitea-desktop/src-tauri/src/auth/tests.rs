@@ -642,3 +642,23 @@ async fn a_426_from_the_token_endpoint_is_reported_as_upgrade_required() {
     );
     assert!(h.keychain.raw().is_some(), "the session is kept");
 }
+
+#[tokio::test]
+async fn a_policy_file_that_cannot_be_written_does_not_fail_sign_in_or_refresh() {
+    let challenge = Arc::new(std::sync::Mutex::new(String::new()));
+    let server = deployment(pkce_checking_deployment(challenge.clone(), Arc::default())).await;
+    let issuer = server.origin.clone();
+    let h = harness(move |q, url| {
+        *challenge.lock().unwrap() = q["code_challenge"].clone();
+        approve_with(issuer.clone())(q, url)
+    });
+    h.service.connect(&server.origin).await.unwrap();
+    // A directory where the staging file must go: every policy write fails.
+    std::fs::create_dir_all(h.dir.join("client-policy.json.tmp")).unwrap();
+
+    let state = h.service.sign_in().await.unwrap();
+    assert!(state.signed_in);
+    assert!(h.keychain.raw().unwrap().contains("refresh-1"));
+    assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
+    assert!(h.keychain.raw().unwrap().contains("refresh-2"));
+}

@@ -281,8 +281,12 @@ impl AuthService {
         } else {
             *self.unsaved.lock().await = None;
         }
-        if let Some(policy) = &tokens.client_policy {
-            self.files.save_policy(policy)?;
+        // The policy file is a cache of what the server sent; failing to write
+        // it must not fail a sign-in or a refresh whose token is already stored.
+        if let Some(policy) = &tokens.client_policy
+            && let Err(error) = self.files.save_policy(policy)
+        {
+            eprintln!("elitea-desktop: could not store the client policy: {error}");
         }
         *self.cached.lock().await = Some(Cached {
             token: tokens.access_token,
