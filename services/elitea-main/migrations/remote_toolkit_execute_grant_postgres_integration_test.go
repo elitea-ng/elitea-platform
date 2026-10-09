@@ -98,3 +98,52 @@ WHERE role_id = $1 AND permission = $2`, auditorRole, remoteToolkitExecutePermis
 		t.Fatalf("a role outside admin/editor/viewer received %s", remoteToolkitExecutePermission)
 	}
 }
+
+// The grant follows the chat send, not the role name: a role that does not
+// hold `models.chat.messages.create` (centrally, or in a project's saved
+// matrix) is not handed the tools a chat turn would run.
+func TestTheGrantFollowsTheChatSendNotTheRoleName(t *testing.T) {
+	pool := newMigratedPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	body, err := os.ReadFile(filepath.Join("shared", "0156_remote_toolkit_execute_permission.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Central: an operator took the chat send away from the default viewer.
+	if _, err := pool.Exec(ctx, `
+DELETE FROM public.auth_core__role_permission AS grant_row
+USING public.auth_core__role AS role
+WHERE grant_row.role_id = role.id AND role.mode = 'default' AND role.name = 'viewer'
+  AND grant_row.permission IN ('models.chat.messages.create', $1)`, remoteToolkitExecutePermission); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(body)); err != nil {
+		t.Fatalf("re-run 0156: %v", err)
+	}
+	if holders := defaultModeGrantHolders(t, pool, remoteToolkitExecutePermission); slices.Contains(holders, "viewer") {
+		t.Fatalf("a viewer without the chat send was granted %s centrally (holders %v)", remoteToolkitExecutePermission, holders)
+	}
+
+	// Per project: a saved matrix that gives the viewer something, but not
+	// the chat send.
+	viewerRole := seedRoleMembership(t, pool, 15604, "viewer", 1)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
+VALUES (1, $1, 'models.applications.version.details')`, viewerRole); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(body)); err != nil {
+		t.Fatalf("re-run 0156 over the saved matrix: %v", err)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM public.auth_core__project_role_permission
+WHERE project_id = 1 AND role_id = $1 AND permission = $2`, viewerRole, remoteToolkitExecutePermission).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("a project viewer whose matrix withholds the chat send received %s", remoteToolkitExecutePermission)
+	}
+}
