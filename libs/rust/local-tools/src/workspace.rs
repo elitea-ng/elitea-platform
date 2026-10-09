@@ -507,6 +507,12 @@ impl Workspace {
                         None
                     }
                     Err(Errno::NOENT) if create_dirs => {
+                        // The directory a write would create must itself be
+                        // writable: a symlink followed on the way may have
+                        // led into `.git` or a denied path.
+                        let mut created = done.clone();
+                        created.push(name.clone());
+                        self.check(&WsPath(created), Intent::Write)?;
                         match rustix::fs::mkdirat(&dir, name.as_str(), Mode::from_raw_mode(0o755)) {
                             Ok(()) | Err(Errno::EXIST) => {}
                             Err(errno) => return Err(errno.into()),
@@ -676,6 +682,9 @@ impl Workspace {
     /// Outside the workspace, denied, a directory in the way, or I/O.
     pub fn write(&self, path: &WsPath, bytes: &[u8], mode: Option<u32>) -> ToolResult<WsPath> {
         self.check(path, Intent::Write)?;
+        // Where it lands, checked before anything is created on the way
+        // (the creating walk checks each directory it makes, too).
+        self.check(&self.final_target(path)?, Intent::Write)?;
         let (dir, resolved) = self.locate(path, true, true)?;
         self.check(&resolved, Intent::Write)?;
         let name = resolved.file_name().unwrap_or_default().to_owned();
@@ -719,6 +728,8 @@ impl Workspace {
     }
 
     /// Remove a file (or a symlink itself). `Ok(false)` when it was absent.
+    /// The path after following symlinks on the way is checked against the
+    /// deny rules before anything is removed.
     ///
     /// # Errors
     ///
@@ -730,6 +741,8 @@ impl Workspace {
             Err(error) if error.code() == ErrorCode::NotFound => return Ok(false),
             Err(error) => return Err(error),
         };
+        // A symlink on the way may have led into `.git` or a denied path.
+        self.check(&resolved, Intent::Write)?;
         match rustix::fs::unlinkat(
             &dir,
             resolved.file_name().unwrap_or_default(),
@@ -1069,6 +1082,51 @@ mod tests {
         std::fs::write(root.path().join("big"), vec![b'a'; 2048]).expect("seed");
         let path = ws.resolve("big", Intent::Read).expect("path");
         assert_eq!(code(ws.read(&path, 1024)), ErrorCode::TooLarge);
+    }
+
+    /// A path that reaches `.git` (or a `path_deny` match) through an
+    /// in-workspace symlink is refused before anything changes: no file is
+    /// removed and no directory is created on the way.
+    #[test]
+    fn a_link_into_protected_or_denied_paths_changes_nothing() {
+        let (root, _outside, ws) = workspace(&["secrets/**"]);
+        std::fs::create_dir_all(root.path().join(".git/hooks")).expect("git dir");
+        std::fs::write(root.path().join(".git/config"), "[core]\n").expect("config");
+        std::fs::create_dir(root.path().join("secrets")).expect("secrets");
+        std::fs::write(root.path().join("secrets/key"), "k").expect("key");
+        symlink(".git", root.path().join("x")).expect("link");
+        symlink("secrets", root.path().join("vault")).expect("link");
+
+        let config = ws
+            .resolve("x/config", Intent::Write)
+            .expect("lexically fine");
+        assert_eq!(code(ws.remove_file(&config)), ErrorCode::Denied);
+        assert!(root.path().join(".git/config").exists(), "not removed");
+        let key = ws
+            .resolve("vault/key", Intent::Write)
+            .expect("lexically fine");
+        assert_eq!(code(ws.remove_file(&key)), ErrorCode::Denied);
+        assert!(root.path().join("secrets/key").exists(), "not removed");
+
+        let hook = ws
+            .resolve("x/hooks/new/pre-commit", Intent::Write)
+            .expect("lexically fine");
+        assert_eq!(
+            code(ws.write(&hook, b"#!/bin/sh\n", None)),
+            ErrorCode::Denied
+        );
+        assert!(
+            !root.path().join(".git/hooks/new").exists(),
+            "no directory was created inside .git"
+        );
+        let planted = ws
+            .resolve("vault/new/key", Intent::Write)
+            .expect("lexically fine");
+        assert_eq!(code(ws.write(&planted, b"x", None)), ErrorCode::Denied);
+        assert!(
+            !root.path().join("secrets/new").exists(),
+            "no directory was created in a denied path"
+        );
     }
 
     #[test]
