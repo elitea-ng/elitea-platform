@@ -89,8 +89,8 @@ pub fn save_pending(store: &dyn SecretStore, pending: &[PendingRevoke]) -> Resul
         return store.clear();
     }
     let start = pending.len().saturating_sub(MAX_PENDING_REVOKES);
-    let raw = serde_json::to_string(&pending[start..])
-        .map_err(|e| HostError::Internal(e.to_string()))?;
+    let raw =
+        serde_json::to_string(&pending[start..]).map_err(|e| HostError::Internal(e.to_string()))?;
     store.save(&raw)
 }
 

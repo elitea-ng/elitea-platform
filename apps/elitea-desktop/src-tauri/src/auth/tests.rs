@@ -499,7 +499,10 @@ async fn a_sign_out_during_a_refresh_is_not_undone_by_the_refresh() {
     h.service.sign_out().await.unwrap();
     let _ = refreshing.await.unwrap();
 
-    assert!(h.keychain.raw().is_none(), "the refresh resurrected the session");
+    assert!(
+        h.keychain.raw().is_none(),
+        "the refresh resurrected the session"
+    );
     assert!(h.service.access_token().await.unwrap().is_none());
     // The sign-out waited for the rotation and revoked the LIVE token.
     let revoked: Vec<String> = server
@@ -720,9 +723,12 @@ async fn a_failed_revoke_is_kept_in_the_keychain_and_retried_at_the_next_launch(
     assert!(h.keychain.raw().is_none());
     assert!(!h.service.state().unwrap().signed_in);
     assert!(h.pending.raw().unwrap().contains("refresh-1"));
-    assert!(!std::fs::read_dir(&h.dir).unwrap().any(|f| {
-        std::fs::read_to_string(f.unwrap().path()).is_ok_and(|t| t.contains("refresh-1"))
-    }), "no refresh token in a plain file");
+    assert!(
+        !std::fs::read_dir(&h.dir).unwrap().any(|f| {
+            std::fs::read_to_string(f.unwrap().path()).is_ok_and(|t| t.contains("refresh-1"))
+        }),
+        "no refresh token in a plain file"
+    );
 
     // Still down at the next launch: kept.
     assert_eq!(h.service.retry_pending_revokes().await, 1);
@@ -743,7 +749,11 @@ async fn sign_out_falls_back_to_the_stored_revocation_endpoint_when_discovery_fa
     let (h, server) = signed_in(Arc::default()).await;
     // Discovery now fails (the origin moved away), the stored endpoint still answers.
     let mut session = load_session(h.keychain.as_ref()).unwrap().unwrap();
-    assert!(session.revocation_endpoint.ends_with("/api/v2/auth/native/revoke"));
+    assert!(
+        session
+            .revocation_endpoint
+            .ends_with("/api/v2/auth/native/revoke")
+    );
     session.origin = "http://127.0.0.1:9".into();
     save_session(h.keychain.as_ref(), &session).unwrap();
 
@@ -772,7 +782,10 @@ async fn a_cancelled_sign_in_stops_waiting_and_stores_nothing() {
         .await
         .expect("cancel ends the wait well before the deadline")
         .unwrap();
-    assert!(matches!(result, Err(HostError::SignInAborted)), "{result:?}");
+    assert!(
+        matches!(result, Err(HostError::SignInAborted)),
+        "{result:?}"
+    );
     assert!(h.keychain.raw().is_none());
     // Cancelling with nothing waiting is harmless.
     h.service.cancel_sign_in();

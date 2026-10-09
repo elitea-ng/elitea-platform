@@ -210,7 +210,10 @@ impl AuthService {
         // Armed first, so a cancel that arrives while discovery is still
         // loading is not lost. A newer attempt replaces (and so ends) an older one.
         let (cancel_tx, cancel_rx) = oneshot::channel();
-        *self.sign_in_cancel.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel_tx);
+        *self
+            .sign_in_cancel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(cancel_tx);
         let settings = self.files.settings()?;
         let origin_text = settings.origin.clone().ok_or(HostError::NotConnected)?;
         let origin = Url::parse(&origin_text).map_err(|e| HostError::Internal(e.to_string()))?;
