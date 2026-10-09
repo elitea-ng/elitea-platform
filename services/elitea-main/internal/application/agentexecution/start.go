@@ -414,7 +414,7 @@ func currentApplicationInput(
 	// appendCurrentApplicationProjectContext, off the frozen version's own
 	// meta (ELITEA-0945).
 	versionDetails = appendCurrentApplicationProjectContext(versionDetails, projectContextText)
-	versionDetails, err = freezeCurrentHTTPActionRequests(target.ApplicationID, target.ApplicationVersionID, versionDetails)
+	versionDetails, err = freezeCurrentHTTPActionRequests(target.ApplicationID, target.ApplicationVersionID, versionDetails, target.SourceVersionDetails)
 	if err != nil {
 		// A pipeline the shared admission refuses (a size bound, a node type
 		// this deployment does not run, an unattached toolkit) keeps the

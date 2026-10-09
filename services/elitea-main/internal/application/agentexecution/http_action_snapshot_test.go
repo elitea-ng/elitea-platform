@@ -97,7 +97,7 @@ func TestCurrentPipelineStartNamesTheNodeTheRuntimeWouldRefuse(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			details, err := json.Marshal(map[string]any{"agent_type": "pipeline", "instructions": tc.instructions, "llm_settings": map[string]any{"model_name": "test", "model_project_id": 7, "openai_compatible": false}, "meta": map[string]any{}, "tools": []any{}})
 			require.NoError(t, err)
-			_, err = currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, nil, "", "")
+			_, err = currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, SourceVersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, nil, "", "")
 			require.ErrorIs(t, err, ErrUnsupportedCurrentAgentStart)
 			refusal := pipelinelimits.Refusal(err)
 			require.NotNil(t, refusal, "start error %v carries no typed refusal", err)
@@ -109,22 +109,33 @@ func TestCurrentPipelineStartNamesTheNodeTheRuntimeWouldRefuse(t *testing.T) {
 	}
 }
 
-// The frozen tool list decides: an attached toolkit (exact or legacy-key name)
-// starts, and a tool list that does not decode never yields a guessed verdict.
-func TestCurrentPipelineStartBindsDirectToolNodesToTheFrozenTools(t *testing.T) {
+// The attached tools decide: a frozen toolkit (exact or legacy-key name)
+// starts, and so does one the version stores but freezing dropped (a
+// guardrail-blocked toolkit, or one whose schema this runtime lacks) — that
+// toolkit IS attached, and telling the author to attach it would be wrong, so
+// the Worker's own refusal stands. Undecodable lists and an unknown stored
+// version never yield a guessed verdict.
+func TestCurrentPipelineStartBindsDirectToolNodesToTheAttachedTools(t *testing.T) {
 	instructions := "entry_point: fetch\nnodes:\n  - id: fetch\n    type: mcp\n    toolkit_name: GitHub MCP\n    tool: list_issues\n    transition: END\n"
-	for name, tools := range map[string]string{
-		"legacy key match": `[{"toolkit_name":"github_mcp","type":"mcp"}]`,
-		"undecodable":      `[{"toolkit_name":42}]`,
+	version := func(tools string) json.RawMessage {
+		return json.RawMessage(`{"agent_type":"pipeline","instructions":` + strconvQuote(instructions) + `,"tools":` + tools + `}`)
+	}
+	for name, tc := range map[string]struct {
+		frozen, stored json.RawMessage
+	}{
+		"legacy key match":          {version(`[{"toolkit_name":"github_mcp","type":"mcp"}]`), version(`[]`)},
+		"dropped by freezing":       {version(`[]`), version(`[{"name":"GitHub MCP","type":"mcp_github","id":4}]`)},
+		"undecodable frozen list":   {version(`[{"toolkit_name":42}]`), version(`[]`)},
+		"undecodable stored list":   {version(`[]`), version(`{"not":"a list"}`)},
+		"no stored version":         {version(`[]`), nil},
+		"stored toolkit_name match": {version(`[]`), version(`[{"toolkit_name":"github_mcp"}]`)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			details := `{"agent_type":"pipeline","instructions":` + strconvQuote(instructions) + `,"tools":` + tools + `}`
-			_, err := freezeCurrentHTTPActionRequests(31, 41, json.RawMessage(details))
+			_, err := freezeCurrentHTTPActionRequests(31, 41, tc.frozen, tc.stored)
 			require.NoError(t, err)
 		})
 	}
-	details := `{"agent_type":"pipeline","instructions":` + strconvQuote(instructions) + `,"tools":[{"toolkit_name":"jira"}]}`
-	_, err := freezeCurrentHTTPActionRequests(31, 41, json.RawMessage(details))
+	_, err := freezeCurrentHTTPActionRequests(31, 41, version(`[{"toolkit_name":"jira"}]`), version(`[{"name":"jira"}]`))
 	require.Equal(t, pipelinelimits.CodeToolkitNotAttached, pipelinelimits.Refusal(err).Code)
 }
 

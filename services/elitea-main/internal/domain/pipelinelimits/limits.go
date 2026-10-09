@@ -44,8 +44,8 @@ var (
 	}
 )
 
-// Node-type refusal codes. The message is built per refusal because it names
-// the node; callers that branch on the kind use IsNodeTypeRefusal.
+// Node and toolkit refusal codes. The message is built per refusal because it
+// names the node; callers that branch on any admission refusal use Refusal.
 const (
 	// CodeNodeTypeNotAvailable is a node type the runtime knows but this
 	// deployment's build does not admit (SplitOut and Aggregate outside a
@@ -195,10 +195,17 @@ func checkNodeType(fields map[string]*yaml.Node) error {
 
 // checkDirectToolkit refuses a direct tool node whose toolkit is not attached.
 func checkDirectToolkit(fields map[string]*yaml.Node, attached []string) error {
-	nodeType, _ := stringScalar(fields["type"])
-	panel := map[string]string{"toolkit": "Toolkit", "mcp": "MCP"}[nodeType]
+	var panel string
+	switch nodeType, _ := stringScalar(fields["type"]); nodeType {
+	case "toolkit":
+		panel = "Toolkit"
+	case "mcp":
+		panel = "MCP"
+	default:
+		return nil
+	}
 	toolkit, ok := stringScalar(fields["toolkit_name"])
-	if panel == "" || !ok || toolkitAttached(toolkit, attached) {
+	if !ok || toolkitAttached(toolkit, attached) {
 		return nil
 	}
 	name := quoted(toolkit)
