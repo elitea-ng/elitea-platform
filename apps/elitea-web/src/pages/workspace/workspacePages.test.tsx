@@ -5,19 +5,22 @@
  * `routes/__tests__/workspacesRoute.test.tsx`.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
-import { WorkspaceIpcProvider } from '@/features/workspace';
+import { WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
+import type { Application } from '@/shared/api/generated/model';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
 import { server } from '../../test/setup';
+import type { AgentSelection } from './useAgentSelection';
+import { useSendPrompt } from './useSendPrompt';
 import WorkspaceSessionPage from './WorkspaceSessionPage';
 import WorkspacesPage from './WorkspacesPage';
 
@@ -209,6 +212,25 @@ describe('WorkspaceSessionPage', () => {
     expect(chatLink).toHaveAttribute('href', '/chat/77');
   });
 
+  it('keeps the prompt when the host refuses the start', async () => {
+    serveProject();
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    ipc.failNext('startTurn', 'local_work_disabled', 'Local work is turned off by your organisation’s policy.');
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces/w1');
+
+    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
+    await user.click(await screen.findByRole('option', { name: 'Coder' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await user.type(screen.getByLabelText('What should the agent do?'), 'fix the build');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Local work is turned off by your organisation’s policy.')).toBeInTheDocument();
+    expect(ipc.calls.started).toHaveLength(1);
+    expect(screen.getByLabelText('What should the agent do?')).toHaveValue('fix the build');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
   it('cancels the running turn from the transcript', async () => {
     serveProject();
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
@@ -225,5 +247,58 @@ describe('WorkspaceSessionPage', () => {
     ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running' } });
     await user.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(ipc.calls.cancelled).toEqual(['turn-1']);
+  });
+
+  describe('useSendPrompt', () => {
+    function selection(picks: string[]): AgentSelection {
+      return {
+        agents: [{ id: '5', name: 'Coder' } as Application],
+        versions: [{ id: 9, name: 'base', agentType: 'openai' }],
+        conversations: [{ id: 77, name: 'fix the build' }],
+        agentId: '5',
+        versionId: '9',
+        // An existing conversation: the send reaches the host without creating one.
+        conversationId: '77',
+        loading: false,
+        selectAgent: () => undefined,
+        selectVersion: () => undefined,
+        selectConversation: (id) => {
+          picks.push(id);
+        },
+      };
+    }
+
+    function turn(started: boolean): WorkspaceTurn {
+      return {
+        view: { phase: null, items: [], approvals: [] },
+        turnId: null,
+        busy: false,
+        startError: null,
+        start: () => Promise.resolve(started),
+        cancel: () => Promise.resolve(),
+        answer: () => Promise.resolve(),
+      };
+    }
+
+    async function send(started: boolean): Promise<{ sent: boolean; picks: string[] }> {
+      serveProject();
+      const picks: string[] = [];
+      const { result } = renderHook(() => useSendPrompt({ ...FOLDER, project_id: 42 }, 42, selection(picks), turn(started)), {
+        wrapper: ({ children }) => <AppProviders>{children}</AppProviders>,
+      });
+      let sent = false;
+      await act(async () => {
+        sent = await result.current.send('fix the build', false);
+      });
+      return { sent, picks };
+    }
+
+    it('reports a refused start as not sent and leaves the conversation choice alone', async () => {
+      expect(await send(false)).toEqual({ sent: false, picks: [] });
+    });
+
+    it('selects the conversation the turn runs in once the host started it', async () => {
+      expect(await send(true)).toEqual({ sent: true, picks: ['77'] });
+    });
   });
 });

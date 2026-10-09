@@ -34,8 +34,7 @@ export function useSendPrompt(workspace: Workspace, projectId: number, selection
         versionId: version.id,
         agentType: version.agentType,
       });
-      selection.selectConversation(conversationId);
-      await turn.start({
+      const started = await turn.start({
         workspace_id: workspace.id,
         project_id: projectId,
         conversation_id: conversationId,
@@ -44,6 +43,10 @@ export function useSendPrompt(workspace: Workspace, projectId: number, selection
         prompt,
         plan_mode: planMode,
       });
+      // A refused start (its reason is the turn's startError) keeps the
+      // prompt and the person's conversation choice as they were.
+      if (!started) return false;
+      selection.selectConversation(conversationId);
       return true;
     } catch (error) {
       setSendError(describeWorkspaceError(error));

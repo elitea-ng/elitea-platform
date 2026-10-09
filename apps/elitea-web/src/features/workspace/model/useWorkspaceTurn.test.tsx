@@ -119,7 +119,11 @@ describe('useWorkspaceTurn', () => {
     ipc.startTurn = () => Promise.reject(new Error('no agent runtime'));
     const { result } = renderHook(() => useWorkspaceTurn(ipc));
     await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
-    await act(() => result.current.start(REQUEST));
+    let started: boolean | undefined;
+    await act(async () => {
+      started = await result.current.start(REQUEST);
+    });
+    expect(started).toBe(false);
     expect(result.current.startError).toBe('no agent runtime');
     expect(result.current.busy).toBe(false);
   });

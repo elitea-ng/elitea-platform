@@ -22,7 +22,8 @@ export interface WorkspaceTurn {
    */
   busy: boolean;
   startError: string | null;
-  start(request: TurnStartRequest): Promise<void>;
+  /** Resolves `true` once the host started the turn; `false` when it refused (see `startError`). */
+  start(request: TurnStartRequest): Promise<boolean>;
   cancel(): Promise<void>;
   answer(requestId: string, decision: ApprovalDecision): Promise<void>;
 }
@@ -51,15 +52,17 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
   const turnId = state.activeTurnId;
 
   const start = useCallback(
-    async (request: TurnStartRequest) => {
+    async (request: TurnStartRequest): Promise<boolean> => {
       setStartError(null);
       setStarting(true);
       try {
         await ready.current;
         const started = await ipc.startTurn(request);
         dispatch({ type: 'begin', turnId: started.turn_id });
+        return true;
       } catch (error) {
         setStartError(describeWorkspaceError(error));
+        return false;
       } finally {
         setStarting(false);
       }
