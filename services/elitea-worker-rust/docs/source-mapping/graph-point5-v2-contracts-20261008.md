@@ -139,6 +139,48 @@ Reviews and scans:
   (`services/elitea-main/internal/api/v2/folders`, concurrent pin → HTTP 500). Pre-existing: `main` fails the same
   test on its last two Go CI runs (`604a49e1`, `fcf86c31`); this PR does not touch that package.
 
+## Recovery guarantees (designed; proven in Wave 2)
+
+Answer to "what happens if Main, the Worker or the supervisor goes down?" for the phases these designs touch. Classes
+per `rules/replatform-delivery-gate.md` §2. This PR ships no runtime code, so each row cites the design section that
+fixes the mechanism, existing code where it already enforces it, and the named Wave 2 proving test.
+
+| Component × phase | Class | Mechanism (design / existing code) | Proving test (Wave 2 unless noted) |
+|---|---|---|---|
+| Worker × fan-out child, completed | R | child `Completed` receipt short-circuits invocation; frozen child identity (D1 §3, §8) | `cross_execution_restore_zero_reinvocations` (PG) |
+| Worker × fan-out child, running | R (child) / I (in-flight model call) | replacement claim restores the child from its last checkpoint; writer fencing `state/postgres_checkpointer.rs:944` | `lease_revoke_mid_child_emits_no_failure`; crash seam `after_child_receipt` |
+| Worker × HITL pause and decision | R | card in the Main ledger; decision re-fetched on restore; apply proven on the child checkpoint; ACK after child save (D1 §5.3, D2 §7) | crash seams `after_fetch`, `after_apply`, `before_ack`; `two_claims_apply_same_key_exactly_once` |
+| Worker × join | R | `freeze()` returns the stored occurrence; deterministic join from receipts (D1 §8) | crash seam `before_join` |
+| Main × decision POST | I | one transaction; client retries with the same `request_id` → byte replay (D2 §6) | `TestDecideFiftyConcurrentTwoTabs`, replay test (Track M2) |
+| Main × park / wake | R | continuation + outbox in the decision or settlement transaction; one active continuation per response (D2 §8) | `TestDecideVersusParkExactlyOneContinuation` |
+| Main down while children run | R | children keep running; fetch is one bounded attempt and retried on the next tick; frames replay from the output spool (D1 §5.4) | process-loss test: stop Main mid-fan-out, restart, one final answer |
+| NATS × wake delivery | I | PostgreSQL outbox is the authority; duplicate wake collapses on the idempotency key (D2 §8) | duplicate-delivery test |
+| PostgreSQL unavailable | R | writes fail closed → control stop → replacement claim restores (D1 §6) | `lease_revoke_mid_child_emits_no_failure` |
+| Web × reload / second tab | R / I | open cards from `GET …/interrupts`; `agent_hitl_resolved` + 409 quietly consumed (D2 §6, §9) | browser: reload keeps cards; two tabs, one 409 |
+| LLM gateway × model call | F → I | until 5b-LLM: typed activation failure; after: child-level retry before first token only, `ModelOutputIncomplete` after it (D1 §6, §9.4) | 5b-LLM PG test (429 → 503 → success, 3 attempts, 0 UI failures) |
+| Sandbox supervisor × fan-out Code child | — | not admitted until Wave 3 (Gate 6 receipts, Code-slot semaphore) | `effectful_worker_rejected_at_compile` |
+| Main × HTTP action, crash after receipt | R | Lookup returns the receipt; 0 extra requests (D5 §13 case 1) | counting-server process-loss test |
+| Main × HTTP action, crash between Begin and Commit | C | `dispatching` → `uncertain/reconciliation_required`, never re-dispatched (D5 §8, §13 case 3) | PG crash-window test |
+| Worker × HTTP action, 503 before any effect | I | Lookup finds nothing; Begin proceeds once (D5 §13 case 6) | unit |
+| Worker × database read | I | read-only transaction; safe retry (D6 §12) | real-DB retry test (Wave 3) |
+| Worker × database write, unknown outcome | C | marker table + session-gone check → committed or `verified_no_effect` (D6 §7, §12) | real-DB kill-mid-write test (Wave 3) |
+
+Pre-existing gap (not widened by these designs): an approved effectful tool that crashes between dispatch and its
+tool-result checkpoint can be re-dispatched (root HITL today). It stays closed for fan-out workers until Gate 6 effect
+receipts make it class C.
+
+## Security categories (`rules/security.md`)
+
+| Category | Applies to this PR | How checked |
+|---|---|---|
+| Trust boundaries and identity | Yes (designs) | Private routes require mTLS + claim + fence; identity never from YAML, browser or model (D1 §15, D2 §12). No code here. |
+| Authorization (object level) | Yes (designs) | Authorization inside the decision/effect transaction with named negative-authz tests per route (D2 §12, D5 §16, D6 §12); Track M2 must add the full authorization matrix (owner, member, foreign project, other user, unauthenticated, token vs session) for both decision routes. |
+| Input, parsing, amplification | Yes | Strict closed schemas with bounds, enforced by `lintStrict` and 63 invalid fixtures; body caps before parsing (D2 §12). |
+| Injection and construction | Yes (designs) | HTTP path segment encoding, CR/LF/NUL refusal (schema-enforced for header literals), no templated URLs; DB typed binds only (D5 §6, D6 §5). |
+| Egress and SSRF | Yes (designs) | Hardened guard requirements and tests (D5 §10, §16); implemented by Track M1. |
+| Secrets | Yes | Diff secret scan: 0 matches; fixtures synthetic; tokens only by reference (`credential_ref`), schema-refused in bodies. |
+| Supply chain | Yes | No new dependency; `govulncheck` 0 new findings (7 pre-existing stdlib). |
+
 ## D2 decisions confirmed
 
 Confirmed by the user, relayed through the Point 5 planning session, 2026-10-08 (recorded in D2 §13):
