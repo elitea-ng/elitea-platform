@@ -110,15 +110,6 @@ export function ToolMenuDropdown({
         </MenuItem>
       )}
 
-      {isLoading && items.length === 0 && (
-        <MenuItem
-          disabled
-          sx={statusItemSx}
-        >
-          <ListItemText primary={t('agents.toolMenu.loading', 'Loading…')} />
-        </MenuItem>
-      )}
-
       {!isLoading && items.length === 0 && (
         <MenuItem
           disabled
@@ -140,6 +131,16 @@ export function ToolMenuDropdown({
           />
         </MenuItem>
       ))}
+
+      {/* After the rows, like EliteaUI's picker: while the next page (or a new search) loads, this sits below what is already listed. */}
+      {isLoading && (
+        <MenuItem
+          disabled
+          sx={statusItemSx}
+        >
+          <ListItemText primary={t('agents.toolMenu.loading', 'Loading…')} />
+        </MenuItem>
+      )}
     </Menu>
   );
 }

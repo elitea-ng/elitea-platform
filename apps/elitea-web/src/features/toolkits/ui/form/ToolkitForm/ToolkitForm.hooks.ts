@@ -28,6 +28,7 @@ export interface ToolkitFormState {
   readonly effectiveToolSchema: RawToolkitTypeSchema | undefined;
   /** A read that feeds the "Tools" section failed (#440). Show it; an empty section must not stand for it. */
   readonly toolListReadFailed: boolean;
+  readonly toolListDiscoveryDisabled: boolean;
   /** Runs both reads again. */
   readonly retryToolListRead: () => void;
   readonly hasErrors: boolean;
@@ -67,7 +68,7 @@ export function useToolkitFormState(props: ResolvedToolkitFormProps): ToolkitFor
     isTeamProject,
     slots,
   } = props;
-  const { view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, toolListReadFailed, retryToolListRead, hasErrors, mergedToolErrors, editField, setToolErrors, showValidation, configurationErrors, setConfigurationErrors, configurationName, setConfigurationName, configuration, setConfiguration, toolType, ToolComponent } = core;
+  const { view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, toolListReadFailed, toolListDiscoveryDisabled, retryToolListRead, hasErrors, mergedToolErrors, editField, setToolErrors, showValidation, configurationErrors, setConfigurationErrors, configurationName, setConfigurationName, configuration, setConfiguration, toolType, ToolComponent } = core;
   const { isCreatingConfiguration, isTestingConnection, onCreateConfiguration, onTestConnection, onRevertCredentials, shouldShowDisabledConfigFields, onCredentialReload, isLoading } = config;
   const renderCredentialLikeField = useCredentialLikeFieldSlot(projectId, slots?.renderCredentialPicker);
 
@@ -146,6 +147,7 @@ export function useToolkitFormState(props: ResolvedToolkitFormProps): ToolkitFor
     isValidSchema,
     effectiveToolSchema,
     toolListReadFailed,
+    toolListDiscoveryDisabled,
     retryToolListRead,
     hasErrors,
     configuration,

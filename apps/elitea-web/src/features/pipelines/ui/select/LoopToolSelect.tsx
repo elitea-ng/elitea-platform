@@ -88,6 +88,8 @@ interface LoopToolSelection {
   readonly functionOptions: readonly SingleSelectOption[];
   /** The tool-catalogue read failed. Render it as its own state, never as an empty picker (#440). */
   readonly toolsReadFailed: boolean;
+  /** `toolsReadFailed` is only because this deployment turned tool discovery off. */
+  readonly toolsDiscoveryDisabled: boolean;
   readonly retryToolsRead: () => void;
 }
 
@@ -161,12 +163,15 @@ function useLoopToolSelection(
   // A lost type-schema read that still left options on screen keeps the
   // working picker: the list the user sees is real.
   const toolsReadFailed = dynamicTools.isError || (typeSchemasReadFailed && functionOptions.length === 0);
+  const toolsDiscoveryDisabled = dynamicTools.isDiscoveryDisabled && !typeSchemasReadFailed;
 
-  return { toolkits, toolkit, functionOptions, toolsReadFailed, retryToolsRead };
+  return { toolkits, toolkit, functionOptions, toolsReadFailed, toolsDiscoveryDisabled, retryToolsRead };
 }
 
 interface ToolPickerProps {
   readonly readFailed: boolean;
+  /** `readFailed` is only because this deployment turned tool discovery off: no retry. */
+  readonly discoveryDisabled: boolean;
   readonly onRetry: () => void;
   readonly label: string;
   readonly value: string;
@@ -182,12 +187,13 @@ interface ToolPickerProps {
  * toolkit offers no tools; it must never stand in for a failure. Split out
  * to keep `LoopToolSelect` under the §3.5 complexity budget.
  */
-function ToolPicker({ readFailed, onRetry, label, value, options, onSelect, disabled }: ToolPickerProps): ReactNode {
+function ToolPicker({ readFailed, discoveryDisabled, onRetry, label, value, options, onSelect, disabled }: ToolPickerProps): ReactNode {
   if (readFailed) {
     return (
       <ToolListError
         onRetry={onRetry}
         testId="loop-tool-list-error"
+        discoveryDisabled={discoveryDisabled}
       />
     );
   }
@@ -217,7 +223,7 @@ export function LoopToolSelect(props: LoopToolSelectProps): ReactNode {
   } = props;
 
   const selectedTool = useMemo(() => (yamlNode ? ((yamlNode[toolField] as string | undefined) ?? '') : ''), [toolField, yamlNode]);
-  const { toolkits, toolkit, functionOptions, toolsReadFailed, retryToolsRead } = useLoopToolSelection(yamlNode, toolkitField, toolField, versionTools, selectedTool);
+  const { toolkits, toolkit, functionOptions, toolsReadFailed, toolsDiscoveryDisabled, retryToolsRead } = useLoopToolSelection(yamlNode, toolkitField, toolField, versionTools, selectedTool);
 
   const handleToolkitChange = useCallback((newValue: string) => onChangeToolkit(newValue), [onChangeToolkit]);
   const onClear = useCallback(() => onChangeToolkit(null), [onChangeToolkit]);
@@ -237,6 +243,7 @@ export function LoopToolSelect(props: LoopToolSelectProps): ReactNode {
       />
       <ToolPicker
         readFailed={toolsReadFailed}
+        discoveryDisabled={toolsDiscoveryDisabled}
         onRetry={retryToolsRead}
         label={toolLabel}
         value={selectedTool}

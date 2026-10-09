@@ -69,6 +69,7 @@ function baseCore(overrides: Partial<CoreState> = {}): CoreState {
     toolType: 'github',
     effectiveToolSchema: undefined,
     toolListReadFailed: false,
+    toolListDiscoveryDisabled: false,
     retryToolListRead: vi.fn(),
     ToolComponent: undefined,
     isValidSchema: true,
