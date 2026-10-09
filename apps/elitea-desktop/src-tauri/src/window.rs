@@ -23,15 +23,76 @@ pub fn is_bundled_origin(url: &Url, dev: bool) -> bool {
     }
 }
 
+/// The smallest window the layout is designed for.
+pub const MIN_SIZE: (f64, f64) = (900.0, 600.0);
+
+/// The window state the window-state plugin keeps across launches: size,
+/// position, maximized and full screen; never visibility or decorations
+/// (those are this module's to decide).
+#[must_use]
+pub fn persisted_state() -> tauri_plugin_window_state::StateFlags {
+    use tauri_plugin_window_state::StateFlags;
+    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
+}
+
+/// The main window. On macOS: no title bar of its own (overlay, hidden
+/// title), the traffic lights inset into the sidebar's top area, and a
+/// transparent window over the system sidebar material (README, "Native
+/// features", for the private-API trade-off). Elsewhere: normal
+/// decorations, an opaque window.
 pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     let dev = cfg!(debug_assertions);
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Elitea")
         .inner_size(1280.0, 820.0)
-        .min_inner_size(900.0, 600.0)
-        .on_navigation(move |url| is_bundled_origin(url, dev))
-        .build()?;
+        .min_inner_size(MIN_SIZE.0, MIN_SIZE.1)
+        .on_navigation(move |url| is_bundled_origin(url, dev));
+    #[cfg(target_os = "macos")]
+    let builder = {
+        use crate::platform::TRAFFIC_LIGHT_POSITION;
+        use tauri::utils::config::WindowEffectsConfig;
+        use tauri::window::{Effect, EffectState};
+        builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(
+                TRAFFIC_LIGHT_POSITION.0,
+                TRAFFIC_LIGHT_POSITION.1,
+            ))
+            .transparent(true)
+            .effects(WindowEffectsConfig {
+                effects: vec![Effect::Sidebar],
+                state: Some(EffectState::FollowsWindowActiveState),
+                radius: None,
+                color: None,
+                interactive: false,
+            })
+    };
+    let window = builder.build()?;
+    let handle = app.clone();
+    window.on_window_event(move |event| on_window_event(&handle, event));
     Ok(())
+}
+
+fn on_window_event(app: &AppHandle, event: &tauri::WindowEvent) {
+    match event {
+        // A folder dropped on the window opens as a workspace; files go to
+        // the UI (IPC.md, `workspace_opened` / `files_dropped`).
+        tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+            crate::app_events::open_paths(app, paths);
+        }
+        // macOS keeps the app running with its window closed (⌘W, the red
+        // button); the dock icon or ⌘Q decide. Hidden, not destroyed, so
+        // a running turn keeps reporting and the window state is kept.
+        #[cfg(target_os = "macos")]
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
+                let _ = window.hide();
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

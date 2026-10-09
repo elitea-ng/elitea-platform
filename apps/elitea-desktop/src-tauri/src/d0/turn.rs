@@ -583,6 +583,35 @@ impl AgentHost {
         mentions::files(&folder, query, limit)
     }
 
+    /// `reveal_path` / `open_path`: a workspace-relative path, resolved and
+    /// confined the way the turn's session sees the folder (`path_deny`
+    /// included, no symlink escape).
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`,
+    /// and [`mentions::locate`]'s refusals.
+    pub fn locate(&self, workspace_id: &str, path: &str) -> Result<mentions::Located, TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        let folder = mentions::open(Path::new(&workspace.path), &policy.path_deny)?;
+        mentions::locate(&folder, path)
+    }
+
+    /// The workspace a kept turn runs (or ran) in, for the host's own
+    /// notifications.
+    #[must_use]
+    pub fn turn_workspace(&self, turn_id: &str) -> Option<String> {
+        self.entry(turn_id)
+            .ok()
+            .map(|entry| entry.workspace_id.clone())
+    }
+
     /// `agent_turn_start`: resolve, check, start; the run continues in the
     /// background. Every refusal is also an `error` event of the turn.
     ///

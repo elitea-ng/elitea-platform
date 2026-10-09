@@ -157,9 +157,91 @@ The host keeps the last 20 turns of each workspace for `turn_changes` and
 `checkpoint_restore`; an older turn rejects with `turn_expired`, an id it
 never ran with `turn_unknown`.
 
+## App and native shell (`src/platform.rs`, `src/local_commands.rs`)
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `app_platform` | — | `AppPlatform` (below). Never rejects. |
+| `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
+| `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
+
+```ts
+type AppPlatform = {
+  os: "macos" | "linux" | "windows";
+  titlebar_overlay: boolean;      // the web content runs under the title bar (macOS): draw a
+                                  // `data-tauri-drag-region` and leave room for the window controls
+  traffic_light_inset_px: number; // room to leave on the left of the top bar (90 on macOS, else 0)
+  vibrancy: boolean;              // the window is transparent over the system sidebar material
+                                  // (macOS): a sidebar painted transparent shows it
+};
+```
+
+`path` of `reveal_path` / `open_path` is **workspace-relative** (`""` or `.`
+is the workspace folder itself; a trailing `/` is ignored). The host
+resolves it through the same confined view as the agent's tools: an
+absolute path, a `..` escape, a symlink (or an in-workspace symlink on the
+way that leads out) and a `path_deny` match are refused with
+`invalid_request`; a missing path with `not_found`. Also
+`local_work_disabled`, `workspace_unknown`, `workspace_unavailable`.
+`open_path` refuses with `open_refused` anything the OS would run rather
+than show (an app bundle, a script — `.command`, `.sh`, `.py`, … —, an
+installer, a file with an execute bit): offer `reveal_path` instead. An OS
+failure rejects with `os_refused`. The webview's drag region works through
+`core:window:allow-start-dragging` and `core:window:allow-internal-toggle-maximize`
+(double-click to zoom), the only window permissions granted.
+
+### `app://command`
+
+Menu items, shortcuts and OS actions that the UI must carry out arrive as
+one event, `app://command`, emitted to the `main` window:
+
+```ts
+type AppCommand = { id: string; args?: object };
+```
+
+| `id` | `args` | Sent when |
+| --- | --- | --- |
+| `new_thread` | — | File ▸ New Thread (⌘N / Ctrl+N) |
+| `settings` | — | Elitea ▸ Settings… (⌘, ; File ▸ Settings… on Linux/Windows) |
+| `command_palette` | — | View ▸ Command Palette… (⌘K) |
+| `toggle_sidebar` | — | View ▸ Toggle Sidebar (⌘\\) |
+| `toggle_changes` | — | View ▸ Toggle Changes Panel (⌘⌥\\) |
+| `back` | — | View ▸ Back (⌘[) |
+| `forward` | — | View ▸ Forward (⌘]) |
+| `workspace_opened` | `{workspace_id: string}` | A folder became (or already was) a workspace through File ▸ Open Folder… (⌘O), a drop on the window, or a drop on the dock icon / "Open With" in Finder. One event per folder; the workspace is already in `workspace_list`, so the UI selects it. |
+| `workspace_open_failed` | `{message: string}` | One of those folders could not be opened (the first failure; a message for a person). |
+| `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
+| `focus_turn` | `{workspace_id: string, turn_id: string}` | Reserved: show this turn. Not sent yet — the notification plugin has no click callback on desktop, so clicking a notification only activates the app. |
+
+**Open Folder… is host-side**: the menu item runs the native folder picker
+in the host (the same picker and `WorkspaceStore::add` as `workspace_open`)
+and then sends `workspace_opened`; there is no `open_folder` command id for
+the UI to handle. Cancelling the picker sends nothing. Menu-forwarded ids
+also bring the window forward first. Events are not replayed: a folder
+dropped on the dock icon while the app starts is opened before the UI
+listens — it is in `workspace_list` either way. In the desktop build the
+UI should not also bind these shortcuts in the page: the menu accelerator
+fires the command, and a page keydown handler for the same keys could run
+the action twice.
+
+Standard actions are the OS's own and never reach the UI: Edit's
+undo/redo/cut/copy/paste/select all, Hide, Quit, Minimize, Zoom, Full
+Screen, Close Window (on macOS it hides the window; the dock icon shows
+it again), the zoom items (Actual Size ⌘0, Zoom In ⌘=, Zoom Out ⌘-, the
+host sets the webview zoom), Reload ⌘R (debug builds only) and Help ▸
+Elitea Help (opens `<deployment>/docs/` in the browser when connected).
+
+Notifications and the dock badge are the host's own, from the
+`agent://event` stream (README, "Native features"); the UI does nothing
+for them.
+
 ## Events
 
-One event name, `agent://event`, emitted to the `main` window:
+Two event names, both emitted to the `main` window only: `app://command`
+(above) and `agent://event`. The webview may listen
+(`core:event:allow-listen` / `allow-unlisten`), never emit.
+
+`agent://event`:
 
 ```ts
 type AgentEvent = { turn_id: string; seq: number; kind: string; payload: object };

@@ -5,6 +5,8 @@
 //! keychain, the loopback sign-in listener, the token endpoint. Remote
 //! content is never loaded into the privileged webview (see `window.rs`).
 
+mod app_events;
+mod attention;
 mod auth;
 mod commands;
 mod d0;
@@ -13,7 +15,9 @@ mod error;
 mod http_scope;
 mod local_commands;
 mod loopback;
+mod menu;
 mod pkce;
+mod platform;
 mod settings;
 mod store;
 mod tokens;
@@ -31,6 +35,7 @@ use std::sync::Arc;
 use tauri::Manager as _;
 use tauri_plugin_opener::OpenerExt as _;
 
+use crate::attention::Attention;
 use crate::auth::{AuthConfig, AuthService, BrowserOpener};
 use crate::commands::AppState;
 use crate::d0::remote_tools::RetryPolicy;
@@ -71,17 +76,24 @@ pub fn run() {
     // First, so a second launch exits before it can touch the keychain: two
     // processes would race the rotating refresh token.
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    }));
-    let result = builder
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            app_events::show_main(app);
+        }))
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(window::persisted_state())
+                .build(),
+        );
+    let built = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(menu::Zoom::default())
+        .manage(app_events::PendingOpens::default())
+        .menu(menu::build)
+        .on_menu_event(|app, event| menu::on_event(app, &event))
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
@@ -123,7 +135,9 @@ pub fn run() {
                 agents: Arc::new(agents),
             });
             app.manage(AppState { auth });
+            app.manage(Arc::new(Attention::new(app.handle().clone())));
             window::create_main_window(app.handle())?;
+            app_events::drain_pending(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -146,10 +160,38 @@ pub fn run() {
             local_commands::approval_respond,
             local_commands::turn_changes,
             local_commands::checkpoint_restore,
+            local_commands::reveal_path,
+            local_commands::open_path,
+            platform::app_platform,
         ])
-        .run(tauri::generate_context!());
-    if let Err(error) = result {
-        eprintln!("elitea-desktop failed to start: {error}");
-        std::process::exit(1);
+        .build(tauri::generate_context!());
+    let app = match built {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("elitea-desktop failed to start: {error}");
+            std::process::exit(1);
+        }
+    };
+    app.run(on_run_event);
+}
+
+#[allow(clippy::needless_pass_by_value)] // the signature `App::run` takes
+fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    #[cfg(target_os = "macos")]
+    match event {
+        // A folder dropped on the dock icon (or opened with the app): the
+        // same path as a drop on the window. Info.plist declares folders.
+        tauri::RunEvent::Opened { urls } => {
+            app_events::open_paths(app, &app_events::file_urls_to_paths(&urls));
+        }
+        // The dock icon clicked with the window closed (hidden).
+        tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } => app_events::show_main(app),
+        _ => {}
     }
+    // Linux and Windows: a drop on the window is the only native open.
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, event);
 }
