@@ -6605,6 +6605,7 @@
               "required": [
                 "application_id",
                 "definition_sha256",
+                "project_context_withheld",
                 "project_id",
                 "schema_version",
                 "version_details",
@@ -6618,6 +6619,9 @@
                 },
                 "definition_sha256": {
                   "type": "string"
+                },
+                "project_context_withheld": {
+                  "type": "boolean"
                 },
                 "project_id": {
                   "type": "integer",
