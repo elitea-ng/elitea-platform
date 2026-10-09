@@ -3711,6 +3711,16 @@ worker:
     # Rust-only. Durable node attempt journal: an interrupted effectful node stops
     # for recovery instead of repeating its effect. Effectful pipeline direct tool
     # nodes require it; Code nodes use it when present.
+    # Turning it on ALSO turns on model-step resume for agent turns: under a
+    # node-recovery claim elitea-main grants model checkpoint inspection
+    # (internal/infra/db/repos/node_recovery_claim.go), whatever
+    # agentModelCheckpointRecovery says. So it stays off here, as recovery as a
+    # whole does, until the pod-replacement proofs pass (recovery-guarantees.md,
+    # ruling D1 and gaps G-WORKER-02/03/13/14). Compose turns it on
+    # (deploy/runtime/worker-runtime.rust.json); a Kubernetes install that wants
+    # parity sets it to true, and needs no extra material: the journal lives in
+    # the AgentState database behind agent-checkpoint-connection.
+    # A boolean only; true with the Python worker fails the render.
     agentNodeRecovery: false
     # Rust-only deployment-selected Code backends. These are never YAML node inputs.
     # Entries use SandboxRuntimeConfig fields: language, target, audience,

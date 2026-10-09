@@ -46,6 +46,7 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Helm Worker node-recovery key 2026-10-09](helm-worker-node-recovery-20261009.md) closes G-WORKER-01: `worker.runtime.agentNodeRecovery` refuses non-boolean values and is proved by `task helm:worker-node-recovery`; the default stays false because the key also turns on model-step resume, which D1/TG-12 keep closed on Kubernetes.
 - [Helm master-key render test 2026-10-09](helm-master-key-render-test-20261009.md) makes `render-main-master-key.sh` declare the network-policy decision #1176 requires, so its 9 checks reach the master-key logic again; registers it as `task helm:main-master-key`, with mutation proof.
 - [Dependency advisories 2026-10-08](dependency-advisories-20261008.md) raises the Go standard-library floor to go1.25.13/go1.26.6, updates h2 and chacha20, and proves the MySQL TLS guard that keeps the rsa (RUSTSEC-2023-0071) path unreachable.
 - [Go 1.26 toolchain for the go.work modules](go-1-26-toolchain-20261009.md) moves every go.work module, its builder images and CI to Go 1.26 with a go1.26.9 floor, takes x/net v0.60.0 and x/crypto v0.57.0, drops `x/crypto/ssh` from the advisory guard, and records govulncheck before and after.
