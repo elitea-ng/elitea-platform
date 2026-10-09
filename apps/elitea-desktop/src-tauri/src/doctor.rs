@@ -6,8 +6,12 @@
 //! `doctor_fix` applies one. Nothing is repaired behind the person's back:
 //! a file the app will not trust (a symlink, another user's, one others can
 //! write, one that does not parse) is never read as data and never silently
-//! overwritten — the Doctor offers to MOVE IT ASIDE (`<name>.broken-<time>`,
-//! the entry itself, never a symlink's target) so the app can start afresh.
+//! overwritten — the Doctor offers to MOVE IT ASIDE (into a new directory
+//! `<name>.broken-<YYYYmmdd-HHMMSS-mmm>-<random>/` beside it, under its own
+//! name; the entry itself, never a symlink's target; never over an earlier
+//! copy) so the app can start afresh. The thread history is moved with its
+//! `-wal` and `-shm` into one such directory, after its writer stopped and
+//! its connections closed, and a fresh history starts at once.
 //!
 //! Every repair is logged (paths and modes, never contents).
 
@@ -22,7 +26,7 @@ use serde_json::Value;
 use crate::auth::AuthService;
 use crate::credentials_file::{self, CredentialsFile};
 use crate::error::HostError;
-use crate::history;
+use crate::history::{self, HistoryStore};
 use crate::workspaces::WorkspaceStore;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -157,8 +161,9 @@ fn tighten_open(path: &Path, file: &fs::File, is_dir: bool) -> Result<(), HostEr
     Ok(())
 }
 
-/// Rename `path` (the entry itself: a symlink is moved, never followed) to
-/// `<name>.broken-<time>` next to it; the new path.
+/// Move `path` (the entry itself: a symlink is moved, never followed) into
+/// a new directory `<name>.broken-<time>-<random>/` next to it, under its
+/// own name; the directory. `None` when there is nothing to move.
 fn move_aside(path: &Path) -> Result<Option<PathBuf>, HostError> {
     if fs::symlink_metadata(path).is_err() {
         return Ok(None);
@@ -167,10 +172,8 @@ fn move_aside(path: &Path) -> Result<Option<PathBuf>, HostError> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-    let aside = path.with_file_name(format!("{name}.broken-{stamp}"));
-    fs::rename(path, &aside)
-        .map_err(|e| HostError::Storage(format!("could not move {} aside: {e}", path.display())))?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let aside = history::move_files_aside(parent, &name, &[path.to_owned()])?;
     log::warn!(
         "diagnostics: moved {} aside to {}",
         path.display(),
@@ -186,8 +189,8 @@ pub struct LocalDoctor {
     pub log_dir: Option<PathBuf>,
     pub credentials: Arc<CredentialsFile>,
     pub workspaces: Arc<WorkspaceStore>,
-    /// The thread history opened at launch.
-    pub history_open: bool,
+    /// The thread history opened at launch; `None` when it was refused.
+    pub history: Option<Arc<HistoryStore>>,
 }
 
 const MOVE_ASIDE: &str = "Move it aside";
@@ -318,7 +321,7 @@ impl LocalDoctor {
                     TITLE,
                     Status::Fail,
                     format!(
-                        "{} {why}, so the app runs without a history. Move it aside, then restart Elitea.",
+                        "{} {why}, so the app will not use it. Move it aside to start a new history.",
                         path.display()
                     ),
                 )
@@ -356,7 +359,7 @@ impl LocalDoctor {
                     "Written by a newer version of Elitea (schema {version}); update the app."
                 ),
             ),
-            Ok(_) if !self.history_open => Check::new(
+            Ok(_) if self.history.is_none() => Check::new(
                 ID,
                 TITLE,
                 Status::Warn,
@@ -368,7 +371,7 @@ impl LocalDoctor {
                 TITLE,
                 Status::Fail,
                 format!(
-                    "The history is damaged ({error}). Move it aside, then restart Elitea; the threads on the server are not affected."
+                    "The history is damaged ({error}). Move it aside to start a new one; the threads on the server are not affected."
                 ),
             )
             .fix("history.move_aside", MOVE_ASIDE),
@@ -451,20 +454,7 @@ impl LocalDoctor {
                 }
                 Ok("The history is now readable by you only.".into())
             }
-            "history.move_aside" => {
-                let path = self.history_path();
-                for suffix in ["-wal", "-shm"] {
-                    move_aside(&path.with_file_name(format!("{}{suffix}", history::FILE_NAME)))?;
-                }
-                let aside = move_aside(&path)?;
-                Ok(match aside {
-                    Some(aside) => format!(
-                        "Moved to {}. Restart Elitea to start a new history.",
-                        aside.display()
-                    ),
-                    None => "There was nothing to move.".into(),
-                })
-            }
+            "history.move_aside" => self.move_history_aside(),
             "workspaces.drop_missing" => {
                 let dropped = self.workspaces.drop_unreachable()?;
                 log::info!(
@@ -487,6 +477,34 @@ impl LocalDoctor {
             }
             _ => Err(HostError::Internal(format!("unknown repair `{fix_id}`"))),
         }
+    }
+}
+
+impl LocalDoctor {
+    /// `history.move_aside`: the open store closes, moves its three files
+    /// together and starts afresh; without one (refused at launch) the
+    /// files are moved the same way and the next launch starts afresh.
+    fn move_history_aside(&self) -> Result<String, HostError> {
+        if let Some(store) = &self.history {
+            let aside = store.move_aside()?;
+            return Ok(format!(
+                "Moved to {}. A new, empty history has started; the threads on the server are not affected.",
+                aside.display()
+            ));
+        }
+        let files = history::history_files(&self.data_dir);
+        if files.iter().all(|file| fs::symlink_metadata(file).is_err()) {
+            return Ok("There was nothing to move.".into());
+        }
+        let aside = history::move_files_aside(&self.data_dir, history::FILE_NAME, &files)?;
+        log::warn!(
+            "diagnostics: moved the thread history aside to {}",
+            aside.display()
+        );
+        Ok(format!(
+            "Moved to {}. Restart Elitea to start a new history.",
+            aside.display()
+        ))
     }
 }
 
@@ -728,7 +746,7 @@ mod tests {
             config_dir,
             data_dir,
             log_dir: Some(log_dir),
-            history_open: true,
+            history: None,
         };
         Fixture {
             _root: root,
@@ -794,12 +812,15 @@ mod tests {
         assert_eq!(c.fix_id, Some("credentials.move_aside"));
         doctor.fix("credentials.move_aside").unwrap();
         // The original is kept aside, untouched; sign-in works.
-        let aside: Vec<_> = fs::read_dir(&doctor.config_dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with("credentials.json.broken-"))
-            .collect();
+        let aside = entries(&doctor.config_dir, "credentials.json.broken-");
         assert_eq!(aside.len(), 1);
+        assert!(
+            doctor
+                .config_dir
+                .join(&aside[0])
+                .join("credentials.json")
+                .is_file()
+        );
         launch.slot("device-session").save("new").unwrap();
         assert_eq!(check(&doctor.checks(), "credentials").status, Status::Ok);
     }
@@ -880,13 +901,73 @@ mod tests {
     #[test]
     fn a_healthy_history_passes_its_integrity_check() {
         let f = fixture();
-        drop(history::HistoryStore::open(&f.doctor.data_dir).unwrap());
-        assert_eq!(check(&f.doctor.checks(), "history").status, Status::Ok);
-        let closed = LocalDoctor {
-            history_open: false,
+        let store = Arc::new(history::HistoryStore::open(&f.doctor.data_dir).unwrap());
+        let open = LocalDoctor {
+            history: Some(store),
             ..f.doctor
         };
+        assert_eq!(check(&open.checks(), "history").status, Status::Ok);
+        let closed = LocalDoctor {
+            history: None,
+            ..open
+        };
         assert_eq!(check(&closed.checks(), "history").status, Status::Warn);
+    }
+
+    /// The names of the entries in `dir` that start with `prefix`.
+    fn entries(dir: &Path, prefix: &str) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(prefix))
+            .collect()
+    }
+
+    #[test]
+    fn an_open_history_is_closed_moved_with_its_wal_and_started_afresh() {
+        let f = fixture();
+        let store = Arc::new(history::HistoryStore::open(&f.doctor.data_dir).unwrap());
+        let doctor = LocalDoctor {
+            history: Some(store.clone()),
+            ..f.doctor
+        };
+        let message = doctor.fix("history.move_aside").unwrap();
+        assert!(message.contains("new, empty history"), "{message}");
+        let moved = entries(&doctor.data_dir, "threads.sqlite.broken-");
+        assert_eq!(moved.len(), 1, "one directory: {moved:?}");
+        let aside = doctor.data_dir.join(&moved[0]);
+        assert!(aside.is_dir());
+        // The database keeps its own name, so SQLite still finds its WAL.
+        assert!(aside.join(history::FILE_NAME).is_file());
+        for name in entries(&aside, "") {
+            assert!(name.starts_with(history::FILE_NAME), "{name}");
+        }
+        // The store works on a fresh file, and the check is green.
+        assert!(doctor.data_dir.join(history::FILE_NAME).is_file());
+        assert_eq!(check(&doctor.checks(), "history").status, Status::Ok);
+        // Again: a second directory, the first untouched.
+        doctor.fix("history.move_aside").unwrap();
+        assert_eq!(entries(&doctor.data_dir, "threads.sqlite.broken-").len(), 2);
+        assert!(aside.join(history::FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn moving_aside_twice_never_overwrites_the_first_copy() {
+        let f = fixture();
+        for content in ["[{", "[{{"] {
+            fs::write(f.doctor.workspaces.file_path(), content).unwrap();
+            f.doctor.fix("workspaces.move_aside").unwrap();
+        }
+        let moved = entries(&f.doctor.data_dir, "workspaces.json.broken-");
+        assert_eq!(moved.len(), 2, "{moved:?}");
+        let mut kept: Vec<String> = moved
+            .iter()
+            .map(|dir| {
+                fs::read_to_string(f.doctor.data_dir.join(dir).join("workspaces.json")).unwrap()
+            })
+            .collect();
+        kept.sort();
+        assert_eq!(kept, ["[{", "[{{"]);
     }
 
     #[test]

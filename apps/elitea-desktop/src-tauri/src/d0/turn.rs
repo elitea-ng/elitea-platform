@@ -1351,8 +1351,10 @@ impl AgentHost {
             return Ok(Vec::new());
         };
         let owner = self.owner(&self.api).await?;
+        // The read waits for the history's writer: off the async workers.
         let mut turns = history
-            .thread(&owner, workspace_id, &conversation)
+            .read_thread(owner, workspace_id.to_owned(), conversation)
+            .await
             .map_err(|e| TurnError::new("storage", e.to_string()))?;
         let table = self
             .turns
@@ -1391,7 +1393,8 @@ impl AgentHost {
         };
         let owner = self.owner(&self.api).await?;
         history
-            .delete_thread(&owner, workspace_id, &conversation)
+            .forget_thread(owner, workspace_id.to_owned(), conversation)
+            .await
             .map_err(|e| TurnError::new("storage", e.to_string()))
     }
 

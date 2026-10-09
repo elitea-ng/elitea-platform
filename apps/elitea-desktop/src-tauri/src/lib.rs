@@ -168,7 +168,7 @@ pub fn run() {
                     log_dir: app.path().app_log_dir().ok(),
                     credentials: credentials.clone(),
                     workspaces: workspaces.clone(),
-                    history_open: history.is_some(),
+                    history: history.clone(),
                 },
                 auth: auth.clone(),
             }));

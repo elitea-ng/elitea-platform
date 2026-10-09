@@ -9,9 +9,13 @@
 //!
 //! Events are recorded HOST-side as they are emitted ([`TurnTap`]), so the
 //! history survives a webview reload or crash. The emit path never touches
-//! SQLite: [`TurnTap::emit`] only queues the event on a bounded channel (if
-//! it is full, the tap keeps it and merges text until there is room), and a
-//! dedicated writer thread owns its own connection. It batches what arrives
+//! SQLite and never waits: [`TurnTap::emit`] only queues the event for the
+//! writer (past [`CHANNEL_CAPACITY`] queued ops, the tap keeps it and merges
+//! text until there is room; a turn's end hands whatever the tap still holds
+//! over at once, in order), and a dedicated writer thread owns its own
+//! connection. Reads and deletes wait for the writer (a flush), so an async
+//! caller runs them off its runtime's workers ([`HistoryStore::read_thread`],
+//! [`HistoryStore::forget_thread`]). It batches what arrives
 //! into one transaction per flush: on every non-text event (so `done` and
 //! `error` too), every [`FLUSH_INTERVAL`] or [`FLUSH_BYTES`], on a read or a
 //! delete, at a turn's end and at the app's exit. Text is stored as APPENDED
@@ -55,8 +59,9 @@
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags, params};
@@ -89,7 +94,7 @@ pub const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 /// ...or once this many bytes of events are pending.
 pub const FLUSH_BYTES: usize = 64 * 1024;
 /// Ops the writer's queue holds before a tap keeps them itself.
-const CHANNEL_CAPACITY: usize = 1024;
+pub const CHANNEL_CAPACITY: usize = 1024;
 
 const SCHEMA: &str = "
 CREATE TABLE turns (
@@ -294,6 +299,7 @@ enum Op {
         owner: Owner,
         workspace_id: String,
         conversation_id: String,
+        conversation_uuid: Option<String>,
     },
     /// Commit what is pending, then answer.
     Flush(std::sync::mpsc::Sender<()>),
@@ -356,13 +362,49 @@ enum Sent {
     Closed,
 }
 
+/// The writer's side of an open database: its queue and its thread.
+struct Writing {
+    sender: Sender<Op>,
+    thread: std::thread::JoinHandle<()>,
+}
+
 pub struct HistoryStore {
+    dir: PathBuf,
     path: PathBuf,
-    /// Reads and deletes (the writer thread has its own connection).
-    conn: Mutex<Connection>,
-    /// The writer thread's queue; `None` once the store is dropped.
-    sender: Option<SyncSender<Op>>,
-    writer: Option<std::thread::JoinHandle<()>>,
+    /// Reads and deletes (the writer thread has its own connection);
+    /// `None` while the store is closed (moved aside and not reopened).
+    conn: Mutex<Option<Connection>>,
+    /// The writer's queue (unbounded: a turn's end never waits for room;
+    /// [`Self::queued`] is the bound the emit path keeps).
+    sender: RwLock<Option<Sender<Op>>>,
+    writer: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Ops queued and not yet taken by the writer.
+    queued: Arc<AtomicUsize>,
+}
+
+/// Open the database at `path` (created owner-only first) and start a
+/// writer on it: the readers' connection and the writer.
+fn start(path: &Path, queued: &Arc<AtomicUsize>) -> Result<(Connection, Writing), HostError> {
+    // Created owner-only BEFORE SQLite opens it, so it is never wider.
+    match create_private_file(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(HostError::Storage(e.to_string())),
+    }
+    for sidecar in ["-wal", "-shm"] {
+        inspect(&path.with_file_name(format!("{FILE_NAME}{sidecar}")))?;
+    }
+    let conn = open_connection(path)?;
+    migrate(&conn)?;
+    let writer_conn = open_connection(path)?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    queued.store(0, Ordering::SeqCst);
+    let counter = queued.clone();
+    let thread = std::thread::Builder::new()
+        .name("history-writer".into())
+        .spawn(move || Writer::new(writer_conn, counter).run(&receiver))
+        .map_err(|e| HostError::Storage(format!("could not start the history writer: {e}")))?;
+    Ok((conn, Writing { sender, thread }))
 }
 
 impl HistoryStore {
@@ -377,32 +419,132 @@ impl HistoryStore {
         create_private_dir(dir)?;
         // Canonical, so the no-follow open below refuses a symlinked FILE,
         // not a symlink higher up (macOS's `/var` is one).
-        let dir = &fs::canonicalize(dir).map_err(|e| HostError::Storage(e.to_string()))?;
+        let dir = fs::canonicalize(dir).map_err(|e| HostError::Storage(e.to_string()))?;
         let path = dir.join(FILE_NAME);
         inspect(&path)?;
-        // Created owner-only BEFORE SQLite opens it, so it is never wider.
-        match create_private_file(&path) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(HostError::Storage(e.to_string())),
-        }
-        for sidecar in ["-wal", "-shm"] {
-            inspect(&dir.join(format!("{FILE_NAME}{sidecar}")))?;
-        }
-        let conn = open_connection(&path)?;
-        migrate(&conn)?;
-        let writer_conn = open_connection(&path)?;
-        let (sender, receiver) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
-        let writer = std::thread::Builder::new()
-            .name("history-writer".into())
-            .spawn(move || Writer::new(writer_conn).run(&receiver))
-            .map_err(|e| HostError::Storage(format!("could not start the history writer: {e}")))?;
+        let queued = Arc::new(AtomicUsize::new(0));
+        let (conn, writing) = start(&path, &queued)?;
         Ok(Self {
+            dir,
             path,
-            conn: Mutex::new(conn),
-            sender: Some(sender),
-            writer: Some(writer),
+            conn: Mutex::new(Some(conn)),
+            sender: RwLock::new(Some(writing.sender)),
+            writer: Mutex::new(Some(writing.thread)),
+            queued,
         })
+    }
+
+    /// Stop the writer (it commits what it holds first) and close the
+    /// readers' connection after a `wal_checkpoint(TRUNCATE)`; nothing is
+    /// queued or read until the store is opened again. Holds `conn`.
+    fn close(&self, conn: &mut Option<Connection>) {
+        let sender = self
+            .sender
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(sender);
+        let writer = self
+            .writer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(writer) = writer
+            && writer.join().is_err()
+        {
+            log::warn!("the thread history writer panicked");
+        }
+        if let Some(open) = conn.take() {
+            // The WAL folded into the database, so the copy moved aside is
+            // whole even without its sidecars; a damaged one may refuse.
+            if let Err(error) = open.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+                log::warn!("the thread history could not be checkpointed before closing: {error}");
+            }
+            drop(open);
+        }
+    }
+
+    /// The Doctor's repair: close the store, move `threads.sqlite` with its
+    /// `-wal` and `-shm` (whichever exist) TOGETHER into a new directory
+    /// `threads.sqlite.broken-<time>-<random>/` beside it, under their own
+    /// names (so SQLite still pairs the database with its WAL there), then
+    /// start a fresh, empty history. The directory it moved them to.
+    ///
+    /// # Errors
+    ///
+    /// The files could not be moved (the store is then reopened on them),
+    /// or the fresh history could not be started (the store stays closed:
+    /// the app runs without a history until it restarts).
+    pub fn move_aside(&self) -> Result<PathBuf, HostError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.close(&mut conn);
+        let moved = move_files_aside(&self.dir, FILE_NAME, &history_files(&self.dir));
+        let started = start(&self.path, &self.queued);
+        let (opened, writing) = match (&moved, started) {
+            (_, Ok(started)) => started,
+            (Err(_), Err(_)) => return moved,
+            (Ok(aside), Err(error)) => {
+                return Err(HostError::Storage(format!(
+                    "moved to {}, but a new history could not start ({error}); restart Elitea",
+                    aside.display()
+                )));
+            }
+        };
+        *conn = Some(opened);
+        *self
+            .sender
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.sender);
+        *self
+            .writer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.thread);
+        let aside = moved?;
+        log::warn!(
+            "diagnostics: moved the thread history aside to {}",
+            aside.display()
+        );
+        Ok(aside)
+    }
+
+    /// [`Self::thread`] on a blocking thread, for an async caller: the
+    /// flush and the query never hold one of the runtime's workers.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::thread`].
+    pub async fn read_thread(
+        self: &Arc<Self>,
+        owner: Owner,
+        workspace_id: String,
+        conversation: String,
+    ) -> Result<Vec<StoredTurn>, HostError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.thread(&owner, &workspace_id, &conversation))
+            .await
+            .map_err(|e| HostError::Internal(format!("the history read stopped: {e}")))?
+    }
+
+    /// [`Self::delete_thread`] on a blocking thread, for an async caller.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::delete_thread`].
+    pub async fn forget_thread(
+        self: &Arc<Self>,
+        owner: Owner,
+        workspace_id: String,
+        conversation: String,
+    ) -> Result<usize, HostError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            store.delete_thread(&owner, &workspace_id, &conversation)
+        })
+        .await
+        .map_err(|e| HostError::Internal(format!("the history delete stopped: {e}")))?
     }
 
     #[must_use]
@@ -419,30 +561,48 @@ impl HistoryStore {
             .conn
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        work(&mut conn).map_err(|e| storage(what, &e))
+        let Some(conn) = conn.as_mut() else {
+            return Err(HostError::Storage(format!(
+                "{what}: the thread history is closed; restart Elitea"
+            )));
+        };
+        work(conn).map_err(|e| storage(what, &e))
     }
 
-    /// Queue `op` without waiting; handed back when the queue is full.
+    /// Queue `op` without waiting; handed back when [`CHANNEL_CAPACITY`]
+    /// ops are already queued.
     fn try_send(&self, op: Op) -> Sent {
-        let Some(sender) = &self.sender else {
-            return Sent::Closed;
-        };
-        match sender.try_send(op) {
-            Ok(()) => Sent::Queued,
-            Err(TrySendError::Full(op)) => Sent::Full(op),
-            Err(TrySendError::Disconnected(_)) => Sent::Closed,
+        if self.queued.load(Ordering::SeqCst) >= CHANNEL_CAPACITY {
+            return Sent::Full(op);
+        }
+        if self.send(op) {
+            Sent::Queued
+        } else {
+            Sent::Closed
         }
     }
 
-    /// Queue `op`, waiting for room (turn end and flushes only, never an emit).
+    /// Queue `op` whatever is queued already (a turn's end, a flush): the
+    /// queue is unbounded, so this never waits either.
     fn send(&self, op: Op) -> bool {
-        self.sender
-            .as_ref()
-            .is_some_and(|sender| sender.send(op).is_ok())
+        let sender = self
+            .sender
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(sender) = sender.as_ref() else {
+            return false;
+        };
+        self.queued.fetch_add(1, Ordering::SeqCst);
+        if sender.send(op).is_ok() {
+            true
+        } else {
+            self.queued.fetch_sub(1, Ordering::SeqCst);
+            false
+        }
     }
 
     /// Commit everything queued so far and wait for it (a read, a delete,
-    /// a turn's end, the app's exit).
+    /// the app's exit). Blocks: never on an async worker.
     pub fn flush(&self) {
         let (ack, done) = std::sync::mpsc::channel();
         if self.send(Op::Flush(ack)) && done.recv_timeout(Duration::from_secs(5)).is_err() {
@@ -467,18 +627,24 @@ impl HistoryStore {
         // A running turn's events so far, not just what the last batch wrote.
         self.flush();
         self.with("could not read the thread history", |conn| {
+            let uuid = thread_uuid(conn, owner, workspace_id, conversation)?;
             let mut turns: Vec<StoredTurn> = {
-                let mut statement = conn.prepare(
+                let mut statement = conn.prepare(&format!(
                     "SELECT turn_id, conversation_id, conversation_uuid, prompt, mentions,
                             started_at, finished_at, changes, events_truncated
                      FROM turns
-                     WHERE origin = ?1 AND user_id = ?2 AND workspace_id = ?3
-                       AND (conversation_id = ?4 OR conversation_uuid = ?4)
-                     ORDER BY started_at, rowid",
-                )?;
+                     WHERE {THREAD}
+                     ORDER BY started_at, rowid"
+                ))?;
                 statement
                     .query_map(
-                        params![owner.origin, owner.user_id, workspace_id, conversation],
+                        params![
+                            owner.origin,
+                            owner.user_id,
+                            workspace_id,
+                            conversation,
+                            uuid
+                        ],
                         |row| {
                             let mentions: String = row.get(4)?;
                             let changes: Option<String> = row.get(7)?;
@@ -536,11 +702,16 @@ impl HistoryStore {
     ) -> Result<usize, HostError> {
         self.flush();
         self.with("could not delete the thread history", |conn| {
+            let uuid = thread_uuid(conn, owner, workspace_id, conversation)?;
             conn.execute(
-                "DELETE FROM turns
-                 WHERE origin = ?1 AND user_id = ?2 AND workspace_id = ?3
-                   AND (conversation_id = ?4 OR conversation_uuid = ?4)",
-                params![owner.origin, owner.user_id, workspace_id, conversation],
+                &format!("DELETE FROM turns WHERE {THREAD}"),
+                params![
+                    owner.origin,
+                    owner.user_id,
+                    workspace_id,
+                    conversation,
+                    uuid
+                ],
             )
         })
     }
@@ -564,8 +735,17 @@ impl HistoryStore {
 impl Drop for HistoryStore {
     /// The writer commits what is left and stops once its queue closes.
     fn drop(&mut self) {
-        drop(self.sender.take());
-        if let Some(writer) = self.writer.take()
+        drop(
+            self.sender
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take(),
+        );
+        if let Some(writer) = self
+            .writer
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
             && writer.join().is_err()
         {
             log::warn!("the thread history writer panicked");
@@ -573,10 +753,81 @@ impl Drop for HistoryStore {
     }
 }
 
+/// The database and its sidecars, as they sit in `dir`.
+pub fn history_files(dir: &Path) -> Vec<PathBuf> {
+    ["", "-wal", "-shm"]
+        .iter()
+        .map(|suffix| dir.join(format!("{FILE_NAME}{suffix}")))
+        .collect()
+}
+
+/// Move whichever of `files` exist (the entries themselves: a symlink is
+/// moved, never followed) into a new directory beside them,
+/// `<name>.broken-<time>-<random>/`, keeping their names; never over an
+/// earlier copy. The new directory.
+///
+/// # Errors
+///
+/// The directory could not be made, or a file could not be moved (those
+/// moved before it stay in the directory).
+pub fn move_files_aside(
+    parent: &Path,
+    name: &str,
+    files: &[PathBuf],
+) -> Result<PathBuf, HostError> {
+    let aside = unique_aside_dir(parent, name)?;
+    for file in files {
+        if fs::symlink_metadata(file).is_err() {
+            continue;
+        }
+        let target = aside.join(file.file_name().unwrap_or_default());
+        fs::rename(file, &target).map_err(|e| {
+            HostError::Storage(format!("could not move {} aside: {e}", file.display()))
+        })?;
+    }
+    Ok(aside)
+}
+
+/// A new, owner-only directory `<name>.broken-<YYYYmmdd-HHMMSS-mmm>-<rand>`
+/// in `parent`: created exclusively, so it is never an earlier one.
+///
+/// # Errors
+///
+/// It could not be created.
+pub fn unique_aside_dir(parent: &Path, name: &str) -> Result<PathBuf, HostError> {
+    let mut last = None;
+    for _ in 0..16 {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S-%3f");
+        let random: u32 = rand::random();
+        let dir = parent.join(format!("{name}.broken-{stamp}-{random:08x}"));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt as _;
+            builder.mode(0o700);
+        }
+        match builder.create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => {
+                return Err(HostError::Storage(format!(
+                    "could not make a folder to move {name} aside into: {e}"
+                )));
+            }
+        }
+    }
+    Err(HostError::Storage(format!(
+        "could not make a folder to move {name} aside into: {}",
+        last.map(|e| e.to_string()).unwrap_or_default()
+    )))
+}
+
 /// The writer thread: owns its connection, batches ops into one
 /// transaction per flush (see the module docs).
 struct Writer {
     conn: Connection,
+    /// The store's count of queued ops: one less per op taken.
+    queued: Arc<AtomicUsize>,
     pending: Vec<Op>,
     pending_bytes: usize,
     since: Option<Instant>,
@@ -585,9 +836,10 @@ struct Writer {
 }
 
 impl Writer {
-    fn new(conn: Connection) -> Self {
+    fn new(conn: Connection, queued: Arc<AtomicUsize>) -> Self {
         Self {
             conn,
+            queued,
             pending: Vec::new(),
             pending_bytes: 0,
             since: None,
@@ -603,6 +855,9 @@ impl Writer {
                     receiver.recv_timeout(FLUSH_INTERVAL.saturating_sub(since.elapsed()))
                 }
             };
+            if next.is_ok() {
+                self.queued.fetch_sub(1, Ordering::SeqCst);
+            }
             match next {
                 Ok(Op::Flush(ack)) => {
                     self.commit();
@@ -748,35 +1003,86 @@ fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
             owner,
             workspace_id,
             conversation_id,
+            conversation_uuid,
         } => {
             conn.execute(
                 "UPDATE turns SET finished_at = ?2 WHERE turn_id = ?1",
                 params![turn_id, now_ms()],
             )?;
-            prune_thread(conn, &owner, &workspace_id, &conversation_id).map(|_| ())
+            prune_thread(
+                conn,
+                &owner,
+                &workspace_id,
+                &conversation_id,
+                conversation_uuid.as_deref(),
+            )
+            .map(|_| ())
         }
         Op::Flush(_) => Ok(()),
     }
 }
 
+/// One thread of one owner's workspace, for either spelling of its
+/// conversation: `?1` origin, `?2` user, `?3` workspace, `?4` the id or
+/// UUID asked for, `?5` the UUID it is known by ([`thread_uuid`]). A
+/// thread whose turns started under both spellings is one thread.
+const THREAD: &str = "origin = ?1 AND user_id = ?2 AND workspace_id = ?3
+    AND (conversation_id IN (?4, ?5) OR conversation_uuid IN (?4, ?5))";
+
+/// The UUID the stored turns know `conversation` by (itself when none
+/// does, or when it is the UUID).
+fn thread_uuid(
+    conn: &Connection,
+    owner: &Owner,
+    workspace_id: &str,
+    conversation: &str,
+) -> rusqlite::Result<String> {
+    use rusqlite::OptionalExtension as _;
+    let uuid: Option<String> = conn
+        .query_row(
+            "SELECT conversation_uuid FROM turns
+             WHERE origin = ?1 AND user_id = ?2 AND workspace_id = ?3
+               AND conversation_id = ?4 AND conversation_uuid IS NOT NULL
+             ORDER BY started_at DESC LIMIT 1",
+            params![owner.origin, owner.user_id, workspace_id, conversation],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(uuid.unwrap_or_else(|| conversation.to_owned()))
+}
+
 /// Keep a thread within its bounds: the newest turns, up to
-/// [`MAX_TURNS_PER_THREAD`] and [`MAX_THREAD_BYTES`].
+/// [`MAX_TURNS_PER_THREAD`] and [`MAX_THREAD_BYTES`]. The thread is what
+/// [`HistoryStore::thread`] reads for either spelling of the conversation
+/// (the id a turn started with, or its UUID): a thread whose turns started
+/// under both is pruned as one.
 fn prune_thread(
     conn: &Connection,
     owner: &Owner,
     workspace_id: &str,
     conversation_id: &str,
+    conversation_uuid: Option<&str>,
 ) -> rusqlite::Result<usize> {
+    let uuid = match conversation_uuid {
+        Some(uuid) => uuid.to_owned(),
+        None => thread_uuid(conn, owner, workspace_id, conversation_id)?,
+    };
     let sizes: Vec<(String, i64)> = {
-        let mut statement = conn.prepare(
+        let mut statement = conn.prepare(&format!(
             "SELECT turn_id, events_bytes + length(coalesce(changes, ''))
              FROM turns
-             WHERE origin = ?1 AND user_id = ?2 AND workspace_id = ?3 AND conversation_id = ?4
-             ORDER BY started_at DESC, rowid DESC",
-        )?;
+             WHERE {THREAD}
+             ORDER BY started_at DESC, rowid DESC"
+        ))?;
         statement
             .query_map(
-                params![owner.origin, owner.user_id, workspace_id, conversation_id],
+                params![
+                    owner.origin,
+                    owner.user_id,
+                    workspace_id,
+                    conversation_id,
+                    uuid
+                ],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?
             .collect::<rusqlite::Result<_>>()?
@@ -953,8 +1259,9 @@ impl TurnTap {
         }
     }
 
-    /// The turn ends: what the backlog holds goes to the writer, waiting
-    /// for room if it must, and the writer commits it.
+    /// The turn ends: what the backlog holds goes to the writer at once,
+    /// in order, past the queue's bound (it never waits: this runs on the
+    /// turn's async task). The writer commits it as it takes the `Finish`.
     fn finish(store: &HistoryStore, recording: &mut Recording) {
         while let Some(op) = recording.backlog.pop_front() {
             if !store.send(op) {
@@ -962,7 +1269,6 @@ impl TurnTap {
                 return;
             }
         }
-        store.flush();
     }
 
     fn record(store: &HistoryStore, recording: &mut Recording, event: &AgentEvent) {
@@ -1009,6 +1315,7 @@ impl TurnTap {
                 owner: turn.owner.clone(),
                 workspace_id: turn.workspace_id.clone(),
                 conversation_id: turn.conversation_id.clone(),
+                conversation_uuid: turn.conversation_uuid.clone(),
             };
             Self::queue(store, recording, op);
             Self::finish(store, recording);
@@ -1319,8 +1626,9 @@ mod tests {
         let turns = store.thread(&owner(1), "w1", "42").unwrap();
         assert_eq!(turns[0].events[0].payload["text"], "Hel");
         tap.emit(event("t1", 1, "text_delta", json!({"text": "lo"})));
-        // The app quits mid-answer.
+        // The app quits mid-answer: the tap goes, and the exit flushes.
         drop(tap);
+        store.flush();
         let again = HistoryStore::open(store.path().parent().unwrap()).unwrap();
         let turns = again.thread(&owner(1), "w1", "42").unwrap();
         let text: String = turns[0]
@@ -1362,6 +1670,126 @@ mod tests {
         drop(tap);
         let turn = &store.thread(&owner(1), "w1", "42").unwrap()[0];
         assert_eq!(turn.events.len(), CHANNEL_CAPACITY * 3, "nothing was lost");
+    }
+
+    #[test]
+    fn the_end_of_a_turn_never_waits_for_the_writer() {
+        let (_root, store) = store();
+        // Hold the writer's database lock: every commit stalls (5 s busy).
+        let blocker = Connection::open(store.path()).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        let tap = TurnTap::new(Arc::new(VecEmitter::default()), Some(store.clone()));
+        tap.activate(new_turn(owner(1), "t1", "42"));
+        tap.emit(event("t1", 0, "status", json!({"phase": "running"})));
+        // Past the queue's bound: the tap holds a backlog when `done` comes.
+        for seq in 1..(CHANNEL_CAPACITY as u64 * 2) {
+            tap.emit(event("t1", seq, "status", json!({"phase": "running"})));
+        }
+        let started = Instant::now();
+        let last = CHANNEL_CAPACITY as u64 * 2;
+        tap.emit(event("t1", last, "done", json!({"committed": true})));
+        drop(tap);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the turn's end waited on SQLite ({:?})",
+            started.elapsed()
+        );
+        blocker.execute_batch("ROLLBACK;").unwrap();
+        let turn = &store.thread(&owner(1), "w1", "42").unwrap()[0];
+        assert_eq!(turn.state, "done");
+        assert_eq!(
+            turn.events.len(),
+            CHANNEL_CAPACITY * 2 + 1,
+            "the backlog was handed over whole, in order"
+        );
+        assert!(turn.finished_at.is_some());
+    }
+
+    #[test]
+    fn an_async_read_does_not_hold_a_runtime_worker() {
+        let (_root, store) = store();
+        let tap = TurnTap::new(Arc::new(VecEmitter::default()), Some(store.clone()));
+        // The writer stalls on a lock held for a second, with a write pending.
+        let blocker = Connection::open(store.path()).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        tap.activate(new_turn(owner(1), "t1", "42"));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            blocker.execute_batch("ROLLBACK;").unwrap();
+        });
+        // One worker: a read that blocked it would stall the timer below.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (ticked, read) = runtime.block_on(async {
+            let reading = tokio::spawn({
+                let store = store.clone();
+                async move {
+                    store
+                        .read_thread(owner(1), "w1".into(), "42".into())
+                        .await
+                        .unwrap()
+                }
+            });
+            tokio::task::yield_now().await;
+            let started = Instant::now();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let ticked = started.elapsed();
+            (ticked, reading.await.unwrap())
+        });
+        release.join().unwrap();
+        assert!(
+            ticked < Duration::from_millis(500),
+            "the read held the runtime's only worker ({ticked:?})"
+        );
+        assert_eq!(read.len(), 1);
+        drop(tap);
+    }
+
+    #[test]
+    fn a_thread_started_under_both_spellings_is_pruned_as_one() {
+        let (_root, store) = store();
+        for index in 0..MAX_TURNS_PER_THREAD + 4 {
+            // The UI started some turns with the id, some with the UUID.
+            let spelling = if index % 2 == 0 { "42" } else { "uuid-42" };
+            let mut turn = new_turn(owner(1), &format!("t{index}"), spelling);
+            turn.conversation_uuid = Some("uuid-42".into());
+            turn.started_at = i64::try_from(index).unwrap();
+            play(&store, turn);
+        }
+        for spelling in ["42", "uuid-42"] {
+            let turns = store.thread(&owner(1), "w1", spelling).unwrap();
+            assert_eq!(turns.len(), MAX_TURNS_PER_THREAD, "{spelling}");
+            assert_eq!(turns[0].turn_id, "t4", "the oldest went first");
+        }
+    }
+
+    #[test]
+    fn moving_the_history_aside_keeps_its_wal_and_starts_afresh() {
+        let (_root, store) = store();
+        play(&store, new_turn(owner(1), "t1", "42"));
+        let dir = store.path().parent().unwrap().to_owned();
+        let first = store.move_aside().unwrap();
+        let name = first.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("threads.sqlite.broken-"), "{name}");
+        // The copy is whole where it lies: its turn is there.
+        assert_eq!(integrity(&first.join(FILE_NAME)).unwrap(), SCHEMA_VERSION);
+        let copy = Connection::open(first.join(FILE_NAME)).unwrap();
+        let kept: i64 = copy
+            .query_row("SELECT count(*) FROM turns", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kept, 1);
+        drop(copy);
+        // The store goes on, empty, and records again.
+        assert!(store.thread(&owner(1), "w1", "42").unwrap().is_empty());
+        play(&store, new_turn(owner(1), "t2", "42"));
+        assert_eq!(store.thread(&owner(1), "w1", "42").unwrap().len(), 1);
+        // A second move never overwrites the first.
+        let second = store.move_aside().unwrap();
+        assert_ne!(first, second);
+        assert!(first.join(FILE_NAME).exists() && second.join(FILE_NAME).exists());
+        assert!(dir.join(FILE_NAME).exists(), "a fresh database");
     }
 
     #[test]

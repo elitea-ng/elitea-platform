@@ -201,7 +201,12 @@ stored as appended chunks, each numbered by the last delta it holds; folding
 concatenates them as it does live deltas). Recording never blocks the
 stream: events go to a writer thread that commits them in batches (on every
 non-text event, every 500 ms or 64 KiB, before a read, at a turn's end and
-at exit), so a crash loses at most the last batch. A refused start is not
+at exit), so a crash loses at most the last batch. A turn's end never waits
+for the writer either (what the turn still holds is handed over at once, in
+order), and `thread_history` / `thread_history_delete` wait for it off the
+host's async workers. A thread is one thread whichever spelling of the
+conversation (its id or its UUID) its turns started with: reads, deletes and
+the bounds below all count them together. A refused start is not
 recorded. Bounds: a string in one event is cut at 16 KiB, a turn's events
 at 4 MiB (past it only `status`, `error` and `done` are kept and
 `events_truncated` is set), a stored diff at 64 KiB (1 MiB per turn), and a

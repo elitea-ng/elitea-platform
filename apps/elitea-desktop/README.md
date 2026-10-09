@@ -151,8 +151,8 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   warning. A file that is a symlink, not a regular file, owned by another
   user, or group/world-writable is never read, followed or written over
   (logged); sign-in then says to open **Help › Run Diagnostics…**, whose
-  repair moves that entry aside (`credentials.json.broken-<time>`, never a
-  symlink's target) so you can sign in again. Sign-out and wipe delete it once no pending
+  repair moves that entry aside (into `credentials.json.broken-<time>-<random>/`,
+  never a symlink's target) so you can sign in again. Sign-out and wipe delete it once no pending
   revoke is left. The trade-off, honestly: it is protected by file
   permissions and disk encryption (FileVault, BitLocker, LUKS), not by
   per-application keychain ACLs, so any process running as you can read it —
@@ -205,8 +205,11 @@ session (a refresh works), the client policy's `local_work.allowed` (and how
 an administrator turns it on) and the sign-outs still waiting to reach the
 server. Each problem it can repair has a **Fix** button: restrict a file to
 `0600` / a folder to `0700` when it is yours, move a damaged, foreign or
-symlinked file aside to `<name>.broken-<time>` (the entry itself, never a
-link's target) so the app starts afresh, drop vanished folders from the
+symlinked file aside into a new folder `<name>.broken-<YYYYmmdd-HHMMSS-mmm>-<random>/`
+beside it, under its own name (the entry itself, never a link's target; an
+earlier copy is never overwritten) so the app starts afresh — the thread
+history goes with its `-wal` and `-shm` into one such folder after its writer
+stopped and its connections closed, and a new history starts at once —, drop vanished folders from the
 workspace list, retry the waiting sign-outs. Nothing is repaired without
 the click; every repair is logged (paths and modes, never contents). At
 launch the app runs the file checks and, when one fails, shows a small
