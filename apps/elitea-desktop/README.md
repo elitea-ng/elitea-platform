@@ -28,10 +28,12 @@ apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
   and holds it in memory; it never reaches web storage. Refresh rotates the
   token; a lost response is retried with the old token (the server re-delivers
   within its grace window). `device_revoked` wipes local state. Sign-out
-  revokes the device session server-side (falling back to the revocation
-  endpoint stored with the token when discovery is unreachable); a revoke that
-  does not get through is kept in a second slot of the same file
-  (`pending-revoke`) and retried at the next launch, while the local session is forgotten at once.
+  forgets the local session at once and queues the server revoke in a second
+  slot of the same file (`pending-revoke`) before any network call; the revoke
+  is sent in the background (falling back to the revocation endpoint stored
+  with the token when discovery is unreachable) and leaves the queue once the
+  server confirms it, otherwise it is retried at the next launch. No lock is
+  held across the network, so nothing waits on a slow deployment.
 - **Client policy**: stored verbatim (`client-policy.json` in the app config
   directory) from every token response. Enforcing `local_work` comes with the
   local runtime.

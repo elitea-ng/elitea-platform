@@ -76,18 +76,19 @@ pub async fn host_refresh(state: State<'_, AppState>) -> Result<RefreshResult, H
     state.auth.refresh().await
 }
 
-/// Revoke the device session on the server, then forget it. Resolves `true`
-/// when the server confirmed the revoke; `false` means it is retried at the
-/// next launch.
+/// Forget the session at once; the server revoke is queued and sent in the
+/// background (retried at the next launch until it gets through). Resolves
+/// without waiting for the network.
 #[tauri::command]
 pub async fn host_sign_out(
     window: WebviewWindow,
     state: State<'_, AppState>,
     local: State<'_, LocalState>,
-) -> Result<bool, HostError> {
+) -> Result<(), HostError> {
     // First: no running turn sends another request with this session.
     local.agents.forget_identity();
-    let result = state.auth.sign_out().await;
+    // The background delivery is detached.
+    let result = state.auth.sign_out().await.map(drop);
     clear_webview_data(&window);
     result
 }

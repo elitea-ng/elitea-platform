@@ -196,7 +196,7 @@ impl AuthService {
 
     /// Normalise the address, fetch and validate discovery, remember the
     /// deployment. Choosing a different deployment ends any session on the old one.
-    pub async fn connect(&self, input: &str) -> Result<DeploymentInfo, HostError> {
+    pub async fn connect(self: &Arc<Self>, input: &str) -> Result<DeploymentInfo, HostError> {
         let origin = discovery::normalize_origin(input)?;
         let document = discovery::fetch_discovery(self.tokens.http(), &origin).await?;
         let origin_text = origin_string(&origin);
@@ -207,7 +207,8 @@ impl AuthService {
             .as_deref()
             .is_some_and(|previous| previous != origin_text)
         {
-            self.sign_out().await?;
+            // The old deployment's revoke goes out in the background.
+            drop(self.sign_out().await?);
         }
         settings.origin = Some(origin_text.clone());
         settings.display_name = Some(document.display_name.clone());
@@ -482,25 +483,60 @@ impl AuthService {
 
     // ---- sign out ------------------------------------------------------
 
-    /// Revoke the device session on the server, then forget it. A revoke that
-    /// does not get through (offline, deployment down) is remembered in its
-    /// own credentials slot and retried at the next launch
-    /// ([`Self::retry_pending_revokes`]); the local session is forgotten
-    /// either way. Returns whether the server confirmed the revoke.
-    pub async fn sign_out(&self) -> Result<bool, HostError> {
-        // Held across the revoke too: a refresh finishing meanwhile would
-        // otherwise rotate the token being revoked and store the new one.
-        let _gate = self.refresh_gate.lock().await;
-        let mut revoked = true;
-        if let Some(session) = self.current_session().await? {
-            let pending = PendingRevoke::from(&session);
-            revoked = self.revoke(&pending).await;
-            if !revoked {
-                self.remember_pending(pending).await;
+    /// Forget the device session at once and revoke it in the background.
+    ///
+    /// Under `refresh_gate` (so a refresh in flight finishes first and the
+    /// LIVE token is the one revoked, and none starts on the forgotten
+    /// session after): the revoke is written to the persisted pending-revoke
+    /// queue, then the local session is wiped. The gate is released before
+    /// any network call. The revoke is then sent fire-and-forget: delivered,
+    /// it leaves the queue; not delivered (offline, deployment down, the app
+    /// quit), it stays queued and is retried at the next launch
+    /// ([`Self::retry_pending_revokes`]).
+    ///
+    /// Returns the background delivery (callers detach it; tests await it).
+    pub async fn sign_out(
+        self: &Arc<Self>,
+    ) -> Result<Option<tokio::task::JoinHandle<bool>>, HostError> {
+        let pending = {
+            let _gate = self.refresh_gate.lock().await;
+            let pending = self
+                .current_session()
+                .await?
+                .map(|session| PendingRevoke::from(&session));
+            if let Some(pending) = &pending {
+                self.remember_pending(pending.clone()).await;
             }
+            self.wipe_locked().await?;
+            pending
+        };
+        Ok(pending.map(|pending| {
+            let service = self.clone();
+            tokio::spawn(async move { service.deliver_revoke(&pending).await })
+        }))
+    }
+
+    /// Send one queued revoke; on success take it out of the queue.
+    async fn deliver_revoke(&self, pending: &PendingRevoke) -> bool {
+        let delivered = self.revoke(pending).await;
+        if delivered {
+            self.forget_pending(pending).await;
+        } else {
+            log::info!("the sign-out revoke did not get through; it is retried at the next launch");
         }
-        self.wipe_locked().await?;
-        Ok(revoked)
+        delivered
+    }
+
+    /// Take a delivered revoke out of the waiting list.
+    async fn forget_pending(&self, delivered: &PendingRevoke) {
+        let _gate = self.pending_gate.lock().await;
+        let result = load_pending(self.pending_revokes.as_ref()).and_then(|mut list| {
+            list.retain(|pending| pending != delivered);
+            save_pending(self.pending_revokes.as_ref(), &list)
+        });
+        if let Err(error) = result {
+            log::warn!("could not update the pending revokes: {error}");
+        }
     }
 
     /// Revoke at the endpoint fresh discovery names, else at the one stored

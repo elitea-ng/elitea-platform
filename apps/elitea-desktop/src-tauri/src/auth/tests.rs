@@ -90,7 +90,7 @@ fn temp_dir() -> PathBuf {
 }
 
 struct Harness {
-    service: AuthService,
+    service: Arc<AuthService>,
     credentials: Arc<MemoryStore>,
     pending: Arc<MemoryStore>,
     browser: Arc<FakeBrowser>,
@@ -123,12 +123,21 @@ fn harness(
         runtime_client_id: None,
     })
     .with_deadline(Duration::from_secs(10));
+    let service = Arc::new(service);
     Harness {
         service,
         credentials,
         pending,
         browser,
         dir,
+    }
+}
+
+/// Sign out and wait for the background revoke; whether it was delivered.
+async fn sign_out_and_deliver(service: &Arc<AuthService>) -> bool {
+    match service.sign_out().await.unwrap() {
+        Some(delivery) => delivery.await.unwrap(),
+        None => true,
     }
 }
 
@@ -265,7 +274,8 @@ async fn a_callback_with_the_wrong_state_is_ignored_and_stores_nothing() {
         build_client_id: None,
         runtime_client_id: None,
     })
-    .with_deadline(Duration::from_millis(300));
+    .with_deadline(Duration::from_millis(300))
+    .into();
     h.service.connect(&server.origin).await.unwrap();
     // The foreign callback no longer aborts the attempt: it just times out.
     let err = h.service.sign_in().await.unwrap_err();
@@ -335,7 +345,8 @@ async fn closing_the_browser_without_finishing_times_out() {
         build_client_id: None,
         runtime_client_id: None,
     })
-    .with_deadline(Duration::from_millis(150));
+    .with_deadline(Duration::from_millis(150))
+    .into();
     h.service.connect(&server.origin).await.unwrap();
     assert!(matches!(
         h.service.sign_in().await.unwrap_err(),
@@ -467,7 +478,7 @@ async fn sign_out_revokes_on_the_server_then_forgets_everything() {
         epoch,
         "a refresh is the same session"
     );
-    h.service.sign_out().await.unwrap();
+    assert!(sign_out_and_deliver(&h.service).await);
     assert!(h.service.session_epoch() > epoch);
     assert!(h.credentials.raw().is_none());
     let revoke = server
@@ -508,7 +519,7 @@ async fn a_sign_out_during_a_refresh_is_not_undone_by_the_refresh() {
         tokio::spawn(async move { h.service.refresh().await })
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
-    h.service.sign_out().await.unwrap();
+    assert!(sign_out_and_deliver(&h.service).await);
     let _ = refreshing.await.unwrap();
 
     assert!(
@@ -524,6 +535,87 @@ async fn a_sign_out_during_a_refresh_is_not_undone_by_the_refresh() {
         .map(|r| r.form()["token"].clone())
         .collect();
     assert_eq!(revoked, ["refresh-2"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sign_out_returns_at_once_and_the_revoke_is_delivered_when_the_server_is_back() {
+    // The revocation endpoint is "unreachable" until the test releases it:
+    // it holds every revoke on the network (event-driven, like the
+    // launch-retry test), then answers 503 while down.
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = std::sync::Mutex::new(released);
+    let up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let signal = arrived.clone();
+    let server_up = up.clone();
+    let challenge = Arc::new(std::sync::Mutex::new(String::new()));
+    let inner = pkce_checking_deployment(challenge.clone(), Arc::default());
+    let server = deployment(Box::new(move |req, form| {
+        if req.path == "/api/v2/auth/native/revoke" && !server_up.load(Ordering::SeqCst) {
+            signal.notify_one();
+            let _ = released
+                .lock()
+                .expect("lock")
+                .recv_timeout(Duration::from_secs(5));
+            return Some(Res::json(503, &json!({"error": "unavailable"})));
+        }
+        inner(req, form)
+    }))
+    .await;
+    let issuer = server.origin.clone();
+    let h = harness(move |q, url| {
+        *challenge.lock().unwrap() = q["code_challenge"].clone();
+        approve_with(issuer.clone())(q, url)
+    });
+    h.service.connect(&server.origin).await.unwrap();
+    h.service.sign_in().await.unwrap();
+
+    let started = std::time::Instant::now();
+    let delivery = h
+        .service
+        .sign_out()
+        .await
+        .unwrap()
+        .expect("a revoke to send");
+    let took = started.elapsed();
+    // The revoke is on the network now, and nothing waits for it.
+    arrived.notified().await;
+    let token_started = std::time::Instant::now();
+    let token = h.service.access_token().await.unwrap();
+    let token_took = token_started.elapsed();
+    assert!(!h.service.state().unwrap().signed_in);
+    assert!(h.credentials.raw().is_none(), "wiped immediately");
+    assert!(
+        h.pending.raw().unwrap().contains("refresh-1"),
+        "queued before the network"
+    );
+    release.send(()).expect("the revoke is still waiting");
+    assert!(
+        took < Duration::from_secs(2),
+        "sign_out waited for the network ({took:?})"
+    );
+    assert!(token.is_none(), "signed out");
+    assert!(
+        token_took < Duration::from_secs(2),
+        "access_token waited for the revoke ({token_took:?})"
+    );
+    assert!(!delivery.await.unwrap(), "the server was down");
+    assert!(
+        h.pending.raw().unwrap().contains("refresh-1"),
+        "still queued"
+    );
+
+    // The server comes back: the next launch delivers it.
+    up.store(true, Ordering::SeqCst);
+    assert_eq!(h.service.retry_pending_revokes().await, 0);
+    assert_eq!(h.pending.raw(), None);
+    let revoked: Vec<String> = server
+        .seen()
+        .iter()
+        .filter(|r| r.path == "/api/v2/auth/native/revoke")
+        .map(|r| r.form()["token"].clone())
+        .collect();
+    assert_eq!(revoked.last().map(String::as_str), Some("refresh-1"));
 }
 
 #[tokio::test]
@@ -730,7 +822,7 @@ async fn a_failed_revoke_is_kept_in_the_credentials_file_and_retried_at_the_next
     h.service.connect(&server.origin).await.unwrap();
     h.service.sign_in().await.unwrap();
 
-    assert!(!h.service.sign_out().await.unwrap(), "the revoke failed");
+    assert!(!sign_out_and_deliver(&h.service).await, "the revoke failed");
     // Signed out locally all the same; the token waits in its own credentials file item.
     assert!(h.credentials.raw().is_none());
     assert!(!h.service.state().unwrap().signed_in);
@@ -825,7 +917,7 @@ async fn sign_out_falls_back_to_the_stored_revocation_endpoint_when_discovery_fa
     session.origin = "http://127.0.0.1:9".into();
     save_session(h.credentials.as_ref(), &session).unwrap();
 
-    assert!(h.service.sign_out().await.unwrap());
+    assert!(sign_out_and_deliver(&h.service).await);
     assert!(
         server
             .seen()
