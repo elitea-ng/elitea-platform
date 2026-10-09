@@ -58,6 +58,8 @@ Detailed ledgers:
 
 - `customer-workflow-migration-20260923.md` maps customer workflow requirements, reuse candidates, and separate acceptance plans.
 
+- [Main egress guard hardening](egress-guard-hardening-20261008.md) records the hardened Main SSRF guard, its callers, recovery rows, and browser refusal evidence.
+
 - `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.
 - `../remaining-gates.md` records the continuation order after the latest main sync.
 - `point3-audit-20260913.md` records point 3 progression acceptance and separate verification debt.
@@ -430,5 +432,6 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
 - [Pipeline size bounds and HTTP snapshot scope](pipeline-size-bounds-http-snapshot-20261008.md) records one 512 KiB pipeline bound across Main and Worker, the non-HTTP snapshot scope, browser evidence and follow-ups.
+- [Container build local crate freshness](container-build-local-crate-freshness-20261008.md) records why Rust image builds recompile local crates under a locked shared target cache, the two-worktree build proof and the gate test.
 - [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.
-- [Main egress guard hardening](egress-guard-hardening-20261008.md) records the hardened Main SSRF guard, its callers, recovery rows, and browser refusal evidence.
+- [Governance body bounds](governance-body-bounds-20261008.md) records the 256 KiB governance body limit, 413 refusal, strict decode, and 8 KiB routing CEL cap.
