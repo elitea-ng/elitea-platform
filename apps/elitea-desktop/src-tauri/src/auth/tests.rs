@@ -758,10 +758,22 @@ async fn a_failed_revoke_is_kept_in_the_credentials_file_and_retried_at_the_next
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_launch_retry_does_not_hold_the_pending_list_across_the_network() {
-    // A slow revocation endpoint: the retry is on the network for a while.
-    let server = deployment(Box::new(|req, _| {
+    // The revocation endpoint holds the retry on the network until the test
+    // releases it, and says when the request has arrived. Event-driven, not
+    // timed: a handler that sleeps blocks a runtime worker, which can hold the
+    // time driver, so a tokio timer in the test would only fire once the
+    // revoke returned (and the sign-out below would race the retry's re-read).
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = std::sync::Mutex::new(released);
+    let signal = arrived.clone();
+    let server = deployment(Box::new(move |req, _| {
         if req.path == "/api/v2/auth/native/revoke" {
-            std::thread::sleep(Duration::from_millis(800));
+            signal.notify_one();
+            let _ = released
+                .lock()
+                .expect("lock")
+                .recv_timeout(Duration::from_secs(5));
             return Some(Res::json(200, &json!({})));
         }
         None
@@ -781,18 +793,19 @@ async fn the_launch_retry_does_not_hold_the_pending_list_across_the_network() {
     };
 
     // A sign-out failing meanwhile (it holds refresh_gate while it waits
-    // here) must not wait for the retry's revokes.
-    let (waiting, remembered) = tokio::join!(h.service.retry_pending_revokes(), async {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        tokio::time::timeout(
-            Duration::from_millis(400),
-            h.service.remember_pending(new.clone()),
-        )
-        .await
+    // here) must not wait for the retry's revokes: it finishes while the
+    // revoke is still on the network, and only then is the revoke answered.
+    let (waiting, remember_took) = tokio::join!(h.service.retry_pending_revokes(), async {
+        arrived.notified().await;
+        let started = std::time::Instant::now();
+        h.service.remember_pending(new.clone()).await;
+        let took = started.elapsed();
+        release.send(()).expect("the revoke is still waiting");
+        took
     });
     assert!(
-        remembered.is_ok(),
-        "remember_pending waited for the retry's network calls"
+        remember_took < Duration::from_secs(2),
+        "remember_pending waited for the retry's network calls ({remember_took:?})"
     );
     // The delivered revoke is gone; the one added meanwhile is kept.
     assert_eq!(waiting, 1);
