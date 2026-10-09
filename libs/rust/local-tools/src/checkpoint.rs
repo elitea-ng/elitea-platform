@@ -27,7 +27,10 @@
 //! `.gitignore` rules honoured. Bounded: [`MAX_COPY_FILES`],
 //! [`MAX_COPY_BYTES`]; files over [`MAX_COPY_FILE_BYTES`], and files that
 //! could not be read, are recorded as skipped and left alone by a restore.
-//! Deletions follow the checkpoint's ignore rules as in git.
+//! Deletions follow the checkpoint's ignore rules as in git. A restore
+//! never writes through a symlink: one the turn put where the checkpoint
+//! had a file or a directory is removed and the file or directory
+//! recreated.
 //!
 //! Restores write through a [`Workspace`] without `path_deny` (it is the
 //! person's undo, not the agent's write), so they are still confined to the
@@ -53,7 +56,7 @@ use sha2::{Digest, Sha256};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::git::Repo;
 use crate::sandbox::SandboxConfig;
-use crate::workspace::{Workspace, WsPath, is_protected_name};
+use crate::workspace::{EntryKind, Workspace, WsPath, is_protected_name};
 
 /// The ref namespace checkpoints live under.
 pub const REF_PREFIX: &str = "refs/elitea/checkpoints";
@@ -1040,6 +1043,27 @@ impl CopyCheckpoints {
         Ok(out)
     }
 
+    /// Remove the symlinks on the way to `path` and at it (the checkpoint
+    /// had directories and a file there: copies never record links), so a
+    /// write recreates them instead of writing through a link.
+    fn unlink_links_on(&self, path: &WsPath, report: &mut RestoreReport) -> ToolResult<()> {
+        let components = path.components();
+        for end in 1..=components.len() {
+            let prefix = WsPath::from_relative(Path::new(&components[..end].join("/")))?;
+            match self.restorer.stat(&prefix)? {
+                Some(EntryKind::Symlink) => {
+                    if self.restorer.remove_file(&prefix)? {
+                        report.deleted.push(prefix.display_string());
+                    }
+                    return Ok(());
+                }
+                Some(EntryKind::Dir) => {}
+                _ => return Ok(()),
+            }
+        }
+        Ok(())
+    }
+
     fn restore(&self, seq: u64, only: Option<&WsPath>) -> ToolResult<RestoreReport> {
         let manifest = self.read_manifest(seq)?;
         let in_scope = |path: &str| only.is_none_or(|only| only.display_string() == path);
@@ -1067,6 +1091,7 @@ impl CopyCheckpoints {
                 continue;
             }
             let path = WsPath::from_relative(Path::new(name))?;
+            self.unlink_links_on(&path, &mut report)?;
             let unchanged = self
                 .restorer
                 .read(&path, MAX_COPY_FILE_BYTES)
@@ -1513,6 +1538,48 @@ mod tests {
         assert!(report.deleted.is_empty(), "{report:?}");
         assert_eq!(read(root, "locked.txt").as_deref(), Some("private\n"));
         assert_eq!(read(root, "a.txt").as_deref(), Some("a\n"));
+    }
+
+    /// The turn replaced a directory with a symlink to another one: the
+    /// restore recreates the directory instead of writing through the link.
+    #[test]
+    fn copy_restore_does_not_write_through_a_symlink_the_turn_made() {
+        let dir = tempfile::tempdir().expect("dir");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).expect("src");
+        std::fs::create_dir_all(root.join("lib")).expect("lib");
+        std::fs::write(root.join("src/a.txt"), "src a\n").expect("src a");
+        std::fs::write(root.join("lib/a.txt"), "lib a\n").expect("lib a");
+        std::fs::write(root.join("b.txt"), "b\n").expect("b");
+        std::fs::write(root.join("lib/b.txt"), "lib b\n").expect("lib b");
+        let workspace = Workspace::open(root, &[]).expect("workspace");
+        let data = tempfile::tempdir().expect("data");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+        checkpoints.create("turn").expect("create");
+
+        std::fs::remove_dir_all(root.join("src")).expect("rm src");
+        std::os::unix::fs::symlink("lib", root.join("src")).expect("link dir");
+        std::fs::remove_file(root.join("b.txt")).expect("rm b");
+        std::os::unix::fs::symlink("lib/b.txt", root.join("b.txt")).expect("link file");
+        checkpoints.restore(1).expect("restore");
+
+        assert!(
+            !std::fs::symlink_metadata(root.join("src"))
+                .expect("src")
+                .file_type()
+                .is_symlink(),
+            "src is a directory again"
+        );
+        assert_eq!(read(root, "src/a.txt").as_deref(), Some("src a\n"));
+        assert_eq!(read(root, "lib/a.txt").as_deref(), Some("lib a\n"));
+        assert!(
+            !std::fs::symlink_metadata(root.join("b.txt"))
+                .expect("b")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(read(root, "b.txt").as_deref(), Some("b\n"));
+        assert_eq!(read(root, "lib/b.txt").as_deref(), Some("lib b\n"));
     }
 
     fn walk_count(base: &Path, name: &str) -> usize {
