@@ -23,7 +23,7 @@ type ResultRequest struct {
 
 func (r ResultRequest) Validate() error {
 	if r.RequestKey != "" {
-		if r.ExecutionID != "" || !validRequestKey(r.RequestKey) {
+		if r.ExecutionID != "" || !ValidRequestKey(r.RequestKey) {
 			return ErrInvalidToolRun
 		}
 		r.ExecutionID = r.RequestKey

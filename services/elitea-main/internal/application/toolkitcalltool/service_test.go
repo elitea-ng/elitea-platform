@@ -408,8 +408,26 @@ func TestRunToolMapsARuntimeFailure(t *testing.T) {
 		t.Fatalf("run tool: %v", err)
 	}
 	if outcome.Status != RunStatusRuntimeFailure ||
-		outcome.ErrorMessage != "The runtime operation failed." {
+		outcome.ErrorMessage != "The runtime operation failed." ||
+		outcome.FailureCode != "RUNTIME_ERROR_CODE_V1_INTERNAL" {
 		t.Fatalf("runtime failure mapped to %+v", outcome)
+	}
+}
+
+// A replay of a key whose run is still going dispatches nothing and says so.
+func TestRunToolMarksAReplayedPendingRun(t *testing.T) {
+	admitted := testAdmitted()
+	admitted.Outcome.Created = false
+	dispatcher := &stubDispatcher{}
+	service := newTestService(t, &stubResolver{inputs: testInputs()}, stubVerdict{supported: true},
+		&stubAdmissions{run: admitted}, dispatcher, &stubSettlements{found: false}, 50*time.Millisecond)
+	_, err := service.RunTool(context.Background(), validRequest())
+	var pending *PendingRun
+	if !errors.As(err, &pending) || !pending.Replayed || pending.ExecutionID != "exec-1" {
+		t.Fatalf("replayed pending = %+v (%v)", pending, err)
+	}
+	if dispatcher.calls != 0 {
+		t.Fatalf("a replay dispatched %d times", dispatcher.calls)
 	}
 }
 
@@ -644,5 +662,24 @@ func TestRunToolSurvivesARecorderFailure(t *testing.T) {
 	}
 	if outcome.Status != RunStatusOK || outcome.ResultJSON != `{"ok":true}` {
 		t.Fatalf("the tool result was altered by a recorder failure: %+v", outcome)
+	}
+}
+
+// A result read for a key that an earlier request admitted says so, and the
+// run that this request admitted does not.
+func TestRunToolMarksAReplayedResult(t *testing.T) {
+	for _, created := range []bool{true, false} {
+		admitted := testAdmitted()
+		admitted.Outcome.Created = created
+		settlements := &stubSettlements{
+			settlement: settledPayload(t, runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_OK, `{"a":1}`, ""),
+			found:      true,
+		}
+		service := newTestService(t, &stubResolver{inputs: testInputs()}, stubVerdict{supported: true},
+			&stubAdmissions{run: admitted}, &stubDispatcher{}, settlements, time.Second)
+		outcome, err := service.RunTool(context.Background(), validRequest())
+		if err != nil || outcome.Replayed == created {
+			t.Fatalf("created %v: outcome %+v, %v", created, outcome, err)
+		}
 	}
 }
