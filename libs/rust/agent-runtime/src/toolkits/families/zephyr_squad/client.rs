@@ -447,7 +447,10 @@ impl ZephyrSquadClient {
             .ok_or_else(invalid_configuration)?;
         let canonical = canonical_request(method, api_path);
         let qsh = ring::digest::digest(&ring::digest::SHA256, canonical.as_bytes());
-        let payload = serde_json::to_vec(&json!({
+        // The signed claims are written with sorted members whatever
+        // `preserve_order` a build unifies, so the token is the SDK's byte
+        // for byte (`crate::canonical`).
+        let payload = crate::canonical::to_vec(&json!({
             "sub":self.config.account_id(),
             "qsh":hex_lower(qsh.as_ref()),
             "iss":self.config.access_key(),

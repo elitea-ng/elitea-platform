@@ -454,8 +454,12 @@ fn project_test_steps(response: &ZephyrHttpResponse) -> Result<Value, ZephyrClie
     if projected.is_empty() {
         return Ok(Value::String("No Zephyr test steps found".to_owned()));
     }
-    let records = serde_json::to_string(&projected).map_err(|_| invalid_response())?;
-    let output = format!("Found {} test steps:\n{records}", projected.len());
+    // Sorted members whatever `preserve_order` a build unifies: the text the
+    // model reads is the SDK's (`crate::canonical`).
+    let count = projected.len();
+    let records =
+        crate::canonical::to_string(&Value::Array(projected)).map_err(|_| invalid_response())?;
+    let output = format!("Found {count} test steps:\n{records}");
     if output.len() > MAX_OUTPUT_BYTES {
         return Err(resource_exhausted(false));
     }

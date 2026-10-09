@@ -4,7 +4,7 @@
 //! Main freezes toolkit identity and redeems schema-declared secrets before a
 //! host receives the turn, so nothing here redeems a credential or holds a
 //! claim: a family is built from already-materialised settings
-//! ([`materialize`]), and the one family that writes to the platform itself
+//! (`materialize`), and the one family that writes to the platform itself
 //! (`artifact`) goes through the host's [`crate::host::PlatformWriter`]. The
 //! cloud worker passes the settings its claim redeemed; the desktop host
 //! never passes a credentialed family (it reaches those through
