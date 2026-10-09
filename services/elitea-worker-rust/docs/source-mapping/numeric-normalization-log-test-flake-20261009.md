@@ -1,6 +1,6 @@
 # Numeric normalization log test flake
 
-Branch `fix/worker-numeric-normalization-log-flake`, based on `origin/main` at `543de2912` (#1162). Evidence was
+PR elitea-ng/elitea-platform#1172, branch `fix/worker-numeric-normalization-log-flake`, based on `origin/main` at `543de2912` (#1162). Evidence was
 collected on 2026-10-09. This is a test-only change. No runtime code, contract or configuration changes.
 
 The Worker test `agents::graph::compiler_identifier_tests::numeric_normalization_is_logged_as_counts_only` (added by
