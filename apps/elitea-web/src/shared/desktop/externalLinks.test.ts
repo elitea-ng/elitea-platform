@@ -12,7 +12,7 @@ function setup() {
   const open = vi.fn<(url: string) => Promise<void>>().mockResolvedValue();
   const nativeOpen = vi.fn<typeof window.open>();
   window.open = nativeOpen;
-  dispose = installExternalLinks({ openExternal: open }, document, window);
+  dispose = installExternalLinks({ openExternal: open }, 'https://elitea.example.com', document, window);
   return { open };
 }
 
@@ -37,6 +37,14 @@ describe('installExternalLinks', () => {
     click('<a href="file:///etc/passwd" target="_blank">x</a>');
     click('<a href="javascript:alert(1)" target="_blank">x</a>');
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it('resolves a relative _blank link against the deployment origin, not the bundled page', () => {
+    const { open } = setup();
+    click('<a href="/app/docs/guide" target="_blank">g</a>');
+    expect(open).toHaveBeenCalledWith('https://elitea.example.com/app/docs/guide');
+    window.open('files/report.pdf');
+    expect(open).toHaveBeenLastCalledWith('https://elitea.example.com/files/report.pdf');
   });
 
   it('leaves in-app links alone', () => {

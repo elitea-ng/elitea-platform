@@ -53,7 +53,7 @@ export async function launchApp(options: LaunchOptions): Promise<Root> {
   const config = desktopRuntimeConfig(state.origin, await readPublicProjectId(noRedirectFetch, state.origin));
   (globalThis as { elitea_ui_config?: unknown }).elitea_ui_config = config;
 
-  installExternalLinks(bridge);
+  installExternalLinks(bridge, state.origin);
 
   const { App } = await import('@/app/App');
   const root = createRoot(container);
