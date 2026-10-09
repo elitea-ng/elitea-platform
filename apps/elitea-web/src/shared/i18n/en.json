@@ -4833,7 +4833,6 @@
   "processes.chat.canvas.saveFailed": "The document could not be saved. Your changes are still here — try again.",
   "processes.chat.canvas.saving": "Saving the document…",
   "processes.chat.canvas.createFailed": "The canvas could not be created. Try again.",
-  "workspace.desktopOnly": "Workspaces are available in the Elitea desktop app.",
   "pipelines.graphExtensions.aggregateEmptyHelp": "Empty input gives one row (count 0, lists [], sum 0, others null) without Group by, and no rows with Group by.",
   "pipelines.graphExtensions.aggregateFlatDescription": "Group list rows and calculate explicit results. Each result row holds the group fields and the operation results side by side.",
   "pipelines.graphExtensions.regroup": "Regroup",

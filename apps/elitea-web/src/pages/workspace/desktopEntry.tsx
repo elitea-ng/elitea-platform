@@ -8,18 +8,20 @@
  * dropped, and the dynamic `import()` of the real pages goes with them — no
  * Workspace chunk is emitted at all. The check is read at render time (not
  * module load) so a test can switch it with `vi.stubEnv`.
+ *
+ * Outside `desktop` the routes' `beforeLoad` already redirects to `/chat`;
+ * the component does the same if it is ever mounted anyway, so the web has no
+ * Workspace screen and no string for one in its initial catalogue.
  */
 import { lazy, Suspense } from 'react';
 
-import Alert from '@mui/material/Alert';
-
-import { t } from '@/shared/i18n';
+import { Navigate } from '@tanstack/react-router';
 
 const WorkspacesPage = /* @__PURE__ */ lazy(() => import('./WorkspacesPage'));
 const WorkspaceSessionPage = /* @__PURE__ */ lazy(() => import('./WorkspaceSessionPage'));
 
 function NotAvailable(): React.JSX.Element {
-  return <Alert severity="info">{t('workspace.desktopOnly', 'Workspaces are available in the Elitea desktop app.')}</Alert>;
+  return <Navigate to="/chat" replace />;
 }
 
 export function WorkspacesEntry(): React.JSX.Element {

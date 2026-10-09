@@ -18,6 +18,6 @@ describe('registerDesktopCatalogue', () => {
     expect(i18n.exists('workspace.openFolder')).toBe(true);
     expect(t('workspace.openFolder', 'fallback-not-used')).toBe(catalogue['workspace.openFolder']);
     // Shared strings are untouched.
-    expect(t('workspace.desktopOnly', 'x')).toBe(shared['workspace.desktopOnly']);
+    expect(t('features.chatConversationList.localWork.filter', 'x')).toBe(shared['features.chatConversationList.localWork.filter']);
   });
 });

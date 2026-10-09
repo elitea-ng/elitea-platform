@@ -7,17 +7,19 @@
  * `workspaces.index.tsx`, not `workspaces.tsx`: as a parent without an
  * `<Outlet/>` it would swallow `/workspaces/$workspaceId` (see
  * `inventory.index.tsx`).
+ *
+ * No per-route pending/error components: the router's defaults
+ * (`app/router.tsx`) are the same `RoutePending`/`RouteError`, and every
+ * per-route copy costs the web build's initial chunk a split-chunk import for
+ * a screen the web never renders.
  */
 import { createFileRoute } from '@tanstack/react-router';
 
 import { WorkspacesEntry } from '@/pages/workspace/desktopEntry';
 
 import { requireDesktopBuild } from '../-guards/desktopGuard';
-import { RouteError, RoutePending } from '../-ui/RouteStatus';
 
 export const Route = createFileRoute('/_shell/workspaces/')({
   beforeLoad: requireDesktopBuild,
-  pendingComponent: RoutePending,
-  errorComponent: RouteError,
   component: WorkspacesEntry,
 });
