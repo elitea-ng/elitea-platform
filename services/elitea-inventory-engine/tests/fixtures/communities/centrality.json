@@ -1,0 +1,132 @@
+{
+ "nodes": [
+  {
+   "id": "p",
+   "attributes": {
+    "name": "P",
+    "type": "function"
+   }
+  },
+  {
+   "id": "q",
+   "attributes": {
+    "name": "Q",
+    "type": "function"
+   }
+  },
+  {
+   "id": "r",
+   "attributes": {
+    "name": "R",
+    "type": "function"
+   }
+  },
+  {
+   "id": "s",
+   "attributes": {
+    "name": "S",
+    "type": "function"
+   }
+  },
+  {
+   "id": "t",
+   "attributes": {
+    "name": "T",
+    "type": "function"
+   }
+  },
+  {
+   "id": "u",
+   "attributes": {
+    "name": "U",
+    "type": "function"
+   }
+  },
+  {
+   "id": "v",
+   "attributes": {
+    "name": "V",
+    "type": "function"
+   }
+  },
+  {
+   "id": "w",
+   "attributes": {
+    "name": "W",
+    "type": "function"
+   }
+  }
+ ],
+ "edges": [
+  {
+   "source": "p",
+   "target": "q",
+   "attributes": {
+    "relation_type": "contains"
+   }
+  },
+  {
+   "source": "q",
+   "target": "p",
+   "attributes": {
+    "relation_type": "calls"
+   }
+  },
+  {
+   "source": "q",
+   "target": "r",
+   "attributes": {
+    "relation_type": "uses"
+   }
+  },
+  {
+   "source": "r",
+   "target": "s",
+   "attributes": {
+    "relation_type": "calls"
+   }
+  },
+  {
+   "source": "p",
+   "target": "s",
+   "attributes": {
+    "relation_type": "imports"
+   }
+  },
+  {
+   "source": "s",
+   "target": "t",
+   "attributes": {
+    "relation_type": "extends"
+   }
+  },
+  {
+   "source": "t",
+   "target": "u",
+   "attributes": {
+    "relation_type": "whatever"
+   }
+  },
+  {
+   "source": "u",
+   "target": "s",
+   "attributes": {
+    "relation_type": "documents"
+   }
+  },
+  {
+   "source": "r",
+   "target": "t",
+   "attributes": {
+    "relation_type": "calls"
+   }
+  },
+  {
+   "source": "t",
+   "target": "r",
+   "attributes": {
+    "relation_type": "calls"
+   }
+  }
+ ]
+}

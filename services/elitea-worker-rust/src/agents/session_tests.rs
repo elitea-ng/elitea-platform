@@ -695,7 +695,7 @@ async fn session_backend_rejects_a_claim_from_another_execution_before_storage()
     .expect("native plan");
     let result = NativeSessionBackend::invocation_local()
         .open(
-            test_session_authority_for("execution/two", 3),
+            test_session_authority_for("execution-two", 3),
             Arc::new(crate::state::TestStateWriterLease::current()),
             &plan,
         )
@@ -2492,9 +2492,9 @@ async fn interrupted_model_restores_saved_request_without_repeating_tool_or_user
     };
     let denied = restore().await.expect("recovery assembly");
     let mismatched =
-        super::session::ValidatedModelCheckpoint::test_evidence("execution/one".into(), 3);
+        super::session::ValidatedModelCheckpoint::test_evidence("execution-one".into(), 3);
     let (claim, control) = crate::protocol::control::test_checkpoint_authorizer(
-        "execution/one",
+        "execution-one",
         3,
         mismatched.digest(),
     );
@@ -2506,7 +2506,7 @@ async fn interrupted_model_restores_saved_request_without_repeating_tool_or_user
     assert_eq!(model_calls.load(Ordering::SeqCst), 0);
     let evidence = NativeSessionBackend::injected(sessions.clone())
         .inspect_model_checkpoint(
-            test_session_authority_for("execution/one", 3),
+            test_session_authority_for("execution-one", 3),
             Arc::new(crate::state::TestStateWriterLease::current()),
             &plan(),
         )
@@ -2514,7 +2514,7 @@ async fn interrupted_model_restores_saved_request_without_repeating_tool_or_user
         .expect("checkpoint inspection");
     assert_eq!(model_calls.load(Ordering::SeqCst), 0);
     let (claim, control) =
-        crate::protocol::control::test_checkpoint_authorizer("execution/one", 3, evidence.digest());
+        crate::protocol::control::test_checkpoint_authorizer("execution-one", 3, evidence.digest());
     let authority = claim
         .authorize(&control, evidence)
         .await
@@ -2590,7 +2590,7 @@ async fn checkpoint_inspection_admits_summary_preparation_before_model_binding()
         vec![Content::new("user").with_text("Exact input awaiting summary.")],
     );
     let checkpoint = json!({
-        "version":1, "execution_id":"execution/one", "generation":3,
+        "version":1, "execution_id":"execution-one", "generation":3,
         "definition_digest":plan.definition_digest(), "invocation_id":"interrupted-summary",
         "phase":"context_pending", "model":{"request":pending,"tools":{}},
     });
@@ -2609,13 +2609,13 @@ async fn checkpoint_inspection_admits_summary_preparation_before_model_binding()
         .unwrap();
     let evidence = NativeSessionBackend::injected(sessions)
         .inspect_model_checkpoint(
-            test_session_authority_for("execution/one", 3),
+            test_session_authority_for("execution-one", 3),
             Arc::new(crate::state::TestStateWriterLease::current()),
             &plan,
         )
         .await
         .expect("inspection needs no model or credential");
-    assert!(evidence.matches_execution("execution/one", 3));
+    assert!(evidence.matches_execution("execution-one", 3));
 }
 
 /// #973: an attached application child this worker cannot build binds no tool,

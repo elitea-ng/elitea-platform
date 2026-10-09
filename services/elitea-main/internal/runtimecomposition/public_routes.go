@@ -15,6 +15,7 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 type PublicRoutes struct {
@@ -65,6 +66,10 @@ type PublicRoutes struct {
 	// exposed only when the distributed Go schedule owner is enabled.
 	IndexScheduleUpdate indexingapi.CurrentIndexScheduleUpdater
 	IndexScheduleDelete indexingapi.CurrentIndexScheduleDeleter
+	// ClientApplicationVersions serves the desktop's resolved definition
+	// (ADR-0029 decision 5a). It is built from the agent plane's own freezer
+	// and nested-version reader, so it is nil exactly when that plane is.
+	ClientApplicationVersions *storage.ClientApplicationVersionService
 }
 
 // Durable PostgreSQL replay remains authoritative. The advisory waiter wakes

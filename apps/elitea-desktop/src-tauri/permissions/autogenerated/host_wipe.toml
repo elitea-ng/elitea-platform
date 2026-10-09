@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-wipe"
+description = "Enables the host_wipe command without any pre-configured scope."
+commands.allow = ["host_wipe"]
+
+[[permission]]
+identifier = "deny-host-wipe"
+description = "Denies the host_wipe command without any pre-configured scope."
+commands.deny = ["host_wipe"]

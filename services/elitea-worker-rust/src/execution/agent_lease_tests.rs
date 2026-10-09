@@ -365,6 +365,50 @@ async fn a_fatal_failure_after_cancellation_becomes_authoritative() {
     assert!(monitor.close().await.is_err());
 }
 
+/// The claim lease probe is the cloud host's `ExecutionGuard` (ADR-0029):
+/// durable Stop is a cooperative `Stopped`, a later fatal state `Lost`.
+#[tokio::test(flavor = "current_thread")]
+async fn the_lease_probe_is_the_cloud_execution_guard() {
+    use elitea_agent_runtime::host::{ExecutionEnd, ExecutionGuard};
+
+    let state = Arc::new(FakeState::default());
+    state.renew.lock().expect("renew").desired_state = DesiredExecutionStateV1::Cancelled as i32;
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let mut guard = monitor.state_probe();
+    assert_eq!(ExecutionGuard::ensure_current(&guard), Ok(()));
+    monitor.check_now().await.expect_err("cancelled");
+    assert_eq!(guard.ended().await, ExecutionEnd::Stopped);
+    assert_eq!(
+        ExecutionGuard::ensure_current(&guard),
+        Err(ExecutionEnd::Stopped)
+    );
+
+    *state.renew.lock().expect("renew") = RenewLeaseResponseV1 {
+        lease_expires_at_unix_millis: 0,
+        desired_state: DesiredExecutionStateV1::Unspecified as i32,
+        rejection: Some(RuntimeErrorV1 {
+            code: RuntimeErrorCodeV1::Internal as i32,
+            safe_message: "must not be exposed".to_owned(),
+            retryable: true,
+        }),
+    };
+    monitor
+        .check_now()
+        .await
+        .expect_err("fatal renewal failure");
+    assert_eq!(guard.ended().await, ExecutionEnd::Lost);
+    assert_eq!(
+        ExecutionGuard::ensure_current(&guard),
+        Err(ExecutionEnd::Lost)
+    );
+    assert!(monitor.close().await.is_err());
+}
+
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn periodic_schedule_skips_missed_intervals_without_a_burst() {
     let state = Arc::new(FakeState::default());
@@ -565,7 +609,7 @@ async fn checkpoint_inspection_requires_one_live_poll_without_fresh_authority() 
         .unwrap_or_else(|_| panic!("live inspection"));
     assert_eq!(*state.calls.lock().expect("calls"), ["renew", "observe"]);
     let (_pending, session) = inspection.into_session_inspection();
-    assert_eq!(session.into_writer_binding().execution_id, "execution/one");
+    assert_eq!(session.into_writer_binding().execution_id, "execution-one");
     assert!(monitor.activate_checkpoint_inspection().await.is_err());
     monitor.close().await.expect("close");
 }
