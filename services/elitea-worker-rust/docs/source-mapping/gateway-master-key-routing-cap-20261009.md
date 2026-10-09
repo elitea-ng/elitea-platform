@@ -133,13 +133,36 @@ No touched row is L. The existing "Main × start-up (vault key)" row
 
 ## Real-browser and image evidence
 
-No browser evidence: nothing rendered or served by the Web changes, and the
-gateway's behaviour on a running stack is either "starts as before" (a key is
-supplied) or "does not start". The process-level proof is
-`TestGatewayRefusesToStartWithoutAMasterKey`, which runs the real `main()`.
+No browser evidence: nothing the Web renders changes. The gateway on a running
+stack either starts as before (a key is supplied) or does not start.
 
-No stack image was built. Free disk was 21 GiB, below the ~30 GiB floor for a
-build. No shared stack was touched.
+### Image (2026-10-09)
+
+- **Build.** `docker buildx build --platform linux/arm64 -f services/elitea-llm-gateway/Containerfile`
+  from this branch at `44b68fb88`. It was the only image build running, with
+  122 GiB free. Tag `elitea-llm-gateway:gw-master-key-44b68fb88`, image
+  `sha256:e0b18f131c71`, arm64.
+- **Binary identity (§3b).** Each binary was extracted with `docker create` +
+  `docker cp /elitea-llm-gateway`. The binaries are stripped, so the check looks
+  for string literals unique to this branch:
+
+  | String | This image (binary `c39d12c2f9caf825`) | `ghcr.io/elitea-ng/elitea-llm-gateway:main-c0f2e5f9b-verify` (binary `7dce4ed7fed076f2`) |
+  | --- | --- | --- |
+  | `refuses to read them in the clear` (gate refusal) | 1 | 0 |
+  | `CEL expression is too long` (`ErrRoutingCELTooLong`) | 1 | 0 |
+  | `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS` | 1 | 0 |
+
+- **Runs.** Both runs used `DATABASE_URL=not-a-database-url`, no NATS,
+  `LLM_BUDGET_REQUIRE_ENFORCEMENT=off` and an identity secret. Neither touched a
+  shared stack.
+  - **No key.** Exit 1, one log line:
+    `{"level":"ERROR","msg":"FATAL: refusing to start","err":"SECRETS_MASTER_KEY is required: the gateway opens every project's provider credentials through project vault keys wrapped with it, and refuses to read them in the clear. Supply a base64url-encoded 32-byte Fernet key (the same value elitea-main uses). For a throwaway local stack only, set ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true to read the keys unwrapped"}`
+  - **`ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`.** The container was still
+    running after 6 s and `GET /healthz` returned 200. It logged:
+    `{"level":"WARN","msg":"ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true and no SECRETS_MASTER_KEY: every project vault key is read UNWRAPPED, ...","variable":"SECRETS_MASTER_KEY","opt_out":"ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS"}`.
+    The container was then removed.
+
+### Running stacks
 
 The three running local stacks (`elitea-verify-0def77b2`, `elitea-respipe` and
 `elitea-dts`, all from `docker-compose.standalone-full.yml`) already pass a
@@ -185,5 +208,3 @@ load (below).
 - `.github/workflows/helm-lint.yml` does not run `render-gateway-master-key.sh`,
   which is the same gap noted for `render-main-master-key.sh`. Adding it needs a
   workflow change, which is out of scope here.
-- Image-level evidence (extract the binary, confirm the branch string, run it
-  keyless) is pending free disk.
