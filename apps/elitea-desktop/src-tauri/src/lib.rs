@@ -23,6 +23,9 @@ mod workspaces;
 #[cfg(test)]
 mod testutil;
 
+#[cfg(test)]
+mod config_tests;
+
 use std::sync::Arc;
 
 use tauri::Manager as _;

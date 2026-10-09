@@ -59,6 +59,16 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   definition, the local turn start/commit, the remote toolkit call and
   `/llm`. No toolkit secret reaches the device; an agent whose definition
   withholds secrets is refused locally.
+- Images and media load from `self`, `data:` and `blob:` only (no remote
+  `https:`). The deployment is chosen at run time, so a static CSP cannot name
+  it; and the webview sends no cookies, so an `<img>` pointed straight at the
+  deployment could not authenticate anyway: authenticated images (chat
+  attachments, artifacts) are fetched with the bearer and shown as `blob:`
+  URLs. The cost is that third-party images (an identity provider's avatar
+  URL, an image link inside Markdown) do not render and fall back to
+  initials / alt text. In exchange, model-written Markdown cannot use an image
+  URL to send conversation data to another host.
+- The opener hands only `https` and loopback `http` URLs to the system browser.
 - The CSP allows scripts from `self` only. The webview reaches the deployment
   through the HTTP plugin (a Rust-side request, so no CORS change is needed on
   the deployment). `capabilities/default.json` grants that plugin no URL at

@@ -1315,6 +1315,7 @@ dependencies = [
  "elitea-llm-wire",
  "elitea-local-tools",
  "futures",
+ "glob",
  "keyring",
  "rand 0.9.5",
  "reqwest 0.12.28",
