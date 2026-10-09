@@ -41,11 +41,11 @@ const MAX_IDENTITY_BYTES: usize = 256;
 /// A session transaction waits at most this long for a writer or row lock.
 /// Holders keep these locks for single statements, so a longer wait means a
 /// stalled holder; the waiter fails with a retryable typed error instead.
-const WRITER_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const WRITER_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_WRITER_LOCK_TIMEOUT: Duration = Duration::from_mins(1);
 /// `PostgreSQL` ends a session transaction left idle this long while holding
 /// writer locks, so a stalled holder cannot block takeover indefinitely.
-const IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_mins(5);
 const MIN_SESSION_TIMEOUT: Duration = Duration::from_millis(1);
 pub(super) const APPLICATION_CAPABILITY_ID: &str = "agent.execute.application.v1";
@@ -102,15 +102,19 @@ impl SessionLimits {
         Ok(self)
     }
 
-    /// `BEGIN` plus transaction-local bounds in one round trip. Only validated
-    /// integer milliseconds are formatted in, never caller text.
     fn begin_statement(self) -> String {
-        format!(
-            "BEGIN; SET LOCAL lock_timeout = {}; SET LOCAL idle_in_transaction_session_timeout = {}",
-            self.writer_lock_timeout.as_millis(),
-            self.idle_transaction_timeout.as_millis()
-        )
+        bounded_begin_statement(self.writer_lock_timeout, self.idle_transaction_timeout)
     }
+}
+
+/// `BEGIN` plus transaction-local bounds in one round trip. Only validated
+/// integer milliseconds are formatted in, never caller text.
+pub(super) fn bounded_begin_statement(writer_lock: Duration, idle: Duration) -> String {
+    format!(
+        "BEGIN; SET LOCAL lock_timeout = {}; SET LOCAL idle_in_transaction_session_timeout = {}",
+        writer_lock.as_millis(),
+        idle.as_millis()
+    )
 }
 
 /// Every session transaction carries the lock-wait and idle bounds.

@@ -376,7 +376,7 @@ impl PostgresCheckpointer {
         state_writer_lease
             .ensure_current()
             .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
-        let mut transaction = pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&pool).await?;
         if let Some(root_thread_id) = root_thread_id {
             let root_writer = sqlx::query_scalar::<_, String>(
                 r"
@@ -485,7 +485,7 @@ RETURNING writer_claim_id
             SerializedCheckpoint::new(expected, self.limits)?;
         }
         let serialized = SerializedCheckpoint::new(checkpoint, self.limits)?;
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Exclusive)
             .await?;
 
@@ -742,7 +742,7 @@ RETURNING next_save_ordinal - 1
                 "the requested checkpoint ID is malformed",
             ));
         }
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Shared)
             .await?;
         let row = if let Some(checkpoint_id) = checkpoint_id {
@@ -806,7 +806,7 @@ LIMIT 1
     }
 
     async fn list_checkpoints(&self) -> Result<Vec<Checkpoint>, PostgresCheckpointError> {
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Shared)
             .await?;
         let (stored_count, stored_bytes) = sqlx::query_as::<_, (i64, i64)>(
@@ -889,7 +889,7 @@ LIMIT $8
     }
 
     async fn delete_checkpoints(&self) -> Result<(), PostgresCheckpointError> {
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Exclusive)
             .await?;
         sqlx::query(
@@ -935,7 +935,7 @@ WHERE tenant_id = $1
                 )
             })?;
         let max_age_micros = policy.max_age.map(duration_micros_ceil).transpose()?;
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_bounded(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Exclusive)
             .await?;
         let result = sqlx::query(
@@ -1490,6 +1490,21 @@ fn duration_micros_ceil(duration: std::time::Duration) -> Result<i64, PostgresCh
     })
 }
 
+/// Checkpoint transactions lock the same kind of writer rows as session
+/// transactions (a child scope share-locks its root), so they carry the same
+/// lock-wait and idle bounds: a stalled holder fails a writer readably and is
+/// ended by `PostgreSQL` instead of blocking writers and takeover forever.
+async fn begin_bounded(
+    pool: &PgPool,
+) -> Result<Transaction<'static, Postgres>, PostgresCheckpointError> {
+    pool.begin_with(super::postgres_session::bounded_begin_statement(
+        super::postgres_session::WRITER_LOCK_TIMEOUT,
+        super::postgres_session::IDLE_TRANSACTION_TIMEOUT,
+    ))
+    .await
+    .map_err(storage_error)
+}
+
 fn storage_error(source: sqlx::Error) -> PostgresCheckpointError {
     if retryable_storage_error(&source) {
         PostgresCheckpointError::StorageUnavailable { source }
@@ -1510,7 +1525,7 @@ fn retryable_storage_error(error: &sqlx::Error) -> bool {
             code.starts_with("08")
                 || matches!(
                     code.as_ref(),
-                    "40001" | "40P01" | "55P03" | "57014" | "57P01" | "57P02" | "57P03"
+                    "25P03" | "40001" | "40P01" | "55P03" | "57014" | "57P01" | "57P02" | "57P03"
                 )
         }),
         _ => false,
@@ -1526,6 +1541,10 @@ impl fmt::Debug for PostgresCheckpointer {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+#[path = "postgres_checkpointer_lock_bound_tests.rs"]
+mod lock_bound_tests;
 
 #[cfg(test)]
 mod tests {

@@ -239,12 +239,12 @@ impl PipelineApplicationNodeRuntime {
         )?;
         let receiver_owner = self.applications.event_receiver().ok_or_else(failure)?;
         let mut receiver = receiver_owner.take().await.map_err(|_| failure())?;
-        // Driven on its own task: forwarding a child event (a bounded send the
-        // Runner drains by persisting it) must never leave the child parked
-        // mid-append holding the root session writer.
+        // Driven: forwarding a child event (a bounded send the Runner drains by
+        // persisting it) must never leave the child parked mid-append holding
+        // the root session writer.
         let tool = Arc::clone(tool);
         let mut future =
-            DrivenTask::spawn(async move { tool.execute(tool_context, arguments).await });
+            DrivenTask::new(async move { tool.execute(tool_context, arguments).await });
         let mut terminal = None;
         let result = loop {
             tokio::select! {

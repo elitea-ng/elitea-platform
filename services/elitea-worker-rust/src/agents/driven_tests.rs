@@ -134,32 +134,40 @@ async fn dropping_the_stream_stops_an_in_flight_pull() {
 
 #[tokio::test]
 async fn a_panicking_pull_fails_closed_with_a_typed_error() {
-    // Panics after a pending point, i.e. on the owned task. A panic during the
-    // inline poll propagates to the caller exactly as direct polling does.
-    let mut stream = DrivenEventStream::new(Box::pin(async_stream::stream! {
-        tokio::task::yield_now().await;
-        assert!(!std::hint::black_box(true), "inner stream defect");
-        yield Ok(Event::with_id("never", "invocation"));
-    }));
-    let error = stream
-        .next()
-        .await
-        .expect("typed failure item")
-        .expect_err("panic is a failure");
-    assert_eq!(error.code, "elitea_agent.driven_task_failed");
-    assert!(!error.message.contains("inner stream defect"));
-    assert!(stream.next().await.is_none());
+    // Inline (before any pending point) and on the owned task alike.
+    for pending_first in [false, true] {
+        let mut stream = DrivenEventStream::new(Box::pin(async_stream::stream! {
+            if pending_first {
+                tokio::task::yield_now().await;
+            }
+            assert!(!std::hint::black_box(true), "inner stream defect");
+            yield Ok(Event::with_id("never", "invocation"));
+        }));
+        let error = stream
+            .next()
+            .await
+            .expect("typed failure item")
+            .expect_err("panic is a failure");
+        assert_eq!(error.code, "elitea_agent.driven_task_failed");
+        assert!(!error.message.contains("inner stream defect"));
+        assert!(stream.next().await.is_none());
+    }
 }
 
 #[tokio::test]
 async fn cancel_returns_only_after_the_task_released_what_it_owns() {
     let dropped = Arc::new(AtomicBool::new(false));
     let guard = DropFlag(dropped.clone());
-    let task = DrivenTask::spawn(async move {
+    let mut task = DrivenTask::new(async move {
         let _guard = guard;
         std::future::pending::<()>().await;
     });
-    tokio::task::yield_now().await;
+    // One inline poll moves the pending work onto its owned task.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut task)
+            .await
+            .is_err()
+    );
     tokio::time::timeout(BOUND, task.cancel())
         .await
         .expect("bounded cancel");
@@ -169,7 +177,7 @@ async fn cancel_returns_only_after_the_task_released_what_it_owns() {
 #[tokio::test]
 async fn driven_task_output_is_returned_and_its_await_is_cancellation_safe() {
     let (release, gate) = oneshot::channel::<u32>();
-    let mut task = DrivenTask::spawn(async move { gate.await.unwrap_or(0) });
+    let mut task = DrivenTask::new(async move { gate.await.unwrap_or(0) });
     assert!(
         tokio::time::timeout(Duration::from_millis(20), &mut task)
             .await
