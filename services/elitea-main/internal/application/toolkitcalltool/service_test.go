@@ -664,3 +664,22 @@ func TestRunToolSurvivesARecorderFailure(t *testing.T) {
 		t.Fatalf("the tool result was altered by a recorder failure: %+v", outcome)
 	}
 }
+
+// A result read for a key that an earlier request admitted says so, and the
+// run that this request admitted does not.
+func TestRunToolMarksAReplayedResult(t *testing.T) {
+	for _, created := range []bool{true, false} {
+		admitted := testAdmitted()
+		admitted.Outcome.Created = created
+		settlements := &stubSettlements{
+			settlement: settledPayload(t, runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_OK, `{"a":1}`, ""),
+			found:      true,
+		}
+		service := newTestService(t, &stubResolver{inputs: testInputs()}, stubVerdict{supported: true},
+			&stubAdmissions{run: admitted}, &stubDispatcher{}, settlements, time.Second)
+		outcome, err := service.RunTool(context.Background(), validRequest())
+		if err != nil || outcome.Replayed == created {
+			t.Fatalf("created %v: outcome %+v, %v", created, outcome, err)
+		}
+	}
+}

@@ -155,6 +155,9 @@ type RunOutcome struct {
 	// the Rust worker refuses an effectful tool in toolkit.call_tool.v1) from
 	// "the tool's provider failed", which the safe message alone does not.
 	FailureCode string
+	// Replayed is true when this request did not admit the run: its
+	// idempotency key had already admitted it, and this is that run's result.
+	Replayed bool
 }
 
 // AuthoritativeInputResolver reloads the saved toolkit and freezes its settings.
@@ -585,7 +588,9 @@ func (s *RunService) await(ctx context.Context, admitted AdmittedRun) (RunOutcom
 			return RunOutcome{}, fmt.Errorf("read tool-run settlement: %w", err)
 		}
 		if found {
-			return decodeSettlement(admitted, settlement)
+			outcome, err := decodeSettlement(admitted, settlement)
+			outcome.Replayed = !admitted.Outcome.Created
+			return outcome, err
 		}
 
 		interval *= 2
