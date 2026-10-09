@@ -153,7 +153,7 @@ func lintStrict(t *testing.T, stem, at string, value any, nameMap bool) {
 			_, named := node["propertyNames"]
 			_, capped := node["maxProperties"]
 			_, mapLike := node["additionalProperties"].(map[string]any)
-			if !closed && !(mapLike && named && capped) {
+			if !closed && (!mapLike || !named || !capped) {
 				t.Errorf("%s %s: object must set additionalProperties:false, or a schema with propertyNames and maxProperties", stem, at)
 			}
 		}

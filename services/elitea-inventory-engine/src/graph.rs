@@ -212,6 +212,22 @@ pub fn layer_of(entity_type: &str) -> Option<&'static str> {
         .map(|(layer, _)| *layer)
 }
 
+/// `KnowledgeGraph.LAYER_TYPE_MAPPING[layer]` (lowercase layer name): the
+/// types listed under it, in source order. Unlike [`layer_of`], a type listed
+/// twice belongs to both layers here, as the Python set membership has it.
+#[must_use]
+pub fn layer_types(layer: &str) -> Option<&'static [&'static str]> {
+    LAYERS
+        .iter()
+        .find(|(name, _)| *name == layer)
+        .map(|(_, types)| *types)
+}
+
+/// The layer names of `LAYER_TYPE_MAPPING`, in source order.
+pub fn layer_names() -> impl Iterator<Item = &'static str> {
+    LAYERS.iter().map(|(name, _)| *name)
+}
+
 /// Where an entity was found: `Citation.to_dict()`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Citation {
@@ -349,6 +365,12 @@ impl Graph {
         self.nodes.get(id)
     }
 
+    /// A node's place in insertion order.
+    #[must_use]
+    pub fn position(&self, id: &str) -> Option<usize> {
+        self.nodes.get_index_of(id)
+    }
+
     /// Every node, in insertion order.
     pub fn nodes(&self) -> impl Iterator<Item = (&str, &Map<String, Value>)> {
         self.nodes.iter().map(|(id, node)| (id.as_str(), node))
@@ -368,6 +390,40 @@ impl Graph {
     /// Insert a node as loaded (no merging, no filtering), or replace one.
     pub fn insert_node(&mut self, id: String, attributes: Map<String, Value>) {
         self.nodes.insert(id, attributes);
+    }
+
+    /// The edge from `source` to `target`, if there is one.
+    #[must_use]
+    pub fn edge(&self, source: &str, target: &str) -> Option<&Map<String, Value>> {
+        self.edges.get(source)?.get(target)
+    }
+
+    /// The outgoing edges of `source`: `(target, attributes)`, in insertion
+    /// order.
+    pub fn successors<'a>(
+        &'a self,
+        source: &str,
+    ) -> impl Iterator<Item = (&'a str, &'a Map<String, Value>)> + 'a {
+        self.edges
+            .get(source)
+            .into_iter()
+            .flat_map(|targets| targets.iter().map(|(target, edge)| (target.as_str(), edge)))
+    }
+
+    /// Keep only the edges `keep` accepts (`source`, `target`, attributes);
+    /// returns how many were removed.
+    pub fn retain_edges(
+        &mut self,
+        mut keep: impl FnMut(&str, &str, &Map<String, Value>) -> bool,
+    ) -> usize {
+        let mut removed = 0;
+        for (source, targets) in &mut self.edges {
+            let before = targets.len();
+            targets.retain(|target, edge| keep(source, target, edge));
+            removed += before - targets.len();
+        }
+        self.edges.retain(|_, targets| !targets.is_empty());
+        removed
     }
 
     /// Insert an edge as loaded, creating a missing endpoint as an empty
@@ -514,6 +570,36 @@ impl Graph {
         }
         self.edges.retain(|_, targets| !targets.is_empty());
         orphaned.len()
+    }
+
+    /// Forget everything one source said: every file it cited
+    /// ([`Graph::remove_file`]) and every edge it recorded. Entities other
+    /// sources still cite stay. Returns the number of entities removed.
+    pub fn remove_source(&mut self, source_toolkit: &str) -> usize {
+        let mut files: Vec<String> = Vec::new();
+        for (_, node) in self.nodes() {
+            for citation in node
+                .get("citations")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if citation.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+                    && let Some(path) = citation.get("file_path").and_then(Value::as_str)
+                    && !files.iter().any(|known| known == path)
+                {
+                    files.push(path.to_owned());
+                }
+            }
+        }
+        let removed = files
+            .iter()
+            .map(|path| self.remove_file(source_toolkit, path))
+            .sum();
+        self.retain_edges(|_, _, edge| {
+            edge.get("source_toolkit").and_then(Value::as_str) != Some(source_toolkit)
+        });
+        removed
     }
 
     /// Set a node's embedding vector; `false` for an unknown node.

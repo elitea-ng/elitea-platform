@@ -1387,6 +1387,17 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct nested application version context: %w", err)
 		}
 	}
+	// The desktop's resolved definition (ADR-0029 decision 5a): the same
+	// reader and the same freezer instance as the nested child above, and no
+	// materializer at all.
+	var clientApplicationVersions *storage.ClientApplicationVersionService
+	if config.AgentExecutionDispatchEnabled {
+		clientApplicationVersions, err = composeClientApplicationVersions(
+			dependencies.AdmissionPool, agentNestedVersions, agentFreezer)
+		if err != nil {
+			return nil, fmt.Errorf("construct client application version service: %w", err)
+		}
+	}
 	if nestedApplicationVersions != nil && codeSources != nil {
 		nestedApplicationVersions.WithFrozenSavedChildVersionCapture(codeSources)
 	}
@@ -2016,6 +2027,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if agentTaskStatus != nil {
 		publicRoutes.AgentTaskStatus = agentTaskStatus
+	}
+	if clientApplicationVersions != nil {
+		publicRoutes.ClientApplicationVersions = clientApplicationVersions
 	}
 
 	closeNATS = false

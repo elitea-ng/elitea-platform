@@ -1153,6 +1153,9 @@ ELITEA_RUNTIME_ENABLED: "true"
 ELITEA_RUNTIME_COMMAND_STREAM: {{ $runtime.commandStream | quote }}
 ELITEA_RUNTIME_MAX_OUTSTANDING: {{ $runtime.maxOutstanding | toString | quote }}
 ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED: {{ ((get $runtime "toolkitDiscovery" | default dict).enabled | default false) | toString | quote }}
+{{/* The per-interrupt HITL list/decision API (Point 5 Track M2). Off: no
+     Wave 1 caller exists, and the admission gate stays false until Wave 2. */}}
+ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED: "false"
 {{/* The SSE stream caps. Optional: the built-in defaults (16/4/8) stay when
      runtime.sse is absent. The cap is process-local, so the cluster admits
      maxStreams x replicas streams at once. */}}

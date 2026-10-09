@@ -48,7 +48,7 @@ These are not reopened here.
 | Route | `POST …/runtime-context/http-actions` exists but is registered only when the service is set. | `M/internal/infra/storage/content_server.go:403-405` |
 | Invocation v2 | Carries `request_wire_b64`, `request_digest`, `binding_digest`. `schema_version` is `elitea.runtime.http-action.v2`. | `contract.go:21,32-42` |
 | Receipt v2 | Eight fixed fields. States `completed`, `failed`, `uncertain`. Schema `elitea.runtime.http-action-receipt.v2`. | `contract.go:22,92-101`, `DecodeReceipt` |
-| Snapshot v1 | The whole request is frozen from YAML and `revision` must be `1`. `Verify` demands byte equality. | `M/internal/application/httpaction/frozen.go:20,39,81,142` |
+| Snapshot v1 | The whole request is frozen from YAML and `revision` must be `1`. `Verify` demands byte equality. | `M/internal/application/httpaction/frozen.go:20,49,98,228` |
 | Rules | One rule per `(project, actor, origin, path, method, configuration)`. `CredentialRevision` is static. Only the root thread is admitted. Sensitive operations fail closed. | `runtime_http_action.go:20-31,102,121,133` |
 | Effects table | `execution_http_effects` (0145), frozen digests and receipt wire (0151), saved-child columns (0152). Primary key `(execution_id, generation, activation_id)`, unique `effect_id`. | `M/migrations/shared/0145_execution_http_effects.sql`, `0151_http_frozen_request_receipts.sql`, `0152_execution_saved_child_scopes.sql` |
 | Recovery owner | Composed. Reads a committed receipt under `FOR SHARE` and builds an owner proof. | `composition.go:519`; `M/internal/infra/db/repos/http_action_recovery.go:31-90` |
@@ -121,8 +121,9 @@ string interpolation.
 - Nothing runs revision 1 in production today (the executor is unwired), so no data migration is needed. New authoring
   and the Web editor emit revision 2 only. ASSUMPTION: revision-1 nodes, if ever admitted, match a rule by exact
   `(origin, path, method, configuration)` instead of by actor.
-- Related Wave 1 fix (expert 05 F1, not part of this track): freeze only pipelines that contain an HTTP node
-  (`M/internal/application/agentexecution/start.go:413`, `http_action_snapshot.go:9`).
+- Related fix (expert 05 F1, merged in elitea-ng/elitea-platform#1140): the snapshot grammar now applies only to
+  pipelines that contain an HTTP node (`M/internal/application/agentexecution/start.go:413`,
+  `http_action_snapshot.go:9`, `httpaction/frozen.go`).
 
 ## 5. Rules
 
@@ -340,7 +341,7 @@ Numbering follows expert 05 section 3.
 | --- | --- | --- | --- |
 | T4 | Effects repo, migration (next free number), real-PostgreSQL tests | `M/internal/infra/db/repos/http_action_effects.go`, `M/migrations/shared/` | this doc |
 | T5 | Rules table, admin API with the new permission, live RBAC and credential revision, Credentials adapter | `repos/http_action_rules.go`, `storage/runtime_http_action.go:20-31,121`, new API package | T4 |
-| T6 | Revision 2 freeze, render, snapshot v2, shared render fixture, recovery proof re-render | `httpaction/frozen.go:39,81,142`, new `render.go`, `http_action_recovery.go:31-90` | this doc |
+| T6 | Revision 2 freeze, render, snapshot v2, shared render fixture, recovery proof re-render | `httpaction/frozen.go:49,98,228`, new `render.go`, `http_action_recovery.go:31-90` | this doc |
 | T3 | Egress guard in `infra/egress` (Track M1) | `M/internal/infra/egress/*`, `M/internal/api/webhook/ssrf.go:183,316` | none |
 | T7 | `HTTPActionSource`, dedicated pool, composition wiring | `content_server.go:25,126,403`, `composition.go:1806-1832` | T3 to T6 |
 | T8 | Worker `http` node, runtime-context client, journal integration, gate constant | `W/src/agents/graph/http_action.rs`, `compiler.rs`, `W/src/transport/` | T6 |

@@ -20,7 +20,7 @@
 //! `module_docstring`, `docstring`, `comments` or `signature`; neither does
 //! this one.
 
-mod ast;
+pub(crate) mod ast;
 mod relations;
 mod source;
 mod symbols;

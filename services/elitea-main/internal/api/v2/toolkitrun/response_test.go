@@ -230,6 +230,12 @@ func TestDecodeRequestTakesTheToolkitFromTheRouteFirst(t *testing.T) {
 	if decoded.ToolName != "list_issues" || string(decoded.Arguments) != `{"repo":"a"}` {
 		t.Fatalf("decoded %+v", decoded)
 	}
+	// test_tool never opts into the desktop's sensitive gate: its runtime
+	// context, and so its idempotency identity and what an older worker
+	// accepts, stays what it was (toolkitcalltool's pinning test).
+	if decoded.SensitiveApproval != nil || decoded.EnforceSensitiveGate {
+		t.Fatalf("test_tool asked for the sensitive gate: %+v", decoded)
+	}
 }
 
 func TestDecodeRequestFallsBackToTheBodyToolkitID(t *testing.T) {

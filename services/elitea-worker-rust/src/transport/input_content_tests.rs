@@ -92,7 +92,7 @@ fn sha256(value: &[u8]) -> [u8; 32] {
 
 fn reference() -> ClaimBoundInputAuthority<'static> {
     ClaimBoundInputAuthority {
-        execution_id: "execution/one",
+        execution_id: "execution-one",
         generation: 2,
         content_id: "settings id",
         immutable_version: "v/1",
@@ -189,7 +189,7 @@ async fn claim_bound_materialization_matches_python_and_go_route() {
         *captured.lock().expect("captured requests"),
         [CapturedRequest {
             method: "GET".to_owned(),
-            path: "/executions/execution%2Fone/generations/2/inputs/settings%20id/versions/v%2F1"
+            path: "/executions/execution-one/generations/2/inputs/settings%20id/versions/v%2F1"
                 .to_owned(),
             claim: "claim-1".to_owned(),
             fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
@@ -691,9 +691,8 @@ async fn checkpoint_request_preserves_claim_binding_and_rejects_changed_source()
             *captured.lock().expect("captured requests"),
             [CapturedRequest {
                 method: "GET".to_owned(),
-                path:
-                    "/executions/execution%2Fone/generations/2/inputs/settings%20id/versions/v%2F1"
-                        .to_owned(),
+                path: "/executions/execution-one/generations/2/inputs/settings%20id/versions/v%2F1"
+                    .to_owned(),
                 claim: "claim-1".to_owned(),
                 fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
             }]

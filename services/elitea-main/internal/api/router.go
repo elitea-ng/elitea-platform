@@ -506,6 +506,20 @@ type RouterConfig struct {
 	// API. It is nil unless ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED.
 	CurrentExecutionInterrupts http.Handler
 	CurrentAgentCancel         http.Handler
+	// CurrentLocalTurns serves startLocalTurn and commitLocalTurn, the
+	// desktop local turn operations (ADR-0029 decision 5c, client contract
+	// 1.5). Composed in cmd/elitea-main wherever a database is configured;
+	// it needs no runtime, because no worker runs a local turn.
+	CurrentLocalTurns http.Handler
+	// CurrentResolvedVersion serves resolveApplicationVersion (ADR-0029
+	// decision 5a, client contract 1.6). Composed in cmd/elitea-main wherever
+	// a database is configured; it answers 501 where no agent plane is.
+	CurrentResolvedVersion http.Handler
+	// CurrentRemoteToolkit serves executeRemoteToolkitTool (ADR-0029
+	// decision 5b, client contract 1.6) over the toolkit.call_tool.v1 use
+	// case. Composed wherever a database is configured; 501 where no toolkit
+	// worker is.
+	CurrentRemoteToolkit http.Handler
 	// CurrentApplicationTask serves the legacy application_task path (issue
 	// 254 P2): GET polls the run bound to a response message, DELETE stops
 	// it through the SAME use case CurrentAgentCancel runs.

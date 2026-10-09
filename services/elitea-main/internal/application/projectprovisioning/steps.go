@@ -342,7 +342,7 @@ func referencingDeletes() []referencingDelete {
 
 	return []referencingDelete{
 
-		// The per-interrupt HITL ledger (shared/0155): audit, then cards (they
+		// The per-interrupt HITL ledger (shared/0157): audit, then cards (they
 		// reference the job and the consuming claim), then the per-response row.
 		{
 			table: "elitea_runtime.execution_interrupt_audit",
@@ -457,6 +457,11 @@ DELETE FROM elitea_runtime.execution_replay_state WHERE projection_project_id = 
 			statement: `
 DELETE FROM elitea_runtime.execution_jobs
 WHERE resource_project_id = $1 OR projection_project_id = $1`,
+		},
+		{
+			// A desktop local turn (shared/0155): no worker job, no children.
+			table:     "elitea_runtime.local_turn_executions",
+			statement: `DELETE FROM elitea_runtime.local_turn_executions WHERE project_id = $1`,
 		},
 		{
 			table:     "elitea_runtime.execution_definition_source_refs",

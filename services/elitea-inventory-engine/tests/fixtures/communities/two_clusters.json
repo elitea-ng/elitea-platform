@@ -1,0 +1,285 @@
+{
+ "nodes": [
+  {
+   "id": "a_cls",
+   "attributes": {
+    "name": "AuthService",
+    "type": "class",
+    "layer": "code",
+    "signature": "class AuthService(Service)",
+    "docstring": "Coordinates sign-in and sign-out for every user session, issuing and verifying the bearer tokens the API gateway checks on each request, and rotating keys."
+   }
+  },
+  {
+   "id": "a_iface",
+   "attributes": {
+    "name": "TokenStore",
+    "type": "interface",
+    "layer": "code",
+    "description": "Where tokens live."
+   }
+  },
+  {
+   "id": "a_login",
+   "attributes": {
+    "name": "login",
+    "type": "function",
+    "layer": "code",
+    "signature": "def login(user, password)"
+   }
+  },
+  {
+   "id": "a_logout",
+   "attributes": {
+    "name": "logout",
+    "type": "function",
+    "layer": "code"
+   }
+  },
+  {
+   "id": "a_verify",
+   "attributes": {
+    "name": "verify_token",
+    "type": "function",
+    "layer": "code",
+    "docstring": "Check a token."
+   }
+  },
+  {
+   "id": "a_refresh",
+   "attributes": {
+    "name": "refresh",
+    "type": "method",
+    "layer": "code"
+   }
+  },
+  {
+   "id": "a_secret",
+   "attributes": {
+    "name": "SECRET_KEY",
+    "type": "variable",
+    "layer": "code"
+   }
+  },
+  {
+   "id": "b_readme",
+   "attributes": {
+    "name": "README.md",
+    "type": "document_file",
+    "layer": "documentation",
+    "description": "Project overview."
+   }
+  },
+  {
+   "id": "b_feat",
+   "attributes": {
+    "name": "Single sign-on",
+    "type": "feature",
+    "layer": "product"
+   }
+  },
+  {
+   "id": "b_req",
+   "attributes": {
+    "name": "Sessions expire",
+    "type": "requirement",
+    "layer": "documentation"
+   }
+  },
+  {
+   "id": "b_sessions",
+   "attributes": {
+    "name": "Sessions",
+    "type": "concept",
+    "layer": "documentation"
+   }
+  },
+  {
+   "id": "b_tokens",
+   "attributes": {
+    "name": "Tokens",
+    "type": "concept",
+    "layer": "documentation"
+   }
+  },
+  {
+   "id": "b_fact",
+   "attributes": {
+    "name": "Tokens last an hour",
+    "type": "fact",
+    "layer": "documentation"
+   }
+  }
+ ],
+ "edges": [
+  {
+   "source": "a_cls",
+   "target": "a_login",
+   "attributes": {
+    "relation_type": "contains"
+   }
+  },
+  {
+   "source": "a_cls",
+   "target": "a_logout",
+   "attributes": {
+    "relation_type": "contains"
+   }
+  },
+  {
+   "source": "a_cls",
+   "target": "a_verify",
+   "attributes": {
+    "relation_type": "contains"
+   }
+  },
+  {
+   "source": "a_cls",
+   "target": "a_iface",
+   "attributes": {
+    "relation_type": "implements"
+   }
+  },
+  {
+   "source": "a_cls",
+   "target": "a_secret",
+   "attributes": {
+    "relation_type": "uses"
+   }
+  },
+  {
+   "source": "a_cls",
+   "target": "a_refresh",
+   "attributes": {
+    "relation_type": "exports",
+    "weight": 5.0
+   }
+  },
+  {
+   "source": "a_iface",
+   "target": "a_refresh",
+   "attributes": {
+    "relation_type": "defines"
+   }
+  },
+  {
+   "source": "a_login",
+   "target": "a_verify",
+   "attributes": {
+    "relation_type": "calls"
+   }
+  },
+  {
+   "source": "a_login",
+   "target": "a_iface",
+   "attributes": {
+    "relation_type": "uses"
+   }
+  },
+  {
+   "source": "a_logout",
+   "target": "a_verify",
+   "attributes": {
+    "relation_type": "calls"
+   }
+  },
+  {
+   "source": "a_logout",
+   "target": "a_cls",
+   "attributes": {
+    "relation_type": "frobnicates"
+   }
+  },
+  {
+   "source": "a_verify",
+   "target": "a_login",
+   "attributes": {
+    "relation_type": "calls"
+   }
+  },
+  {
+   "source": "a_verify",
+   "target": "a_iface",
+   "attributes": {
+    "relation_type": "depends_on"
+   }
+  },
+  {
+   "source": "a_refresh",
+   "target": "a_secret",
+   "attributes": {
+    "relation_type": "references"
+   }
+  },
+  {
+   "source": "b_readme",
+   "target": "b_sessions",
+   "attributes": {
+    "relation_type": "documents"
+   }
+  },
+  {
+   "source": "b_readme",
+   "target": "b_tokens",
+   "attributes": {
+    "relation_type": "documents"
+   }
+  },
+  {
+   "source": "b_readme",
+   "target": "a_cls",
+   "attributes": {
+    "relation_type": "documents"
+   }
+  },
+  {
+   "source": "b_feat",
+   "target": "b_sessions",
+   "attributes": {
+    "relation_type": "mentions"
+   }
+  },
+  {
+   "source": "b_feat",
+   "target": "b_readme",
+   "attributes": {
+    "relation_type": "references"
+   }
+  },
+  {
+   "source": "b_req",
+   "target": "b_feat",
+   "attributes": {
+    "relation_type": "part_of"
+   }
+  },
+  {
+   "source": "b_req",
+   "target": "b_tokens",
+   "attributes": {
+    "relation_type": "related_to"
+   }
+  },
+  {
+   "source": "b_sessions",
+   "target": "b_tokens",
+   "attributes": {
+    "relation_type": "related_to"
+   }
+  },
+  {
+   "source": "b_tokens",
+   "target": "b_sessions",
+   "attributes": {
+    "relation_type": "related_to"
+   }
+  },
+  {
+   "source": "b_fact",
+   "target": "b_tokens",
+   "attributes": {
+    "relation_type": "mentions"
+   }
+  }
+ ]
+}

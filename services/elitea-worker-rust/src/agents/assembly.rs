@@ -1130,14 +1130,15 @@ fn bounded_runtime_identity(value: &str) -> bool {
 ///
 /// A PIPELINE keeps the non-empty rule: its `instructions` field carries the
 /// graph YAML, and an empty graph is not an unconstrained agent — it is a
-/// pipeline with nothing to run.
+/// pipeline with nothing to run. Its bound is the compiler's YAML bound, so the
+/// profile never refuses a graph that Main admits and the compiler accepts.
 fn bounded_instruction(value: &str, allow_empty: bool) -> bool {
     (allow_empty || !value.is_empty())
         && value.len()
             <= if allow_empty {
                 super::request::MAX_AGENT_INSTRUCTION_BYTES
             } else {
-                64 * 1_024
+                super::graph::compiler::MAX_PIPELINE_YAML_BYTES
             }
         && !value.contains('\0')
 }

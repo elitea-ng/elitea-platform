@@ -58,6 +58,8 @@ import type {
   CreatedConversation,
   ExecutionInterruptDecisionResult,
   ExecutionInterruptList,
+  LocalTurnCommitted,
+  LocalTurnStarted,
   MemoryEntry,
   MemoryEntryList,
   MessageFeedbackSummary,
@@ -805,6 +807,40 @@ export const getSendChatMessageResponseMock = (
   command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getStartLocalTurnResponseMock = (
+  overrideResponse: Partial<Extract<LocalTurnStarted, object>> = {},
+): LocalTurnStarted => ({
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  question_id: faker.string.uuid(),
+  response_message_id: faker.string.uuid(),
+  conversation_uuid: faker.string.uuid(),
+  participant_id: faker.number.int(),
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  created: faker.datatype.boolean(),
+  memory_recall: {
+    text: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    count: faker.number.int(),
+    memory_ids: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  ...overrideResponse,
+});
+
+export const getCommitLocalTurnResponseMock = (
+  overrideResponse: Partial<Extract<LocalTurnCommitted, object>> = {},
+): LocalTurnCommitted => ({
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  conversation_uuid: faker.string.uuid(),
+  question_message_id: faker.string.uuid(),
+  response_message_id: faker.string.uuid(),
+  memories_used: faker.number.int(),
+  committed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   created: faker.datatype.boolean(),
   ...overrideResponse,
 });
@@ -1946,6 +1982,58 @@ export const getSendChatMessageMockHandler = (
   );
 };
 
+export const getStartLocalTurnMockHandler = (
+  overrideResponse?:
+    | LocalTurnStarted
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LocalTurnStarted> | LocalTurnStarted),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/local_turn/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getStartLocalTurnResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCommitLocalTurnMockHandler = (
+  overrideResponse?:
+    | LocalTurnCommitted
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LocalTurnCommitted> | LocalTurnCommitted),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/local_turn_commit/prompt_lib/:projectId/:executionId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCommitLocalTurnResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getCancelChatExecutionMockHandler = (
   overrideResponse?:
     | void
@@ -2450,6 +2538,8 @@ export const getChatMock = () => [
   getListParticipantCandidatesMockHandler(),
   getListConversationMessagesMockHandler(),
   getSendChatMessageMockHandler(),
+  getStartLocalTurnMockHandler(),
+  getCommitLocalTurnMockHandler(),
   getCancelChatExecutionMockHandler(),
   getListExecutionInterruptsMockHandler(),
   getDecideExecutionInterruptMockHandler(),

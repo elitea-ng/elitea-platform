@@ -600,8 +600,8 @@ and [Kubernetes images and pull policy](https://kubernetes.io/docs/concepts/cont
 ## Initial optional ADK Docker hardening implementation
 
 The worker manifest now patches optional `adk-sandbox = 2.2.0` to the vendored
-source, enabled only by `sandbox-supervisor`. Provenance is in `vendor/README.md`.
-`vendor/adk-sandbox/src/workspace/docker.rs` implements the explicit offline
+source, enabled only by `sandbox-supervisor`. Provenance is in `libs/rust/vendor/README.md`.
+`libs/rust/vendor/adk-sandbox/src/workspace/docker.rs` implements the explicit offline
 non-root policy, combined 1 MiB decoded output cap, stream/input failure handling,
 command-error/timeout termination, bounded preparation with attempted cleanup,
 and cleanup-handle retention after removal failure. Policy is revalidated at
@@ -617,7 +617,7 @@ real-container tests, and UI execution acceptance. Code nodes remain gated.
 
 ## ADK backend real-container verification
 
-Two opt-in tests in `vendor/adk-sandbox/src/workspace/docker_live_tests.rs` passed
+Two opt-in tests in `libs/rust/vendor/adk-sandbox/src/workspace/docker_live_tests.rs` passed
 against Docker Desktop's Linux engine using cached immutable Python image
 `sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c`.
 No image pull was performed.
@@ -633,7 +633,7 @@ are removed through the backend after each case, including assertion failures
 inside the verification body.
 
 Run with a cached immutable image in `ELITEA_SANDBOX_TEST_IMAGE`:
-`cargo test --manifest-path services/elitea-worker-rust/vendor/adk-sandbox/Cargo.toml --no-default-features --features workspace-docker --lib live_tests -- --ignored --nocapture`.
+`cargo test --manifest-path libs/rust/vendor/adk-sandbox/Cargo.toml --no-default-features --features workspace-docker --lib live_tests -- --ignored --nocapture`.
 
 Both tests passed in 13.32 seconds including several isolated container lifecycles.
 This is functional local-container evidence, not a throughput benchmark, Kubernetes
@@ -674,7 +674,7 @@ The existing graph durability boundary remains
 Current SDK `runtime/langchain/remote_sandbox.py` supplies the remote-execution
 behavior reference, but its request/session transport is not a durable job ledger.
 
-The ADK extension `vendor/adk-sandbox/src/workspace/docker_code_jobs.rs` adds:
+The ADK extension `libs/rust/vendor/adk-sandbox/src/workspace/docker_code_jobs.rs` adds:
 `CodeJobIdentity`, `provision_code_job`, and `observe_code_job`.
 The trusted caller supplies a validated opaque job key and request fingerprint;
 the supervisor must derive these from its authorized persisted invocation,
@@ -852,7 +852,7 @@ that ordering by themselves. The current-platform remote sandbox provides the
 separate execution boundary described above; this extension adds runtime
 identity recovery needed by the new worker's durable job contract.
 
-Implementation: `vendor/adk-sandbox/src/workspace/docker_code_jobs.rs`.
+Implementation: `libs/rust/vendor/adk-sandbox/src/workspace/docker_code_jobs.rs`.
 Verification: `live_recovered_client_terminates_and_removes_named_job` used the
 cached Linux runner image and a disposable Docker container. It verified new
 client recovery, rejection of conflicting identity, refusal to remove a live
@@ -2610,7 +2610,7 @@ The worker and runner resource policies remain unchanged.
 
 The current-platform reference remains `elitea-sdk/runtime/langchain/pyodide_sandbox.py` and its bounded subprocess execution.
 The new container boundary additionally limits writable workspace storage.
-Docker configures a 256 MiB workspace tmpfs through `vendor/adk-sandbox/src/workspace/docker.rs::build_host_config`.
+Docker configures a 256 MiB workspace tmpfs through `libs/rust/vendor/adk-sandbox/src/workspace/docker.rs::build_host_config`.
 Kubernetes configures the same ceiling through `src/sandbox/kubernetes/mod.rs::PodPolicy::workload`.
 
 Two live tests in `src/sandbox/kubernetes/live_tests.rs` run the same JavaScript through the actual runtime adapters.

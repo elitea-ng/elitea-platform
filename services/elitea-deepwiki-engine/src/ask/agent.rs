@@ -403,23 +403,14 @@ async fn summarize<M: Model>(
     messages: Vec<Msg>,
     stop: &StopSignal,
 ) -> Result<Vec<Msg>, EngineError> {
-    if !spec.policy.should_summarize(&messages) {
-        return Ok(messages);
-    }
-    let cutoff = spec.policy.cutoff(&messages);
-    if cutoff == 0 {
-        return Ok(messages);
-    }
-    let (old, kept) = messages.split_at(cutoff);
-    let text = summarize::summary_request(spec.summary_prompt, old);
-    let mut chat = ChatRequest::new(vec![crate::llm::ChatMessage::User(text)]);
-    chat.max_tokens = Some(spec.max_tokens);
-    let response = model.call(&chat, false, stop, &mut |_| {}).await?;
-    let mut out = vec![summarize::summary_message(crate::graph::pystr::strip(
-        &response.content,
-    ))];
-    out.extend_from_slice(kept);
-    Ok(out)
+    summarize::compact(
+        &spec.policy,
+        spec.summary_prompt,
+        Some(spec.max_tokens),
+        messages,
+        |request| async move { model.call(&request, false, stop, &mut |_| {}).await },
+    )
+    .await
 }
 
 /// Run the loop.

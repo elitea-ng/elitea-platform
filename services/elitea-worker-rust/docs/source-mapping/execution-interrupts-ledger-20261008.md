@@ -39,7 +39,7 @@ Not ported:
 ## Changed paths
 
 New:
-- `services/elitea-main/migrations/shared/0155_execution_interrupts.sql`:
+- `services/elitea-main/migrations/shared/0157_execution_interrupts.sql`:
   - `execution_interrupt_responses` (:18), with `decision_revision`;
   - `execution_interrupts` (:28), with decision/consumption column groups and state coherence (:79);
   - one open `interrupt_id` per response (:95);
@@ -91,8 +91,12 @@ Edited:
   - `apps/elitea-web/src/shared/api/generated/**`, regenerated with `node scripts/check-generated-client.mjs --write`
     (orval 8.33.0): 6 new files and 3 updated.
 - **Pins:**
-  - `apps/elitea-web/scripts/check-endpoint-manifest.test.mjs`: 309 → 311 operations;
-  - `migrate/manifest_test.go`: head 155.
+  - `apps/elitea-web/scripts/check-endpoint-manifest.test.mjs`: 313 → 315 operations (309 → 311 before main added the desktop operations);
+  - `migrate/manifest_test.go`: head 157.
+- **Chart:** `deploy/helm/elitea/templates/main/_helpers.tpl` renders
+  `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED: "false"` beside the other runtime flags, so
+  `deploy/helm/tests/render-capabilities.sh` (which requires every name `config.go` looks up) passes and the gate stays
+  off in every chart deployment.
 
 ## Design decisions to review
 
@@ -123,8 +127,9 @@ Edited:
 5. **The private claim authority is the node recovery authority** with `recovery_mode='NONE'` and
    `desired_state='RUNNING'`. Code review suggested sharing one query. Skipped: the selected columns and predicates
    differ, and node recovery code is outside this PR. Follow-up below.
-6. **Migration number 0155** was free on `origin/main`, #1084, #1143 and every local worktree on 2026-10-08. Any
-   later collision must renumber here, since this migration has not shipped.
+6. **Migration number 0157.** The migration was written as 0155, which was free on 2026-10-08. On 2026-10-09
+   `origin/main` took 0155 (`local_turn_executions`) and 0156, so merging main renumbered this one to 0157 with no
+   change to its body. It has not shipped. Any later collision must renumber again.
 
 ## Tests (2026-10-08, darwin/arm64, go1.26.5, `-race`)
 
@@ -421,6 +426,9 @@ wires it.
 - **Rehearsal stack state.**
   - The candidate Main now runs the M2 composite with migrations 0154/0155 applied. Other sessions that deploy a
     Main without these migrations must restore the snapshot first, or include them.
+  - That database records this ledger as version 155, the number it had on 2026-10-08. Main's own 0155 is now
+    `local_turn_executions`, so a Main built from current `main` or from this branch will not start on it. Restore
+    the snapshot before deploying either.
   - The previous container `…-pre-m2` and the dump are kept for rollback.
   - The seeded `m2-live:*` ledger rows remain as evidence. Nothing consumes them.
 - **CI.** The Go job will run the new PostgreSQL tests. The latency test asserts the best of three rounds so that a

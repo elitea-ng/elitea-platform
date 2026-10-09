@@ -164,3 +164,25 @@ export async function credentialRefusalCode(response: Response): Promise<string 
     return undefined;
   }
 }
+
+/* ── behaviour 2e: the native client's device was revoked (ADR-0025) ─────── */
+
+/**
+ * True when a 401 says the native device session is gone: ADR-0025 decision 4
+ * answers `{"error":"device_revoked"}` (the OAuth shape), and a client also
+ * accepts the platform envelope `{"error":{"code":"device_revoked"}}`. Only
+ * the native transport asks; a browser session never receives either.
+ */
+export async function isDeviceRevoked(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
+  if (!(response.headers.get('content-type') ?? '').includes('application/json')) return false;
+  try {
+    const body: unknown = await response.clone().json();
+    const error = (body as { readonly error?: unknown } | null)?.error;
+    if (error === 'device_revoked') return true;
+    return (error as { readonly code?: unknown } | null)?.code === 'device_revoked';
+  } catch {
+    // Handled (§3.6): a 401 that lies about its content-type is just a 401.
+    return false;
+  }
+}

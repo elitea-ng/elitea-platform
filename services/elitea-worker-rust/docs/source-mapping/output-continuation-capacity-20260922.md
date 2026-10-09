@@ -154,7 +154,7 @@ The local correction accepts only an absent legacy finish reason or `FinishReaso
 All 12 model-scope tests pass, including the PostgreSQL child-scope takeover test.
 This correction is not deployed and does not implement automatic continuation.
 
-ADK 2.2.0 `vendor/adk-agent/src/llm_agent.rs` ends its loop when the response has no function calls.
+ADK 2.2.0 `libs/rust/vendor/adk-agent/src/llm_agent.rs` ends its loop when the response has no function calls.
 Its per-chunk after-model callbacks do not provide a continuation-loop decision.
 The Rust `ModelCheckpointWriter::restore_validated` rejects a model checkpoint followed by persisted model content.
 Therefore a truncated response requires an explicit durable continuation boundary before another model request.
@@ -718,7 +718,7 @@ The fix removes the observed envelope but does not yet establish successful cont
 the model restarts an object. Inspect the retained ADK schema instruction versus the fragment
 contract before changing overlap acceptance. Browser acceptance remains open.
 
-ADK `vendor/adk-agent/src/llm_agent.rs::build_instructions` also inserts a user-role
+ADK `libs/rust/vendor/adk-agent/src/llm_agent.rs::build_instructions` also inserts a user-role
 instruction requiring every response to be a complete JSON object. Removing only the
 provider's native schema leaves that conflicting generated instruction in continuation
 history. `model_checkpoint/output.rs` now matches only the exact ADK-generated instruction
