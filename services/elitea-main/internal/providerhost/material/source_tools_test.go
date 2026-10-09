@@ -1,0 +1,238 @@
+package material_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+)
+
+// fakeGrants admits exactly one (project, user, token, toolkit, provider,
+// tool) and records every lookup.
+type fakeGrants struct {
+	err     error
+	lookups int
+}
+
+func (f *fakeGrants) AdmitsSourceTool(
+	_ context.Context, projectID, userID, tokenID, toolkitID int64, provider, tool string,
+) (bool, error) {
+	f.lookups++
+	if f.err != nil {
+		return false, f.err
+	}
+	return projectID == 42 && userID == 11 && tokenID == 900 && toolkitID == 101 &&
+		provider == "inventory" && tool == "investigate", nil
+}
+
+// gate composes SourceToolGate over two stand-in permission middlewares that
+// answer 200 "patch" / "execute" when the caller holds them and 403
+// otherwise, and a terminal handler that echoes the body it received.
+func gate(grants material.SourceToolGrants, holds ...string) http.Handler {
+	permission := func(name string) func(http.Handler) http.Handler {
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !slices.Contains(holds, name) {
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = io.WriteString(w, "denied by "+name)
+					return
+				}
+				w.Header().Set("X-Gate", name)
+				next.ServeHTTP(w, r)
+			})
+		}
+	}
+	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_, _ = w.Write(body)
+	})
+	router := chi.NewRouter()
+	router.With(material.SourceToolGate(grants, "inventory", "investigate",
+		material.ReadOnlySourceTool, permission("tool.patch"), permission("tool.execute"), nil)).
+		Post("/test_tool/prompt_lib/{projectID}/{toolID}", echo)
+	return router
+}
+
+const engineBody = `{"request_id":"investigate-101-get_issue","tool_name":"get_issue",` +
+	`"tool_params":{"issue_number":7},"toolkit_config":{"toolkit_id":"101"},"llm_model":"gpt-x"}`
+
+func callbackUser() auth.User {
+	bound := int64(42)
+	return auth.User{ID: "11", UserID: "11", TokenID: "900", AuthType: "token", TokenProjectID: &bound}
+}
+
+func serve(t *testing.T, handler http.Handler, path, body string, user *auth.User) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	if user != nil {
+		request = request.WithContext(auth.ContextWithUser(request.Context(), *user))
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func TestTheInvestigateGrantPassesWithExecuteAndKeepsTheBody(t *testing.T) {
+	grants := &fakeGrants{}
+	user := callbackUser()
+	response := serve(t, gate(grants, "tool.execute"),
+		"/test_tool/prompt_lib/42/101", engineBody, &user)
+	if response.Code != http.StatusOK || response.Header().Get("X-Gate") != "tool.execute" {
+		t.Fatalf("want the execute gate to admit, got %d %q: %s",
+			response.Code, response.Header().Get("X-Gate"), response.Body.String())
+	}
+	if response.Body.String() != engineBody {
+		t.Errorf("the handler did not receive the body the gate read: %s", response.Body.String())
+	}
+	if grants.lookups != 1 {
+		t.Errorf("want one grant lookup, got %d", grants.lookups)
+	}
+}
+
+func TestTheInvestigateGrantStillNeedsExecute(t *testing.T) {
+	user := callbackUser()
+	response := serve(t, gate(&fakeGrants{}), "/test_tool/prompt_lib/42/101", engineBody, &user)
+	if response.Code != http.StatusForbidden || response.Body.String() != "denied by tool.execute" {
+		t.Fatalf("a grant without execute must be refused by execute, got %d: %s",
+			response.Code, response.Body.String())
+	}
+}
+
+// Every request the grant does not cover takes the route's own gate, and a
+// caller without patch is refused there.
+func TestEverythingElseTakesThePatchGate(t *testing.T) {
+	session := auth.User{ID: "11", UserID: "11", AuthType: "session"}
+	pat := auth.User{ID: "11", UserID: "11", TokenID: "901", AuthType: "token"}
+	native := callbackUser()
+	native.NativeClientID = "desktop"
+	boundElsewhere := callbackUser()
+	other := int64(43)
+	boundElsewhere.TokenProjectID = &other
+	write := strings.Replace(engineBody, `"get_issue"`, `"create_issue"`, 1)
+	branchy := strings.Replace(engineBody, `"get_issue"`, `"list_branches_in_repo"`, 1)
+	padded := strings.Replace(engineBody, `"get_issue"`, `"  delete_file  "`, 1)
+	withSettings := strings.Replace(engineBody, `"llm_model"`, `"llm_settings":{"api_key":"x"},"llm_model"`, 1)
+	withMCP := strings.Replace(engineBody, `"llm_model"`, `"mcp_authorization_reference":"r","llm_model"`, 1)
+	// encoding/json matches keys case-insensitively and the last one wins:
+	// the name checked must be the name test_tool would run.
+	shadowed := strings.Replace(engineBody, `"llm_model"`, `"Tool_Name":"update_issue","llm_model"`, 1)
+	callback := callbackUser()
+
+	cases := map[string]struct {
+		user *auth.User
+		path string
+		body string
+	}{
+		"a session":                          {&session, "/test_tool/prompt_lib/42/101", engineBody},
+		"a plain PAT":                        {&pat, "/test_tool/prompt_lib/42/101", engineBody},
+		"a native client credential":         {&native, "/test_tool/prompt_lib/42/101", engineBody},
+		"a token bound to another project":   {&boundElsewhere, "/test_tool/prompt_lib/42/101", engineBody},
+		"the callback for another project":   {&callback, "/test_tool/prompt_lib/43/101", engineBody},
+		"a toolkit the grant does not name":  {&callback, "/test_tool/prompt_lib/42/102", engineBody},
+		"a write tool":                       {&callback, "/test_tool/prompt_lib/42/101", write},
+		"a read prefix with a write pattern": {&callback, "/test_tool/prompt_lib/42/101", branchy},
+		"a write tool behind whitespace":     {&callback, "/test_tool/prompt_lib/42/101", padded},
+		"caller-supplied llm_settings":       {&callback, "/test_tool/prompt_lib/42/101", withSettings},
+		"an MCP authorization reference":     {&callback, "/test_tool/prompt_lib/42/101", withMCP},
+		"a case-folded duplicate tool name":  {&callback, "/test_tool/prompt_lib/42/101", shadowed},
+		"a body that is not JSON":            {&callback, "/test_tool/prompt_lib/42/101", `{"tool_name":`},
+		"no principal":                       {nil, "/test_tool/prompt_lib/42/101", engineBody},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			response := serve(t, gate(&fakeGrants{}, "tool.execute"), tc.path, tc.body, tc.user)
+			if response.Code != http.StatusForbidden || response.Body.String() != "denied by tool.patch" {
+				t.Fatalf("want the patch gate's refusal, got %d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+// The expiry, the owner and the grant's tool are the store's to decide; the
+// gate passes the AUTHENTICATING token's id and fails closed on a lookup
+// error.
+func TestAnExpiredOrUnrecordedGrantAndALookupFailureTakeThePatchGate(t *testing.T) {
+	user := callbackUser()
+	user.TokenID = "902" // a token the store does not admit (expired, another tool, a PAT)
+	response := serve(t, gate(&fakeGrants{}, "tool.execute"), "/test_tool/prompt_lib/42/101", engineBody, &user)
+	if response.Code != http.StatusForbidden || response.Body.String() != "denied by tool.patch" {
+		t.Fatalf("an unrecorded token was admitted: %d %s", response.Code, response.Body.String())
+	}
+	failing := &fakeGrants{err: errors.New("database down")}
+	user = callbackUser()
+	response = serve(t, gate(failing, "tool.execute"), "/test_tool/prompt_lib/42/101", engineBody, &user)
+	if response.Code != http.StatusForbidden || failing.lookups != 1 {
+		t.Fatalf("a failed lookup must fall back to patch: %d (lookups %d)", response.Code, failing.lookups)
+	}
+}
+
+// A caller WITH patch is unaffected by any of this: the patch gate admits it
+// and the body arrives intact.
+func TestACallerWithPatchIsUnchanged(t *testing.T) {
+	pat := auth.User{ID: "11", UserID: "11", TokenID: "901", AuthType: "token"}
+	write := strings.Replace(engineBody, `"get_issue"`, `"create_issue"`, 1)
+	response := serve(t, gate(&fakeGrants{}, "tool.patch"), "/test_tool/prompt_lib/42/101", write, &pat)
+	if response.Code != http.StatusOK || response.Header().Get("X-Gate") != "tool.patch" ||
+		response.Body.String() != write {
+		t.Fatalf("a patch holder was disturbed: %d %q %s",
+			response.Code, response.Header().Get("X-Gate"), response.Body.String())
+	}
+}
+
+func TestReadOnlySourceTool(t *testing.T) {
+	for name, want := range map[string]bool{
+		"get_issue": true, "list_files": true, "search_code": true, "Read_File": true,
+		"create_issue": false, "update_file": false, "list_branches_in_repo": false,
+		"get_tags": false, "run_query": false, "": false, "delete_branch": false,
+	} {
+		if got := material.ReadOnlySourceTool(name); got != want {
+			t.Errorf("ReadOnlySourceTool(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// TestReadOnlyRulesMatchTheEngineAsset pins the Go restatement to the lists
+// the Inventory engine filters its offered tools with. A rule the engine
+// tightens and the platform does not would leave the server-side check
+// weaker than the tool list the model is shown.
+func TestReadOnlyRulesMatchTheEngineAsset(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "..", "elitea-inventory-engine", "assets", "python_inventory.json")
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skipf("the engine asset is not in this checkout: %s", path)
+	}
+	if err != nil {
+		t.Fatalf("read the engine asset: %v", err)
+	}
+	var document struct {
+		Investigate struct {
+			Prefixes []string `json:"read_only_prefixes"`
+			Patterns []string `json:"write_operation_patterns"`
+		} `json:"investigate"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("parse the engine asset: %v", err)
+	}
+	asset := document.Investigate
+	if len(asset.Prefixes) == 0 || len(asset.Patterns) == 0 {
+		t.Fatal("the engine asset no longer carries the read-only rule; this pin measures nothing")
+	}
+	if !slices.Equal(asset.Prefixes, material.ReadOnlyToolPrefixes) {
+		t.Errorf("read-only prefixes drifted:\n engine %v\n go     %v", asset.Prefixes, material.ReadOnlyToolPrefixes)
+	}
+	if !slices.Equal(asset.Patterns, material.WriteOperationPatterns) {
+		t.Errorf("write patterns drifted:\n engine %v\n go     %v", asset.Patterns, material.WriteOperationPatterns)
+	}
+}

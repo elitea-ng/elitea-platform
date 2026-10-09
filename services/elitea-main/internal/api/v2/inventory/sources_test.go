@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,6 +146,29 @@ func (m *recordingMinter) Revoke(_ context.Context, _ int64, tokenUUID string) e
 	return nil
 }
 
+// recordingGrants stands in for the callback_token_grant store.
+type recordingGrants struct {
+	mu       sync.Mutex
+	recorded []repos.CallbackTokenGrant
+	err      error
+}
+
+func (g *recordingGrants) Record(_ context.Context, grant repos.CallbackTokenGrant) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.err != nil {
+		return g.err
+	}
+	g.recorded = append(g.recorded, grant)
+	return nil
+}
+
+func (g *recordingGrants) snapshot() []repos.CallbackTokenGrant {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]repos.CallbackTokenGrant(nil), g.recorded...)
+}
+
 func (m *recordingMinter) snapshot() (minted, revoked []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -228,7 +252,15 @@ func sources(
 	cfg inventory.SourcesConfig,
 ) *inventory.Sources {
 	t.Helper()
-	built, err := inventory.NewSources(toolkits(), settings, minter, cfg)
+	return sourcesRecording(t, settings, minter, &recordingGrants{}, cfg)
+}
+
+func sourcesRecording(
+	t *testing.T, settings material.SettingsResolver, minter material.Minter,
+	grants material.GrantRecorder, cfg inventory.SourcesConfig,
+) *inventory.Sources {
+	t.Helper()
+	built, err := inventory.NewSources(toolkits(), settings, minter, grants, cfg)
 	if err != nil {
 		t.Fatalf("compose the source expander: %v", err)
 	}
@@ -618,6 +650,121 @@ func TestInvestigateGetsTheCallbackBlockAndNothingElse(t *testing.T) {
 	}
 	if _, decrypts := settings.counts(); decrypts != 0 {
 		t.Errorf("investigate opened the vault %d time(s)", decrypts)
+	}
+}
+
+// grantRoute composes the Inventory route over a recording grant store.
+func grantRoute(
+	t *testing.T, minter *recordingMinter, grants *recordingGrants, providerStatus int,
+) (http.Handler, *[]string) {
+	t.Helper()
+	bodies, cfg := provider(t, providerStatus)
+	built, err := inventory.NewRoute(cfg, authConfig(),
+		permissions(inventory.ReadPermission, inventory.InvokePermission),
+		sourcesRecording(t, &countingSettings{}, minter, grants, config()),
+		slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
+	if err != nil {
+		t.Fatalf("compose the Inventory route: %v", err)
+	}
+	return built, bodies
+}
+
+func post(handler http.Handler, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Auth-Type", "user")
+	request.Header.Set("X-Auth-ID", "11")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+const investigatePath = "/api/v2/inventory/tools/42/inventory_search/investigate/invoke"
+
+// TestInvestigateRecordsItsGrantWithTheToolkitsOwnSources pins the half of
+// the source-tool allowance the facade owns: the bearer's record names the
+// invoking toolkit from the ROW, and only the sources its own list names
+// whose type could ever have been ingested — github 101 and ado_repos 103,
+// not gitlab 102 (no projection) and not 999 (the client's list).
+func TestInvestigateRecordsItsGrantWithTheToolkitsOwnSources(t *testing.T) {
+	minter, grants := &recordingMinter{}, &recordingGrants{}
+	route, _ := grantRoute(t, minter, grants, http.StatusOK)
+	response := post(route, investigatePath,
+		`{"configuration":{"application_id":7,"parameters":{"sources":[999]}},`+
+			`"parameters":{"question":"who refunds?"}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", response.Code, response.Body.String())
+	}
+	recorded := grants.snapshot()
+	if len(recorded) != 1 {
+		t.Fatalf("want one recorded grant, got %v", recorded)
+	}
+	got := recorded[0]
+	minted, revoked := minter.snapshot()
+	if got.TokenUUID != minted[0] || got.OwnerID != 11 || got.ProjectID != 42 ||
+		got.Provider != "inventory" || got.Tool != "investigate" || got.OwnerToolkitID != inventoryRow {
+		t.Errorf("the record does not describe this invocation: %+v (minted %v)", got, minted)
+	}
+	if !slices.Equal(got.SourceToolkitIDs, []int32{githubRow, adoRow}) {
+		t.Errorf("recorded sources %v, want [101 103]", got.SourceToolkitIDs)
+	}
+	if len(revoked) != 0 {
+		t.Errorf("an accepted investigate revoked its grant: %v", revoked)
+	}
+}
+
+// A record that cannot be written revokes the bearer and refuses: a bearer
+// the gate cannot recognise would only fail later, on every source call.
+func TestAnUnrecordedInvestigateGrantIsRevoked(t *testing.T) {
+	minter := &recordingMinter{}
+	grants := &recordingGrants{err: errors.New("database down")}
+	route, bodies := grantRoute(t, minter, grants, http.StatusOK)
+	response := post(route, investigatePath,
+		`{"configuration":{"application_id":7},"parameters":{"question":"q"}}`)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d: %s", response.Code, response.Body.String())
+	}
+	minted, revoked := minter.snapshot()
+	if len(minted) != 1 || !slices.Equal(minted, revoked) {
+		t.Errorf("the unrecorded bearer was not given back: minted %v revoked %v", minted, revoked)
+	}
+	if len(*bodies) != 0 {
+		t.Errorf("the provider was reached: %v", *bodies)
+	}
+}
+
+// An invoking toolkit that is not in the project is refused before a bearer
+// exists.
+func TestInvestigateNamingAnUnknownToolkitMintsNothing(t *testing.T) {
+	minter, grants := &recordingMinter{}, &recordingGrants{}
+	route, _ := grantRoute(t, minter, grants, http.StatusOK)
+	response := post(route, investigatePath,
+		`{"configuration":{"application_id":4040},"parameters":{"question":"q"}}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", response.Code, response.Body.String())
+	}
+	if minted, _ := minter.snapshot(); len(minted) != 0 || len(grants.snapshot()) != 0 {
+		t.Errorf("a refused investigate minted %v / recorded %v", minted, grants.snapshot())
+	}
+}
+
+// smart_normalize_types calls the toolkit's model too, so it gets the
+// callback block — and, calling no source tool, no recorded grant.
+func TestSmartNormalizeTypesGetsTheCallbackBlockWithoutARecord(t *testing.T) {
+	minter, grants := &recordingMinter{}, &recordingGrants{}
+	route, bodies := grantRoute(t, minter, grants, http.StatusOK)
+	response := post(route, "/api/v2/inventory/tools/42/inventory/smart_normalize_types/invoke",
+		`{"configuration":{"application_id":7},"parameters":{"dry_run":true,"llm_model":"gpt-x",`+
+			`"llm_settings":{"api_key":"sk-attacker"}}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if len(*bodies) != 1 || !strings.Contains((*bodies)[0], "bearer-for-token-a") ||
+		!strings.Contains((*bodies)[0], "/llm/v1") || strings.Contains((*bodies)[0], "sk-attacker") {
+		t.Fatalf("smart_normalize_types did not get the facade's callback block: %v", *bodies)
+	}
+	if recorded := grants.snapshot(); len(recorded) != 0 {
+		t.Errorf("smart_normalize_types recorded a source grant: %v", recorded)
 	}
 }
 

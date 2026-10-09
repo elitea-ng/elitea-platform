@@ -33,6 +33,7 @@ import (
 	v2contextmgr "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
@@ -84,6 +85,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
@@ -3149,7 +3151,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// pylon has test_toolkit_tool.py and no test_tool.py; both
 				// verbs here run one toolkit tool, so both take the string that
 				// module declares.
-				r.With(requireToolPatch).
+				//
+				// ONE exception on the POST, chosen by the owner (ADR-0027
+				// P4): the native Inventory engine's `investigate` calls a
+				// source toolkit's READ-ONLY tool here with the callback
+				// bearer minted for that invocation. Such a call takes the
+				// chat-time `tool.execute` instead of patch — only when the
+				// authenticating token's recorded grant (shared/0159) names
+				// investigate, this project, this caller and this toolkit,
+				// is unexpired, and the tool passes the engine's read-only
+				// rule. Every other request takes requireToolPatch unchanged
+				// (material.SourceToolGate). The result GET is not opened:
+				// the engine waits on the POST and never polls.
+				requireTestTool := material.SourceToolGate(
+					dbrepos.NewCallbackTokenGrants(cfg.Pool),
+					"inventory", "investigate", material.ReadOnlySourceTool,
+					requireToolPatch, toolkitGate(desktopopsapi.RemoteToolkitPermission), nil)
+				r.With(requireTestTool).
 					Post("/test_tool/prompt_lib/{projectID}/{toolID}", toolkitHandler.TestTool)
 				r.With(requireToolPatch).
 					Get("/test_tool/prompt_lib/{projectID}/{toolID}/{executionID}", toolkitHandler.TestToolResult)

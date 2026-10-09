@@ -1451,7 +1451,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 			inventorySources, err = v2inventory.NewSources(
 				inventoryToolkits, inventorySourceSettings,
-				material.NewCallbackMinter(inventoryTokens), inventorySourcesConfig)
+				material.NewCallbackMinter(inventoryTokens),
+				// What investigate's bearer was minted for: the record the
+				// test_tool source-tool gate reads (shared/0159).
+				dbrepos.NewCallbackTokenGrants(pool), inventorySourcesConfig)
 			if err != nil {
 				return fmt.Errorf("compose Inventory source expander: %w", err)
 			}
