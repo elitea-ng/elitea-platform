@@ -110,6 +110,59 @@ def test_an_empty_pattern_string_is_no_filter_not_an_empty_filter():
     assert source.blacklist is None
 
 
+def test_the_flat_source_the_facade_sends_is_read():
+    """elitea-main's expander writes the settings and credential block flat.
+
+    Its exact output for a github source (material/source.go, plus the
+    stored per-source patterns from api/v2/inventory/sources.go). Reading
+    only ``settings`` refused this with "no 'github_configuration' in its
+    settings" and dropped the stored patterns.
+    """
+    source = sources.parse_source(
+        {
+            "toolkit_id": 42,
+            "type": "github",
+            "name": "platform",
+            "github_configuration": {"base_url": "https://api.github.com", "access_token": "t"},
+            "repository": "o/r",
+            "active_branch": "main",
+            "base_branch": "main",
+            "file_patterns": "*.py, *.go",
+            "exclude_patterns": "vendor/*",
+            "branch": "dev",
+        },
+        ALLOWED,
+    )
+    assert source.settings == {
+        "github_configuration": {"base_url": "https://api.github.com", "access_token": "t"},
+        "repository": "o/r",
+        "active_branch": "main",
+        "base_branch": "main",
+    }
+    assert source.whitelist == ["*.py", "*.go"]
+    assert source.blacklist == ["vendor/*"]
+    assert source.branch == "dev"
+    # The credential check build_toolkit runs now passes, and the caller's
+    # branch is the one read.
+    built = sources._toolkit_settings(source)
+    assert built["active_branch"] == "dev"
+
+
+def test_the_nested_shape_still_wins_when_present():
+    source = sources.parse_source(
+        {
+            "type": "ado_repos",
+            "settings": {"ado_configuration": {}},
+            "repository_id": "ignored-outside-settings",
+            "whitelist": ["a"],
+            "file_patterns": "b",
+        },
+        ALLOWED,
+    )
+    assert source.settings == {"ado_configuration": {}}
+    assert source.whitelist == ["a"]
+
+
 def test_a_source_with_no_name_is_named_after_its_toolkit():
     """The name keys the checkpoint file and every citation's source_toolkit."""
     source = sources.parse_source({"type": "github", "toolkit_id": 9, "settings": {}}, ALLOWED)

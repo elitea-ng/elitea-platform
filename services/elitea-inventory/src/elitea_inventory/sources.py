@@ -22,7 +22,23 @@ Here the facade expands it and forwards the result. What arrives per invoke is::
     }
 
 and this module turns it into the SDK api-wrapper the ingestion pipeline reads
-from. A body with no ``source`` for an ingest tool is refused as invalid input,
+from.
+
+THE FACADE SENDS IT FLAT. elitea-main's expander
+(``internal/providerhost/material/source.go`` and
+``internal/api/v2/inventory/sources.go``) writes the picked settings and the
+credential block at the TOP level, and the stored per-source patterns as
+``file_patterns`` / ``exclude_patterns``::
+
+    {"toolkit_id": 42, "type": "github", "name": "...",
+     "github_configuration": {...}, "repository": "o/r",
+     "active_branch": "main", "file_patterns": "*.py", "branch": "dev"}
+
+Both shapes are read: ``settings`` when present, otherwise every key that is
+not part of the envelope; ``whitelist``/``blacklist`` first, then the
+facade's pattern keys. Reading only the nested shape refused every
+facade-driven ingestion ("has no 'github_configuration' in its settings")
+and dropped the stored patterns. A body with no ``source`` for an ingest tool is refused as invalid input,
 by name — never resolved.
 """
 
@@ -35,7 +51,17 @@ logger = logging.getLogger(__name__)
 
 #: Keys the engine reads off the expanded object itself rather than passing to
 #: the SDK loader.
-_ENVELOPE_KEYS = ("toolkit_id", "type", "name", "settings", "branch", "whitelist", "blacklist")
+_ENVELOPE_KEYS = (
+    "toolkit_id",
+    "type",
+    "name",
+    "settings",
+    "branch",
+    "whitelist",
+    "blacklist",
+    "file_patterns",
+    "exclude_patterns",
+)
 
 
 class Source:
@@ -96,7 +122,8 @@ def parse_source(raw: Any, allowed_types: tuple[str, ...]) -> Source:
 
     settings = raw.get("settings")
     if settings is None:
-        settings = {}
+        # The facade's flat shape: everything that is not the envelope.
+        settings = {key: value for key, value in raw.items() if key not in _ENVELOPE_KEYS}
     if not isinstance(settings, dict):
         raise ValueError(
             f"source.settings must be an object, got {type(settings).__name__}"
@@ -129,8 +156,8 @@ def parse_source(raw: Any, allowed_types: tuple[str, ...]) -> Source:
         name=name,
         settings=settings,
         branch=str(branch) if branch else None,
-        whitelist=_patterns("whitelist"),
-        blacklist=_patterns("blacklist"),
+        whitelist=_patterns("whitelist") or _patterns("file_patterns"),
+        blacklist=_patterns("blacklist") or _patterns("exclude_patterns"),
     )
 
 
