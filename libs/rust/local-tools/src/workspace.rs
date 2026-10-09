@@ -410,6 +410,26 @@ impl Workspace {
         })
     }
 
+    /// A `'static` test for the directory walkers' `filter_entry`: is the
+    /// absolute path under the root denied for reading? A denied directory is
+    /// then pruned, not walked (its contents are denied too: rules match any
+    /// prefix), so it costs nothing against a walk's entry limit.
+    pub(crate) fn read_denied_filter(&self) -> impl Fn(&Path) -> bool + Send + Sync + 'static {
+        let root = self.root.clone();
+        let deny = self.deny.clone();
+        move |absolute: &Path| {
+            absolute
+                .strip_prefix(&root)
+                .ok()
+                .and_then(|rest| WsPath::from_relative(rest).ok())
+                .is_some_and(|path| {
+                    let components = path.components();
+                    (1..=components.len())
+                        .any(|end| deny.is_match(nfc(&components[..end].join("/"))))
+                })
+        }
+    }
+
     /// [`Self::denied_by`] as an error.
     ///
     /// # Errors

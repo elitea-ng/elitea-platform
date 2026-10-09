@@ -426,13 +426,18 @@ pub(crate) fn walker(
     depth: Option<usize>,
 ) -> ToolResult<ignore::Walk> {
     let mut builder = ignore::WalkBuilder::new(workspace.absolute(base));
+    let denied = workspace.read_denied_filter();
     builder
         .hidden(false)
         .require_git(false)
         .follow_links(false)
         .max_depth(depth)
         .sort_by_file_name(Ord::cmp)
-        .filter_entry(|entry| !entry.file_name().to_str().is_some_and(is_protected_name));
+        // `path_deny` matches are pruned here, not filtered after: a denied
+        // tree is never descended into, so it cannot use up a walk's limit.
+        .filter_entry(move |entry| {
+            !entry.file_name().to_str().is_some_and(is_protected_name) && !denied(entry.path())
+        });
     if let Some(glob) = glob {
         let mut overrides = ignore::overrides::OverrideBuilder::new(workspace.root());
         overrides

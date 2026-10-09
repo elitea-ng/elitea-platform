@@ -168,6 +168,23 @@ mod tests {
     }
 
     #[test]
+    fn a_denied_tree_does_not_use_up_the_walk_limit() {
+        let (dir, workspace) = tree(&["aaa/**"]);
+        // A denied folder with more entries than one lookup walks, sorting
+        // before the file the person is looking for.
+        let big = dir.path().join("aaa");
+        fs::create_dir_all(&big).unwrap();
+        for i in 0..=super::MAX_VISITED {
+            fs::write(big.join(format!("f{i:05}")), "").unwrap();
+        }
+        fs::write(dir.path().join("zzz-wanted.txt"), "x").unwrap();
+        assert_eq!(
+            paths(&find_paths(&workspace, "zzz-wanted", 10).unwrap()),
+            vec!["zzz-wanted.txt"]
+        );
+    }
+
+    #[test]
     fn symlinks_are_neither_listed_nor_followed() {
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("passwords.txt"), "x").unwrap();
