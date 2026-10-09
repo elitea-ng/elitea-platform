@@ -90,8 +90,9 @@ func newPinnedListingPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, `
 CREATE SCHEMA p_1;
 CREATE SCHEMA centry;
-CREATE TABLE centry.project(id integer PRIMARY KEY);
+CREATE TABLE centry.project(id integer PRIMARY KEY,suspended boolean NOT NULL DEFAULT false);
 INSERT INTO centry.project VALUES (1),(2);
+CREATE TABLE public.auth_core__user(id integer PRIMARY KEY,email text,name text,last_login timestamp,suspended boolean NOT NULL DEFAULT false);
 CREATE TABLE public.auth_core__project_role(id integer PRIMARY KEY,project_id integer,name text);
 CREATE TABLE public.auth_core__project_user_role(project_id integer,user_id integer,role_id integer);
 CREATE TABLE public.auth_core__role(id integer PRIMARY KEY,name text,mode text);
