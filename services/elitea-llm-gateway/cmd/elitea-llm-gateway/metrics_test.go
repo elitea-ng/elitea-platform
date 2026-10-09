@@ -173,6 +173,8 @@ func TestMetricsRoute_IsServedByTheRunningGateway(t *testing.T) {
 		// Required once a database pool exists (issue #11). The pool is lazy,
 		// so no database has to answer for the process to start and serve.
 		"GATEWAY_IDENTITY_SECRET=test-identity-secret",
+		// Required at start-up, pool or no pool (master_key_gate.go).
+		"SECRETS_MASTER_KEY="+testMasterKey,
 		// No NATS: budget enforcement is off, so the gauge must read 0.
 		"GATEWAY_NATS_URL=",
 	)

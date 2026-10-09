@@ -47,6 +47,8 @@ use crate::transport::runtime_context::{
     RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
 };
 
+#[path = "pipeline_artifact_tests.rs"]
+mod artifact_tests;
 #[path = "pipeline_scope_tests.rs"]
 mod model_scope_tests;
 

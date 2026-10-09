@@ -335,7 +335,11 @@ services:
       # for any `/app/**` path (the SPA's history fallback), which is all a
       # probe needs to read as "the provider recognised this credential" — see
       # STANDIN_PROVIDER_BASE_URL in `e2e/journeys/toolkits/toolkits.aha.spec.ts`.
-      ELITEA_TOOLKIT_CHECK_ALLOWLIST: "elitea-main, elitea-web"
+      # The two names resolve to this compose network's private addresses, so
+      # the probe's egress guard also needs those ranges named (Docker's
+      # default address pools); naming the hosts alone permits no private
+      # address.
+      ELITEA_TOOLKIT_CHECK_ALLOWLIST: "elitea-main, elitea-web, 172.16.0.0/12, 192.168.0.0/16"
       # ── The DeepWiki facade, on the OIDC-only stack (ADR-0023 H0) ────────
       # The facade takes the API group's credential set, and under OIDC-only
       # auth that carries the LocalValidator for APPLICATION_SECRET_KEY-signed

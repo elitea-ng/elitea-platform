@@ -183,6 +183,40 @@ describe('useDeleteItems: onConfirmDelete / onCancelDelete', () => {
     expect(getEdges()).toEqual([]);
   });
 
+  it('keeps the canvas when the document write is refused (the document still holds the node and edge)', () => {
+    const setYamlJsonObject = vi.fn(() => false);
+    const nodeA = flowNode('A');
+    const nodeB = flowNode('B');
+    const edgeAB: FlowEdge = { id: 'e1', source: 'A', target: 'B' };
+    const { setFlowNodes, getNodes } = makeStatefulSetFlowNodes([nodeA, nodeB]);
+    const { setFlowEdges, getEdges } = makeStatefulSetFlowEdges([edgeAB]);
+
+    const { result } = renderHook(() =>
+      useDeleteItems({
+        display: 'flex',
+        yamlJsonObject: { nodes: [{ id: 'A', transition: 'B' }, { id: 'B' }], entry_point: 'A' },
+        flowNodes: [nodeA, nodeB],
+        flowEdges: [edgeAB],
+        setYamlJsonObject,
+        setFlowNodes,
+        setFlowEdges,
+      }),
+    );
+
+    act(() => {
+      result.current.onBeforeDelete({ nodes: [nodeA], edges: [edgeAB] });
+    });
+    act(() => {
+      result.current.onConfirmDelete();
+    });
+
+    expect(setYamlJsonObject).toHaveBeenCalledTimes(1);
+    expect(getNodes().map(n => n.id)).toEqual(['A', 'B']);
+    expect(getEdges()).toEqual([edgeAB]);
+    expect(result.current.showDeleteConfirmDlg).toBe(false);
+    expect(result.current.nodesToDelete).toEqual([]);
+  });
+
   it('filters out an End-type node from the yaml/flow-node deletion pass (baseline never deletes the synthetic End node)', () => {
     const setYamlJsonObject = vi.fn();
     const endNode = flowNode('END', 'END');
