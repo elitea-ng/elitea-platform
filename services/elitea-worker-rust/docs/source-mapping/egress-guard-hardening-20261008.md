@@ -45,9 +45,10 @@ destination in Main:
 
 ## Upgrade notes for operators
 
-Three behaviour changes can reach a running deployment after upgrading past #1149. None is configured from the
-Admin UI: the Admin **Egress Allowlist** governs only the LLM gateway's provider endpoints. Main's outbound paths
-are configured in the chart or the Main config.
+Three behaviour changes can reach a running deployment after upgrading past #1149, and two more after #1192
+(private entries permit only their own range; toolkit connection checks go through the guard). None is configured
+from the Admin UI: the Admin **Egress Allowlist** governs only the LLM gateway's provider endpoints. Main's outbound
+paths are configured in the chart or the Main config.
 
 | Outbound path | Setting |
 |---|---|
@@ -55,6 +56,7 @@ are configured in the chart or the Main config.
 | MCP Load Tools and metadata reads | `ELITEA_MCP_EGRESS_ALLOWLIST` (`deploy/helm/elitea/values.yaml`) |
 | MCP OAuth and DCR proxies | `ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST` (`deploy/helm/elitea/values.yaml`) |
 | Code workspace GitHub reader | `egress_allowlist` in the Code workspace config (exact `host:port` entries) |
+| Toolkit credential "Test connection" (since #1192) | `ELITEA_TOOLKIT_CHECK_ALLOWLIST` (`deploy/helm/elitea/values.yaml`) |
 
 ### CGNAT and benchmarking addresses are now private
 
@@ -62,9 +64,9 @@ are configured in the chart or the Main config.
 now private, like RFC 1918. Tailscale, some EKS custom-networking setups and some lab networks use these ranges.
 
 **Who is affected.** A deployment whose webhook receiver, MCP server, identity provider or GitHub Enterprise host
-resolves into one of these ranges, and whose allowlist for that path is empty or names only public hosts. If the
-allowlist already names any private range (for example `10.0.0.0/8`), nothing changes: private egress is already
-declared for that path.
+resolves into one of these ranges, and whose allowlist for that path does not name a block covering the target.
+Since #1192 each entry permits only its own range, so naming another private range (for example `10.0.0.0/8`) does
+not cover a CGNAT target.
 
 **Symptom.** Creating the webhook, loading MCP tools or reading the repository fails with
 `does not resolve to a permitted destination (loopback, private-network, link-local, multicast and reserved
@@ -77,11 +79,47 @@ addresses are refused)`. Webhooks that already exist fail at delivery with the s
    resolved addresses.
 2. Restart Main. These settings are read at startup.
 
-**Know before you add the entry.** A private entry currently switches private egress on for the whole path: once
-any private block is named, every private class (RFC 1918, loopback, ULA, CGNAT, benchmarking) is permitted for
-that path, not only the named block. So add it only for paths that need it, and keep Main's network policy
-default-deny. Metadata endpoints, link-local, multicast and reserved addresses stay refused whatever the entry
-says. Narrowing a private entry to its own block is listed under follow-ups.
+**Know before you add the entry.** Before #1192 a private entry switched private egress on for the whole path.
+Since #1192 an entry permits only its own range: a CIDR block its block, an IP literal that address, `localhost`
+loopback, each only on the entry's port when it pins one. Metadata endpoints, link-local, multicast and reserved
+addresses stay refused whatever the entry says. Keep Main's network policy default-deny.
+
+### Private entries permit only their own range (#1192)
+
+**What changed.** An allowlist entry that names a private block or address now permits only that block or address
+(and only its port, when the entry pins one). Before, naming any private block permitted every private class
+(RFC 1918, loopback, ULA, CGNAT, benchmarking) for that path. A host-name or `*.` entry permits no private address.
+
+**Who is affected.** A deployment that named one private block on a path and relies on reaching a target in a
+different private range, or on loopback, through it. Example: `ELITEA_MCP_EGRESS_ALLOWLIST=10.0.0.0/8` with an MCP
+server on `172.20.0.5` or on `localhost`.
+
+**Symptom.** The same `does not resolve to a permitted destination (…)` refusal as above, for targets that worked
+before the upgrade.
+
+**Fix.** Name the block of each private target on that path (for example add `172.20.0.0/16`, or `localhost` for a
+loopback receiver), then restart Main.
+
+### Toolkit connection checks go through the egress guard (#1192)
+
+**What changed.** The credential card's "Test connection" for GitHub, GitLab, Bitbucket, Jira, Confluence and the
+other checkable toolkits used to dial the base URL through the default transport once the host name was on
+`ELITEA_TOOLKIT_CHECK_ALLOWLIST`. It now dials through the guard: the address is classified at dial time, no proxy
+is used, redirects are not followed, response headers are capped and the body is not read. Loopback and private
+addresses are refused unless a CIDR block, IP literal or `localhost` entry of `ELITEA_TOOLKIT_CHECK_ALLOWLIST`
+names them, per entry as above. A bare `*` in that variable is no longer accepted: it is dropped, and a value of
+only `*` refuses every host.
+
+**Who is affected.** A deployment whose self-hosted GitLab, Jira, Confluence (or other checkable provider) resolves
+to a private address, or that set `ELITEA_TOOLKIT_CHECK_ALLOWLIST=*`. SaaS providers on public addresses (the
+default list) are not affected.
+
+**Symptom.** "Test connection" answers "This provider endpoint is not permitted by the platform's configuration."
+for a provider that checked successfully before, and a toolkit editor that requires a passing check will not save.
+
+**Fix.** Keep the host name in `ELITEA_TOOLKIT_CHECK_ALLOWLIST` and add the narrowest block of its private address,
+for example `ELITEA_TOOLKIT_CHECK_ALLOWLIST="gitlab.corp.example, jira.corp.example, 10.20.0.0/16"`. Replace a `*`
+with the hosts the deployment checks. Restart Main.
 
 ### Webhooks no longer follow redirects
 
@@ -91,8 +129,8 @@ the receiver at its final URL.
 
 ### No outbound proxy on these paths
 
-Main ignores `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` for the four paths above, and dials the destination
-directly. The shipped charts set no proxy, so they are not affected. A site where every outbound connection
+Main ignores `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` for the paths above (the toolkit connection check
+included since #1192), and dials the destination directly. The shipped charts set no proxy, so they are not affected. A site where every outbound connection
 **must** go through a forward proxy cannot reach public webhook receivers or MCP servers from Main until guarded
 proxy support exists (listed under follow-ups).
 
