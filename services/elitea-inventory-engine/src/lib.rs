@@ -62,6 +62,7 @@ pub fn build_runner(settings: &Settings) -> Result<Runner, ConfigError> {
 
 /// The largest invoke body this engine's sidecar reads. The default (2 MB)
 /// is below the host's SPI cap (4 MiB), and `import_graph` carries a graph
-/// document the host read from a bucket (up to 32 MiB, JSON-escaped once more
-/// in the body). The socket is the host's alone.
+/// document the host read from a bucket (up to 64 MiB, the host's
+/// `MaxGraphImportBytes`; JSON-escaped once more in the body, which the host
+/// bounds at 88 MiB). The socket is the host's alone.
 pub const MAX_INVOKE_BYTES: usize = 96 << 20;

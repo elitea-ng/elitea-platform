@@ -3323,6 +3323,9 @@ inventory:
     #   _MAX_PARSED_BYTES, _CLONE_TIMEOUT_SECONDS
     # Source types ingestion reads (default github,ado_repos):
     #   ELITEA_INVENTORY_SOURCE_TYPES
+    # Ingestion model calls in flight at once (default 8; set to the chat model
+    # server's concurrent slots):
+    #   ELITEA_INVENTORY_MODEL_CONCURRENCY
 
   # Sensitive values from Kubernetes Secrets. ELITEA_INVENTORY_DATABASE_URL
   # defaults to the chart-wide postgresql secret when one is set, exactly as

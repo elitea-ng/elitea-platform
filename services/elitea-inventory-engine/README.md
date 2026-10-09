@@ -178,6 +178,7 @@ owner runs them without cluster access:
 | `ELITEA_INVENTORY_SCRATCH_PATH` | `/var/scratch/inventory` | where a run clones (removed after) |
 | `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store (`migrate`, `import-graph`, `export-graph`, and required by `native`; `postgresql://` URL form). PostgreSQL with the pgvector extension available: migration 0004 creates it, and semantic search ranks there |
 | `ELITEA_INVENTORY_CALLBACK_CA_FILE` | unset | a PEM bundle the model transport trusts besides the platform roots |
+| `ELITEA_INVENTORY_MODEL_CONCURRENCY` | `8` | ingestion model calls (extraction, relations, community labels) in flight at once across the engine process; set it to the chat model server's concurrent slots (past them a request only queues there, and keeps the server busy after a stop) |
 | `OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT` | unset | span export (`elitea-engine-sidecar::telemetry`) |
 
 ## The three fixture runners

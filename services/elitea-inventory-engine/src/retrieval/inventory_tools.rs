@@ -36,7 +36,9 @@
 //!   directly (Python's text methods would re-resolve the name).
 //! * **D5 — no raw vectors.** JSON entity rows omit `embedding` (Python sent
 //!   every matched entity's vector, and `search_graph` defaults to sending
-//!   every edge of the graph too, which the graph UI draws and is kept).
+//!   every edge of the graph too, which the graph UI draws and is kept), and
+//!   `get_entity`'s text no longer lists it among the properties (Python
+//!   printed `- embedding: 2560 items`).
 //! * **D6 — `list_graphs` answers.** Its handler referenced an undefined
 //!   `bucket` and raised `NameError` on every call. It answers the one graph
 //!   this toolkit has (`bucket` / `graph_name` parameters, defaulting to
@@ -501,8 +503,11 @@ fn layer_and_type(node: &Map<String, Value>) -> (String, String) {
     (layer, kind)
 }
 
-/// The keys the detail page does not list as properties.
-const SKIP: [&str; 10] = [
+/// The keys the detail page does not list as properties. `embedding` is
+/// D5 (Python listed the vector as `- embedding: 2560 items`, an internal
+/// field that says nothing about the entity).
+const SKIP: [&str; 11] = [
+    "embedding",
     "id",
     "name",
     "type",

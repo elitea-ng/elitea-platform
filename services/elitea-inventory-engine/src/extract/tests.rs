@@ -347,3 +347,55 @@ async fn relations_resolve_and_low_confidence_ones_are_dropped() {
         "single-word code names are not offered"
     );
 }
+
+#[tokio::test]
+async fn a_limited_model_keeps_at_most_its_permits_in_flight_and_a_stop_drops_the_rest() {
+    let (in_flight, peak) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let (now, high) = (Arc::clone(&in_flight), Arc::clone(&peak));
+    let model = Model::new(move |_prompt| {
+        let (now, high) = (Arc::clone(&now), Arc::clone(&high));
+        Box::pin(async move {
+            let current = now.fetch_add(1, Ordering::SeqCst) + 1;
+            high.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            now.fetch_sub(1, Ordering::SeqCst);
+            Ok("ok".to_owned())
+        })
+    });
+    let stop = StopSignal::default();
+    let limited = model.limited(Arc::new(tokio::sync::Semaphore::new(3)), stop.clone());
+    let mut calls = tokio::task::JoinSet::new();
+    for index in 0..20 {
+        let limited = limited.clone();
+        calls.spawn(async move { limited.ask(format!("prompt {index}")).await });
+    }
+    while let Some(answer) = calls.join_next().await {
+        assert_eq!(answer.ok().and_then(Result::ok).as_deref(), Some("ok"));
+    }
+    assert_eq!(peak.load(Ordering::SeqCst), 3, "the limit is the peak");
+
+    // A call waiting for a permit ends at once when a stop arrives.
+    let blocked = Model::new(|_prompt| Box::pin(std::future::pending()));
+    let limit = Arc::new(tokio::sync::Semaphore::new(1));
+    let limited = blocked.limited(Arc::clone(&limit), stop.clone());
+    let holder = tokio::spawn({
+        let limited = limited.clone();
+        async move { limited.ask("holds the permit".to_owned()).await }
+    });
+    let waiter = tokio::spawn({
+        let limited = limited.clone();
+        async move { limited.ask("waits".to_owned()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(limit.available_permits(), 0);
+    stop.request();
+    let outcome = tokio::time::timeout(Duration::from_secs(1), waiter).await;
+    assert!(
+        outcome.is_ok_and(|joined| joined.is_ok_and(|answer| answer.is_err_and(|e| is_cancel(&e)))),
+        "the waiting call was not cancelled by the stop"
+    );
+    // Dropping the in-flight call returns its permit.
+    holder.abort();
+    let _ = holder.await;
+    assert_eq!(limit.available_permits(), 1);
+}

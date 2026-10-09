@@ -134,6 +134,16 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 	if err := tc.Thinking(ctx, "Starting "+call.Tool); err != nil {
 		return nil, err
 	}
+	var exportClient ArtifactClient
+	if call.Tool == ExportTool {
+		// Refused before the engine reads the whole graph: an export's only
+		// output is the bucket object (see transfer.go).
+		client, err := r.ExportClient(params)
+		if err != nil {
+			return nil, err
+		}
+		exportClient = client
+	}
 	if call.Tool == ImportTool {
 		// Overwritten on every call: the document is the bucket's, never
 		// the caller's (see transfer.go).
@@ -163,7 +173,11 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 	}
 
 	objects := ComposeResultObjects(result, ResolveBucket(params))
-	objects, err = r.upload(ctx, objects, params, tc)
+	if exportClient != nil {
+		objects, err = r.StoreExport(ctx, objects, exportClient, tc)
+	} else {
+		objects, err = r.upload(ctx, objects, params, tc)
+	}
 	if err != nil {
 		return nil, err
 	}

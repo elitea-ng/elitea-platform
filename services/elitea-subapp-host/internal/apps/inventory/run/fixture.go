@@ -753,13 +753,20 @@ func fixtureImportGraph(_, _ string, params Params) map[string]any {
 
 // fixtureExportGraph exports the canned graph, as the engine exports the
 // stored one: graph.json as an artifact, for the host to upload.
+// The answer is a summary of what goes to the bucket (the canned graph is not
+// stored, so its revision is null); the document rides only as the artifact.
 func fixtureExportGraph(_, _ string, params Params) map[string]any {
 	graph := pyDumps(FixtureGraph(SourceLabelFor(params)))
+	bucket := ResolveBucket(params)
 	result := fixtureAnswer(params,
-		map[string]any{"artifact": "graph.json", "entities": len(FixtureEntities), "relations": len(FixtureRelations)},
-		fmt.Sprintf("Exported %d entities and %d relations to graph.json.", len(FixtureEntities), len(FixtureRelations)))
+		map[string]any{
+			"artifact": DefaultGraphArtifact, "bucket": bucket, "entities": len(FixtureEntities),
+			"relations": len(FixtureRelations), "revision": nil, "size_bytes": len(graph),
+		},
+		fmt.Sprintf("Exported %d entities and %d relations to %s in bucket %s (%d bytes).",
+			len(FixtureEntities), len(FixtureRelations), DefaultGraphArtifact, bucket, len(graph)))
 	result["artifacts"] = []any{
-		map[string]any{"name": "graph.json", "type": "application/json", "data": graph},
+		map[string]any{"name": DefaultGraphArtifact, "type": "application/json", "data": graph},
 	}
 	return result
 }

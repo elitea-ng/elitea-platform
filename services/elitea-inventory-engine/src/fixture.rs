@@ -887,15 +887,18 @@ fn import_graph(_graph: &FixtureGraph, params: &Map<String, Value>) -> Value {
 /// `export_graph`: the canned graph as `graph.json`, as the engine exports
 /// the stored one.
 fn export_graph(graph: &FixtureGraph, params: &Map<String, Value>) -> Value {
-    let document = graph_document(graph, &source_label_for(params));
-    let (entities, relations) = (graph.entities.len(), graph.relations.len());
-    let mut result = answer(
-        params,
-        &json!({"artifact": "graph.json", "entities": entities, "relations": relations}),
-        format!("Exported {entities} entities and {relations} relations to graph.json."),
+    let document = dumps(&graph_document(graph, &source_label_for(params)));
+    // The canned graph is not stored, so it has no revision.
+    let (summary, text) = crate::transfer::export_summary(
+        &crate::transfer::export_bucket(params),
+        graph.entities.len(),
+        graph.relations.len(),
+        None,
+        document.len(),
     );
+    let mut result = answer(params, &summary, text);
     result["artifacts"] = json!([
-        {"name": "graph.json", "type": "application/json", "data": dumps(&document)},
+        {"name": crate::transfer::EXPORT_ARTIFACT, "type": "application/json", "data": document},
     ]);
     result
 }

@@ -169,6 +169,56 @@ pub struct ExportReport {
     pub document: String,
     pub entities: usize,
     pub relations: usize,
+    /// The stored graph's revision the document was read at.
+    pub revision: i64,
+}
+
+/// The key `export_graph` writes in the toolkit's bucket.
+pub const EXPORT_ARTIFACT: &str = "graph.json";
+
+/// The bucket the host uploads an export to: the toolkit's `bucket` (or
+/// the UI's `toolkit_configuration_bucket`), `graphs` when it names none —
+/// the host's `run.ResolveBucket`.
+#[must_use]
+pub fn export_bucket(params: &serde_json::Map<String, Value>) -> String {
+    ["bucket", "toolkit_configuration_bucket"]
+        .iter()
+        .find_map(|key| {
+            params
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|bucket| !bucket.is_empty())
+        })
+        .unwrap_or("graphs")
+        .to_owned()
+}
+
+/// The `export_graph` answer: a summary of what went to the bucket. The
+/// document itself rides only as the artifact the host uploads; the
+/// answer never repeats it (a 50-file repository's graph is 43 MB, and an
+/// answer is what a poll returns and a chat shows).
+#[must_use]
+pub fn export_summary(
+    bucket: &str,
+    entities: usize,
+    relations: usize,
+    revision: Option<i64>,
+    size_bytes: usize,
+) -> (Value, String) {
+    let document = serde_json::json!({
+        "artifact": EXPORT_ARTIFACT,
+        "bucket": bucket,
+        "entities": entities,
+        "relations": relations,
+        "revision": revision,
+        "size_bytes": size_bytes,
+    });
+    let at = revision.map_or_else(String::new, |revision| format!(" (revision {revision})"));
+    let text = format!(
+        "Exported {entities} entities and {relations} relations{at} to {EXPORT_ARTIFACT} in bucket {bucket} ({size_bytes} bytes)."
+    );
+    (document, text)
 }
 
 /// [`export_graph`] with the counts the `export_graph` tool reports.
@@ -181,7 +231,7 @@ pub async fn export_report(
     key: GraphKey,
     saved_at: &str,
 ) -> Result<ExportReport, TransferError> {
-    let (graph, _) = store::load(pool, key)
+    let (graph, revision) = store::load(pool, key)
         .await?
         .ok_or(TransferError::NotFound {
             project_id: key.project_id,
@@ -191,6 +241,7 @@ pub async fn export_report(
         document: graph.to_json_text(saved_at),
         entities: graph.node_count(),
         relations: graph.edge_count(),
+        revision,
     })
 }
 
@@ -198,6 +249,31 @@ pub async fn export_report(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_export_answers_a_summary_and_never_the_document() {
+        let params = json!({"toolkit_configuration_bucket": " legacy "});
+        assert_eq!(
+            export_bucket(params.as_object().unwrap_or(&serde_json::Map::new())),
+            "legacy"
+        );
+        assert_eq!(export_bucket(&serde_json::Map::new()), "graphs");
+        let (document, text) = export_summary("graphs", 761, 1324, Some(12), 43_297_981);
+        assert_eq!(
+            document,
+            json!({"artifact": "graph.json", "bucket": "graphs", "entities": 761, "relations": 1324, "revision": 12, "size_bytes": 43_297_981})
+        );
+        assert_eq!(
+            text,
+            "Exported 761 entities and 1324 relations (revision 12) to graph.json in bucket graphs (43297981 bytes)."
+        );
+        let (document, text) = export_summary("graphs", 6, 5, None, 10);
+        assert_eq!(document["revision"], Value::Null);
+        assert_eq!(
+            text,
+            "Exported 6 entities and 5 relations to graph.json in bucket graphs (10 bytes)."
+        );
+    }
 
     #[test]
     fn a_nul_is_located() {

@@ -44,6 +44,9 @@ pub struct NativeRunner {
     settings: Arc<Settings>,
     transport: Transport,
     views: Arc<crate::retrieval::ViewCache>,
+    /// The ingestion model calls in flight across this process
+    /// (`ELITEA_INVENTORY_MODEL_CONCURRENCY`).
+    model_calls: Arc<tokio::sync::Semaphore>,
 }
 
 fn invalid(message: impl Into<String>) -> EngineError {
@@ -111,11 +114,17 @@ impl NativeRunner {
             user_agent: concat!("elitea-inventory-engine/", env!("CARGO_PKG_VERSION")),
             ..TransportSettings::default()
         })?;
+        let model_calls = Arc::new(tokio::sync::Semaphore::new(
+            settings
+                .model_concurrency
+                .clamp(1, tokio::sync::Semaphore::MAX_PERMITS),
+        ));
         Ok(Self {
             pool,
             settings: Arc::new(settings),
             transport,
             views: Arc::new(crate::retrieval::ViewCache::default()),
+            model_calls,
         })
     }
 
@@ -259,7 +268,8 @@ impl NativeRunner {
     }
 
     /// `export_graph`: the stored graph as `graph.json`, returned as an
-    /// artifact the host uploads to the toolkit's bucket.
+    /// artifact the host uploads to the toolkit's bucket; the answer is a
+    /// summary (counts, revision, size, bucket), never the document.
     async fn export_graph(
         &self,
         key: GraphKey,
@@ -276,22 +286,24 @@ impl NativeRunner {
                 }
                 other => EngineError::new(ErrorType::Runtime, other.to_string()),
             })?;
+        let (summary, text) = transfer::export_summary(
+            &transfer::export_bucket(params),
+            report.entities,
+            report.relations,
+            Some(report.revision),
+            report.document.len(),
+        );
         let result = if json_format(params) {
-            elitea_engine_core::pyjson::dumps(&json!({
-                "artifact": "graph.json",
-                "entities": report.entities,
-                "relations": report.relations,
-            }))
+            elitea_engine_core::pyjson::dumps(&summary)
         } else {
-            format!(
-                "Exported {} entities and {} relations to graph.json.",
-                report.entities, report.relations
-            )
+            text
         };
+        // The document goes to the bucket only: the host uploads the
+        // artifact and leaves it out of the terminal body (run.ExportTool).
         Ok(json!({
             "success": true,
             "result": result,
-            "artifacts": [{"name": "graph.json", "type": "application/json", "data": report.document}],
+            "artifacts": [{"name": transfer::EXPORT_ARTIFACT, "type": "application/json", "data": report.document}],
         }))
     }
 
@@ -428,7 +440,10 @@ impl NativeRunner {
 
     /// `semantic_search` for an investigation, when the graph has vectors:
     /// the query is embedded with the model the graph was built with, so
-    /// the two compare, and PostgreSQL ranks the entities (pgvector).
+    /// the two compare (in that model's query format,
+    /// [`crate::embed::query_text`]), and PostgreSQL ranks the entities
+    /// (pgvector's cosine distance, which is scale-free: unnormalised
+    /// vectors rank as normalised ones).
     fn ranker(
         &self,
         view: &crate::retrieval::view::GraphView,
@@ -452,11 +467,10 @@ impl NativeRunner {
                 let embed: crate::investigate::Embed = Arc::new(move |query: String| {
                     let (client, stop, pool) = (client.clone(), stop.clone(), pool.clone());
                     Box::pin(async move {
-                        let vectors = client.embed_documents(&[query], &stop).await?;
-                        let vector: Vec<f64> = vectors
-                            .into_iter()
-                            .next()
-                            .unwrap_or_default()
+                        let text = crate::embed::query_text(client.model(), &query);
+                        let vector: Vec<f64> = client
+                            .embed_query(&text, &stop)
+                            .await?
                             .into_iter()
                             .map(f64::from)
                             .collect();
@@ -638,7 +652,8 @@ impl NativeRunner {
         let model: Model = extract::gateway_model(
             ChatClient::new(self.transport.clone(), chat_settings.clone()),
             context.stop_signal(),
-        );
+        )
+        .limited(Arc::clone(&self.model_calls), context.stop_signal());
         let embeddings = text_param(
             params,
             &["embedding_model", "toolkit_configuration_embedding_model"],
@@ -921,15 +936,18 @@ fn report(
     let _ = kind;
     let source = name.to_owned();
     if as_json {
-        let (documents, entities, relations) = outcome.map_or((0, 0, 0), |o| {
-            (o.documents_processed, o.entities_added, o.relations_added)
-        });
+        let empty = Outcome::default();
+        let counts = outcome.unwrap_or(&empty);
         return elitea_engine_core::pyjson::dumps(&json!({
             "success": outcome.is_ok(),
             "source": source,
-            "documents_processed": documents,
-            "entities_added": entities,
-            "relations_added": relations,
+            "documents_processed": counts.documents_processed,
+            // Python's keys: this run's extraction, merges included.
+            "entities_added": counts.entities_added,
+            "relations_added": counts.relations_added,
+            // What the graph holds of the source (get_sources_status).
+            "entities_in_graph": counts.entities_stored,
+            "relations_in_graph": counts.relations_stored,
             "errors": errors.iter().take(10).collect::<Vec<_>>(),
             "duration_seconds": seconds,
         }));
@@ -940,9 +958,16 @@ fn report(
         lines.extend(errors.iter().take(10).map(|e| format!("- {e}")));
         return lines.join("\n");
     };
+    // Entities and Relations are the stored graph's (what get_stats and
+    // get_sources_status count); the extraction line is this run's add
+    // calls, before duplicates merged and the quality pass pruned.
     let mut output = format!(
-        "# Ingestion Complete: {name}\n\n**Source:** {source}\n**Documents:** {}\n**Entities:** {}\n**Relations:** {}\n**Duration:** {seconds:.1}s\n",
-        outcome.documents_processed, outcome.entities_added, outcome.relations_added
+        "# Ingestion Complete: {name}\n\n**Source:** {source}\n**Documents:** {}\n**Entities:** {}\n**Relations:** {}\n**Extracted this run:** {} entities, {} relations (before duplicates merged)\n**Duration:** {seconds:.1}s\n",
+        outcome.documents_processed,
+        outcome.entities_stored,
+        outcome.relations_stored,
+        outcome.entities_added,
+        outcome.relations_added
     );
     if !errors.is_empty() {
         output.push_str(&format!("\n**Warnings/Errors ({}):**\n", errors.len()));
@@ -1109,11 +1134,15 @@ mod tests {
             documents_processed: 3,
             entities_added: 9,
             relations_added: 4,
+            entities_stored: 7,
+            relations_stored: 3,
             ..Outcome::default()
         };
         let text = report("repo", "github", Ok(&outcome), 1.25, false);
+        // The counts are the stored graph's; the extraction is labelled.
         assert!(
-            text.starts_with("# Ingestion Complete: repo\n\n**Source:** repo\n**Documents:** 3\n")
+            text.starts_with("# Ingestion Complete: repo\n\n**Source:** repo\n**Documents:** 3\n**Entities:** 7\n**Relations:** 3\n**Extracted this run:** 9 entities, 4 relations (before duplicates merged)\n"),
+            "{text}"
         );
         assert!(text.contains("**Duration:** 1.2s"));
         let failed = report("repo", "github", Err(&invalid("clone refused")), 0.0, false);
@@ -1125,6 +1154,8 @@ mod tests {
             serde_json::from_str(&report("repo", "github", Ok(&outcome), 2.0, true))
                 .unwrap_or_default();
         assert_eq!(as_json["entities_added"], json!(9));
+        assert_eq!(as_json["entities_in_graph"], json!(7));
+        assert_eq!(as_json["relations_in_graph"], json!(3));
         assert_eq!(as_json["success"], json!(true));
     }
 

@@ -80,7 +80,15 @@ pub struct Settings {
     /// `CALLBACK_CA_FILE`: a PEM bundle the model transport trusts besides
     /// the platform roots (the gateway reached over TLS through the edge).
     pub callback_ca_file: Option<PathBuf>,
+    /// `MODEL_CONCURRENCY`: the ingestion model calls (extraction,
+    /// relations, community labels) in flight at once across this engine
+    /// process (default [`DEFAULT_MODEL_CONCURRENCY`]). Set it to the
+    /// model server's concurrent slots: past them a call only queues there.
+    pub model_concurrency: usize,
 }
+
+/// `MODEL_CONCURRENCY` when unset: a small model server's slot count.
+pub const DEFAULT_MODEL_CONCURRENCY: usize = 8;
 
 impl Settings {
     /// Read the process environment.
@@ -168,6 +176,12 @@ impl Settings {
             ingest,
             database_url,
             callback_ca_file: raw("CALLBACK_CA_FILE").map(PathBuf::from),
+            model_concurrency: usize::try_from(positive_count(
+                &raw,
+                "MODEL_CONCURRENCY",
+                u64::try_from(DEFAULT_MODEL_CONCURRENCY).unwrap_or(u64::MAX),
+            )?)
+            .unwrap_or(usize::MAX),
             engine_socket: raw("ENGINE_SOCKET").map_or_else(
                 || PathBuf::from("/run/inventory/engine.sock"),
                 PathBuf::from,
@@ -255,6 +269,7 @@ mod tests {
         assert_eq!(defaults.fixture_step, Duration::ZERO);
         assert_eq!(defaults.fixtures, None);
         assert_eq!(defaults.source_types, ["github", "ado_repos"]);
+        assert_eq!(defaults.model_concurrency, DEFAULT_MODEL_CONCURRENCY);
         assert_eq!(
             defaults.ingest.scratch_path,
             PathBuf::from("/var/scratch/inventory")
@@ -272,10 +287,12 @@ mod tests {
             ("ELITEA_INVENTORY_GIT_ALLOWLIST", "github.com"),
             ("ELITEA_INVENTORY_MAX_FILE_COUNT", "10"),
             ("ELITEA_INVENTORY_CLONE_TIMEOUT_SECONDS", "2.5"),
+            ("ELITEA_INVENTORY_MODEL_CONCURRENCY", "3"),
         ]) else {
             panic!("parses");
         };
         assert_eq!(parsed.source_types, ["github"]);
+        assert_eq!(parsed.model_concurrency, 3);
         assert!(parsed.ingest.git_allowlist.permits("github.com"));
         assert_eq!(parsed.ingest.limits.max_file_count, 10);
         assert_eq!(
@@ -287,6 +304,7 @@ mod tests {
             ("ELITEA_INVENTORY_SOURCE_TYPES", "github,gitlab"),
             ("ELITEA_INVENTORY_MAX_FILE_COUNT", "0"),
             ("ELITEA_INVENTORY_CLONE_TIMEOUT_SECONDS", "-1"),
+            ("ELITEA_INVENTORY_MODEL_CONCURRENCY", "0"),
         ] {
             let refused = settings(&[(name, value)]);
             assert!(

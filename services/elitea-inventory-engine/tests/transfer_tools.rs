@@ -123,11 +123,14 @@ async fn a_bucket_graph_is_imported_and_exported_through_the_socket() {
 
     let exported = invoke(&socket, "export_graph", &call("export_graph", json!({}))).await;
     let result = &exported["result"];
-    assert_eq!(
-        result["result"],
-        json!("Exported 10000 entities and 9999 relations to graph.json.")
-    );
     let artifact = &result["artifacts"][0];
+    let size = artifact["data"].as_str().map_or(0, str::len);
+    let summary = result["result"].as_str().unwrap_or_default();
+    assert!(
+        summary.starts_with("Exported 10000 entities and 9999 relations (revision ")
+            && summary.ends_with(&format!(") to graph.json in bucket graphs ({size} bytes).")),
+        "{summary}"
+    );
     assert_eq!(artifact["name"], json!("graph.json"));
     assert_eq!(artifact["type"], json!("application/json"));
     let graph: Value =

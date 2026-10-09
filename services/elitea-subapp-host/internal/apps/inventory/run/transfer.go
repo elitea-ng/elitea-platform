@@ -4,9 +4,15 @@ package run
 // `export_graph`, the native engine's `import-graph` / `export-graph`
 // operator commands as tools.
 //
-// export_graph needs nothing from the host: the engine returns graph.json as
-// an artifact, and the ordinary composition and upload put it in the
-// toolkit's bucket as a knowledge_graph object.
+// export_graph: the engine returns graph.json as an artifact and a summary
+// (counts, revision, size, bucket) as its answer. The host puts the artifact
+// in the toolkit's bucket and leaves it OUT of the terminal body (StoreExport):
+// the ordinary composition carries every artifact inline too, which for a
+// graph meant the whole document (43 MB for a 50-file repository, measured)
+// in the poll result as well as the bucket. Because the bucket is the export's
+// only output, a call without a bucket transport is refused before the engine
+// runs, and a failed upload fails the invocation (the stored graph is
+// untouched, so the export can simply run again).
 //
 // import_graph needs the DOCUMENT, and the document is in the toolkit's
 // artifact bucket: the Python engine kept each toolkit's graph there as
@@ -138,4 +144,62 @@ func (r *Runner) ResolveGraphDocument(ctx context.Context, params Params, tc *sp
 			name, bucket)
 	}
 	return string(data), nil
+}
+
+// ExportClient is the bucket transport an export_graph call needs, or the
+// refusal when the call carries none.
+func (r *Runner) ExportClient(params Params) (ArtifactClient, error) {
+	llmSettings := object(params["llm_settings"])
+	if llmSettings == nil {
+		llmSettings = map[string]any{}
+	}
+	var client ArtifactClient
+	if r.Artifacts != nil {
+		built, err := r.Artifacts(llmSettings)
+		if err != nil {
+			r.logger().Error("building the bucket transport failed", "error", err)
+			return nil, spi.Failf(spi.KindRuntime, "%s: the bucket transport cannot be built", ExportTool)
+		}
+		client = built
+	}
+	if client == nil {
+		return nil, spi.Failf(spi.KindValue,
+			"%s writes %s to this toolkit's bucket, and the call carries no bucket transport. "+
+				"Run the tool through the platform rather than calling the provider directly.",
+			ExportTool, DefaultGraphArtifact)
+	}
+	return client, nil
+}
+
+// StoreExport uploads an export's artifact objects and returns the objects
+// without them: the terminal body carries the engine's summary, never the
+// document. Any upload failure fails the call.
+func (r *Runner) StoreExport(ctx context.Context, objects []Object, client ArtifactClient, tc *spi.Context) ([]Object, error) {
+	kept := make([]Object, 0, len(objects))
+	for _, obj := range objects {
+		if !obj.IsArtifact() || obj.NameString() == "" {
+			kept = append(kept, obj)
+			continue
+		}
+		if err := tc.Checkpoint(); err != nil {
+			return nil, err
+		}
+		bucket, name := obj.ResultBucket, obj.NameString()
+		if bucket == "" {
+			bucket = DefaultBucket
+		}
+		if err := tc.Thinking(ctx, fmt.Sprintf("Writing %s to bucket %s", name, bucket)); err != nil {
+			return nil, err
+		}
+		if err := client.Upload(ctx, bucket, name, []byte(obj.Data)); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, spi.ErrCancelled) {
+				return nil, err
+			}
+			r.logger().Error("storing the exported graph failed", "name", name, "bucket", bucket, "error", err)
+			return nil, spi.Failf(spi.KindRuntime,
+				"%s could not be written to bucket %s; the stored graph is unchanged, so run %s again",
+				name, bucket, ExportTool)
+		}
+	}
+	return kept, nil
 }

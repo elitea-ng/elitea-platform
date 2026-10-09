@@ -1,8 +1,8 @@
 {
-  "_comment": "export_graph, JSON output form, over the canned graph. The graph.json artifact rides beside the result.",
+  "_comment": "export_graph, JSON output form, over the canned graph. The answer is a summary of what goes to the bucket (the canned graph is not stored, so revision is null); the graph.json artifact rides beside it for the host to upload, and the host leaves it out of the terminal body.",
   "tool": "export_graph",
   "params": { "output_format": "json" },
-  "expected": { "artifact": "graph.json", "entities": 6, "relations": 5 },
+  "expected": { "artifact": "graph.json", "bucket": "graphs", "entities": 6, "relations": 5, "revision": null, "size_bytes": 1946 },
   "artifacts": [
     { "name": "graph.json", "type": "application/json", "data_sha256": "1f0556509166f1f7031aa58df5b1285893898e2f09052158c8ec9a396818e2f7" }
   ]

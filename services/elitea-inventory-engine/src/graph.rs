@@ -608,6 +608,32 @@ impl Graph {
         removed
     }
 
+    /// What the graph holds of one source: the entities it cites (an
+    /// entity other sources cite too counts for each) and the edges it
+    /// recorded. What a run reports and the source status shows: the
+    /// stored graph, after duplicates merged into one entity, a relation
+    /// found twice became one edge, and the quality pass pruned.
+    #[must_use]
+    pub fn source_counts(&self, source_toolkit: &str) -> (usize, usize) {
+        let by_source = |fields: &Map<String, Value>| {
+            fields.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+        };
+        let entities = self
+            .nodes()
+            .filter(|(_, node)| {
+                node.get("citations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .chain(node.get("citation"))
+                    .filter_map(Value::as_object)
+                    .any(by_source)
+            })
+            .count();
+        let relations = self.edges().filter(|(_, _, edge)| by_source(edge)).count();
+        (entities, relations)
+    }
+
     /// Set a node's embedding vector; `false` for an unknown node.
     pub fn set_embedding(&mut self, entity_id: &str, vector: &[f64]) -> bool {
         let Some(node) = self.nodes.get_mut(entity_id) else {
@@ -882,6 +908,30 @@ mod tests {
         assert_eq!(edge.get("source"), Some(&json!("parser")));
         let document = graph.to_node_link("now");
         assert_eq!(document["links"][0]["source"], json!("a"));
+    }
+
+    #[test]
+    fn a_source_counts_what_is_stored_not_what_was_added() {
+        let cite = |file: &str, source: &str| Citation {
+            file_path: file.to_owned(),
+            source_toolkit: Some(source.to_owned()),
+            ..Citation::default()
+        };
+        let mut graph = Graph::new();
+        // Three add calls, two entities: a duplicate merges.
+        graph.add_entity("a", "A", "class", Some(&cite("a.py", "repo")), None);
+        graph.add_entity("a", "A", "class", Some(&cite("b.py", "repo")), None);
+        graph.add_entity("b", "B", "class", Some(&cite("b.py", "repo")), None);
+        graph.add_entity("w", "W", "concept", Some(&cite("w.md", "wiki")), None);
+        let by = |source: &str| json!({"source_toolkit": source});
+        // Three add calls that succeed, two edges: a re-found pair is one.
+        assert!(graph.add_relation("a", "b", "calls", by("repo").as_object()));
+        assert!(graph.add_relation("a", "b", "uses", by("repo").as_object()));
+        assert!(graph.add_relation("b", "w", "describes", by("repo").as_object()));
+        assert!(graph.add_relation("w", "a", "describes", by("wiki").as_object()));
+        assert_eq!(graph.source_counts("repo"), (2, 2));
+        assert_eq!(graph.source_counts("wiki"), (1, 1));
+        assert_eq!(graph.source_counts("absent"), (0, 0));
     }
 
     #[test]

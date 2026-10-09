@@ -51,9 +51,18 @@ pub struct Outcome {
     pub unchanged: usize,
     /// Files no longer in the source, whose entities were removed.
     pub removed_files: usize,
-    /// `add_entity` calls (Python's `entities_added`, merges included).
+    /// `add_entity` calls (Python's `entities_added`, merges included):
+    /// what this run extracted, NOT what the graph holds.
     pub entities_added: usize,
+    /// `add_relation` calls that found both endpoints (Python's
+    /// `relations_added`): a relation found twice, or by the parser and the
+    /// model, is one edge in the graph, and the quality pass prunes some.
     pub relations_added: usize,
+    /// The entities the stored graph holds of this source after the run
+    /// ([`Graph::source_counts`]).
+    pub entities_stored: usize,
+    /// The edges the stored graph holds of this source after the run.
+    pub relations_stored: usize,
     pub skipped_whitelist: usize,
     pub skipped_blacklist: usize,
     pub skipped_unsupported: usize,
@@ -861,10 +870,14 @@ async fn run_started(
     )
     .await?;
 
-    // What sources_status.json recorded: this run's additions.
+    // What the source status records: what the stored graph holds of the
+    // source. Python's sources_status.json recorded this run's add calls
+    // (merged duplicates, re-found relations and pruned edges included),
+    // so the status disagreed with get_stats on the same graph.
+    (outcome.entities_stored, outcome.relations_stored) = graph.source_counts(&source.name);
     let counts = RunCounts {
-        entities: i64::try_from(outcome.entities_added).unwrap_or(i64::MAX),
-        relations: i64::try_from(outcome.relations_added).unwrap_or(i64::MAX),
+        entities: i64::try_from(outcome.entities_stored).unwrap_or(i64::MAX),
+        relations: i64::try_from(outcome.relations_stored).unwrap_or(i64::MAX),
         documents: i64::try_from(outcome.documents_processed).unwrap_or(i64::MAX),
     };
     let toolkit_id = source.status_key();
