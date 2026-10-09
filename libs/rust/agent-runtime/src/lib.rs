@@ -60,8 +60,9 @@ pub mod toolkits;
 mod patched_adk {
     #[test]
     fn the_runtime_builds_the_patched_agent_and_runner() {
-        let _agent = adk_agent::LlmAgentBuilder::new("probe").retain_prepared_history(true);
-        let _refresh: fn(adk_runner::Runner, bool) -> adk_runner::Runner =
+        let agent = adk_agent::LlmAgentBuilder::new("probe").retain_prepared_history(true);
+        let refresh: fn(adk_runner::Runner, bool) -> adk_runner::Runner =
             adk_runner::Runner::with_session_event_refresh;
+        std::hint::black_box((agent, refresh));
     }
 }
