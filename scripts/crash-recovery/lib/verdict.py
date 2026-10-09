@@ -184,7 +184,7 @@ def measurements(run):
         't_admit_to_settled_s': seconds_between(run.get('t_admit'), settlement and settlement['committed_at']),
         'takeover_latency_s': seconds_between(t_fault, claims[-1]['claimed_at']) if len(claims) > 1 else None,
         'model_calls': len(run['final'].get('llm_journal') or []),
-        'nats_redelivered_delta': i7_nats_drained(run)['redelivered_delta'],
+        'nats_redelivered_while_open': run.get('max_num_redelivered_while_open'),
         'replay_events': p['replay']['events'],
     }
 

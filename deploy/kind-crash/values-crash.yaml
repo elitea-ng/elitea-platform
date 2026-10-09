@@ -1,0 +1,138 @@
+# Chart values for the Kubernetes crash-rehearsal profile (kind, cluster
+# elitea-crash). Layer it AFTER deploy/helm/elitea/values-standalone.yaml:
+#
+#   helm install elitea deploy/helm/elitea -n elitea \
+#     -f deploy/helm/elitea/values-standalone.yaml -f deploy/kind-crash/values-crash.yaml
+#
+# Adapted from deploy/kind/values-kind.yaml, which turns the Worker, the gateway
+# and the sandbox OFF. This profile turns them ON. Every key was checked against
+# deploy/helm/elitea/values.yaml; deploy/kind-crash/README.md lists the ones
+# that could not be.
+#
+# Placement. Node labels come from kind-config.yaml:
+#   elitea.ai/crash-role=platform   (control-plane): Main, gateway, NATS, PostgreSQL
+#   elitea.ai/crash-role=execution  (worker node):   Worker, Supervisor, sandbox pods
+# The chart has no placement keys for the platform edge, the Supervisor or the
+# sandbox pods. `crash-stack.sh pin` patches the Supervisor and the edge after
+# install (gap G-CHART-PIN in the README).
+
+image:
+  # Locally built and side-loaded with `kind load docker-image`. Nothing is pulled.
+  tag: crash
+
+# The database is the crash-rehearsal PostgreSQL in manifests/postgres.yaml
+# (StatefulSet on a PVC). Its initdb script creates the vector extension and the
+# agent-state database, so the chart's dbInit stays off.
+postgresql:
+  existingSecret: elitea-main-db
+  key: database-url
+  maxConnections: 200
+dbInit:
+  enabled: false
+  externallyManaged: true
+
+# Off: nothing a crash scenario uses.
+web:
+  enabled: false
+scheduler:
+  enabled: false
+otelCollector:
+  enabled: false
+objectInit:
+  enabled: false
+agentStateMigrations:
+  enabled: false
+deepwiki:
+  enabled: false
+inventory:
+  enabled: false
+
+nats:
+  # Release `elitea-nats` of deploy/helm/nats with values-nats-crash.yaml.
+  service: elitea-nats
+
+main:
+  # Two replicas for KX-09. Autoscaling would make replicaCount inert.
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  nodeSelector:
+    elitea.ai/crash-role: platform
+  image:
+    pullPolicy: IfNotPresent
+  env:
+    COOKIE_SECURE: "false"
+    # Throwaway cluster: no master-key Secret is created.
+    ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "true"
+    APPLICATION_SECRET_KEY: "changeme-crash"
+    STORAGE_BACKEND: "s3"
+    STORAGE_CONTAINER: "elitea-artifacts"
+    S3_ENDPOINT_URL: "http://rustfs:9000"
+    S3_REGION: "us-east-1"
+    S3_FORCE_PATH_STYLE: "true"
+  runtime:
+    # Original-Code owner recovery: a Worker with agentNodeRecovery refuses Code
+    # without it. Same setting the compose overlay enables. The two values
+    # marked CRASH_FILL are not known from the chart; see README "Unverified".
+    sandboxAudiences:
+      - dns:elitea-sandbox-deno
+    codeOwnerRecovery:
+      enabled: true
+      mainWorkloadIdentity: CRASH_FILL_MAIN_WORKLOAD_IDENTITY
+      supervisors:
+        - audience: dns:elitea-sandbox-deno
+          httpsOrigin: https://elitea-sandbox-deno:9446
+
+llmGateway:
+  nodeSelector:
+    elitea.ai/crash-role: platform
+  # The gateway renders only with an egress posture and a self-origin list; the
+  # render tests use these two values (deploy/helm/tests/render-worker-sandbox.sh).
+  egressPosture: public-unrestricted
+  env:
+    GATEWAY_SELF_LLM_ORIGINS: https://elitea.invalid/llm/v1
+
+worker:
+  enabled: true
+  implementation: rust
+  replicaCount: 1
+  nodeSelector:
+    elitea.ai/crash-role: execution
+  runtime:
+    # D1: recovery is off in stock Helm. This profile turns it on.
+    agentModelCheckpointRecovery: true
+    # Durable node-attempt journal. Chart key present in this worktree
+    # (values.yaml:3714; the brief expected it absent on main). Without the key,
+    # Code recovery on Kubernetes is EXPECTED-GAP F (G-WORKER-01) until fix F5
+    # lands; set this to false then.
+    agentNodeRecovery: true
+    # Fill after the Supervisor image is loaded: one entry per Code language.
+    # Fields: language, target, audience, image_digest, policy_revision,
+    # timeout_seconds. Example in deploy/helm/tests/render-worker-sandbox.sh.
+    sandboxRuntimes: []
+  # Spool is an emptyDir (D2). A pod delete loses unacknowledged frames; a
+  # container-only restart keeps them. Both are tested (KX-01 vs crictl restart).
+
+networkPolicies:
+  main:
+    # Reached by kubectl port-forward only.
+    noExternalIngress: true
+
+# Supervisor and isolated Code namespace. The image MUST be an @sha256
+# reference (templates/sandbox/supervisor.yaml:4). The value below is the
+# PLACEHOLDER marker: crash-stack.sh refuses to install while it is unchanged;
+# set ELITEA_CRASH_SUPERVISOR_IMAGE=<registry>/<repo>@sha256:<digest>.
+sandboxKubernetes:
+  enabled: true
+  executionNamespace: elitea-sandbox
+  maxPods: 16
+  supervisor:
+    enabled: true
+    image: "registry.invalid/elitea-sandbox-supervisor@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    materialSecret: sandbox-material
+    profiles:
+      - file: deno.json
+        port: 9446

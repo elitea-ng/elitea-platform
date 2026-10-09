@@ -92,12 +92,11 @@ def cmd_run(args):
     for scenario in scenarios:
         scenario['_oracle'] = oracle.get(scenario['fixture'], {})
         repeat = args.repeat or scenario.get('repeat', 1)
-        for index in range(1, repeat + 1):
-            browser = args.browser and scenario.get('browser', False) and index == 1
+        for index in range(args.first_repeat, args.first_repeat + repeat):
+            browser = args.browser and scenario.get('browser', False) and index == args.first_repeat
             out = run_dir / scenario['id'] / f'r{index}'
             print(f"{iso()} {scenario['id']} r{index} start (browser={browser})", flush=True)
-            rec, result = run_scenario(stack, client, scenario, fixtures, out, browser=browser,
-                                       node_path=args.node_path)
+            rec, result = run_scenario(stack, client, scenario, fixtures, out, browser=browser)
             line = {'scenario': scenario['id'], 'repeat': index, 'execution_id': rec.get('execution_id'),
                     'verdict': result['verdict'], 'observed': result.get('observed'), 'target': scenario['target'],
                     'why': result.get('why') or result.get('reason'), 'dir': str(out.relative_to(run_dir))}
@@ -162,8 +161,8 @@ def main():
     p.add_argument('scope', nargs='+')
     p.add_argument('--repeat', type=int, default=None)
     p.add_argument('--run-id', default=None)
+    p.add_argument('--first-repeat', type=int, default=1, help='index of the first repeat (continue a run)')
     p.add_argument('--browser', action='store_true')
-    p.add_argument('--node-path', default=None, help='node_modules with @playwright/test for the browser subset')
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser('verify')
     p.add_argument('run_id')

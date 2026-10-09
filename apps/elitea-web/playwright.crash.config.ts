@@ -22,7 +22,7 @@
  *   CRASH_PROMPT           text to send (CRASH_SEND_VIA=ui)
  *
  * and may set CRASH_OIDC_SUBJECT, CRASH_SEND_VIA (`ui`|`api`),
- * CRASH_RELEASE_TIMEOUT_MS, CRASH_TEST_TIMEOUT_MS, CRASH_STATE_DIR, E2E_OIDC_PORT.
+ * CRASH_RELEASE_TIMEOUT_MS, CRASH_TEST_TIMEOUT_MS, CRASH_STATE_DIR, E2E_OIDC_PORT, CRASH_BROWSER_CHANNEL.
  */
 import path from 'path';
 
@@ -41,6 +41,10 @@ const stateDir =
   process.env['CRASH_STATE_DIR'] ??
   (controlDir === undefined || controlDir === '' ? '.crash-state' : path.join(controlDir, '..', '.crash-state'));
 export const CRASH_STORAGE_STATE = path.join(stateDir, 'crash-user.json');
+
+// An installed browser channel (e.g. `chrome`) avoids downloading Playwright's pinned Chromium build.
+const channel = process.env['CRASH_BROWSER_CHANNEL'];
+const browser = { ...devices['Desktop Chrome'], ...(channel ? { channel } : {}) };
 
 export default defineConfig({
   testDir: './e2e/crash',
@@ -61,12 +65,12 @@ export default defineConfig({
     video: 'off',
   },
   projects: [
-    { name: 'crash-setup', testMatch: /crash\.setup\.ts/, use: { ...devices['Desktop Chrome'] } },
+    { name: 'crash-setup', testMatch: /crash\.setup\.ts/, use: browser },
     {
       name: 'crash',
       testMatch: /recovery-.+\.spec\.ts/,
       dependencies: ['crash-setup'],
-      use: { ...devices['Desktop Chrome'], storageState: CRASH_STORAGE_STATE },
+      use: { ...browser, storageState: CRASH_STORAGE_STATE },
     },
   ],
 });

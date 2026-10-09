@@ -53,7 +53,7 @@ def build(run_dirs):
 
 def _timings(repeats):
     keys = ('t_fault_to_first_progress_s', 't_fault_to_settled_s', 'takeover_latency_s', 'model_calls',
-            'nats_redelivered_delta')
+            'nats_redelivered_while_open')
     out = {}
     for key in keys:
         values = [r['measurements'][key] for r in repeats if r.get('measurements') and r['measurements'].get(key) is not None]

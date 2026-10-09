@@ -88,6 +88,7 @@ def apply(stack, ctx, step):
         record['after'] = _identity(stack, service)
         record['process_changed'] = (record['before'].get('id') != record['after'].get('id')
                                      or record['before'].get('started_at') != record['after'].get('started_at'))
+        record['process_stopped'] = bool(record['before'].get('running')) and not record['after'].get('running')
     record['t_end'] = iso()
     return record
 

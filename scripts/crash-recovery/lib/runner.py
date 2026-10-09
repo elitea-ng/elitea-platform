@@ -110,18 +110,18 @@ def _takeover(claims):
 class Browser:
     """Drives apps/elitea-web/e2e/crash through the control-file contract (WP-7)."""
 
-    def __init__(self, stack, control_dir, scenario_id, conversation_id, prompt, send_via, node_path=None):
+    def __init__(self, stack, control_dir, scenario_id, conversation_id, prompt, send_via):
         self.dir = pathlib.Path(control_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, CRASH_SCENARIO=scenario_id, CRASH_CONTROL_DIR=str(self.dir),
                    PLAYWRIGHT_BASE_URL=stack.base_url, CRASH_OIDC_SUBJECT=stack.cfg['oidc_subject'],
                    CRASH_CONVERSATION_ID=str(conversation_id), CRASH_PROMPT=prompt, CRASH_SEND_VIA=send_via,
-                   CRASH_STATE_DIR=str(stack.dir / 'browser-state'))
-        if node_path:
-            env['NODE_PATH'] = node_path
+                   CRASH_STATE_DIR=str(stack.dir / 'browser-state'),
+                   CRASH_BROWSER_CHANNEL=os.environ.get('CRASH_BROWSER_CHANNEL', 'chrome'))
         self.log = open(self.dir / 'playwright.log', 'wb')
-        npx = [str(pathlib.Path(node_path).parent / '.bin' / 'playwright')] if node_path else ['npx', 'playwright']
-        self.proc = subprocess.Popen(npx + ['test', '-c', 'playwright.crash.config.ts'], cwd=REPO / 'apps/elitea-web',
+        # apps/elitea-web/node_modules must resolve @playwright/test (a local install or a symlink to one).
+        self.proc = subprocess.Popen(['npx', 'playwright', 'test', '-c', 'playwright.crash.config.ts'],
+                                     cwd=REPO / 'apps/elitea-web',
                                      env=env, stdout=self.log, stderr=subprocess.STDOUT)
 
     def wait_file(self, name, timeout_s):
@@ -146,7 +146,7 @@ class Browser:
         return {'exit': rc, 'result': read_json(self.dir / 'browser' / 'result.json')}
 
 
-def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False, node_path=None):
+def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False):
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     col = Collector(stack)
@@ -167,8 +167,7 @@ def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False, n
         rec['conversation'] = {k: conv[k] for k in ('conversation_id', 'conversation_uuid', 'participant_id')}
         rec['t_admit'] = iso()
         if browser:
-            br = Browser(stack, out_dir / 'control', scenario['id'], conv['conversation_id'], fixture['prompt'],
-                         'ui', node_path)
+            br = Browser(stack, out_dir / 'control', scenario['id'], conv['conversation_id'], fixture['prompt'], 'ui')
             br.wait_file('browser-ready.json', 180)
             sent = br.wait_file('sent.json', 120)
             if sent.get('status') not in (200, 201):
@@ -206,8 +205,13 @@ def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False, n
         def settled():
             rows = col.sql('product', 'settlements', exec_id=exec_id) or []
             return [r for r in rows if r.get('committed_at')] or None
+        redelivered = []
         while time.time() < deadline and not settled():
+            # num_redelivered counts unacked redeliveries only, so it is sampled while the run is open.
+            consumer = (col.jsz().get('consumer') or {})
+            redelivered.append(consumer.get('num_redelivered') or 0)
             time.sleep(SETTLE_POLL_S)
+        rec['max_num_redelivered_while_open'] = max(redelivered, default=0)
         rec['settled_within_budget'] = bool(settled())
         rec['t_settle_observed'] = iso()
         claims = col.sql('product', 'claims', exec_id=exec_id) or []

@@ -94,7 +94,7 @@ def model_request_pending(ctx, params):
     replay = ctx.collector.sql('product', 'replay', exec_id=ctx.exec_id, t_fault='')
     streamed = sum(n for k, n in replay['by_type'].items()
                    if k.startswith('execution.node_event') and k.split(':', 1)[-1] in params.get(
-                       'stream_types', ('agent_response', 'agent_message', 'full_message')))
+                       'stream_types', ('agent_llm_chunk', 'agent_response', 'full_message')))
     held = streamed == 0 and params.get('min_age_s', 1) <= age <= params.get('max_age_s', 15)
     return held, {'model_requests': len(slow), 'request_age_s': round(age, 3), 'streamed_events': streamed,
                   'by_type': replay['by_type']}
