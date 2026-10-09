@@ -31,8 +31,9 @@ Design and guarantees: [`../direct-tool-effects-design.md`](../direct-tool-effec
 - `src/agents/graph/compiler.rs` `select_pipeline_result`: a set `_pipeline_blocked` message is the pipeline's answer.
 - `src/agents/graph/node_recovery_runtime.rs`: the test module is visible inside the graph module
   (test-only).
-- `deploy/runtime/worker-runtime.json`, `deploy/runtime/worker-runtime.nats-secure.json`:
-  `agent_node_recovery: true`.
+- `deploy/runtime/worker-runtime.rust.json` (new; the shared file plus `agent_node_recovery: true`) and
+  `deploy/docker-compose.standalone-rust-agent.yml` (mounts it for the Rust worker). The shared file is unchanged:
+  the Python worker forbids unknown keys.
 - `deploy/helm/elitea/values.yaml`, `templates/worker/configmap-runtime.yaml`: new
   `worker.runtime.agentNodeRecovery` (Rust-only, default false).
 - `deploy/helm/tests/render-worker-sandbox.sh`: asserts that the toggle renders.
@@ -103,7 +104,7 @@ from this branch.
 `http://dtfx.localhost:18140`.
 - Images are tagged `dtfx-20261008`. Final worker image `sha256:fac953b5…`, built from commit `7740d591`. Main is
   `sha256:ae4e9479…` and web is `sha256:241e6128…`.
-- `agent_node_recovery: true` comes from `deploy/runtime/worker-runtime.json`.
+- `agent_node_recovery: true` came from the runtime file mounted for the Rust worker.
 - The MCP server is `deploy/mock-mcp`. Its `echo` and `reverse` tools declare no `readOnlyHint`, so both are
   effectful.
 - Every real effect was counted from the mock's `tools/call` log lines.

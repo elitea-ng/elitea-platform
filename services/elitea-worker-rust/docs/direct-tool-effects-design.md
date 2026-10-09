@@ -66,8 +66,9 @@ What we deliberately do not port:
    differs between pause and resume, so the pause and the approved dispatch are different
    activations.
 6. **Configuration.**
-   - `agent_node_recovery: true` is set in `deploy/runtime/worker-runtime.json` and
-     `worker-runtime.nats-secure.json` (the local/rehearsal stack).
+   - `agent_node_recovery: true` is set in `deploy/runtime/worker-runtime.rust.json`, which the Rust compose
+     overlay mounts. The shared `worker-runtime.json` stays without it because the Python worker rejects unknown
+     keys. The NATS-secure compose profile does not enable it.
    - Helm has a `worker.runtime.agentNodeRecovery` toggle for Rust installs. It defaults to false
      because the chart's default worker is Python and the runtime file is shared between them.
 
