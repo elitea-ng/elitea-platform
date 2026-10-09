@@ -20,12 +20,15 @@ type BindingStore interface {
 type StoredBinding struct {
 	ApplicationID int64
 	VersionID     int64
+	// Credential is the family that started the turn.
+	Credential Credential
 	Committed     bool
 	Expired       bool
 }
 
 // LiveTurn is a turn that may still act: started by the caller in the
-// project, not committed, not past its deadline, and local work allowed.
+// project with the same credential family, not committed, not past its
+// deadline, and local work allowed.
 type LiveTurn struct {
 	ExecutionID   string
 	ApplicationID int64
@@ -54,10 +57,11 @@ func NewLiveTurns(store BindingStore, policy PolicyReader, logger *slog.Logger) 
 }
 
 // Live answers the live turn, or ErrInvalid, ErrUnavailable,
-// ErrLocalWorkDisabled, ErrNotFound, ErrAlreadyCommitted or ErrExpired.
-func (l *LiveTurns) Live(ctx context.Context, projectID, actorUserID int64, executionID string) (LiveTurn, error) {
+// ErrLocalWorkDisabled, ErrNotFound, ErrAlreadyCommitted or ErrExpired. A turn
+// another credential family started is ErrNotFound, like another caller's.
+func (l *LiveTurns) Live(ctx context.Context, projectID, actorUserID int64, credential Credential, executionID string) (LiveTurn, error) {
 	if l == nil || projectID <= 0 || projectID > 2147483647 ||
-		actorUserID <= 0 || actorUserID > 2147483647 || !ValidExecutionID(executionID) {
+		actorUserID <= 0 || actorUserID > 2147483647 || credential.TokenID == "" || !ValidExecutionID(executionID) {
 		return LiveTurn{}, ErrInvalid
 	}
 	policy, err := l.policy.Policy(ctx)
@@ -71,6 +75,9 @@ func (l *LiveTurns) Live(ctx context.Context, projectID, actorUserID int64, exec
 	binding, err := l.store.ReadLocalTurnBinding(ctx, projectID, actorUserID, executionID)
 	if err != nil {
 		return LiveTurn{}, err
+	}
+	if binding.Credential != credential {
+		return LiveTurn{}, ErrNotFound
 	}
 	switch {
 	case binding.Committed:

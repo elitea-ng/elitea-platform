@@ -202,7 +202,7 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
 		return
 	}
-	_, actor, ok := caller(writer, request)
+	user, actor, ok := caller(writer, request)
 	if !ok {
 		return
 	}
@@ -216,6 +216,7 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 	}
 	turn, err := h.useCase.Commit(request.Context(), localturn.CommitRequest{
 		ProjectID: projectID, ActorUserID: actor, ExecutionID: chi.URLParam(request, "executionID"),
+		Credential:       localturn.Credential{TokenID: user.TokenID, NativeClientID: user.NativeClientID},
 		UserMessage:      body.UserMessage.Content,
 		AssistantMessage: body.AssistantMessage.Content,
 		AssistantIsError: body.AssistantMessage.IsError,

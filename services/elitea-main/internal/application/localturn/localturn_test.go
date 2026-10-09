@@ -38,7 +38,7 @@ func TestBoundReportCutsAndCounts(t *testing.T) {
 
 func TestValidCommitRules(t *testing.T) {
 	base := CommitRequest{
-		ProjectID: 1, ActorUserID: 2, ExecutionID: strings.Repeat("a", 32),
+		ProjectID: 1, ActorUserID: 2, ExecutionID: strings.Repeat("a", 32), Credential: Credential{TokenID: "70"},
 		UserMessage: "q", AssistantMessage: "a",
 	}
 	if !validCommit(base) {
@@ -46,6 +46,7 @@ func TestValidCommitRules(t *testing.T) {
 	}
 	for name, mutate := range map[string]func(*CommitRequest){
 		"upper-case id":      func(r *CommitRequest) { r.ExecutionID = strings.Repeat("A", 32) },
+		"no credential":      func(r *CommitRequest) { r.Credential = Credential{} },
 		"empty question":     func(r *CommitRequest) { r.UserMessage = "" },
 		"NUL in answer":      func(r *CommitRequest) { r.AssistantMessage = "a\x00" },
 		"error without flag": func(r *CommitRequest) { r.AssistantError = "boom" },
@@ -148,7 +149,7 @@ func (commitFakeAudit) Record(context.Context, audit.Event) {}
 
 func TestCommitHonoursTheLocalWorkPolicy(t *testing.T) {
 	commit := CommitRequest{
-		ProjectID: 1, ActorUserID: 2, ExecutionID: strings.Repeat("a", 32),
+		ProjectID: 1, ActorUserID: 2, ExecutionID: strings.Repeat("a", 32), Credential: Credential{TokenID: "70"},
 		UserMessage: "hi", AssistantMessage: "hello",
 	}
 	for name, test := range map[string]struct {

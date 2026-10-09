@@ -131,6 +131,11 @@ func TestCommitDecodesTheBody(t *testing.T) {
 		len(got.Report.Commands) != 1 || len(got.Report.Paths) != 1 || !strings.Contains(string(got.ToolCalls), "shell") {
 		t.Fatalf("commit request = %+v", got)
 	}
+	// The commit carries the caller's credential family, which the store
+	// compares with the one that started the turn.
+	if got.Credential != (localturn.Credential{TokenID: "70", NativeClientID: "ai.elitea.desktop"}) {
+		t.Fatalf("commit credential = %+v", got.Credential)
+	}
 	trailing := serve(t, h.commit, tokenUser(),
 		"/api/v2/elitea_core/local_turn_commit/prompt_lib/1/0123456789abcdef0123456789abcdef", CommitPath, `{} {}`)
 	if trailing.Code != http.StatusBadRequest {

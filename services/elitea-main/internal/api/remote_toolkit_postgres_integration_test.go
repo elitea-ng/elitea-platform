@@ -22,7 +22,7 @@ import (
 // authorization have their own tests, so here they admit everything.
 type remoteGateTurns struct{}
 
-func (remoteGateTurns) Live(_ context.Context, _, _ int64, executionID string) (localturn.LiveTurn, error) {
+func (remoteGateTurns) Live(_ context.Context, _, _ int64, _ localturn.Credential, executionID string) (localturn.LiveTurn, error) {
 	return localturn.LiveTurn{ExecutionID: executionID, ApplicationID: 11, VersionID: 12}, nil
 }
 

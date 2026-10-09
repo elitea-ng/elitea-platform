@@ -71,7 +71,7 @@ var _ RemoteToolAuthorizer = (*storage.ClientApplicationVersionService)(nil)
 // LiveTurnReader is *localturn.LiveTurns: the start/commit checks for a turn
 // that is still running.
 type LiveTurnReader interface {
-	Live(ctx context.Context, projectID, actorUserID int64, executionID string) (localturn.LiveTurn, error)
+	Live(ctx context.Context, projectID, actorUserID int64, credential localturn.Credential, executionID string) (localturn.LiveTurn, error)
 }
 
 var _ LiveTurnReader = (*localturn.LiveTurns)(nil)
@@ -291,7 +291,8 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	turn, err := h.turns.Live(request.Context(), projectID, actor, body.ExecutionID)
+	turn, err := h.turns.Live(request.Context(), projectID, actor,
+		localturn.Credential{TokenID: user.TokenID, NativeClientID: user.NativeClientID}, body.ExecutionID)
 	if err != nil {
 		call.outcome = "turn_refused"
 		writeLiveTurnError(request.Context(), writer, err)
