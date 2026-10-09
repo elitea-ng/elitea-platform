@@ -1654,6 +1654,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
 	// under the same guard so an absent agent plane leaves a NIL interface.
 	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
+	// The remote toolkit call's authorizer: the SAME service, under the same
+	// guard, so an absent agent plane leaves a NIL interface and the route
+	// answers 501.
+	var remoteToolAuthorizer desktopopsapi.RemoteToolAuthorizer
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	// The unattended pipeline entry points (issues 192, 193).
 	//
@@ -1811,6 +1815,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		toolkitToolRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.ClientApplicationVersions != nil {
 			clientApplicationVersions = publicRoutes.ClientApplicationVersions
+			remoteToolAuthorizer = publicRoutes.ClientApplicationVersions
 		}
 		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
@@ -2325,7 +2330,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose resolved version route: %w", err)
 	}
-	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, workerImplementation, apiGroupAuth)
+	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, remoteToolAuthorizer, workerImplementation,
+		nativePolicy, auditRecorder, apiGroupAuth, logger)
 	if err != nil {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}

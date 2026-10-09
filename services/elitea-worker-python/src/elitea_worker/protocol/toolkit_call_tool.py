@@ -46,6 +46,7 @@ def request_from(
     llm_model: str | None = None,
     llm_configuration: dict | None = None,
     mcp_tokens: dict | None = None,
+    runtime_context: dict | None = None,
 ) -> ToolkitCallToolRequest:
     """Bind resolved inputs to the command that named them.
 
@@ -61,6 +62,11 @@ def request_from(
     )
     if any(not _matches(entry_id, value) for entry_id, value in expected):
         raise InvalidInput("A tool-run input does not match its command reference.")
+    context = runtime_context or {}
+    if not isinstance(context, dict):
+        raise InvalidInput("The tool-run runtime context is malformed.")
+    security = context.get("toolkit_security")
+    approval = context.get("sensitive_action_approval")
     return ToolkitCallToolRequest(
         toolkit_type=command.toolkit_type,
         toolkit_id=command.toolkit_id,
@@ -74,6 +80,8 @@ def request_from(
         llm_model=llm_model,
         llm_configuration=llm_configuration,
         mcp_tokens=mcp_tokens,
+        toolkit_security=security if isinstance(security, dict) else None,
+        sensitive_action_approval=approval,
     )
 
 

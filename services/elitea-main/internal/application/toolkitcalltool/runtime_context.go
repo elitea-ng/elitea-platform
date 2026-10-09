@@ -18,6 +18,57 @@ type RuntimeContext struct {
 	ToolkitSecurity   *guardrails.RuntimePolicy `json:"toolkit_security"`
 	LLMModel          string                    `json:"llm_model,omitempty"`
 	MCPTokenReference *MCPTokenReference        `json:"mcp_token_reference,omitempty"`
+	// SensitiveActionApproval is the only authority a worker accepts to run a
+	// tool the toolkit_security policy marks sensitive. Absent, a worker
+	// refuses a sensitive tool (defence in depth: the Go producer refuses first
+	// where it can tell).
+	SensitiveActionApproval *SensitiveActionApproval `json:"sensitive_action_approval,omitempty"`
+}
+
+// Sensitive action approval sources.
+const (
+	// ApprovalSourceConfigurationTest is test_tool: an editor of the toolkit
+	// (`models.applications.tool.patch`) testing its saved configuration. It
+	// always ran sensitive tools; it keeps doing so.
+	ApprovalSourceConfigurationTest = "configuration_test"
+	// ApprovalSourceUserConfirmation is a remote toolkit call whose caller
+	// confirmed this sensitive call (ADR-0029 decision 5b), the desktop's
+	// answer to the same approval a chat turn pauses for.
+	ApprovalSourceUserConfirmation = "user_confirmation"
+)
+
+// SensitiveActionApproval records who approved a sensitive call and when.
+type SensitiveActionApproval struct {
+	Source     string `json:"source"`
+	ApprovedAt string `json:"approved_at,omitempty"`
+}
+
+// ConfigurationTestApproval is the approval every test_tool run carries.
+func ConfigurationTestApproval() *SensitiveActionApproval {
+	return &SensitiveActionApproval{Source: ApprovalSourceConfigurationTest}
+}
+
+func (a *SensitiveActionApproval) valid() bool {
+	if a == nil {
+		return true
+	}
+	switch a.Source {
+	case ApprovalSourceConfigurationTest:
+		return a.ApprovedAt == ""
+	case ApprovalSourceUserConfirmation:
+		return a.ApprovedAt != "" && len(a.ApprovedAt) <= 64 && utf8.ValidString(a.ApprovedAt) &&
+			!strings.ContainsAny(a.ApprovedAt, "\x00\r\n")
+	default:
+		return false
+	}
+}
+
+func (a *SensitiveActionApproval) clone() *SensitiveActionApproval {
+	if a == nil {
+		return nil
+	}
+	copied := *a
+	return &copied
 }
 
 func validRuntimeContext(raw []byte) bool {
@@ -37,6 +88,9 @@ func validRuntimeContext(raw []byte) bool {
 		return false
 	}
 	if value.MCPTokenReference != nil && !value.MCPTokenReference.valid() {
+		return false
+	}
+	if !value.SensitiveActionApproval.valid() {
 		return false
 	}
 	if !validModelSettings(value.LLMConfiguration) {

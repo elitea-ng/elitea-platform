@@ -3649,7 +3649,7 @@ components:
         NOTE(W2): the saved version after the shared admission freeze, the
         object the worker's runtime-context route serves minus credentials;
         its keys follow the version-details projection
-        (internal/infra/storage/client_application_version.go:160,
+        (internal/infra/storage/client_application_version.go:163,
         `ProjectClientApplicationVersion`).
       required: [tools]
       properties:
@@ -3664,7 +3664,7 @@ components:
       description: >-
         One tool of a resolved version. `kind` is `remote_toolkit`,
         `application` or `platform_mcp`. NOTE(W2):
-        internal/infra/storage/client_application_version.go:210
+        internal/infra/storage/client_application_version.go:234
         (`projectClientTool`).
       required: [kind, type]
       properties:
@@ -3686,7 +3686,7 @@ components:
             additionalProperties: true
             x-elitea-passthrough: >-
               NOTE(W2): one skill a nested agent carries, as the freeze recorded
-              it (internal/infra/storage/client_application_version.go:248).
+              it (internal/infra/storage/client_application_version.go:272).
         server_name:
           type: string
           description: A `platform_mcp` tool's server.
@@ -3699,30 +3699,68 @@ components:
     ResolvedToolkitRef:
       type: object
       description: >-
-        The opaque reference of one saved toolkit. `ref` is stable for the
-        toolkit and carries no credential. NOTE(W2):
-        internal/infra/storage/client_application_version.go:199
+        The opaque reference of one saved toolkit as attached to this agent
+        version in this project. `ref` is stable for that attachment, carries
+        no credential and grants nothing: executeRemoteToolkitTool recomputes
+        it from the version a call names and refuses a mismatch. NOTE(W2):
+        internal/infra/storage/client_application_version.go:221
         (`ClientToolkitRef`).
       required: [toolkit_id, project_id, ref]
       properties:
         toolkit_id: { type: integer, format: int64 }
         project_id: { type: integer, format: int64 }
         ref: { type: string, pattern: '^tkr1_[0-9a-f]{32}$' }
+    RemoteToolkitCallConfirmation:
+      type: object
+      description: >-
+        The user's approval of a sensitive tool call, after a 409
+        `confirmation_required`. It is recorded in the audit trail and passed
+        to the worker as the call's only authority to run a sensitive tool.
+      required: [approved, approved_at]
+      properties:
+        approved:
+          type: boolean
+          description: Must be true; a refused call is not sent.
+        approved_at:
+          type: string
+          format: date-time
+          description: When the user approved (RFC 3339); within the turn's 24 hours and not in the future.
     RemoteToolkitCallRequest:
       type: object
       description: >-
-        One remote tool call. Settings and credentials are never accepted.
-        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:85
+        One remote tool call, inside one live local turn. Settings and
+        credentials are never accepted. NOTE(W2):
+        internal/api/v2/desktopops/remote_toolkit.go:177
         (`remoteToolkitBody`).
-      required: [tool_name]
+      required: [execution_id, application_id, version_id, toolkit_ref, tool_name]
       properties:
+        execution_id:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: The live local turn (startLocalTurn's `execution_id`) this call belongs to.
+        application_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The agent the desktop is running in that turn (the turn's agent, or a nested agent it reaches).
+        version_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: That agent's version, as resolveApplicationVersion resolved it.
+        toolkit_ref:
+          type: string
+          pattern: '^tkr1_[0-9a-f]{32}$'
+          description: The toolkit's `toolkit_ref.ref` from resolveApplicationVersion of that version.
         tool_name: { type: string, minLength: 1 }
         arguments:
           type: object
           additionalProperties: true
           x-elitea-passthrough: >-
             NOTE(W2): the tool's own arguments, validated by the tool
-            (internal/api/v2/desktopops/remote_toolkit.go:85).
+            (internal/api/v2/desktopops/remote_toolkit.go:177).
+        confirmation:
+          $ref: '#/components/schemas/RemoteToolkitCallConfirmation'
         request_id:
           type: string
           maxLength: 128
@@ -3743,8 +3781,8 @@ components:
       type: object
       description: >-
         A remote tool call's answer. `error` is a machine code on a refusal.
-        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:180
-        (`writeOutcome`) and :263 (`writeRunError`).
+        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:529
+        (`writeOutcome`) and :612 (`writeRunError`).
       required: [ok]
       properties:
         ok: { type: boolean }
@@ -3759,7 +3797,7 @@ components:
           nullable: true
           x-elitea-passthrough: >-
             NOTE(W2): what the tool returned, any JSON value
-            (internal/api/v2/desktopops/remote_toolkit.go:196).
+            (internal/api/v2/desktopops/remote_toolkit.go:545).
         truncated:
           type: boolean
           description: The result was too large to return; it is omitted, never cut.
@@ -3772,6 +3810,8 @@ components:
             `worker_refused`.
         authorization_required:
           $ref: '#/components/schemas/ClientFrameMcpAuthorizationRequest'
+        hitl_interrupt:
+          $ref: '#/components/schemas/ClientFrameHitlInterruptDetail'
         authorization_retry:
           type: object
           properties:
@@ -3781,7 +3821,7 @@ components:
               additionalProperties: true
               x-elitea-passthrough: >-
                 NOTE(W2): the arguments to send again after authorising
-                (internal/api/v2/desktopops/remote_toolkit.go:212).
+                (internal/api/v2/desktopops/remote_toolkit.go:561).
     DesktopOperationError:
       type: object
       description: >-
@@ -17165,6 +17205,27 @@ paths:
         `models.applications.tool.execute` in the project (admin, editor and
         viewer hold it).
 
+        THE AUTHORITY OF A CHAT TURN. The call names a live local turn
+        (`execution_id`: started by this caller in this project, not
+        committed, not past its deadline, local work allowed) and the agent
+        version the desktop is running in it (`application_id`,
+        `version_id`): the turn's agent, or a nested agent that agent reaches
+        through its `application` tools. The server resolves that version with
+        the same freeze a cloud turn uses and runs the tool only when the
+        toolkit is one of the version's tools and `tool_name` is in its
+        `selected_tools` (empty means every tool, as in chat), the guardrails
+        block neither, and `toolkit_ref` is the one resolveApplicationVersion
+        gives that toolkit of that version. A model turn (no agent) can call
+        no toolkit. A tool the guardrails mark sensitive answers 409
+        `confirmation_required` with `hitl_interrupt` (the chat HITL shape,
+        `guardrail_type: sensitive_tool`) until the call carries
+        `confirmation`; the desktop asks the user as a cloud turn would pause.
+        Every call that names a tool is audited (caller, project, toolkit,
+        tool, turn, confirmation, outcome, a SHA-256 of the arguments).
+
+        RATE. At most 60 calls a minute per caller on each server replica;
+        past that, 429 `rate_limited` with Retry-After.
+
         BOUNDS. The body is at most 1 MiB and `arguments` one JSON object
         within the input-entry bound. The call waits at most 60 seconds;
         past that it answers 504 with the still-running `task_id`.
@@ -17213,13 +17274,22 @@ paths:
                   - $ref: '#/components/schemas/InvalidClientVersionError'
         '401': { $ref: '#/components/responses/401' }
         '403':
-          description: No `models.applications.tool.execute` in the project, or a session caller (`remote_toolkit_requires_token`).
+          description: >-
+            No `models.applications.tool.execute` in the project, a session
+            caller (`remote_toolkit_requires_token`), local work turned off
+            (`local_work_disabled`), a tool the running agent may not call
+            (`tool_not_in_agent`), a blocked toolkit or tool (`tool_blocked`),
+            or a `toolkit_ref` that does not name this toolkit of this version
+            (`toolkit_ref_mismatch`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DesktopOperationError'
         '404':
-          description: The toolkit is not visible in this project (`toolkit_not_found`).
+          description: >-
+            The toolkit is not visible in this project (`toolkit_not_found`),
+            or the turn is not this caller's in this project
+            (`local_turn_not_found`).
           content:
             application/json:
               schema:
@@ -17227,12 +17297,20 @@ paths:
         '409':
           description: >-
             The tool needs the user to authorise (`mcp_authorization_required`,
-            with `authorization_required`), or the Idempotency-Key belongs to
-            another input (`idempotency_conflict`).
+            with `authorization_required`), a sensitive tool needs the user's
+            confirmation (`confirmation_required`, with `hitl_interrupt`), the
+            turn is already committed (`local_turn_already_committed`), or the
+            Idempotency-Key belongs to another input (`idempotency_conflict`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '410':
+          description: The turn passed its deadline (`local_turn_expired`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
         '413':
           description: The body is larger than 1 MiB.
           content:
@@ -17246,14 +17324,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/DesktopOperationError'
         '422':
-          description: The worker cannot run this toolkit or tool (`remote_tool_unsupported`, with `reason`).
+          description: >-
+            The worker cannot run this toolkit or tool
+            (`remote_tool_unsupported`, with `reason`), or the named version
+            cannot be resolved for execution (`application_version_unresolvable`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '429':
+          description: Too many calls from this caller (`rate_limited`); retry after Retry-After.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
         '500': { $ref: '#/components/responses/500' }
         '501':
-          description: This deployment runs no toolkit worker (`remote_toolkit_unavailable`).
+          description: This deployment runs no toolkit worker or no cloud agents (`remote_toolkit_unavailable`).
           content:
             application/json:
               schema:
@@ -17265,7 +17355,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/RemoteToolkitCallResult'
         '503':
-          description: The toolkit's settings could not be resolved right now (`remote_toolkit_unavailable_now`); retry.
+          description: The turn, the version or the toolkit's settings could not be read right now (`remote_toolkit_unavailable_now`); retry.
           headers:
             Retry-After:
               schema: { type: string }

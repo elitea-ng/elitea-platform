@@ -79,6 +79,24 @@ func TestRuntimeContextRejectsMissingPolicyAndCredentialMaterial(t *testing.T) {
 		}
 	}
 }
+func TestRuntimeContextCarriesOnlyAKnownApproval(t *testing.T) {
+	const policy = `"toolkit_security":{"blocked_toolkits":[],"blocked_tools":{},"sensitive_tools":{}}`
+	for raw, want := range map[string]bool{
+		`{` + policy + `,"sensitive_action_approval":{"source":"configuration_test"}}`:                                     true,
+		`{` + policy + `,"sensitive_action_approval":{"source":"user_confirmation","approved_at":"2026-10-08T12:00:00Z"}}`: true,
+		`{` + policy + `,"sensitive_action_approval":{"source":"user_confirmation"}}`:                                      false,
+		`{` + policy + `,"sensitive_action_approval":{"source":"anyone"}}`:                                                 false,
+	} {
+		if got := validRuntimeContext([]byte(raw)); got != want {
+			t.Errorf("validRuntimeContext(%s) = %v, want %v", raw, got, want)
+		}
+	}
+	if (RunRequest{ProjectID: 1, ActorUserID: 1, ToolkitID: 1, ToolName: "t",
+		SensitiveApproval: &SensitiveActionApproval{Source: "anyone"}}).Validate() == nil {
+		t.Fatal("an unknown approval source must not validate")
+	}
+}
+
 func TestContextSnapshotIsIndependentAndChangesIdempotency(t *testing.T) {
 	original := testInputs()
 	cloned := original.Clone()

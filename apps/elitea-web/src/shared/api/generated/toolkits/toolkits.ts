@@ -697,6 +697,11 @@ export type executeRemoteToolkitToolResponse409 = {
   status: 409;
 };
 
+export type executeRemoteToolkitToolResponse410 = {
+  data: DesktopOperationError;
+  status: 410;
+};
+
 export type executeRemoteToolkitToolResponse413 = {
   data: DesktopOperationError;
   status: 413;
@@ -715,6 +720,11 @@ export type executeRemoteToolkitToolResponse422 = {
 export type executeRemoteToolkitToolResponse426 = {
   data: ClientUpgradeRequiredResponse;
   status: 426;
+};
+
+export type executeRemoteToolkitToolResponse429 = {
+  data: DesktopOperationError;
+  status: 429;
 };
 
 export type executeRemoteToolkitToolResponse500 = {
@@ -752,10 +762,12 @@ export type executeRemoteToolkitToolResponseError = (
   | executeRemoteToolkitToolResponse403
   | executeRemoteToolkitToolResponse404
   | executeRemoteToolkitToolResponse409
+  | executeRemoteToolkitToolResponse410
   | executeRemoteToolkitToolResponse413
   | executeRemoteToolkitToolResponse415
   | executeRemoteToolkitToolResponse422
   | executeRemoteToolkitToolResponse426
+  | executeRemoteToolkitToolResponse429
   | executeRemoteToolkitToolResponse500
   | executeRemoteToolkitToolResponse501
   | executeRemoteToolkitToolResponse502
@@ -792,6 +804,27 @@ export const getExecuteRemoteToolkitToolUrl = (
  * session answers 403 `remote_toolkit_requires_token`. The caller needs
  * `models.applications.tool.execute` in the project (admin, editor and
  * viewer hold it).
+ *
+ * THE AUTHORITY OF A CHAT TURN. The call names a live local turn
+ * (`execution_id`: started by this caller in this project, not
+ * committed, not past its deadline, local work allowed) and the agent
+ * version the desktop is running in it (`application_id`,
+ * `version_id`): the turn's agent, or a nested agent that agent reaches
+ * through its `application` tools. The server resolves that version with
+ * the same freeze a cloud turn uses and runs the tool only when the
+ * toolkit is one of the version's tools and `tool_name` is in its
+ * `selected_tools` (empty means every tool, as in chat), the guardrails
+ * block neither, and `toolkit_ref` is the one resolveApplicationVersion
+ * gives that toolkit of that version. A model turn (no agent) can call
+ * no toolkit. A tool the guardrails mark sensitive answers 409
+ * `confirmation_required` with `hitl_interrupt` (the chat HITL shape,
+ * `guardrail_type: sensitive_tool`) until the call carries
+ * `confirmation`; the desktop asks the user as a cloud turn would pause.
+ * Every call that names a tool is audited (caller, project, toolkit,
+ * tool, turn, confirmation, outcome, a SHA-256 of the arguments).
+ *
+ * RATE. At most 60 calls a minute per caller on each server replica;
+ * past that, 429 `rate_limited` with Retry-After.
  *
  * BOUNDS. The body is at most 1 MiB and `arguments` one JSON object
  * within the input-entry bound. The call waits at most 60 seconds;

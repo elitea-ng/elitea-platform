@@ -259,9 +259,24 @@ fn runtime_context(raw: &[u8]) -> Result<Map<String, Value>, DirectToolkitReques
     if context.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "toolkit_security" | "mcp_tokens" | "llm_model" | "llm_configuration"
+            "toolkit_security"
+                | "mcp_tokens"
+                | "llm_model"
+                | "llm_configuration"
+                | "sensitive_action_approval"
         )
     }) {
+        return Err(invalid_input());
+    }
+    // The producer's record of who approved a sensitive call (test_tool's
+    // configuration test, or a desktop user's confirmation). It is accepted so
+    // a run that carries one is not refused as malformed, and it grants
+    // nothing here: this path still refuses every sensitive tool
+    // (execute_toolsets, SensitiveToolUnavailable).
+    if context
+        .get("sensitive_action_approval")
+        .is_some_and(|value| !value.is_object())
+    {
         return Err(invalid_input());
     }
     if context.get("llm_model").is_some_and(|value| {
@@ -405,6 +420,24 @@ mod tests {
         let result = DirectToolkitRequest::parse_call("mcp", "52", "search_docs", &raw, b"{}",
             br#"{"toolkit_security":{},"mcp_tokens":{"https://mcp.example.invalid/events":{"access_token":"{{secret.TOKEN}}"}}}"#);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_a_sensitive_action_approval_and_rejects_a_malformed_one() {
+        let raw = serde_json::to_vec(&toolkit()).expect("toolkit");
+        assert!(DirectToolkitRequest::parse_call("mcp", "52", "search_docs", &raw, b"{}",
+            br#"{"toolkit_security":{},"sensitive_action_approval":{"source":"configuration_test"}}"#).is_ok());
+        assert!(
+            DirectToolkitRequest::parse_call(
+                "mcp",
+                "52",
+                "search_docs",
+                &raw,
+                b"{}",
+                br#"{"toolkit_security":{},"sensitive_action_approval":"yes"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

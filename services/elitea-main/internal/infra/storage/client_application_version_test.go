@@ -153,7 +153,7 @@ func TestClientApplicationVersionCarriesNoSecretMaterial(t *testing.T) {
 	ref := toolkit["toolkit_ref"].(map[string]any)
 	require.EqualValues(t, 7, ref["toolkit_id"])
 	require.EqualValues(t, 90106, ref["project_id"])
-	require.Equal(t, ClientToolkitRef(90106, 7, "github"), ref["ref"])
+	require.Equal(t, ClientToolkitRef(ClientVersionIdentity{ProjectID: 90106, ApplicationID: 1, VersionID: 2}, 7, "github"), ref["ref"])
 
 	child := kinds[ClientToolKindApplication]
 	require.NotNil(t, child)
@@ -167,12 +167,17 @@ func TestClientApplicationVersionCarriesNoSecretMaterial(t *testing.T) {
 
 func TestClientToolkitRefIsStableAndScoped(t *testing.T) {
 	t.Parallel()
-	ref := ClientToolkitRef(1, 7, "github")
+	at := func(project, application, version int64) ClientVersionIdentity {
+		return ClientVersionIdentity{ProjectID: project, ApplicationID: application, VersionID: version}
+	}
+	ref := ClientToolkitRef(at(1, 2, 3), 7, "github")
 	require.Regexp(t, `^tkr1_[0-9a-f]{32}$`, ref)
-	require.Equal(t, ref, ClientToolkitRef(1, 7, "github"))
-	require.NotEqual(t, ref, ClientToolkitRef(2, 7, "github"))
-	require.NotEqual(t, ref, ClientToolkitRef(1, 8, "github"))
-	require.NotEqual(t, ref, ClientToolkitRef(1, 7, "gitlab"))
+	require.Equal(t, ref, ClientToolkitRef(at(1, 2, 3), 7, "github"))
+	require.NotEqual(t, ref, ClientToolkitRef(at(2, 2, 3), 7, "github"))
+	require.NotEqual(t, ref, ClientToolkitRef(at(1, 9, 3), 7, "github"), "the agent is part of the binding")
+	require.NotEqual(t, ref, ClientToolkitRef(at(1, 2, 9), 7, "github"), "the version is part of the binding")
+	require.NotEqual(t, ref, ClientToolkitRef(at(1, 2, 3), 8, "github"))
+	require.NotEqual(t, ref, ClientToolkitRef(at(1, 2, 3), 7, "gitlab"))
 }
 
 type clientVersionFailingFreezer struct{ err error }
@@ -221,10 +226,11 @@ func TestClientApplicationVersionErrorTaxonomy(t *testing.T) {
 
 func TestProjectClientApplicationVersionRefusesAToolItCannotName(t *testing.T) {
 	t.Parallel()
-	_, err := ProjectClientApplicationVersion(1, json.RawMessage(`{"tools":[{"type":"github","settings":{}}]}`))
+	identity := ClientVersionIdentity{ProjectID: 1, ApplicationID: 2, VersionID: 3}
+	_, err := ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":[{"type":"github","settings":{}}]}`))
 	require.Error(t, err, "a toolkit with no id has no reference to give")
-	_, err = ProjectClientApplicationVersion(1, json.RawMessage(`{"tools":{}}`))
+	_, err = ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":{}}`))
 	require.Error(t, err)
-	_, err = ProjectClientApplicationVersion(0, json.RawMessage(`{"tools":[]}`))
+	_, err = ProjectClientApplicationVersion(ClientVersionIdentity{}, json.RawMessage(`{"tools":[]}`))
 	require.Error(t, err)
 }

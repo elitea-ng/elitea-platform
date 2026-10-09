@@ -520,6 +520,7 @@ export * from "./publishedAgentsListing.zod";
 export * from "./recommendationsResponse.zod";
 export * from "./regenerateChatMessageHeaders.zod";
 export * from "./regenerateChatMessageParams.zod";
+export * from "./remoteToolkitCallConfirmation.zod";
 export * from "./remoteToolkitCallRequest.zod";
 export * from "./remoteToolkitCallResult.zod";
 export * from "./removeUserModeRoleParams.zod";

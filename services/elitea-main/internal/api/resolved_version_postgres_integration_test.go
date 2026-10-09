@@ -111,7 +111,7 @@ func TestResolvedVersionCarriesNoSecretOverTheRealFreeze(t *testing.T) {
 	}
 	ref, _ := toolkit["toolkit_ref"].(map[string]any)
 	if ref["toolkit_id"] != float64(61) || ref["project_id"] != float64(1) ||
-		ref["ref"] != storage.ClientToolkitRef(1, 61, "github") {
+		ref["ref"] != storage.ClientToolkitRef(storage.ClientVersionIdentity{ProjectID: 1, ApplicationID: 71, VersionID: 81}, 61, "github") {
 		t.Fatalf("toolkit_ref = %v", ref)
 	}
 

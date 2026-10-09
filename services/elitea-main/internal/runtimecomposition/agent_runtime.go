@@ -165,5 +165,13 @@ func NewClientApplicationVersionService(
 	if err != nil {
 		return nil, err
 	}
-	return storage.NewClientApplicationVersionService(versions, freezer)
+	service, err := storage.NewClientApplicationVersionService(versions, freezer)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := platformconfig.NewGuardrailPolicyAdapter(pool)
+	if err != nil {
+		return nil, err
+	}
+	return service.WithGuardrails(policy), nil
 }

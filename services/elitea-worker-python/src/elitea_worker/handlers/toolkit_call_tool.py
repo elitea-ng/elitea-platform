@@ -22,6 +22,7 @@ from elitea_worker.agents.sdk_adapter import EliteaSdkToolkitToolAdapter
 from elitea_worker.constants import MAX_TOOL_RESULT_BYTES
 from elitea_worker.execution.errors import InvalidInput
 from elitea_worker.execution.supervisor import ExecutionRunner
+from elitea_worker.handlers.toolkit_security import enforce_toolkit_security
 
 
 STATUS_OK = "ok"
@@ -56,6 +57,11 @@ class ToolkitCallToolRequest:
     llm_model: str | None = None
     llm_configuration: dict[str, Any] | None = None
     mcp_tokens: dict[str, Any] | None = None
+    # The run's runtime context: the platform guardrails policy and the only
+    # authority that may run a sensitive tool. The handler refuses a run that
+    # carries no policy.
+    toolkit_security: dict[str, Any] | None = None
+    sensitive_action_approval: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +111,17 @@ class ToolkitCallToolHandler:
 
     async def execute(self, request: ToolkitCallToolRequest) -> ToolkitCallToolResult:
         _validate_request(request)
+        # BEFORE the SDK is touched: a blocked tool, or a sensitive one the
+        # run carries no approval for, is refused as the Rust worker refuses
+        # it (UNSUPPORTED_CAPABILITY), whoever produced the command.
+        toolkit_name = request.settings.value.get("toolkit_name")
+        enforce_toolkit_security(
+            toolkit_security=request.toolkit_security,
+            approval=request.sensitive_action_approval,
+            toolkit_type=request.toolkit_type,
+            toolkit_name=toolkit_name if isinstance(toolkit_name, str) else None,
+            tool_name=request.tool_name,
+        )
         sdk_result = await self._supervisor.run_sync(
             self._sdk.call_tool,
             toolkit_config=request.settings.value,

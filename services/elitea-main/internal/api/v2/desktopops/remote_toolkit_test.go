@@ -6,13 +6,88 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/failurelimit"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
+
+const (
+	remoteExecution = "0123456789abcdef0123456789abcdef"
+	remoteRef       = "tkr1_00112233445566778899aabbccddeeff"
+)
+
+// remoteBody is a well-formed call naming the live turn, the version it runs
+// and the toolkit reference, plus whatever extra fields a test adds.
+func remoteBody(extra string) string {
+	body := `"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"toolkit_ref":"` + remoteRef + `"`
+	if extra != "" {
+		body += "," + extra
+	}
+	return "{" + body + "}"
+}
+
+type fakeTurns struct {
+	turn  localturn.LiveTurn
+	err   error
+	calls int
+}
+
+func (f *fakeTurns) Live(_ context.Context, _, _ int64, executionID string) (localturn.LiveTurn, error) {
+	f.calls++
+	if f.err != nil {
+		return localturn.LiveTurn{}, f.err
+	}
+	turn := f.turn
+	turn.ExecutionID = executionID
+	return turn, nil
+}
+
+type fakeAuthorizer struct {
+	grant   storage.RemoteToolGrant
+	err     error
+	request storage.RemoteToolAuthorization
+	calls   int
+}
+
+func (f *fakeAuthorizer) AuthorizeRemoteTool(_ context.Context, request storage.RemoteToolAuthorization) (storage.RemoteToolGrant, error) {
+	f.calls++
+	f.request = request
+	return f.grant, f.err
+}
+
+type recordedAudit struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (r *recordedAudit) Record(_ context.Context, event audit.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+// remoteHandler is a handler whose turn is live (agent 11, version 12) and
+// whose authorizer grants a non-sensitive github tool, unless a test swaps
+// either out.
+func remoteHandler(runs RemoteToolkitUseCase, worker string) (*remoteToolkitHandler, *fakeTurns, *fakeAuthorizer, *recordedAudit) {
+	turns := &fakeTurns{turn: localturn.LiveTurn{ApplicationID: 11, VersionID: 12}}
+	authorizer := &fakeAuthorizer{grant: storage.RemoteToolGrant{ToolkitType: "github", ToolkitName: "gh"}}
+	recorder := &recordedAudit{}
+	h := newRemoteToolkitHandler(RemoteToolkitDependencies{
+		Runs: runs, Worker: worker, Authorizer: authorizer, Turns: turns, Audit: recorder,
+	})
+	return h, turns, authorizer, recorder
+}
 
 type fakeToolRuns struct {
 	outcome toolkitcalltoolapp.RunOutcome
@@ -38,16 +113,35 @@ func TestRemoteToolkitRunsTheCallersToolThroughTheSharedUseCase(t *testing.T) {
 		ExecutionID: "e1", Status: toolkitcalltoolapp.RunStatusOK, ResultJSON: `{"created":true}`,
 		ToolkitType: "github", ToolName: "create_issue",
 	}}
-	h := &remoteToolkitHandler{useCase: runs, worker: "python"}
+	h, turns, authorizer, recorder := remoteHandler(runs, "python")
 	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL,
-		`{"tool_name":"create_issue","arguments":{"title":"x"},"request_id":"r1"}`, desktopToken(), h.serve)
+		remoteBody(`"tool_name":"create_issue","arguments":{"title":"x"},"request_id":"r1"`), desktopToken(), h.serve)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", response.Code, response.Body)
 	}
 	got := runs.request
 	if got.ProjectID != 3 || got.ToolkitID != 61 || got.ActorUserID != 7 || got.ToolName != "create_issue" ||
-		string(got.Arguments) != `{"title":"x"}` || got.RequestID != "r1" {
+		string(got.Arguments) != `{"title":"x"}` || got.RequestID != "r1" || got.SensitiveApproval != nil {
 		t.Fatalf("run request = %+v", got)
+	}
+	// The authorization is asked of the TURN's agent, for the version and
+	// reference the call names.
+	if turns.calls != 1 || authorizer.request != (storage.RemoteToolAuthorization{
+		ProjectID: 3, ActorID: 7, TurnApplicationID: 11, TurnVersionID: 12, ApplicationID: 11, VersionID: 12,
+		ToolkitID: 61, ToolkitRef: remoteRef, ToolName: "create_issue",
+	}) {
+		t.Fatalf("authorization = %+v (turn reads %d)", authorizer.request, turns.calls)
+	}
+	if len(recorder.events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(recorder.events))
+	}
+	event := recorder.events[0]
+	if event.EntityType != remoteToolkitAuditEntity || *event.EntityID != 61 || event.EntityName != "create_issue" ||
+		*event.UserID != 7 || *event.ProjectID != 3 || *event.StatusCode != http.StatusOK ||
+		!strings.Contains(event.Action, remoteExecution) || !strings.Contains(event.Action, `"github.create_issue": ok`) ||
+		!strings.Contains(event.Action, "confirmation none") || !strings.Contains(event.Action, "arguments sha256 ") ||
+		strings.Contains(event.Action, "title") {
+		t.Fatalf("audit event = %+v", event)
 	}
 	var body map[string]any
 	_ = json.Unmarshal(response.Body.Bytes(), &body)
@@ -59,33 +153,46 @@ func TestRemoteToolkitRunsTheCallersToolThroughTheSharedUseCase(t *testing.T) {
 
 func TestRemoteToolkitRefusesABrowserSession(t *testing.T) {
 	runs := &fakeToolRuns{}
-	h := &remoteToolkitHandler{useCase: runs}
+	h, _, _, _ := remoteHandler(runs, "")
 	session := &auth.User{ID: "7", UserID: "7", AuthType: "session"}
-	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, `{"tool_name":"t"}`, session, h.serve)
+	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), session, h.serve)
 	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), remoteToolkitRequiresToken) || runs.calls != 0 {
 		t.Fatalf("status = %d, body %s, calls %d", response.Code, response.Body, runs.calls)
 	}
 }
 
 func TestRemoteToolkitWithoutAWorkerAnswers501(t *testing.T) {
-	h := &remoteToolkitHandler{}
-	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, `{"tool_name":"t"}`, desktopToken(), h.serve)
-	if response.Code != http.StatusNotImplemented || !strings.Contains(response.Body.String(), "remote_toolkit_unavailable") {
-		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	for name, deps := range map[string]RemoteToolkitDependencies{
+		"no worker":      {Authorizer: &fakeAuthorizer{}, Turns: &fakeTurns{}},
+		"no agent plane": {Runs: &fakeToolRuns{}, Turns: &fakeTurns{}},
+		"no local turns": {Runs: &fakeToolRuns{}, Authorizer: &fakeAuthorizer{}},
+	} {
+		deps.Audit = &recordedAudit{}
+		h := newRemoteToolkitHandler(deps)
+		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), desktopToken(), h.serve)
+		if response.Code != http.StatusNotImplemented || !strings.Contains(response.Body.String(), "remote_toolkit_unavailable") {
+			t.Fatalf("%s: status = %d, body %s", name, response.Code, response.Body)
+		}
 	}
 }
 
 func TestRemoteToolkitBoundsTheRequest(t *testing.T) {
 	runs := &fakeToolRuns{}
-	h := &remoteToolkitHandler{useCase: runs}
+	h, _, _, _ := remoteHandler(runs, "")
 	for name, tc := range map[string]struct {
 		body   string
 		status int
 	}{
-		"no tool name":         {`{"arguments":{}}`, http.StatusBadRequest},
-		"arguments not object": {`{"tool_name":"t","arguments":[1]}`, http.StatusBadRequest},
-		"two values":           {`{"tool_name":"t"} {}`, http.StatusBadRequest},
-		"too large":            {`{"tool_name":"t","arguments":{"x":"` + strings.Repeat("a", 1<<20) + `"}}`, http.StatusRequestEntityTooLarge},
+		"no tool name":         {remoteBody(`"arguments":{}`), http.StatusBadRequest},
+		"arguments not object": {remoteBody(`"tool_name":"t","arguments":[1]`), http.StatusBadRequest},
+		"two values":           {remoteBody(`"tool_name":"t"`) + ` {}`, http.StatusBadRequest},
+		"too large":            {remoteBody(`"tool_name":"t","arguments":{"x":"` + strings.Repeat("a", 1<<20) + `"}`), http.StatusRequestEntityTooLarge},
+		"no execution id":      {`{"application_id":11,"version_id":12,"toolkit_ref":"` + remoteRef + `","tool_name":"t"}`, http.StatusBadRequest},
+		"no version":           {`{"execution_id":"` + remoteExecution + `","application_id":11,"toolkit_ref":"` + remoteRef + `","tool_name":"t"}`, http.StatusBadRequest},
+		"no toolkit ref":       {`{"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"tool_name":"t"}`, http.StatusBadRequest},
+		"malformed ref":        {`{"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"toolkit_ref":"tkr1_x","tool_name":"t"}`, http.StatusBadRequest},
+		"refused confirmation": {remoteBody(`"tool_name":"t","confirmation":{"approved":false,"approved_at":"2026-10-08T10:00:00Z"}`), http.StatusBadRequest},
+		"undated confirmation": {remoteBody(`"tool_name":"t","confirmation":{"approved":true}`), http.StatusBadRequest},
 	} {
 		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, tc.body, desktopToken(), h.serve)
 		if response.Code != tc.status {
@@ -121,8 +228,8 @@ func TestRemoteToolkitOutcomesMapToTypedAnswers(t *testing.T) {
 			Status: toolkitcalltoolapp.RunStatusRuntimeFailure, FailureCode: "RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE", ErrorMessage: "down",
 		}, http.StatusBadGateway, []string{`"remote_toolkit_failed"`}},
 	} {
-		h := &remoteToolkitHandler{useCase: &fakeToolRuns{outcome: tc.outcome}, worker: tc.worker}
-		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, `{"tool_name":"t"}`, desktopToken(), h.serve)
+		h, _, _, _ := remoteHandler(&fakeToolRuns{outcome: tc.outcome}, tc.worker)
+		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), desktopToken(), h.serve)
 		if response.Code != tc.status {
 			t.Errorf("%s: status = %d, body %s", name, response.Code, response.Body)
 		}
@@ -148,8 +255,8 @@ func TestRemoteToolkitRunErrorsMapToTypedAnswers(t *testing.T) {
 		"settings down": {toolkitcalltoolapp.ErrToolkitSettingsResolutionUnavailable, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now"},
 		"other":         {errors.New("x"), http.StatusInternalServerError, "remote_toolkit_failed"},
 	} {
-		h := &remoteToolkitHandler{useCase: &fakeToolRuns{err: tc.err}}
-		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, `{"tool_name":"t"}`, desktopToken(), h.serve)
+		h, _, _, _ := remoteHandler(&fakeToolRuns{err: tc.err}, "")
+		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), desktopToken(), h.serve)
 		if response.Code != tc.status || !strings.Contains(response.Body.String(), `"`+tc.code+`"`) {
 			t.Errorf("%s: status = %d, body %s", name, response.Code, response.Body)
 		}
@@ -157,7 +264,133 @@ func TestRemoteToolkitRunErrorsMapToTypedAnswers(t *testing.T) {
 }
 
 func TestRemoteToolkitRouteRequiresTheCredentialPlane(t *testing.T) {
-	if _, err := NewRemoteToolkitRoute(&fakeToolRuns{}, "python", apimwZero(), nil); !errors.Is(err, ErrInvalidRoute) {
+	if _, err := NewRemoteToolkitRoute(RemoteToolkitDependencies{Runs: &fakeToolRuns{}, Audit: &recordedAudit{}}, apimwZero(), nil); !errors.Is(err, ErrInvalidRoute) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The turn the call names must be live; each refusal is the local turn
+// route's own answer, and nothing is authorized or run.
+func TestRemoteToolkitRequiresALiveLocalTurn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		code   string
+	}{
+		"local work off":        {localturn.ErrLocalWorkDisabled, http.StatusForbidden, "local_work_disabled"},
+		"not the caller's turn": {localturn.ErrNotFound, http.StatusNotFound, "local_turn_not_found"},
+		"committed":             {localturn.ErrAlreadyCommitted, http.StatusConflict, "local_turn_already_committed"},
+		"expired":               {localturn.ErrExpired, http.StatusGone, "local_turn_expired"},
+		"policy unreadable":     {localturn.ErrUnavailable, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now"},
+	} {
+		runs := &fakeToolRuns{}
+		h, turns, authorizer, recorder := remoteHandler(runs, "python")
+		turns.err = tc.err
+		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), desktopToken(), h.serve)
+		if response.Code != tc.status || !strings.Contains(response.Body.String(), `"`+tc.code+`"`) ||
+			authorizer.calls != 0 || runs.calls != 0 {
+			t.Errorf("%s: status = %d, body %s, authorizer %d, runs %d", name, response.Code, response.Body, authorizer.calls, runs.calls)
+		}
+		if len(recorder.events) != 1 || *recorder.events[0].StatusCode != int32(tc.status) {
+			t.Errorf("%s: a refused call is audited too: %+v", name, recorder.events)
+		}
+	}
+}
+
+// What the agent cannot call in a chat turn is refused here, before any run.
+func TestRemoteToolkitRefusesWhatTheAgentCannotCall(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		code   string
+	}{
+		"not in the agent": {storage.ErrRemoteToolNotInAgent, http.StatusForbidden, "tool_not_in_agent"},
+		"blocked":          {storage.ErrRemoteToolBlocked, http.StatusForbidden, "tool_blocked"},
+		"ref mismatch":     {storage.ErrRemoteToolkitRefMismatch, http.StatusForbidden, "toolkit_ref_mismatch"},
+		"unresolvable":     {storage.ErrClientApplicationVersionUnresolvable, http.StatusUnprocessableEntity, "application_version_unresolvable"},
+		"dependency":       {storage.ErrContentUnavailable, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now"},
+	} {
+		runs := &fakeToolRuns{}
+		h, _, authorizer, _ := remoteHandler(runs, "python")
+		authorizer.err = tc.err
+		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), desktopToken(), h.serve)
+		if response.Code != tc.status || !strings.Contains(response.Body.String(), `"`+tc.code+`"`) || runs.calls != 0 {
+			t.Errorf("%s: status = %d, body %s, runs %d", name, response.Code, response.Body, runs.calls)
+		}
+	}
+}
+
+// A sensitive tool pauses exactly as a chat turn does: without a confirmation
+// the answer is the HITL interrupt; with one, the approval travels to the
+// worker and is audited.
+func TestRemoteToolkitSensitiveToolNeedsAConfirmation(t *testing.T) {
+	sensitive := &guardrails.SensitiveAction{ActionLabel: "gh.delete_file", PolicyMessage: "Acme requires approval before running the sensitive action 'gh.delete_file'."}
+	runs := &fakeToolRuns{outcome: toolkitcalltoolapp.RunOutcome{Status: toolkitcalltoolapp.RunStatusOK, ResultJSON: `{}`}}
+	h, _, authorizer, recorder := remoteHandler(runs, "python")
+	authorizer.grant.Sensitive = sensitive
+	fixed := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	h.now = func() time.Time { return fixed }
+
+	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"delete_file","arguments":{"path":"a"}`), desktopToken(), h.serve)
+	if response.Code != http.StatusConflict || runs.calls != 0 {
+		t.Fatalf("status = %d, runs %d, body %s", response.Code, runs.calls, response.Body)
+	}
+	var body struct {
+		Error     string         `json:"error"`
+		Interrupt map[string]any `json:"hitl_interrupt"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	interrupt := body.Interrupt
+	if body.Error != "confirmation_required" || interrupt["guardrail_type"] != "sensitive_tool" ||
+		interrupt["action_label"] != "gh.delete_file" || interrupt["policy_message"] != sensitive.PolicyMessage ||
+		interrupt["tool_name"] != "delete_file" || interrupt["toolkit_name"] != "gh" || interrupt["toolkit_type"] != "github" ||
+		!strings.HasPrefix(interrupt["interrupt_id"].(string), "hitl_") || interrupt["tool_args"] != nil {
+		t.Fatalf("confirmation body = %s", response.Body)
+	}
+
+	response = serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL,
+		remoteBody(`"tool_name":"delete_file","arguments":{"path":"a"},"confirmation":{"approved":true,"approved_at":"2026-10-08T11:59:30Z"}`),
+		desktopToken(), h.serve)
+	if response.Code != http.StatusOK || runs.calls != 1 {
+		t.Fatalf("confirmed: status = %d, runs %d, body %s", response.Code, runs.calls, response.Body)
+	}
+	approval := runs.request.SensitiveApproval
+	if approval == nil || approval.Source != toolkitcalltoolapp.ApprovalSourceUserConfirmation || approval.ApprovedAt != "2026-10-08T11:59:30Z" {
+		t.Fatalf("approval = %+v", approval)
+	}
+	last := recorder.events[len(recorder.events)-1]
+	if !strings.Contains(last.Action, "confirmation approved_at 2026-10-08T11:59:30Z") {
+		t.Fatalf("audit action = %q", last.Action)
+	}
+
+	// An approval far in the past (older than a turn can live) or from the
+	// future is not one.
+	for _, at := range []string{"2026-10-06T11:59:30Z", "2026-10-08T13:00:00Z"} {
+		response = serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL,
+			remoteBody(`"tool_name":"delete_file","confirmation":{"approved":true,"approved_at":"`+at+`"}`), desktopToken(), h.serve)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("approved_at %s: status = %d", at, response.Code)
+		}
+	}
+}
+
+func TestRemoteToolkitRateLimitsEachCaller(t *testing.T) {
+	runs := &fakeToolRuns{outcome: toolkitcalltoolapp.RunOutcome{Status: toolkitcalltoolapp.RunStatusOK, ResultJSON: `{}`}}
+	h, _, _, _ := remoteHandler(runs, "python")
+	h.limiter = failurelimit.New(2, time.Minute)
+	for i := 0; i < 2; i++ {
+		if response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), desktopToken(), h.serve); response.Code != http.StatusOK {
+			t.Fatalf("call %d: status = %d", i, response.Code)
+		}
+	}
+	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), desktopToken(), h.serve)
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "" || runs.calls != 2 {
+		t.Fatalf("third call: status = %d, runs %d", response.Code, runs.calls)
+	}
+	other := &auth.User{ID: "8", UserID: "8", TokenID: "80", AuthType: "token"}
+	if response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), other, h.serve); response.Code != http.StatusOK {
+		t.Fatalf("another caller: status = %d", response.Code)
 	}
 }

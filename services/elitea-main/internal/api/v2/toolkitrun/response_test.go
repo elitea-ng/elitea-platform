@@ -230,6 +230,11 @@ func TestDecodeRequestTakesTheToolkitFromTheRouteFirst(t *testing.T) {
 	if decoded.ToolName != "list_issues" || string(decoded.Arguments) != `{"repo":"a"}` {
 		t.Fatalf("decoded %+v", decoded)
 	}
+	// test_tool is a configuration test: the worker, which now enforces the
+	// sensitive-tool policy, must be told so to keep running sensitive tools.
+	if decoded.SensitiveApproval == nil || decoded.SensitiveApproval.Source != toolkitcalltoolapp.ApprovalSourceConfigurationTest {
+		t.Fatalf("approval = %+v", decoded.SensitiveApproval)
+	}
 }
 
 func TestDecodeRequestFallsBackToTheBodyToolkitID(t *testing.T) {
