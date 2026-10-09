@@ -167,7 +167,12 @@ pub fn splice_memory(instructions: &str, recall: &str) -> String {
 
 fn conversation_key(value: &Value) -> Result<String, TurnError> {
     match value {
-        Value::String(text) if !text.is_empty() && text.len() <= 64 => Ok(text.clone()),
+        // `.` and `..` would be resolved away as path segments.
+        Value::String(text)
+            if !text.is_empty() && text.len() <= 64 && text != "." && text != ".." =>
+        {
+            Ok(text.clone())
+        }
         Value::Number(number) if number.as_u64().is_some() => Ok(number.to_string()),
         _ => Err(TurnError::new(
             "invalid_request",
@@ -933,6 +938,8 @@ mod tests {
         assert_eq!(conversation_key(&json!("6f1c")).unwrap(), "6f1c");
         assert!(conversation_key(&json!(-1)).is_err());
         assert!(conversation_key(&json!("")).is_err());
+        assert!(conversation_key(&json!(".")).is_err());
+        assert!(conversation_key(&json!("..")).is_err());
         assert!(conversation_key(&json!({})).is_err());
     }
 

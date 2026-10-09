@@ -273,7 +273,7 @@ impl PlatformApi {
                 Method::GET,
                 &format!(
                     "/api/v2/elitea_core/conversation/prompt_lib/{project_id}/{}",
-                    path_segment(conversation_id)
+                    path_segment(conversation_id)?
                 ),
                 None,
                 &[],
@@ -296,7 +296,7 @@ impl PlatformApi {
             Method::POST,
             &format!(
                 "/api/v2/elitea_core/local_turn/prompt_lib/{project_id}/{}",
-                path_segment(conversation_id)
+                path_segment(conversation_id)?
             ),
             Some(body),
             &[],
@@ -352,10 +352,20 @@ impl PlatformApi {
 
 /// Percent-encode one path segment (a conversation id is a number or a
 /// UUID, but nothing the webview sends is trusted to be either).
-fn path_segment(value: &str) -> String {
-    url::form_urlencoded::byte_serialize(value.as_bytes())
+///
+/// Percent-encoding leaves `.` alone, and a URL parser resolves a `.` or
+/// `..` segment (WHATWG also treats `%2e` as a dot), so those and the empty
+/// segment are refused rather than encoded.
+fn path_segment(value: &str) -> Result<String, ApiError> {
+    if matches!(value, "" | "." | "..") {
+        return Err(ApiError::local(
+            "invalid_request",
+            "conversation_id must be the conversation's id or UUID",
+        ));
+    }
+    Ok(url::form_urlencoded::byte_serialize(value.as_bytes())
         .collect::<String>()
-        .replace('+', "%20")
+        .replace('+', "%20"))
 }
 
 fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Result<i64, ApiError> {
@@ -424,8 +434,20 @@ mod tests {
 
     #[test]
     fn a_path_segment_cannot_escape_its_route() {
-        assert_eq!(path_segment("../x?y"), "..%2Fx%3Fy");
-        assert_eq!(path_segment("6f1c2d4e-8a7b"), "6f1c2d4e-8a7b");
+        // A separator or query is encoded, so the value stays one segment.
+        assert_eq!(path_segment("../x?y").unwrap(), "..%2Fx%3Fy");
+        assert_eq!(path_segment("%2e%2e").unwrap(), "%252e%252e");
+        assert_eq!(path_segment("6f1c2d4e-8a7b").unwrap(), "6f1c2d4e-8a7b");
+        // A dot segment would be resolved away by the URL parser: refused.
+        for dots in ["", ".", ".."] {
+            assert_eq!(path_segment(dots).unwrap_err().code, "invalid_request");
+        }
+        let base = url::Url::parse("https://x/api/v2/conversation/prompt_lib/1/").unwrap();
+        let joined = base.join(&path_segment("../x?y").unwrap()).unwrap();
+        assert_eq!(
+            joined.path(),
+            "/api/v2/conversation/prompt_lib/1/..%2Fx%3Fy"
+        );
     }
 
     #[test]
