@@ -8,7 +8,12 @@
 //! files, deletions, and untracked files that are not ignored),
 //! `write-tree`, `commit-tree` with HEAD as parent, `update-ref`. The
 //! person's index, HEAD, branches and stash are never touched, and the ref
-//! keeps the objects alive across `gc` and restarts. Restore diffs the
+//! keeps the objects alive across `gc` and restarts (up to
+//! [`CheckpointLimits::keep`] per session and [`CheckpointLimits::max_age`];
+//! older ones are pruned). Files over [`CheckpointLimits::max_file_bytes`]
+//! and special files (FIFOs, sockets, devices) are left out, the large ones
+//! recorded in the commit so a restore leaves them alone; too many
+//! untracked bytes and the turn runs without a checkpoint. Restore diffs the
 //! checkpoint's tree against a fresh snapshot of now: files that differ or
 //! disappeared are written back with `checkout-index` (from another
 //! temporary index), files created since are deleted.
@@ -35,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -54,6 +59,38 @@ pub const MAX_COPY_FILES: usize = 50_000;
 pub const MAX_COPY_BYTES: u64 = 1024 * 1024 * 1024;
 /// Files larger than this are skipped by copy checkpoints.
 pub const MAX_COPY_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// What one session's checkpoints may hold, and for how long.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CheckpointLimits {
+    /// Files larger than this are left out of a checkpoint (recorded as
+    /// skipped, and left alone by a restore).
+    pub max_file_bytes: u64,
+    /// A git checkpoint stores untracked files as new objects: more than
+    /// this many bytes of them and the turn runs without a checkpoint.
+    pub max_untracked_bytes: u64,
+    /// The same, in files.
+    pub max_untracked_files: usize,
+    /// Checkpoints kept per session (the oldest are pruned).
+    pub keep: usize,
+    /// Checkpoints older than this are pruned (the newest is always kept).
+    pub max_age: Duration,
+}
+
+impl Default for CheckpointLimits {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: MAX_COPY_FILE_BYTES,
+            max_untracked_bytes: 512 * 1024 * 1024,
+            max_untracked_files: MAX_COPY_FILES,
+            keep: 50,
+            max_age: Duration::from_hours(30 * 24),
+        }
+    }
+}
+
+/// The commit-message trailer listing the paths a git checkpoint skipped.
+const SKIPPED_TRAILER: &str = "Elitea-Skipped: ";
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -161,6 +198,7 @@ impl Checkpoints {
                         prefix,
                         session: session.to_owned(),
                         restorer,
+                        limits: CheckpointLimits::default(),
                     }));
                 }
                 None
@@ -183,7 +221,18 @@ impl Checkpoints {
             manifests: base.join("sessions").join(session),
             restorer,
             refused,
+            limits: CheckpointLimits::default(),
         }))
+    }
+
+    /// Use `limits` instead of the defaults.
+    #[must_use]
+    pub fn with_limits(mut self, limits: CheckpointLimits) -> Self {
+        match &mut self {
+            Self::Git(git) => git.limits = limits,
+            Self::Copy(copy) => copy.limits = limits,
+        }
+        self
     }
 
     /// Why the folder's git repository is not used, when it was refused.
@@ -306,6 +355,17 @@ pub struct GitCheckpoints {
     prefix: WsPath,
     session: String,
     restorer: Workspace,
+    limits: CheckpointLimits,
+}
+
+/// What a git checkpoint leaves out.
+#[derive(Default)]
+struct Plan {
+    /// Workspace-relative paths not added: too large, or not regular files
+    /// (FIFOs, sockets, devices).
+    excluded: Vec<String>,
+    /// Top-relative paths a restore must leave alone.
+    skipped: Vec<String>,
 }
 
 impl GitCheckpoints {
@@ -337,9 +397,73 @@ impl GitCheckpoints {
             .filter(|head| !head.is_empty())
     }
 
+    /// Size the snapshot before `add` stores anything: files over the cap
+    /// and special files are left out, and too many untracked bytes refuse
+    /// the checkpoint ([`ErrorCode::TooLarge`]: the turn runs without one).
+    fn plan(&self) -> ToolResult<Plan> {
+        let workspace_dir = self.workspace_dir();
+        let tracked: BTreeSet<String> = self
+            .repo
+            .git(&workspace_dir)
+            .run(&["ls-files", "-z", "--cached"])?
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect();
+        let walker = ignore::WalkBuilder::new(&workspace_dir)
+            .hidden(false)
+            .require_git(false)
+            .follow_links(false)
+            .filter_entry(|entry| !entry.file_name().to_str().is_some_and(is_protected_name))
+            .build();
+        let mut plan = Plan::default();
+        let (mut untracked_bytes, mut untracked_files) = (0u64, 0usize);
+        for entry in walker.flatten() {
+            let Ok(relative) = entry.path().strip_prefix(&workspace_dir) else {
+                continue;
+            };
+            let Some(relative) = relative.to_str().filter(|text| !text.is_empty()) else {
+                continue;
+            };
+            let Ok(meta) = entry.path().symlink_metadata() else {
+                continue;
+            };
+            let kind = meta.file_type();
+            if kind.is_dir() || kind.is_symlink() {
+                continue;
+            }
+            let ws_path = WsPath::from_relative(Path::new(relative))?;
+            if !kind.is_file() {
+                plan.excluded.push(relative.to_owned());
+                continue;
+            }
+            if meta.len() > self.limits.max_file_bytes {
+                plan.excluded.push(relative.to_owned());
+                plan.skipped.push(self.top_relative(&ws_path));
+                continue;
+            }
+            if !tracked.contains(relative) {
+                untracked_bytes += meta.len();
+                untracked_files += 1;
+            }
+        }
+        if untracked_bytes > self.limits.max_untracked_bytes
+            || untracked_files > self.limits.max_untracked_files
+        {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!(
+                    "{untracked_files} untracked files ({untracked_bytes} bytes) are too many to checkpoint"
+                ),
+            ));
+        }
+        Ok(plan)
+    }
+
     /// The tree of the workspace as it is now (outside the workspace: as
-    /// in HEAD).
-    fn snapshot_tree(&self) -> ToolResult<String> {
+    /// in HEAD), and the paths it skipped.
+    fn snapshot_tree(&self) -> ToolResult<(String, Vec<String>)> {
+        let plan = self.plan()?;
         let index = TempIndex::new()?;
         let index_dir = [index.dir.clone()];
         let with_objects = [index.dir.clone(), self.objects()];
@@ -350,28 +474,74 @@ impl GitCheckpoints {
                 .writes(&index_dir)
                 .run(&["read-tree", &head])?;
         }
-        let workspace_dir = self.workspace_dir();
+        let mut pathspecs = b".\0".to_vec();
+        for path in &plan.excluded {
+            pathspecs.extend_from_slice(format!(":(exclude,literal){path}").as_bytes());
+            pathspecs.push(0);
+        }
         self.repo
-            .git(&workspace_dir)
+            .git(&self.workspace_dir())
             .env("GIT_INDEX_FILE", index.os())
             .writes(&with_objects)
+            .literal(false)
+            .stdin(&pathspecs)
             .worktree()
-            .run(&["add", "--all", "--ignore-submodules=all", "--", "."])
-            .or_else(|_| {
-                // Older gits lack the flag on add; submodules are refused
-                // before this point anyway.
-                self.repo
-                    .git(&workspace_dir)
-                    .env("GIT_INDEX_FILE", index.os())
-                    .writes(&with_objects)
-                    .worktree()
-                    .run(&["add", "--all", "--", "."])
-            })?;
-        self.repo
+            .run(&[
+                "add",
+                "--all",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ])?;
+        let tree = self
+            .repo
             .git(self.top())
             .env("GIT_INDEX_FILE", index.os())
             .writes(&with_objects)
-            .text(&["write-tree"])
+            .text(&["write-tree"])?;
+        Ok((tree, plan.skipped))
+    }
+
+    /// The paths checkpoint `commit` skipped.
+    fn skipped_in(&self, commit: &str) -> Vec<String> {
+        let body = self
+            .repo
+            .git(self.top())
+            .text(&["cat-file", "commit", commit])
+            .unwrap_or_default();
+        body.lines()
+            .filter_map(|line| line.strip_prefix(SKIPPED_TRAILER))
+            .filter_map(|list| serde_json::from_str::<Vec<String>>(list).ok())
+            .flatten()
+            .collect()
+    }
+
+    /// Drop the session's checkpoints beyond [`CheckpointLimits::keep`] and
+    /// older than [`CheckpointLimits::max_age`] (never the newest). Best
+    /// effort: a failure leaves them for the next time.
+    fn prune(&self) {
+        let Ok(all) = self.list() else { return };
+        let cutoff = now_unix().saturating_sub(self.limits.max_age.as_secs());
+        let excess = all.len().saturating_sub(self.limits.keep.max(1));
+        let writes = [
+            self.refs(),
+            self.repo.git_dir().join("packed-refs"),
+            self.repo.git_dir().join("packed-refs.lock"),
+        ];
+        for (index, info) in all.iter().enumerate() {
+            let newest = index + 1 == all.len();
+            if newest || (index >= excess && info.created_unix >= cutoff) {
+                continue;
+            }
+            let deleted = self.repo.git(self.top()).writes(&writes).run(&[
+                "update-ref",
+                "-d",
+                &self.ref_name(info.seq),
+                &info.id,
+            ]);
+            if let Err(error) = deleted {
+                tracing::warn!(reason = error.message(), "a checkpoint could not be pruned");
+            }
+        }
     }
 
     fn ref_name(&self, seq: u64) -> String {
@@ -379,10 +549,15 @@ impl GitCheckpoints {
     }
 
     fn create(&self, label: &str) -> ToolResult<CheckpointInfo> {
-        let tree = self.snapshot_tree()?;
+        let (tree, skipped) = self.snapshot_tree()?;
         let seq = self.list()?.last().map_or(1, |last| last.seq + 1);
         let label = single_line(label);
-        let message = format!("elitea checkpoint {seq}: {label}");
+        let mut message = format!("elitea checkpoint {seq}: {label}");
+        if !skipped.is_empty() {
+            let list = serde_json::to_string(&skipped)
+                .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the checkpoint"))?;
+            message = format!("{message}\n\n{SKIPPED_TRAILER}{list}");
+        }
         let mut args = vec![
             "commit-tree",
             "--no-gpg-sign",
@@ -405,11 +580,14 @@ impl GitCheckpoints {
             .env("GIT_COMMITTER_EMAIL", email)
             .writes(&[self.objects()])
             .text(&args)?;
+        std::fs::create_dir_all(self.refs())
+            .map_err(|error| ToolError::io("cannot store the checkpoint", &error))?;
         self.repo.git(self.top()).writes(&[self.refs()]).run(&[
             "update-ref",
             &self.ref_name(seq),
             &commit,
         ])?;
+        self.prune();
         Ok(CheckpointInfo {
             seq,
             label,
@@ -482,7 +660,8 @@ impl GitCheckpoints {
                 &format!("{}^{{commit}}", self.ref_name(seq)),
             ])
             .map_err(|_| ToolError::new(ErrorCode::NotFound, format!("no checkpoint {seq}")))?;
-        let current = self.snapshot_tree()?;
+        let (current, _) = self.snapshot_tree()?;
+        let skipped: BTreeSet<String> = self.skipped_in(&commit).into_iter().collect();
         let scope = match only {
             Some(path) => self.top_relative(path),
             None if self.prefix.is_root() => ".".to_owned(),
@@ -509,6 +688,9 @@ impl GitCheckpoints {
         let mut write_back = Vec::new();
         let mut delete = Vec::new();
         while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+            if skipped.contains(&path) {
+                continue;
+            }
             if status == "A" {
                 delete.push(path);
             } else {
@@ -579,6 +761,7 @@ pub struct CopyCheckpoints {
     restorer: Workspace,
     /// Why the folder's git repository was not used.
     refused: Option<ToolError>,
+    limits: CheckpointLimits,
 }
 
 /// The regular files of the workspace a copy checkpoint covers: not
@@ -637,7 +820,10 @@ impl CopyCheckpoints {
         };
         let mut total = 0u64;
         for path in files {
-            let read = match self.restorer.read(&path, MAX_COPY_FILE_BYTES) {
+            let read = match self
+                .restorer
+                .read(&path, self.limits.max_file_bytes.min(MAX_COPY_FILE_BYTES))
+            {
                 Ok(read) => read,
                 Err(error) if error.code() == ErrorCode::TooLarge => {
                     manifest.skipped.insert(path.display_string());
@@ -678,12 +864,60 @@ impl CopyCheckpoints {
         std::fs::write(&temp, bytes)
             .and_then(|()| std::fs::rename(&temp, &target))
             .map_err(io)?;
+        self.prune();
         Ok(CheckpointInfo {
             seq: manifest.seq,
             label: manifest.label,
             created_unix: manifest.created_unix,
             id: format!("{:08}", manifest.seq),
         })
+    }
+
+    /// As [`GitCheckpoints::prune`], then remove stored contents no
+    /// manifest of any session of this workspace refers to.
+    fn prune(&self) {
+        let Ok(all) = self.list() else { return };
+        let cutoff = now_unix().saturating_sub(self.limits.max_age.as_secs());
+        let excess = all.len().saturating_sub(self.limits.keep.max(1));
+        for (index, info) in all.iter().enumerate() {
+            let newest = index + 1 == all.len();
+            if !newest && (index < excess || info.created_unix < cutoff) {
+                let _ = std::fs::remove_file(self.manifest_path(info.seq));
+            }
+        }
+        let Some(sessions) = self.manifests.parent() else {
+            return;
+        };
+        let mut referenced = BTreeSet::new();
+        for session in std::fs::read_dir(sessions).into_iter().flatten().flatten() {
+            for manifest in std::fs::read_dir(session.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let Ok(bytes) = std::fs::read(manifest.path()) else {
+                    // Unreadable: keep every object rather than lose one.
+                    return;
+                };
+                let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes) else {
+                    if manifest.path().extension().is_some_and(|ext| ext == "json") {
+                        return;
+                    }
+                    continue;
+                };
+                referenced.extend(manifest.files.into_values().map(|file| file.sha256));
+            }
+        }
+        for object in std::fs::read_dir(&self.objects)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = object.file_name().to_string_lossy().into_owned();
+            if name.len() == 64 && !referenced.contains(&name) {
+                let _ = std::fs::remove_file(object.path());
+            }
+        }
     }
 
     fn list(&self) -> ToolResult<Vec<CheckpointInfo>> {
@@ -761,7 +995,8 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
-    use super::{Checkpoints, REF_PREFIX};
+    use super::{CheckpointLimits, Checkpoints, REF_PREFIX};
+    use crate::error::ErrorCode;
     use crate::workspace::{Intent, Workspace};
 
     fn git(dir: &Path, args: &[&str]) -> String {
@@ -997,5 +1232,122 @@ mod tests {
             "copies survive a restart"
         );
         assert!(Checkpoints::open(&workspace, "../evil", data.path()).is_err());
+    }
+
+    fn small_limits() -> CheckpointLimits {
+        CheckpointLimits {
+            max_file_bytes: 1024,
+            ..CheckpointLimits::default()
+        }
+    }
+
+    /// M5 / L2: large files and special files stay out of a git
+    /// checkpoint, and a restore leaves what it skipped alone.
+    #[test]
+    fn git_checkpoints_skip_large_and_special_files_and_restore_leaves_them() {
+        let dir = repo();
+        let root = dir.path();
+        std::fs::write(root.join("big.bin"), vec![b'x'; 4096]).expect("big");
+        std::fs::write(root.join("grows.bin"), vec![b'y'; 4096]).expect("grows");
+        let fifo = Command::new("mkfifo")
+            .arg(root.join("pipe"))
+            .status()
+            .expect("mkfifo");
+        assert!(fifo.success());
+        let workspace = Workspace::open(root, &[]).expect("workspace");
+        let data = tempfile::tempdir().expect("data");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .with_limits(small_limits());
+        assert_eq!(checkpoints.kind(), "git");
+        checkpoints
+            .create("turn")
+            .expect("a FIFO does not fail the checkpoint");
+        let files = git(
+            root,
+            &["ls-tree", "-r", "--name-only", &format!("{REF_PREFIX}/s/1")],
+        );
+        assert!(!files.contains("big.bin"), "{files}");
+        assert!(!files.contains("pipe"), "{files}");
+        assert!(files.contains("tracked.txt"));
+
+        std::fs::write(root.join("tracked.txt"), "agent\n").expect("edit");
+        std::fs::write(root.join("big.bin"), vec![b'z'; 8192]).expect("big edit");
+        std::fs::write(root.join("grows.bin"), "now small\n").expect("shrink");
+        let report = checkpoints.restore(1).expect("restore");
+        assert_eq!(read(root, "tracked.txt").as_deref(), Some("v1\n"));
+        assert_eq!(
+            std::fs::read(root.join("big.bin")).expect("big").len(),
+            8192,
+            "a skipped file is left as it is"
+        );
+        assert_eq!(
+            read(root, "grows.bin").as_deref(),
+            Some("now small\n"),
+            "a file skipped then is not deleted now"
+        );
+        assert!(!report.deleted.iter().any(|path| path.contains(".bin")));
+    }
+
+    #[test]
+    fn too_many_untracked_bytes_skip_the_checkpoint() {
+        let dir = repo();
+        std::fs::write(dir.path().join("dump.json"), vec![b'1'; 900]).expect("dump");
+        let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
+        let data = tempfile::tempdir().expect("data");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .with_limits(CheckpointLimits {
+                max_untracked_bytes: 500,
+                ..CheckpointLimits::default()
+            });
+        assert_eq!(
+            checkpoints.create("turn").expect_err("too large").code(),
+            ErrorCode::TooLarge
+        );
+        assert!(checkpoints.list().expect("list").is_empty());
+    }
+
+    #[test]
+    fn old_checkpoints_are_pruned_in_git_and_copies() {
+        let limits = CheckpointLimits {
+            keep: 2,
+            ..CheckpointLimits::default()
+        };
+        let dir = repo();
+        let plain = tempfile::tempdir().expect("plain");
+        for root in [dir.path(), plain.path()] {
+            let workspace = Workspace::open(root, &[]).expect("workspace");
+            let data = tempfile::tempdir().expect("data");
+            let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+                .expect("open")
+                .with_limits(limits);
+            for turn in 0..4 {
+                std::fs::write(root.join("f.txt"), format!("turn {turn}\n")).expect("edit");
+                checkpoints.create(&format!("turn {turn}")).expect("create");
+            }
+            let seqs: Vec<u64> = checkpoints
+                .list()
+                .expect("list")
+                .iter()
+                .map(|info| info.seq)
+                .collect();
+            assert_eq!(seqs, [3, 4], "{}", checkpoints.kind());
+            if checkpoints.kind() == "copy" {
+                let objects = walk_count(&data.path().join("checkpoints"), "objects");
+                assert_eq!(objects, 2, "contents only the kept checkpoints use");
+            }
+        }
+    }
+
+    fn walk_count(base: &Path, name: &str) -> usize {
+        std::fs::read_dir(base)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path().join(name))
+            .filter_map(|objects| std::fs::read_dir(objects).ok())
+            .map(Iterator::count)
+            .sum()
     }
 }

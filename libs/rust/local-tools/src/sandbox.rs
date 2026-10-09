@@ -857,7 +857,9 @@ pub mod bubblewrap {
         }
         out.extend(["--dev", "/dev", "--proc", "/proc"].map(str::to_owned));
         if request.mode == SandboxMode::WorkspaceWrite {
-            for writable in &request.writable_roots {
+            // bwrap cannot bind what does not exist (a lock file git
+            // creates later): such a path stays read-only.
+            for writable in request.writable_roots.iter().filter(|path| path.exists()) {
                 push(&mut out, &["--bind"], writable);
             }
         }

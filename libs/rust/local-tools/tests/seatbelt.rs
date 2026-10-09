@@ -318,3 +318,43 @@ async fn network_is_blocked_when_denied_and_open_when_allowed() {
     assert_eq!(allowed.exit_code, Some(0), "{}", allowed.stderr);
     drop(listener);
 }
+
+/// M5: checkpoint refs and objects live in `.git`, so a sandboxed command
+/// cannot forge or rewrite a checkpoint the person would restore.
+#[tokio::test]
+async fn checkpoint_refs_and_objects_are_out_of_reach() {
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let root = fixture.workspace.root().to_path_buf();
+    std::fs::remove_dir_all(root.join(".git")).expect("reset");
+    let init = std::process::Command::new("git")
+        .current_dir(&root)
+        .args(["init", "-q"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .expect("git init");
+    assert!(init.success());
+    let refs_before = std::fs::read_dir(root.join(".git/refs"))
+        .expect("refs")
+        .count();
+    for probe in [
+        "git update-ref refs/elitea/checkpoints/s/1 4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "echo x | git hash-object -w --stdin",
+        "mkdir -p .git/refs/elitea/checkpoints/s && echo 0 > .git/refs/elitea/checkpoints/s/1",
+        "touch .git/objects/forged",
+        "touch .git/packed-refs",
+    ] {
+        let output = sh(&fixture, probe, SandboxMode::WorkspaceWrite, false).await;
+        assert_ne!(output.exit_code, Some(0), "`{probe}` succeeded");
+    }
+    assert!(!root.join(".git/refs/elitea").exists());
+    assert!(!root.join(".git/objects/forged").exists());
+    assert_eq!(
+        std::fs::read_dir(root.join(".git/refs"))
+            .expect("refs")
+            .count(),
+        refs_before
+    );
+}
