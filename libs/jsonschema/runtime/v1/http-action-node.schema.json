@@ -1,0 +1,381 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.http-action-node.v2",
+  "title": "HTTP action node (revision 2)",
+  "description": "YAML node type http, revision 2. It names a Main-owned rule and binds state to path, query, headers, body and idempotency key. It never carries a URL, method or credential.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "type",
+    "revision",
+    "operation",
+    "request",
+    "response",
+    "output"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "type": {
+      "const": "http"
+    },
+    "revision": {
+      "const": 2
+    },
+    "operation": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/bindingMap"
+        },
+        "query": {
+          "$ref": "#/$defs/bindingMap"
+        },
+        "headers": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$"
+              },
+              "from": {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+              },
+              "optional": {
+                "type": "boolean"
+              },
+              "value": {
+                "type": "string",
+                "maxLength": 8192,
+                "pattern": "^[^\\x00\\r\\n]*$"
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "from"
+                ],
+                "not": {
+                  "required": [
+                    "value"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "value"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "from"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "optional"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "body": {
+          "$ref": "#/$defs/body"
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/binding"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "json",
+            "text",
+            "artifact"
+          ]
+        },
+        "accepted_statuses": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "first",
+              "last"
+            ],
+            "properties": {
+              "first": {
+                "type": "integer",
+                "minimum": 200,
+                "maximum": 599
+              },
+              "last": {
+                "type": "integer",
+                "minimum": 200,
+                "maximum": 599
+              }
+            }
+          }
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097152
+        }
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30000
+    },
+    "output": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "string",
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^[^\\x00\\r\\n]+$"
+      }
+    },
+    "transition": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    }
+  },
+  "$defs": {
+    "binding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from"
+          ],
+          "properties": {
+            "from": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+            },
+            "optional": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value"
+          ],
+          "properties": {
+            "value": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "bindingMap": {
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9_.~-]{1,64}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/binding"
+      }
+    },
+    "jsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number",
+          "minimum": -1e+300,
+          "maximum": 1e+300
+        },
+        {
+          "type": "string",
+          "maxLength": 262144
+        },
+        {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 4096,
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    },
+    "body": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "empty"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "from"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "from": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+            },
+            "content_type": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 3,
+              "pattern": "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "value": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "content_type": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 3,
+              "pattern": "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "from",
+            "content_type"
+          ],
+          "properties": {
+            "kind": {
+              "const": "artifact"
+            },
+            "from": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+            },
+            "content_type": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 3,
+              "pattern": "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

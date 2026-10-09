@@ -1196,6 +1196,11 @@ ORDER BY 1`, removed)
 	if !contains(projectprovisioning.ReferencingTables(), "elitea_runtime.execution_jobs") {
 		t.Fatal("the covered list does not name execution_jobs, so this test proves nothing")
 	}
+	// The desktop local turn table cascades from the project (shared/0155),
+	// and the delete still names it, so a reader of referencingDeletes sees it.
+	if !contains(projectprovisioning.ReferencingTables(), "elitea_runtime.local_turn_executions") {
+		t.Fatal("referencingDeletes does not clear elitea_runtime.local_turn_executions")
+	}
 }
 
 /* ── the execution graph fixture ───────────────────────────────────────── */

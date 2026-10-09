@@ -188,6 +188,10 @@ _INDEX_INTERNAL_FAILURE_FRAME_LIMIT = 8
 # apart is what lets the claim check refuse a bundle that swapped them.
 _TOOL_RUN_SETTINGS_ROLE = "toolkit.call_tool.settings"
 _TOOL_RUN_ARGUMENTS_ROLE = "toolkit.call_tool.arguments"
+# The producer's policy document for the run (toolkit_security and the
+# sensitive action approval). The command names no entry id for it, so it is
+# found by its role, and there must be exactly one.
+_TOOL_RUN_RUNTIME_CONTEXT_ROLE = "toolkit.call_tool.runtime_context"
 
 
 class ControlPlane(Protocol):
@@ -2142,6 +2146,7 @@ class _AcceptedToolRunClaim:
     verified: VerifiedWorkerCommand
     settings: FixtureEntry
     arguments: FixtureEntry
+    runtime_context: FixtureEntry
     claim_id: str
     claim_handoff_watermark: int
 
@@ -2150,6 +2155,7 @@ class _AcceptedToolRunClaim:
 class _ResolvedToolRunInputs:
     settings: ResolvedToolkitCallToolInput
     arguments: ResolvedToolkitCallToolInput
+    runtime_context: dict[str, Any]
     client_context: EliteaClientContext
 
 
@@ -2215,7 +2221,7 @@ class ToolkitCallToolDeliveryProcessor(IndexIngestDeliveryProcessor):
         if not isinstance(accepted, _AcceptedToolRunClaim):
             raise InternalFailure()
         resolved: dict[str, ResolvedToolkitCallToolInput] = {}
-        for entry in (accepted.settings, accepted.arguments):
+        for entry in (accepted.settings, accepted.arguments, accepted.runtime_context):
             grant = self._input_request_builder.build(
                 _claim_bound_reference(
                     entry.content,
@@ -2265,9 +2271,13 @@ class ToolkitCallToolDeliveryProcessor(IndexIngestDeliveryProcessor):
                 error=error,
             )
             raise InternalFailure() from None
+        runtime_context = resolved[_TOOL_RUN_RUNTIME_CONTEXT_ROLE].value
+        if not isinstance(runtime_context, dict):
+            raise InvalidInput("The tool-run runtime context is malformed.")
         return _ResolvedToolRunInputs(
             settings=resolved[_TOOL_RUN_SETTINGS_ROLE],
             arguments=resolved[_TOOL_RUN_ARGUMENTS_ROLE],
+            runtime_context=runtime_context,
             client_context=context,
         )
 
@@ -2296,6 +2306,7 @@ class ToolkitCallToolDeliveryProcessor(IndexIngestDeliveryProcessor):
                     "tool_name": command.tool_name,
                 }
             },
+            runtime_context=resolved_input.runtime_context,
         )
         # The capability check comes BEFORE the client, the authorization and
         # the SDK call, because a toolkit this image cannot build will fail
@@ -2365,8 +2376,18 @@ def _accepted_tool_run_claim(
         (selected.arguments_entry_id, _TOOL_RUN_ARGUMENTS_ROLE),
     )
     by_id = {entry.entry_id: entry for entry in entries}
+    context_entries = [
+        entry
+        for entry in entries
+        if entry.semantic_role == _TOOL_RUN_RUNTIME_CONTEXT_ROLE
+        and entry.entry_id not in (selected.settings_entry_id, selected.arguments_entry_id)
+    ]
+    if len(context_entries) != 1:
+        # No policy document, or two: the run cannot be guarded, so it is not
+        # run (toolkit_security is enforced here, not only by the producer).
+        raise InvalidInput("The tool-run input manifest has no single runtime context.")
     accepted_entries: list[FixtureEntry] = []
-    for entry_id, role in references:
+    for entry_id, role in (*references, (context_entries[0].entry_id, _TOOL_RUN_RUNTIME_CONTEXT_ROLE)):
         entry = by_id.get(entry_id)
         if (
             entry is None
@@ -2383,6 +2404,7 @@ def _accepted_tool_run_claim(
         verified=_verified_claim_command(signed, command, receipt),
         settings=accepted_entries[0],
         arguments=accepted_entries[1],
+        runtime_context=accepted_entries[2],
         claim_id=receipt.claim_id,
         claim_handoff_watermark=int(receipt.claim_handoff_watermark),
     )

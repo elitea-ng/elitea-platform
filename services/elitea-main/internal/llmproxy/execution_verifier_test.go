@@ -17,13 +17,15 @@ import (
 )
 
 type stubExecutionVerifier struct {
-	ok    bool
-	err   error
-	calls []string
+	ok          bool
+	err         error
+	calls       []string
+	credentials []string
 }
 
-func (s *stubExecutionVerifier) VerifyExecution(_ context.Context, projectID, userID, executionID string) (bool, error) {
+func (s *stubExecutionVerifier) VerifyExecution(_ context.Context, projectID, userID, tokenID, nativeClientID, executionID string) (bool, error) {
 	s.calls = append(s.calls, projectID+"|"+userID+"|"+executionID)
+	s.credentials = append(s.credentials, tokenID+"|"+nativeClientID)
 	return s.ok, s.err
 }
 
@@ -185,5 +187,19 @@ func TestInjectIdentity_ACallbackIDIsCheckedAgainstTheAuthenticatingToken(t *tes
 				t.Fatal("the forwarded identity does not verify")
 			}
 		})
+	}
+}
+
+// The verifier is told the authenticating credential family, so a desktop
+// local turn is attributed only to calls from the device or token that
+// started it.
+func TestInjectIdentity_PassesTheCallersCredentialToTheVerifier(t *testing.T) {
+	verifier := &stubExecutionVerifier{ok: true}
+	ctx := auth.ContextWithUser(fullCtx(), auth.User{ID: "user-7", TokenID: "70", NativeClientID: "ai.elitea.desktop"})
+	out := http.Header{}
+	out.Set(HeaderExecutionID, "exec-9")
+	injectIdentity(ctx, out, []byte(frozenSecret), verifier)
+	if len(verifier.credentials) != 1 || verifier.credentials[0] != "70|ai.elitea.desktop" {
+		t.Fatalf("verifier credentials = %v, want the principal's token and native client", verifier.credentials)
 	}
 }

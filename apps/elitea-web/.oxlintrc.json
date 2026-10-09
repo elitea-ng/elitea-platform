@@ -301,6 +301,31 @@
       }
     },
     {
+      // ADR-0029 decision 9, R-A1 sanctioned path: the NATIVE (desktop) network
+      // layer. `shared/desktop/**` holds the fetch-based event stream and the
+      // host transport; `nativeTransport.ts` types the `fetch` the host
+      // supplies. They are the bearer-auth counterpart of http.ts and are
+      // reachable only through the transport registry the desktop entry fills.
+      "files": ["src/shared/api/nativeTransport.ts", "src/shared/desktop/**"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          { "name": "XMLHttpRequest", "message": "R-A4: XMLHttpRequest lives only in shared/api/upload.ts" },
+          { "name": "localStorage", "message": "§5.4: storage goes through shared/lib/storage.ts" },
+          { "name": "sessionStorage", "message": "§5.4: storage goes through shared/lib/storage.ts" }
+        ]
+      }
+    },
+    {
+      // ADR-0029: the desktop entry's connect / sign-in screen renders BEFORE the
+      // app exists — no i18n catalogue, no brand pack, no type scale are loaded
+      // yet — so its copy is English-only and its Typography uses plain sx.
+      // Scoped to the entry so any page written inside the real app still fails
+      // the gate.
+      "files": ["src/entries/desktop/**"],
+      "rules": { "i18next/no-literal-string": "off" }
+    },
+    {
       // R-A4 sanctioned path: the ONE sanctioned XMLHttpRequest (upload progress).
       "files": ["src/shared/api/upload.ts"],
       "rules": {

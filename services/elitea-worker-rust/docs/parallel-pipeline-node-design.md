@@ -286,6 +286,15 @@ This rule also applies inside Agent branches.
 
 ## Nested HITL and authorization
 
+> **Superseded (2026-10-08).** The aggregate interrupt, the "one exact complete
+> decision set" rule and the resume model in this section are replaced by
+> per-interrupt HITL: each card is decided, applied and consumed on its own,
+> siblings keep running, and nothing waits for a complete set (user decision U4).
+> See [fanout-v2-runtime-design.md](fanout-v2-runtime-design.md) and the wire
+> contract `libs/proto/contracts/fanout-interrupt-decisions-v1.md`. The text
+> below is kept as history. Child lineage that hashes `execution_id` and
+> generation is a known defect fixed by Track C1 (frozen child identity).
+
 Treat an inner `GraphError::Interrupted` as a paused branch. Do not convert it
 to `graph.parallel.branch_failed`.
 
@@ -423,8 +432,10 @@ Add focused unit and component tests for these behaviors:
 - no pending admission after Blocked or Failed;
 - two simultaneous HITL branches;
 - mixed sensitive, authorization, and clarification branches;
-- complete-set resume without replanning;
-- partial-set rejection before dispatch;
+- complete-set resume without replanning (superseded: per-interrupt resume,
+  see [fanout-v2-runtime-design.md](fanout-v2-runtime-design.md));
+- partial-set rejection before dispatch (superseded: a single decision is
+  valid; stale or foreign decisions are still refused);
 - changed resume controls reuse the original child lineage;
 - changed business input creates a new lineage;
 - process loss after child completion;
@@ -485,6 +496,8 @@ Keep the pull request in draft until these live gates pass:
 2. Compile Agent-only child graphs and activate deterministic completion.
 3. Add branch progress metadata and tracing.
 4. Add aggregate child interrupts and exact complete-set resume.
+   *Superseded: per-interrupt cards and the shared `FanoutRunner`, see
+   [fanout-v2-runtime-design.md](fanout-v2-runtime-design.md).*
 5. Add PostgreSQL crash and reclaim proofs.
 6. Add the UI node and live chat proof.
 7. Consider other branch node families after V1 passes.

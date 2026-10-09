@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { LocalWorkPolicy } from "./localWorkPolicy.zod";
 
 export const NativeClientPolicy = zod
   .object({
@@ -104,9 +105,10 @@ export const NativeClientPolicy = zod
       .describe(
         "Client contract 1.3. Widgets, home-screen quick actions and other surfaces outside the app may show conversation and agent titles. False means counts only. Default false.",
       ),
+    local_work: LocalWorkPolicy,
   })
   .describe(
-    "The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`).",
+    "The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:219 (`NativeClientPolicy`).",
   );
 
 export type NativeClientPolicy = zod.input<typeof NativeClientPolicy>;

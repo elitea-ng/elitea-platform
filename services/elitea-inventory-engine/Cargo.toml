@@ -7,34 +7,72 @@ publish = false
 description = "The Rust-native Inventory engine behind the sub-application host's engine sidecar socket (ADR-0027)."
 
 [dependencies]
+# investigate's agent loop (adk-rust; the worker's version, without its
+# patches, which only its durable history needs). No default features:
+# no skills, artifacts or plugins.
+adk-agent = { version = "=2.2.0", default-features = false }
+adk-core = { version = "=2.2.0", default-features = false }
+adk-runner = { version = "=2.2.0", default-features = false }
+adk-session = { version = "=2.2.0", default-features = false }
 # The engine sidecars' shared crates (ADR-0027): the error contract, the
 # NDJSON stream and stop flag, Python-compatible text; the socket server, the
 # container probe and process tracing.
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
+# Leiden for the communities stage.
+elitea-graph-algos = { path = "../../libs/rust/graph-algos" }
+# The content layer and document extraction (ADR-0028).
+elitea-content-source = { path = "../../libs/rust/content-source" }
+elitea-doc-extract = { path = "../../libs/rust/doc-extract" }
+# The tree-sitter parsers of the parser stage.
+elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
+# adk's model over the gateway client.
+elitea-adk-gateway = { path = "../../libs/rust/adk-gateway" }
+# investigate's conversation and its summarisation (shared with DeepWiki).
+elitea-conversation = { path = "../../libs/rust/conversation" }
+elitea-model-client = { path = "../../libs/rust/model-client" }
 elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
 # The graph's node and edge order is insertion order (graph.json, search ties).
-indexmap = "=2.14.2"
+# join_all for the per-file model calls.
+futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
+indexmap = { version = "=2.14.2", features = ["serde"] }
+# The wall-clock stamps graph metadata carries (embeddings_generated_at).
+jiff = "=0.2.38"
+# Repairing a model's malformed JSON answer.
+jsonrepair = { version = "=0.1.0", default-features = false, features = ["serde"] }
 # Entity ids are Python's md5 prefix; file hashes its sha256.
 md-5 = "=0.10.6"
 sha2 = "=0.10.9"
+# investigate's source-tool calls through the platform (the model client's
+# transport builds the client).
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "http2", "json"] }
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
 # The graph store (src/store.rs); the same stack the DeepWiki engine uses.
 sqlx = { version = "=0.8.6", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
-thiserror = "=2.0.20"
-tokio = { version = "=1.53.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+# Chunking a file for the model (by syntax where a grammar exists).
+text-splitter = { version = "=0.33.0", features = ["code"] }
+thiserror = "=2.0.21"
+# The investigation's cancellation token (adk's runner takes one).
+tokio-util = { version = "=0.7.19", default-features = false }
+tokio = { version = "=1.53.2", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "=0.1.44"
 
 [features]
+# PDF, Office, e-mail and e-book documents in a source (ADR-0028 D4; xberg,
+# about +29 MB of binary). On by default: the engines ingest enterprise
+# content, not only code.
+default = ["documents"]
+documents = ["elitea-doc-extract/documents"]
 # TEST ONLY (debug builds): clone from an `http://` loopback server, for the
 # ingestion tests' local git server. A release build ignores it.
 loopback-git-http = ["elitea-repo-ingest/loopback-git-http"]
 
 [dev-dependencies]
 # The ingestion tests' local smart-HTTP git server (`git http-backend`).
-axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
-tokio = { version = "=1.53.1", features = ["test-util"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "=1.53.2", features = ["test-util"] }
 
 [lints.rust]
 unsafe_code = "forbid"

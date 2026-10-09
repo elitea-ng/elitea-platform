@@ -46,6 +46,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Recovery guarantees inventory](recovery-guarantees-inventory-20261008.md) records the platform recovery matrix baseline, evidence ruling and ranked gap backlog.
+
 - [Sandbox phase deadlines](sandbox-phase-deadlines-20261002.md) separates durable readiness and execution clocks and records rolling compatibility and Docker/Kubernetes browser acceptance.
 
 - [Main integration and PR 883 release preparation](main-integration-20261001.md) records conflict resolution, migration identities, fresh CI repairs, and preserved Point 5 work.
@@ -428,4 +430,5 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
 - [Pipeline size bounds and HTTP snapshot scope](pipeline-size-bounds-http-snapshot-20261008.md) records one 512 KiB pipeline bound across Main and Worker, the non-HTTP snapshot scope, browser evidence and follow-ups.
+- [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.
 - [Go module advisories](go-module-advisories-20261008.md) records the cel-go and klauspost/compress fixes, the deferred x/crypto fix (Go 1.26), and the guard against linking x/crypto/ssh and openpgp.

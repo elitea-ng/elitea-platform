@@ -178,11 +178,14 @@ func (service *RuntimeApplicationVersionService) Resolve(
 		)
 	}
 
-	record, err := service.versions.ReadCurrentApplicationVersion(
+	record, frozen, err := freezeSavedApplicationVersion(
 		ctx,
+		service.versions,
+		service.freezer,
 		authorization.ResourceProjectID,
-		int64(applicationID),
-		int64(versionID),
+		actorID,
+		applicationID,
+		versionID,
 	)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
@@ -191,32 +194,11 @@ func (service *RuntimeApplicationVersionService) Resolve(
 		if errors.Is(err, ErrContentNotFound) {
 			return RuntimeApplicationVersionContext{}, ErrContentNotFound
 		}
-		return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(
-			runtimeContextStageNestedVersionRead,
-		)
-	}
-	// The query already filters on both identity columns, and this repeats the
-	// comparison against what the URL asked for. The duplication is deliberate:
-	// the worker validates the same pair on its side (runtime_context.rs:554-564)
-	// and would reject a mismatched document as an authorization failure with no
-	// diagnosis, so the disagreement is worth naming here instead.
-	if record.ApplicationID != int64(applicationID) ||
-		record.VersionID != int64(versionID) ||
-		len(record.VersionDetails) == 0 || !json.Valid(record.VersionDetails) {
-		return RuntimeApplicationVersionContext{}, ErrContentNotFound
-	}
-
-	frozen, err := service.freezer.FreezeCurrentApplicationVersion(
-		ctx,
-		agentexecutionapp.CurrentApplicationVersionFreezeRequest{
-			ProjectID:      int32(authorization.ResourceProjectID),
-			ActorUserID:    int32(actorID),
-			VersionDetails: record.VersionDetails,
-		},
-	)
-	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return RuntimeApplicationVersionContext{}, contextErr
+		var stage *savedApplicationVersionFreezeError
+		if errors.As(err, &stage) && stage.read {
+			return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(
+				runtimeContextStageNestedVersionRead,
+			)
 		}
 		return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(
 			runtimeContextStageNestedVersionFreeze,
@@ -264,4 +246,97 @@ func (service *RuntimeApplicationVersionService) Resolve(
 		VersionDetails:         frozen,
 		FrozenDefinitionSHA256: definitionSHA256,
 	}, nil
+}
+
+// savedApplicationVersionFreezeError tells the two callers of
+// freezeSavedApplicationVersion which half failed, without either of them
+// re-deriving it: the read (a database fault) or the freeze (the shared
+// admission rules refused, or one of their dependencies did).
+type savedApplicationVersionFreezeError struct {
+	read  bool
+	cause error
+}
+
+func (e *savedApplicationVersionFreezeError) Error() string {
+	if e.read {
+		return "saved application version read failed: " + e.cause.Error()
+	}
+	return "saved application version freeze failed: " + e.cause.Error()
+}
+
+func (e *savedApplicationVersionFreezeError) Unwrap() error { return e.cause }
+
+// freezeSavedApplicationVersion is the ONE projection both the worker's nested
+// child route (RuntimeApplicationVersionService) and the desktop's resolved
+// definition (ClientApplicationVersionService) start from: read the saved
+// version out of the project's tenant schema, check the row is the pair that
+// was asked for, and freeze it through the same CurrentApplicationVersionFreezer
+// the interactive start path uses. The freeze keeps every secret reference
+// sealed (configurations.CurrentToolkitSettingsReferenceMode); redemption is a
+// separate step only the claim-bound worker route takes.
+//
+// The project and actor are the CALLER's to authorize: this function trusts
+// them. It answers ErrContentNotFound for an absent or mismatched pair, the
+// context error when the context ended, and *savedApplicationVersionFreezeError
+// for everything else.
+func freezeSavedApplicationVersion(
+	ctx context.Context,
+	versions CurrentApplicationVersionSource,
+	freezer agentexecutionapp.CurrentApplicationVersionFreezer,
+	projectID int64,
+	actorID int64,
+	applicationID uint64,
+	versionID uint64,
+) (CurrentApplicationVersionRecord, json.RawMessage, error) {
+	if versions == nil || freezer == nil ||
+		projectID <= 0 || projectID > math.MaxInt32 ||
+		actorID <= 0 || actorID > math.MaxInt32 {
+		return CurrentApplicationVersionRecord{}, nil, &savedApplicationVersionFreezeError{
+			read: true, cause: errors.New("saved application version dependencies or identities are invalid"),
+		}
+	}
+	if applicationID == 0 || applicationID > math.MaxInt32 ||
+		versionID == 0 || versionID > math.MaxInt32 {
+		return CurrentApplicationVersionRecord{}, nil, ErrContentNotFound
+	}
+	record, err := versions.ReadCurrentApplicationVersion(
+		ctx,
+		projectID,
+		int64(applicationID),
+		int64(versionID),
+	)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return CurrentApplicationVersionRecord{}, nil, contextErr
+		}
+		if errors.Is(err, ErrContentNotFound) {
+			return CurrentApplicationVersionRecord{}, nil, ErrContentNotFound
+		}
+		return CurrentApplicationVersionRecord{}, nil, &savedApplicationVersionFreezeError{read: true, cause: err}
+	}
+	// The query already filters on both identity columns, and this repeats the
+	// comparison against what the URL asked for. The duplication is deliberate:
+	// the worker validates the same pair on its side (runtime_context.rs:554-564)
+	// and would reject a mismatched document as an authorization failure with no
+	// diagnosis, so the disagreement is worth naming here instead.
+	if record.ApplicationID != int64(applicationID) ||
+		record.VersionID != int64(versionID) ||
+		len(record.VersionDetails) == 0 || !json.Valid(record.VersionDetails) {
+		return CurrentApplicationVersionRecord{}, nil, ErrContentNotFound
+	}
+	frozen, err := freezer.FreezeCurrentApplicationVersion(
+		ctx,
+		agentexecutionapp.CurrentApplicationVersionFreezeRequest{
+			ProjectID:      int32(projectID),
+			ActorUserID:    int32(actorID),
+			VersionDetails: record.VersionDetails,
+		},
+	)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return CurrentApplicationVersionRecord{}, nil, contextErr
+		}
+		return CurrentApplicationVersionRecord{}, nil, &savedApplicationVersionFreezeError{cause: err}
+	}
+	return record, frozen, nil
 }

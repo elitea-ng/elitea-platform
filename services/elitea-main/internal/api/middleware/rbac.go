@@ -227,9 +227,33 @@ func RequireResolvedPermissionsForProject(
 
 			user.UserID = strconv.FormatInt(resolution.UserID, 10)
 			ctx := auth.ContextWithUser(r.Context(), user)
+			ctx = context.WithValue(ctx, resolvedProjectPermissionsKey{}, resolvedProjectPermissions{
+				mode: mode, projectID: resolvedProjectID, permissions: append([]string(nil), resolution.Permissions...),
+			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+type resolvedProjectPermissionsKey struct{}
+
+type resolvedProjectPermissions struct {
+	mode, projectID string
+	permissions     []string
+}
+
+// ResolvedProjectPermissions answers the permission set
+// RequireResolvedPermissionsForProject resolved for this request's caller in
+// projectID under mode, so a handler that needs a second permission of the same
+// project (an optional part of its answer) reads it here instead of asking the
+// resolver again. ok is false when the gate did not run for that project and
+// mode.
+func ResolvedProjectPermissions(ctx context.Context, mode, projectID string) ([]string, bool) {
+	resolved, ok := ctx.Value(resolvedProjectPermissionsKey{}).(resolvedProjectPermissions)
+	if !ok || resolved.mode != mode || resolved.projectID != projectID {
+		return nil, false
+	}
+	return append([]string(nil), resolved.permissions...), true
 }
 
 // writeResolverError answers a permission-resolver error.

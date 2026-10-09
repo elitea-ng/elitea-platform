@@ -84,9 +84,14 @@ export const ClientPublicPolicy = zod
       .describe(
         "Client contract 1.3. Widgets, home-screen quick actions and other surfaces outside the app may show conversation and agent titles. False means counts only. Default false.",
       ),
+    local_work_allowed: zod
+      .boolean()
+      .describe(
+        "Client contract 1.5 (ADR-0029 decision 6). The token policy's `local_work.allowed`: a desktop app may offer local work. The rest of the `local_work` group travels only with a token. Default false.",
+      ),
   })
   .describe(
-    "The public subset of the native client policy (ADR-0025 decision 5); the full policy travels with every token response. NOTE(W2): internal/api/v2/discovery/document.go:65 (`PublicPolicy`).",
+    "The public subset of the native client policy (ADR-0025 decision 5); the full policy travels with every token response. NOTE(W2): internal/api/v2/discovery/document.go:100 (`PublicPolicy`).",
   );
 
 export type ClientPublicPolicy = zod.input<typeof ClientPublicPolicy>;

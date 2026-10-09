@@ -86,6 +86,17 @@ fn source(extra: &Value) -> Source {
     Source::parse(Some(&raw), &["github".to_owned()]).expect("a source")
 }
 
+/// The file nodes of a graph (`source_file`, `document_file`, …), by name.
+fn file_names(graph: &Graph) -> Vec<String> {
+    let mut names: Vec<String> = graph
+        .nodes()
+        .filter(|(_, n)| n["layer"] == json!("structure"))
+        .filter_map(|(_, n)| n["name"].as_str().map(str::to_owned))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
 #[test]
 fn a_tree_is_selected_as_the_loader_did_and_diffed_by_hash() {
     let root = scratch("tree");
@@ -126,7 +137,7 @@ fn a_tree_is_selected_as_the_loader_did_and_diffed_by_hash() {
     let second = ingest_tree(&mut graph, &source, &root, &first.hashes, &context).expect("ingests");
     assert_eq!(second.unchanged, 1);
     assert_eq!(second.documents_processed, 2);
-    assert_eq!(graph.node_count(), 3);
+    assert_eq!(file_names(&graph), ["README.md", "app.py", "new.go"]);
     let app = graph
         .node(&entity_id("file", "src/app.py", Some("src/app.py")))
         .expect("re-read");
@@ -140,7 +151,7 @@ fn a_tree_is_selected_as_the_loader_did_and_diffed_by_hash() {
     std::fs::remove_file(root.join("README.md")).expect("rm");
     let third = ingest_tree(&mut graph, &source, &root, &second.hashes, &context).expect("ingests");
     assert_eq!(third.removed_files, 1);
-    assert_eq!(graph.node_count(), 2);
+    assert_eq!(file_names(&graph), ["app.py", "new.go"]);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -390,15 +401,23 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
     let settings = settings(&root.join("jobs"), "127.0.0.1");
     let (context, mut lines, _) = context();
 
-    let first = ingest::run(&pool, key, &loopback_source(port), &settings, &context)
-        .await
-        .expect("the first run");
+    let first = ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &settings,
+        &ingest::RunOptions::default(),
+        &context,
+    )
+    .await
+    .expect("the first run");
     assert_eq!(first.documents_processed, 2);
     let (graph, revision) = store::load(&pool, key)
         .await
         .expect("load")
         .expect("a graph");
-    assert_eq!((graph.node_count(), revision), (2, 1));
+    assert_eq!(file_names(&graph), ["README.md", "app.py"]);
+    assert_eq!(revision, 1);
     let status = sources::status_document(&pool, key).await.expect("status");
     assert_eq!(status["sources"]["5"]["status"], json!("completed"));
     assert_eq!(status["sources"]["5"]["documents_processed"], json!(2));
@@ -421,9 +440,16 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
             ("docs/guide.md", Some("# guide\n")),
         ],
     );
-    let second = ingest::run(&pool, key, &loopback_source(port), &settings, &context)
-        .await
-        .expect("the second run");
+    let second = ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &settings,
+        &ingest::RunOptions::default(),
+        &context,
+    )
+    .await
+    .expect("the second run");
     assert_eq!(
         (
             second.documents_processed,
@@ -438,13 +464,14 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
         .expect("load")
         .expect("a graph");
     assert_eq!(revision, 2);
-    let mut names: Vec<&str> = graph
-        .nodes()
-        .filter_map(|(_, n)| n["name"].as_str())
-        .collect();
-    names.sort_unstable();
-    assert_eq!(names, ["app.py", "guide.md"]);
-    let hashes = sources::file_hashes(&pool, key, "repo")
+    assert_eq!(file_names(&graph), ["app.py", "guide.md"]);
+    assert!(
+        graph
+            .nodes()
+            .any(|(_, n)| n["name"] == json!("hello") && n["type"] == json!("function")),
+        "the re-read file's function"
+    );
+    let hashes = sources::document_versions(&pool, key, "repo")
         .await
         .expect("hashes");
     assert_eq!(
@@ -479,6 +506,7 @@ async fn a_refused_clone_is_recorded_and_commits_nothing() {
         key,
         &loopback_source(port),
         &settings(&root.join("jobs"), "github.com"),
+        &ingest::RunOptions::default(),
         &context,
     )
     .await;
@@ -531,4 +559,335 @@ async fn one_ingestion_per_graph_at_a_time() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(retaken.is_some(), "released when dropped");
+}
+
+fn by_name(graph: &Graph, name: &str, kind: &str) -> String {
+    let found = graph
+        .nodes()
+        .find(|(_, n)| n["name"] == json!(name) && n["type"] == json!(kind));
+    match found {
+        Some((id, _)) => id.to_owned(),
+        None => panic!(
+            "no {kind} {name}: {:?}",
+            graph
+                .nodes()
+                .map(|(_, n)| (n["name"].clone(), n["type"].clone()))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+fn edge(graph: &Graph, source: &str, target: &str) -> Option<serde_json::Map<String, Value>> {
+    graph
+        .edges()
+        .find(|(s, t, _)| *s == source && *t == target)
+        .map(|(_, _, e)| e.clone())
+}
+
+#[test]
+fn code_files_add_their_symbols_and_relations() {
+    let root = scratch("parse");
+    write(
+        &root,
+        "src/users.py",
+        b"from src.util import helper\n\nclass Users:\n    \"\"\"The user registry.\"\"\"\n    def create(self, name):\n        local = name\n        return helper(local)\n",
+    );
+    write(&root, "src/util.py", b"def helper(x):\n    return x\n");
+    write(
+        &root,
+        "cmd/main.go",
+        b"package main\n\nfunc Run() int {\n\treturn 1\n}\n",
+    );
+    write(
+        &root,
+        "app/Order.kt",
+        b"package app\n\ndata class Order(val id: String)\n",
+    );
+    write(
+        &root,
+        "ios/Cart.swift",
+        b"import Foundation\n\nstruct Cart {\n    var items: [String]\n}\n",
+    );
+    write(&root, "README.md", b"# demo\n");
+    let (context, _lines, _) = context();
+    let mut graph = Graph::new();
+    let outcome = ingest_tree(
+        &mut graph,
+        &source(&json!({})),
+        &root,
+        &BTreeMap::new(),
+        &context,
+    )
+    .expect("ingests");
+    assert_eq!(outcome.documents_processed, 6);
+    // The Kotlin and Swift ports of the Python regex parsers.
+    for (name, file) in [("Order", "app/Order.kt"), ("Cart", "ios/Cart.swift")] {
+        assert!(
+            graph
+                .nodes()
+                .any(|(_, n)| n["name"] == json!(name)
+                    && n["citations"][0]["file_path"] == json!(file)),
+            "{name} from {file}"
+        );
+    }
+    assert!(
+        outcome.parse_errors.is_empty(),
+        "{:?}",
+        outcome.parse_errors
+    );
+
+    let users = by_name(&graph, "Users", "class");
+    let create = by_name(&graph, "create", "method");
+    let helper = by_name(&graph, "helper", "function");
+    let run = by_name(&graph, "Run", "function");
+    let users_file = by_name(&graph, "users.py", "source_file");
+    assert!(
+        graph
+            .nodes()
+            .all(|(_, n)| n["name"] != json!("name") && n["name"] != json!("local")),
+        "no parameter or local entities"
+    );
+    let users_node = graph.node(&users).expect("Users");
+    assert_eq!(users_node["layer"], json!("code"));
+    assert_eq!(users_node["description"], json!("The user registry."));
+    assert_eq!(users_node["citations"][0]["line_start"], json!(3));
+    assert!(graph.node(&run).is_some());
+
+    let contains = edge(&graph, &users, &create).expect("class contains its method");
+    assert_eq!(contains["relation_type"], json!("contains"));
+    let calls = edge(&graph, &create, &helper).expect("the cross-file call resolved by name");
+    assert_eq!(
+        calls["relation_type"],
+        json!("calls"),
+        "not replaced by `references`"
+    );
+    assert_eq!(calls["discovered_in_file"], json!("src/users.py"));
+    assert_eq!(calls["source"], json!("parser"));
+    let file_edge = edge(&graph, &users_file, &users).expect("the file contains its class");
+    assert_eq!(file_edge["relation_type"], json!("contains"));
+    let file_node = graph.node(&users_file).expect("the file node");
+    assert!(file_node["entity_count"].as_u64().is_some_and(|n| n >= 2));
+    assert!(
+        file_node["code_entity_count"]
+            .as_u64()
+            .is_some_and(|n| n >= 2)
+    );
+
+    // The file changes: its symbols and edges go and come back; the helper
+    // another file declares stays.
+    write(&root, "src/users.py", b"class Accounts:\n    pass\n");
+    let hashes = outcome.hashes.clone();
+    ingest_tree(&mut graph, &source(&json!({})), &root, &hashes, &context).expect("re-ingests");
+    assert!(
+        graph.nodes().all(|(_, n)| n["name"] != json!("Users")),
+        "the old class went"
+    );
+    by_name(&graph, "Accounts", "class");
+    by_name(&graph, "helper", "function");
+    assert!(edge(&graph, &create, &helper).is_none());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---------------------------------------------------------------------------
+// With a model: a mock OpenAI-compatible gateway behind the real client
+// ---------------------------------------------------------------------------
+
+/// `/chat/completions` answering by prompt kind, as a model would.
+async fn gateway(
+    axum::extract::State(calls): axum::extract::State<
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    >,
+    axum::Json(body): axum::Json<Value>,
+) -> axum::Json<Value> {
+    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let prompt = body["messages"][0]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(
+        body["temperature"],
+        json!(0.0),
+        "the extractors sample deterministically"
+    );
+    let answer = if prompt.starts_with("Extract semantic entities") {
+        if prompt.contains("Refund policy") {
+            r#"[{"id": "r", "type": "Business Rules", "name": "Refund window", "line_start": 3, "line_end": 9,
+                 "properties": {"description": "Refunds within 30 days"}},
+                {"id": "s", "type": "service", "name": "Billing Service", "line_start": 10, "line_end": 14,
+                 "properties": {"description": "Issues refunds"}}]"#
+        } else {
+            "[]"
+        }
+    } else if prompt.starts_with("Extract SEMANTIC relationships") {
+        r#"[{"source_id": "Billing Service", "relation_type": "implements", "target_id": "Refund window", "confidence": 0.9},
+            {"source_id": "Billing Service", "relation_type": "related_to", "target_id": "Billing Service", "confidence": 0.9}]"#
+    } else if prompt.starts_with("Extract factual information") {
+        r#"[{"fact_type": "decision", "title": "Refunds go through Billing", "line_start": 2, "line_end": 4, "confidence": 0.8}]"#
+    } else {
+        "[]"
+    };
+    axum::Json(json!({
+        "id": "x", "object": "chat.completion", "model": "m",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": answer}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }))
+}
+
+#[cfg(feature = "loopback-git-http")]
+#[tokio::test]
+async fn a_source_with_a_model_gets_entities_facts_and_relations() {
+    use elitea_inventory_engine::extract::gateway_model;
+    use elitea_inventory_engine::ingest::ModelOptions;
+    use elitea_model_client::chat::ChatClient;
+    use elitea_model_client::settings::ModelSettings;
+    use elitea_model_client::transport::{Transport, TransportSettings};
+
+    let Some(pool) = database("model").await else {
+        return;
+    };
+    let root = scratch("model");
+    repository(&root);
+    let policy = format!(
+        "# Refund policy\n\nRefunds are accepted within 30 days.\n{}\n## Billing Service\n\nThe Billing Service issues every refund.\n",
+        "Customers ask support for a refund and support files it.\n".repeat(20)
+    );
+    publish(&root, &[("docs/refunds.md", Some(policy.as_str()))]);
+    let port = serve(&root).await;
+
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let app = axum::Router::new()
+        .route("/v1/chat/completions", axum::routing::post(gateway))
+        .with_state(std::sync::Arc::clone(&calls));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let model_port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    let settings_value = json!({
+        "api_base": format!("http://127.0.0.1:{model_port}/v1"),
+        "api_key": "k",
+        "model_name": "m",
+        "streaming": false,
+    });
+    let model_settings = ModelSettings::from_llm_settings(&settings_value).expect("llm settings");
+    let transport = Transport::new(&TransportSettings::default()).expect("transport");
+    let (context, _lines, stop) = context();
+    let model = gateway_model(ChatClient::new(transport, model_settings), stop);
+    let options = ingest::RunOptions {
+        model: Some(ModelOptions::new(model)),
+        ..ingest::RunOptions::default()
+    };
+
+    let key = GraphKey::new(1, 10).expect("key");
+    let outcome = ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &settings(&root.join("jobs"), "127.0.0.1"),
+        &options,
+        &context,
+    )
+    .await
+    .expect("the run");
+    assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 3);
+    assert_eq!(
+        outcome.model_skipped, 2,
+        "README and app.py are small: {outcome:?}"
+    );
+    let (graph, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    let rule = by_name(&graph, "Refund window", "rule");
+    let service = by_name(&graph, "Billing Service", "service");
+    let fact = by_name(&graph, "Refunds go through Billing", "fact");
+    let rule_node = graph.node(&rule).expect("rule");
+    assert!(
+        rule_node.get("layer").is_none(),
+        "`rule` is in no layer of LAYER_TYPE_MAPPING"
+    );
+    assert_eq!(
+        rule_node["citations"][0]["file_path"],
+        json!("docs/refunds.md")
+    );
+    assert_eq!(
+        rule_node["properties"]["description"],
+        json!("Refunds within 30 days")
+    );
+    assert_eq!(
+        graph.node(&fact).expect("fact")["fact_type"],
+        json!("decision")
+    );
+    let implements = edge(&graph, &service, &rule).expect("the model's relation");
+    assert_eq!(implements["relation_type"], json!("implements"));
+    assert_eq!(implements["source"], json!("llm"));
+    assert_eq!(implements["discovered_in_file"], json!("docs/refunds.md"));
+    assert!(
+        edge(&graph, &service, &service).is_none(),
+        "the quality pass removes self-loops"
+    );
+    let file = by_name(&graph, "refunds.md", "document_file");
+    assert!(
+        edge(&graph, &file, &rule).is_some(),
+        "the file contains what the model found"
+    );
+    assert_eq!(graph.node(&file).expect("file")["fact_count"], json!(1));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Documents that are not text (ADR-0028 D4): an RTF and an e-mail in the
+/// tree are extracted and cited like any file; an image is still skipped.
+#[cfg(feature = "documents")]
+#[test]
+fn documents_in_a_tree_are_extracted() {
+    let root = scratch("documents");
+    write(
+        &root,
+        "policies/refunds.rtf",
+        br"{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}\f0\pard Refunds are accepted within thirty days.\par}",
+    );
+    write(
+        &root,
+        "mail/decision.eml",
+        b"From: cfo@example.com\r\nSubject: Refund approvals\r\nContent-Type: text/plain\r\n\r\nBilling approves every refund.\r\n",
+    );
+    write(&root, "logo.png", b"\x89PNG\r\n\x1a\n");
+    let (context, _lines, _) = context();
+    let mut graph = Graph::new();
+    let outcome = ingest_tree(
+        &mut graph,
+        &source(&json!({})),
+        &root,
+        &BTreeMap::new(),
+        &context,
+    )
+    .expect("ingests");
+    assert_eq!(outcome.documents_processed, 2, "{outcome:?}");
+    assert_eq!(outcome.skipped_unsupported, 1, "the image");
+    assert_eq!(
+        outcome.documents["policies/refunds.rtf"].mime,
+        "application/rtf"
+    );
+    let rtf = graph
+        .node(&entity_id(
+            "file",
+            "policies/refunds.rtf",
+            Some("policies/refunds.rtf"),
+        ))
+        .expect("the document's node");
+    assert_eq!(
+        rtf["citations"][0]["doc_id"],
+        json!("repo://policies/refunds.rtf")
+    );
+    assert!(rtf["line_count"].as_u64().is_some_and(|n| n >= 1));
+    assert!(
+        graph
+            .node(&entity_id(
+                "file",
+                "mail/decision.eml",
+                Some("mail/decision.eml")
+            ))
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }

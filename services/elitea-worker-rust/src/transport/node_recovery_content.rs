@@ -673,7 +673,7 @@ mod tests {
         .expect("receipt")
     }
     fn poll() -> Value {
-        json!({"schema":"elitea.pipeline.node-recovery-control.v1", "execution_id":"execution/one",
+        json!({"schema":"elitea.pipeline.node-recovery-control.v1", "execution_id":"execution-one",
             "generation":2,"desired_state":"SUSPENDED","receipt":receipt(),"action":null})
     }
     #[test]
@@ -682,7 +682,7 @@ mod tests {
         assert!(serde_json::from_value::<NodeRecoveryControlReply>(value.clone()).is_ok());
         value.as_object_mut().expect("object").remove("action");
         assert!(serde_json::from_value::<NodeRecoveryControlReply>(value).is_err());
-        let ack = json!({"schema":"elitea.pipeline.node-recovery-ack.v1","execution_id":"execution/one",
+        let ack = json!({"schema":"elitea.pipeline.node-recovery-ack.v1","execution_id":"execution-one",
             "generation":2,"request_id":"1".repeat(32),"applied_revision":4,"replay":false,
             "recovery_resume_authorized":false,"resumption":null,
             "terminal_settlement_authorized":false,"terminal_authorization":null});
@@ -740,7 +740,7 @@ mod tests {
             assert_eq!(
                 request.uri().path(),
                 format!(
-                    "/executions/execution%2Fone/generations/2/node-recovery/{}",
+                    "/executions/execution-one/generations/2/node-recovery/{}",
                     self.operation
                 )
             );
@@ -837,9 +837,9 @@ mod tests {
         let authority = crate::protocol::control::test_node_recovery_control_authority(receipt());
         let request_id = "1".repeat(32);
         let sha = receipt_sha256(authority.receipt()).expect("hash");
-        let valid = json!({"schema":"elitea.pipeline.node-recovery-ack.v1","execution_id":"execution/one","generation":2,
+        let valid = json!({"schema":"elitea.pipeline.node-recovery-ack.v1","execution_id":"execution-one","generation":2,
             "request_id":request_id,"applied_revision":4,"replay":false,"recovery_resume_authorized":true,
-            "resumption":{"schema":"elitea.pipeline.node-recovery-resumption.v1","execution_id":"execution/one","generation":2,
+            "resumption":{"schema":"elitea.pipeline.node-recovery-resumption.v1","execution_id":"execution-one","generation":2,
                 "request_id":request_id,"activation_id":receipt().activation_id,"journal_revision":4,
                 "input_bundle_id":"frozen","input_manifest_sha256":"4".repeat(64),"receipt_sha256":sha,"claim_id":"claim-1","failure_route_continuation":null},
             "terminal_settlement_authorized":false,"terminal_authorization":null});
@@ -889,7 +889,7 @@ mod tests {
         assert!(next.validate());
         let id = "1".repeat(32);
         let sha = receipt_sha256(&original).unwrap();
-        let valid = json!({"schema":"elitea.pipeline.node-recovery-ack.v1","execution_id":"execution/one",
+        let valid = json!({"schema":"elitea.pipeline.node-recovery-ack.v1","execution_id":"execution-one",
             "generation":2,"request_id":id,"applied_revision":4,"replay":false,
             "recovery_resume_authorized":false,"resumption":null,
             "terminal_settlement_authorized":false,"terminal_authorization":null});
@@ -970,9 +970,9 @@ mod tests {
             terminal_stop_reason: None,
             failure_route_continuation: Some(&route),
         };
-        let valid = json!({"schema":"elitea.pipeline.node-recovery-ack.v1","execution_id":"execution/one","generation":2,
+        let valid = json!({"schema":"elitea.pipeline.node-recovery-ack.v1","execution_id":"execution-one","generation":2,
             "request_id":id,"applied_revision":4,"replay":false,"recovery_resume_authorized":true,
-            "resumption":{"schema":"elitea.pipeline.node-recovery-resumption.v1","execution_id":"execution/one","generation":2,
+            "resumption":{"schema":"elitea.pipeline.node-recovery-resumption.v1","execution_id":"execution-one","generation":2,
                 "request_id":id,"activation_id":original.activation_id,"journal_revision":4,"input_bundle_id":"frozen",
                 "input_manifest_sha256":"4".repeat(64),"receipt_sha256":sha,"claim_id":"claim-1",
                 "failure_route_continuation":route},"terminal_settlement_authorized":false,"terminal_authorization":null});

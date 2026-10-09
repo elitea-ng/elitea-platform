@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-ack-request.v1",
+  "title": "Private decision ACK request",
+  "description": "Body of POST /executions/{executionID}/generations/{generation}/interrupts/ack. Sent only after the resumed child checkpoint is saved (applied) or after the child checkpoint proves the card is no longer current (stale).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "interrupt_key",
+    "request_id",
+    "revision",
+    "decision_sha256",
+    "outcome",
+    "child_checkpoint_id"
+  ],
+  "properties": {
+    "interrupt_key": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 9223372036854775807
+    },
+    "decision_sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "outcome": {
+      "enum": [
+        "applied",
+        "stale"
+      ]
+    },
+    "child_checkpoint_id": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "outcome": {
+          "const": "applied"
+        },
+        "child_checkpoint_id": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "properties": {
+        "outcome": {
+          "const": "stale"
+        },
+        "child_checkpoint_id": {
+          "type": "null"
+        }
+      }
+    }
+  ]
+}
