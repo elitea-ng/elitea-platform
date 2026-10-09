@@ -35,7 +35,10 @@
 -- file.
 CREATE TABLE IF NOT EXISTS elitea_runtime.local_turn_executions (
     execution_id TEXT PRIMARY KEY,
-    project_id INTEGER NOT NULL REFERENCES centry.project(id),
+    -- ON DELETE CASCADE: a local turn is nothing without its project, and
+    -- the project delete (projectprovisioning.referencingDeletes) also clears
+    -- it explicitly, so the delete names what it removes.
+    project_id INTEGER NOT NULL REFERENCES centry.project(id) ON DELETE CASCADE,
     actor_id TEXT NOT NULL,
     token_id TEXT NOT NULL,
     native_client_id TEXT NOT NULL DEFAULT '',
