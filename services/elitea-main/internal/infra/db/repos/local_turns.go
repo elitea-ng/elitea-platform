@@ -211,18 +211,17 @@ func (r *LocalTurnsRepo) CommitLocalTurn(ctx context.Context, record localturn.C
 		committedAt  *time.Time
 		storedDigest []byte
 		expired      bool
-		startedAt    time.Time
 		credential   localturn.Credential
 	)
 	err = tx.QueryRow(ctx, `
 SELECT conversation_uuid::text, question_id::text, response_message_id::text,
        target_participant_id, memories_used, committed_at, commit_digest,
-       expires_at <= clock_timestamp(), started_at, token_id, native_client_id
+       expires_at <= clock_timestamp(), token_id, native_client_id
 FROM elitea_runtime.local_turn_executions
 WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3
 FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.ActorUserID, 10)).
 		Scan(&turn.ConversationUUID, &questionID, &turn.ResponseMessageID, &participant,
-			&turn.MemoriesUsed, &committedAt, &storedDigest, &expired, &startedAt,
+			&turn.MemoriesUsed, &committedAt, &storedDigest, &expired,
 			&credential.TokenID, &credential.NativeClientID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return localturn.CommittedTurn{}, localturn.ErrNotFound
@@ -251,20 +250,27 @@ FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.Acto
 		return localturn.CommittedTurn{}, err
 	}
 
-	// The question is dated at the turn's START, the moment a cloud turn's
-	// admission writes its question group, not at the commit. The memory
-	// next-turn guarantee reads "the user's previous turn" as the newest
-	// message the user authored, so a memory saved while this turn ran
-	// (after started_at) must stay newer than it, and the next turn reserves it.
-	var questionGroup int64
+	// Both messages are dated at the COMMIT and after every message already
+	// in the conversation: the question first, the answer a millisecond
+	// later. Dating them at the turn's start would order them before messages
+	// written while the turn ran. The memory next-turn guarantee does not need
+	// the old backdating: its "previous turn" boundary reads a local turn's
+	// started_at instead of its question's created_at
+	// (MemoriesRepo.ResolveCurrentMemoryRecall).
+	var (
+		questionGroup int64
+		questionAt    time.Time
+	)
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
-INSERT INTO %s.chat_message_group
+INSERT INTO %[1]s.chat_message_group
     (uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming, created_at)
-VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, $6::timestamptz)
-RETURNING id`, schema),
+VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, GREATEST(
+    clock_timestamp(),
+    (SELECT max(created_at) + interval '1 millisecond'
+     FROM %[1]s.chat_message_group WHERE conversation_id = $3)))
+RETURNING id, created_at`, schema),
 		questionID, target.userParticipantID, target.conversationID, target.targetID, string(record.QuestionMeta),
-		startedAt,
-	).Scan(&questionGroup)
+	).Scan(&questionGroup, &questionAt)
 	if err != nil {
 		return localturn.CommittedTurn{}, localTurnWriteError("insert question", err)
 	}
@@ -276,10 +282,10 @@ RETURNING id`, schema),
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.chat_message_group
     (uuid, author_participant_id, conversation_id, reply_to_id, meta, is_streaming, created_at, task_id)
-VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, $7::timestamptz + interval '1 second', $6)
+VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, $7::timestamptz + interval '1 millisecond', $6)
 RETURNING id`, schema),
 		turn.ResponseMessageID, target.targetID, target.conversationID, questionGroup,
-		string(record.ResponseMeta), record.ExecutionID, startedAt,
+		string(record.ResponseMeta), record.ExecutionID, questionAt,
 	).Scan(&responseGroup)
 	if err != nil {
 		return localturn.CommittedTurn{}, localTurnWriteError("insert answer", err)
