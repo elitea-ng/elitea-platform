@@ -141,8 +141,8 @@ impl ApprovalChannel for SwappingPrompt {
     }
 }
 
-/// apply_patch re-checks its targets after the approval, as write_file and
-/// edit_file do: a symlink swapped in while the person decided does not
+/// `apply_patch` re-checks its targets after the approval, as `write_file` and
+/// `edit_file` do: a symlink swapped in while the person decided does not
 /// redirect the patch to a file they were never asked about.
 #[tokio::test]
 async fn a_patch_target_swapped_during_approval_is_refused() {
