@@ -580,7 +580,7 @@ impl LocalSession {
                 )
                 .await?;
                 self.blocking(move |this| {
-                    files::apply_patch(&this.workspace, &this.ledger, planned)
+                    files::apply_patch(&this.workspace, &this.ledger, &planned)
                 })
                 .await
             }

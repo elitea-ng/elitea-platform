@@ -223,7 +223,7 @@ pub(crate) fn plan_patch(
     ledger: &ReadLedger,
     text: &str,
 ) -> ToolResult<Vec<PlannedChange>> {
-    let mut planned = Vec::new();
+    let mut planned: Vec<PlannedChange> = Vec::new();
     for file in patch::parse(text)? {
         let path = workspace.resolve(file.target(), Intent::Write)?;
         if let (Some(old), Some(new)) = (&file.old_path, &file.new_path)
@@ -256,6 +256,11 @@ pub(crate) fn plan_patch(
             None => workspace.final_target(&path)?,
         };
         workspace.check(&target, Intent::Write)?;
+        if planned.iter().any(|change| change.path == target) {
+            return Err(ToolError::invalid(format!(
+                "the patch changes `{target}` more than once; put all of its hunks in one section"
+            )));
+        }
         planned.push(PlannedChange {
             typed: path,
             path: target,
@@ -265,24 +270,56 @@ pub(crate) fn plan_patch(
     Ok(planned)
 }
 
-/// `apply_patch`, after approval.
+/// `apply_patch`, after approval: every file or none. Each file is
+/// replaced atomically; when one cannot be written, the files already
+/// changed are put back as they were.
 pub(crate) fn apply_patch(
     workspace: &Workspace,
     ledger: &ReadLedger,
-    planned: Vec<PlannedChange>,
+    planned: &[PlannedChange],
 ) -> ToolResult<Value> {
     // Re-check: the person may have edited a file while the approval was
-    // pending.
-    for change in &planned {
-        check_fresh(workspace, ledger, &change.path)?;
+    // pending. What is there now is what a rollback restores.
+    let mut originals = Vec::new();
+    for change in planned {
+        let now = check_fresh(workspace, ledger, &change.path)?;
+        originals.push(now.map(|read| (read.bytes, read.mode)));
     }
     let mut changed = Vec::new();
-    for change in planned {
-        if let Some(content) = change.content {
-            write_and_record(workspace, ledger, &change.path, content.as_bytes())?;
-        } else {
-            workspace.remove_file(&change.path)?;
-            ledger.forget(&change.path);
+    for (index, change) in planned.iter().enumerate() {
+        let applied = match &change.content {
+            Some(content) => {
+                write_and_record(workspace, ledger, &change.path, content.as_bytes()).map(|_| ())
+            }
+            None => workspace.remove_file(&change.path).map(|_| {
+                ledger.forget(&change.path);
+            }),
+        };
+        if let Err(error) = applied {
+            for (done, original) in planned[..index].iter().zip(&originals).rev() {
+                let restored = match original {
+                    Some((bytes, mode)) => {
+                        workspace.write(&done.path, bytes, Some(*mode)).map(|_| ())
+                    }
+                    None => workspace.remove_file(&done.path).map(|_| ()),
+                };
+                if let Err(rollback) = restored {
+                    tracing::warn!(
+                        path = %done.path,
+                        reason = rollback.message(),
+                        "a patch could not be rolled back"
+                    );
+                }
+                ledger.forget(&done.path);
+            }
+            return Err(ToolError::new(
+                error.code(),
+                format!(
+                    "the patch was not applied (`{}`: {}); nothing changed",
+                    change.path,
+                    error.message()
+                ),
+            ));
         }
         changed.push(change.path.display_string());
     }
@@ -645,7 +682,7 @@ mod tests {
         read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
         read(&ws, &ledger, json!({ "path": "gone.txt" })).expect("read");
         let planned = plan_patch(&ws, &ledger, diff).expect("plan");
-        let result = apply_patch(&ws, &ledger, planned).expect("apply");
+        let result = apply_patch(&ws, &ledger, &planned).expect("apply");
         assert_eq!(result["changed"], json!(["a.txt", "new.txt", "gone.txt"]));
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
@@ -675,6 +712,65 @@ mod tests {
                 .map(|error| error.code()),
             Some(ErrorCode::OutsideWorkspace)
         );
+    }
+
+    /// L2: one path twice in a patch is refused (the second section would
+    /// silently overwrite the first), also when a link names it again.
+    #[test]
+    fn a_path_repeated_in_one_patch_is_refused() {
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.txt", "1\n2\n3\n");
+        std::os::unix::fs::symlink("a.txt", dir.path().join("alias.txt")).expect("link");
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        for second in ["a.txt", "alias.txt"] {
+            let diff = format!(
+                "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-1\n+one\n--- a/{second}\n+++ b/{second}\n@@ -3 +3 @@\n-3\n+three\n"
+            );
+            assert_eq!(
+                plan_patch(&ws, &ledger, &diff)
+                    .err()
+                    .map(|error| error.code()),
+                Some(ErrorCode::InvalidArgument),
+                "{second}"
+            );
+        }
+    }
+
+    /// L2: when one file of a patch cannot be written, the files already
+    /// written are put back: the patch applies whole or not at all.
+    #[test]
+    fn a_failed_write_rolls_the_patch_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.txt", "1\n2\n3\n");
+        seed(&dir, "gone.txt", "bye\n");
+        seed(&dir, "locked/keep.txt", "k\n");
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        read(&ws, &ledger, json!({ "path": "gone.txt" })).expect("read");
+        let diff = "--- a/a.txt\n+++ b/a.txt\n@@ -2 +2 @@\n-2\n+two\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n--- /dev/null\n+++ b/fresh.txt\n@@ -0,0 +1 @@\n+fresh\n--- /dev/null\n+++ b/locked/new.txt\n@@ -0,0 +1 @@\n+x\n";
+        let planned = plan_patch(&ws, &ledger, diff).expect("plan");
+        let locked = dir.path().join("locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).expect("lock");
+        let result = apply_patch(&ws, &ledger, &planned);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("unlock");
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+            "1\n2\n3\n",
+            "the written file is restored"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("gone.txt")).expect("gone"),
+            "bye\n",
+            "the deleted file is back"
+        );
+        assert!(
+            !dir.path().join("fresh.txt").exists(),
+            "the created file is removed"
+        );
+        assert!(!locked.join("new.txt").exists());
+        // The ledger still lets the agent retry after reading again.
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
     }
 
     #[test]
