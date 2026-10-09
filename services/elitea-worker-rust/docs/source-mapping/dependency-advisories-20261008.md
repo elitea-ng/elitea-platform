@@ -31,8 +31,12 @@ with, and proves one existing security property of the SQL toolkit.
 | `scripts/ci/check-gateway-toolchain.sh` (section 4) | Reads `stdlibFloorGo126` from the Go test and fails when the gateway's `go` directive is below it. ci-gateway runs this script; ci-go's paths do not cover the gateway. |
 | `services/elitea-llm-gateway/Containerfile:5`, `deploy/docker-compose.standalone-full.yml:506` | Comments no longer name 1.25.8 |
 | `services/elitea-worker-rust/Cargo.lock:676,1420` | `chacha20` 0.10.1 → 0.10.2, `h2` 0.4.15 → 0.4.16 (version and checksum only) |
-| `services/elitea-worker-rust/src/toolkits/families/sql/client.rs:30-34,244` | `MYSQL_TLS_MODE` constant (`VerifyIdentity`), used by `mysql_options` |
-| `services/elitea-worker-rust/src/toolkits/sql_tests.rs:696-860` | Fake MySQL server and two protocol tests |
+| `libs/rust/agent-runtime/src/toolkits/families/sql/client.rs:30-34,244` | `MYSQL_TLS_MODE` constant (`VerifyIdentity`), used by `mysql_options` |
+| `libs/rust/agent-runtime/src/toolkits/sql_tests.rs:696-860` | Fake MySQL server and two protocol tests |
+
+The SQL toolkit moved from `services/elitea-worker-rust/src/toolkits/` to the shared runtime crate
+`libs/rust/agent-runtime/src/toolkits/` on `main` (#1165, ADR-0029). The merge carried this change there unchanged,
+with the same line numbers; the Worker pulls it in through `elitea-agent-runtime` with `toolkit-sql`.
 
 ### Why the `go` directive and not an image pin
 
