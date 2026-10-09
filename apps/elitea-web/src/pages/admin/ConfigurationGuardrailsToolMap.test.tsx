@@ -2,12 +2,12 @@
  * The Guardrails map fields through the WHOLE page — not the editor alone.
  *
  * `ConfigurationToolMapEditor.test.tsx` drives the editor with a harness that
- * holds `rows` in its own state, which is exactly the state the real page does
- * NOT hold: the page stores the field's VALUE (a `{toolkit: [tools]}` map) and
- * re-derives rows from it on every render. A blank row has no key in that map,
- * so on the page "Add toolkit" produced a row that vanished on the same render
- * and neither map could be extended from the UI. These tests go through
- * `useAdminConfigurationPage`'s draft and assert the PUT the save produced.
+ * holds `rows` in its own state, while the page stores the field's VALUE (a
+ * `{toolkit: [tools]}` map). When the field re-derived rows from that value on
+ * every render, a blank row had no key in it, so "Add toolkit" produced a row
+ * that vanished on the same render and neither map could be extended from the
+ * UI. These tests go through `useAdminConfigurationPage`'s draft and assert the
+ * PUT the save produced.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -129,6 +129,28 @@ describe('Guardrails map fields — adding a toolkit row on the page', () => {
       expect(screen.getAllByLabelText('Toolkit type')).toHaveLength(1);
     });
     expect(screen.getAllByLabelText('Toolkit type')[0]).toHaveValue('github');
+  });
+
+  it('shows the stored map after a save, dropping a row that was never named', async () => {
+    // The refetch after a save is a value the editor did not emit, so the rows
+    // are re-read from it: sorted, and without the blank in-progress row.
+    const user = userEvent.setup();
+    await openGuardrails();
+
+    await user.click(screen.getByRole('button', { name: 'Add toolkit — Blocked Tools' }));
+    await user.click(screen.getByRole('button', { name: 'Add toolkit — Blocked Tools' }));
+    await user.type(screen.getAllByLabelText('Toolkit type')[1] as HTMLElement, 'atlassian');
+    expect(screen.getAllByLabelText('Toolkit type')).toHaveLength(3);
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('Toolkit type')).toHaveLength(2);
+    });
+    expect(screen.getAllByLabelText('Toolkit type').map((input) => (input as HTMLInputElement).value)).toEqual([
+      'atlassian',
+      'github',
+    ]);
+    expect(puts[0]?.values).toEqual({ blocked_tools: { github: ['delete_repo'], atlassian: [] } });
   });
 
   it('flags a duplicate typed into a new row instead of silently merging it', async () => {

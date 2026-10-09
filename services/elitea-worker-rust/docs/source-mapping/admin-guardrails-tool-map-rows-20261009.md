@@ -46,16 +46,18 @@ serialised, and only changed keys are sent.
 
 `npx vitest run --config vitest.config.ts --project node`:
 
-- New file: 4 tests. All 4 failed before the fix (no row appeared) and pass after.
+- New file: 5 tests. The first 4 were written first and all failed before the fix
+  (no row appeared); the post-save test was added after review. All 5 pass.
   - Add a row to an empty map, type `mcp` / `echo`, save → PUT
     `{sensitive_tools: {mcp: ["echo"]}}`.
   - Add a row below stored `github`, type `atlassian` → order stays
     `github, atlassian`; PUT carries both.
   - Two blank rows are kept and not flagged; Discard removes the added rows.
+  - After Save, rows show the stored map sorted, without the unnamed row.
   - `GitHub` typed into a new row beside stored `github` shows the duplicate
     warning.
 - `src/pages/admin/Configuration*.test.tsx` and
-  `ConfigurationToolMapEditor.test.tsx`: 7 files, 53 tests, 0 skipped, all pass.
+  `ConfigurationToolMapEditor.test.tsx`: 7 files, 54 tests, 0 skipped, all pass.
 - Full `src/pages/admin/`: 57 files, 664 tests. One unrelated test
   (`AdminNativeClientsEditor` "registers a client…") timed out at 5 s under the
   parallel run and passes alone (18/18). It does not touch these files.
@@ -63,36 +65,46 @@ serialised, and only changed keys are sent.
 
 ## Performance
 
-No new requests or effects. The hook keeps one state object per map field and
-does one reference comparison per render. Re-deriving rows happens only on an
-external value change, not on every keystroke, so a keystroke no longer sorts
-the whole map. Proven by the page tests above (no extra PUT/GET recorded).
+- Mechanism: one reference comparison per render (`apps/elitea-web/src/pages/admin/ConfigurationToolMapEditor.tsx:124`); rows are
+  re-derived only on an external value change, so a keystroke no longer sorts
+  the whole map (`apps/elitea-web/src/pages/admin/ConfigurationToolMapEditor.tsx:130-133`).
+- Proving test: `apps/elitea-web/src/pages/admin/ConfigurationGuardrailsToolMap.test.tsx:67` and `:87` record exactly one PUT per save.
+- Measured: one PUT per Save in the browser check below; no extra requests.
 
 ## Durability
 
-Unchanged. The server value is the only durable record; in-progress rows live in
-component state and are discarded on reload, as before. The post-save refetch
-replaces local rows with the stored map
-(`ConfigurationToolMapEditor.tsx` `useConfigToolMapRows`).
+- Mechanism: unchanged. The server value is the only durable record. The
+  post-save refetch is a new value reference, so `apps/elitea-web/src/pages/admin/ConfigurationToolMapEditor.tsx:124` replaces local rows
+  with the stored map (`apps/elitea-web/src/pages/admin/useAdminConfigurationPage.ts:187`
+  clears the draft after the invalidating mutation settles).
+- Proving test: `apps/elitea-web/src/pages/admin/ConfigurationGuardrailsToolMap.test.tsx:134`.
+- Measured: browser reload after each save showed the stored rows; DB rows
+  matched.
 
 ## Resilience
 
-Discard and a changed server value always win over local rows, so the form
-cannot show a map that differs from the draft or the store. Proven by the
-Discard test.
+- Mechanism: any value the editor did not emit (Discard, load, refetch)
+  replaces local rows (`apps/elitea-web/src/pages/admin/ConfigurationToolMapEditor.tsx:124-128`). Blank rows are never serialised
+  (`apps/elitea-web/src/pages/admin/ConfigurationToolMapEditor.tsx:92-97`).
+- Proving test: `apps/elitea-web/src/pages/admin/ConfigurationGuardrailsToolMap.test.tsx:115` (Discard), `apps/elitea-web/src/pages/admin/ConfigurationGuardrailsToolMap.test.tsx:134` (post-save).
+- Measured: removing both rows and saving restored `{}` / `{}` in the DB.
 
 ## Security
 
-No new route, parser, egress, or identity surface. Authorization of the PUT is
-unchanged and server-side. The browser check went through the stack's own Main
-with its own session and admin check, and its own CSP header.
+- Applies: none of the `rules/security.md` categories change. No new route,
+  parser, egress, identity, secret or dependency surface; the PUT body shape is
+  unchanged (`apps/elitea-web/src/pages/admin/ConfigurationToolMapEditor.tsx:92-97`).
+- Proving test: `apps/elitea-web/src/pages/admin/ConfigurationGuardrailsToolMap.test.tsx:67` asserts the exact PUT body (only the changed key).
+- Measured: the browser check went through the stack's own Main with its own
+  session, admin check and CSP header; `npm audit` reports the same 7
+  pre-existing findings (no dependency change).
 
 ## Recovery guarantees
 
 | Component × phase | Class | Note |
 | --- | --- | --- |
-| Web/browser × admin configuration edit (before Save) | L (pre-existing, by design) | Unsaved form edits are browser state and are lost on reload, as everywhere in the admin console. Not new. |
-| Web/browser × Save | I | One PUT of the changed keys; re-sending the same map is idempotent. Unchanged by this PR. |
+| Web/browser × admin configuration edit (before Save) | L (pre-existing, by design) | Unsaved form edits are browser state and are lost on reload, as everywhere in the admin console. Not new. Code `apps/elitea-web/src/pages/admin/ConfigurationToolMapEditor.tsx:116-136`; test `apps/elitea-web/src/pages/admin/ConfigurationGuardrailsToolMap.test.tsx:115`. |
+| Web/browser × Save | I | One PUT of the changed keys; re-sending the same map is idempotent. Unchanged by this PR. Code `apps/elitea-web/src/pages/admin/useAdminConfigurationPage.ts:183-196`; test `apps/elitea-web/src/pages/admin/ConfigurationGuardrailsToolMap.test.tsx:67`. |
 
 ## Real-browser evidence
 
@@ -125,3 +137,6 @@ Created through the UI only; reverted through the UI. No database writes.
 ## Follow-ups
 
 - Confirm on the next rehearsal stack built from `main` with this change.
+- Review notes not changed here: Save is not blocked while two rows share a
+  toolkit key (the editor warns, by its existing design); adding then removing
+  a row still marks the form dirty, as before this change.
