@@ -120,20 +120,17 @@ function childPath(path: string, key: string, inSequence: boolean): string {
   return path ? `${path}.${key}` : key;
 }
 
-function isSameValue(before: unknown, after: unknown): boolean {
-  if (Object.is(before, after)) return true;
-  return before instanceof Date && after instanceof Date && before.getTime() === after.getTime();
+function isLeaf(value: unknown): boolean {
+  return value === null || typeof value !== 'object' || value instanceof Date || value instanceof Uint8Array;
 }
 
 function isContainerPair(before: unknown, after: unknown): boolean {
-  if (before === null || after === null || typeof before !== 'object' || typeof after !== 'object') return false;
-  if (before instanceof Date || before instanceof Uint8Array) return false;
-  return Array.isArray(before) === Array.isArray(after);
+  return !isLeaf(before) && !isLeaf(after) && Array.isArray(before) === Array.isArray(after);
 }
 
 /** The first path whose value YAML does not carry back (e.g. an `undefined` member), for a readable refusal. */
 function firstChangedPath(before: unknown, after: unknown, path: string): string | undefined {
-  if (isSameValue(before, after)) return undefined;
+  if (Object.is(before, after)) return undefined;
   if (!isContainerPair(before, after)) return path || 'the document';
   const left = before as Record<string, unknown>;
   const right = after as Record<string, unknown>;

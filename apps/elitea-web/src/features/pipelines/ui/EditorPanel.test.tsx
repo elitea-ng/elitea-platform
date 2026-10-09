@@ -3,7 +3,7 @@ import { createRef } from 'react';
 
 import { ThemeProvider } from '@mui/material/styles';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -157,6 +157,26 @@ describe('EditorPanel', () => {
     expect(usePipelineYamlStore.getState().yamlCode).toBe(PIPELINE_165_YAML);
     expect((load(usePipelineYamlStore.getState().yamlCode) as { nodes: unknown[] }).nodes).toHaveLength(2);
     expect(screen.queryByText(/Error dumping YAML/)).not.toBeInTheDocument();
+  });
+
+  it('drops the serialization error once the kept document is replaced (Cancel or a version switch)', async () => {
+    const document = load(PIPELINE_165_YAML) as { nodes: Record<string, unknown>[] };
+    document.nodes[1] = { ...document.nodes[1], input_mapping: { folder: { type: 'fixed', value: null, enum: undefined } } };
+    usePipelineYamlStore.setState({
+      yamlCode: PIPELINE_165_YAML,
+      yamlJsonObject: document,
+      initYamlCode: PIPELINE_165_YAML,
+      initYamlJsonObject: load(PIPELINE_165_YAML) as Record<string, unknown>,
+    });
+    const user = userEvent.setup();
+    renderEditorPanel();
+    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    act(() => usePipelineYamlStore.getState().resetPipelineYaml());
+
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(usePipelineYamlStore.getState().yamlCode).toBe(PIPELINE_165_YAML);
   });
 
   it('shows no serialization error for a document that round-trips', async () => {

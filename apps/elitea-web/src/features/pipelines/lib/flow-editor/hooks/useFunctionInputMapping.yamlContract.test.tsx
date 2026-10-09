@@ -11,7 +11,7 @@ import { renderWithRouterAndProject } from '../../../__tests__/testUtils';
 import { serializePipelineYaml } from '../../dumpYaml.helpers';
 import { parsePipelineYamlDocument } from '../../pipelineYamlDocument.helpers';
 import type { YamlPipelineDocument } from '../helpers/pipelineFlow.types';
-import type { UseFunctionInputMappingArgs } from './useFunctionInputMapping';
+import type { UseFunctionInputMappingArgs, UseFunctionInputMappingResult } from './useFunctionInputMapping';
 import { useFunctionInputMapping } from './useFunctionInputMapping';
 
 const BASE = '/api/v2';
@@ -48,22 +48,27 @@ const ARTIFACT_SCHEMAS = {
 /** The attached artifact toolkit `test`: no credentials yet, no explicit `selected_tools`. */
 const VERSION_TOOLS = [{ type: 'artifact', name: 'test', toolkit_name: 'test' }];
 
-function HookProbe(args: UseFunctionInputMappingArgs) {
-  useFunctionInputMapping(args);
+function HookProbe({ onResult, ...args }: UseFunctionInputMappingArgs & { onResult: (result: UseFunctionInputMappingResult) => void }) {
+  onResult(useFunctionInputMapping(args));
   return null;
 }
 
-function renderNode(id: string, setYamlJsonObject: (next: YamlPipelineDocument) => void) {
+function renderNode(id: string, setYamlJsonObject: (next: YamlPipelineDocument) => void): () => UseFunctionInputMappingResult | undefined {
   const { yamlJsonObject } = parsePipelineYamlDocument(PIPELINE_165_YAML);
+  let latest: UseFunctionInputMappingResult | undefined;
   renderWithRouterAndProject(
     <HookProbe
       id={id}
       yamlJsonObject={yamlJsonObject}
       setYamlJsonObject={setYamlJsonObject}
       versionTools={VERSION_TOOLS}
+      onResult={(result) => {
+        latest = result;
+      }}
     />,
     PROJECT_ID,
   );
+  return () => latest;
 }
 
 /** Every document the editor hands on must serialize and load back as the very same value. */
@@ -104,9 +109,12 @@ describe('toolkit node load path keeps the pipeline YAML contract (pipeline 165)
 
   it('keeps a node whose mapping already covers its required inputs serializable', async () => {
     const setYamlJsonObject = vi.fn();
-    renderNode('mk', setYamlJsonObject);
+    const read = renderNode('mk', setYamlJsonObject);
 
-    await new Promise(resolve => setTimeout(resolve, 200));
-    expectEveryWriteRoundTrips(setYamlJsonObject);
+    // The schema has landed once `filename` is known to be required; the default-mapping effect has run with it.
+    await waitFor(() => expect(read()?.requiredInputs).toEqual(['filename']));
+    await waitFor(() => expect(read()?.inputMappings['bucket_name']).toStrictEqual({ type: 'fixed', value: null }));
+    // `filename` is mapped already, so nothing is written for `mk`, and nothing unserializable could be.
+    expect(setYamlJsonObject).not.toHaveBeenCalled();
   });
 });

@@ -190,6 +190,12 @@ describe('pipeline 165 round-trip', () => {
     );
   });
 
+  it('names a date member, which the default schema loads back as a string', () => {
+    expect(() => serializePipelineYaml({ ...(load(PIPELINE_165_YAML) as object), at: new Date('2026-10-09T00:00:00Z') })).toThrow(
+      'Pipeline YAML serialization changed its contract: at has no YAML form',
+    );
+  });
+
   it('reports the refusal as a value, so a caller never stores the error text as YAML', () => {
     const result = trySerializePipelineYaml(pipeline165WithUndefinedEnum());
     expect(result.yaml).toBeUndefined();

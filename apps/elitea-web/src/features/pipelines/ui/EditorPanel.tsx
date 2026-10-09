@@ -228,7 +228,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const clearResetFlag = usePipelineYamlStore((state) => state.clearResetFlag);
   const setLayoutVersion = usePipelineYamlStore((state) => state.setLayoutVersion);
 
-  const { serializationError, serializeDocument } = usePipelineYamlSerialization();
+  const { serializationError, serializeDocument } = usePipelineYamlSerialization(yamlCode, yamlJsonObject);
 
   const setYamlJsonObject = useCallback(
     (next: YamlPipelineDocument) => {
