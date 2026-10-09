@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.runtime.http-action-receipt.v2",
+  "title": "HTTP action receipt v2",
+  "description": "Mirrors Receipt in services/elitea-main/internal/application/httpaction/contract.go. All eight fields are always present. completed has a result and no failure code; failed and uncertain have a failure code and no result.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "activation_id",
+        "request_digest",
+        "binding_digest",
+        "effect_id",
+        "state",
+        "failure_code",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "elitea.runtime.http-action-receipt.v2"
+        },
+        "activation_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "request_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "binding_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "effect_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "state": {
+          "enum": [
+            "completed"
+          ]
+        },
+        "failure_code": {
+          "type": "null"
+        },
+        "result": {
+          "$ref": "#/$defs/projection"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "activation_id",
+        "request_digest",
+        "binding_digest",
+        "effect_id",
+        "state",
+        "failure_code",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "elitea.runtime.http-action-receipt.v2"
+        },
+        "activation_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "request_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "binding_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "effect_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "state": {
+          "enum": [
+            "failed",
+            "uncertain"
+          ]
+        },
+        "failure_code": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z_]{1,64}$"
+        },
+        "result": {
+          "type": "null"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "content_type",
+        "byte_length",
+        "data"
+      ],
+      "properties": {
+        "status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 599
+        },
+        "content_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2097152
+        },
+        "data": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "empty"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "value"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "json"
+                },
+                "value": {
+                  "$ref": "#/$defs/jsonValue"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "value"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "text"
+                },
+                "value": {
+                  "type": "string",
+                  "maxLength": 524288
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "reference"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "artifact"
+                },
+                "reference": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "reference",
+                    "immutable_version",
+                    "sha256",
+                    "byte_length"
+                  ],
+                  "properties": {
+                    "reference": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "minLength": 1
+                    },
+                    "immutable_version": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$",
+                      "minLength": 64,
+                      "maxLength": 64
+                    },
+                    "byte_length": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2097152
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "jsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number",
+          "minimum": -1e+300,
+          "maximum": 1e+300
+        },
+        {
+          "type": "string",
+          "maxLength": 262144
+        },
+        {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 4096,
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    }
+  }
+}

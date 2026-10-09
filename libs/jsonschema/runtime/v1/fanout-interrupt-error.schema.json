@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-error.v1",
+  "title": "Decision API error envelope",
+  "description": "400, 404 and 409 bodies of the decision API. Every conflict other than an exact replay is 409 agent_interrupt_already_resolved.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "error",
+    "message",
+    "retryable"
+  ],
+  "properties": {
+    "error": {
+      "enum": [
+        "agent_interrupt_already_resolved",
+        "agent_interrupt_invalid_decision",
+        "agent_interrupt_not_found"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+    },
+    "retryable": {
+      "const": false
+    }
+  }
+}

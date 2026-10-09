@@ -431,3 +431,4 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
 - [Pipeline size bounds and HTTP snapshot scope](pipeline-size-bounds-http-snapshot-20261008.md) records one 512 KiB pipeline bound across Main and Worker, the non-HTTP snapshot scope, browser evidence and follow-ups.
 - [Graph fan-out child lineage](graph-fanout-child-lineage-20261008.md) records frozen Parallel/Map child identity across executions, lease-loss control stops and event-driven cancellation (Point 5 C1).
+- [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.
