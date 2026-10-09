@@ -433,4 +433,5 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Container build local crate freshness](container-build-local-crate-freshness-20261008.md) records why Rust image builds recompile local crates under a locked shared target cache, the two-worktree build proof and the gate test.
 - [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.
 - [Governance body bounds](governance-body-bounds-20261008.md) records the 256 KiB governance body limit, 413 refusal, strict decode, and 8 KiB routing CEL cap.
+- [Go module advisories](go-module-advisories-20261008.md) records the cel-go and klauspost/compress fixes, the deferred x/crypto fix (Go 1.26), and the guard against linking x/crypto/ssh and openpgp.
 - [Numeric node ids and readable pipeline limits](pipeline-numeric-ids-readable-limits-20261008.md) records numeric-id support in Worker and Web, the Main save-time bound, typed readable limit refusals, browser evidence and follow-ups.
