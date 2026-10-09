@@ -607,6 +607,9 @@ impl LocalSession {
                 )
                 .await?;
                 self.blocking(move |this| {
+                    for change in &planned {
+                        this.unchanged_target(&change.path)?;
+                    }
                     files::apply_patch(&this.workspace, &this.ledger, &planned)
                 })
                 .await

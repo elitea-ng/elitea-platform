@@ -119,3 +119,82 @@ async fn writes_through_symlinks_are_approved_as_their_targets() {
     assert!(!root.join("src/new.rs").exists());
     assert!(!root.join("src/patched.rs").exists());
 }
+
+/// Approves, but first swaps `a.txt` for a link to `other.txt` and `docs`
+/// for a link to `src`: what the person approved is no longer where the
+/// write would land.
+struct SwappingPrompt {
+    root: std::path::PathBuf,
+}
+
+#[async_trait]
+impl ApprovalChannel for SwappingPrompt {
+    async fn request(&self, _request: ApprovalRequest) -> Result<ApprovalOutcome, HostError> {
+        let _ = std::fs::remove_file(self.root.join("a.txt"));
+        let _ = symlink("other.txt", self.root.join("a.txt"));
+        let _ = std::fs::remove_dir_all(self.root.join("docs"));
+        let _ = symlink("src", self.root.join("docs"));
+        Ok(ApprovalOutcome::Decided {
+            action: "approve".to_owned(),
+            value: Value::Null,
+        })
+    }
+}
+
+/// apply_patch re-checks its targets after the approval, as write_file and
+/// edit_file do: a symlink swapped in while the person decided does not
+/// redirect the patch to a file they were never asked about.
+#[tokio::test]
+async fn a_patch_target_swapped_during_approval_is_refused() {
+    let dir = tempfile::tempdir().expect("dir");
+    let root = dir.path().join("ws");
+    std::fs::create_dir_all(root.join("docs")).expect("docs");
+    std::fs::create_dir_all(root.join("src")).expect("src");
+    std::fs::write(root.join("a.txt"), "1\n").expect("a");
+    std::fs::write(root.join("other.txt"), "1\n").expect("other");
+    let session = LocalSession::open(SessionConfig {
+        root: root.clone(),
+        session_id: "s".to_owned(),
+        policy: LocalWorkPolicy {
+            allowed: true,
+            ..LocalWorkPolicy::default()
+        },
+        settings: WorkspaceSettings::default(),
+        choices: Arc::new(MemoryChoices::default()),
+        prompt: Arc::new(SwappingPrompt { root: root.clone() }),
+        data_dir: dir.path().join("data"),
+        shell: None,
+    })
+    .expect("session");
+    for path in ["a.txt", "other.txt"] {
+        let read = session
+            .call("read_file", "r", json!({ "path": path }))
+            .await;
+        assert_eq!(read["status"], "ok", "{read}");
+    }
+    let edit = session
+        .call(
+            "apply_patch",
+            "p1",
+            json!({ "patch": "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-1\n+2\n" }),
+        )
+        .await;
+    assert_eq!(edit["code"], "local_tools.conflict", "{edit}");
+    assert_eq!(
+        std::fs::read_to_string(root.join("other.txt")).expect("other"),
+        "1\n",
+        "the link's target was not patched"
+    );
+
+    std::fs::remove_file(root.join("docs")).expect("unlink");
+    std::fs::create_dir(root.join("docs")).expect("docs");
+    let create = session
+        .call(
+            "apply_patch",
+            "p2",
+            json!({ "patch": "--- /dev/null\n+++ b/docs/new.txt\n@@ -0,0 +1 @@\n+x\n" }),
+        )
+        .await;
+    assert_eq!(create["code"], "local_tools.conflict", "{create}");
+    assert!(!root.join("src/new.txt").exists(), "nothing landed in src");
+}
