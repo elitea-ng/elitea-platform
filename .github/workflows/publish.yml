@@ -92,7 +92,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.work
           # uictl has no external dependencies and no go.sum, so the cache
           # would hold the toolchain and little else for two commands that run
           # once per release.
