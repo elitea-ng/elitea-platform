@@ -230,6 +230,14 @@ impl TurnTable {
         }
     }
 
+    /// Forget every turn of a removed workspace.
+    fn forget_workspace(&mut self, workspace_id: &str) {
+        self.entries
+            .retain(|_, entry| entry.workspace_id != workspace_id);
+        let entries = &self.entries;
+        self.order.retain(|id| entries.contains_key(id));
+    }
+
     fn get(&self, turn_id: &str) -> Result<Arc<TurnEntry>, TurnError> {
         if let Some(entry) = self.entries.get(turn_id) {
             return Ok(entry.clone());
@@ -788,6 +796,35 @@ impl AgentHost {
             self.broker.forget_turn(turn_id);
             true
         })
+    }
+
+    /// `workspace_remove`: forget the workspace, its host data and
+    /// everything this host keeps for it (its session, its turns).
+    ///
+    /// # Errors
+    ///
+    /// `workspace_busy` while a turn (or an undo) runs in it, or the
+    /// workspace list cannot be written.
+    pub fn remove_workspace(&self, workspace_id: &str) -> Result<(), TurnError> {
+        // Held across the removal: no turn starts on the folder meanwhile.
+        let _claim = WorkspaceClaim::take(
+            &self.busy,
+            workspace_id,
+            "Wait for the running turn to end, or stop it, before removing this workspace.",
+        )?;
+        self.deps
+            .workspaces
+            .remove(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(workspace_id);
+        self.turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .forget_workspace(workspace_id);
+        Ok(())
     }
 
     /// `approval_respond`. False when no such question is open.

@@ -120,9 +120,11 @@ pub fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, Ho
     state.workspaces.list()
 }
 
+/// Refused (`workspace_busy`) while a turn runs in the workspace; also
+/// drops the agent host's session and turns of it.
 #[tauri::command(rename_all = "snake_case")]
 pub fn workspace_remove(state: State<'_, LocalState>, id: String) -> Result<(), HostError> {
-    state.workspaces.remove(&id)
+    Ok(state.agents.remove_workspace(&id)?)
 }
 
 #[tauri::command(rename_all = "snake_case")]

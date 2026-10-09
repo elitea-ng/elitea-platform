@@ -706,6 +706,40 @@ async fn only_the_last_turns_of_a_workspace_are_kept() {
     assert_eq!(h.host.changes("nope").unwrap_err().code, "turn_unknown");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workspace_with_a_running_turn_cannot_be_removed() {
+    let slow = Arc::new(AtomicBool::new(true));
+    let h = harness(
+        stalling_platform(slow.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let running = h.host.start(request(&h.workspace_id)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let refused = h.host.remove_workspace(&h.workspace_id).unwrap_err();
+    assert_eq!(refused.code, "workspace_busy");
+
+    assert!(h.host.cancel(&running.turn_id));
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h.emitter, &running.turn_id).await;
+    h.host.remove_workspace(&h.workspace_id).unwrap();
+    // Its turns are gone from the host, and a new turn finds no workspace.
+    assert_eq!(
+        h.host.changes(&running.turn_id).unwrap_err().code,
+        "turn_unknown"
+    );
+    assert_eq!(
+        h.host
+            .start(request(&h.workspace_id))
+            .await
+            .unwrap_err()
+            .code,
+        "workspace_unknown"
+    );
+    assert!(h.folder.path().exists(), "the folder itself is untouched");
+}
+
 #[tokio::test]
 async fn a_model_refusal_is_committed_as_a_failed_turn() {
     let server = serve({

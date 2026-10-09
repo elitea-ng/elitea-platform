@@ -40,7 +40,7 @@ type Workspace = {
 | --- | --- | --- |
 | `workspace_open` | — | `Workspace \| null` — the native folder dialog; `null` when cancelled. Opening a folder that is already a workspace returns that workspace. |
 | `workspace_list` | — | `Workspace[]` |
-| `workspace_remove` | `{id}` | `null` — forgets the workspace and its host data (remembered approvals, copy checkpoints); the folder is never touched. |
+| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints) and its turns; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
@@ -91,7 +91,12 @@ but `checkpoint_restore` undoes it with the rest of the turn.
 `checkpoint_restore` without `path` puts the whole workspace back to the
 turn's checkpoint (taken before its first change); with `path` only that
 file. It answers the files written back or deleted, and `[]` for a turn
-that changed nothing. It rejects while a turn runs in the workspace.
+that changed nothing. It rejects (`workspace_busy`) while a turn runs in
+the workspace.
+
+The host keeps the last 20 turns of each workspace for `turn_changes` and
+`checkpoint_restore`; an older turn rejects with `turn_expired`, an id it
+never ran with `turn_unknown`.
 
 ## Events
 
