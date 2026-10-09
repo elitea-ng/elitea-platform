@@ -368,12 +368,22 @@ fn path_segment(value: &str) -> Result<String, ApiError> {
         .replace('+', "%20"))
 }
 
+/// The participant that answers as `application_id` on `version_id`.
+///
+/// The platform's `local_turn` start accepts any application participant of
+/// the conversation (it does not look at versions); the version rule is the
+/// conversation's own: a participant pinned to a version
+/// (`entity_settings.version_id`) answers on that version only, an unpinned
+/// one answers on whichever version is asked for. A participant pinned to
+/// the requested version wins over an unpinned one; only when every entry of
+/// the agent is pinned to another version is the turn refused.
 fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Result<i64, ApiError> {
     let participants = detail
         .get("participants")
         .and_then(Value::as_array)
         .map_or(&[][..], Vec::as_slice);
-    let mut other_version = None;
+    let mut unpinned = None;
+    let mut other_versions: Vec<i64> = Vec::new();
     for participant in participants {
         let kind = participant.get("entity_name").and_then(Value::as_str);
         let entity = participant
@@ -389,22 +399,47 @@ fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Resu
         let pinned = participant
             .get("entity_settings")
             .and_then(|settings| settings.get("version_id"))
-            .and_then(Value::as_i64);
-        if pinned == Some(version_id) {
-            return Ok(id);
+            .filter(|value| !value.is_null())
+            .map(|value| value.as_i64().ok_or(()));
+        match pinned {
+            Some(Ok(pinned)) if pinned == version_id => return Ok(id),
+            Some(Ok(pinned)) => {
+                if !other_versions.contains(&pinned) {
+                    other_versions.push(pinned);
+                }
+            }
+            // No pin: answers on the version asked for.
+            None => {
+                unpinned.get_or_insert(id);
+            }
+            // A pin this client cannot read is not a match.
+            Some(Err(())) => {}
         }
-        other_version = pinned;
     }
-    Err(match other_version {
-        Some(pinned) => ApiError::local(
+    if let Some(id) = unpinned {
+        return Ok(id);
+    }
+    Err(match other_versions.as_slice() {
+        [] => ApiError::local(
+            "agent_not_in_conversation",
+            "the agent is not a participant of this conversation",
+        ),
+        [pinned] => ApiError::local(
             "agent_version_mismatch",
             format!(
                 "this conversation runs version {pinned} of the agent, not version {version_id}; switch the version in the conversation first"
             ),
         ),
-        None => ApiError::local(
-            "agent_not_in_conversation",
-            "the agent is not a participant of this conversation",
+        pinned => ApiError::local(
+            "agent_version_mismatch",
+            format!(
+                "this conversation runs versions {} of the agent, not version {version_id}; switch the version in the conversation first",
+                pinned
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         ),
     })
 }
@@ -430,6 +465,49 @@ mod tests {
             participant_for(&detail, 8, 1).unwrap_err().code,
             "agent_not_in_conversation"
         );
+    }
+
+    #[test]
+    fn an_unpinned_participant_answers_on_the_requested_version() {
+        // No entity_settings, an empty one, and an explicit null: all unpinned.
+        for settings in [json!(null), json!({}), json!({"version_id": null})] {
+            let mut entry =
+                json!({"id": 4, "entity_name": "application", "entity_meta": {"id": 5}});
+            if !settings.is_null() {
+                entry["entity_settings"] = settings;
+            }
+            let detail = json!({"participants": [entry]});
+            assert_eq!(participant_for(&detail, 5, 9), Ok(4));
+        }
+    }
+
+    #[test]
+    fn a_pinned_match_wins_and_a_later_unpinned_entry_does_not_hide_a_mismatch() {
+        let detail = json!({"participants": [
+            {"id": 2, "entity_name": "application", "entity_meta": {"id": 5}},
+            {"id": 3, "entity_name": "application", "entity_meta": {"id": 5}, "entity_settings": {"version_id": 9}}
+        ]});
+        assert_eq!(participant_for(&detail, 5, 9), Ok(3));
+        assert_eq!(participant_for(&detail, 5, 10), Ok(2));
+
+        // Pinned elsewhere, then an entry of another agent with no pin: the
+        // mismatch is still reported, with the version the agent runs.
+        let detail = json!({"participants": [
+            {"id": 2, "entity_name": "application", "entity_meta": {"id": 5}, "entity_settings": {"version_id": 7}},
+            {"id": 3, "entity_name": "application", "entity_meta": {"id": 6}}
+        ]});
+        let error = participant_for(&detail, 5, 9).unwrap_err();
+        assert_eq!(error.code, "agent_version_mismatch");
+        assert!(error.message.contains("version 7"), "{}", error.message);
+
+        // Two entries pinned to two other versions: both are named.
+        let detail = json!({"participants": [
+            {"id": 2, "entity_name": "application", "entity_meta": {"id": 5}, "entity_settings": {"version_id": 7}},
+            {"id": 3, "entity_name": "application", "entity_meta": {"id": 5}, "entity_settings": {"version_id": 8}}
+        ]});
+        let error = participant_for(&detail, 5, 9).unwrap_err();
+        assert_eq!(error.code, "agent_version_mismatch");
+        assert!(error.message.contains("versions 7, 8"), "{}", error.message);
     }
 
     #[test]

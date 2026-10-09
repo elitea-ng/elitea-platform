@@ -73,7 +73,9 @@ inside the folder.
 local turn on the platform before it resolves; the run then continues in
 the background and reports through events. `conversation_id` is the
 conversation's numeric id or its UUID. The conversation must hold the agent
-as a participant on `version_id`. A refusal rejects the call **and** is sent
+as a participant pinned to `version_id` (`entity_settings.version_id`) or
+not pinned to any version; when every entry of the agent is pinned to
+another version the start is refused with `agent_version_mismatch`. A refusal rejects the call **and** is sent
 as an `error` event plus a `status` `error` event of a fresh `turn_id`.
 Refusal codes (the rejection's `code` and the `error` event's): `local_work_disabled`,
 `secrets_withheld` ("this agent needs secrets; run it in the cloud"),
