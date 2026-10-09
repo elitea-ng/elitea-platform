@@ -24,6 +24,9 @@ interface PendingConversation {
 export function useSendPrompt(workspace: Workspace, projectId: number, selection: AgentSelection, turn: WorkspaceTurn): SendPrompt {
   const ensureConversation = useEnsureConversation();
   const [sendError, setSendError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  // Synchronous: a second click lands before React re-renders with `sending`.
+  const inFlight = useRef(false);
   // A refused start keeps the person's choice ("new conversation"), but the
   // retry runs in the conversation the first attempt created, not another one.
   const pending = useRef<PendingConversation | null>(null);
@@ -31,7 +34,9 @@ export function useSendPrompt(workspace: Workspace, projectId: number, selection
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
 
   const send = async (prompt: string, planMode: boolean): Promise<boolean> => {
-    if (agent === undefined || version === undefined || prompt.trim() === '' || turn.busy) return false;
+    if (agent === undefined || version === undefined || prompt.trim() === '' || turn.busy || inFlight.current) return false;
+    inFlight.current = true;
+    setSending(true);
     setSendError(null);
     const key = `${String(projectId)}:${agent.id}:${String(version.id)}`;
     const startsNew = selection.conversationId === '';
@@ -64,8 +69,11 @@ export function useSendPrompt(workspace: Workspace, projectId: number, selection
     } catch (error) {
       setSendError(describeWorkspaceError(error));
       return false;
+    } finally {
+      inFlight.current = false;
+      setSending(false);
     }
   };
 
-  return { canSend: agent !== undefined && version !== undefined && !turn.busy, sendError, send };
+  return { canSend: agent !== undefined && version !== undefined && !turn.busy && !sending, sendError, send };
 }

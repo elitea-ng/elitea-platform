@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppProviders } from '@/app/providers/AppProviders';
 import { WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
 import type { Application } from '@/shared/api/generated/model';
+import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
@@ -339,6 +340,40 @@ describe('WorkspaceSessionPage', () => {
 
     it('selects the conversation the turn runs in once the host started it', async () => {
       expect(await send(true)).toEqual({ sent: true, picks: ['77'] });
+    });
+
+    it('sends once when Send is pressed twice while the conversation is being created', async () => {
+      serveProject();
+      let created = 0;
+      server.use(
+        http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => {
+          created += 1;
+          return HttpResponse.json({ id: 77, name: 'fix the build' });
+        }),
+      );
+      const starts: string[] = [];
+      const fresh: AgentSelection = { ...selection([]), conversationId: '' };
+      const running: WorkspaceTurn = {
+        ...turn(true),
+        start: (request) => {
+          starts.push(request.conversation_id);
+          return Promise.resolve(true);
+        },
+      };
+      const { result } = renderHook(
+        () => ({ prompt: useSendPrompt({ ...FOLDER, project_id: 42 }, 42, fresh, running), author: useGetCurrentAuthor() }),
+        { wrapper: ({ children }) => <AppProviders>{children}</AppProviders> },
+      );
+      // A conversation is created for the signed-in user: wait until it is known.
+      await waitFor(() => expect(result.current.author.isSuccess).toBe(true));
+      let outcomes: boolean[] = [];
+      await act(async () => {
+        const { send } = result.current.prompt;
+        outcomes = await Promise.all([send('fix the build', false), send('fix the build', false)]);
+      });
+      expect(outcomes).toEqual([true, false]);
+      expect(created).toBe(1);
+      expect(starts).toEqual(['77']);
     });
   });
 
