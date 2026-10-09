@@ -7129,10 +7129,21 @@
             "maximum": 1000
           }
         },
+        "query:mcp": {
+          "schema": {
+            "type": "boolean"
+          }
+        },
         "query:offset": {
           "schema": {
             "type": "integer",
             "minimum": 0
+          }
+        },
+        "query:query": {
+          "schema": {
+            "type": "string",
+            "max_length": 128
           }
         }
       },

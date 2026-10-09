@@ -1,8 +1,11 @@
-# Current Social Feedback Create parity evidence
+# Current Social Feedback parity evidence
 
-This slice ports only project-scoped feedback creation. It is deliberately
-unmounted until production composition can replace the older permissive Social
-handler atomically.
+This slice covers project-scoped feedback creation and listing. Both are
+mounted under `/social` (`Handler.Routes`) behind the project-membership gate
+and an RBAC gate; the list is also mounted at
+`/elitea_core/feedbacks/default/{project_id}`. The earlier tenant-table
+`ListFeedbacks`/`CreateFeedback` handlers, which read and wrote a
+`p_N.social_feedbacks` that no tenant migration creates, are removed.
 
 ## Current-baseline evidence
 
@@ -39,8 +42,9 @@ project-membership authorization boundary.
 | media type | `request.get_json()` requires JSON, including `application/*+json` | exact |
 | input | required description and rating 0..5; unknown fields ignored | same valid EliteaUI contract; unknown fields ignored |
 | request metadata | user agent comes from request; `Referer` overwrites body referrer when present | request user agent and `Referer` only |
-| storage | one row in shared `centry.social_feedbacks`; no project column or tenant schema | exact |
+| storage | one row in shared `centry.social_feedbacks`; no project column or tenant schema | same table, plus a nullable `project_id` (migration `shared/0158`) set from the path; no tenant schema |
 | success | `201 {"id": <row id>}` | exact |
+| membership at write | route decorator only | route gate, and the INSERT repeats the membership check (and project existence) so a revoked member cannot write; no row returned maps to 403 |
 | insert atomicity | one SQLAlchemy transaction | one PostgreSQL statement transaction; error returns no row |
 
 The persisted RBAC tables remain authoritative. Role names do not grant access
@@ -48,7 +52,25 @@ by themselves, and the Go route does not cache permissions. Active principal,
 active project, project membership, and the exact permission are checked before
 the body is allocated or decoded.
 
+## List semantics
+
+`GET .../feedbacks/default/{project_id}` (alias `.../feedbacks/{project_id}`)
+requires `models.social.feedbacks.list` and answers
+`{"total": <all visible rows>, "rows": [...]}`, paged by `limit` (1..200,
+default 50), `offset` (0..100000), `sort_by` (`id` | `created_at`) and
+`sort_order` (`asc` | `desc`); any other query key or value is a 400. One
+statement checks membership and returns the count and page from one snapshot.
+A row is visible when the caller is a member and either the row belongs to the
+project (only the caller's own rows in the public project) or the row has no
+project and the caller wrote it (legacy rows keep a NULL `project_id`).
+
 ## Deliberate security deltas
+
+- The legacy list returned every row of the shared table, across all projects
+  and users, to any viewer. That is not ported: a project's list shows that
+  project's rows only, and a legacy row shows only to its author.
+- With no permission resolver configured the feedback routes answer 503
+  rather than skipping the RBAC check.
 
 These deltas preserve all valid EliteaUI requests while rejecting ambiguous or
 untrusted inputs accepted by Pydantic v1 coercion:
@@ -91,13 +113,18 @@ storage boundaries. It proves:
 - shared-table shape and exact stored values;
 - no partial feedback row after a constraint-induced statement failure.
 
+`feedback_list_postgres_integration_test.go` adds the write-then-list round
+trip, the authorization matrix on both path forms (owner, viewer, foreign
+project, no project, no permission, unauthenticated), in-statement refusal of a
+revoked member, project isolation, legacy-row and public-project visibility,
+pagination bounds and the empty project. `migrations/` carries the 0158
+fresh-install and legacy-rows tests.
+
 ## Remaining cutover gates
 
 - Add sqlc compiler input/query generation from the authoritative deployed
   `centry.social_feedbacks` schema. This isolated slice was intentionally
   restricted from editing shared schema/query/generated-code files.
-- Compose the repository and route in production without mounting it alongside
-  the older `social.Handler.CreateFeedback` implementation.
 - Add the route to generated API documentation/telemetry with the same
   visibility as the current `register_openapi` declaration.
 - Run a signed-in browser checkpoint through the existing feedback dialog and

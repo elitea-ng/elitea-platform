@@ -15,7 +15,8 @@ import {
   useCreateApplicationInitialValues,
   type ApplicationCreationInput,
 } from '@/entities/application-form';
-import { CreateAgentForm } from '@/features/agents';
+import { applicationServerErrorMessage, CreateAgentForm } from '@/features/agents';
+import { useLivePipelineGraphAdmission } from '@/features/pipelines';
 import { PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 import { areAgentLlmSettingsEqual, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
@@ -23,6 +24,7 @@ import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { CreatePipelineAdmissionAlert } from './ui/CreatePipelineAdmissionAlert';
 
 /**
  * The `version_details` subset `CreateAgentForm` reads/writes that
@@ -182,7 +184,7 @@ export function CreatePipeline(): ReactNode {
   const params = useParams({ strict: false }) as { tab?: string };
   const projectId = useSelectedProjectId();
   const draftDefaults = useCreateApplicationInitialValues(true);
-  const { create, isCreating } = useCreateApplicationDraft(projectId);
+  const { create, isCreating, error: createRequestError } = useCreateApplicationDraft(projectId);
   const [createError, setCreateError] = useState<unknown>(undefined);
 
   const form = useForm<ApplicationCreationInput>({
@@ -217,6 +219,15 @@ export function CreatePipeline(): ReactNode {
   const initialExtraFields = useRef(extraFields);
   const isDraftDirty = form.formState.isDirty || !areExtraFieldsEqual(extraFields, initialExtraFields.current);
   useUnsavedChangesNavBlocker(isDraftDirty);
+
+  /*
+   * The document Save would store, judged exactly as the editor's save gate
+   * judges it. Before this, create gated only on name/description, so a graph
+   * the runtime refuses (a `split_out` node on a production build) was stored
+   * and the editor's gate then blocked every later save of it. Main refuses
+   * the same node types on its side (`pipelinelimits.Check`).
+   */
+  const admission = useLivePipelineGraphAdmission(pipelineInstructions(extraFields.instructions));
 
   const name = form.watch('name') ?? '';
   const description = form.watch('description') ?? '';
@@ -278,6 +289,8 @@ export function CreatePipeline(): ReactNode {
   );
 
   const handleSave = useCallback(() => {
+    // The button is disabled on this verdict too; this is the click-time half.
+    if (!admission.isAdmissible) return;
     void form.handleSubmit(async (values) => {
       setCreateError(undefined);
       const created = await create({
@@ -327,7 +340,7 @@ export function CreatePipeline(): ReactNode {
         search: { isFromCreation: 'true' },
       });
     })();
-  }, [form, create, draftDefaults, extraFields, navigate, params.tab]);
+  }, [admission.isAdmissible, form, create, draftDefaults, extraFields, navigate, params.tab]);
 
   const handleModelSettingsChange = useCallback(
     (next: AgentLlmSettings) => setExtraFields((previous) => ({ ...previous, llmSettings: next })),
@@ -348,7 +361,7 @@ export function CreatePipeline(): ReactNode {
           <CreateApplicationTabBar
             onSave={handleSave}
             onCancel={handleCancel}
-            canSave={form.formState.isValid && !isCreating}
+            canSave={form.formState.isValid && !isCreating && admission.isAdmissible}
             isSaving={isCreating}
             saveTestId="pipeline-save-button"
           />
@@ -359,9 +372,11 @@ export function CreatePipeline(): ReactNode {
               role="alert"
               variant="bodyMedium"
             >
-              {t('pages.pipelines.createPipeline.error', 'Failed to create the pipeline.')}
+              {/* Main's own readable refusal (a node type, a size limit), else the generic text. */}
+              {applicationServerErrorMessage(createRequestError, t('pages.pipelines.createPipeline.error', 'Failed to create the pipeline.'))}
             </Typography>
           )}
+          <CreatePipelineAdmissionAlert admission={admission} />
           <Box data-testid="create-pipeline-form-panel">
             <CreateAgentForm
               values={pipelineDraftValues}

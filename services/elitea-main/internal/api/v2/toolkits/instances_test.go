@@ -14,6 +14,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -26,6 +28,8 @@ type pagingRepo struct {
 	mockRepo
 	page     int
 	size     int
+	filter   toolkits.InstanceListFilter
+	calls    int
 	rows     []map[string]any
 	total    int
 	listErr  error
@@ -33,9 +37,11 @@ type pagingRepo struct {
 	getValue map[string]any
 }
 
-func (r *pagingRepo) ListToolkits(
-	_ context.Context, _ string, page, size int,
+func (r *pagingRepo) ListToolkitInstances(
+	_ context.Context, _ string, filter toolkits.InstanceListFilter, page, size int,
 ) ([]map[string]any, int, error) {
+	r.calls++
+	r.filter = filter
 	r.page = page
 	r.size = size
 	if r.listErr != nil {
@@ -93,6 +99,98 @@ func TestListToolkitsTranslatesLimitAndOffsetIntoAPage(t *testing.T) {
 		})
 	}
 }
+
+func TestListToolkitsPassesTheMCPAndQueryFilterThrough(t *testing.T) {
+	t.Parallel()
+
+	for name, testCase := range map[string]struct {
+		query     string
+		wantMCP   *bool
+		wantQuery string
+	}{
+		"absent params apply no filter":          {query: ""},
+		"mcp=true keeps MCP":                     {query: "?mcp=true", wantMCP: boolRef(true)},
+		"mcp=false drops MCP":                    {query: "?mcp=false", wantMCP: boolRef(false)},
+		"the query is trimmed":                   {query: "?query=%20ctx7%20", wantQuery: "ctx7"},
+		"a blank query applies no text filter":   {query: "?query=%20%20"},
+		"both filters travel together with page": {query: "?mcp=true&query=doc&limit=10&offset=10", wantMCP: boolRef(true), wantQuery: "doc"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := &pagingRepo{}
+			response := httptest.NewRecorder()
+			instanceRouter(repo).ServeHTTP(response,
+				httptest.NewRequest(http.MethodGet, "/tools/prompt_lib/1"+testCase.query, nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d: %s", response.Code, response.Body.String())
+			}
+			if (repo.filter.MCP == nil) != (testCase.wantMCP == nil) ||
+				(repo.filter.MCP != nil && *repo.filter.MCP != *testCase.wantMCP) {
+				t.Errorf("mcp=%v, want %v", repo.filter.MCP, testCase.wantMCP)
+			}
+			if repo.filter.Query != testCase.wantQuery {
+				t.Errorf("query=%q, want %q", repo.filter.Query, testCase.wantQuery)
+			}
+		})
+	}
+}
+
+func TestListToolkitsRefusesABadFilterBeforeTheRepository(t *testing.T) {
+	t.Parallel()
+
+	for name, rawQuery := range map[string]string{
+		"mcp is not a boolean":       "?mcp=yes",
+		"mcp is empty":               "?mcp=",
+		"mcp is a different case":    "?mcp=True",
+		"query is one rune too long": "?query=" + strings.Repeat("a", 129),
+		"query has a NUL byte":       "?query=a%00b",
+		"query is not valid UTF-8":   "?query=%ff",
+		"long multi-byte query":      "?query=" + strings.Repeat("%C3%A9", 129),
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := &pagingRepo{}
+			response := httptest.NewRecorder()
+			instanceRouter(repo).ServeHTTP(response,
+				httptest.NewRequest(http.MethodGet, "/tools/prompt_lib/1"+rawQuery, nil))
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d, want 400: %s", response.Code, response.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body["error"] == "" {
+				t.Errorf("want a readable {\"error\": ...}, got %s", response.Body.String())
+			}
+			if repo.calls != 0 {
+				t.Errorf("the repository was called %d times for a refused request", repo.calls)
+			}
+		})
+	}
+}
+
+func TestListToolkitsAcceptsAQueryAtExactlyTheLimit(t *testing.T) {
+	t.Parallel()
+
+	for name, query := range map[string]string{
+		"128 ASCII characters":      strings.Repeat("a", 128),
+		"128 multi-byte characters": strings.Repeat("é", 128),
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := &pagingRepo{}
+			response := httptest.NewRecorder()
+			instanceRouter(repo).ServeHTTP(response,
+				httptest.NewRequest(http.MethodGet, "/tools/prompt_lib/1?query="+url.QueryEscape(query), nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d: %s", response.Code, response.Body.String())
+			}
+			if repo.filter.Query != query {
+				t.Errorf("the query did not reach the repository intact")
+			}
+		})
+	}
+}
+
+func boolRef(v bool) *bool { return &v }
 
 func TestListToolkitsAnswersAnArrayWhenThereAreNoRows(t *testing.T) {
 	t.Parallel()

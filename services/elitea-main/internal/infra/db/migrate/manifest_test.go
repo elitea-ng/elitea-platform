@@ -652,7 +652,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// decision ledger (execution_interrupts, its per-response revision row
 	// and audit; fanout-interrupt-decisions-v1 §5). New tables only, no
 	// backfill, no permission; unwired until Wave 2.
-	require.EqualValues(t, 157, Head(shared))
+	//
+	// 158: shared/0158_social_feedbacks_project.sql, the legacy shared
+	// centry.social_feedbacks table (created if absent) with a nullable
+	// project_id and two indexes. No tenant table, no permission.
+	require.EqualValues(t, 158, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

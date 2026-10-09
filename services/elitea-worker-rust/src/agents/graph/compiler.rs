@@ -2375,6 +2375,10 @@ fn parse_pipeline_node(
     parse_pipeline_node_admitting(raw_node, SHAPING_INTEGRATION_READY)
 }
 
+/// The typed cause code of [`PipelineConfigurationError::NodeTypeNotAvailable`];
+/// the lifecycle maps it to its own registered, data-free message.
+pub(crate) const NODE_TYPE_NOT_AVAILABLE_CODE: &str = "graph.pipeline.node_type_not_available";
+
 /// Production admission of data shaping nodes waits for deployed acceptance.
 /// Only rehearsal builds (`graph-extensions-rehearsal`) admit them.
 const SHAPING_INTEGRATION_READY: bool = cfg!(feature = "graph-extensions-rehearsal");
@@ -2477,6 +2481,14 @@ fn parse_pipeline_node_admitting(
         "aggregate" if shaping_admitted => AggregateNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Aggregate)
             .map_err(|_| PipelineConfigurationError::Invalid("an Aggregate node is invalid")),
+        // Known to this runtime, not admitted by this build: named as a
+        // deployment limit rather than as an unknown type.
+        "split_out" => Err(PipelineConfigurationError::NodeTypeNotAvailable(
+            PipelineGatedNodeType::SplitOut,
+        )),
+        "aggregate" => Err(PipelineConfigurationError::NodeTypeNotAvailable(
+            PipelineGatedNodeType::Aggregate,
+        )),
         _ => Err(PipelineConfigurationError::Unsupported(
             "the pipeline contains a node type that is not enabled",
         )),
@@ -2952,6 +2964,30 @@ impl fmt::Display for PipelineIdentifierField {
     }
 }
 
+/// A node type this runtime knows but admits only in graph-extensions
+/// rehearsal builds (`SHAPING_INTEGRATION_READY`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PipelineGatedNodeType {
+    SplitOut,
+    Aggregate,
+}
+
+impl PipelineGatedNodeType {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::SplitOut => "split_out",
+            Self::Aggregate => "aggregate",
+        }
+    }
+}
+
+impl std::fmt::Display for PipelineGatedNodeType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable, data-free stored-pipeline admission failure.
 #[derive(Debug, Error)]
 pub(crate) enum PipelineConfigurationError {
@@ -2970,6 +3006,8 @@ pub(crate) enum PipelineConfigurationError {
     Invalid(&'static str),
     #[error("the stored pipeline requests an unavailable capability: {0}")]
     Unsupported(&'static str),
+    #[error("the stored pipeline uses a node type this deployment does not admit: {0}")]
+    NodeTypeNotAvailable(PipelineGatedNodeType),
     #[error("the stored pipeline graph could not be compiled")]
     Graph(#[source] GraphError),
 }
@@ -2989,6 +3027,7 @@ impl PipelineConfigurationError {
             Self::MalformedYaml { .. } => "graph.pipeline.malformed_yaml",
             Self::Invalid(_) => "graph.pipeline.invalid_configuration",
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
+            Self::NodeTypeNotAvailable(_) => NODE_TYPE_NOT_AVAILABLE_CODE,
             Self::Graph(_) => "graph.pipeline.compile_failed",
         }
     }
@@ -2999,6 +3038,7 @@ impl PipelineConfigurationError {
         match self {
             Self::LimitExceeded(limit) => Some(limit.as_str()),
             Self::InvalidIdentifier(field) => Some(field.as_str()),
+            Self::NodeTypeNotAvailable(node_type) => Some(node_type.as_str()),
             Self::ResourceExhausted
             | Self::MalformedYaml { .. }
             | Self::Invalid(_)

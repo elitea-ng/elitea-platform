@@ -2386,6 +2386,21 @@ export const getListToolkitInstancesUrl = (
  * documented [1,1000]/default 20; offset<0 resets to 0 (:521-523).
  * The caller must be a member of {project_id} (or a super-admin), and a
  * repository failure is returned as a safe 500 error.
+ *
+ * `mcp` and `query` filter on the server
+ * (internal/api/v2/toolkits/handler.go, parseInstanceListFilter and
+ * instanceWhere), so a picker can page MCP servers and plain toolkits
+ * separately. `total` is the filtered total. Rows are ordered by name,
+ * then id, so offset paging reaches every row once. A bad `mcp` or an
+ * over-long `query` returns 400 `{"error": ...}`. That body has no
+ * `error_description`, so it is not the InvalidClientVersionError the 400
+ * entry below names: the client-contract lock allows no change to that
+ * entry within this major.
+ *
+ * When `mcp` is present (true or false) the list is the typed listing:
+ * it also leaves out the `application` rows (agent-as-tool links), as the
+ * legacy toolkits_listing does. When `mcp` is absent the raw listing is
+ * unchanged and still holds them.
  * @summary List toolkit (tool) instances for a project
  */
 export const listToolkitInstances = async (

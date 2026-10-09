@@ -47,6 +47,8 @@ export const listToolkitInstancesParamsLimitMax = 1000;
 export const listToolkitInstancesParamsOffsetDefault = 0;
 export const listToolkitInstancesParamsOffsetMin = 0;
 
+export const listToolkitInstancesParamsQueryMax = 128;
+
 export const ListToolkitInstancesParams = zod.object({
   limit: zod
     .int()
@@ -57,6 +59,8 @@ export const ListToolkitInstancesParams = zod.object({
     .int()
     .min(listToolkitInstancesParamsOffsetMin)
     .default(listToolkitInstancesParamsOffsetDefault),
+  mcp: zod.boolean().optional(),
+  query: zod.string().max(listToolkitInstancesParamsQueryMax).optional(),
 });
 
 export type ListToolkitInstancesParams = zod.input<

@@ -594,10 +594,8 @@ func writeStartError(writer http.ResponseWriter, err error) {
 	case errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart),
 		errors.Is(err, agentexecutionapp.ErrInvalidAgentAdmission):
 		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
-	case errors.Is(err, pipelinelimits.ErrInstructionsTooLarge):
-		writePipelineLimit(writer, pipelinelimits.ErrInstructionsTooLarge)
-	case errors.Is(err, pipelinelimits.ErrTooManyNodes):
-		writePipelineLimit(writer, pipelinelimits.ErrTooManyNodes)
+	case pipelinelimits.Refusal(err) != nil:
+		writePipelineLimit(writer, pipelinelimits.Refusal(err))
 	case errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart):
 		writeUnsupported(writer)
 	case errors.Is(err, agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing):
@@ -635,9 +633,10 @@ func writeStartError(writer http.ResponseWriter, err error) {
 	}
 }
 
-// writePipelineLimit answers the shared pipeline size refusal with its stable
-// code and readable message (never pipeline content), in the same 422 envelope
-// writeUnsupported uses.
+// writePipelineLimit answers a shared pipeline admission refusal (size bound,
+// node type, unattached toolkit) with its stable code and readable message,
+// in the same 422 envelope writeUnsupported uses. The message names at most a
+// short printable node id, node type or toolkit name, never other content.
 func writePipelineLimit(writer http.ResponseWriter, refusal error) {
 	var api *apierr.APIError
 	if !errors.As(refusal, &api) {

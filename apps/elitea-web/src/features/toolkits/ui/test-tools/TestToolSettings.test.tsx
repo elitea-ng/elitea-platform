@@ -152,6 +152,27 @@ describe('TestToolSettings', () => {
       expect(screen.queryByLabelText('Tool')).not.toBeInTheDocument();
     });
 
+    it('says tool discovery is turned off, with no retry, for a saved toolkit on a deployment that disabled it', async () => {
+      server.use(http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/proj-1/19', () => HttpResponse.json({ error: 'toolkit discovery unavailable' }, { status: 503 })));
+
+      renderTestToolSettings({ toolkitId: '19', values: DYNAMIC_VALUES });
+
+      expect(await screen.findByTestId('tool-list-error')).toBeInTheDocument();
+      expect(screen.getByText('Tool discovery is turned off on this deployment. Ask an administrator to enable it.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Tool')).not.toBeInTheDocument();
+    });
+
+    it('keeps the generic message and the retry when the toolkit schema read fails too', async () => {
+      server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ error: 'schemas unavailable' }, { status: 500 })));
+      server.use(http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/proj-1/19', () => HttpResponse.json({ error: 'toolkit discovery unavailable' }, { status: 503 })));
+
+      renderTestToolSettings({ toolkitId: '19', values: DYNAMIC_VALUES });
+
+      expect(await screen.findByText('The tool list did not load. Try again.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    });
+
     it('shows the empty picker, not an error, when the read succeeds with no tools', async () => {
       server.use(http.post(DISCOVER_PATH, () => HttpResponse.json({ tools: [], total: 0 })));
 

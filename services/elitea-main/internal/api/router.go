@@ -3810,11 +3810,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(projectPermission("models.applications.applications.list")).
 					Get("/recommendations/prompt_lib/{projectID}", coreHandler.Recommendations)
 
-				// Feedbacks — the project's feedback listing, so it takes the
-				// same project-membership gate as the social twin
-				// (/social/feedbacks/default/{projectID}). The tenant read
-				// runs only for a member.
-				r.With(projectScoped).Get("/feedbacks/default/{projectID}", coreHandler.Feedbacks)
+				// Feedbacks — the same listing as the social twin
+				// (/social/feedbacks/default/{projectID}), from the shared
+				// centry.social_feedbacks table, behind the same project gate
+				// and the same permission.
+				r.With(projectScoped, projectPermission(v2social.CurrentFeedbackListPermission)).
+					Method(http.MethodGet, "/feedbacks/default/{projectID}", v2social.NewFeedbackListHandler(cfg.Pool))
 
 				// Analytics (flat paths matching UI expectations). All seven
 				// pylon analytics_*.py modules declare the SAME string as
@@ -4324,6 +4325,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				socialOptions = append(socialOptions,
 					v2social.WithProjectAccessQuerier(socialProjectAccess))
 			}
+			// The feedback routes carry an RBAC gate of their own; the resolver is
+			// the one projectPermission uses. Without it they answer 503.
+			socialOptions = append(socialOptions, v2social.WithPermissionResolver(coreResolver))
 			r.Mount("/social", v2social.NewHandler(cfg.Pool, socialOptions...).Routes())
 
 			// === Tracing plugin (issue #250) ===
