@@ -55,9 +55,59 @@ fn hex(yaml: &str) -> String {
         .collect()
 }
 
+const GOLDEN: [(&str, &str, &str); 3] = [
+    (
+        "loop",
+        LOOP,
+        "03879059de057d7fdc445657465f1bab128a52c95a4c9424da468e9132fea38c",
+    ),
+    (
+        "paused",
+        PAUSED,
+        "396e3129030776807f742f1c88361c0e63410d3b55550430cf135d5089478663",
+    ),
+    (
+        "map",
+        MAP,
+        "63527fd0a1e5d8c2473f82f42576e48d85123cb566a2d8b9925d39f28a1c2a59",
+    ),
+];
+
 #[test]
 fn overwrite_only_definitions_keep_their_pre_reducer_digests() {
-    for (name, yaml) in [("loop", LOOP), ("paused", PAUSED), ("map", MAP)] {
-        println!("GOLDEN {name} {}", hex(yaml));
+    for (name, yaml, golden) in GOLDEN {
+        assert_eq!(hex(yaml), golden, "{name}");
     }
+}
+
+/// An explicit `reducer: overwrite` is the default, not a new definition.
+#[cfg(feature = "graph-extensions-rehearsal")]
+#[test]
+fn explicit_overwrite_keeps_the_golden_digest_and_typed_reducers_change_it() {
+    let explicit = LOOP
+        .replace(
+            "count: {type: int, value: 0}",
+            "count: {type: int, value: 0, reducer: overwrite}",
+        )
+        .replace("seen: {type: dict, value: {}}", "seen: {type: dict, value: {}, reducer: overwrite}");
+    assert_eq!(hex(&explicit), GOLDEN[0].2);
+    let append = LOOP.replace(
+        "findings: {type: list, value: [seed]}",
+        "findings: {type: list, value: [seed], reducer: append}",
+    );
+    let merge = LOOP.replace(
+        "seen: {type: dict, value: {}}",
+        "seen: {type: dict, value: {}, reducer: merge}",
+    );
+    let sum = LOOP.replace(
+        "count: {type: int, value: 0}",
+        "count: {type: int, value: 0, reducer: sum_int}",
+    );
+    let digests = [hex(&append), hex(&merge), hex(&sum)];
+    for digest in &digests {
+        assert_ne!(digest, GOLDEN[0].2);
+    }
+    assert_ne!(digests[0], digests[1]);
+    assert_ne!(digests[1], digests[2]);
+    assert_eq!(hex(&append), digests[0], "the fold is deterministic");
 }
