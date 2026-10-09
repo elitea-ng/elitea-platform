@@ -53,6 +53,7 @@ use crate::transport::model_facade::{
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
+use elitea_agent_runtime::host::PlatformWriter;
 use sqlx::PgPool;
 
 /// Shared ordinary application/ad-hoc assembler used after `AUTHORIZED_NOW`.
@@ -297,10 +298,11 @@ impl OrdinaryNativeAgentAssembler {
         // assembly, which is exactly what a tool the model calls mid-run
         // needs. The same authority the two builder tools take, for the same
         // reason — see `internal_tools::BuilderToolAuthority`.
-        let artifact_authority = ArtifactToolAuthority::new(Arc::new(ClaimPlatformWriter::new(
+        let platform_writer: Arc<dyn PlatformWriter> = Arc::new(ClaimPlatformWriter::new(
             Arc::clone(&self.platform),
             Arc::clone(runtime_context),
-        )));
+        ));
+        let artifact_authority = ArtifactToolAuthority::new(Arc::clone(&platform_writer));
         let DirectToolsets {
             mut toolsets,
             sensitive: sensitive_tools,
@@ -314,10 +316,7 @@ impl OrdinaryNativeAgentAssembler {
         )
         .await?;
         let internal_tools = profile.internal_tools();
-        toolsets.extend(internal_tools.toolsets(Some(&BuilderToolAuthority::new(
-            Arc::clone(&self.platform),
-            Arc::clone(runtime_context),
-        ))));
+        toolsets.extend(internal_tools.toolsets(Some(&BuilderToolAuthority::new(platform_writer))));
         toolsets.extend(profile.instruction_plan().toolsets());
         // The attachment tools exist only when a document of this turn was
         // shown as an overview; the note in the prompt offers them by name.
