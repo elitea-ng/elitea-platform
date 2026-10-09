@@ -86,6 +86,13 @@ EXEMPT_WORKFLOWS = {
         "dependency-scanning.yml, which refuses a closure that does not "
         "resolve."
     ),
+    "cancel-merged-pr-runs.yml": (
+        "No push arm and no pull_request arm, deliberately: it runs on "
+        "pull_request_target `closed` only, and cancels the unfinished runs of "
+        "a pull request that merged. A push arm would give it nothing to "
+        "cancel, and it must never touch the runs a merge starts on a trunk "
+        "branch."
+    ),
     "ci-web-mutation.yml": (
         "It has no push arm at all. It is a weekly cadence job plus manual "
         "dispatch, not a per-merge gate."
