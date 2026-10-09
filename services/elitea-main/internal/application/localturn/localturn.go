@@ -626,10 +626,13 @@ func commitAuditAction(report boundedReport) string {
 
 // commitDigest identifies a commit body, so a retried commit is recognised as
 // the same one. It hashes the normalized request: the JSON of a struct with
-// fixed field order and compacted raw parts.
+// fixed field order and compacted raw parts. An absent list and an empty one
+// are the same body (a client that omits `hitl_exchanges` on the retry it sent
+// as `[]` the first time is retrying, not changing the turn), and so are an
+// absent and a null `tool_calls` and the empty object.
 func commitDigest(request CommitRequest) ([32]byte, error) {
 	compact := func(raw json.RawMessage) (json.RawMessage, error) {
-		if len(bytes.TrimSpace(raw)) == 0 {
+		if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 			return json.RawMessage("null"), nil
 		}
 		var buffer bytes.Buffer
@@ -641,6 +644,20 @@ func commitDigest(request CommitRequest) ([32]byte, error) {
 	toolCalls, err := compact(request.ToolCalls)
 	if err != nil {
 		return [32]byte{}, err
+	}
+	if bytes.Equal(toolCalls, []byte("{}")) {
+		toolCalls = json.RawMessage("null")
+	}
+	exchanges := request.HITLExchanges
+	if exchanges == nil {
+		exchanges = []HITLExchange{}
+	}
+	report := request.Report
+	if report.Commands == nil {
+		report.Commands = []CommandRecord{}
+	}
+	if report.Paths == nil {
+		report.Paths = []string{}
 	}
 	steps := make([]json.RawMessage, 0, len(request.ThinkingSteps))
 	for _, step := range request.ThinkingSteps {
@@ -663,7 +680,7 @@ func commitDigest(request CommitRequest) ([32]byte, error) {
 	}{
 		request.ExecutionID, request.UserMessage, request.AssistantMessage,
 		request.AssistantIsError, request.AssistantError, toolCalls, steps,
-		request.HITLExchanges, request.Report,
+		exchanges, report,
 	})
 	if err != nil {
 		return [32]byte{}, err
