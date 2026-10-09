@@ -1022,6 +1022,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-agent-runtime"
+version = "0.1.0"
+dependencies = [
+ "adk-agent",
+ "adk-core",
+ "adk-graph",
+ "adk-runner",
+ "adk-session",
+ "adk-tool",
+ "async-stream",
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "futures",
+ "hmac 0.13.0",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "md-5 0.11.0",
+ "minijinja",
+ "percent-encoding",
+ "regex",
+ "reqwest 0.12.28",
+ "reqwest 0.13.4",
+ "ring",
+ "rmcp",
+ "rustls",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "elitea-llm-wire"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "elitea-worker-rust"
 version = "0.1.0"
 dependencies = [
@@ -1035,17 +1087,17 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "elitea-agent-runtime",
+ "elitea-llm-wire",
  "futures-util",
  "hmac 0.13.0",
  "http",
  "http-body",
  "http-body-util",
  "hyper",
- "hyper-rustls",
  "hyper-util",
  "k8s-openapi",
  "kube",
- "md-5 0.11.0",
  "minijinja",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -1053,14 +1105,12 @@ dependencies = [
  "percent-encoding",
  "prost",
  "protoc-bin-vendored",
- "regex",
  "reqwest 0.12.28",
  "reqwest 0.13.4",
  "ring",
  "rmcp",
  "rustix",
  "rustls",
- "rustls-native-certs",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -1069,7 +1119,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
  "toml",
  "tonic",

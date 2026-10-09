@@ -23,6 +23,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 pub mod sources;
+pub mod vectors;
 
 /// The DSN variable: the engine's database. Unset, the engine stores
 /// nothing (the fixture runner needs no database).
@@ -45,6 +46,14 @@ const EMBEDDED: &[(&str, &str)] = &[
     (
         "0002_sources.sql",
         include_str!("../../migrations/0002_sources.sql"),
+    ),
+    (
+        "0003_documents.sql",
+        include_str!("../../migrations/0003_documents.sql"),
+    ),
+    (
+        "0004_entity_vectors.sql",
+        include_str!("../../migrations/0004_entity_vectors.sql"),
     ),
 ];
 
@@ -486,6 +495,22 @@ pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> 
     Ok(Some((graph, revision)))
 }
 
+/// The stored graph's revision, or `None` when there is no graph: a
+/// cheap check of whether a cached copy is still current.
+///
+/// # Errors
+///
+/// [`StoreError::Database`].
+pub async fn revision(pool: &PgPool, key: GraphKey) -> Result<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT revision FROM inventory_graph.graphs WHERE project_id = $1 AND application_id = $2",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// Delete the stored graph `key` and its sources' state; `true` when there
 /// was a graph.
 ///
@@ -503,7 +528,7 @@ pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
     .execute(&mut *transaction)
     .await?
     .rows_affected();
-    for table in ["inventory_graph.sources", "inventory_graph.source_files"] {
+    for table in ["inventory_graph.sources", "inventory_graph.documents"] {
         sqlx::query(&format!(
             "DELETE FROM {table} WHERE project_id = $1 AND application_id = $2"
         ))

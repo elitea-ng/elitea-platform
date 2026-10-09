@@ -1,0 +1,106 @@
+name: CI — Desktop client
+
+# apps/elitea-desktop (ADR-0029 decision 9): the Tauri host and the elitea-web
+# `desktop` build mode it bundles. ONE job on macOS (the first platform): the
+# organisation is on the GitHub free plan with a 20-concurrent-job cap, and a
+# macOS minute costs ten Linux ones, so this is deliberately a single cached job
+# that does the cheap, decisive work — Rust format, lint and tests for the host,
+# the web unit tests that pin the desktop transport, and the desktop web build
+# the host embeds. It does NOT build a signed bundle; that is a release step
+# (apps/elitea-desktop/README.md, "Release signing").
+#
+# Path-filtered: the desktop bundle embeds the whole elitea-web app (the shell
+# imports `App`), so any change under apps/elitea-web/src can break it; the filter
+# covers all of it, still as one job. ci-web.yml gates the same files for the web.
+
+on:
+  pull_request:
+    paths:
+      - "apps/elitea-desktop/**"
+      - "apps/elitea-web/src/**"
+      - "apps/elitea-web/vite.config.ts"
+      - "apps/elitea-web/package.json"
+      - "apps/elitea-web/package-lock.json"
+      - ".github/workflows/ci-desktop.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/elitea-desktop/**"
+      - "apps/elitea-web/src/**"
+      - "apps/elitea-web/vite.config.ts"
+      - "apps/elitea-web/package.json"
+      - "apps/elitea-web/package-lock.json"
+      - ".github/workflows/ci-desktop.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  desktop:
+    name: Host (fmt, clippy, tests) + desktop web build
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: apps/elitea-web/package-lock.json
+
+      # The desktop web build comes first: `tauri::generate_context!` embeds
+      # `frontendDist` (apps/elitea-web/dist-desktop) at compile time, so the
+      # Rust steps below cannot even compile without it.
+      - name: Install web (locked)
+        working-directory: apps/elitea-web
+        run: npm ci
+
+      - name: Desktop transport unit tests (bearer, refresh, fetch SSE, host bridge)
+        working-directory: apps/elitea-web
+        run: >
+          npx vitest run --config vitest.config.ts --project node
+          src/shared/desktop src/shared/api/http src/shared/api/sse
+
+      - name: Build the desktop web bundle
+        working-directory: apps/elitea-web
+        run: npm run build:desktop
+
+      - name: Show pinned toolchain
+        working-directory: apps/elitea-desktop/src-tauri
+        run: |
+          rustc --version
+          cargo --version
+
+      # Read everywhere, write on main only: a pull request's target directory
+      # is a large part of the repository's 10 GB Actions cache, duplicated per
+      # branch (the same policy as ci-rust.yml).
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: apps/elitea-desktop/src-tauri
+
+      - name: Check formatting
+        working-directory: apps/elitea-desktop/src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        working-directory: apps/elitea-desktop/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # The flow tests bind loopback ports and run an in-process deployment; the
+      # keychain is a mock, so a runner with no login keychain is fine.
+      - name: Run tests
+        working-directory: apps/elitea-desktop/src-tauri
+        run: cargo test --locked --all-targets

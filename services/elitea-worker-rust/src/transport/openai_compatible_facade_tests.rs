@@ -322,7 +322,7 @@ fn assert_exact_captured_request(request: &CapturedModelRequest) {
             .headers
             .get("x-elitea-execution-id")
             .expect("execution id header"),
-        "execution/fixture-one"
+        "0123456789abcdef0123456789abcdef"
     );
     assert_eq!(
         request
@@ -511,6 +511,50 @@ async fn automatic_max_tokens_omits_the_openai_wire_limit() {
     assert!(body.get("max_completion_tokens").is_none());
 }
 
+/// The execution ids the caller contract lists (`conformance/llm-caller/
+/// contract.json`): the edge keeps the valid ones and silently DROPS the
+/// rest, so a call with one would lose its execution attribution. The worker
+/// refuses to bind such an id instead (#1156).
+const CONTRACT_VALID_EXECUTION_IDS: [&str; 2] = [
+    "0123456789abcdef0123456789abcdef",
+    "callback-6f1c2d4e-8a7b-4c3d-9e2f-1a2b3c4d5e6f",
+];
+const CONTRACT_INVALID_EXECUTION_IDS: [&str; 6] = [
+    "",
+    "a:b",
+    "execution id",
+    "a/b",
+    "eval:7:case:3",
+    "execution/fixture-one",
+];
+
+#[test]
+fn only_contract_execution_ids_are_bound() {
+    let (client, _) =
+        test_model_gateway_client(Vec::new(), test_model_gateway_config()).expect("client");
+    let bind = |execution_id: &str| {
+        client.bind_ordinary(
+            &ClaimScopedEliteaContext::fixture_with_execution_id(17, TOKEN, execution_id),
+            17,
+            test_model_facade_invocation(),
+        )
+    };
+    for valid in CONTRACT_VALID_EXECUTION_IDS {
+        assert!(bind(valid).is_ok(), "{valid}");
+    }
+    assert!(bind(&"a".repeat(128)).is_ok());
+    for invalid in CONTRACT_INVALID_EXECUTION_IDS
+        .into_iter()
+        .map(str::to_owned)
+        .chain([("a".repeat(129))])
+    {
+        assert!(
+            matches!(bind(&invalid), Err(ModelFacadeError::InvalidInvocation)),
+            "{invalid}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
     let (client, captured) = test_model_gateway_client(
@@ -525,7 +569,7 @@ async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
             &ClaimScopedEliteaContext::fixture_with_execution_id(
                 17,
                 TOKEN,
-                "execution/distinct-42",
+                "callback-6f1c2d4e-8a7b-4c3d-9e2f-1a2b3c4d5e6f",
             ),
             17,
             test_model_facade_invocation(),
@@ -550,7 +594,7 @@ async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
             .headers
             .get("x-elitea-execution-id")
             .expect("execution id header"),
-        "execution/distinct-42"
+        "callback-6f1c2d4e-8a7b-4c3d-9e2f-1a2b3c4d5e6f"
     );
 }
 

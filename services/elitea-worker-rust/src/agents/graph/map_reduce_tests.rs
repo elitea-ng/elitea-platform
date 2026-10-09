@@ -463,7 +463,9 @@ async fn eight_items_refill_four_slots_without_batch_barrier() {
     );
 }
 
-#[tokio::test]
+// Paused clock: the workers' `8 - index` ms sleeps then complete strictly by
+// duration, so "item 3 finishes first" no longer depends on CI scheduling.
+#[tokio::test(start_paused = true)]
 async fn reverse_completion_collects_original_order_and_preserves_structured_values() {
     let (node, _, _, workers) = setup(Workers::new(Mode::Normal), definition());
     let context = context(json!([{"x":1},["x",null],false,42]), false);

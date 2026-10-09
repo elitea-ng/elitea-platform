@@ -45,7 +45,7 @@ func TestDocumentKeySetIsPinned(t *testing.T) {
 	_ = json.Unmarshal(policy, &pm)
 	publicKeys := []string{"require_device_lock", "offline_enabled", "min_client_version",
 		"allow_share_out", "allow_share_in", "allow_cloud_stt", "notification_preview",
-		"allow_notification_actions", "allow_system_surfaces"}
+		"allow_notification_actions", "allow_system_surfaces", "local_work_allowed"}
 	for _, k := range publicKeys {
 		if _, ok := pm[k]; !ok || len(pm) != len(publicKeys) {
 			t.Fatalf("client_policy keys = %v", pm)

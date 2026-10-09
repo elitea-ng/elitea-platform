@@ -221,6 +221,25 @@ async fn drain(
     Ok(responses)
 }
 
+/// As the OpenAI-compatible facade: an execution id the `/llm` edge would
+/// drop is refused at bind (#1156).
+#[test]
+fn only_contract_execution_ids_are_bound() {
+    let (client, _) =
+        test_model_gateway_client(Vec::new(), test_model_gateway_config()).expect("client");
+    let bind = |execution_id: &str| {
+        client.bind_anthropic_ordinary(
+            &ClaimScopedEliteaContext::fixture_with_execution_id(17, TOKEN, execution_id),
+            23,
+            invocation(MODEL, None),
+        )
+    };
+    assert!(bind("0123456789abcdef0123456789abcdef").is_ok());
+    for invalid in ["", "a:b", "a/b", "eval:7:judge:3", &"a".repeat(129)] {
+        assert!(bind(invalid).is_err(), "{invalid}");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
     let response =
@@ -235,7 +254,7 @@ async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
             &ClaimScopedEliteaContext::fixture_with_execution_id(
                 17,
                 TOKEN,
-                "execution/distinct-42",
+                "callback-6f1c2d4e-8a7b-4c3d-9e2f-1a2b3c4d5e6f",
             ),
             23,
             invocation(MODEL, Some(ModelReasoningEffort::Medium)),
@@ -257,7 +276,7 @@ async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
     };
     assert_eq!(
         request.headers["x-elitea-execution-id"],
-        "execution/distinct-42"
+        "callback-6f1c2d4e-8a7b-4c3d-9e2f-1a2b3c4d5e6f"
     );
 }
 
@@ -327,7 +346,7 @@ async fn native_messages_request_preserves_cache_thinking_identity_and_completio
     assert_eq!(request.headers["x-project-id"], "17");
     assert_eq!(
         request.headers["x-elitea-execution-id"],
-        "execution/fixture-one"
+        "0123456789abcdef0123456789abcdef"
     );
     assert_eq!(request.headers["anthropic-version"], "2023-06-01");
     assert_eq!(

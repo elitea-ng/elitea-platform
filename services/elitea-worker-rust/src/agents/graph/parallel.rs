@@ -21,8 +21,7 @@ use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
 
 #[path = "parallel_checkpoint.rs"]
 mod checkpoint;
-#[path = "parallel_control.rs"]
-mod control;
+use elitea_agent_runtime::graph::parallel_control as control;
 #[path = "parallel_structure.rs"]
 mod structure;
 pub(in crate::agents::graph) use structure::{validate_state, validate_values};

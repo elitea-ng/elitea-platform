@@ -50,6 +50,8 @@ pub enum RunnerKind {
     Unavailable,
     /// The canned graph (`crate::fixture`).
     Fixture,
+    /// The engine itself: the PostgreSQL graph, ingestion, retrieval.
+    Native,
 }
 
 /// Everything the engine sidecar reads from the environment.
@@ -57,7 +59,7 @@ pub enum RunnerKind {
 pub struct Settings {
     /// `ENGINE_SOCKET`: the Unix socket the Go host in the same pod dials.
     pub engine_socket: PathBuf,
-    /// `RUNNER`: `unavailable` (default) or `fixture`.
+    /// `RUNNER`: `unavailable` (default), `fixture` or `native`.
     pub runner: RunnerKind,
     /// `FIXTURE_STEP_SECONDS`: the pause between the fixture's progress lines.
     pub fixture_step: Duration,
@@ -73,6 +75,11 @@ pub struct Settings {
     /// `MAX_CLONE_BYTES`, `MAX_FILE_COUNT`, `MAX_FILE_BYTES`,
     /// `MAX_PARSED_BYTES`, `CLONE_TIMEOUT_SECONDS`, `SCRATCH_PATH`.
     pub ingest: IngestSettings,
+    /// `DATABASE_URL`: the graph store (required by `native`).
+    pub database_url: Option<elitea_engine_core::secret::Secret>,
+    /// `CALLBACK_CA_FILE`: a PEM bundle the model transport trusts besides
+    /// the platform roots (the gateway reached over TLS through the edge).
+    pub callback_ca_file: Option<PathBuf>,
 }
 
 impl Settings {
@@ -99,6 +106,7 @@ impl Settings {
         let runner = match raw("RUNNER").as_deref() {
             None | Some("unavailable") => RunnerKind::Unavailable,
             Some("fixture") => RunnerKind::Fixture,
+            Some("native") => RunnerKind::Native,
             Some("legacy") => {
                 return Err(ConfigError(format!(
                     "{ENV_PREFIX}RUNNER=legacy names the Python engine, which this native image does not contain; use the elitea-inventory image for it, or fixture here"
@@ -106,7 +114,7 @@ impl Settings {
             }
             Some(other) => {
                 return Err(ConfigError(format!(
-                    "{ENV_PREFIX}RUNNER must be unavailable or fixture, got '{other}'"
+                    "{ENV_PREFIX}RUNNER must be unavailable, fixture or native, got '{other}'"
                 )));
             }
         };
@@ -149,9 +157,17 @@ impl Settings {
             )));
         }
         let ingest = ingest_settings(&raw)?;
+        let database_url = raw("DATABASE_URL").and_then(elitea_engine_core::secret::Secret::new);
+        if runner == RunnerKind::Native && database_url.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine keeps every graph in PostgreSQL and has no other storage"
+            )));
+        }
         Ok(Self {
             source_types,
             ingest,
+            database_url,
+            callback_ca_file: raw("CALLBACK_CA_FILE").map(PathBuf::from),
             engine_socket: raw("ENGINE_SOCKET").map_or_else(
                 || PathBuf::from("/run/inventory/engine.sock"),
                 PathBuf::from,
