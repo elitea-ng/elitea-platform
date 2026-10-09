@@ -239,6 +239,12 @@ func newAccessMatrixRouter(t *testing.T, members *projectMembers) (chi.Router, *
 		PrincipalValidator:   testPrincipalValidator{},
 		SessionSecret:        accessMatrixSecret,
 		ProjectAccessQuerier: members,
+		// The feedback routes also gate on a permission; this matrix is about
+		// project membership, so the permission is granted in project 7.
+		ProjectPermissionResolver: fakePermissionResolver{
+			granted:    []string{"models.social.feedbacks.list", "models.social.feedbacks.create"},
+			forProject: "7",
+		},
 	})
 	// Anything the router did while being built is not the request's.
 	db.reset()
