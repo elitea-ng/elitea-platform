@@ -59,7 +59,14 @@ impl WorkspaceStore {
 
     fn read(&self) -> Result<Vec<Workspace>, HostError> {
         match fs::read_to_string(self.dir.join(FILE)) {
-            Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_default()),
+            // A file that does not parse is an error, never "no workspaces":
+            // the next write would otherwise erase every workspace in it.
+            Ok(text) => serde_json::from_str(&text).map_err(|e| {
+                HostError::Storage(format!(
+                    "{FILE} in the app data folder is damaged ({e}); it was left as it is, \
+                     fix or remove it to manage workspaces again"
+                ))
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(io(&e)),
         }
@@ -218,5 +225,22 @@ mod tests {
         assert!(folder.path().exists(), "the folder itself is never touched");
         assert!(store.add(&folder.path().join("missing")).is_err());
         assert!(store.bind_project("nope", 1).is_err());
+    }
+
+    #[test]
+    fn a_damaged_file_is_an_error_and_is_never_overwritten() {
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let store = WorkspaceStore::new(app.path().to_owned());
+        let file = app.path().join(FILE);
+        std::fs::write(&file, "[{\"id\": \"abc\", truncated").unwrap();
+        let before = std::fs::read_to_string(&file).unwrap();
+
+        assert!(matches!(store.list(), Err(HostError::Storage(_))));
+        assert!(store.get("abc").is_err());
+        assert!(store.add(folder.path()).is_err());
+        assert!(store.bind_project("abc", 1).is_err());
+        assert!(store.remove("abc").is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
     }
 }
