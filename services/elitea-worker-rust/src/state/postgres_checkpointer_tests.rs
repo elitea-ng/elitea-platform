@@ -2475,3 +2475,4 @@ async fn postgres_recursive_application_threads_preserve_takeover_and_completed_
 
 mod direct_tool_journal;
 mod graph_receipts;
+mod run_root_fencing;

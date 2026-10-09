@@ -60,7 +60,7 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
         let child = Self::activate_under_root(
             self.pool.clone(),
             authority.for_thread(thread_id.clone())?,
-            &authority.thread_id,
+            &self.run_root_thread_id,
             self.limits,
             Arc::clone(&self.state_writer_lease),
         )

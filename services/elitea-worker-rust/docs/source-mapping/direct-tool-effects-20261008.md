@@ -28,8 +28,10 @@ Design and guarantees: [`../direct-tool-effects-design.md`](../direct-tool-effec
   - journaled `dispatch` at `:536-592`;
   - `DirectToolAttempt` at `:842-937`.
 - `src/agents/graph/compiler.rs:1315-1319`: attaches the node-recovery authority.
-- `src/state/postgres_checkpointer.rs` `activate_under_root` and `postgres_checkpointer/node_attempts.rs`: a node
-  journal opens only while the claim still owns the run's root writer, checked under a share lock.
+- `src/state/postgres_checkpointer.rs` `activate_under_root` and the run root carried by each checkpointer; callers in
+  `postgres_checkpointer/{node_attempts,application_children,parallel_children,map_children}.rs`: every thread
+  opened below the run root (node journal, application, parallel-branch and Map-item child) opens only while the
+  claim still owns the run's root writer, checked under a share lock.
 - `src/agents/graph/compiler.rs` `select_pipeline_result`: a set `_pipeline_blocked` message is the pipeline's answer.
 - `src/agents/graph/node_recovery_runtime.rs`: the test module is visible inside the graph module
   (test-only).
@@ -62,7 +64,12 @@ New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 8 tests:
 - `superseded_claim_cannot_start_an_effect_in_an_unopened_activation`: claim B takes the run over; claim A, with its
   lease still current, is refused (`writer_not_current`), makes 0 calls and creates no journal thread.
 
-Run against a disposable PostgreSQL 18 (pgvector image): 6 passed. Removing the `recovering_started` guard makes
+`src/state/postgres_checkpointer_tests/run_root_fencing.rs` (DB-gated):
+- `superseded_claim_cannot_activate_application_child_threads`
+- `child_thread_of_a_superseded_run_cannot_open_new_threads`: a child thread activated before the takeover cannot
+  open a node journal once a newer claim owns the run root.
+
+Run against a disposable PostgreSQL 18 (pgvector image): 8 passed. Removing the `recovering_started` guard makes
 the crash and takeover tests fail.
 
 `src/agents/graph/compiler_tests.rs`:

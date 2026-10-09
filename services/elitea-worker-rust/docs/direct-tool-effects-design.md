@@ -110,8 +110,10 @@ What we deliberately do not port:
 6. **Root-writer fencing (fixed).** A node journal thread now opens only while this claim still owns the
    run: `PostgresCheckpointer::activate_under_root` share-locks the root writer row in the same transaction as
    the journal-thread activation. A superseded claim is refused even while its in-process lease is still
-   current (`superseded_claim_cannot_start_an_effect_in_an_unopened_activation`). Application child threads
-   (`postgres_checkpointer/application_children.rs`) still use the unfenced `activate`, which is a follow-up.
+   current (`superseded_claim_cannot_start_an_effect_in_an_unopened_activation`). The same fence now covers
+   every thread a run opens below its root (application, parallel-branch and Map-item child threads), keyed on
+   the run root carried by each `PostgresCheckpointer`, so a child of a superseded run cannot open new threads
+   either (`src/state/postgres_checkpointer_tests/run_root_fencing.rs`).
 7. **LLM-node receipts.** Pipeline LLM nodes admit effectful sensitive tools without an effect
    receipt (`src/agents/graph/llm.rs:1326-1470`). They should move to the same journal so the two
    node kinds share one guarantee (Gate 6, `docs/remaining-gates.md:60`).

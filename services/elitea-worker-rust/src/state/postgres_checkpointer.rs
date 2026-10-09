@@ -322,6 +322,8 @@ pub struct PostgresCheckpointer {
     scope: CheckpointScope,
     limits: CheckpointLimits,
     state_writer_lease: Arc<dyn StateWriterLease>,
+    // Every thread opened below this one is fenced by the run's root writer.
+    run_root_thread_id: String,
 }
 
 impl PostgresCheckpointer {
@@ -453,11 +455,14 @@ RETURNING writer_claim_id
             .ensure_current()
             .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
         transaction.commit().await.map_err(storage_error)?;
+        let run_root_thread_id =
+            root_thread_id.map_or_else(|| authority.thread_id.clone(), ToOwned::to_owned);
         Ok(Self {
             pool,
             scope: CheckpointScope { authority },
             limits,
             state_writer_lease,
+            run_root_thread_id,
         })
     }
 
