@@ -6608,7 +6608,8 @@
                 "project_id",
                 "schema_version",
                 "version_details",
-                "version_id"
+                "version_id",
+                "withheld_secrets"
               ],
               "properties": {
                 "application_id": {
@@ -6727,6 +6728,12 @@
                 "version_id": {
                   "type": "integer",
                   "format": "int64"
+                },
+                "withheld_secrets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               }
             }

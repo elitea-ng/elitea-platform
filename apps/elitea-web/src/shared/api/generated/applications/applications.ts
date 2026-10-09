@@ -3771,7 +3771,8 @@ export const getResolveApplicationVersionUrl = (
  * platform MCP server the version selects (`server_name`). No credential,
  * vault secret, `{{secret.*}}` reference or MCP OAuth material is ever in
  * the document; a secret reference outside the tools reads
- * `[secret withheld]`.
+ * `[secret withheld]`, and `withheld_secrets` names each such string by
+ * JSON Pointer so the desktop can decide to run that agent in the cloud.
  *
  * Memory recall is not part of the document: startLocalTurn answers it.
  *

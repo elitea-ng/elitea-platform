@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -93,6 +94,9 @@ func TestResolvedVersionCarriesNoSecretOverTheRealFreeze(t *testing.T) {
 	}
 	if len(details.Variables) != 1 || details.Variables[0]["value"] != "[secret withheld]" {
 		t.Fatalf("variables = %v", details.Variables)
+	}
+	if !slices.Contains(document.WithheldSecrets, "/instructions") || !slices.Contains(document.WithheldSecrets, "/variables/0/value") {
+		t.Fatalf("withheld_secrets = %v, want the instructions and the variable named", document.WithheldSecrets)
 	}
 	if details.LLMSettings["model_name"] != "resolved-canary-model" {
 		t.Fatalf("the freeze did not resolve the model: %v", details.LLMSettings)

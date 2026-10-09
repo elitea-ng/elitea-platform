@@ -3629,7 +3629,7 @@ components:
         One version resolved for a desktop's local runtime (ADR-0029 decision
         5a). NOTE(W2): internal/infra/storage/client_application_version.go:59
         (`ClientApplicationVersion`).
-      required: [schema_version, project_id, application_id, version_id, version_details, definition_sha256]
+      required: [schema_version, project_id, application_id, version_id, version_details, definition_sha256, withheld_secrets]
       properties:
         schema_version:
           type: string
@@ -3640,6 +3640,15 @@ components:
         definition_sha256:
           type: string
           description: SHA-256 (hex) of `version_details` and the three ids; also the ETag.
+        withheld_secrets:
+          type: array
+          items: { type: string }
+          description: >-
+            JSON Pointers (RFC 6901, into `version_details`) of every string
+            whose `{{secret.*}}` reference was replaced with
+            `[secret withheld]`; empty when none. A local run of this version
+            sees the placeholder, not the value: a client may run it in the
+            cloud instead.
         version_details:
           $ref: '#/components/schemas/ResolvedApplicationVersionDetails'
     ResolvedApplicationVersionDetails:
@@ -17103,7 +17112,8 @@ paths:
         platform MCP server the version selects (`server_name`). No credential,
         vault secret, `{{secret.*}}` reference or MCP OAuth material is ever in
         the document; a secret reference outside the tools reads
-        `[secret withheld]`.
+        `[secret withheld]`, and `withheld_secrets` names each such string by
+        JSON Pointer so the desktop can decide to run that agent in the cloud.
 
         Memory recall is not part of the document: startLocalTurn answers it.
 
