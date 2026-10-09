@@ -16,7 +16,10 @@
 //! untracked bytes and the turn runs without a checkpoint. Restore diffs the
 //! checkpoint's tree against a fresh snapshot of now: files that differ or
 //! disappeared are written back with `checkout-index` (from another
-//! temporary index), files created since are deleted.
+//! temporary index), files created since are deleted. A file is only
+//! deleted when the checkpoint's own ignore rules (its `.gitignore` files)
+//! did not ignore it: one ignored then and un-ignored during the turn was
+//! not snapshotted, so it may well be older than the turn, and is kept.
 //!
 //! **Elsewhere** a checkpoint is a manifest (path, SHA-256, mode) in the
 //! host's data directory plus content-addressed copies of the files
@@ -24,6 +27,7 @@
 //! `.gitignore` rules honoured. Bounded: [`MAX_COPY_FILES`],
 //! [`MAX_COPY_BYTES`]; files over [`MAX_COPY_FILE_BYTES`] are recorded as
 //! skipped and left alone by a restore.
+//! Deletions follow the checkpoint's ignore rules as in git.
 //!
 //! Restores write through a [`Workspace`] without `path_deny` (it is the
 //! person's undo, not the agent's write), so they are still confined to the
@@ -42,6 +46,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -151,6 +156,75 @@ fn single_line(label: &str) -> String {
         .take(200)
         .collect();
     line.trim().to_owned()
+}
+
+/// Reads one ignore file of a checkpoint by its `/`-joined path.
+type LoadIgnoreFile<'a> = Box<dyn FnMut(&str) -> Option<Vec<u8>> + 'a>;
+
+/// The ignore rules a checkpoint was taken under, read from the ignore
+/// files it holds (`load` returns one by its `/`-joined path, or `None`).
+struct CheckpointIgnores<'a> {
+    /// The ignore file names honoured in each directory, lowest precedence
+    /// first.
+    names: &'static [&'static str],
+    load: LoadIgnoreFile<'a>,
+    /// One matcher per directory (`""`: the root), `None` without rules.
+    matchers: BTreeMap<String, Option<Gitignore>>,
+}
+
+impl<'a> CheckpointIgnores<'a> {
+    fn new(names: &'static [&'static str], load: impl FnMut(&str) -> Option<Vec<u8>> + 'a) -> Self {
+        Self {
+            names,
+            load: Box::new(load),
+            matchers: BTreeMap::new(),
+        }
+    }
+
+    fn matcher(&mut self, dir: &str) -> Option<&Gitignore> {
+        if !self.matchers.contains_key(dir) {
+            let mut builder = GitignoreBuilder::new(Path::new("/").join(dir));
+            let mut any = false;
+            for name in self.names {
+                let file = if dir.is_empty() {
+                    (*name).to_owned()
+                } else {
+                    format!("{dir}/{name}")
+                };
+                if let Some(bytes) = (self.load)(&file) {
+                    any = true;
+                    for line in String::from_utf8_lossy(&bytes).lines() {
+                        // A line that is not a valid glob is skipped, as git does.
+                        let _ = builder.add_line(None, line);
+                    }
+                }
+            }
+            let matcher = any.then(|| builder.build().ok()).flatten();
+            self.matchers.insert(dir.to_owned(), matcher);
+        }
+        self.matchers.get(dir).and_then(Option::as_ref)
+    }
+
+    /// Whether the checkpoint's rules ignored the file `path`: the deepest
+    /// directory whose rules decide (ignore or re-include) wins, as in git.
+    fn ignores(&mut self, path: &str) -> bool {
+        let components: Vec<&str> = path.split('/').collect();
+        let full = Path::new("/").join(path);
+        for depth in (0..components.len()).rev() {
+            let dir = components[..depth].join("/");
+            let Some(matcher) = self.matcher(&dir) else {
+                continue;
+            };
+            let decided = matcher.matched_path_or_any_parents(&full, false);
+            if decided.is_ignore() {
+                return true;
+            }
+            if decided.is_whitelist() {
+                return false;
+            }
+        }
+        false
+    }
 }
 
 /// The checkpoints of one session in one workspace.
@@ -707,6 +781,16 @@ impl GitCheckpoints {
                 write_back.push(path);
             }
         }
+        // Not in the checkpoint, but ignored by its rules: it was not
+        // snapshotted, so it may be older than the checkpoint. Kept.
+        let mut ignores = CheckpointIgnores::new(&[".gitignore"], |file| {
+            self.repo
+                .git(self.top())
+                .run(&["cat-file", "blob", &format!("{commit}:{file}")])
+                .ok()
+        });
+        delete.retain(|path| !ignores.ignores(path));
+        drop(ignores);
         let mut report = RestoreReport::default();
         for path in delete {
             if let Some(ws_path) = self.in_workspace(&path)
@@ -961,17 +1045,25 @@ impl CopyCheckpoints {
     fn restore(&self, seq: u64, only: Option<&WsPath>) -> ToolResult<RestoreReport> {
         let manifest = self.read_manifest(seq)?;
         let in_scope = |path: &str| only.is_none_or(|only| only.display_string() == path);
+        // Not in the checkpoint, but ignored by its rules: it was not
+        // copied, so it may be older than the checkpoint. Kept.
+        let mut ignores = CheckpointIgnores::new(&[".gitignore", ".ignore"], |file| {
+            let stored = manifest.files.get(file)?;
+            std::fs::read(self.objects.join(&stored.sha256)).ok()
+        });
         let mut report = RestoreReport::default();
         for path in walk_files(self.restorer.root()) {
             let name = path.display_string();
             if in_scope(&name)
                 && !manifest.files.contains_key(&name)
                 && !manifest.skipped.contains(&name)
+                && !ignores.ignores(&name)
                 && self.restorer.remove_file(&path)?
             {
                 report.deleted.push(name);
             }
         }
+        drop(ignores);
         for (name, file) in &manifest.files {
             if !in_scope(name) {
                 continue;
@@ -1347,6 +1439,50 @@ mod tests {
                 let objects = walk_count(&data.path().join("checkpoints"), "objects");
                 assert_eq!(objects, 2, "contents only the kept checkpoints use");
             }
+        }
+    }
+
+    /// A file ignored when the checkpoint was taken and un-ignored during
+    /// the turn was not created by the turn: a restore keeps it (whole or
+    /// one file), in git and in copies.
+    #[test]
+    fn restore_keeps_files_that_were_ignored_at_checkpoint_time() {
+        let dir = repo();
+        let plain = tempfile::tempdir().expect("plain");
+        for root in [dir.path(), plain.path()] {
+            std::fs::write(root.join(".gitignore"), "target/\n.env\n").expect("ignore");
+            std::fs::write(root.join(".env"), "SECRET=1\n").expect("env");
+            std::fs::create_dir_all(root.join("target")).expect("target");
+            std::fs::write(root.join("target/out.o"), "built").expect("built");
+            let workspace = Workspace::open(root, &[]).expect("workspace");
+            let data = tempfile::tempdir().expect("data");
+            let checkpoints = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+            let kind = checkpoints.kind();
+            checkpoints.create("turn").expect("create");
+
+            // The turn un-ignores both and creates one file of its own.
+            std::fs::write(root.join(".gitignore"), "# nothing ignored\n").expect("unignore");
+            std::fs::write(root.join("created.txt"), "by the turn\n").expect("created");
+            let report = checkpoints.restore(1).expect("restore");
+            assert_eq!(
+                read(root, ".gitignore").as_deref(),
+                Some("target/\n.env\n"),
+                "{kind}"
+            );
+            assert_eq!(read(root, ".env").as_deref(), Some("SECRET=1\n"), "{kind}");
+            assert_eq!(
+                read(root, "target/out.o").as_deref(),
+                Some("built"),
+                "{kind}"
+            );
+            assert_eq!(read(root, "created.txt"), None, "{kind}");
+            assert_eq!(report.deleted, ["created.txt"], "{kind}");
+
+            std::fs::write(root.join(".gitignore"), "\n").expect("unignore");
+            let path = workspace.resolve(".env", Intent::Read).expect("path");
+            let one = checkpoints.restore_file(1, &path).expect("restore file");
+            assert!(one.deleted.is_empty(), "{kind}: {one:?}");
+            assert_eq!(read(root, ".env").as_deref(), Some("SECRET=1\n"), "{kind}");
         }
     }
 
