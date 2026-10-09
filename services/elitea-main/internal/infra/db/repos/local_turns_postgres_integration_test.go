@@ -367,9 +367,11 @@ WHERE execution_id = $1`, started.ExecutionID); err != nil {
 
 // TestPostgresLocalTurnMemorySavedDuringTurnIsRecalledNextTurn: the next-turn
 // guarantee holds across a local turn. A memory saved (through the cloud
-// memory API) while turn N runs is newer than turn N's question, because the
-// commit dates the question at the turn's start, so turn N+1 reserves it even
-// though it shares no word with the input and eight older memories outrank it.
+// memory API) while turn N runs is newer than turn N's START, which is the
+// recall's previous-turn boundary for a local turn, so turn N+1 reserves it
+// even though it shares no word with the input and eight older memories
+// outrank it. The commit itself dates turn N's messages after everything the
+// conversation held when it was written, so they are not misordered.
 func TestPostgresLocalTurnMemorySavedDuringTurnIsRecalledNextTurn(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx := context.Background()
@@ -433,11 +435,39 @@ UPDATE p_1.personal_memory_entries SET created_at = now() - make_interval(mins =
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Another message lands in the conversation while turn N runs (another
+	// participant, or a cloud turn on the web).
+	var dummyID int64
+	if err := pool.QueryRow(ctx, `
+SELECT p.id FROM p_1.chat_participants p JOIN p_1.chat_participant_mapping m ON m.participant_id = p.id
+WHERE m.conversation_id = $1 AND p.entity_name = 'dummy'`, conversationID).Scan(&dummyID); err != nil {
+		t.Fatal(err)
+	}
+	var during time.Time
+	if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
+VALUES (gen_random_uuid(), $1, $2, '{}'::jsonb, FALSE, clock_timestamp() + interval '2 seconds')
+RETURNING created_at`, dummyID, conversationID).Scan(&during); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.Commit(ctx, localturn.CommitRequest{
 		ProjectID: 1, ActorUserID: user, Credential: localturn.Credential{TokenID: "79"}, ExecutionID: first.ExecutionID,
 		UserMessage: input, AssistantMessage: "Booked.",
 	}); err != nil {
 		t.Fatalf("commit turn N: %v", err)
+	}
+	// The committed turn is ordered AFTER everything the conversation held,
+	// the message written while it ran included: question, then answer.
+	var questionAt, answerAt time.Time
+	if err := pool.QueryRow(ctx, `
+SELECT q.created_at, a.created_at FROM p_1.chat_message_group q, p_1.chat_message_group a
+WHERE q.uuid = $1::uuid AND a.uuid = $2::uuid`, "21111111-2222-4333-8444-555555555555", first.ResponseMessageID).
+		Scan(&questionAt, &answerAt); err != nil {
+		t.Fatal(err)
+	}
+	if !questionAt.After(during) || !answerAt.After(questionAt) {
+		t.Fatalf("order: message during the turn %v, question %v, answer %v; want during < question < answer",
+			during, questionAt, answerAt)
 	}
 	second, err := service.Start(ctx, localturn.StartRequest{
 		ProjectID: 1, ActorUserID: user, TokenID: "79", ConversationUUID: conversationUUID,

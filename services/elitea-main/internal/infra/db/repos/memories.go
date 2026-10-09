@@ -232,16 +232,29 @@ const (
 // the user's previous turn in this project. Overlap-ranked entries never take
 // that slot, and the character budget is cut from the other entries first.
 //
-// "The user's previous turn" is the newest chat_message_group in the project
-// that one of the user's own `user` participant rows authored, in any
-// conversation. The lookup is cheap: a user has few participant rows, and
-// tenant/0148 indexes chat_message_group (author_participant_id, created_at
-// DESC). It is read in the same statement as the candidates, so one turn
-// costs one round trip. Every caller resolves recall BEFORE it writes the
-// turn's own question group (cloud admission in start.go/adhoc.go, the
-// desktop local-turn start), so the newest user message is the previous turn,
-// never the current one. A user with no message in the project has no
-// previous turn, and the newest memory is then always reserved.
+// "The user's previous turn" starts at the later of
+//
+//   - the newest chat_message_group in the project that one of the user's own
+//     `user` participant rows authored, in any conversation, leaving out the
+//     questions of desktop local turns (meta executed_by "desktop"), and
+//   - the START (started_at) of the user's newest committed desktop local
+//     turn in the project (elitea_runtime.local_turn_executions).
+//
+// A local turn's question is written at its COMMIT, after everything the
+// conversation already holds, so its created_at is later than a memory saved
+// while the turn ran. The turn began at started_at, which is what a cloud
+// turn's question date means, so that is the boundary a local turn counts
+// with; the memory saved during it stays newer, and the next turn reserves it.
+//
+// The lookups are cheap: a user has few participant rows, tenant/0148 indexes
+// chat_message_group (author_participant_id, created_at DESC), and shared/0155
+// indexes local_turn_executions (project_id, actor_id, started_at DESC). They
+// are read in the same statement as the candidates, so one turn costs one
+// round trip. Every caller resolves recall BEFORE it writes the turn's own
+// question group or commits its local turn (cloud admission in
+// start.go/adhoc.go, the desktop local-turn start), so the boundary is the
+// previous turn's, never the current one's. A user with no turn in the project
+// has no previous turn, and the newest memory is then always reserved.
 func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 	ctx context.Context,
 	projectID, actorUserID int64,
@@ -253,12 +266,20 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 	}
 	q := fmt.Sprintf(`
 		WITH previous_turn AS (
-			SELECT max(message.created_at) AS at
-			FROM %[1]s.chat_participants AS participant
-			JOIN %[1]s.chat_message_group AS message
-			  ON message.author_participant_id = participant.id
-			WHERE participant.entity_name = 'user'
-			  AND participant.entity_meta ->> 'id' = ($1::bigint)::text
+			SELECT GREATEST(
+				(SELECT max(message.created_at)
+				 FROM %[1]s.chat_participants AS participant
+				 JOIN %[1]s.chat_message_group AS message
+				   ON message.author_participant_id = participant.id
+				 WHERE participant.entity_name = 'user'
+				   AND participant.entity_meta ->> 'id' = ($1::bigint)::text
+				   AND (message.meta ->> 'executed_by') IS DISTINCT FROM 'desktop'),
+				(SELECT max(local_turn.started_at)
+				 FROM elitea_runtime.local_turn_executions AS local_turn
+				 WHERE local_turn.project_id = $2
+				   AND local_turn.actor_id = ($1::bigint)::text
+				   AND local_turn.committed_at IS NOT NULL)
+			) AS at
 		)
 		SELECT memory.id::text, memory.content,
 		       (previous_turn.at IS NULL OR memory.created_at > previous_turn.at) AS after_previous_turn
@@ -267,7 +288,7 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 		WHERE memory.user_id = $1::bigint AND memory.enabled = TRUE
 		ORDER BY memory.created_at DESC, memory.id DESC
 		LIMIT %[2]d`, s, currentMemoryRecallPoolSize)
-	rows, err := r.pool.Query(ctx, q, actorUserID)
+	rows, err := r.pool.Query(ctx, q, actorUserID, projectID)
 	if err != nil {
 		return agentexecutionapp.CurrentMemoryRecall{}, fmt.Errorf("memories: resolve recall: %w", err)
 	}
