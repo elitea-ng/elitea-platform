@@ -3,62 +3,30 @@
 //! The current Main service resolves configured toolkit settings to immutable
 //! references before dispatch. This module validates that frozen boundary but
 //! deliberately performs no credential redemption, discovery, or invocation.
+//!
+//! The families, MCP, policy, snapshot, binding and materialisation live in
+//! `elitea-agent-runtime` (ADR-0029 decision 2, stage 3) and are re-exported
+//! here at their old paths. The worker keeps what still parses the gRPC
+//! input (`direct_request`, `direct_runtime`), the per-family behaviour
+//! suites and the SDK conformance gate, which reads elitea-main's toolkit
+//! schema snapshot.
 
 #![allow(dead_code)] // Materialization remains capability-gated.
 
-mod delegated_auth;
-mod direct_execution;
 mod direct_request;
 mod direct_runtime;
-mod families;
-mod invocation;
-mod materialize;
-mod mcp;
-mod mcp_error;
-mod mcp_tool_cache;
-mod policy;
 mod sdk_conformance;
-mod snapshot;
-mod tool_binding;
 
-#[cfg(test)]
-pub(crate) use delegated_auth::delegated_authorization_error_fixture;
-pub(crate) use delegated_auth::{
-    DELEGATED_AUTHORIZATION_METADATA_KEY, DELEGATED_AUTHORIZATION_SCOPE_KEY,
-    DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement,
-    bind_authorization_model_tools, decode_declined_authorization_scope,
-    decode_delegated_authorization_requirement, delegated_authorization_declined_result,
-    delegated_authorization_granted_result, delegated_authorization_requirement,
-    encode_delegated_authorization_requirement, hide_model_tools,
-};
 pub(crate) use direct_request::{DirectToolkitRequest, DirectToolkitRequestErrorCode};
 pub(crate) use direct_runtime::{
     DirectToolkitRuntime, DirectToolkitRuntimeError, DirectToolkitRuntimeErrorCode,
 };
-pub(crate) use families::artifact::ArtifactToolAuthority;
-pub(crate) use materialize::{
-    ToolsetMaterializationError, ToolsetMaterializationErrorCode,
-    materialize_configured_toolsets_with_artifact_authority,
-    materialize_configured_toolsets_with_tokens_and_authorization,
-};
-pub(crate) use mcp::{
-    AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,
-    RETIRED_SSE_MESSAGE, materialize_mcp_toolsets_with_tokens_and_authorization,
-};
-#[cfg(test)]
-pub(crate) use mcp::{RemoteMcpConfig, mcp_authorization_required_fixture};
-pub(crate) use policy::{
-    SensitiveToolPolicy, ToolAdmissionDecision, ToolAdmissionPolicy, ToolAdmissionPolicyError,
-    ToolAdmissionPolicyErrorCode,
-};
-pub(crate) use snapshot::{
-    AdmittedToolSnapshot, FrozenToolKind, FrozenToolSnapshot, FrozenToolSnapshotError,
-    FrozenToolSnapshotErrorCode,
-};
-pub(crate) use tool_binding::{
-    FrozenToolset, ToolBindingError, ToolBindingPlan, bind_frozen_toolsets, bind_toolsets,
-    freeze_toolsets,
-};
+#[allow(
+    clippy::wildcard_imports,
+    reason = "the moved toolkits keep their old paths: every module and item of \
+              elitea_agent_runtime::toolkits is crate::toolkits::* here"
+)]
+pub(crate) use elitea_agent_runtime::toolkits::*;
 
 #[cfg(test)]
 mod aha_tests;
@@ -88,6 +56,8 @@ mod keycloak_tests;
 mod kubernetes_tests;
 #[cfg(test)]
 mod mcp_tests;
+#[cfg(test)]
+mod openapi_pipeline_tests;
 #[cfg(test)]
 mod openapi_tests;
 #[cfg(test)]

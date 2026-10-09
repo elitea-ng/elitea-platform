@@ -51,6 +51,7 @@ use crate::transport::model_facade::{
     ModelReasoningEffort,
 };
 use crate::transport::platform_client::PlatformClient;
+use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use sqlx::PgPool;
 
@@ -296,8 +297,10 @@ impl OrdinaryNativeAgentAssembler {
         // assembly, which is exactly what a tool the model calls mid-run
         // needs. The same authority the two builder tools take, for the same
         // reason — see `internal_tools::BuilderToolAuthority`.
-        let artifact_authority =
-            ArtifactToolAuthority::new(Arc::clone(&self.platform), Arc::clone(runtime_context));
+        let artifact_authority = ArtifactToolAuthority::new(Arc::new(ClaimPlatformWriter::new(
+            Arc::clone(&self.platform),
+            Arc::clone(runtime_context),
+        )));
         let DirectToolsets {
             mut toolsets,
             sensitive: sensitive_tools,

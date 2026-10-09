@@ -17,6 +17,7 @@ use super::families::artifact::tools::build_artifact_toolset;
 use super::policy::ToolAdmissionPolicy;
 use crate::protocol::control::test_runtime_context_authority;
 use crate::transport::platform_client::PlatformClient;
+use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::{
     RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
 };
@@ -94,10 +95,10 @@ fn authority(body: &str) -> (ArtifactToolAuthority, Arc<FixtureRpc>) {
     )
     .expect("fixture runtime-context client");
     (
-        ArtifactToolAuthority::new(
+        ArtifactToolAuthority::new(Arc::new(ClaimPlatformWriter::new(
             Arc::new(PlatformClient::new(Arc::new(client))),
             Arc::new(test_runtime_context_authority()),
-        ),
+        ))),
         rpc,
     )
 }

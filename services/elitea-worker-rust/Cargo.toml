@@ -35,7 +35,9 @@ elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
 # serde_json uses default features; its digests are order-explicit
 # (`canonical`), so neither this crate's `arbitrary_precision` nor a
 # `preserve_order` from elsewhere changes them.
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime" }
+# `toolkit-sql`: the worker serves the `sql` toolkit family (sqlx postgres +
+# mysql), which the desktop host never links.
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql"] }
 futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
@@ -85,7 +87,7 @@ protoc-bin-vendored = "=3.2.0"
 tonic-prost-build = "=0.14.6"
 
 [dev-dependencies]
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support"] }
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql"] }
 http-body = "=1.1.0"
 tokio = { version = "=1.53.1", features = ["test-util"] }
 

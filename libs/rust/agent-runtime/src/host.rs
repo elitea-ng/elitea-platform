@@ -8,6 +8,10 @@
 //! The desktop host answers the same traits over the public HTTPS API with a
 //! native token, a local SQLite store and a local cancellation token.
 //!
+//! [`PlatformWriter`] and [`CodeSandbox`] joined in stages 2–3 of
+//! `EXTRACTION.md` (its finding 1: the first trait set had no way to write to
+//! the platform or to run code).
+//!
 //! Each trait is shaped from the worker call sites it replaces, named in its
 //! documentation. They are object safe (`Arc<dyn …>`), carry no claim, lease,
 //! fence or credential type, and return the data-free [`HostError`]. The
@@ -15,9 +19,16 @@
 //! extraction stage in `EXTRACTION.md` switches the modules it moves to these
 //! traits.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
+use crate::platform::{
+    ArtifactDeleteOutcome, ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest,
+    ArtifactReadOutcome, ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest,
+    ProjectContextWriteOutcome, ProjectContextWriteRequest, SkillWriteOutcome, SkillWriteRequest,
+};
 use adk_core::{Event, Llm, Toolset};
 use adk_graph::Checkpointer;
 use adk_session::SessionService;
@@ -77,17 +88,40 @@ impl HostErrorCode {
 pub struct HostError {
     code: HostErrorCode,
     message: &'static str,
+    reason: Option<&'static str>,
 }
 
 impl HostError {
     #[must_use]
     pub const fn new(code: HostErrorCode, message: &'static str) -> Self {
-        Self { code, message }
+        Self {
+            code,
+            message,
+            reason: None,
+        }
+    }
+
+    /// Keep the host's own stable reason code (the cloud adapter's
+    /// `runtime_context.*` codes), so log fields stay what they were before
+    /// the call went through the trait.
+    #[must_use]
+    pub const fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(reason);
+        self
     }
 
     #[must_use]
     pub const fn code(&self) -> HostErrorCode {
         self.code
+    }
+
+    /// The host's reason code when it gave one, else the [`HostErrorCode`]'s.
+    #[must_use]
+    pub const fn reason_code(&self) -> &'static str {
+        match self.reason {
+            Some(reason) => reason,
+            None => self.code.as_str(),
+        }
     }
 }
 
@@ -387,6 +421,120 @@ pub trait ApprovalChannel: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// PlatformWriter
+// ---------------------------------------------------------------------------
+
+/// Where the runtime writes to the platform on the turn's behalf: the
+/// `artifact` toolkit's bucket operations and the two builder tools.
+///
+/// Replaces, in the worker, `transport::platform_client::PlatformClient`'s
+/// `list/read/write/delete_artifact`, `write_skill` and
+/// `write_project_context`, each called with the turn's
+/// `ClaimBoundRuntimeContextAuthority` over the private runtime-context
+/// routes; the cloud adapter (`transport::platform_writer::ClaimPlatformWriter`)
+/// holds both. Desktop: the same operations over the public API with the
+/// native token, scoped to the turn's project.
+///
+/// Every target is inside the turn's own project; no request names a
+/// project. A refused document is [`HostErrorCode::InvalidInput`] (main's
+/// 422), a refused bucket [`HostErrorCode::AuthorizationFailed`], a missing
+/// file [`HostErrorCode::NotFound`]; callers turn each into a model-visible
+/// answer rather than failing the turn.
+#[async_trait]
+pub trait PlatformWriter: Send + Sync {
+    async fn list_artifacts(
+        &self,
+        request: &ArtifactListRequest,
+    ) -> Result<ArtifactListOutcome, HostError>;
+
+    async fn read_artifact(
+        &self,
+        request: &ArtifactReadRequest,
+    ) -> Result<ArtifactReadOutcome, HostError>;
+
+    async fn write_artifact(
+        &self,
+        request: &ArtifactWriteRequest,
+    ) -> Result<ArtifactWriteOutcome, HostError>;
+
+    async fn delete_artifact(
+        &self,
+        request: &ArtifactDeleteRequest,
+    ) -> Result<ArtifactDeleteOutcome, HostError>;
+
+    async fn write_skill(
+        &self,
+        request: &SkillWriteRequest,
+    ) -> Result<SkillWriteOutcome, HostError>;
+
+    async fn write_project_context(
+        &self,
+        request: &ProjectContextWriteRequest,
+    ) -> Result<ProjectContextWriteOutcome, HostError>;
+}
+
+// ---------------------------------------------------------------------------
+// CodeSandbox
+// ---------------------------------------------------------------------------
+
+/// A language the code node runs. Mirrors the worker's
+/// `sandbox::request::Language`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CodeLanguage {
+    Python,
+    JavaScript,
+    TypeScript,
+    Rust,
+}
+
+/// One admitted code job. The runtime chooses none of the image, policy or
+/// limits beyond the timeout: those belong to the host's deployment. Not
+/// `Debug`: source and input may hold private user data.
+pub struct CodeJob {
+    /// Stable identity of this activation; a resubmission with the same id
+    /// is the same job (the host reconciles it, never reruns it blindly).
+    pub job_id: String,
+    pub language: CodeLanguage,
+    pub source: String,
+    pub input: BTreeMap<String, Value>,
+    pub timeout: Duration,
+}
+
+/// What became of a [`CodeJob`]. Output is untrusted: the graph applies its
+/// typed state projection to it. Mirrors `sandbox::client::SandboxOutcome`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CodeOutcome {
+    Pending,
+    Completed(Vec<u8>),
+    Failed {
+        code: String,
+    },
+    Cancelled,
+    /// Completion cannot be confirmed either way; the caller reconciles the
+    /// same `job_id` before anything else runs.
+    Uncertain {
+        code: String,
+    },
+}
+
+/// How code nodes run code.
+///
+/// Replaces `sandbox::client::SandboxClient` (`submit`,
+/// `submit_with_dependencies`, `cancel`, each authorised by main through
+/// `ControlGrpcClient::authorize_sandbox_job` for the claim) as the
+/// `graph::code*` nodes use it. No moved module calls it yet: the code nodes
+/// and the cloud adapter move together in stage 6 of `EXTRACTION.md`.
+/// Desktop: the local sandbox of ADR-0029 decision 4.
+#[async_trait]
+pub trait CodeSandbox: Send + Sync {
+    /// Submit (or reconcile) one job and report its state.
+    async fn submit(&self, job: &CodeJob) -> Result<CodeOutcome, HostError>;
+
+    /// Ask the host to stop one job; never runs code.
+    async fn cancel(&self, job_id: &str) -> Result<(), HostError>;
+}
+
+// ---------------------------------------------------------------------------
 // ExecutionGuard
 // ---------------------------------------------------------------------------
 
@@ -484,6 +632,8 @@ pub struct Host {
     pub state: Arc<dyn StateStore>,
     pub memory: Arc<dyn MemoryStore>,
     pub approvals: Arc<dyn ApprovalChannel>,
+    pub platform: Arc<dyn PlatformWriter>,
+    pub code: Arc<dyn CodeSandbox>,
 }
 
 #[cfg(test)]

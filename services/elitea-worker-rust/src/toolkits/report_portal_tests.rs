@@ -902,10 +902,18 @@ async fn subset_keeps_source_order_and_invalid_selection_or_arguments_fail_close
 #[test]
 fn production_family_has_no_environment_global_or_debug_output_escape_hatches() {
     let sources = [
-        include_str!("families/report_portal/mod.rs"),
-        include_str!("families/report_portal/config.rs"),
-        include_str!("families/report_portal/client.rs"),
-        include_str!("families/report_portal/tools.rs"),
+        include_str!(
+            "../../../../libs/rust/agent-runtime/src/toolkits/families/report_portal/mod.rs"
+        ),
+        include_str!(
+            "../../../../libs/rust/agent-runtime/src/toolkits/families/report_portal/config.rs"
+        ),
+        include_str!(
+            "../../../../libs/rust/agent-runtime/src/toolkits/families/report_portal/client.rs"
+        ),
+        include_str!(
+            "../../../../libs/rust/agent-runtime/src/toolkits/families/report_portal/tools.rs"
+        ),
     ]
     .join("\n");
     for forbidden in [

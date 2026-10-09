@@ -820,16 +820,16 @@ async fn invalid_arguments_fail_before_api_or_network() {
 
 #[test]
 fn family_remains_capability_disabled_and_has_no_forbidden_production_macros() {
-    let registry = include_str!("families/mod.rs");
-    let snapshot = include_str!("snapshot.rs");
+    let registry = include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/mod.rs");
+    let snapshot = include_str!("../../../../libs/rust/agent-runtime/src/toolkits/snapshot.rs");
     assert!(registry.contains("mod yagmail"));
     assert!(!snapshot.contains("build_yagmail_toolset"));
 
     for source in [
-        include_str!("families/yagmail/mod.rs"),
-        include_str!("families/yagmail/config.rs"),
-        include_str!("families/yagmail/client.rs"),
-        include_str!("families/yagmail/tools.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/yagmail/mod.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/yagmail/config.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/yagmail/client.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/yagmail/tools.rs"),
     ] {
         for forbidden in ["panic!(", "unwrap(", "expect(", "todo!(", "unimplemented!("] {
             assert!(

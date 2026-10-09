@@ -642,11 +642,11 @@ fn error_taxonomy_is_redacted_and_effect_unknown_outcome_never_retries() {
 #[test]
 fn production_slice_has_no_debug_output_or_unbounded_collection_helpers() {
     let sources = [
-        include_str!("families/sql/config.rs"),
-        include_str!("families/sql/lexer.rs"),
-        include_str!("families/sql/project.rs"),
-        include_str!("families/sql/client.rs"),
-        include_str!("families/sql/tools.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/sql/config.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/sql/lexer.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/sql/project.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/sql/client.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/sql/tools.rs"),
     ];
     for source in sources {
         for forbidden in [
@@ -666,7 +666,8 @@ fn production_slice_has_no_debug_output_or_unbounded_collection_helpers() {
             );
         }
     }
-    let client = include_str!("families/sql/client.rs");
+    let client =
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/sql/client.rs");
     assert!(client.contains("statement_cache_capacity(0)"));
     assert!(client.contains("disable_statement_logging()"));
     assert!(client.contains("PgSslMode::VerifyFull"));

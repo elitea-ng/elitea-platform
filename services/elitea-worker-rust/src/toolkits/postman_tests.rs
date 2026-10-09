@@ -1429,12 +1429,16 @@ fn dynamic_auth_headers_cookies_and_bodies_are_bounded_and_source_compatible() {
 #[test]
 fn production_slice_has_no_forbidden_control_flow_macros() {
     let sources = [
-        include_str!("families/postman/mod.rs"),
-        include_str!("families/postman/config.rs"),
-        include_str!("families/postman/client.rs"),
-        include_str!("families/postman/collection.rs"),
-        include_str!("families/postman/analysis.rs"),
-        include_str!("families/postman/tools.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/postman/mod.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/postman/config.rs"),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/postman/client.rs"),
+        include_str!(
+            "../../../../libs/rust/agent-runtime/src/toolkits/families/postman/collection.rs"
+        ),
+        include_str!(
+            "../../../../libs/rust/agent-runtime/src/toolkits/families/postman/analysis.rs"
+        ),
+        include_str!("../../../../libs/rust/agent-runtime/src/toolkits/families/postman/tools.rs"),
     ];
     for source in sources {
         for forbidden in [

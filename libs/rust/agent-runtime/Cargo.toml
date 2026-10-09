@@ -1,6 +1,6 @@
 [package]
 name = "elitea-agent-runtime"
-description = "The pure agent runtime shared by the cloud worker and the desktop host (ADR-0029): graph nodes, tool naming, canonical digests, and the host interface the hosts implement."
+description = "The pure agent runtime shared by the cloud worker and the desktop host (ADR-0029): graph nodes, toolkits, MCP, tool naming, canonical digests, and the host interface the hosts implement."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,8 @@ publish.workspace = true
 
 [features]
 # Test fixtures the worker's own tests still build against (they compose the
-# moved nodes with worker-only modules). Never enabled by a production build.
+# moved nodes and toolkit families with worker-only modules). Never enabled
+# by a production build.
 test-support = []
 # Builds this crate with the serde_json features every other crate in this
 # workspace turns on (`preserve_order`, `float_roundtrip`: engine-core,
@@ -18,30 +19,70 @@ test-support = []
 # digest tests run under it to prove every digest here is order-explicit
 # (ADR-0029 decision 2).
 test-preserve-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"]
+# The `sql` toolkit family: sqlx with the PostgreSQL and MySQL drivers, to
+# reach the user's own databases. The cloud worker enables it; the desktop
+# host does not (a credentialed family goes through RemoteToolkit there,
+# ADR-0029 decision 3), and without it a `sql` toolkit is skipped as
+# unsupported.
+toolkit-sql = ["dep:sqlx"]
 
 [dependencies]
-# Tilde, not caret: adk breaks its API between minors, and the worker pins
-# =2.2.0 with patches of its own (libs/rust/vendor, patched into the worker and this workspace). Only
-# unpatched crates are named here: adk-core, adk-graph and adk-session.
+# Tilde, not caret: adk breaks its API between minors. adk-agent and
+# adk-runner are patched (libs/rust/vendor/README.md): this workspace and
+# every host that links this crate apply the same [patch.crates-io], so the
+# runtime always runs on the patched agent loop.
+adk-agent = { version = "~2.2.0", default-features = false }
 adk-core = { version = "~2.2.0", default-features = false }
 adk-graph = { version = "~2.2.0", default-features = false }
 adk-session = { version = "~2.2.0", default-features = false }
+# `http-transport`: the Streamable HTTP MCP client both hosts use. It links
+# reqwest 0.13, whose default rustls provider is aws-lc-rs (EXTRACTION.md,
+# finding 3).
+adk-tool = { version = "~2.2.0", default-features = false, features = ["http-transport"] }
+async-stream = "0.3.6"
 async-trait = "0.1.92"
 base64 = "0.23.1"
+bytes = "1.12.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
+futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
+hmac = "0.13.0"
+http = "1.5.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.11.1", default-features = false, features = ["client", "http1", "http2"] }
+hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
+md-5 = "0.11.0"
 minijinja = { version = "2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
+percent-encoding = "2.3.2"
 regex = "1.13.1"
+reqwest = { version = "0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
+reqwest-mcp = { package = "reqwest", version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 ring = "0.17.14"
+# Named for its `auth` feature (the MCP OAuth challenge types adk-tool
+# re-exports); the code reaches it through `adk_tool::mcp::rmcp`.
+rmcp = { version = "3.5.0", default-features = false, features = ["auth"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+rustls-native-certs = "0.8.4"
 serde = { version = "1.0.228", features = ["derive"] }
-# Default features only. The worker builds serde_json with
-# `arbitrary_precision` and without `preserve_order`; nothing in this crate
-# may depend on either (see `canonical`).
-serde_json = "1.0.151"
+# `raw_value` only (context_summary walks a batch without parsing it). The
+# worker builds serde_json with `arbitrary_precision` and without
+# `preserve_order`; nothing in this crate may depend on either (see
+# `canonical`).
+serde_json = { version = "1.0.151", features = ["raw_value"] }
 serde_yaml_ng = "0.10.0"
+sqlx = { version = "0.8.6", optional = true, default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json", "uuid"] }
+tempfile = "3.27.0"
 thiserror = "2.0.21"
-tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
+tokio-stream = { version = "0.1.19", features = ["net"] }
 tracing = "0.1.44"
+zeroize = "1.9.0"
 
 [dev-dependencies]
+# Patched (libs/rust/vendor): `patched_adk` proves this workspace builds the
+# patched runner and agent, not the registry ones.
+adk-runner = { version = "~2.2.0", default-features = false, features = ["context-compaction"] }
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 
 [lints]
