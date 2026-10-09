@@ -27,6 +27,8 @@ export interface CreatePipelineAdmissionAlertProps {
  */
 export function CreatePipelineAdmissionAlert({ admission }: CreatePipelineAdmissionAlertProps): ReactNode {
   if (admission.isAdmissible) return null;
+  // A notice (a declared state `reducer`) never blocks a save; only refusals are listed here.
+  const refusals = admission.issues.filter((issue) => issue.severity !== 'warning');
   return (
     <Alert
       severity="error"
@@ -50,7 +52,7 @@ export function CreatePipelineAdmissionAlert({ admission }: CreatePipelineAdmiss
             {t('pages.pipelines.createPipeline.admissionUnparseable', 'The YAML does not parse, so the runtime cannot read a graph out of it.')}
           </Typography>
         )}
-        {admission.issues.map((issue) => (
+        {refusals.map((issue) => (
           <Typography
             key={`${issue.rule}|${issue.nodeId ?? ''}|${issue.field}|${issue.subject}`}
             component="li"

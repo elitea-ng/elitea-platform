@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { YamlPipelineDocument, YamlPipelineNode } from './flow-editor/helpers/pipelineFlow.types';
-import { GRAPH_ADMISSION_RULES, collectGraphAdmissionIssues, documentLevelIssues, issuesForNode } from './graphAdmission.helpers';
+import { GRAPH_ADMISSION_RULES, blockingIssues, collectGraphAdmissionIssues, documentLevelIssues, issuesForNode } from './graphAdmission.helpers';
 import type { GraphAdmissionRuleId } from './graphAdmission.types';
 
 /** An LLM node the compiler admits: one declared, non-`messages` output, a legal id, a legal transition. */
@@ -58,6 +58,7 @@ describe('the rule catalogue', () => {
       'state.key',
       'state.type',
       'state.builtin-type',
+      'state.reducer',
       'node.type',
       'node.id',
       'node.required-field',
@@ -208,6 +209,34 @@ describe('state rules', () => {
     expect(pinned?.field).toBe('state.input');
     expect(pinned?.message).toContain('"str"');
     expect(pinned?.citation).toBe('compiler.rs:1391');
+  });
+
+  it('state.reducer: warns, never refuses, so the YAML-only key is not silently dropped (compiler.rs:2774)', () => {
+    const issues = collectGraphAdmissionIssues(
+      baseDocument({ state: { input: 'str', messages: 'list', summary: 'str', findings: { type: 'list', value: [], reducer: 'append' } } }),
+    );
+
+    expect(issues).toHaveLength(1);
+    const [notice] = issues;
+    expect(notice?.rule).toBe('state.reducer');
+    expect(notice?.severity).toBe('warning');
+    expect(notice?.field).toBe('state.findings');
+    expect(notice?.subject).toBe('append');
+    expect(notice?.message).toContain('YAML');
+    expect(notice?.citation).toBe('compiler.rs:2774');
+    expect(blockingIssues(issues)).toEqual([]);
+    expect(documentLevelIssues(issues)).toEqual(issues);
+  });
+
+  it('state.reducer: a bare type name or a descriptor without the key raises nothing', () => {
+    expect(ruleIds(baseDocument({ state: { input: 'str', messages: 'list', summary: 'str', findings: { type: 'list', value: [] } } }))).toEqual([]);
+  });
+
+  it('every rule except the reducer notice blocks a save', () => {
+    const issues = collectGraphAdmissionIssues(baseDocument({ state: { input: 'list', messages: 'list', summary: 'str', total: { type: 'int', reducer: 'sum_int' } } }));
+
+    expect(issues.map((issue) => issue.rule)).toEqual(['state.builtin-type', 'state.reducer']);
+    expect(blockingIssues(issues).map((issue) => issue.rule)).toEqual(['state.builtin-type']);
   });
 });
 
