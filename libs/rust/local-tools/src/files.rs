@@ -419,7 +419,7 @@ fn base_dir(workspace: &Workspace, path: Option<&str>) -> ToolResult<WsPath> {
     }
 }
 
-fn walker(
+pub(crate) fn walker(
     workspace: &Workspace,
     base: &WsPath,
     glob: Option<&str>,
@@ -447,7 +447,7 @@ fn walker(
     Ok(builder.build())
 }
 
-fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
+pub(crate) fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
     WsPath::from_relative(path.strip_prefix(workspace.root()).ok()?).ok()
 }
 
