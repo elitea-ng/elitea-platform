@@ -110,24 +110,28 @@ through `RUNTIME_WORKER_SESSION_ID`, `RUNTIME_WORKER_PRODUCER_ID`,
 database restored from a backup that predates this row, or a worker brought
 up with `--no-deps` — but a normal `up` no longer needs it.
 
-### DeepWiki and Inventory — canned data with no engine closure
+### DeepWiki and Inventory — canned data, or the real engines
 
 Both sub-applications run their Go host (`elitea-subapp-host`) reaching an
 engine SIDECAR over a shared Unix socket — the socket hop this stack exists
 to exercise, not just the Go half. DeepWiki's host runs `RUNNER=native`
 and its sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`,
-with its migration service); Inventory's host runs `RUNNER=legacy` and its
-sidecar is `elitea-inventory` without the engine closure. Both sidecars
-serve their `fixture` runner, so `up` shows a populated wiki and a
-populated Inventory graph with no repository and no model.
-`DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead.
+with its migration service); Inventory's host runs `RUNNER=legacy` (which
+means "dial the sidecar socket") and its sidecar is the Rust-native
+`elitea-inventory-engine` (with its own `elitea-inventory-migrate` service).
+Both sidecars serve their `fixture` runner, so `up` shows a populated wiki
+and a populated Inventory graph with no repository and no model.
+`DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead, and
+`INVENTORY_ENGINE_RUNNER=native` the real Inventory engine (graph in the
+stack's PostgreSQL; it clones repositories itself, admitting the hosts in
+`INVENTORY_GIT_ALLOWLIST`, default `github.com,*.github.com`).
 
 Inventory's fixture graph (six entities, two source toolkits, five
 relations) is the SAME one the Go sub-application host's own fixture runner
 serves on the E2E stack
 (`conformance/provider/fixtures/inventory/spi/graph.json` — see
-`services/elitea-inventory/README.md`'s "Fixture mode" section for how the
-two are kept from drifting). `INVENTORY_FIXTURES=/fixtures/inventory`
+`services/elitea-inventory-engine/README.md` for the three fixture runners and
+the goldens that keep them from drifting). `INVENTORY_FIXTURES=/fixtures/inventory`
 points the `elitea-inventory-engine` service at the bind-mounted copy of
 that directory instead of the image's packaged one, for iterating on the
 fixture data without a rebuild:

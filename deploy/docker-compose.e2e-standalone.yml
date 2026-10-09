@@ -429,11 +429,11 @@ services:
   # ONE container rather than two: RUNNER=fixture is the host's own canned
   # knowledge graph, so this stack needs no engine image at all. That is what
   # this arm buys over the standalone stack's host-plus-sidecar pair — a
-  # browser journey reaches a deterministic Inventory result with nothing
-  # Python in the picture.
+  # browser journey reaches a deterministic Inventory result with no engine
+  # sidecar in the picture.
   #
-  # The two fixture runners (this one, and the Python one the standalone
-  # stack's sidecar serves) are kept in step BY HAND.
+  # The two fixture runners (this one, and the native engine's, which the
+  # standalone stack's sidecar serves) are kept in step BY HAND.
   elitea-inventory:
     image: ghcr.io/eliteaai/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
     build:

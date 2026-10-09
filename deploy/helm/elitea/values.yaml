@@ -3228,19 +3228,19 @@ deepwiki:
 # refuses a half-configured install rather than rendering one that boots and
 # then fails.
 #
-# It has NO database of its own, unlike DeepWiki: there is no storage package,
-# no migrations and no migrate Job. A graph's home is the platform artifact
-# bucket, reached with the callback bearer the facade mints per invocation.
+# It has its OWN database schema, like DeepWiki (ADR-0027): the Rust engine
+# keeps each graph in the inventory_graph schema (pgvector extension needed) and
+# a pre-install migrate Job from the engine image creates it. The engine also
+# clones repositories itself, so it carries its own git allowlist.
 inventory:
   enabled: false
   replicaCount: 1
 
   # The provider pod is up to TWO containers (ADR-0023 H2): the Go
   # sub-application host, which serves the SPI, composes and uploads, and — for
-  # runner=legacy — the Python engine sidecar, which runs the knowledge-graph
-  # engine for it over a Unix socket the two share. `image` is the host;
-  # `engine.image` is the Python image, which must be the `-engine` variant for
-  # the legacy runner to run anything.
+  # env.ELITEA_INVENTORY_RUNNER=legacy — the Rust-native engine sidecar
+  # (ADR-0027), which runs the knowledge-graph engine for it over a Unix socket
+  # the two share. `image` is the host; `engine.image` is the engine.
   image:
     repository: ghcr.io/elitea-ng/elitea-subapp-host
     # Empty means the chart-wide image.tag.
@@ -3248,19 +3248,33 @@ inventory:
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   engine:
+    # One distroless binary: its probe is the binary itself
+    # (`elitea-inventory-engine healthcheck`) and the migrate Job runs its
+    # `migrate` subcommand. The old Python image
+    # (ghcr.io/elitea-ng/elitea-inventory, `-engine` tags) is gone and the
+    # chart refuses it.
     image:
-      repository: ghcr.io/elitea-ng/elitea-inventory
-      # Empty means the chart-wide image.tag with `-engine` appended — the
-      # image that carries the engine's dependency closure. The guard in
-      # _helpers.tpl refuses a runner=legacy install whose engine tag lacks
-      # that suffix: the plain image carries the engine SOURCE and its FIXTURE
-      # runner only, and every engine tool would fail at invocation time.
+      repository: ghcr.io/elitea-ng/elitea-inventory-engine
+      # Empty means the chart-wide image.tag (no suffix: its own repository).
       tag: ""
       pullPolicy: IfNotPresent
-    # What the SIDECAR runs: legacy (the engine) or fixture (a canned
-    # knowledge graph, for a stack that proves the hop without the engine).
-    runner: legacy
+    # What the SIDECAR runs:
+    #   native  the engine. Needs ELITEA_INVENTORY_DATABASE_URL (secrets below,
+    #           or postgresql.existingSecret) and env.ELITEA_INVENTORY_GIT_
+    #           ALLOWLIST; the chart refuses to render without them.
+    #   fixture canned knowledge graph, for a stack that proves the hop without
+    #           the engine. It reads no database.
+    # (`legacy`, the Python engine, is refused.)
+    runner: native
     socketDir: /run/inventory
+    # A private CA for the callback origin (main.env.ELITEA_INVENTORY_CALLBACK_
+    # BASE_URL), when it is https under a CA the platform roots do not cover.
+    # Names a Secret in this namespace; only `key` is mounted, at `mountPath`,
+    # and ELITEA_INVENTORY_CALLBACK_CA_FILE points at it. Empty: not mounted.
+    callbackCa:
+      secretName: ""
+      key: ca.crt
+      mountPath: /run/elitea-callback-ca
     resources:
       requests:
         cpu: 250m
@@ -3278,7 +3292,8 @@ inventory:
   env:
     ELITEA_SUBAPP: inventory
     # The HOST's runner. `legacy` reaches the engine sidecar over the socket
-    # below and renders that sidecar; `fixture` serves the host's OWN canned
+    # below and renders that sidecar (the word predates the Rust engine and now
+    # just means "dial the sidecar"); `fixture` serves the host's OWN canned
     # knowledge graph in one container, which is what a stack that only needs
     # deterministic results wants; `unavailable` refuses every tool and says
     # so. The guard refuses `legacy` with no socket and a socket with no
@@ -3290,19 +3305,30 @@ inventory:
     # The origin elitea-main proxies to. Must agree with
     # main.env.ELITEA_INVENTORY_BASE_URL.
     ELITEA_INVENTORY_SERVICE_LOCATION_URL: https://elitea-inventory-svc:8443
+    # The git hosts the ENGINE may clone from. FAIL-CLOSED, and the chart
+    # refuses to render a native engine while it is empty. The engine clones
+    # repositories itself (a shallow clone per ingestion), so unlike the Python
+    # engine's per-file API reads there IS a provider-side destination to
+    # check. Use the SAME value as main.env.ELITEA_INVENTORY_GIT_ALLOWLIST: the
+    # facade checks it before opening the vault, the engine before cloning, and
+    # two that disagree mean an ingestion that starts and then fails.
+    # Example: "github.com,*.github.com"; "*" disables the control explicitly.
+    ELITEA_INVENTORY_GIT_ALLOWLIST: ""
+    # Clone limits, optional; the engine's defaults apply when unset
+    # (2 GiB on disk per clone, among others). Raise them together with
+    # scratch.sizeLimit below:
+    #   ELITEA_INVENTORY_MAX_CLONE_BYTES, _MAX_FILE_COUNT, _MAX_FILE_BYTES,
+    #   _MAX_PARSED_BYTES, _CLONE_TIMEOUT_SECONDS
+    # Source types ingestion reads (default github,ado_repos):
+    #   ELITEA_INVENTORY_SOURCE_TYPES
 
-  # NO git allowlist here, and that is a difference from DeepWiki rather than
-  # an omission. DeepWiki CLONES from a URL in the request, so the destination
-  # is the provider's to allow or refuse as well as the facade's. Inventory
-  # reads its source through the ELITEA SDK's toolkit, whose destination is the
-  # toolkit's stored configuration — expanded by the facade, from a toolkit the
-  # caller can already see. There is no request-supplied clone URL for a
-  # provider-side allowlist to check, and one that always passed would look
-  # like an egress control while being none. main.env.
-  # ELITEA_INVENTORY_GIT_ALLOWLIST is the real one, checked before the vault is
-  # opened.
-
-  # Sensitive values from Kubernetes Secrets.
+  # Sensitive values from Kubernetes Secrets. ELITEA_INVENTORY_DATABASE_URL
+  # defaults to the chart-wide postgresql secret when one is set, exactly as
+  # every other component's database URL does; only the engine container and the
+  # migrate Job receive it. Uncomment to point at a dedicated secret:
+  #   ELITEA_INVENTORY_DATABASE_URL:
+  #     secretName: elitea-inventory-db
+  #     key: url
   secrets:
     # The HMAC key that verifies the identity headers elitea-main signs. It
     # must hold the SAME value as main's ELITEA_INVENTORY_IDENTITY_SECRET —
@@ -3313,13 +3339,33 @@ inventory:
       key: identity-secret
       optional: true
 
-  # Ephemeral source-read and graph-build space. Nothing durable lives here:
-  # the graph is uploaded to the artifact bucket, and a replica that dies
-  # mid-ingestion loses only work that is being redone anyway. Size it for the
-  # largest repository set this deployment expects to ingest.
+  # The engine's own migrations, run as a pre-install/pre-upgrade Job from the
+  # engine image (templates/inventory/migrate-job.yaml). Rendered only with a
+  # sidecar and a database secret. Database privileges: the chart creates no
+  # role. The Job runs as the role in ELITEA_INVENTORY_DATABASE_URL, which
+  # needs CREATE on the database (the inventory_graph schema) and permission to
+  # CREATE EXTENSION vector (migration 0004), or the extension pre-created by an
+  # administrator.
+  migrate:
+    enabled: true
+    backoffLimit: 3
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+
+  # Ephemeral clone space for the engine. Nothing durable lives here: the graph
+  # is in PostgreSQL, and a replica that dies mid-ingestion loses only work that
+  # is being redone anyway. 20Gi, not DeepWiki's 8Gi: the engine's default cap
+  # is 2 GiB on disk per clone, and a run may hold a checkout plus the files the
+  # parser stage reads while another tool call lands in the same pod, so the
+  # limit is a multiple of the cap rather than equal to it. Raise it together
+  # with ELITEA_INVENTORY_MAX_CLONE_BYTES.
   scratch:
     mountPath: /var/scratch/inventory
-    sizeLimit: 8Gi
+    sizeLimit: 20Gi
 
   # mTLS for the elitea-main -> inventory hop. cert-manager issues a server
   # cert (this Deployment mounts it) and a facade client cert (elitea-main
