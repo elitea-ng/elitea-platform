@@ -5219,8 +5219,7 @@ fn invalid_configuration() -> NativeAgentAssemblyError {
     )
 }
 
-pub(crate) const AMBIGUOUS_CHILD_INVOCATION_CODE: &str =
-    "nested_application.ambiguous_child_invocation";
+const AMBIGUOUS_CHILD_INVOCATION_CODE: &str = "nested_application.ambiguous_child_invocation";
 
 /// One child invocation id persisted under two different parent calls. Its history cannot be
 /// joined to either call, so the continuation fails closed with its own typed reason. Histories
