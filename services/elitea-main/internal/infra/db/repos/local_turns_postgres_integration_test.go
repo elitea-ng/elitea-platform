@@ -102,7 +102,7 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUE
 	start := localturn.StartRequest{
 		ProjectID: 1, ActorUserID: user, TokenID: "77", NativeClientID: "ai.elitea.desktop",
 		ConversationUUID: fixture.conversationUUID,
-		QuestionID: questionID, UserInput: "Fix the failing test", AuditRoute: "/start",
+		QuestionID:       questionID, UserInput: "Fix the failing test", AuditRoute: "/start",
 	}
 	desktop := localturn.Credential{TokenID: "77", NativeClientID: "ai.elitea.desktop"}
 
@@ -549,5 +549,91 @@ WHERE conversation_id = $1 AND participant_id = $2`, conversationID, participant
 	}
 	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn); err != nil || !binding.Committed {
 		t.Fatalf("committed binding = %+v, %v", binding, err)
+	}
+}
+
+// A sensitive call's confirmation is consumed once per call: the ledger
+// accepts only the call's next interrupt id, accepts a repeat of the request
+// that consumed it, refuses it to any other request, and goes with its turn.
+func TestPostgresLocalTurnConfirmationIsSingleUse(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const user int64 = 4531
+	repo := NewLocalTurnsRepo(pool)
+	var conversationID int
+	var conversationUUID string
+	if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
+VALUES (gen_random_uuid(), 'confirmations', $1, 'elitea') RETURNING id, uuid::text`, user).
+		Scan(&conversationID, &conversationUUID); err != nil {
+		t.Fatal(err)
+	}
+	for _, seed := range []string{`('user', '{"id": 4531}')`, `('dummy', '{}')`} {
+		if _, err := pool.Exec(ctx, `
+WITH p AS (
+    INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta, meta)
+    SELECT gen_random_uuid(), v.name, v.meta::jsonb, '{}'::json FROM (VALUES `+seed+`) AS v(name, meta)
+    RETURNING id
+)
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELECT $1, id FROM p`, conversationID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	execution := strings.Repeat("5", 32)
+	if _, err := repo.StartLocalTurn(ctx, localturn.StartRecord{
+		ExecutionID: execution, ProjectID: 1, ActorUserID: user, TokenID: "90",
+		ConversationUUID: conversationUUID, QuestionID: "55555555-5555-4555-8555-555555555555",
+		ResponseMessageID: localturn.ResponseMessageID("55555555-5555-4555-8555-555555555555"), TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	call := localturn.ConfirmationCall{ExecutionID: execution, ToolkitID: 61, ApplicationID: 11, VersionID: 12,
+		ToolName: "delete_file", ArgumentsSHA256: strings.Repeat("a", 64)}.Digest()
+	other := localturn.ConfirmationCall{ExecutionID: execution, ToolkitID: 61, ApplicationID: 11, VersionID: 12,
+		ToolName: "delete_file", ArgumentsSHA256: strings.Repeat("b", 64)}.Digest()
+
+	first, err := repo.NextConfirmationInterruptID(ctx, execution, call)
+	if err != nil || first != localturn.ConfirmationInterruptID(call, 0) {
+		t.Fatalf("first interrupt = %q, %v", first, err)
+	}
+	consume := func(digest, interrupt, key string) localturn.ConfirmationOutcome {
+		t.Helper()
+		outcome, err := repo.ConsumeConfirmation(ctx, localturn.ConfirmationClaim{
+			ExecutionID: execution, CallDigest: digest, InterruptID: interrupt, IdempotencyKey: key,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return outcome
+	}
+	// Another call's arguments cannot use this call's id.
+	if outcome := consume(other, first, "k1"); outcome.Accepted || outcome.NextInterruptID != localturn.ConfirmationInterruptID(other, 0) {
+		t.Fatalf("another call with this id = %+v", outcome)
+	}
+	if outcome := consume(call, first, "k1"); !outcome.Accepted {
+		t.Fatalf("the bound confirmation = %+v", outcome)
+	}
+	// The consuming request repeated is accepted; another request is not.
+	if outcome := consume(call, first, "k1"); !outcome.Accepted {
+		t.Fatalf("the consuming request retried = %+v", outcome)
+	}
+	second := localturn.ConfirmationInterruptID(call, 1)
+	if outcome := consume(call, first, "k2"); outcome.Accepted || outcome.NextInterruptID != second {
+		t.Fatalf("a reused confirmation = %+v, want the next id", outcome)
+	}
+	if next, err := repo.NextConfirmationInterruptID(ctx, execution, call); err != nil || next != second {
+		t.Fatalf("next interrupt after one use = %q, %v", next, err)
+	}
+	if outcome := consume(call, second, "k2"); !outcome.Accepted {
+		t.Fatalf("the next confirmation = %+v", outcome)
+	}
+	if _, err := repo.ConsumeConfirmation(ctx, localturn.ConfirmationClaim{
+		ExecutionID: strings.Repeat("6", 32), CallDigest: call, InterruptID: first, IdempotencyKey: "k1",
+	}); !errors.Is(err, localturn.ErrNotFound) {
+		t.Fatalf("a confirmation for no turn = %v, want ErrNotFound", err)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.local_turn_confirmations WHERE execution_id = $1`, execution).Scan(&rows); err != nil || rows != 2 {
+		t.Fatalf("consumed rows = %d (%v), want 2", rows, err)
 	}
 }

@@ -3728,10 +3728,17 @@ components:
     RemoteToolkitCallConfirmation:
       type: object
       description: >-
-        The user's approval of a sensitive tool call, after a 409
-        `confirmation_required`. It is recorded in the audit trail and passed
-        to the worker as the call's only authority to run a sensitive tool.
-      required: [approved, approved_at]
+        The user's approval of ONE sensitive tool call, after a 409
+        `confirmation_required`. It is bound to that call: `interrupt_id` must
+        echo the `hitl_interrupt.interrupt_id` the 409 named, which the server
+        derives from the turn, the toolkit, the agent version, the tool and the
+        arguments and recomputes from the call it receives. It is used once: a
+        repeat of the same request (the same Idempotency-Key) is the same call,
+        any other request presenting it answers 409 `confirmation_required`
+        again with the next interrupt id. It is recorded in the audit trail and
+        passed to the worker as the call's only authority to run a sensitive
+        tool.
+      required: [approved, approved_at, interrupt_id]
       properties:
         approved:
           type: boolean
@@ -3739,7 +3746,14 @@ components:
         approved_at:
           type: string
           format: date-time
-          description: When the user approved (RFC 3339); within the turn's 24 hours and not in the future.
+          description: >-
+            When the user approved (RFC 3339). At most 15 minutes old and at
+            most 5 minutes in the future; an older approval answers 409
+            `confirmation_required` again.
+        interrupt_id:
+          type: string
+          pattern: '^hitl_[0-9a-f]{32}$'
+          description: The `hitl_interrupt.interrupt_id` of the 409 this approves.
     RemoteToolkitCallRequest:
       type: object
       additionalProperties: false
@@ -17232,8 +17246,10 @@ paths:
         gives that toolkit of that version. A model turn (no agent) can call
         no toolkit. A tool the guardrails mark sensitive answers 409
         `confirmation_required` with `hitl_interrupt` (the chat HITL shape,
-        `guardrail_type: sensitive_tool`) until the call carries
-        `confirmation`; the desktop asks the user as a cloud turn would pause.
+        `guardrail_type: sensitive_tool`) until the call carries a
+        `confirmation` echoing that interrupt's `interrupt_id`, which approves
+        this call only (these arguments, this tool, this turn) and only once;
+        the desktop asks the user as a cloud turn would pause.
         Every call that names a tool is audited (caller, project, toolkit,
         tool, turn, confirmation, outcome, a SHA-256 of the arguments).
 

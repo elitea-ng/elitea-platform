@@ -51,10 +51,11 @@ const (
 	// interactive loop and far below a scripted flood of provider writes.
 	RemoteToolkitCallsPerMinute = 60
 
-	// confirmationMaxAge and confirmationMaxSkew bound approved_at: the
-	// approval belongs to the turn (whose deadline is localturn.DeadlineTTL),
-	// and a timestamp from the future is a clock that cannot be trusted.
-	confirmationMaxAge  = localturn.DeadlineTTL
+	// confirmationMaxAge and confirmationMaxSkew bound approved_at: an
+	// approval is for the call the user was just shown, so one older than
+	// confirmationMaxAge asks again, and a timestamp from the future is a
+	// clock that cannot be trusted.
+	confirmationMaxAge  = 15 * time.Minute
 	confirmationMaxSkew = 5 * time.Minute
 
 	remoteToolkitAuditEntity = "remote_toolkit_call"
@@ -87,6 +88,9 @@ type RemoteToolkitDependencies struct {
 	Worker     string
 	Authorizer RemoteToolAuthorizer
 	Turns      LiveTurnReader
+	// Confirmations binds a sensitive call's confirmation to that call and
+	// uses it once (*repos.LocalTurnsRepo). Nil answers 501, like Turns.
+	Confirmations localturn.ConfirmationLedger
 	// Audit receives one event per call that names a tool. Required.
 	Audit audit.Recorder
 	// Limiter counts calls per caller; nil uses RemoteToolkitCallsPerMinute.
@@ -112,9 +116,12 @@ type RemoteToolkitUseCase = toolkitrun.UseCase
 //   - a toolkit or tool the guardrails policy blocks: 403 tool_blocked;
 //   - a toolkit_ref that is not the one resolveApplicationVersion handed out
 //     for this toolkit of this version: 403 toolkit_ref_mismatch;
-//   - a sensitive tool without `confirmation`: 409 confirmation_required,
-//     carrying the chat HITL interrupt shape, so the desktop prompts the user
-//     exactly as a cloud turn would pause.
+//   - a sensitive tool without a `confirmation` of THIS call: 409
+//     confirmation_required, carrying the chat HITL interrupt shape, so the
+//     desktop prompts the user exactly as a cloud turn would pause. The
+//     confirmation must echo the interrupt_id that answer named (derived from
+//     the turn, toolkit, version, tool and arguments, so it approves only
+//     this call), be at most 15 minutes old, and is used once.
 //
 // The worker is told the approval (or its absence) in the runtime context and
 // enforces toolkit_security itself as well.
@@ -151,7 +158,7 @@ func newRemoteToolkitHandler(deps RemoteToolkitDependencies) *remoteToolkitHandl
 	}
 	return &remoteToolkitHandler{
 		useCase: deps.Runs, worker: deps.Worker, authorizer: deps.Authorizer, turns: deps.Turns,
-		audit: recorder, limiter: limiter, now: time.Now,
+		confirmations: deps.Confirmations, audit: recorder, limiter: limiter, now: time.Now,
 	}
 }
 
@@ -160,18 +167,23 @@ type discardAudit struct{}
 func (discardAudit) Record(context.Context, audit.Event) {}
 
 type remoteToolkitHandler struct {
-	useCase    RemoteToolkitUseCase
-	worker     string
-	authorizer RemoteToolAuthorizer
-	turns      LiveTurnReader
-	audit      audit.Recorder
-	limiter    *failurelimit.Limiter
-	now        func() time.Time
+	useCase       RemoteToolkitUseCase
+	worker        string
+	authorizer    RemoteToolAuthorizer
+	turns         LiveTurnReader
+	confirmations localturn.ConfirmationLedger
+	audit         audit.Recorder
+	limiter       *failurelimit.Limiter
+	now           func() time.Time
 }
 
+// remoteToolkitConfirmation is the user's approval of ONE sensitive call: it
+// echoes the interrupt_id the 409 confirmation_required answer named, which
+// the server recomputes from the call it receives, and it is used once.
 type remoteToolkitConfirmation struct {
-	Approved   bool   `json:"approved"`
-	ApprovedAt string `json:"approved_at"`
+	Approved    bool   `json:"approved"`
+	ApprovedAt  string `json:"approved_at"`
+	InterruptID string `json:"interrupt_id"`
 }
 
 type remoteToolkitBody struct {
@@ -223,7 +235,7 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 			"Remote toolkit calls need a native app token or a personal access token.")
 		return
 	}
-	if h.useCase == nil || h.authorizer == nil || h.turns == nil {
+	if h.useCase == nil || h.authorizer == nil || h.turns == nil || h.confirmations == nil {
 		writeError(writer, http.StatusNotImplemented, "remote_toolkit_unavailable",
 			"This deployment runs no cloud worker that can execute toolkit tools.")
 		return
@@ -279,7 +291,7 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		// opts in; test_tool and the MCP and code-platform runs do not.
 		EnforceSensitiveGate: true,
 	}
-	confirmedAt, confirmationOK := h.validConfirmation(body.Confirmation)
+	confirmedAt, confirmationFresh, confirmationOK := h.validConfirmation(body.Confirmation)
 	if err := runRequest.Validate(); err != nil || !localturn.ValidExecutionID(body.ExecutionID) ||
 		!positiveInt32(body.ApplicationID) || !positiveInt32(body.VersionID) ||
 		!validToolkitRef(body.ToolkitRef) || !confirmationOK {
@@ -287,7 +299,7 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call",
 			"Invalid remote toolkit call: execution_id, application_id, version_id, toolkit_ref and tool_name are "+
 				"required, arguments must be one JSON object within the size bound, and a confirmation must be "+
-				"approved with an RFC 3339 approved_at.")
+				"approved with an RFC 3339 approved_at and the interrupt_id of the call it approves.")
 		return
 	}
 
@@ -313,9 +325,38 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	runRequest.LLMModel = grant.LLMModel
 	runRequest.LLMSettings = append(json.RawMessage(nil), grant.LLMSettings...)
 	if grant.Sensitive != nil {
-		if body.Confirmation == nil {
+		confirmationCall := localturn.ConfirmationCall{
+			ExecutionID: body.ExecutionID, ToolkitID: toolkitID,
+			ApplicationID: body.ApplicationID, VersionID: body.VersionID,
+			ToolName: call.toolName, ArgumentsSHA256: call.argumentsSHA256,
+		}.Digest()
+		next := ""
+		if body.Confirmation != nil && confirmationFresh {
+			consumed, err := h.confirmations.ConsumeConfirmation(request.Context(), localturn.ConfirmationClaim{
+				ExecutionID: body.ExecutionID, CallDigest: confirmationCall,
+				InterruptID: body.Confirmation.InterruptID, IdempotencyKey: runRequest.IdempotencyKey,
+			})
+			if err != nil {
+				call.outcome = "confirmation_unavailable"
+				writeLiveTurnError(request.Context(), writer, err)
+				return
+			}
+			if !consumed.Accepted {
+				next = consumed.NextInterruptID
+			}
+		} else {
+			var err error
+			if next, err = h.confirmations.NextConfirmationInterruptID(request.Context(), body.ExecutionID, confirmationCall); err != nil {
+				call.outcome = "confirmation_unavailable"
+				writeLiveTurnError(request.Context(), writer, err)
+				return
+			}
+		}
+		// No confirmation, a stale one, or one of another call or already
+		// used: ask the user again, for this call.
+		if next != "" {
 			call.outcome = "confirmation_required"
-			writeConfirmationRequired(writer, toolkitID, call.toolName, body.ExecutionID, call.argumentsSHA256, grant)
+			writeConfirmationRequired(writer, toolkitID, call.toolName, next, grant)
 			return
 		}
 		call.confirmedAt = confirmedAt
@@ -334,25 +375,25 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	h.writeOutcome(writer, toolkitID, outcome)
 }
 
-// validConfirmation answers the normalized approved_at of a confirmation, and
-// false for a confirmation that is present but not an approval: a desktop that
-// asked the user and was refused sends no call at all.
-func (h *remoteToolkitHandler) validConfirmation(confirmation *remoteToolkitConfirmation) (string, bool) {
+// validConfirmation answers the normalized approved_at of a confirmation and
+// whether it is fresh (at most confirmationMaxAge old, at most
+// confirmationMaxSkew in the future; a stale one asks the user again), and
+// false for a confirmation that is malformed or not an approval: a desktop
+// that asked the user and was refused sends no call at all.
+func (h *remoteToolkitHandler) validConfirmation(confirmation *remoteToolkitConfirmation) (string, bool, bool) {
 	if confirmation == nil {
-		return "", true
+		return "", false, true
 	}
-	if !confirmation.Approved {
-		return "", false
+	if !confirmation.Approved || !localturn.ValidConfirmationInterruptID(confirmation.InterruptID) {
+		return "", false, false
 	}
 	approvedAt, err := time.Parse(time.RFC3339Nano, confirmation.ApprovedAt)
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
 	now := h.now()
-	if approvedAt.After(now.Add(confirmationMaxSkew)) || approvedAt.Before(now.Add(-confirmationMaxAge)) {
-		return "", false
-	}
-	return approvedAt.UTC().Format(time.RFC3339Nano), true
+	fresh := !approvedAt.After(now.Add(confirmationMaxSkew)) && !approvedAt.Before(now.Add(-confirmationMaxAge))
+	return approvedAt.UTC().Format(time.RFC3339Nano), fresh, true
 }
 
 func positiveInt32(id int64) bool { return id > 0 && id <= math.MaxInt32 }
@@ -389,17 +430,16 @@ func argumentsDigest(arguments json.RawMessage) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// writeConfirmationRequired answers a sensitive call that carries no
-// confirmation, in the chat HITL interrupt shape (ClientFrameHitlInterruptDetail,
-// guardrail_type `sensitive_tool`, as the SDK's sensitive tool guard raises it)
-// so the desktop can put the same question to the user through its
-// ApprovalChannel and repeat the call with `confirmation`. The arguments are
-// not echoed: the desktop holds them, and they are caller content.
-func writeConfirmationRequired(writer http.ResponseWriter, toolkitID int64, toolName, executionID, argumentsSHA256 string, grant storage.RemoteToolGrant) {
-	identity := sha256.Sum256([]byte(executionID + "\x00" + strconv.FormatInt(toolkitID, 10) + "\x00" +
-		grant.Sensitive.ActionLabel + "\x00" + argumentsSHA256))
+// writeConfirmationRequired answers a sensitive call that carries no valid
+// confirmation of itself, in the chat HITL interrupt shape
+// (ClientFrameHitlInterruptDetail, guardrail_type `sensitive_tool`, as the
+// SDK's sensitive tool guard raises it) so the desktop can put the same
+// question to the user through its ApprovalChannel and repeat the call with
+// `confirmation` echoing interruptID. The arguments are not echoed: the
+// desktop holds them, and they are caller content.
+func writeConfirmationRequired(writer http.ResponseWriter, toolkitID int64, toolName, interruptID string, grant storage.RemoteToolGrant) {
 	interrupt := map[string]any{
-		"interrupt_id":      "hitl_" + hex.EncodeToString(identity[:16]),
+		"interrupt_id":      interruptID,
 		"tool_call_id":      nil,
 		"guardrail_type":    "sensitive_tool",
 		"message":           grant.Sensitive.PolicyMessage,

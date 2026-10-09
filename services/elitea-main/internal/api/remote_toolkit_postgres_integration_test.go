@@ -26,6 +26,16 @@ func (remoteGateTurns) Live(_ context.Context, _, _ int64, _ localturn.Credentia
 	return localturn.LiveTurn{ExecutionID: executionID, ApplicationID: 11, VersionID: 12}, nil
 }
 
+type remoteGateLedger struct{}
+
+func (remoteGateLedger) NextConfirmationInterruptID(_ context.Context, _, callDigest string) (string, error) {
+	return localturn.ConfirmationInterruptID(callDigest, 0), nil
+}
+
+func (remoteGateLedger) ConsumeConfirmation(context.Context, localturn.ConfirmationClaim) (localturn.ConfirmationOutcome, error) {
+	return localturn.ConfirmationOutcome{Accepted: true}, nil
+}
+
 type remoteGateAuthorizer struct{}
 
 func (remoteGateAuthorizer) AuthorizeRemoteTool(context.Context, storage.RemoteToolAuthorization) (storage.RemoteToolGrant, error) {
@@ -89,6 +99,7 @@ INSERT INTO public.auth_core__token (id, uuid, user_id, name) VALUES (%[1]d, 're
 	serve := func(validator remoteToolkitTokenValidator, runs *recordingToolRuns, path string) (int, string) {
 		route, err := desktopopsapi.NewRemoteToolkitRoute(desktopopsapi.RemoteToolkitDependencies{
 			Runs: runs, Worker: "rust", Authorizer: remoteGateAuthorizer{}, Turns: remoteGateTurns{}, Audit: remoteGateAudit{},
+			Confirmations: remoteGateLedger{},
 		}, apimw.AuthConfig{
 			Validator: apimw.TokenValidator(validator), PrincipalValidator: testPrincipalValidator{},
 		}, legacyrbac.NewPostgresResolver(pool))

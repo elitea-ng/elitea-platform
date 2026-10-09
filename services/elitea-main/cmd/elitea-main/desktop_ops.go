@@ -52,11 +52,13 @@ func composeRemoteToolkit(
 	if pool == nil || groupAuth.PrincipalValidator == nil {
 		return nil, nil
 	}
-	turns, err := localturn.NewLiveTurns(dbrepos.NewLocalTurnsRepo(pool), policy, logger)
+	localTurns := dbrepos.NewLocalTurnsRepo(pool)
+	turns, err := localturn.NewLiveTurns(localTurns, policy, logger)
 	if err != nil {
 		return nil, err
 	}
 	return desktopopsapi.NewRemoteToolkitRoute(desktopopsapi.RemoteToolkitDependencies{
-		Runs: toolRuns, Worker: workerImplementation, Authorizer: authorizer, Turns: turns, Audit: recorder,
+		Runs: toolRuns, Worker: workerImplementation, Authorizer: authorizer, Turns: turns,
+		Confirmations: localTurns, Audit: recorder,
 	}, groupAuth, legacyrbac.NewPostgresResolver(pool))
 }

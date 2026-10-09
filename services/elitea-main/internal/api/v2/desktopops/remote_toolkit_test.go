@@ -70,6 +70,43 @@ func (f *fakeAuthorizer) AuthorizeRemoteTool(_ context.Context, request storage.
 	return f.grant, f.err
 }
 
+// fakeLedger is the confirmation ledger's rule in memory: an id is accepted
+// when it is the call's next one, or when the request that consumed it repeats
+// (same call, same key).
+type fakeLedger struct {
+	mu       sync.Mutex
+	consumed map[string]struct{ call, key string }
+	counts   map[string]int
+	err      error
+}
+
+func (f *fakeLedger) NextConfirmationInterruptID(_ context.Context, _, callDigest string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return localturn.ConfirmationInterruptID(callDigest, f.counts[callDigest]), f.err
+}
+
+func (f *fakeLedger) ConsumeConfirmation(_ context.Context, claim localturn.ConfirmationClaim) (localturn.ConfirmationOutcome, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return localturn.ConfirmationOutcome{}, f.err
+	}
+	if f.consumed == nil {
+		f.consumed, f.counts = map[string]struct{ call, key string }{}, map[string]int{}
+	}
+	if used, ok := f.consumed[claim.InterruptID]; ok && used.call == claim.CallDigest && used.key == claim.IdempotencyKey {
+		return localturn.ConfirmationOutcome{Accepted: true}, nil
+	}
+	next := localturn.ConfirmationInterruptID(claim.CallDigest, f.counts[claim.CallDigest])
+	if claim.InterruptID != next {
+		return localturn.ConfirmationOutcome{NextInterruptID: next}, nil
+	}
+	f.consumed[claim.InterruptID] = struct{ call, key string }{claim.CallDigest, claim.IdempotencyKey}
+	f.counts[claim.CallDigest]++
+	return localturn.ConfirmationOutcome{Accepted: true}, nil
+}
+
 type recordedAudit struct {
 	mu     sync.Mutex
 	events []audit.Event
@@ -93,6 +130,7 @@ func remoteHandler(runs RemoteToolkitUseCase, worker string) (*remoteToolkitHand
 	recorder := &recordedAudit{}
 	h := newRemoteToolkitHandler(RemoteToolkitDependencies{
 		Runs: runs, Worker: worker, Authorizer: authorizer, Turns: turns, Audit: recorder,
+		Confirmations: &fakeLedger{},
 	})
 	return h, turns, authorizer, recorder
 }
@@ -207,7 +245,9 @@ func TestRemoteToolkitBoundsTheRequest(t *testing.T) {
 		"no toolkit ref":        {`{"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"tool_name":"t"}`, http.StatusBadRequest},
 		"malformed ref":         {`{"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"toolkit_ref":"tkr1_x","tool_name":"t"}`, http.StatusBadRequest},
 		"refused confirmation":  {remoteBody(`"tool_name":"t","confirmation":{"approved":false,"approved_at":"2026-10-08T10:00:00Z"}`), http.StatusBadRequest},
-		"undated confirmation":  {remoteBody(`"tool_name":"t","confirmation":{"approved":true}`), http.StatusBadRequest},
+		"undated confirmation":  {remoteBody(`"tool_name":"t","confirmation":{"approved":true,"interrupt_id":"hitl_00112233445566778899aabbccddeeff"}`), http.StatusBadRequest},
+		"unbound confirmation":  {remoteBody(`"tool_name":"t","confirmation":{"approved":true,"approved_at":"2026-10-08T10:00:00Z"}`), http.StatusBadRequest},
+		"malformed interrupt":   {remoteBody(`"tool_name":"t","confirmation":{"approved":true,"approved_at":"2026-10-08T10:00:00Z","interrupt_id":"hitl_x"}`), http.StatusBadRequest},
 		"caller-chosen model":   {remoteBody(`"tool_name":"t","llm_model":"expensive-model"`), http.StatusBadRequest},
 		"caller model settings": {remoteBody(`"tool_name":"t","llm_settings":{"temperature":1}`), http.StatusBadRequest},
 	} {
@@ -352,23 +392,20 @@ func TestRemoteToolkitSensitiveToolNeedsAConfirmation(t *testing.T) {
 	if response.Code != http.StatusConflict || runs.calls != 0 {
 		t.Fatalf("status = %d, runs %d, body %s", response.Code, runs.calls, response.Body)
 	}
-	var body struct {
-		Error     string         `json:"error"`
-		Interrupt map[string]any `json:"hitl_interrupt"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	interrupt := body.Interrupt
-	if body.Error != "confirmation_required" || interrupt["guardrail_type"] != "sensitive_tool" ||
+	interrupt := confirmationInterrupt(t, response)
+	if interrupt["guardrail_type"] != "sensitive_tool" ||
 		interrupt["action_label"] != "gh.delete_file" || interrupt["policy_message"] != sensitive.PolicyMessage ||
 		interrupt["tool_name"] != "delete_file" || interrupt["toolkit_name"] != "gh" || interrupt["toolkit_type"] != "github" ||
-		!strings.HasPrefix(interrupt["interrupt_id"].(string), "hitl_") || interrupt["tool_args"] != nil {
+		!localturn.ValidConfirmationInterruptID(interrupt["interrupt_id"].(string)) || interrupt["tool_args"] != nil {
 		t.Fatalf("confirmation body = %s", response.Body)
 	}
+	id := interrupt["interrupt_id"].(string)
 
-	response = serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL,
-		remoteBody(`"tool_name":"delete_file","arguments":{"path":"a"},"confirmation":{"approved":true,"approved_at":"2026-10-08T11:59:30Z"}`),
+	confirmed := func(arguments, at, interruptID string) string {
+		return remoteBody(`"tool_name":"delete_file","arguments":` + arguments +
+			`,"confirmation":{"approved":true,"approved_at":"` + at + `","interrupt_id":"` + interruptID + `"}`)
+	}
+	response = serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, confirmed(`{"path":"a"}`, "2026-10-08T11:59:30Z", id),
 		desktopToken(), h.serve)
 	if response.Code != http.StatusOK || runs.calls != 1 {
 		t.Fatalf("confirmed: status = %d, runs %d, body %s", response.Code, runs.calls, response.Body)
@@ -382,15 +419,84 @@ func TestRemoteToolkitSensitiveToolNeedsAConfirmation(t *testing.T) {
 		t.Fatalf("audit action = %q", last.Action)
 	}
 
-	// An approval far in the past (older than a turn can live) or from the
-	// future is not one.
-	for _, at := range []string{"2026-10-06T11:59:30Z", "2026-10-08T13:00:00Z"} {
-		response = serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL,
-			remoteBody(`"tool_name":"delete_file","confirmation":{"approved":true,"approved_at":"`+at+`"}`), desktopToken(), h.serve)
-		if response.Code != http.StatusBadRequest {
-			t.Fatalf("approved_at %s: status = %d", at, response.Code)
-		}
+	// The consuming request repeated (the same Idempotency-Key: a retry
+	// after a timeout) is the same call and is not refused.
+	response = serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, confirmed(`{"path":"a"}`, "2026-10-08T11:59:30Z", id),
+		desktopToken(), h.serve)
+	if response.Code != http.StatusOK || runs.calls != 2 {
+		t.Fatalf("retry of the confirmed call: status = %d, body %s", response.Code, response.Body)
 	}
+}
+
+// A confirmation approves ONE call, once: the same interrupt id with other
+// arguments, or used again by another request, asks again; a stale approval
+// asks again. None of them runs anything.
+func TestRemoteToolkitConfirmationIsBoundAndSingleUse(t *testing.T) {
+	runs := &fakeToolRuns{outcome: toolkitcalltoolapp.RunOutcome{Status: toolkitcalltoolapp.RunStatusOK, ResultJSON: `{}`}}
+	h, _, authorizer, _ := remoteHandler(runs, "python")
+	authorizer.grant.Sensitive = &guardrails.SensitiveAction{ActionLabel: "gh.delete_file", PolicyMessage: "approve"}
+	fixed := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	h.now = func() time.Time { return fixed }
+	call := func(arguments, at, interruptID, key string) *httptest.ResponseRecorder {
+		body := `"tool_name":"delete_file","arguments":` + arguments
+		if interruptID != "" {
+			body += `,"confirmation":{"approved":true,"approved_at":"` + at + `","interrupt_id":"` + interruptID + `"}`
+		}
+		request := httptest.NewRequest(http.MethodPost, remoteURL, strings.NewReader(remoteBody(body)))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", key)
+		request = request.WithContext(auth.ContextWithUser(request.Context(), *desktopToken()))
+		mux := chi.NewRouter()
+		mux.Post(RemoteToolkitPath, h.serve)
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+		return recorder
+	}
+	first := confirmationInterrupt(t, call(`{"path":"a"}`, "", "", "k1"))["interrupt_id"].(string)
+
+	// Another call's arguments under this call's approval: asked again, and
+	// the interrupt it names is the OTHER call's.
+	response := call(`{"path":"b"}`, "2026-10-08T11:59:00Z", first, "k2")
+	if response.Code != http.StatusConflict || runs.calls != 0 {
+		t.Fatalf("approval reused with other arguments: status = %d, runs %d", response.Code, runs.calls)
+	}
+	if other := confirmationInterrupt(t, response)["interrupt_id"]; other == first {
+		t.Fatal("two calls with different arguments share an interrupt id")
+	}
+	// A stale approval of the right call: asked again.
+	if response := call(`{"path":"a"}`, "2026-10-08T11:40:00Z", first, "k3"); response.Code != http.StatusConflict || runs.calls != 0 {
+		t.Fatalf("stale approval: status = %d, runs %d", response.Code, runs.calls)
+	}
+	// The right call, fresh: runs once.
+	if response := call(`{"path":"a"}`, "2026-10-08T11:59:00Z", first, "k4"); response.Code != http.StatusOK || runs.calls != 1 {
+		t.Fatalf("bound approval: status = %d, runs %d, body %s", response.Code, runs.calls, response.Body)
+	}
+	// The same approval presented by another request: used, asked again for
+	// the NEXT confirmation of this call.
+	response = call(`{"path":"a"}`, "2026-10-08T11:59:00Z", first, "k5")
+	if response.Code != http.StatusConflict || runs.calls != 1 {
+		t.Fatalf("approval reused: status = %d, runs %d", response.Code, runs.calls)
+	}
+	second := confirmationInterrupt(t, response)["interrupt_id"].(string)
+	if second == first {
+		t.Fatal("a consumed interrupt id was handed out again")
+	}
+	if response := call(`{"path":"a"}`, "2026-10-08T11:59:30Z", second, "k5"); response.Code != http.StatusOK || runs.calls != 2 {
+		t.Fatalf("the next approval: status = %d, runs %d", response.Code, runs.calls)
+	}
+}
+
+func confirmationInterrupt(t *testing.T, response *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body struct {
+		Error     string         `json:"error"`
+		Interrupt map[string]any `json:"hitl_interrupt"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Error != "confirmation_required" ||
+		body.Interrupt == nil {
+		t.Fatalf("not a confirmation_required answer: %d %s", response.Code, response.Body)
+	}
+	return body.Interrupt
 }
 
 func TestRemoteToolkitRateLimitsEachCaller(t *testing.T) {

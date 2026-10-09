@@ -89,3 +89,31 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.local_turn_executions (
 -- read of one caller's local turns in a project, newest first.
 CREATE INDEX IF NOT EXISTS local_turn_executions_actor_started_idx
     ON elitea_runtime.local_turn_executions (project_id, actor_id, started_at DESC);
+
+-- The sensitive-tool confirmations a turn's remote toolkit calls consumed
+-- (ADR-0029 decision 5b, localturn/confirmation.go). A confirmation is bound
+-- to one call: its interrupt_id derives from call_digest (the turn, toolkit,
+-- agent version, tool and arguments digest) and sequence (how many
+-- confirmations of that call the turn consumed before), and the server
+-- recomputes it from the call it receives. It is SINGLE USE: the primary key
+-- refuses a second consumption. A retry of the consuming request (the same
+-- idempotency_key) is the same call and is accepted; any other request
+-- presenting the id is not. Rows go with their turn.
+CREATE TABLE IF NOT EXISTS elitea_runtime.local_turn_confirmations (
+    execution_id TEXT NOT NULL
+        REFERENCES elitea_runtime.local_turn_executions(execution_id) ON DELETE CASCADE,
+    interrupt_id TEXT NOT NULL,
+    call_digest TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    consumed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (execution_id, interrupt_id),
+    CONSTRAINT local_turn_confirmations_call_sequence
+        UNIQUE (execution_id, call_digest, sequence),
+    CONSTRAINT local_turn_confirmations_call_shape
+        CHECK (call_digest ~ '^[0-9a-f]{64}$' AND sequence >= 0),
+    CONSTRAINT local_turn_confirmations_interrupt_shape
+        CHECK (interrupt_id ~ '^hitl_[0-9a-f]{32}$'),
+    CONSTRAINT local_turn_confirmations_key_shape
+        CHECK (idempotency_key ~ '^[A-Za-z0-9_-]{1,128}$')
+);
