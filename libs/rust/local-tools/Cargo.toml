@@ -1,0 +1,50 @@
+[package]
+name = "elitea-local-tools"
+description = "The desktop host's local tool family (ADR-0029 decision 4): a confined workspace, file, shell, git and document tools, the OS sandbox, checkpoints and the approval rules, handed to the agent runtime through its ToolProvider."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Text from PDF, Office, e-mail and HTML through doc-extract's extractor.
+# Off by default: it links xberg, which is large.
+documents = ["elitea-doc-extract/documents"]
+
+[dependencies]
+# Tilde, like agent-runtime: adk breaks its API between minors and the
+# runtime pins the same line.
+adk-core = { version = "~2.2.0", default-features = false }
+async-trait = "0.1.92"
+elitea-agent-runtime = { path = "../agent-runtime" }
+elitea-content-source = { path = "../content-source" }
+elitea-doc-extract = { path = "../doc-extract" }
+globset = "0.4.20"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+ignore = "0.4.33"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+shlex = "2.0.1"
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tracing = "0.1.44"
+# Path comparisons the way APFS makes them (NFC/NFD-insensitive).
+unicode-normalization = "0.1.25"
+
+# Every file operation walks the workspace from a directory descriptor with
+# O_NOFOLLOW (openat/mkdirat/renameat), so a symlink swapped in mid-call
+# cannot redirect it; process groups are killed on timeout. Unix only.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["fs", "process"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

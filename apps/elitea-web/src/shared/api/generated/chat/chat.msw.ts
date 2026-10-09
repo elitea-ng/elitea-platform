@@ -56,6 +56,8 @@ import type {
   ConversationMessageListing,
   ConversationParticipant,
   CreatedConversation,
+  ExecutionInterruptDecisionResult,
+  ExecutionInterruptList,
   LocalTurnCommitted,
   LocalTurnStarted,
   MemoryEntry,
@@ -840,6 +842,151 @@ export const getCommitLocalTurnResponseMock = (
   memories_used: faker.number.int(),
   committed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   created: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getListExecutionInterruptsResponseMock = (
+  overrideResponse: Partial<Extract<ExecutionInterruptList, object>> = {},
+): ExecutionInterruptList => ({
+  schema: faker.helpers.arrayElement([
+    "elitea.pipeline.fanout-interrupt-list.v1",
+  ] as const),
+  response_message_id: faker.string.uuid(),
+  decision_revision: faker.number.int({ min: 0 }),
+  interrupts: Array.from(
+    { length: faker.number.int({ min: 1, max: 16 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    card: {
+      schema: faker.helpers.arrayElement([
+        "elitea.pipeline.fanout-interrupt-card.v1",
+      ] as const),
+      interrupt_key: faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+      interrupt_id: faker.string.alpha({ length: { min: 1, max: 512 } }),
+      kind: faker.helpers.arrayElement([
+        "tool_guard",
+        "hitl_node",
+        "ask_user",
+        "delegated_auth",
+      ] as const),
+      available_actions: faker.helpers.arrayElements([
+        "approve",
+        "reject",
+        "edit",
+        "block_with_comment",
+        "answer",
+        "authorize",
+        "skip",
+        "continue",
+      ] as const),
+      payload_sha256: faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+      display: {
+        message: faker.string.alpha({ length: { min: 1, max: 8192 } }),
+        guardrail_type: faker.helpers.arrayElement([
+          "sensitive_tool",
+          "pipeline_hitl",
+          "pipeline_static",
+          "clarifying_question",
+          "mcp_auth",
+        ] as const),
+        node_name: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 128 } }),
+          undefined,
+        ]),
+        tool_name: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 512 } }),
+          undefined,
+        ]),
+        toolkit_name: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 512 } }),
+          undefined,
+        ]),
+        toolkit_type: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 128 } }),
+          undefined,
+        ]),
+        action_label: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 512 } }),
+          undefined,
+        ]),
+        tool_call_id: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 512 } }),
+          undefined,
+        ]),
+        tool_args_json: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 16384 } }),
+          undefined,
+        ]),
+        policy_message: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 2048 } }),
+          undefined,
+        ]),
+        interaction_type: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 64 } }),
+          undefined,
+        ]),
+        edit_state_key: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 1, max: 128 } }),
+          undefined,
+        ]),
+        server_url: faker.helpers.arrayElement([
+          faker.helpers.fromRegExp("^https://"),
+          undefined,
+        ]),
+      },
+      parent_agent_name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 1, max: 2048 } }),
+        null,
+      ]),
+      parent_agent_call_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 1, max: 512 } }),
+        null,
+      ]),
+      parent_agent_path: Array.from(
+        { length: faker.number.int({ min: 1, max: 3 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        name: faker.string.alpha({ length: { min: 1, max: 2048 } }),
+        call_id: faker.string.alpha({ length: { min: 1, max: 512 } }),
+        sibling_ordinal: faker.helpers.arrayElement([
+          faker.number.int({ min: 1, max: 64 }),
+          undefined,
+        ]),
+      })),
+      fanout_v1: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            kind: faker.helpers.arrayElement(["parallel", "map"] as const),
+            node: faker.helpers.fromRegExp("^[A-Za-z0-9_.:-]{1,128}$"),
+            activation: faker.helpers.fromRegExp("^[0-9a-f]{16}$"),
+            member: faker.helpers.fromRegExp("^[A-Za-z0-9_.:-]{1,128}$"),
+            ordinal: faker.number.int({ min: 1, max: 64 }),
+            total: faker.number.int({ min: 1, max: 64 }),
+          },
+          null,
+        ]),
+        null,
+      ]),
+    },
+    state: faker.helpers.arrayElement(["PENDING", "DECIDED"] as const),
+    revision: faker.number.int({ min: 1 }),
+  })),
+  ...overrideResponse,
+});
+
+export const getDecideExecutionInterruptResponseMock = (
+  overrideResponse: Partial<
+    Extract<ExecutionInterruptDecisionResult, object>
+  > = {},
+): ExecutionInterruptDecisionResult => ({
+  schema: faker.helpers.arrayElement([
+    "elitea.pipeline.fanout-interrupt-decision-result.v1",
+  ] as const),
+  interrupt_key: faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+  state: faker.helpers.arrayElement(["DECIDED", "CONSUMED"] as const),
+  revision: faker.number.int({ min: 1 }),
+  request_id: faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+  replay: faker.datatype.boolean(),
   ...overrideResponse,
 });
 
@@ -1909,6 +2056,60 @@ export const getCancelChatExecutionMockHandler = (
   );
 };
 
+export const getListExecutionInterruptsMockHandler = (
+  overrideResponse?:
+    | ExecutionInterruptList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ExecutionInterruptList> | ExecutionInterruptList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/task/prompt_lib/:projectId/:responseMessageId/interrupts",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListExecutionInterruptsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDecideExecutionInterruptMockHandler = (
+  overrideResponse?:
+    | ExecutionInterruptDecisionResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        | Promise<ExecutionInterruptDecisionResult>
+        | ExecutionInterruptDecisionResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/task/prompt_lib/:projectId/:responseMessageId/interrupts/:interruptKey/decision",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDecideExecutionInterruptResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getRegenerateChatMessageMockHandler = (
   overrideResponse?:
     | ChatExecutionStarted
@@ -2340,6 +2541,8 @@ export const getChatMock = () => [
   getStartLocalTurnMockHandler(),
   getCommitLocalTurnMockHandler(),
   getCancelChatExecutionMockHandler(),
+  getListExecutionInterruptsMockHandler(),
+  getDecideExecutionInterruptMockHandler(),
   getRegenerateChatMessageMockHandler(),
   getContinueChatExecutionMockHandler(),
   getUploadConversationAttachmentMockHandler(),

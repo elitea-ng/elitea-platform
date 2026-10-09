@@ -647,7 +647,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// grant of `models.applications.tool.execute` to admin, editor and viewer
 	// (ADR-0029 decision 5b, the desktop's remote toolkit call), with its
 	// per-project override block.
-	require.EqualValues(t, 156, Head(shared))
+	//
+	// 157: shared/0157_execution_interrupts.sql, the per-interrupt HITL
+	// decision ledger (execution_interrupts, its per-response revision row
+	// and audit; fanout-interrupt-decisions-v1 §5). New tables only, no
+	// backfill, no permission; unwired until Wave 2.
+	require.EqualValues(t, 157, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -724,7 +724,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 312 -> 313 (client contract 1.6, ADR-0029 decision 5b):
 // executeRemoteToolkitTool, the desktop's remote toolkit call. Token callers
 // only (a browser session is refused), so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 313;
+// 313 -> 315 (per-interrupt HITL ledger, Point 5 Track M2):
+// listExecutionInterrupts and decideExecutionInterrupt. Main registers them
+// only behind ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED and no web code
+// calls them in Wave 1, so the manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 315;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

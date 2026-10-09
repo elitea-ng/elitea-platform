@@ -38,6 +38,7 @@ mod decision;
 mod direct_tool;
 #[cfg(test)]
 mod direct_tool_tests;
+pub(crate) mod fanout_control;
 use elitea_agent_runtime::graph::hitl;
 #[cfg(test)]
 mod hitl_tests;
@@ -109,9 +110,17 @@ pub use yaml::{
     ParallelNodeDefinition, ParallelWaitPolicy,
 };
 
+#[cfg(test)]
+pub(crate) use parallel::{
+    AdkParallelBranchRuntime, DurableParallelNode, PARALLEL_INTERRUPT_SCHEMA,
+    PARALLEL_RESUME_STATE_KEY, ParallelBranchGraphFactory, ParallelBranchPause,
+    ParallelBranchRuntime, ParallelBranchTerminal, ParallelDecision,
+    ParallelOccurrenceCheckpointer, ParallelPauseCard, PreparedParallelActivation,
+};
 pub(crate) use parallel::{
     ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
+    ParallelChildOrigin,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 

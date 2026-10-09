@@ -11,22 +11,52 @@ use ring::digest;
 use super::PostgresCheckpointer;
 use crate::agents::graph::{
     ParallelActivation, ParallelBranchDefinition, ParallelChildCheckpoint,
-    ParallelChildCheckpointerFactory,
+    ParallelChildCheckpointerFactory, ParallelChildOrigin,
 };
 
 const CHILD_THREAD_DOMAIN: &[u8] = b"elitea.graph.parallel.child-thread.v1\0";
 
 #[async_trait]
 impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
+    fn child_origin(
+        &self,
+        activation: &ParallelActivation,
+    ) -> Result<ParallelChildOrigin, adk_rust::graph::GraphError> {
+        self.check_parallel_root(activation)?;
+        Ok(ParallelChildOrigin {
+            execution_id: self.scope.authority.execution_id.clone(),
+            generation: u64::try_from(self.scope.authority.generation).map_err(|_| {
+                adk_rust::graph::GraphError::CheckpointError(
+                    "checkpoint.invalid_scope: the parallel writer generation is invalid"
+                        .to_owned(),
+                )
+            })?,
+        })
+    }
+
+    fn branch_thread_id(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
+    ) -> Result<String, adk_rust::graph::GraphError> {
+        self.check_parallel_root(activation)?;
+        let ordinal = branch_ordinal(ordinal)?;
+        child_thread_id(self, activation, branch, ordinal, input_digest, origin)
+    }
+
     async fn for_branch(
         &self,
         activation: &ParallelActivation,
         branch: &ParallelBranchDefinition,
         ordinal: usize,
         input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, adk_rust::graph::GraphError> {
         let child = self
-            .activate_parallel_branch(activation, branch, ordinal, input_digest)
+            .activate_parallel_branch(activation, branch, ordinal, input_digest, origin)
             .await?;
         let thread_id = child.scope.authority.thread_id.clone();
         let checkpointer: Arc<dyn Checkpointer> = Arc::new(child);
@@ -38,26 +68,39 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
     }
 }
 
+fn branch_ordinal(ordinal: usize) -> Result<u64, adk_rust::graph::GraphError> {
+    u64::try_from(ordinal).map_err(|_| {
+        adk_rust::graph::GraphError::CheckpointError(
+            "checkpoint.resource_exhausted: the parallel branch ordinal overflowed".to_owned(),
+        )
+    })
+}
+
 impl PostgresCheckpointer {
-    pub(super) async fn activate_parallel_branch(
+    fn check_parallel_root(
         &self,
         activation: &ParallelActivation,
-        branch: &ParallelBranchDefinition,
-        ordinal: usize,
-        input_digest: &[u8; 32],
-    ) -> Result<Self, adk_rust::graph::GraphError> {
+    ) -> Result<(), adk_rust::graph::GraphError> {
         if activation.root_thread_id != self.scope.authority.thread_id {
             return Err(adk_rust::graph::GraphError::CheckpointError(
                 "checkpoint.invalid_scope: the parallel activation is not bound to this checkpoint family"
                     .to_owned(),
             ));
         }
-        let ordinal = u64::try_from(ordinal).map_err(|_| {
-            adk_rust::graph::GraphError::CheckpointError(
-                "checkpoint.resource_exhausted: the parallel branch ordinal overflowed".to_owned(),
-            )
-        })?;
-        let thread_id = child_thread_id(self, activation, branch, ordinal, input_digest);
+        Ok(())
+    }
+
+    pub(super) async fn activate_parallel_branch(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
+    ) -> Result<Self, adk_rust::graph::GraphError> {
+        self.check_parallel_root(activation)?;
+        let ordinal = branch_ordinal(ordinal)?;
+        let thread_id = child_thread_id(self, activation, branch, ordinal, input_digest, origin)?;
         let authority = self.scope.authority.for_thread(thread_id.clone())?;
         let child = PostgresCheckpointer::activate(
             self.pool.clone(),
@@ -76,7 +119,13 @@ fn child_thread_id(
     branch: &ParallelBranchDefinition,
     ordinal: u64,
     input_digest: &[u8; 32],
-) -> String {
+    origin: &ParallelChildOrigin,
+) -> Result<String, adk_rust::graph::GraphError> {
+    let generation = i64::try_from(origin.generation).map_err(|_| {
+        adk_rust::graph::GraphError::CheckpointError(
+            "checkpoint.invalid_scope: the parallel origin generation is invalid".to_owned(),
+        )
+    })?;
     let mut context = digest::Context::new(&digest::SHA256);
     context.update(CHILD_THREAD_DOMAIN);
     digest_field(
@@ -108,14 +157,8 @@ fn child_thread_id(
         checkpointer.scope.authority.definition_digest.as_slice(),
     );
     digest_field(&mut context, activation.root_thread_id.as_bytes());
-    digest_field(
-        &mut context,
-        checkpointer.scope.authority.execution_id.as_bytes(),
-    );
-    digest_field(
-        &mut context,
-        &checkpointer.scope.authority.generation.to_be_bytes(),
-    );
+    digest_field(&mut context, origin.execution_id.as_bytes());
+    digest_field(&mut context, &generation.to_be_bytes());
     digest_field(&mut context, activation.node_id.as_bytes());
     digest_field(&mut context, &activation.step.to_be_bytes());
     digest_field(&mut context, activation.config_digest.as_slice());
@@ -124,7 +167,7 @@ fn child_thread_id(
     digest_field(&mut context, &ordinal.to_be_bytes());
     digest_field(&mut context, input_digest);
     let digest = context.finish();
-    format!("p1:{}", URL_SAFE_NO_PAD.encode(digest.as_ref()))
+    Ok(format!("p1:{}", URL_SAFE_NO_PAD.encode(digest.as_ref())))
 }
 
 fn digest_field(context: &mut digest::Context, value: &[u8]) {
