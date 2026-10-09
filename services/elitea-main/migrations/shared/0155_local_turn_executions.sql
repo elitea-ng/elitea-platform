@@ -16,7 +16,12 @@
 --     live execution of the caller in the project
 --     (repos.ExecutionAttributionVerifier, the same rule as execution_jobs);
 --   * the binding to one project, actor, conversation and question, so the
---     commit can be refused to anyone else;
+--     commit can be refused to anyone else, and to the credential family that
+--     started it (token_id: a native device session's anchor token, stable
+--     across access-token rotation, or the personal access token; plus
+--     native_client_id), so another device or token of the same user can
+--     neither commit it, nor call a remote toolkit in it, nor have /llm usage
+--     attributed to it;
 --   * a deadline, so a turn the desktop never commits expires the way an
 --     unclaimed cloud run does (24 h, the cloud agent deadline);
 --   * the commit, recorded once, so a retried commit is idempotent.
@@ -46,6 +51,13 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.local_turn_executions (
     question_id UUID NOT NULL,
     response_message_id UUID NOT NULL,
     target_participant_id INTEGER NOT NULL,
+    -- The agent version the turn runs, PINNED at start: the answering
+    -- participant's application and mapped version at that moment (NULL for a
+    -- model turn, or an agent of another project). A remote toolkit call is
+    -- authorized against this version, so switching the participant's version
+    -- mid-turn does not change what the running turn may call.
+    application_id INTEGER,
+    version_id INTEGER,
     memories_used INTEGER NOT NULL DEFAULT 0,
     started_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     expires_at TIMESTAMPTZ NOT NULL,
@@ -55,6 +67,9 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.local_turn_executions (
         CHECK (execution_id ~ '^[0-9a-f]{32}$'),
     CONSTRAINT local_turn_executions_actor
         CHECK (actor_id ~ '^[1-9][0-9]{0,18}$'),
+    CONSTRAINT local_turn_executions_agent
+        CHECK ((application_id IS NULL) = (version_id IS NULL)
+               AND (application_id IS NULL OR (application_id > 0 AND version_id > 0))),
     CONSTRAINT local_turn_executions_deadline
         CHECK (expires_at > started_at),
     CONSTRAINT local_turn_executions_memories

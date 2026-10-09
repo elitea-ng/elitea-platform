@@ -14,8 +14,9 @@ type BindingStore interface {
 }
 
 // StoredBinding is one turn's stored state. ApplicationID and VersionID name
-// the agent version the answering participant is mapped to; both are 0 for the
-// conversation's model (dummy) participant.
+// the agent version the answering participant was mapped to when the turn
+// STARTED (pinned on the execution row); both are 0 for the conversation's
+// model (dummy) participant.
 type StoredBinding struct {
 	ApplicationID int64
 	VersionID     int64
