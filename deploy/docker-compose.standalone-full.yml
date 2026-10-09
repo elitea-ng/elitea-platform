@@ -258,7 +258,10 @@ services:
   # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
     image: nats:2.12.0
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    command: ["-c", "/etc/nats-config/nats.conf"]
+    volumes:
+      - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
+      - standalone_nats_data:/data
 
   # The NATS readiness probe, from outside the scratch server container. It
   # idles, and its healthcheck reads http://nats:8222/healthz with JetStream
@@ -426,11 +429,11 @@ services:
         i=0
         until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
           i=$((i + 1))
-          if [ "$i" -ge 30 ]; then
+          if [ "$$i" -ge 30 ]; then
             echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2
             exit 1
           fi
-          echo "rustfs not ready yet (attempt $i/30), retrying in 2s..." >&2
+          echo "rustfs not ready yet (attempt $$i/30), retrying in 2s..." >&2
           sleep 2
         done &&
         rc mb --ignore-existing rustfs/elitea-artifacts
@@ -1903,6 +1906,7 @@ volumes:
   inventory-engine-sock:
   standalone_pg_data:
   standalone_rustfs_data:
+  standalone_nats_data:
   # Runtime material, split per consumer so no service holds a key it does not
   # use. Populated by runtime-material from deploy/certs/runtime.
   standalone_runtime_main:

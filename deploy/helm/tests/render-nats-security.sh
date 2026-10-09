@@ -106,7 +106,7 @@ refuse "nats: the worker's account removed"   "exactly MAIN, GATEWAY, SCHEDULER,
 refuse "nats: an extra account"               "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
 refuse "nats: WORKER JetStream unbounded"     "max_streams: 1"               "${NA[@]}" --set nats.config.merge.accounts.WORKER.jetstream=enabled
 refuse "nats: WORKER JetStream widened"       "max_streams: 1"               "${NA[@]}" --set nats.config.merge.accounts.WORKER.jetstream.max_streams=5
-refuse "nats: WORKER exports"                 "account WORKER exports"       "${NA[@]}" --set 'nats.config.merge.accounts.WORKER.exports[0].stream=elitea.>' 
+refuse "nats: WORKER exports"                 "account WORKER exports"       "${NA[@]}" --set 'nats.config.merge.accounts.WORKER.exports[0].stream=elitea.>'
 refuse "nats: GATEWAY export widened"         "is neither the soft-alert stream" "${NA[@]}" --set 'nats.config.merge.accounts.GATEWAY.exports[0].stream=gateway.>' --set 'nats.config.merge.accounts.GATEWAY.exports[0].accounts[0]=MAIN'
 refuse "nats: SCHEDULER gets JetStream"       "holds NO streams"             "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER.jetstream=enabled
 refuse "nats: SCHEDULER exports"              "account SCHEDULER exports"    "${NA[@]}" --set 'nats.config.merge.accounts.SCHEDULER.exports[0].stream=elitea.>'
@@ -645,6 +645,21 @@ nsset = {app(f)["spec"]["destination"]["namespace"] for f in ("nats.yaml", "nats
 check("argocd: NATS, its bootstrap and the platform share one namespace (the NATS CA Issuer is namespaced)", len(nsset) == 1, nsset)
 bparams = {p["name"]: p["value"] for p in app("nats-bootstrap.yaml")["spec"]["source"]["helm"]["parameters"]}
 check("argocd: the bootstrap dials tls://", bparams.get("natsUrl", "").startswith("tls://"))
+
+# Docker retains the store when its container is replaced, as the PVC does.
+for filename in ("docker-compose.yml", "docker-compose.standalone-full.yml"):
+    compose = yaml.safe_load((root / "deploy" / filename).read_text())
+    server = compose["services"]["nats"]
+    volumes = [entry.split(":") for entry in server.get("volumes", [])]
+    stores = [entry for entry in volumes if len(entry) >= 2 and entry[1] == "/data"]
+    check(f"{filename}: JetStream has one declared named volume", len(stores) == 1 and stores[0][0] in compose.get("volumes", {}), stores)
+    check(f"{filename}: the local store config is mounted read-only", ["./runtime/nats-local.conf", "/etc/nats-config/nats.conf", "ro"] in volumes, volumes)
+    check(f"{filename}: NATS loads the mounted config", server["command"] == ["-c", "/etc/nats-config/nats.conf"], server["command"])
+secure = yaml.safe_load((root / "deploy/docker-compose.nats-secure.yml").read_text())["services"]["nats"]
+check("the secure overlay preserves persistent JetStream storage", not any(entry.split(":")[0] == "/data" for entry in secure.get("tmpfs", [])), secure.get("tmpfs"))
+local_config = (root / "deploy/runtime/nats-local.conf").read_text()
+check("local JetStream writes sync before acknowledgment", re.search(r"^\s*sync_interval:\s*always\s*$", local_config, re.M) is not None, "sync_interval")
+check("local JetStream uses the persistent mount", re.search(r'^\s*store_dir:\s*"/data"\s*$', local_config, re.M) is not None, "store_dir")
 
 # ── report ────────────────────────────────────────────────────────────────
 for line in open(tmp / "refusals"):

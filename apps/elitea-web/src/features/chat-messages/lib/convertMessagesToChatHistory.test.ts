@@ -326,3 +326,32 @@ describe('convertMessagesToChatHistory over a stored reasoning answer', () => {
     expect(plain[0]?.toolActions ?? []).toHaveLength(0);
   });
 });
+
+
+describe('persisted assistant authors', () => {
+  const participants = [
+    { id: 135, entity_name: 'application', entity_meta: { name: 'Pipeline Alpha' } },
+    { id: '136', entity_name: 'pipeline', entity_meta: { name: 'Pipeline Beta' } },
+  ] as unknown as readonly MessageParticipantWire[];
+  const messages = [
+    { id: 1, uuid: 'alpha-answer', role: 'assistant', author_participant_id: '135', content: '', created_at: '2026-01-01T12:00:00Z', meta: { is_error: true, error: 'Synthetic safe failure', error_code: 'PIPELINE_CODE_FAILED' } },
+    { id: 2, uuid: 'beta-answer', role: 'assistant', author_participant_id: 136, content: 'Synthetic answer', created_at: '2026-01-01T12:00:01Z' },
+  ] as unknown as readonly MessageGroupWire[];
+
+  it('restores two different pipeline authors across numeric and string ids', () => {
+    const history = convertMessagesToChatHistory(messages, participants);
+    expect(history.map((message) => message.authorName)).toEqual(['Pipeline Alpha', 'Pipeline Beta']);
+    expect(history[0]?.failureCode).toBe('PIPELINE_CODE_FAILED');
+    expect(history[0]?.exception).toBe('Synthetic safe failure');
+    expect(history[0]?.id).toBe('alpha-answer');
+  });
+
+  it('uses a safe fallback when a stated author no longer resolves', () => {
+    expect(convertMessagesToChatHistory(messages, participants.slice(1))[0]?.authorName).toBe('Elitea');
+  });
+
+  it('leaves an unstated author to the existing live-message fallback', () => {
+    const message = { id: 3, uuid: 'unattributed', role: 'assistant', content: '', created_at: '2026-01-01T12:00:02Z' } as MessageGroupWire;
+    expect(convertMessagesToChatHistory([message], participants)[0]?.authorName).toBeUndefined();
+  });
+});

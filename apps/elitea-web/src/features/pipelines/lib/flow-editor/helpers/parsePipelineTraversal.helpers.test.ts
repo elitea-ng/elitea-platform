@@ -62,6 +62,65 @@ describe('parseNodes', () => {
     expect(result.nodes.map(n => n.id).sort()).toEqual(['A', 'END', 'Orphan'].sort());
   });
 
+  it('retains the after-pause label on an END-transition edge when the document loads', () => {
+    const document: YamlPipelineDocument = {
+      entry_point: 'A',
+      nodes: [{ id: 'A', type: 'llm', transition: 'END' }],
+      interrupt_before: ['A'],
+      interrupt_after: ['A'],
+    };
+
+    expect(parseNodes(document).edges).toEqual([
+      { id: 'xy-edge__A---EliteAPipelineEnd', source: 'A', target: 'END', type: 'custom', data: { label: 'interrupt' } },
+    ]);
+  });
+
+  it.each(['END', undefined])('retains after-pause labels on Router default route %s', (defaultOutput) => {
+    const document: YamlPipelineDocument = {
+      entry_point: 'R',
+      nodes: [
+        { id: 'R', type: 'router', routes: ['B'], ...(defaultOutput === undefined ? {} : { default_output: defaultOutput }) },
+        { id: 'B', type: 'llm', transition: 'END' },
+      ],
+      interrupt_after: ['R'],
+    };
+
+    const edges = parseNodes(document).edges.filter((edge) => edge.source === 'R');
+    expect(edges).toHaveLength(2);
+    expect(edges.map((edge) => edge.data?.label)).toEqual(['interrupt', 'interrupt']);
+  });
+
+  it('retains after-pause labels on HITL terminal and stored-node routes', () => {
+    const document: YamlPipelineDocument = {
+      entry_point: 'H',
+      nodes: [
+        { id: 'H', type: 'hitl', routes: { approve: 'END', reject: 'B' } },
+        { id: 'B', type: 'llm', transition: 'END' },
+      ],
+      interrupt_after: ['H'],
+    };
+
+    const edges = parseNodes(document).edges.filter((edge) => edge.source === 'H');
+    expect(edges).toHaveLength(2);
+    expect(edges.map((edge) => edge.data?.label)).toEqual(['interrupt', 'interrupt']);
+  });
+
+  it('preserves synthetic legacy branch edges and their existing pause labels', () => {
+    const document: YamlPipelineDocument = {
+      entry_point: 'A',
+      nodes: [
+        { id: 'A', type: 'tool', condition: { conditional_outputs: ['B'] } },
+        { id: 'B', type: 'tool', transition: 'END' },
+      ],
+      interrupt_after: ['A'],
+    };
+
+    const { edges } = parseNodes(document);
+    expect(edges.find((edge) => edge.source === 'A')?.data).toBeUndefined();
+    expect(edges.find((edge) => edge.source === 'A~~~ConditionNode')?.data?.label).toBe('interrupt');
+    expect(edges.find((edge) => edge.source === 'B')?.data).toBeUndefined();
+  });
+
   it('normalizes non-array interrupt_before/after to empty arrays rather than throwing', () => {
     const doc = {
       entry_point: 'A',

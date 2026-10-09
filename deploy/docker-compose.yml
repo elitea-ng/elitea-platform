@@ -46,7 +46,10 @@ services:
   # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
     image: nats:2.12.0
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    command: ["-c", "/etc/nats-config/nats.conf"]
+    volumes:
+      - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
+      - nats_data:/data
 
   # The NATS readiness probe, from outside the scratch server container. It
   # idles, and its healthcheck reads http://nats:8222/healthz with JetStream
@@ -447,3 +450,4 @@ volumes:
   # engine only.
   deepwiki-engine-sock:
   rustfs_data:
+  nats_data:

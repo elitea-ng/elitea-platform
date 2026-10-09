@@ -1,12 +1,14 @@
 import { useCallback, useState } from 'react';
 
-import { trySerializePipelineYaml } from '../dumpYaml.helpers';
+import { trySerializePipelineYaml, type DumpYamlOptions } from '../dumpYaml.helpers';
 
 export interface PipelineYamlSerializationState {
   /** Why the last flow document could not be written as YAML, while the editor still holds what it kept. */
   readonly serializationError: string | undefined;
-  /** The document's YAML text, or `undefined` when the strict serializer refuses it. */
-  readonly serializeDocument: (document: unknown) => string | undefined;
+  /** The document's YAML text, or `undefined` when the strict serializer refuses it. `originalYaml` keeps unchanged source bytes. */
+  readonly serializeDocument: (document: unknown, options?: DumpYamlOptions) => string | undefined;
+  /** Surface a refusal raised by a store edit that serializes internally with the same strict serializer. */
+  readonly reportSerializationError: (caught: unknown) => void;
 }
 
 interface Refusal {
@@ -26,13 +28,19 @@ interface Refusal {
 export function usePipelineYamlSerialization(yamlCode: string, yamlJsonObject: unknown): PipelineYamlSerializationState {
   const [refusal, setRefusal] = useState<Refusal | undefined>(undefined);
   const serializeDocument = useCallback(
-    (document: unknown): string | undefined => {
-      const result = trySerializePipelineYaml(document);
+    (document: unknown, options?: DumpYamlOptions): string | undefined => {
+      const result = trySerializePipelineYaml(document, options);
       setRefusal(result.error === undefined ? undefined : { error: result.error, yamlCode, yamlJsonObject });
       return result.yaml;
     },
     [yamlCode, yamlJsonObject],
   );
+  const reportSerializationError = useCallback(
+    (caught: unknown): void => {
+      setRefusal({ error: caught instanceof Error ? caught.message : String(caught), yamlCode, yamlJsonObject });
+    },
+    [yamlCode, yamlJsonObject],
+  );
   const current = refusal?.yamlCode === yamlCode && refusal.yamlJsonObject === yamlJsonObject;
-  return { serializationError: current ? refusal.error : undefined, serializeDocument };
+  return { serializationError: current ? refusal.error : undefined, serializeDocument, reportSerializationError };
 }

@@ -85,6 +85,27 @@ impl DispatchJournal {
         .bind(activation.as_slice()).fetch_one(&self.pool).await?)
     }
 
+    /// Same answer as `contains_activation` for each id, in one `= ANY($4)` round trip.
+    pub(crate) async fn contains_activations(
+        &self,
+        scope: &DispatchScope,
+        activations: &[[u8; 32]],
+    ) -> Result<Vec<bool>, DispatchError> {
+        if activations.is_empty() || activations.len() > 8 {
+            return Err(DispatchError::Invalid);
+        }
+        let ids: Vec<&[u8]> = activations.iter().map(<[u8; 32]>::as_slice).collect();
+        let found: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT DISTINCT activation_id FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id = ANY($4::bytea[])",
+        )
+        .bind(&scope.tenant).bind(scope.project).bind(&scope.execution)
+        .bind(&ids).fetch_all(&self.pool).await?;
+        Ok(activations
+            .iter()
+            .map(|id| found.iter().any(|row| row.as_slice() == id.as_slice()))
+            .collect())
+    }
+
     /// Preserve the original request and audience across claim generations.
     pub(crate) async fn recorded(
         &self,

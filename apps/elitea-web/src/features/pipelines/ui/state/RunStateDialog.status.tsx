@@ -48,15 +48,16 @@ import {
 
 export interface HeaderActionsProps {
   readonly status: string;
+  readonly recoveryPaused?: boolean;
   readonly onStop: (event: { readonly stopPropagation: () => void }) => void;
   readonly onDelete: (event: { readonly stopPropagation: () => void }) => void;
   readonly onClose: () => void;
 }
 
-export function HeaderActions({ status, onStop, onDelete, onClose }: HeaderActionsProps): ReactNode {
+export function HeaderActions({ status, recoveryPaused = false, onStop, onDelete, onClose }: HeaderActionsProps): ReactNode {
   return (
     <>
-      {status === FlowEditorConstants.PipelineStatus.InProgress ? (
+      {(status === FlowEditorConstants.PipelineStatus.InProgress || (recoveryPaused && status === FlowEditorConstants.PipelineStatus.Interrupt)) ? (
         <IconButton
           aria-label={t('pipelines.flowEditor.state.stopRun', 'Stop run')}
           sx={headerIconButtonSx}

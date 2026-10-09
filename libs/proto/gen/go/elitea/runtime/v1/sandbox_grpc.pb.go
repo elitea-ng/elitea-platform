@@ -24,6 +24,7 @@ const (
 	SandboxSupervisorService_PublishRustCompiledSnapshot_FullMethodName = "/elitea.runtime.v1.SandboxSupervisorService/PublishRustCompiledSnapshot"
 	SandboxSupervisorService_SubmitSandboxJob_FullMethodName            = "/elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob"
 	SandboxSupervisorService_CancelSandboxJob_FullMethodName            = "/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob"
+	SandboxSupervisorService_LookupSandboxDependencies_FullMethodName   = "/elitea.runtime.v1.SandboxSupervisorService/LookupSandboxDependencies"
 	SandboxSupervisorService_PrepareSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/PrepareSandboxDependencies"
 	SandboxSupervisorService_PublishSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/PublishSandboxDependencies"
 	SandboxSupervisorService_HydrateSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxDependencies"
@@ -39,6 +40,8 @@ type SandboxSupervisorServiceClient interface {
 	PublishRustCompiledSnapshot(ctx context.Context, in *PublishRustCompiledSnapshotRequestV1, opts ...grpc.CallOption) (*PublishRustCompiledSnapshotResponseV1, error)
 	SubmitSandboxJob(ctx context.Context, in *SubmitSandboxJobRequestV1, opts ...grpc.CallOption) (*SubmitSandboxJobResponseV1, error)
 	CancelSandboxJob(ctx context.Context, in *CancelSandboxJobRequestV1, opts ...grpc.CallOption) (*CancelSandboxJobResponseV1, error)
+	// Content-only lookup cannot reserve a job or start a preparer.
+	LookupSandboxDependencies(ctx context.Context, in *LookupSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*LookupSandboxDependenciesResponseV1, error)
 	PrepareSandboxDependencies(ctx context.Context, in *PrepareSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PrepareSandboxDependenciesResponseV1, error)
 	PublishSandboxDependencies(ctx context.Context, in *PublishSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PublishSandboxDependenciesResponseV1, error)
 	HydrateSandboxDependencies(ctx context.Context, in *HydrateSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*HydrateSandboxDependenciesResponseV1, error)
@@ -102,6 +105,16 @@ func (c *sandboxSupervisorServiceClient) CancelSandboxJob(ctx context.Context, i
 	return out, nil
 }
 
+func (c *sandboxSupervisorServiceClient) LookupSandboxDependencies(ctx context.Context, in *LookupSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*LookupSandboxDependenciesResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupSandboxDependenciesResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_LookupSandboxDependencies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sandboxSupervisorServiceClient) PrepareSandboxDependencies(ctx context.Context, in *PrepareSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PrepareSandboxDependenciesResponseV1, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PrepareSandboxDependenciesResponseV1)
@@ -142,6 +155,8 @@ type SandboxSupervisorServiceServer interface {
 	PublishRustCompiledSnapshot(context.Context, *PublishRustCompiledSnapshotRequestV1) (*PublishRustCompiledSnapshotResponseV1, error)
 	SubmitSandboxJob(context.Context, *SubmitSandboxJobRequestV1) (*SubmitSandboxJobResponseV1, error)
 	CancelSandboxJob(context.Context, *CancelSandboxJobRequestV1) (*CancelSandboxJobResponseV1, error)
+	// Content-only lookup cannot reserve a job or start a preparer.
+	LookupSandboxDependencies(context.Context, *LookupSandboxDependenciesRequestV1) (*LookupSandboxDependenciesResponseV1, error)
 	PrepareSandboxDependencies(context.Context, *PrepareSandboxDependenciesRequestV1) (*PrepareSandboxDependenciesResponseV1, error)
 	PublishSandboxDependencies(context.Context, *PublishSandboxDependenciesRequestV1) (*PublishSandboxDependenciesResponseV1, error)
 	HydrateSandboxDependencies(context.Context, *HydrateSandboxDependenciesRequestV1) (*HydrateSandboxDependenciesResponseV1, error)
@@ -169,6 +184,9 @@ func (UnimplementedSandboxSupervisorServiceServer) SubmitSandboxJob(context.Cont
 }
 func (UnimplementedSandboxSupervisorServiceServer) CancelSandboxJob(context.Context, *CancelSandboxJobRequestV1) (*CancelSandboxJobResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CancelSandboxJob not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) LookupSandboxDependencies(context.Context, *LookupSandboxDependenciesRequestV1) (*LookupSandboxDependenciesResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LookupSandboxDependencies not implemented")
 }
 func (UnimplementedSandboxSupervisorServiceServer) PrepareSandboxDependencies(context.Context, *PrepareSandboxDependenciesRequestV1) (*PrepareSandboxDependenciesResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PrepareSandboxDependencies not implemented")
@@ -291,6 +309,24 @@ func _SandboxSupervisorService_CancelSandboxJob_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxSupervisorService_LookupSandboxDependencies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupSandboxDependenciesRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).LookupSandboxDependencies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_LookupSandboxDependencies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).LookupSandboxDependencies(ctx, req.(*LookupSandboxDependenciesRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SandboxSupervisorService_PrepareSandboxDependencies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PrepareSandboxDependenciesRequestV1)
 	if err := dec(in); err != nil {
@@ -371,6 +407,10 @@ var SandboxSupervisorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CancelSandboxJob",
 			Handler:    _SandboxSupervisorService_CancelSandboxJob_Handler,
+		},
+		{
+			MethodName: "LookupSandboxDependencies",
+			Handler:    _SandboxSupervisorService_LookupSandboxDependencies_Handler,
 		},
 		{
 			MethodName: "PrepareSandboxDependencies",

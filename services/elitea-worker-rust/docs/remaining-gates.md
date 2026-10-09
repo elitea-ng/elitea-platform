@@ -1,12 +1,22 @@
 # Rust worker remaining gates
 
-Updated: 2026-10-05. Main integration baseline: `20f0dfd04` (PR 883 merged).
+Updated: 2026-10-07. Incoming Main integration baseline: `781bf6ece` (Trixie and native-client changes).
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
 [Prior main integration](source-mapping/main-integration-20260923.md) records earlier conflict decisions and rehearsal deployment.
 [Current integration](source-mapping/main-integration-20261001.md) records the migration collision, CI repairs, and preserved Point 5 checkpoint.
+[NATS integration](source-mapping/main-nats-integration-20261006.md) records transport conflict resolution and separates earlier Code evidence from new deployment requirements.
 Current-platform code defines business behavior, not a requirement to copy its implementation or security defects.
+
+The [merge continuation](source-mapping/main-integration-20261007.md) verifies the final handoff and records all six resolved listener failures.
+It preserves durable NATS storage and the incoming scratch-image health sidecar.
+The [deployed NATS acceptance](source-mapping/code-nats-deployed-acceptance-20261007.md) records current images and verified Code cases.
+Complete Code cache, authority, recovery, editor, and Kubernetes acceptance before graph consolidation.
+No worker gate closes from the merge checks alone.
+The [live canvas terminal correction](source-mapping/code-live-canvas-terminal-20261008.md) passes source checks, Node26 production build, and strict Alpine scan.
+Its deployed browser acceptance remains open.
+The [pending preparation Stop case](source-mapping/code-pending-stop-owner-recovery-20261008.md) passes Worker-loss recovery and normal browser reload in chat850.
 
 ## Progression status
 
@@ -18,7 +28,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 4 is accepted for progression on 2026-09-28. The final audit records every required contract and its evidence.
 - Gate 5 is active. [Direct HITL admission](source-mapping/pipeline-hitl-admission-20260928.md) records main-chat history, repeated edits, paused-worker recovery, and transaction evidence.
 - PR 883 is merged. Its final CI reports 67 successful checks and three configured skips. Pending Point 5 work remains preserved.
-- The user requests complete Point 5 delivery in one PR. Each internal component requires its own source mapping and acceptance evidence.
+- Point 5 delivery continues through focused increments. Each component requires its own source mapping and acceptance evidence.
 - Persistent and ephemeral four-language benchmarks pass on the existing rehearsal backend with matching prepared runtime images.
 - The [point 4 acceptance audit](source-mapping/point4-acceptance-audit-20260928.md) records the final requirement review and explicit acceptance limits. Chats 727/728 verify parent completion after child access-denial and rate-limit failures.
 - [Provider context accounting](source-mapping/provider-context-accounting-20260928.md) records provider usage retention, native cache normalization, and the combined-window context meter. Chat 717 passes fresh-browser synthetic/Haiku measurements, model switching, regeneration, and reload. Chat 719 verifies per-call pipeline continuation and repair measurements without replacing the root meter. Chat 721 verifies repeated Haiku input accounting without proving its adapter. Confirmed native-adapter regeneration and reload pass in chat 720; cache counters remain zero. Chat 720 exposes generic diagnostics for the separate 64 KiB instruction limit. The [instruction capacity correction](source-mapping/instruction-content-capacity-20260928.md) passes chat 720 regeneration and reload with the original large instructions. [Input-admission diagnostics](source-mapping/input-admission-diagnostics-20260928.md) add a separate public failure code; chat 723 verifies deployment, live UI, support details, reload, and ERROR logs. The user-message bound correction passes regeneration in chat 723. Recovery accounting passes in chat 724. Full-window accounting after compaction passes in chat 708. Section-specific input guidance passes deployed agent-settings rejection and reload in chat 725. Real-provider cache savings remain unproven; the final audit records this performance limitation.
@@ -69,7 +79,59 @@ OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or o
 
 All Code workspace integration moves to the [post-worker feature backlog](wanted_feature.md#wf-01--code-workspaces) on 2026-10-05.
 The former Point 5f does not belong to the active worker gaps or their acceptance register.
+
+### Point 5 consolidation after the sandbox merge, 2026-10-06
+
+PR 1014 merges at `e79c277bdcd12fd08fc5d487d80438c5a059c74d`.
+The next delivery preserves the existing graph implementation and composes its missing Main and Web consumers.
+The [consolidation mapping](source-mapping/point5-consolidation-20261006.md) separates source checks from assembled acceptance.
+All 118 audited Worker graph source paths remain present. Four retain newer corrections.
+Do not restore the saved snapshot over these corrections.
+
+The restored [data shaping catalog](data-shaping-node-catalog.md) retains the full planned operation families.
+SplitOut and Aggregate remain the first implementation tier for Gate 5c.
+Their Rust execution and the executable HTTP consumer remain open work.
+Map and fixed Parallel remain separate Gate 5a contracts.
+Keep their admission gates false until assembled runtime acceptance passes.
+
+Workspaces remain in the [post-worker backlog](wanted_feature.md#wf-01--code-workspaces).
+They do not return to the active Point 5 delivery.
 The user schedules it after completion and release of the full Rust worker.
+
+Real-backend editor checks pass for exact source retention, attachment synchronization, and saved descriptor metadata.
+Immediate YAML-to-Flow changes now retain valid and invalid drafts without waiting for the shared editor debounce.
+Semantic edits use canonical formatting. State rename does not rewrite node references; this existing editor gap remains open.
+The Worker restart probe in chat 825 fails after delivery consumes the original JavaScript deadline.
+The same-consumer pending-delivery correction passes 45 focused tests and strict Clippy. Deployed restart acceptance remains open.
+The deployed retest acquires its replacement claim about 254 milliseconds after lease expiry.
+It exposes an indexed hydration capacity deadlock before the restored broker starts.
+The [shared Supervisor correction](source-mapping/code-retained-hydration-recovery-20261006.md) passes twelve selected tests and strict Clippy.
+The existing CI harness selects three new PostgreSQL regressions; its PostgreSQL job passes at `9ae93a9ee`.
+The corrected Supervisor is deployed from that revision. The v5 restart retest still fails before JavaScript sequence 2 commits.
+The original runtime and checkpoint-attested replacement claim remain unchanged.
+The [Worker pump lifetime correction](../../../docs/source-mapping/code-platform-pump-lifetime-20261006.md) keeps one scoped broker future across Pending/Busy replies, grant refresh, and backoff.
+Sixteen selected tests and strict Clippy pass. The corrected Worker is deployed from `fee3d059d`.
+The v6 restart retest commits JavaScript sequence 2 but still fails before TypeScript admission.
+The original JavaScript container exits successfully with a valid result receipt.
+The Supervisor loses its request-owned result collector after Worker disconnection. Its unrenewed lease expires before receipt persistence.
+The [Supervisor task ownership correction](source-mapping/code-supervisor-task-ownership-20261006.md) passes 24 focused tests and strict Clippy.
+The Supervisor deploys from `45b152a92`. The unchanged v7 Worker-only restart test passes in persistent chat 825.
+The same execution and original JavaScript runtime complete all four languages, with eight unique committed reads.
+All seven preparation and execution containers are removed. No owned sandbox lease remains active.
+The browser displays one final result, which matches persisted output after reload. No Stop control remains.
+This closes the exact Worker-loss Code recovery boundary. Supervisor/Main replacement and Kubernetes recovery remain separate gates.
+Generic Code failure display passes in ephemeral chat 826 and persistent chat 827, including persistent reload.
+Both failed journals commit before publication. No sandbox or later node runs.
+The fresh positive run in chat 825 completes all four languages and retains its exact answer after reload.
+These checks use deployed Worker `d6568bae8` with unchanged Main and Web.
+NATS complete-cohort acceptance remains open. Point 5 remains open.
+The [typed Code correction](source-mapping/code-terminal-failure-20261006.md) passes 50 Rust tests and 109 Main cases, with strict Clippy and vet.
+It preserves finite categories after durable commit and projects restored failure classes without re-execution or journal mutation.
+Main preparation-message deployment and actual failed-journal replay remain open.
+The [empty-document editor correction](../../../apps/elitea-web/docs/source-mapping/point5-web-empty-document-ci-20261006.md) passes 110 focused tests and real-backend first-node browser checks.
+CI at `d6568bae8` completes without failed jobs, including the visual and image-scan jobs.
+Two configured skips remain: live toolkit lanes and documentation screenshot capture.
+The integrated NATS revision requires its own CI and runtime checks.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
 The deployed Docker path passes Python/Pyodide, JavaScript, TypeScript, and Rust execution through the pipeline test chat.
@@ -936,3 +998,49 @@ The Cargo regression passes in about five seconds and retains its result after p
 Its compiled execution descriptor remains present.
 The replacement CI result remains required before merge.
 The new Main migration transition and complete-cohort restart acceptance remain separate open gates.
+
+## Code chat reload UI correction, 2026-10-07
+
+The [reload mapping](source-mapping/code-chat-reload-ui-20261007.md) records the author and participant-selection corrections.
+Historical answers use their persisted author. Fresh-chat creation stores the selected participant before route navigation.
+Numeric and string IDs match through the existing supported-participant guard.
+The complete creation, route, unmount, and remount regression passes.
+Six focused suites pass 76 unique tests with zero failures or skips.
+TypeScript, lint, and whitespace checks return direct status zero.
+The final implementation patch SHA-256 is `8179380e07279ac1d783d9ed4fcce092ae9ddba3c98ef4aba58ff3c1cef60588`.
+
+These are local Web checks. Deployed Web remains at efa and the native pair remains at c53.
+The actual chat838 selection-loss branch and notification Offline cause remain unproved.
+The existing terminal failure and journal evidence remains separate.
+Root retains image delivery, browser acceptance, CI, and Code gate closure.
+
+## Code failed-journal Worker recovery, 2026-10-07
+
+The [recovery mapping](source-mapping/code-failed-stop-owner-recovery-20261007.md) closes the finite R19 failed-journal owner-loss case.
+Chat 843 restores the original failure after loss of the exact original Worker.
+The replacement uses the accepted c53 image and a fresh private spool; the old Worker and spool remain preserved and unopened.
+Main grants checkpoint recovery authority at claim attempt 2 and epoch 2.
+One typed failure output and one FAILED settlement commit without a new Code dispatch or execution.
+The original failure journal and completed predecessor identities remain unchanged.
+Live and ordinary reloaded UI retain the same failure code and support reference.
+Both original sandbox runtimes pass 16 isolation checks and later return HTTP 404 on independent removal readback.
+The frozen root acceptance receipt is `cbbdffb369169b57d1c6456928bc0b233d9b4cdc8b69886d5bd17a049bf6d262`.
+
+The operator fixes affect capture matching and private spool initialization; this case requires no product source change.
+The record preserves earlier refusals and the separate permission-probe boundary.
+Preparation Stop, preparation owner loss, the remaining service-loss cases, and current-cohort Kubernetes acceptance stay open.
+
+The published Web reload correction passes build, strict local Alpine scan, exact deployment, and normal author/selection browser acceptance.
+The browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
+Chat845 misses the original preparation Stop window and receives no preparation-Stop or Worker-recovery credit.
+
+Later chat850 closes pending preparation Stop across Worker loss, including original runtime removal and reloaded terminal History.
+The [chat851 mapping](source-mapping/code-live-owner-recovery-20261008.md) closes live Worker and Supervisor loss for the original JavaScript job.
+The same runtime returns count2. Main grants checkpoint recovery at claim2/epoch2, then the next empty-source node fails safely.
+One settlement, both runtime removals, NATS drain, and the same live/reloaded support reference pass.
+
+Later [chat852](source-mapping/code-compiled-publication-main-recovery-20261008.md) closes Main loss during publication of the original successful compilation.
+The same compiler receipt becomes Ready. One result and settlement, physical removal, NATS drain, and exact live/reloaded answer pass.
+The [finite checklist](source-mapping/code-nats-deployed-acceptance-20261007.md) retains three runtime groups and separate deployed canvas acceptance.
+Preparation outcomes and debug replacement remain open within the first group. NATS restart and Kubernetes remain open.
+Complete Code, graph gates 5a–5e, later worker gates, and release remain open. Workspaces remain deferred.

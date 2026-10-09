@@ -1,4 +1,4 @@
-//! Service the retained Code process while its submit RPC awaits completion.
+//! Service the retained Code process across the complete submission observation.
 
 use std::future::Future;
 
@@ -9,6 +9,8 @@ pub enum ObservationFailure<E> {
 
 /// Both futures belong to this attempt. Dropping the attempt drops both.
 /// The caller retains the original dispatch identity and absolute deadline.
+/// Submission includes nonterminal reconciliation and backoff. It yields only
+/// a terminal receipt or refusal, so those waits cannot replace the pump.
 pub async fn drive<S, P, T, E>(
     submission: S,
     platform: P,
@@ -73,6 +75,64 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn platform_refusal_during_backoff_stops_the_whole_observation() {
+        let submissions = AtomicUsize::new(0);
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let submit_guard = DropCount(dropped.clone());
+        let pump_guard = DropCount(dropped.clone());
+        let outcome = drive(
+            async {
+                let _guard = submit_guard;
+                submissions.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                submissions.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+            },
+            async {
+                let _guard = pump_guard;
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                "authorization_denied"
+            },
+            tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(matches!(
+            outcome,
+            Err(ObservationFailure::Platform("authorization_denied"))
+        ));
+        assert_eq!(submissions.load(Ordering::SeqCst), 1);
+        assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn absolute_deadline_covers_all_nonterminal_backoffs() {
+        let submissions = AtomicUsize::new(0);
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let submit_guard = DropCount(dropped.clone());
+        let pump_guard = DropCount(dropped.clone());
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(2500);
+        let outcome = drive(
+            async {
+                let _guard = submit_guard;
+                loop {
+                    submissions.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            },
+            async {
+                let _guard = pump_guard;
+                std::future::pending::<()>().await;
+            },
+            deadline,
+        )
+        .await;
+        assert!(matches!(outcome, Err(ObservationFailure::Deadline)));
+        assert_eq!(tokio::time::Instant::now(), deadline);
+        assert_eq!(submissions.load(Ordering::SeqCst), 3);
+        assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn preserves_absolute_deadline_and_drops_both_scoped_futures() {
         let dropped = Arc::new(AtomicUsize::new(0));
         let submit_guard = DropCount(dropped.clone());
@@ -124,6 +184,29 @@ mod tests {
         )
         .await;
         assert!(matches!(outcome, Ok(42)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_receipt_stops_pump_before_journal_finalization_wait() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let pump_guard = DropCount(dropped.clone());
+        let (reply, receipt) = oneshot::channel();
+        let outcome = drive(
+            async { receipt.await.expect("terminal RPC receipt") },
+            async {
+                let _guard = pump_guard;
+                reply.send(42).expect("original observation is active");
+                tokio::task::yield_now().await;
+                "late_platform_refusal"
+            },
+            tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(matches!(outcome, Ok(42)));
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        // Journal persistence follows the winning receipt, after pump shutdown.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

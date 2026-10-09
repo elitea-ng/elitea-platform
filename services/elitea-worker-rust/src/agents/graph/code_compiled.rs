@@ -1,6 +1,7 @@
 //! Optional pre-admission snapshot lookup. A recorded selection never becomes a miss.
 use super::workspace_remote::CodeWorkspaceFailure;
 use super::{CodeRuntimeProfile, RemoteCodeRuntime, failed};
+use crate::agents::graph::code_timing;
 use crate::agents::graph::{code_runtime::CodeAttemptPhase, node_recovery::NodeFailureClass};
 use crate::{
     agents::graph::{code::CodeLanguage, code_runtime::CodeInvocation},
@@ -240,7 +241,7 @@ fn compiled_profile_for_job<'a>(
     }
 }
 
-fn compiled_activation(activation: &[u8; 32]) -> [u8; 32] {
+pub(super) fn compiled_activation(activation: &[u8; 32]) -> [u8; 32] {
     let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
     hash.update(b"elitea.sandbox.compilation-activation.v1\0");
     hash.update(activation);
@@ -346,7 +347,7 @@ impl RemoteCodeRuntime {
                 if tokio::time::Instant::now() >= deadline {
                     return Err(super::uncertain().into());
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                tokio::time::sleep(code_timing::CODE_FAST_RECONCILE_INTERVAL).await;
             }
         };
         let selected = SelectedSnapshot::select(binding.clone(), canonical.clone())
@@ -407,7 +408,7 @@ impl RemoteCodeRuntime {
                 if tokio::time::Instant::now() >= deadline {
                     return Err(super::uncertain());
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                tokio::time::sleep(code_timing::CODE_FAST_RECONCILE_INTERVAL).await;
             }
         }
         Ok(())

@@ -1,5 +1,6 @@
 //! Keep the Code frontier pending until frozen dependencies are published and terminal.
 use super::{CodeRuntimeProfile, RemoteCodeRuntime, failed, observation_deadline, uncertain};
+use crate::agents::graph::code_timing;
 use crate::{
     agents::graph::{
         code::CodeLanguage,
@@ -12,7 +13,7 @@ use crate::{
     },
 };
 use adk_rust::graph::GraphError;
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 impl RemoteCodeRuntime {
     pub(super) async fn prepare_execution_job(
@@ -167,127 +168,184 @@ impl RemoteCodeRuntime {
             .authority
             .dispatch_scope()
             .map_err(|_| CodePreparationFailure::Failed)?;
-        self.journal
-            .register(&scope, &activation, &digest, client.audience())
+        // Recorded preparation keeps its original runtime and publication lineage.
+        // Only a fresh Cargo request can select the operator-pinned frozen root.
+        let is_rust = invocation.language == CodeLanguage::Rust;
+        let compiled = super::compiled::compiled_activation(&invocation.activation);
+        // One round trip answers all identity probes (PREPARATION_IDENTITY_PROBES_BUDGET).
+        let probe = [activation, invocation.activation, compiled];
+        let found = self
+            .journal
+            .contains_activations(&scope, if is_rust { &probe } else { &probe[..1] })
             .await
             .map_err(|_| CodePreparationFailure::Failed)?;
-        let mut deadline = observation_deadline(config.timeout_seconds);
-        let mut bundle: Option<DependencyBundle> = None;
-        let mut index = 0;
-        loop {
-            let mut wait = true;
-            if let Some(recorded) = &bundle {
-                let attempt = self.control.publish_sandbox_dependencies(
-                    client,
-                    &self.authority,
-                    &activation,
-                    &job,
-                    recorded,
-                    index,
-                );
-                match tokio::time::timeout_at(deadline, attempt)
-                    .await
-                    .map_err(|_| CodePreparationFailure::Unconfirmed)?
+        let (recorded, recorded_code) = recorded_identities(is_rust, &found);
+        let root = (invocation.language == CodeLanguage::Rust)
+            .then(|| self.selected_compiled_profile(profile))
+            .flatten()
+            .and_then(|selected| selected.dependency_bundle_root());
+        resolve_preparation_bundle(
+            recorded,
+            recorded_code,
+            root,
+            |root| async {
+                // A busy or briefly unavailable lookup waits for the same absolute
+                // deadline as fresh preparation. It never falls through to prepare.
+                let deadline = observation_deadline(config.timeout_seconds);
+                let selected = retry_frozen_lookup(deadline, || async {
+                    let lookup = self.control.lookup_sandbox_dependencies(
+                        client,
+                        &self.authority,
+                        &activation,
+                        &job,
+                        root,
+                    );
+                    tokio::time::timeout(Duration::from_secs(config.timeout_seconds.into()), lookup)
+                        .await
+                        .map_err(|_| LookupAttempt::Final(CodePreparationFailure::Unconfirmed))?
+                        .map_err(|error| {
+                            if retryable(&error) {
+                                LookupAttempt::Retry
+                            } else {
+                                LookupAttempt::Final(CodePreparationFailure::Failed)
+                            }
+                        })
+                })
+                .await?;
+                if selected
+                    .as_ref()
+                    .is_some_and(|bundle| !job.matches_bundle(bundle))
                 {
-                    Ok(PublicationOutcome::Completed) => {
-                        // A concurrent owner can complete publication before this
-                        // indexed retry. Authority binds the locally retained root.
-                        self.journal
-                            .resolve(&scope, &activation, &digest, client.audience())
+                    return Err(CodePreparationFailure::Failed);
+                }
+                Ok(selected)
+            },
+            || async {
+                self.journal
+                    .register(&scope, &activation, &digest, client.audience())
+                    .await
+                    .map_err(|_| CodePreparationFailure::Failed)?;
+                let mut deadline = observation_deadline(config.timeout_seconds);
+                let mut bundle: Option<DependencyBundle> = None;
+                let mut index = 0;
+                loop {
+                    let mut wait = true;
+                    if let Some(recorded) = &bundle {
+                        let attempt = self.control.publish_sandbox_dependencies(
+                            client,
+                            &self.authority,
+                            &activation,
+                            &job,
+                            recorded,
+                            index,
+                        );
+                        match tokio::time::timeout_at(deadline, attempt)
                             .await
-                            .map_err(|_| CodePreparationFailure::Failed)?;
-                        return bundle.ok_or(CodePreparationFailure::Unconfirmed);
-                    }
-                    Ok(PublicationOutcome::Pending) => {
-                        if index < recorded.file_count() {
-                            index += 1;
-                            wait = false;
+                            .map_err(|_| CodePreparationFailure::Unconfirmed)?
+                        {
+                            Ok(PublicationOutcome::Completed) => {
+                                // A concurrent owner can complete publication before this
+                                // indexed retry. Authority binds the locally retained root.
+                                self.journal
+                                    .resolve(&scope, &activation, &digest, client.audience())
+                                    .await
+                                    .map_err(|_| CodePreparationFailure::Failed)?;
+                                return bundle.ok_or(CodePreparationFailure::Unconfirmed);
+                            }
+                            Ok(PublicationOutcome::Pending) => {
+                                if index < recorded.file_count() {
+                                    index += 1;
+                                    wait = false;
+                                }
+                            }
+                            Ok(PublicationOutcome::Failed { code }) => {
+                                self.journal
+                                    .resolve(&scope, &activation, &digest, client.audience())
+                                    .await
+                                    .map_err(|_| CodePreparationFailure::Failed)?;
+                                return Err(preparation_failed(&code));
+                            }
+                            Ok(PublicationOutcome::Cancelled) => {
+                                self.journal
+                                    .resolve(&scope, &activation, &digest, client.audience())
+                                    .await
+                                    .map_err(|_| CodePreparationFailure::Failed)?;
+                                return Err(preparation_cancelled());
+                            }
+                            Ok(PublicationOutcome::Uncertain { .. }) => {
+                                return Err(CodePreparationFailure::Unconfirmed);
+                            }
+                            Err(error) if retryable(&error) => {}
+                            Err(_) => return Err(CodePreparationFailure::Failed),
+                        }
+                    } else {
+                        let attempt = self.control.prepare_sandbox_dependencies(
+                            client,
+                            &self.authority,
+                            &activation,
+                            &job,
+                        );
+                        match tokio::time::timeout_at(deadline, attempt)
+                            .await
+                            .map_err(|_| CodePreparationFailure::Unconfirmed)?
+                        {
+                            Ok(PreparationOutcome::Completed(recorded)) => {
+                                self.journal
+                                    .resolve(&scope, &activation, &digest, client.audience())
+                                    .await
+                                    .map_err(|_| CodePreparationFailure::Failed)?;
+                                if !job.matches_bundle(&recorded) {
+                                    return Err(CodePreparationFailure::Failed);
+                                }
+                                return Ok(recorded);
+                            }
+                            Ok(PreparationOutcome::Pending(recorded)) => {
+                                wait = recorded.is_none();
+                                if recorded.is_some() {
+                                    // Resolution ends before indexed publication begins.
+                                    // Retries keep this fixed publication deadline.
+                                    deadline = observation_deadline(config.timeout_seconds);
+                                }
+                                if recorded.as_ref().is_some_and(|v| !job.matches_bundle(v)) {
+                                    return Err(CodePreparationFailure::Failed);
+                                }
+                                bundle = recorded;
+                            }
+                            Ok(PreparationOutcome::Failed { code }) => {
+                                self.journal
+                                    .resolve(&scope, &activation, &digest, client.audience())
+                                    .await
+                                    .map_err(|_| CodePreparationFailure::Failed)?;
+                                return Err(preparation_failed(&code));
+                            }
+                            Ok(PreparationOutcome::Cancelled) => {
+                                self.journal
+                                    .resolve(&scope, &activation, &digest, client.audience())
+                                    .await
+                                    .map_err(|_| CodePreparationFailure::Failed)?;
+                                return Err(preparation_cancelled());
+                            }
+                            Ok(PreparationOutcome::Uncertain { .. }) => {
+                                return Err(CodePreparationFailure::Unconfirmed);
+                            }
+                            Err(error) if retryable(&error) => {}
+                            Err(_) => return Err(CodePreparationFailure::Failed),
                         }
                     }
-                    Ok(PublicationOutcome::Failed { code }) => {
-                        self.journal
-                            .resolve(&scope, &activation, &digest, client.audience())
-                            .await
-                            .map_err(|_| CodePreparationFailure::Failed)?;
-                        return Err(preparation_failed(&code));
-                    }
-                    Ok(PublicationOutcome::Cancelled) => {
-                        self.journal
-                            .resolve(&scope, &activation, &digest, client.audience())
-                            .await
-                            .map_err(|_| CodePreparationFailure::Failed)?;
-                        return Err(preparation_cancelled());
-                    }
-                    Ok(PublicationOutcome::Uncertain { .. }) => {
+                    if tokio::time::Instant::now() >= deadline {
                         return Err(CodePreparationFailure::Unconfirmed);
                     }
-                    Err(error) if retryable(&error) => {}
-                    Err(_) => return Err(CodePreparationFailure::Failed),
+                    if wait {
+                        tokio::time::sleep_until(
+                            (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL)
+                                .min(deadline),
+                        )
+                        .await;
+                    }
                 }
-            } else {
-                let attempt = self.control.prepare_sandbox_dependencies(
-                    client,
-                    &self.authority,
-                    &activation,
-                    &job,
-                );
-                match tokio::time::timeout_at(deadline, attempt)
-                    .await
-                    .map_err(|_| CodePreparationFailure::Unconfirmed)?
-                {
-                    Ok(PreparationOutcome::Completed(recorded)) => {
-                        self.journal
-                            .resolve(&scope, &activation, &digest, client.audience())
-                            .await
-                            .map_err(|_| CodePreparationFailure::Failed)?;
-                        if !job.matches_bundle(&recorded) {
-                            return Err(CodePreparationFailure::Failed);
-                        }
-                        return Ok(recorded);
-                    }
-                    Ok(PreparationOutcome::Pending(recorded)) => {
-                        wait = recorded.is_none();
-                        if recorded.is_some() {
-                            // Resolution ends before indexed publication begins.
-                            // Retries keep this fixed publication deadline.
-                            deadline = observation_deadline(config.timeout_seconds);
-                        }
-                        if recorded.as_ref().is_some_and(|v| !job.matches_bundle(v)) {
-                            return Err(CodePreparationFailure::Failed);
-                        }
-                        bundle = recorded;
-                    }
-                    Ok(PreparationOutcome::Failed { code }) => {
-                        self.journal
-                            .resolve(&scope, &activation, &digest, client.audience())
-                            .await
-                            .map_err(|_| CodePreparationFailure::Failed)?;
-                        return Err(preparation_failed(&code));
-                    }
-                    Ok(PreparationOutcome::Cancelled) => {
-                        self.journal
-                            .resolve(&scope, &activation, &digest, client.audience())
-                            .await
-                            .map_err(|_| CodePreparationFailure::Failed)?;
-                        return Err(preparation_cancelled());
-                    }
-                    Ok(PreparationOutcome::Uncertain { .. }) => {
-                        return Err(CodePreparationFailure::Unconfirmed);
-                    }
-                    Err(error) if retryable(&error) => {}
-                    Err(_) => return Err(CodePreparationFailure::Failed),
-                }
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(CodePreparationFailure::Unconfirmed);
-            }
-            if wait {
-                tokio::time::sleep_until(
-                    (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline),
-                )
-                .await;
-            }
-        }
+            },
+        )
+        .await
     }
 
     pub(super) async fn hydrate_python_dependencies(
@@ -362,11 +420,38 @@ impl RemoteCodeRuntime {
                 return Err(uncertain());
             }
             tokio::time::sleep_until(
-                (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline),
+                (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
             )
             .await;
         }
     }
+}
+
+/// Keep lookup, original reconciliation, and fresh acquisition in one tested flow.
+async fn resolve_preparation_bundle<'root, Lookup, Acquire, LookupFuture, AcquireFuture>(
+    recorded_preparation: bool,
+    recorded_code: bool,
+    root: Option<&'root str>,
+    lookup: Lookup,
+    reconcile_or_prepare: Acquire,
+) -> Result<DependencyBundle, CodePreparationFailure>
+where
+    Lookup: FnOnce(&'root str) -> LookupFuture,
+    Acquire: FnOnce() -> AcquireFuture,
+    LookupFuture: Future<Output = Result<Option<DependencyBundle>, CodePreparationFailure>>,
+    AcquireFuture: Future<Output = Result<DependencyBundle, CodePreparationFailure>>,
+{
+    if !recorded_preparation {
+        if let Some(root) = root
+            && let Some(bundle) = lookup(root).await?
+        {
+            return Ok(bundle);
+        }
+        if recorded_code {
+            return Err(CodePreparationFailure::Failed);
+        }
+    }
+    reconcile_or_prepare().await
 }
 
 fn requires_dependency_preparation(
@@ -399,6 +484,47 @@ fn native_acquisition<'a>(
             "Native dependency acquisition requires its language adapter.",
         )),
     }
+}
+
+enum LookupAttempt {
+    Retry,
+    Final(CodePreparationFailure),
+}
+
+/// Retry retryable frozen-lookup errors at the reconcile cadence until `deadline`.
+async fn retry_frozen_lookup<T, Op, Fut>(
+    deadline: tokio::time::Instant,
+    mut attempt: Op,
+) -> Result<T, CodePreparationFailure>
+where
+    Op: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, LookupAttempt>>,
+{
+    loop {
+        match attempt().await {
+            Ok(value) => return Ok(value),
+            Err(LookupAttempt::Final(failure)) => return Err(failure),
+            Err(LookupAttempt::Retry) => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(CodePreparationFailure::Unconfirmed);
+        }
+        tokio::time::sleep_until(
+            (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
+        )
+        .await;
+    }
+}
+
+/// Identity probes per Rust preparation; all are answered by one query.
+#[cfg(test)]
+pub(super) const PREPARATION_IDENTITY_PROBES_BUDGET: usize = 1;
+
+/// `found` is [preparation, code, compiled] for Rust, or [preparation] otherwise.
+fn recorded_identities(is_rust: bool, found: &[bool]) -> (bool, bool) {
+    let recorded = found.first().copied().unwrap_or(false);
+    let recorded_code = is_rust && !recorded && found.iter().skip(1).any(|found| *found);
+    (recorded, recorded_code)
 }
 
 pub(super) fn retryable(error: &SandboxCallError) -> bool {
@@ -567,5 +693,230 @@ mod safe_preparation_diagnostic_tests {
         assert!(unconfirmed.contains("was not restarted"));
         assert!(unconfirmed.contains("reconcile the existing attempt"));
         assert!(!unconfirmed.contains("agent.legacy"));
+    }
+}
+
+#[cfg(test)]
+mod frozen_preparation_flow_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn bundle() -> DependencyBundle {
+        crate::sandbox::preparation::frozen_lookup_tests::fixture().1
+    }
+
+    #[tokio::test]
+    async fn frozen_flow_fresh_exact_hit_bypasses_prepare() {
+        let selected = bundle();
+        let root = selected.root().to_owned();
+        let lookups = Cell::new(0);
+        let preparations = Cell::new(0);
+        let result = resolve_preparation_bundle(
+            false,
+            false,
+            Some(&root),
+            |_| async {
+                lookups.set(lookups.get() + 1);
+                Ok(Some(selected))
+            },
+            || async {
+                preparations.set(preparations.get() + 1);
+                Ok(bundle())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.root(), root);
+        assert_eq!((lookups.get(), preparations.get()), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn frozen_flow_genuine_fresh_miss_can_prepare() {
+        let lookups = Cell::new(0);
+        let preparations = Cell::new(0);
+        let result = resolve_preparation_bundle(
+            false,
+            false,
+            Some(&"c".repeat(64)),
+            |_| async {
+                lookups.set(lookups.get() + 1);
+                Ok(None)
+            },
+            || async {
+                preparations.set(preparations.get() + 1);
+                Ok(bundle())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.root(), bundle().root());
+        assert_eq!((lookups.get(), preparations.get()), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn frozen_flow_lookup_errors_never_prepare() {
+        for failure in [
+            CodePreparationFailure::Failed,
+            CodePreparationFailure::Unconfirmed,
+        ] {
+            let preparations = Cell::new(0);
+            let result = resolve_preparation_bundle(
+                false,
+                false,
+                Some(&"c".repeat(64)),
+                |_| async { Err(failure) },
+                || async {
+                    preparations.set(preparations.get() + 1);
+                    Ok(bundle())
+                },
+            )
+            .await;
+            assert_eq!(result.err(), Some(failure));
+            assert_eq!(preparations.get(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn frozen_flow_recorded_preparation_keeps_original_reconciliation() {
+        let lookups = Cell::new(0);
+        let reconciliations = Cell::new(0);
+        let original = bundle();
+        let original_root = original.root().to_owned();
+        let result = resolve_preparation_bundle(
+            true,
+            true,
+            Some(&"c".repeat(64)),
+            |_| async {
+                lookups.set(lookups.get() + 1);
+                Ok(Some(bundle()))
+            },
+            || async {
+                reconciliations.set(reconciliations.get() + 1);
+                Ok(original)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.root(), original_root);
+        assert_eq!((lookups.get(), reconciliations.get()), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn frozen_flow_recorded_compile_or_execute_miss_blocks_new_acquisition() {
+        for recorded_owner in ["compile", "execute"] {
+            for root in [
+                None,
+                Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+            ] {
+                let preparations = Cell::new(0);
+                let result = resolve_preparation_bundle(
+                    false,
+                    true,
+                    root,
+                    |_| async { Ok(None) },
+                    || async {
+                        preparations.set(preparations.get() + 1);
+                        Ok(bundle())
+                    },
+                )
+                .await;
+                assert_eq!(
+                    result.err(),
+                    Some(CodePreparationFailure::Failed),
+                    "{recorded_owner}"
+                );
+                assert_eq!(preparations.get(), 0, "{recorded_owner}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod frozen_lookup_retry_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[tokio::test(start_paused = true)]
+    async fn frozen_flow_retries_busy_lookup_until_hit() {
+        let lookups = Cell::new(0);
+        let preparations = Cell::new(0);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let started = tokio::time::Instant::now();
+        let result = resolve_preparation_bundle(
+            false,
+            false,
+            Some(&"c".repeat(64)),
+            |_| async {
+                retry_frozen_lookup(deadline, || async {
+                    lookups.set(lookups.get() + 1);
+                    if lookups.get() < 3 {
+                        Err(LookupAttempt::Retry)
+                    } else {
+                        Ok(Some(
+                            crate::sandbox::preparation::frozen_lookup_tests::fixture().1,
+                        ))
+                    }
+                })
+                .await
+            },
+            || async {
+                preparations.set(preparations.get() + 1);
+                Err(CodePreparationFailure::Failed)
+            },
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!((lookups.get(), preparations.get()), (3, 0));
+        assert_eq!(started.elapsed(), code_timing::CODE_RECONCILE_INTERVAL * 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn frozen_lookup_busy_until_deadline_is_unconfirmed_and_bounded() {
+        let lookups = Cell::new(0_usize);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let result: Result<(), _> = retry_frozen_lookup(deadline, || async {
+            lookups.set(lookups.get() + 1);
+            Err(LookupAttempt::Retry)
+        })
+        .await;
+        assert_eq!(result.err(), Some(CodePreparationFailure::Unconfirmed));
+        assert!(tokio::time::Instant::now() >= deadline);
+        // 1 s cadence: at most one attempt per second until the deadline.
+        assert!(lookups.get() <= 11, "{}", lookups.get());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn frozen_lookup_terminal_error_is_not_retried() {
+        let lookups = Cell::new(0);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let result: Result<(), _> = retry_frozen_lookup(deadline, || async {
+            lookups.set(lookups.get() + 1);
+            Err(LookupAttempt::Final(CodePreparationFailure::Failed))
+        })
+        .await;
+        assert_eq!(result.err(), Some(CodePreparationFailure::Failed));
+        assert_eq!(lookups.get(), 1);
+    }
+
+    #[test]
+    fn identity_probe_fold_matches_sequential_probes() {
+        // The three sequential probes this replaced, as a reference model.
+        for bits in 0..8_u8 {
+            let [prep, code, compiled] = [bits & 1 != 0, bits & 2 != 0, bits & 4 != 0];
+            for is_rust in [true, false] {
+                let old_recorded = prep;
+                let old_code = is_rust && !prep && (code || compiled);
+                let found = if is_rust {
+                    vec![prep, code, compiled]
+                } else {
+                    vec![prep]
+                };
+                assert_eq!(
+                    recorded_identities(is_rust, &found),
+                    (old_recorded, old_code)
+                );
+            }
+        }
+        assert_eq!(PREPARATION_IDENTITY_PROBES_BUDGET, 1);
     }
 }

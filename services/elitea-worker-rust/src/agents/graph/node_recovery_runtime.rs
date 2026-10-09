@@ -168,6 +168,15 @@ pub(crate) trait NodeAttemptBody: Node {
     ) -> Result<(), GraphError> {
         Ok(())
     }
+
+    /// Project a validated terminal class. Never execute, reconcile, or change authority.
+    async fn report_restored_terminal_failure(
+        &self,
+        _: &NodeContext,
+        _: NodeFailureClass,
+    ) -> Result<(), GraphError> {
+        Ok(())
+    }
 }
 
 /// Read-only owning projection. It must never invoke an external operation.
@@ -953,8 +962,23 @@ impl RecoverableNode {
                         data: Some(serde_json::json!({ "guardrail_type": "pipeline_node_recovery", "receipt": receipt })),
                     }));
                 }
-                NodeAttemptPhase::Failed(RecoveryDecision::Stop(_))
-                | NodeAttemptPhase::ControlStopped { .. } => {
+                NodeAttemptPhase::Failed(RecoveryDecision::Stop(_)) => {
+                    let failure = snapshot.ledger.effective_failure().map_err(policy_error)?;
+                    journal.ensure_current()?;
+                    if failure.class != NodeFailureClass::LeaseLost {
+                        self.body
+                            .report_restored_terminal_failure(context, failure.class)
+                            .await?;
+                    }
+                    return Err(recovery_error("pipeline.node_recovery.failed"));
+                }
+                NodeAttemptPhase::ControlStopped { class, .. } => {
+                    journal.ensure_current()?;
+                    if class != NodeFailureClass::LeaseLost {
+                        self.body
+                            .report_restored_terminal_failure(context, class)
+                            .await?;
+                    }
                     return Err(recovery_error("pipeline.node_recovery.failed"));
                 }
                 NodeAttemptPhase::Failed(RecoveryDecision::ErrorRoute { failed, .. }) => {
@@ -1042,14 +1066,17 @@ impl RecoverableNode {
                         .record_failure(failure.failure, self.clock.now_ms()?)
                         .map_err(policy_error)?;
                     snapshot = journal.append(&snapshot, failed, None).await?;
-                    if let Some(code) = failure.terminal_code
+                    if failure.failure.class != NodeFailureClass::LeaseLost
+                        && let Some(code) = failure.terminal_code
                         && matches!(snapshot.ledger.phase(), NodeAttemptPhase::Failed(
                             RecoveryDecision::Stop(reason)
                         ) if reason != super::node_recovery::StopReason::OperatorApprovalRequired)
                     {
+                        journal.ensure_current()?;
                         self.body
                             .report_terminal_failure(context, &authority, code)
                             .await?;
+                        return Err(recovery_error("pipeline.node_recovery.failed"));
                     }
                 }
             }

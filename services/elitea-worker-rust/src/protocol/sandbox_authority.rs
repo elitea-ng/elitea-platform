@@ -488,6 +488,23 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .await
     }
 
+    pub(crate) async fn lookup_sandbox_dependencies(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::preparation::PreparationJob,
+        root: &str,
+    ) -> Result<
+        Option<crate::sandbox::dependency_bundle::DependencyBundle>,
+        crate::sandbox::client::SandboxCallError,
+    > {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .lookup_dependencies(&self.control, authority.request(activation), job, root)
+            .await
+    }
+
     pub(crate) async fn prepare_sandbox_dependencies(
         &self,
         sandbox: &crate::sandbox::client::SandboxClient,

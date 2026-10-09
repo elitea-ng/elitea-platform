@@ -429,3 +429,74 @@ Main's exact profile admission remains unchanged.
 The [source mapping](docs/source-mapping/code-compiled-cohort-selection-20261006.md) separates the failed four-language fixture from passing Cargo browser runs.
 The unchanged four-language fixture and Cargo regression pass after the Worker-only correction deploys.
 Replacement CI and complete-cohort restart acceptance remain required.
+
+## Point 5 consolidation, 2026-10-06
+
+PR 1014 is merged. Preserved graph source remains intact while missing Main and Web consumers are connected.
+The [consolidation mapping](docs/source-mapping/point5-consolidation-20261006.md) records focused checks and real-backend editor acceptance.
+It also records the failed Worker restart probe and its delivery latency boundary.
+The later v7 Worker-loss probe proves the exact Docker recovery boundary, including browser reload and container cleanup.
+Deployed Main continuation and complete-cohort recovery remain open.
+The [typed failure mapping](docs/source-mapping/code-terminal-failure-20261006.md) records Code category propagation and read-only failed-journal projection.
+Its focused Rust and Main checks pass. Deployed negative UI acceptance remains open.
+Parallel, Map, resilience, data shaping, and HTTP actions retain their separate acceptance gates.
+Workspaces remain in the post-worker backlog, outside active Point 5 scope.
+
+## Main merge continuation, 2026-10-07
+
+The [integration mapping](docs/source-mapping/main-integration-20261007.md) records source, snapshot, deployment-render, generation, and listener verification.
+The merge preserves existing runtime work and mandatory NATS replacement.
+These source checks do not prove current images, integrated CI, or candidate Code recovery.
+All worker gates retain their requirement-specific acceptance boundaries.
+
+## Code failed-journal recovery, 2026-10-07
+
+The [owner-loss mapping](docs/source-mapping/code-failed-stop-owner-recovery-20261007.md) records current NATS recovery in chat 843.
+The current application's safe terminal failure behavior remains the reference.
+Main grants checkpoint authority to a fresh claim; the c53 Worker restores the original recorded failure from a fresh private spool.
+The original failure and completed Code journals remain unchanged, with no Code re-execution or new dispatch.
+One typed output and one FAILED settlement commit. Live and reloaded UI retain the same support reference.
+All 16 isolation checks pass for each original runtime; independent HTTP 404 and absence checks prove their removal.
+The old Worker and spool remain preserved and unopened.
+This closes the finite failed-journal Worker-loss case, not the remaining preparation, service-loss, Kubernetes, graph, or release gates.
+The source record preserves capture-matcher fixes, the restricted descriptor-based initializer repair, and earlier refused attempts.
+
+## Code Web image and acceptance capture, 2026-10-07
+
+The [reload mapping](docs/source-mapping/code-chat-reload-ui-20261007.md) traces persisted Main authors and selected participants into Web rendering and fresh-chat navigation.
+Its immutable 42a0 source passes 76 focused Web tests, image build, and the strict local Alpine scan with zero HIGH or CRITICAL findings.
+The later exact Web deployment and normal author/selection browser acceptance pass.
+The frozen browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
+
+The deployed native source remains c53. No product source changes for the later preparation-test controller fixes.
+Chats 839 and 844 complete normally after their capture controllers refuse before Stop or Worker loss.
+These normal results do not close preparation cancellation or recovery.
+Their source mappings retain the logical-to-dispatch correction and the source-defined admission transitions.
+
+Chat845 later cancels downstream preparation after the original preparation window is missed.
+Its first Code job already completes. No Worker fault occurs.
+All three original runtimes are physically removed, but preparation-Stop and recovery receive no credit.
+
+## Code live canvas terminal correction, 2026-10-08
+
+Chat848 proves ordinary early Stop before user Code and durable cancelled History.
+Its live canvas remains active after cancellation.
+The [terminal callback mapping](docs/source-mapping/code-live-canvas-terminal-20261008.md) records the correction through the existing event bridge.
+The canvas requires matching response and generation, then clears active nodes and sets Stopped or Error.
+The selection passes75 unique source tests. Its Node26 production image and strict Alpine scan later pass.
+Node26 CI and deployed browser proof remain open.
+This source correction supplies no pending preparation or Worker-loss proof.
+
+The separate [chat850 mapping](docs/source-mapping/code-pending-stop-owner-recovery-20261008.md) closes pending preparation Stop across Worker loss.
+The fresh-spool replacement settles the same run under claim2/epoch2, without user Code or downstream execution.
+Original runtime removal, canonical cancellation, independent acknowledgement drain, and normal reloaded History pass.
+The live canvas correction and remaining service-loss and Kubernetes proofs stay separate.
+
+The [chat851 mapping](docs/source-mapping/code-live-owner-recovery-20261008.md) closes live Worker and Supervisor loss for the original JavaScript job.
+The same runtime returns count2 after both independently verified live cuts.
+Main grants checkpoint recovery at claim2/epoch2. The original result projects once before the next empty-source node fails safely.
+Both original runtimes are removed. NATS drains, and normal reloaded chat retains the same error code and support reference.
+
+The [chat852 mapping](docs/source-mapping/code-compiled-publication-main-recovery-20261008.md) closes Main loss during original successful compilation publication.
+The same compiler receipt becomes Ready. One result and settlement, physical removal, NATS drain, and exact live/reloaded answer pass.
+Preparation outcomes, debug replacement, NATS restart, Kubernetes, and deployed canvas acceptance remain open.

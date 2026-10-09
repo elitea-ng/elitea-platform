@@ -50,6 +50,31 @@ impl CodePreparationFailure {
     }
 }
 
+fn terminal_failure_code(
+    class: NodeFailureClass,
+    preparation: Option<CodePreparationFailure>,
+) -> Option<&'static str> {
+    match class {
+        NodeFailureClass::LeaseLost => None,
+        NodeFailureClass::AuthenticationDenied
+        | NodeFailureClass::AuthorizationDenied
+        | NodeFailureClass::SensitiveRejected => Some("pipeline.code_authorization_failed"),
+        NodeFailureClass::Cancelled if preparation.is_none() => Some("pipeline.code_cancelled"),
+        NodeFailureClass::DependencyUnavailable
+        | NodeFailureClass::RateLimited
+        | NodeFailureClass::AttemptTimeout
+        | NodeFailureClass::WorkerInterrupted
+        | NodeFailureClass::InvalidConfiguration
+        | NodeFailureClass::InvalidInput
+        | NodeFailureClass::InvalidResult
+        | NodeFailureClass::ModelOutputIncomplete
+        | NodeFailureClass::Cancelled
+        | NodeFailureClass::Unknown => {
+            Some(preparation.map_or("pipeline.code_failed", CodePreparationFailure::code))
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CodeAttemptFailure {
     pub(crate) phase: CodeAttemptPhase,
@@ -276,11 +301,12 @@ impl NodeAttemptBody for CodeNode {
         context: &NodeContext,
         authority: &NodeAttemptAuthority,
     ) -> Result<NodeOutput, NodeAttemptReportedFailure> {
-        let reject = |class| {
-            NodeAttemptReportedFailure::from(NodeFailure {
+        let reject = |class| NodeAttemptReportedFailure {
+            failure: NodeFailure {
                 class,
                 replay: ReplaySafety::NoExternalEffect,
-            })
+            },
+            terminal_code: terminal_failure_code(class, None),
         };
         if !authority.matches(
             self.definition.id(),
@@ -342,7 +368,7 @@ impl NodeAttemptBody for CodeNode {
             .await
             .map_err(|failure| NodeAttemptReportedFailure {
                 failure: failure.failure,
-                terminal_code: failure.preparation.map(CodePreparationFailure::code),
+                terminal_code: terminal_failure_code(failure.failure.class, failure.preparation),
             })?;
         let updates = project_code_receipt(
             &receipt,
@@ -350,13 +376,14 @@ impl NodeAttemptBody for CodeNode {
             self.definition.output_keys(),
             self.definition.structured_output(),
         )
-        .map_err(|_| {
-            NodeAttemptReportedFailure::from(NodeFailure {
+        .map_err(|_| NodeAttemptReportedFailure {
+            failure: NodeFailure {
                 class: NodeFailureClass::InvalidResult,
                 replay: ReplaySafety::CompletedExternalEffect {
                     receipt_id: authority.dispatch_activation(),
                 },
-            })
+            },
+            terminal_code: terminal_failure_code(NodeFailureClass::InvalidResult, None),
         })?;
         let mut output = NodeOutput::new();
         for (key, value) in updates {
@@ -376,15 +403,36 @@ impl NodeAttemptBody for CodeNode {
             graph_thread_id = context.config.thread_id,
             activation_id = %crate::sandbox::code_recovery::hex(&authority.dispatch_activation()),
             attempt = authority.attempt(),
-            phase = "preparation",
             error_code = code,
-            "pipeline Code dependency preparation stopped"
+            "pipeline Code node stopped"
         );
         if let Some(events) = &self.events {
             events
                 .send_execution_failure(code)
                 .await
                 .map_err(|_| code_error("The pipeline failure channel closed."))?;
+        }
+        Ok(())
+    }
+
+    async fn report_restored_terminal_failure(
+        &self,
+        context: &NodeContext,
+        class: NodeFailureClass,
+    ) -> Result<(), GraphError> {
+        if let Some(code) = terminal_failure_code(class, None) {
+            tracing::error!(
+                node_id = self.definition.id(),
+                graph_thread_id = context.config.thread_id,
+                error_code = code,
+                "persisted pipeline Code node failure restored"
+            );
+            if let Some(events) = &self.events {
+                events
+                    .send_execution_failure(code)
+                    .await
+                    .map_err(|_| code_error("The pipeline failure channel closed."))?;
+            }
         }
         Ok(())
     }
@@ -476,6 +524,55 @@ mod tests {
             runtime,
         )
         .unwrap()
+    }
+    #[test]
+    fn terminal_categories_use_typed_facts_and_keep_cancellation_distinct() {
+        for class in [
+            NodeFailureClass::AuthenticationDenied,
+            NodeFailureClass::AuthorizationDenied,
+            NodeFailureClass::SensitiveRejected,
+        ] {
+            assert_eq!(
+                terminal_failure_code(class, None),
+                Some("pipeline.code_authorization_failed")
+            );
+            assert_eq!(
+                terminal_failure_code(class, Some(CodePreparationFailure::Unconfirmed)),
+                Some("pipeline.code_authorization_failed")
+            );
+        }
+        assert_eq!(
+            terminal_failure_code(NodeFailureClass::Cancelled, None),
+            Some("pipeline.code_cancelled")
+        );
+        assert_eq!(
+            terminal_failure_code(
+                NodeFailureClass::Cancelled,
+                Some(CodePreparationFailure::Cancelled)
+            ),
+            Some("pipeline.code_preparation_cancelled")
+        );
+        assert_eq!(
+            terminal_failure_code(NodeFailureClass::LeaseLost, None),
+            None
+        );
+        assert_eq!(
+            terminal_failure_code(
+                NodeFailureClass::LeaseLost,
+                Some(CodePreparationFailure::Failed)
+            ),
+            None
+        );
+        for class in [
+            NodeFailureClass::AttemptTimeout,
+            NodeFailureClass::Unknown,
+            NodeFailureClass::InvalidInput,
+        ] {
+            assert_eq!(
+                terminal_failure_code(class, None),
+                Some("pipeline.code_failed")
+            );
+        }
     }
     #[tokio::test]
     async fn recovered_visit_has_same_identity_but_new_step_or_thread_does_not() {

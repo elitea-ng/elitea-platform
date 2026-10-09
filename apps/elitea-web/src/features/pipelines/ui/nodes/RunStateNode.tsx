@@ -69,6 +69,7 @@ export const RunStateNode = memo(function RunStateNode(props: RunStateNodeProps)
 
   const [isOpened, setIsOpened] = useState(false);
   const runInProgress = data.status === FlowEditorConstants.PipelineStatus.InProgress;
+  const canStop = runInProgress || (data['recoveryPaused'] === true && data.status === FlowEditorConstants.PipelineStatus.Interrupt);
 
   const onOpen = useCallback(() => setIsOpened(true), []);
   const onClose = useCallback(() => setIsOpened(false), []);
@@ -135,14 +136,14 @@ export const RunStateNode = memo(function RunStateNode(props: RunStateNodeProps)
           title={
             avoidTooltip
               ? ''
-              : runInProgress
+              : canStop
                 ? t('pipelines.flowEditor.runStateNode.stopRun', 'Stop run')
                 : t('pipelines.flowEditor.runStateNode.deleteRun', 'Delete run')
           }
           placement="bottom"
         >
           <Box sx={styles.negativeButton}>
-            {runInProgress ? <StopIcon onClick={onStop} /> : <DeleteOutlineIcon onClick={onDelete} />}
+            {canStop ? <StopIcon onClick={onStop} /> : <DeleteOutlineIcon onClick={onDelete} />}
           </Box>
         </Tooltip>
       </Box>

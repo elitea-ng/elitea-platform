@@ -299,7 +299,7 @@ export function ChatMessageList({
                   // the answers — the mode's whole point (reading the reply
                   // back) could not happen.
                   isSpeakingMode={autoSpeak}
-                  author={{ participantName: assistantName }}
+                  author={{ participantName: message.authorName ?? assistantName }}
                   toolActions={message.toolActions}
                   status={{ isLoading: Boolean(message.isLoading), isStreaming: messageIsStreaming }}
                   actions={{

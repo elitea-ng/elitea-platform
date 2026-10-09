@@ -419,6 +419,159 @@ impl DeliveryFixture {
     }
 }
 
+fn assert_no_hydration_effects(runtime: &Runtime) {
+    assert_eq!(runtime.0.prepares.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.imports.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.exports.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.cleanups.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL and ELITEA_TEST_BUNDLE_TLS"]
+async fn hydration_retained_dispatch_is_ready_with_the_only_execution_slot_occupied() {
+    let database = database().await;
+    let bundle = bundle();
+    let request = request()
+        .with_python_dependency_bundle(bundle.root().into())
+        .unwrap();
+    let delivery = DeliveryFixture::new(&request, &bundle);
+    let scope = delivery.execution.scope();
+    let runtime = Runtime::new(true);
+    let supervisor = supervisor(database.pool.clone(), runtime.clone(), OWNER);
+    let lease = bound(&supervisor, scope).await;
+    supervisor.ledger.mark_dispatched(&lease).await.unwrap();
+    let _execution_owner = supervisor.capacity.try_acquire().unwrap();
+
+    assert!(
+        supervisor
+            .hydrate_authorized(
+                &delivery.execution,
+                &request,
+                delivery.delivery(&bundle),
+                &bundle,
+                0,
+            )
+            .await
+            .unwrap()
+    );
+    let retained = supervisor.ledger.read(scope).await.unwrap();
+    assert_eq!(retained.phase, Phase::Dispatched);
+    assert_eq!(retained.runtime_id.as_deref(), Some(RUNTIME_ID));
+    assert!(retained.result_json.is_none());
+    assert!(retained.failure_code.is_none());
+    assert_eq!(supervisor.capacity.available_permits(), 0);
+    assert_no_hydration_effects(&runtime);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL and ELITEA_TEST_BUNDLE_TLS"]
+async fn hydration_retained_dispatch_keeps_authority_index_and_digest_refusals() {
+    let database = database().await;
+    let bundle = bundle();
+    let request = request()
+        .with_python_dependency_bundle(bundle.root().into())
+        .unwrap();
+    let delivery = DeliveryFixture::new(&request, &bundle);
+    let runtime = Runtime::new(true);
+    let supervisor = supervisor(database.pool.clone(), runtime.clone(), OWNER);
+    let scope = delivery.execution.scope();
+    let conflicting =
+        JobScope::new(scope.tenant.clone(), scope.project, scope.key, [0xff; 32]).unwrap();
+    let lease = bound(&supervisor, &conflicting).await;
+    supervisor.ledger.mark_dispatched(&lease).await.unwrap();
+    let _execution_owner = supervisor.capacity.try_acquire().unwrap();
+
+    // These refuse before retained state can acknowledge readiness.
+    for index in [u32::try_from(bundle.file_count()).unwrap() + 1, u32::MAX] {
+        assert!(matches!(
+            supervisor
+                .hydrate_authorized(
+                    &delivery.execution,
+                    &request,
+                    delivery.delivery(&bundle),
+                    &bundle,
+                    index,
+                )
+                .await,
+            Err(SupervisorError::Invalid)
+        ));
+    }
+    let changed = PreparedJob::new(
+        Language::Python,
+        "print(43)".into(),
+        BTreeMap::new(),
+        format!("sha256:{}", "a".repeat(64)),
+        POLICY.into(),
+        30,
+    )
+    .unwrap()
+    .with_python_dependency_bundle(bundle.root().into())
+    .unwrap();
+    assert!(matches!(
+        supervisor
+            .hydrate_authorized(
+                &delivery.execution,
+                &changed,
+                delivery.delivery(&bundle),
+                &bundle,
+                0,
+            )
+            .await,
+        Err(SupervisorError::Invalid)
+    ));
+    assert!(matches!(
+        supervisor
+            .hydrate_authorized(
+                &delivery.execution,
+                &request,
+                delivery.delivery(&bundle),
+                &bundle,
+                0,
+            )
+            .await,
+        Err(SupervisorError::Ledger(LedgerError::Conflict))
+    ));
+    assert_no_hydration_effects(&runtime);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL and ELITEA_TEST_BUNDLE_TLS"]
+async fn hydration_missing_and_reserved_jobs_remain_capacity_bound() {
+    let database = database().await;
+    let bundle = bundle();
+    let request = request()
+        .with_python_dependency_bundle(bundle.root().into())
+        .unwrap();
+    let delivery = DeliveryFixture::new(&request, &bundle);
+    let runtime = Runtime::new(false);
+    let supervisor = supervisor(database.pool.clone(), runtime.clone(), OWNER);
+    let _execution_owner = supervisor.capacity.try_acquire().unwrap();
+    for reserved in [false, true] {
+        if reserved {
+            supervisor
+                .ledger
+                .reserve(delivery.execution.scope())
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            supervisor
+                .hydrate_authorized(
+                    &delivery.execution,
+                    &request,
+                    delivery.delivery(&bundle),
+                    &bundle,
+                    0,
+                )
+                .await,
+            Err(SupervisorError::Busy)
+        ));
+    }
+    assert_no_hydration_effects(&runtime);
+}
+
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL through ELITEA_TEST_DATABASE_URL"]
 async fn hydration_fresh_binding_preserves_old_reservation() {

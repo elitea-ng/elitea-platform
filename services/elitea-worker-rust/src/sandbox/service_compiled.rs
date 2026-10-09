@@ -1,5 +1,8 @@
 //! Authenticated revision 4 dispatch; disabled without the compiled profile and data plane.
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use super::{
     DependencyContentError, DependencyDelivery, Ed25519PublicKeyResolver, LedgerError, Phase,
@@ -49,9 +52,9 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
         let control = Control::from_bytes(&input.control_json, purpose)
             .map_err(|_| Status::invalid_argument("The snapshot control is invalid."))?;
         validate_index_mode(&input, purpose)?;
-        let content = self.content.as_deref().ok_or_else(|| {
+        let content = Arc::clone(self.content.as_ref().ok_or_else(|| {
             Status::failed_precondition("The snapshot data plane is unavailable.")
-        })?;
+        })?);
         let outcome = match purpose {
             Purpose::Execute => {
                 if input.descriptor_json.len() > DESCRIPTOR_LIMIT {
@@ -112,16 +115,21 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
                     descriptor.validate(&control).map_err(|_| {
                         Status::invalid_argument("The selected descriptor changed.")
                     })?;
+                    let supervisor = Arc::clone(&self.supervisor);
                     let outcome = self
-                        .supervisor
-                        .reconcile_snapshot_execute(
-                            &authority,
-                            &job,
-                            &control,
-                            &input.descriptor_json,
-                        )
-                        .await
-                        .map_err(|error| service_error(&error))?;
+                        .job_owners
+                        .run(async move {
+                            supervisor
+                                .reconcile_snapshot_execute(
+                                    &authority,
+                                    &job,
+                                    &control,
+                                    &input.descriptor_json,
+                                )
+                                .await
+                                .map_err(|error| service_error(&error))
+                        })
+                        .await?;
                     return Ok(Response::new(match outcome {
                         Some(outcome) => snapshot_response(outcome)?,
                         None => SubmitRustCompiledSnapshotResponseV1 {
@@ -170,16 +178,11 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
                     })
                     .transpose()
                     .map_err(|_| Status::data_loss("Native Execute metadata changed."))?;
-                let delivery = match (&native, &bundle, input.dependency_content_grant.as_ref()) {
+                let delivery = match (native, bundle, input.dependency_content_grant.as_ref()) {
                     (Some(authorization), Some(bundle), Some(grant))
                         if bundle.native().is_some() =>
                     {
-                        Some(DependencyDelivery {
-                            client: content,
-                            authorization,
-                            bundle,
-                            grant,
-                        })
+                        Some((authorization, bundle, grant.clone()))
                     }
                     (None, None, None) => None,
                     _ => {
@@ -189,7 +192,7 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
                     }
                 };
                 if let Some(index) = input.native_hydration_index {
-                    let delivery = delivery.ok_or_else(|| {
+                    let (authorization, bundle, grant) = delivery.as_ref().ok_or_else(|| {
                         Status::invalid_argument(
                             "Indexed Execute requires exact native Content authority.",
                         )
@@ -202,24 +205,47 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
                             &control,
                             &descriptor,
                             &input.descriptor_json,
-                            delivery,
+                            DependencyDelivery {
+                                client: &content,
+                                authorization,
+                                bundle,
+                                grant,
+                            },
                             index,
                         )
                         .await
                 } else {
-                    self.supervisor
-                        .submit_snapshot_execute(
-                            &authority,
-                            &read,
-                            &job,
-                            &control,
-                            &descriptor,
-                            &input.descriptor_json,
-                            read_grant,
-                            content,
-                            delivery,
-                        )
-                        .await
+                    let supervisor = Arc::clone(&self.supervisor);
+                    self.job_owners
+                        .run(async move {
+                            let delivery =
+                                delivery.as_ref().map(|(authorization, bundle, grant)| {
+                                    DependencyDelivery {
+                                        client: &content,
+                                        authorization,
+                                        bundle,
+                                        grant,
+                                    }
+                                });
+                            Ok(supervisor
+                                .submit_snapshot_execute(
+                                    &authority,
+                                    &read,
+                                    &job,
+                                    &control,
+                                    &descriptor,
+                                    &input.descriptor_json,
+                                    input.read_grant.as_ref().ok_or_else(|| {
+                                        Status::unauthenticated(
+                                            "Separate snapshot Read authority is required.",
+                                        )
+                                    })?,
+                                    &content,
+                                    delivery,
+                                )
+                                .await)
+                        })
+                        .await?
                 }
             }
             Purpose::Compile => {
@@ -243,11 +269,16 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
                             "Compiler receipt recovery cannot import content.",
                         ));
                     }
+                    let supervisor = Arc::clone(&self.supervisor);
                     let outcome = self
-                        .supervisor
-                        .reconcile_snapshot_compile(&authority, &job, &control, content)
-                        .await
-                        .map_err(|error| service_error(&error))?;
+                        .job_owners
+                        .run(async move {
+                            supervisor
+                                .reconcile_snapshot_compile(&authority, &job, &control, &content)
+                                .await
+                                .map_err(|error| service_error(&error))
+                        })
+                        .await?;
                     return Ok(Response::new(match outcome {
                         Some(outcome) => snapshot_response(outcome)?,
                         None => SubmitRustCompiledSnapshotResponseV1 {
@@ -285,28 +316,52 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
                     })
                     .transpose()
                     .map_err(|_| Status::data_loss("Native compile metadata changed."))?;
-                let delivery = match (&native, &bundle, input.dependency_content_grant.as_ref()) {
-                    (Some(authorization), Some(bundle), Some(grant)) => Some(DependencyDelivery {
-                        client: content,
-                        authorization,
-                        bundle,
-                        grant,
-                    }),
+                let delivery = match (native, bundle, input.dependency_content_grant.as_ref()) {
+                    (Some(authorization), Some(bundle), Some(grant)) => {
+                        Some((authorization, bundle, grant.clone()))
+                    }
                     _ => None,
                 };
                 if let Some(index) = input.native_hydration_index {
-                    let delivery = delivery.ok_or_else(|| {
+                    let (authorization, bundle, grant) = delivery.as_ref().ok_or_else(|| {
                         Status::invalid_argument(
                             "Indexed compiler hydration requires exact native content authority.",
                         )
                     })?;
                     self.supervisor
-                        .hydrate_snapshot_compile(&authority, &job, &control, delivery, index)
+                        .hydrate_snapshot_compile(
+                            &authority,
+                            &job,
+                            &control,
+                            DependencyDelivery {
+                                client: &content,
+                                authorization,
+                                bundle,
+                                grant,
+                            },
+                            index,
+                        )
                         .await
                 } else {
-                    self.supervisor
-                        .submit_snapshot_compile(&authority, &job, &control, delivery, content)
-                        .await
+                    let supervisor = Arc::clone(&self.supervisor);
+                    self.job_owners
+                        .run(async move {
+                            let delivery =
+                                delivery.as_ref().map(|(authorization, bundle, grant)| {
+                                    DependencyDelivery {
+                                        client: &content,
+                                        authorization,
+                                        bundle,
+                                        grant,
+                                    }
+                                });
+                            Ok(supervisor
+                                .submit_snapshot_compile(
+                                    &authority, &job, &control, delivery, &content,
+                                )
+                                .await)
+                        })
+                        .await?
                 }
             }
         }

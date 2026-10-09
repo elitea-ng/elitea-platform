@@ -23,7 +23,7 @@
 import type { ReactNode } from 'react';
 
 import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,6 +60,20 @@ describe('findActiveParticipantById', () => {
 
   it('restores an application participant', () => {
     expect(findActiveParticipantById(participants, '26')).toEqual(participants[2]);
+  });
+
+  it.each([
+    { rowId: 135, storedId: '135' },
+    { rowId: '135', storedId: 135 },
+  ])('restores the selected pipeline across id spellings: $rowId/$storedId', ({ rowId, storedId }) => {
+    const roster = [{ id: rowId, entity_name: 'application' }, { id: 136, entity_name: 'application' }];
+    expect(findActiveParticipantById(roster, storedId)).toBe(roster[0]);
+    expect(findActiveParticipantById(roster, '137')).toBeUndefined();
+  });
+
+  it('does not restore a toolkit across id spellings', () => {
+    expect(findActiveParticipantById([{ id: 25, entity_name: 'toolkit' }], '25')).toBeUndefined();
+    expect(findActiveParticipantById([{ entity_name: 'application' }], 'undefined')).toBeUndefined();
   });
 
   it('rejects a stored toolkit participant', () => {
@@ -835,4 +849,60 @@ describe('ChatPage add participant', () => {
     await waitFor(() => expect(removed).toEqual(['31']), { timeout: 5000 });
     await waitFor(() => expect(screen.queryByTestId('participant-item-42')).toBeNull(), { timeout: 5000 });
   });
+});
+
+
+describe('ChatPage fresh-chat participant reload', () => {
+  it('keeps the saved pipeline selected after creation, route promotion and reload', async () => {
+    const key = 'ActiveConversationParticipantKey';
+    const originalSelection = localStorage.getItem(key);
+    const originalProject = useSelectedProjectStore.getState().project;
+    const originalWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 });
+    useSelectedProjectStore.setState({ project: { id: PROJECT, name: 'Reload test' } });
+    localStorage.removeItem(key);
+    const savedPipeline = { id: '147', project_id: PROJECT, name: 'Reload Pipeline', agent_type: 'pipeline', participantType: 'pipeline', meta: {} };
+    const participant = { id: 135, entity_name: 'application', entity_meta: { id: '147', project_id: PROJECT, name: 'Reload Pipeline' }, entity_settings: { agent_type: 'pipeline', version_id: '170' } };
+    const creates: string[] = [];
+    let attached = false;
+    server.use(
+      http.get(`${BASE}/elitea_core/application/prompt_lib/${PROJECT}/147`, () => HttpResponse.json({ ...savedPipeline, version_details: { id: '170', name: 'base' }, versions: [{ id: '170', name: 'base' }] })),
+      http.post(`${BASE}/elitea_core/conversations/prompt_lib/${PROJECT}`, ({ request }) => {
+        creates.push(request.url);
+        return HttpResponse.json({ id: Number(CONVERSATION), uuid: 'conversation-uuid-5', participants: [] }, { status: 201 });
+      }),
+      http.post(`${BASE}/elitea_core/participants/prompt_lib/${PROJECT}/${CONVERSATION}`, () => {
+        attached = true;
+        return HttpResponse.json([participant]);
+      }),
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/${PROJECT}/${CONVERSATION}`, () => HttpResponse.json({ id: Number(CONVERSATION), uuid: 'conversation-uuid-5', name: 'New Chat', participants: attached ? [participant] : [] })),
+      http.get(`${BASE}/elitea_core/message_traces/prompt_lib/${PROJECT}/${CONVERSATION}`, () => HttpResponse.json({ items: [], total: 0 })),
+      http.get(`${BASE}/configurations/tts_voices/${PROJECT}`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`, () => HttpResponse.json({ current_tokens: 0, max_tokens: 0, message_groups_in_context: 0 })),
+    );
+    try {
+      const page = () => <ChatPage entitySubmenus={{ pipelines: [savedPipeline] }} />;
+      const router = renderAt('/chat', page);
+      const user = userEvent.setup();
+      await user.click(await screen.findByTestId('plus-menu-button'));
+      await user.click(screen.getByTestId('plus-menu-pipelines'));
+      await user.click(await screen.findByRole('menuitem', { name: 'Reload Pipeline' }));
+      await waitFor(() => expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION}`), { timeout: 5000 });
+      const stored = JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, { cid: string; pid: string }[]>;
+      expect(stored[PROJECT]).toContainEqual({ cid: CONVERSATION, pid: '135' });
+      expect(creates).toHaveLength(1);
+      // Unmount the page and its React fallback. Keep only the durable local selection.
+      cleanup();
+      renderAt(`/chat/${CONVERSATION}`, page);
+      await waitFor(() => expect(screen.getByLabelText('Model Selector Menu')).toHaveTextContent('Reload Pipeline'), { timeout: 5000 });
+      expect(creates).toHaveLength(1);
+    } finally {
+      cleanup();
+      useSelectedProjectStore.setState({ project: originalProject });
+      if (originalWidth) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', originalWidth);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth');
+      if (originalSelection === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, originalSelection);
+    }
+  }, 15000);
 });

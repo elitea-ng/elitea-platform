@@ -175,6 +175,7 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
                 <RunStatus status={data.status} />
                 <HeaderActions
                   status={data.status}
+                  recoveryPaused={data['recoveryPaused'] === true && data.status === FlowEditorConstants.PipelineStatus.Interrupt}
                   onStop={onStop}
                   onDelete={onDelete}
                   onClose={onClose}

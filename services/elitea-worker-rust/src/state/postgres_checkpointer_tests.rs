@@ -2297,6 +2297,15 @@ async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
         .unwrap();
     // A fresh worker uses the exact same identity; retries do not duplicate it.
     assert!(journal.contains_activation(&scope, &[1; 32]).await.unwrap());
+    // The batched probe answers exactly what the per-id probes answer.
+    let probe = [[9; 32], [1; 32], [8; 32]];
+    let batched = journal.contains_activations(&scope, &probe).await.unwrap();
+    let mut single = Vec::new();
+    for id in &probe {
+        single.push(journal.contains_activation(&scope, id).await.unwrap());
+    }
+    assert_eq!(batched, single);
+    assert_eq!(batched, [false, true, false]);
     let replacement = DispatchJournal::new(isolated.pool.clone());
     replacement
         .register(&scope, &[1; 32], &[2; 32], "dns:sandbox-a")

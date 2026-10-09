@@ -52,12 +52,15 @@ export interface RunPipelineStatus {
     label: string;
     timeline: RunTimelineEntry[];
     status: string;
+    recoveryPaused?: boolean;
     error?: string;
   };
   type: string;
 }
 
 interface RunResponseMetadata {
+  readonly node_recovery_required_v1?: unknown;
+  readonly [key: string]: unknown;
   readonly metadata?: {
     readonly original_name?: string;
     readonly langgraph_node?: string;
@@ -72,6 +75,9 @@ interface RunResponseMetadata {
 }
 
 export interface RunSocketEvent {
+  readonly message_id?: string;
+  readonly execution_generation?: string;
+  readonly code?: string;
   readonly type: string;
   readonly response_metadata: RunResponseMetadata;
   readonly content?: unknown;

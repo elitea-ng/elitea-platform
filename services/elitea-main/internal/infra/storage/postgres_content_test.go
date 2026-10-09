@@ -1,9 +1,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"io"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -16,6 +19,57 @@ type contentQueryerFunc func(context.Context, string, ...any) pgx.Row
 
 func (f contentQueryerFunc) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
 	return f(ctx, query, args...)
+}
+
+func TestPostgresNodeRecoveryContentIsOriginalInspectionWithoutMaterialization(t *testing.T) {
+	data := []byte(`{"original":"frozen-input"}`)
+	digest := sha256.Sum256(data)
+	queries := 0
+	repository, err := newPostgresContentRepository(contentQueryerFunc(func(_ context.Context, query string, args ...any) pgx.Row {
+		queries++
+		for _, guard := range []string{
+			"c.released_at IS NULL", "c.lease_expires_at > clock_timestamp()", "ws.revoked_at IS NULL",
+			"j.desired_state = 'RUNNING' AND c.recovery_mode <> 'NODE_RECOVERY'", "j.desired_state IN ('SUSPENDED', 'RUNNING') AND c.recovery_mode = 'NODE_RECOVERY'",
+			"CASE WHEN c.recovery_mode = 'NODE_RECOVERY' THEN 'node.recovery.inspection'",
+			"j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')",
+			"AND e.semantic_role = 'agent.execution_request'", "e.required_grant_audience = $8",
+		} {
+			require.Contains(t, query, guard)
+		}
+		require.Len(t, args, 8)
+		require.Equal(t, inputReadGrantAudience, args[7])
+		return contentRowFunc(func(dest ...any) error {
+			*dest[0].(*string) = "7"
+			*dest[1].(*string) = "11"
+			*dest[2].(*string) = "original-bundle"
+			*dest[3].(*string) = "agent.execute.application.v1"
+			*dest[4].(*string) = "node.recovery.inspection"
+			*dest[5].(*string) = "application/json"
+			*dest[6].(*[]byte) = digest[:]
+			*dest[7].(*int64) = int64(len(data))
+			return nil
+		})
+	}))
+	require.NoError(t, err)
+	server, err := NewMaterializingContentServerWithLimits(repository,
+		contentStoreFunc(func(_ context.Context, project, bundle, _, _ string) (io.ReadCloser, error) {
+			require.Equal(t, "7", project)
+			require.Equal(t, "original-bundle", bundle)
+			return io.NopCloser(bytes.NewReader(data)), nil
+		}), contentMaterializerFunc(func(_ context.Context, _ ContentAuthorization, _ []byte, _ int64) ([]byte, error) {
+			t.Fatal("paused original inspection redeemed credentials")
+			return nil, nil
+		}), 8192, 1)
+	require.NoError(t, err)
+	response := httptest.NewRecorder()
+	request := validContentRequest(t)
+	identity, err := url.Parse("spiffe://elitea.internal/runtime/worker-1")
+	require.NoError(t, err)
+	request.TLS.VerifiedChains[0][0] = certificateWithURI(identity)
+	server.Routes().ServeHTTP(response, request)
+	require.Equal(t, 200, response.Code)
+	require.Equal(t, data, response.Body.Bytes())
+	require.Equal(t, 1, queries)
 }
 
 type contentRowFunc func(...any) error

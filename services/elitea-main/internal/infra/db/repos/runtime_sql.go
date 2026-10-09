@@ -333,3 +333,11 @@ func parseProjectID(value string) (int64, error) {
 func (e pgxExecutor) FinalizeCurrentAgentMixedPause(ctx context.Context, arg sqlcgen.FinalizeCurrentAgentMixedPauseParams) (int64, error) {
 	return sqlcgen.New(e.queryer).FinalizeCurrentAgentMixedPause(ctx, arg)
 }
+
+func (e pgxExecutor) ResolveCurrentStaticContinuation(ctx context.Context, arg sqlcgen.ResolveCurrentStaticContinuationParams) (sqlcgen.ResolveCurrentStaticContinuationRow, error) {
+	return sqlcgen.New(e.queryer).ResolveCurrentStaticContinuation(ctx, arg)
+}
+
+func (e pgxExecutor) ResolveCurrentStaticToolContinuation(ctx context.Context, arg sqlcgen.ResolveCurrentStaticToolContinuationParams) (sqlcgen.ResolveCurrentStaticToolContinuationRow, error) {
+	return sqlcgen.New(e.queryer).ResolveCurrentStaticToolContinuation(ctx, arg)
+}

@@ -236,6 +236,7 @@ impl CommandBusConnection for FakeConnection {
 enum Script {
     Retire,
     RetryLater,
+    RetryOnceThenRetire,
     Poison(PoisonReason),
 }
 
@@ -249,6 +250,7 @@ struct TestProcessor {
     completed_changed: Notify,
     release: Semaphore,
     sequences: Mutex<Vec<u64>>,
+    deliveries: Mutex<Vec<(u64, u64, Vec<u8>)>>,
 }
 
 impl TestProcessor {
@@ -267,6 +269,7 @@ impl TestProcessor {
             completed_changed: Notify::new(),
             release: Semaphore::new(0),
             sequences: Mutex::new(Vec::new()),
+            deliveries: Mutex::new(Vec::new()),
         }
     }
 
@@ -319,12 +322,20 @@ impl CommandDeliveryProcessor for TestProcessor {
         let _active = ActiveProcess::enter(self);
         let sequence = delivery.stream_sequence();
         self.sequences.lock().expect("sequences").push(sequence);
+        self.deliveries.lock().expect("deliveries").push((
+            sequence,
+            delivery.delivered(),
+            delivery.signed_envelope().to_vec(),
+        ));
         self.started.fetch_add(1, Ordering::AcqRel);
         self.started_changed.notify_waiters();
         let permit = self.release.acquire().await.expect("release semaphore");
         permit.forget();
         let verdict = match self.script.get(&sequence).copied() {
-            Some(Script::Retire) => {
+            Some(Script::RetryOnceThenRetire) if delivery.delivered() == 1 => {
+                DeliveryVerdict::Processed
+            }
+            Some(Script::Retire | Script::RetryOnceThenRetire) => {
                 // Stands in for CommandRetirer's confirmed double ack.
                 delivery.settlement().test_mark_retired();
                 DeliveryVerdict::Processed
@@ -607,6 +618,55 @@ async fn runtime_stops_intake_but_heartbeats_until_owned_processing_drains() {
     // Work that ends during the drain still gets its disposition.
     assert_eq!(naks(&connection), [(1, RETRY_DELAY)]);
     assert_eq!(operations.last(), Some(&FakeOperation::Close));
+}
+
+#[tokio::test(start_paused = true)]
+async fn unretired_command_redelivery_reuses_exact_bytes_and_capacity_until_retirement() {
+    let sequence = 47;
+    let connection = Arc::new(FakeConnection::new(1));
+    connection.push_fetch(Ok(vec![delivery(sequence)]));
+    let processor = Arc::new(TestProcessor::scripted(BTreeMap::from([(
+        sequence,
+        Script::RetryOnceThenRetire,
+    )])));
+    processor.release(2);
+    let runtime = CommandDeliveryRuntime::new(
+        Arc::clone(&connection),
+        Arc::clone(&processor),
+        runtime_config(1, 1),
+    );
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(runtime.run(stopped));
+    connection
+        .wait_for(|operations| {
+            operations.contains(&FakeOperation::Nak {
+                sequence,
+                delivered: 1,
+                delay: RETRY_DELAY,
+            })
+        })
+        .await;
+    assert_eq!(processor.completed.load(Ordering::Acquire), 1);
+    assert_eq!(processor.active.load(Ordering::Acquire), 0);
+
+    // The server delivers the same stored command after the requested delay.
+    tokio::time::advance(RETRY_DELAY).await;
+    connection.push_fetch(Ok(vec![delivered(sequence, 2)]));
+    processor.wait_completed(2).await;
+    stop.send(true).expect("request runtime stop");
+    task.await.expect("runtime task").expect("runtime drain");
+
+    assert_eq!(
+        *processor.deliveries.lock().expect("deliveries"),
+        [
+            (sequence, 1, b"signed-command".to_vec()),
+            (sequence, 2, b"signed-command".to_vec()),
+        ],
+        "redelivery changes its delivery count, not command bytes or stream sequence"
+    );
+    assert_eq!(processor.maximum_active.load(Ordering::Acquire), 1);
+    assert_eq!(naks(&connection), [(sequence, RETRY_DELAY)]);
+    assert!(terms(&connection).is_empty());
 }
 
 #[tokio::test(start_paused = true)]

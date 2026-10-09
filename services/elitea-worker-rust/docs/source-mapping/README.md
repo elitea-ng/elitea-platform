@@ -1,5 +1,11 @@
 # Source-to-Rust mapping
 
+The [Code live canvas terminal mapping](code-live-canvas-terminal-20261008.md) records the matching-run callback correction and its separate deployment requirements.
+The [pending preparation Stop mapping](code-pending-stop-owner-recovery-20261008.md) records accepted Worker-loss recovery and normal reloaded History.
+The [preparer cancellation boundary](code-preparer-cancellation-boundary-20261008.md) separates verified UI Stop from the internal diagnostic and records a pending scope decision.
+The [live owner recovery mapping](code-live-owner-recovery-20261008.md) records the original JavaScript result after Worker and Supervisor loss.
+The [compiled publication mapping](code-compiled-publication-main-recovery-20261008.md) records the original compiler receipt after Main loss and normal browser reload.
+
 These ledgers map observable Elitea behavior to concrete Rust ownership. They
 are compatibility evidence, not a byte-for-byte port plan.
 
@@ -46,6 +52,11 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.
+
+- [Deployed Code on NATS](code-nats-deployed-acceptance-20261007.md) records current image boundaries, browser cases, retained failures, and open completion requirements.
+
+- [Main merge continuation](main-integration-20261007.md) records the verified handoff, complete listener reruns, and pending current-image and NATS/Code acceptance.
 - [Helm Worker node-recovery key 2026-10-09](helm-worker-node-recovery-20261009.md) closes G-WORKER-01: `worker.runtime.agentNodeRecovery` refuses non-boolean values and is proved by `task helm:worker-node-recovery`; the default stays false because the key also turns on model-step resume, which D1/TG-12 keep closed on Kubernetes.
 - [LLM gateway master key and routing CEL cap 2026-10-09](gateway-master-key-routing-cap-20261009.md) makes the gateway refuse to start without `SECRETS_MASTER_KEY` (elitea-main's rule and opt-out), requires the chart's gateway Secret reference with a render test (`task helm:gateway-master-key`), gives the load-time routing compiler its own 8 KiB CEL cap with limit and limit+1 tests, and notes F15 (rehearsal migration numbering, ops only).
 - [Helm master-key render test 2026-10-09](helm-master-key-render-test-20261009.md) makes `render-main-master-key.sh` declare the network-policy decision #1176 requires, so its 9 checks reach the master-key logic again; registers it as `task helm:main-master-key`, with mutation proof.

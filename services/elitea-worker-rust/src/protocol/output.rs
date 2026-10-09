@@ -629,6 +629,8 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.result_invalid") => RuntimeFailureKind::PipelineResultInvalid,
         Some("pipeline.result_limit") => RuntimeFailureKind::PipelineResultLimit,
         Some("pipeline.code_failed") => RuntimeFailureKind::PipelineCodeFailed,
+        Some("pipeline.code_authorization_failed") => RuntimeFailureKind::AuthorizationFailed,
+        Some("pipeline.code_cancelled") => RuntimeFailureKind::Cancelled,
         Some("pipeline.code_preparation_failed") => RuntimeFailureKind::CodePreparationFailed,
         Some("pipeline.code_preparation_cancelled") => RuntimeFailureKind::CodePreparationCancelled,
         Some("pipeline.code_preparation_unconfirmed") => {
@@ -1364,6 +1366,38 @@ mod continuation_failure_tests {
 #[cfg(test)]
 mod code_preparation_failure_tests {
     use super::*;
+
+    #[test]
+    fn code_terminal_categories_are_closed_nonretryable_and_restorable() {
+        for (upstream, expected) in [
+            (
+                "pipeline.code_failed",
+                RuntimeFailureKind::PipelineCodeFailed,
+            ),
+            (
+                "pipeline.code_authorization_failed",
+                RuntimeFailureKind::AuthorizationFailed,
+            ),
+            ("pipeline.code_cancelled", RuntimeFailureKind::Cancelled),
+        ] {
+            let kind = model_failure(Some(upstream));
+            assert_eq!(kind, expected);
+            let error = runtime_error(kind);
+            assert!(!error.retryable);
+            assert_eq!(canonical_runtime_failure(&error), Some(kind));
+            let mut injected = error;
+            injected.retryable = true;
+            assert_eq!(canonical_runtime_failure(&injected), None);
+        }
+        for upstream in [
+            "pipeline.code_authorization_failed; credential=secret",
+            "sandbox.deadline_exceeded",
+            "SELECT private_schema",
+            "agent.legacy",
+        ] {
+            assert_eq!(model_failure(Some(upstream)), RuntimeFailureKind::Internal);
+        }
+    }
 
     #[test]
     fn code_preparation_messages_are_exact_bounded_and_restorable() {

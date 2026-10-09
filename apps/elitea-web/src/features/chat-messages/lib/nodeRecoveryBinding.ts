@@ -2,7 +2,7 @@ import { nodeRecoveryBinding, type NodeRecoveryBinding } from '@/shared/lib/node
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 
 /** Only the active response can block a new turn or display a suspended run. */
-function messageNodeRecoveryBinding(message: ChatMessage | undefined): NodeRecoveryBinding | undefined {
+export function messageNodeRecoveryBinding(message: ChatMessage | undefined): NodeRecoveryBinding | undefined {
   const binding = message?.nodeRecoveryRequired;
   if (!message || message.role !== 'assistant' || !message.isStreaming || message.exception || message.failureCode
     || !binding || message.id !== binding.responseMessageId || message.executionGeneration !== binding.executionGeneration) return;

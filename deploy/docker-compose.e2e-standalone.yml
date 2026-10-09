@@ -132,11 +132,11 @@ services:
         i=0
         until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
           i=$((i + 1))
-          if [ "$i" -ge 30 ]; then
+          if [ "$$i" -ge 30 ]; then
             echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2
             exit 1
           fi
-          echo "rustfs not ready yet (attempt $i/30), retrying in 2s..." >&2
+          echo "rustfs not ready yet (attempt $$i/30), retrying in 2s..." >&2
           sleep 2
         done &&
         rc mb --ignore-existing rustfs/elitea-artifacts

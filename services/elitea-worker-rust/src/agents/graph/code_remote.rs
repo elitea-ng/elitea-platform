@@ -5,6 +5,7 @@ use super::{
     code::{CodeLanguage, CodeProvenance},
     code_runtime::{CodeInvocation, CodeSandboxRuntime},
 };
+use crate::agents::graph::code_timing;
 use crate::{
     protocol::control::{AgentControlClient, ClaimBoundSandboxAuthority},
     sandbox::{
@@ -424,7 +425,7 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
             // Every retry uses a fresh Main grant and the identical prepared
             // request/activation. No replacement sandbox identity is generated.
             tokio::time::sleep_until(
-                (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline),
+                (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
             )
             .await;
         }
@@ -457,7 +458,9 @@ fn uncertain() -> GraphError {
 }
 
 fn observation_deadline(timeout_seconds: u32) -> tokio::time::Instant {
-    tokio::time::Instant::now() + Duration::from_secs(u64::from(timeout_seconds) + 90)
+    tokio::time::Instant::now()
+        + Duration::from_secs(u64::from(timeout_seconds))
+        + code_timing::OBSERVATION_MARGIN
 }
 
 #[async_trait]

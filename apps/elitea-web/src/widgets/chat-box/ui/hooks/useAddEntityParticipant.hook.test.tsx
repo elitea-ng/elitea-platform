@@ -96,7 +96,7 @@ describe('useAddEntityParticipant on a chat with no conversation', () => {
     expect(posted?.[0]?.entity_name).toBe('application');
     expect(posted?.[0]?.entity_meta['id']).toBe('12');
     expect(posted?.[0]?.entity_settings['version_id']).toBe('34');
-    await waitFor(() => { expect(onConversationCreated).toHaveBeenCalledWith({ id: 77, uuid: 'u-77' }); });
+    await waitFor(() => { expect(onConversationCreated).toHaveBeenCalledWith({ id: 77, uuid: 'u-77', activeParticipantId: '101' }); });
     expect(onChangeParticipant.mock.calls[0]?.[0]).toMatchObject({ id: '101', entityName: 'application' });
   });
 
