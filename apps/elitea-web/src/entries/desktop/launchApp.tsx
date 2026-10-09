@@ -7,14 +7,17 @@
  *     CORS-free network layer), so the first request the app makes already
  *     carries a token;
  *  2. publish the absolute-URL runtime config the app reads at boot;
- *  3. only then import `App` — a dynamic import, so none of it evaluates
- *     before 1 and 2, and the app's chunks load only after sign-in.
+ *  3. publish the deployment's brand pack (`shared/desktop/brandPack.ts`) —
+ *     the app resolves its pack once, at mount, from `window.elitea_brand`;
+ *  4. only then import `App` — a dynamic import, so none of it evaluates
+ *     before 1–3, and the app's chunks load only after sign-in.
  */
 import { fetch as hostFetch } from '@tauri-apps/plugin-http';
 import { StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { setNativeTransport, type NativeSignOutReason } from '@/shared/api/nativeTransport';
+import { loadDesktopBrand } from '@/shared/desktop/brandPack';
 import { desktopRuntimeConfig, readPublicProjectId } from '@/shared/desktop/deploymentConfig';
 import type { HostBridge, HostState } from '@/shared/desktop/hostBridge';
 import { installExternalLinks } from '@/shared/desktop/externalLinks';
@@ -50,7 +53,12 @@ export async function launchApp(options: LaunchOptions): Promise<Root> {
       onUpgradeRequired: options.onUpgradeRequired,
     }),
   );
-  const config = desktopRuntimeConfig(state.origin, await readPublicProjectId(noRedirectFetch, state.origin));
+  const [publicProjectId] = await Promise.all([
+    readPublicProjectId(noRedirectFetch, state.origin),
+    // Branding never blocks the launch: a failure leaves the compiled default.
+    loadDesktopBrand({ fetch: noRedirectFetch, origin: state.origin }).catch(() => undefined),
+  ]);
+  const config = desktopRuntimeConfig(state.origin, publicProjectId);
   (globalThis as { elitea_ui_config?: unknown }).elitea_ui_config = config;
 
   installExternalLinks(bridge, state.origin);
