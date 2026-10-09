@@ -6,6 +6,10 @@
 //! no fuzz: a hunk whose context does not match anywhere fails the whole
 //! patch, and nothing is written.
 //!
+//! Every line keeps its own line ending: context lines stay as they are in
+//! the file, and an added line takes the ending of the original line next
+//! to it (the file's usual ending when the hunk has none).
+//!
 //! git's extended headers are read too: a section with `rename from` /
 //! `rename to` renames (with or without hunks), and `new file mode` /
 //! `deleted file mode` without hunks create or delete an empty file. A
@@ -410,9 +414,79 @@ fn signed(value: usize) -> isize {
     isize::try_from(value).unwrap_or(isize::MAX)
 }
 
+/// A line's ending: `\r\n`, `\n`, or empty (the last line of a file
+/// without a final newline).
+fn ending_of(line: &str) -> &str {
+    if line.ends_with("\r\n") {
+        "\r\n"
+    } else if line.ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    }
+}
+
 fn strip_ending(line: &str) -> &str {
-    line.strip_suffix('\n')
-        .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line))
+    &line[..line.len() - ending_of(line).len()]
+}
+
+/// The ending most of `lines` use (`\n` on a tie or with none).
+fn usual_ending(lines: &[String]) -> &'static str {
+    let crlf = lines.iter().filter(|line| line.ends_with("\r\n")).count();
+    let lf = lines.iter().filter(|line| ending_of(line) == "\n").count();
+    if crlf > lf { "\r\n" } else { "\n" }
+}
+
+/// The new lines for a hunk matched at `matched` (the original lines its
+/// context and removed lines matched): context lines as they were, added
+/// lines with the ending of the nearest original line in the hunk (before
+/// it, else after it, else `usual`). Every line ends with a newline; the
+/// caller trims the last one when the new side has none.
+fn replacement(hunk: &Hunk, matched: &[String], usual: &str) -> Vec<String> {
+    let mut originals = matched.iter();
+    // The ending of each hunk line's original (`None` for added lines).
+    let endings: Vec<Option<&str>> = hunk
+        .lines
+        .iter()
+        .map(|line| match line {
+            Line::Context(_) | Line::Remove(_) => originals
+                .next()
+                .map(|original| ending_of(original))
+                .filter(|ending| !ending.is_empty()),
+            Line::Add(_) => None,
+        })
+        .collect();
+    let nearest = |at: usize| {
+        endings[..at]
+            .iter()
+            .rev()
+            .flatten()
+            .chain(endings[at..].iter().flatten())
+            .next()
+            .copied()
+            .unwrap_or(usual)
+    };
+    let mut originals = matched.iter();
+    let mut out = Vec::new();
+    for (at, line) in hunk.lines.iter().enumerate() {
+        match line {
+            Line::Context(_) => {
+                let original = originals.next().map_or("", String::as_str);
+                let ending = ending_of(original);
+                let ending = if ending.is_empty() {
+                    nearest(at)
+                } else {
+                    ending
+                };
+                out.push(format!("{}{ending}", strip_ending(original)));
+            }
+            Line::Remove(_) => {
+                originals.next();
+            }
+            Line::Add(text) => out.push(format!("{text}{}", nearest(at))),
+        }
+    }
+    out
 }
 
 /// Apply one file's hunks to `original` (empty for a created file).
@@ -422,12 +496,8 @@ fn strip_ending(line: &str) -> &str {
 ///
 /// [`ErrorCode::Conflict`] when a hunk's context is not in the file.
 pub fn apply(original: &str, patch: &FilePatch) -> ToolResult<Option<String>> {
-    let ending = if original.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
     let mut lines: Vec<String> = original.split_inclusive('\n').map(str::to_owned).collect();
+    let usual = usual_ending(&lines);
     // `cursor`: hunks apply in order and never overlap the previous one.
     let mut cursor = 0usize;
     let mut delta: isize = 0;
@@ -475,14 +545,7 @@ pub fn apply(original: &str, patch: &FilePatch) -> ToolResult<Option<String>> {
                     ),
                 )
             })?;
-        let replacement: Vec<String> = hunk
-            .lines
-            .iter()
-            .filter_map(|line| match line {
-                Line::Context(text) | Line::Add(text) => Some(format!("{text}{ending}")),
-                Line::Remove(_) => None,
-            })
-            .collect();
+        let replacement = replacement(hunk, &lines[position..position + old.len()], usual);
         let replaced_tail = position + old.len() == lines.len();
         if hunk.old_no_newline && !replaced_tail {
             return Err(ToolError::new(
@@ -696,6 +759,40 @@ mod tests {
                 .expect_err("no change")
                 .code(),
             ErrorCode::InvalidArgument
+        );
+    }
+
+    /// Context lines keep their own line endings; an added line takes the
+    /// ending of the original line next to it.
+    #[test]
+    fn mixed_line_endings_are_preserved() {
+        let original = "one\r\ntwo\nthree\r\nfour\n";
+        let diff = "--- f\n+++ f\n@@ -1,4 +1,5 @@\n one\n two\n-three\n+THREE\n+inserted\n four\n";
+        assert_eq!(
+            apply_one(original, diff).expect("apply").as_deref(),
+            Some("one\r\ntwo\nTHREE\r\ninserted\r\nfour\n")
+        );
+        let lf_with_one_crlf = "a\nb\r\nc\nd\n";
+        let edit = "--- f\n+++ f\n@@ -2,3 +2,3 @@\n b\n-c\n+C\n d\n";
+        assert_eq!(
+            apply_one(lf_with_one_crlf, edit).expect("apply").as_deref(),
+            Some("a\nb\r\nC\nd\n"),
+            "one CRLF line does not turn the file's other lines into CRLF"
+        );
+        let pure_insert = "--- f\n+++ f\n@@ -1,2 +1,3 @@\n a\n+new\n b\n";
+        assert_eq!(
+            apply_one("a\r\nb\n", pure_insert)
+                .expect("apply")
+                .as_deref(),
+            Some("a\r\nnew\r\nb\n")
+        );
+        let at_end_without_newline =
+            "--- f\n+++ f\n@@ -1,2 +1,3 @@\n a\n-b\n\\ No newline at end of file\n+b\n+c\n";
+        assert_eq!(
+            apply_one("a\r\nb", at_end_without_newline)
+                .expect("apply")
+                .as_deref(),
+            Some("a\r\nb\r\nc\r\n")
         );
     }
 
