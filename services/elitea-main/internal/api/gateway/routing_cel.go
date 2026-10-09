@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -132,6 +133,16 @@ func isIdentByte(b byte) bool {
 	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
+// maxRoutingCELBytes caps a routing-rule predicate before it reaches the CEL
+// parser. A rule is one boolean over nine variables; 8 KiB is far above any
+// hand-written predicate. cel-go's own guard (100,000 code points, recursion
+// depth 250) would otherwise be the only bound, and every byte accepted here is
+// compiled again by the gateway on every policy load.
+const maxRoutingCELBytes = 8 << 10
+
+// ErrRoutingCELTooLong reports a predicate longer than maxRoutingCELBytes.
+var ErrRoutingCELTooLong = errors.New("CEL expression is too long")
+
 // CompileRoutingCEL type-checks a routing-rule CEL expression against the
 // governance variable set and requires it to evaluate to a boolean. It returns a
 // user-facing error describing the first compile/type problem, or nil when the
@@ -145,6 +156,9 @@ func isIdentByte(b byte) bool {
 func CompileRoutingCEL(expr string) error {
 	if expr == "" {
 		return fmt.Errorf("CEL expression must not be empty")
+	}
+	if len(expr) > maxRoutingCELBytes {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrRoutingCELTooLong, len(expr), maxRoutingCELBytes)
 	}
 	env, err := governanceCELEnv()
 	if err != nil {
