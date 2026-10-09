@@ -572,6 +572,9 @@ in a release note.**
   (which stays 1.25.8 for elitea-main/scheduler). Build with GOWORK=off. Rationale:
   bumping the workspace floor to 1.26.4 broke elitea-main/scheduler CI lint on the
   1.25 runner (learned the hard way in review round 1's fix).
+  Update 2026-10-09: go.work moved to the Go 1.26 series (floor go1.26.9), so the
+  toolchain reason no longer holds. The gateway still builds standalone; joining
+  the workspace is a separate decision.
 
 ## Prevention gates (CI)
 - Three enforcing gates guard the classes that recurred in review:

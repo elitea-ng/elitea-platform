@@ -28,7 +28,12 @@ describe.each([['absent', undefined], ['false', 'false'], ['1', '1']])('graph ex
     const { contract, admission, menu, parallel } = await load(flag);
     expect(contract.isCompilerAdmittedNodeType('split_out')).toBe(false);
     expect(contract.isCompilerAdmittedNodeType('aggregate')).toBe(false);
-    expect(admission.collectGraphAdmissionIssues(document).filter((issue) => issue.rule === 'node.type')).toHaveLength(1);
+    const typeIssues = admission.collectGraphAdmissionIssues(document).filter((issue) => issue.rule === 'node.type');
+    expect(typeIssues).toHaveLength(1);
+    // Named as a deployment limit, the same way Main's save check names it.
+    expect(typeIssues[0]?.message).toBe('type: "split_out" is not available on this deployment — the whole pipeline is refused.');
+    expect(contract.isDeploymentGatedNodeType('split_out')).toBe(true);
+    expect(contract.isDeploymentGatedNodeType('custom')).toBe(false);
     const entries = await menuEntries(menu);
     expect(entries).toHaveLength(10);
     expect(entries).not.toContain('SplitOut');
@@ -41,6 +46,7 @@ describe('graph extensions rehearsal flag true', () => {
     expect(contract.isCompilerAdmittedNodeType('split_out')).toBe(true);
     expect(contract.isCompilerAdmittedNodeType('aggregate')).toBe(true);
     expect(contract.isCompilerAdmittedNodeType('map')).toBe(false);
+    expect(contract.isDeploymentGatedNodeType('split_out')).toBe(false);
     expect(admission.collectGraphAdmissionIssues(document).filter((issue) => issue.rule === 'node.type')).toEqual([]);
     const entries = await menuEntries(menu);
     expect(entries).toHaveLength(12);

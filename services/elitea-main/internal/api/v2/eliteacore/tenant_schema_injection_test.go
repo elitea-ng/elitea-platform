@@ -39,7 +39,6 @@ func schemaFirstHandlers(h *eliteacore.Handler) map[string]http.HandlerFunc {
 		"AgentCategories":     h.AgentCategories,
 		"ListCollections":     h.ListCollections,
 		"Recommendations":     h.Recommendations,
-		"Feedbacks":           h.Feedbacks,
 		"ApplicationRelation": h.ApplicationRelation,
 		"GetCollection":       h.GetCollection,
 	}

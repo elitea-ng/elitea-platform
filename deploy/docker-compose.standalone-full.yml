@@ -503,8 +503,8 @@ services:
     # Build context is the repository ROOT: the module replaces
     # libs/go/egresslib, which sits outside services/elitea-llm-gateway. The
     # image still does not inherit the root go.work — the Containerfile never
-    # copies it and the build sets GOWORK=off — so the Go 1.25 series of
-    # elitea-main/elitea-scheduler stays out of this build.
+    # copies it and the build sets GOWORK=off — so the workspace toolchain
+    # of elitea-main/elitea-scheduler stays out of this build.
     build:
       context: ..
       dockerfile: services/elitea-llm-gateway/Containerfile
@@ -890,7 +890,14 @@ services:
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
-      OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/auth/oidc/callback"
+      # The host the browser signs in on. Cookies are scoped by host, never by
+      # port, so two stacks both browsed on `localhost:<port>` write the same
+      # `elitea_session` and each sign-in evicts the other's session (the
+      # other Main logs `session_unknown`). A second stack sets
+      # STANDALONE_HOST=<name>.localhost and is browsed on that host; the
+      # callback must be on the same host. standalone-stack.sh refuses any value
+      # but localhost or <label>.localhost; plain `docker compose` does not check.
+      OIDC_REDIRECT_URI: "http://${STANDALONE_HOST:-localhost}:${STANDALONE_PORT:-8084}/auth/oidc/callback"
       COOKIE_SECURE: "false"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). deploy/runtime/auth.form.yml's
@@ -1173,6 +1180,16 @@ services:
       # and no second workload_sessions row. ELITEA_RT_V1_INDEX (with a worker
       # on elitea-index-worker-v1) is the alternative shape.
       ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
+
+      # Toolkit tool discovery: GET .../toolkit_available_tools/prompt_lib/...,
+      # which fills the tool lists on the toolkit and MCP pages. Unset, the
+      # route answers 503 "toolkit discovery unavailable" and those pages show
+      # "The tool list did not load". The worker serves it in both worker modes
+      # (the Rust overlay inherits this value; toolkit_route.go picks the
+      # stream), and it needs the object store (STORAGE_BACKEND above). Set it
+      # to false to turn it off. The Helm chart keeps it opt-in
+      # (main.runtime.toolkitDiscovery.enabled=false).
+      ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED: "${ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED:-true}"
 
       # Plaintext here (compose posture; docker-compose.nats-secure.yml layers
       # the elitea-main-runtime identity on).

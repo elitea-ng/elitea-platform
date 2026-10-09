@@ -119,10 +119,11 @@ export const migerateLegacyNodes = (
       const { decisional_inputs, ...left } = decision;
       migratedNodes.push({
         ...left,
-        input: decisional_inputs,
+        // YAML holds no `undefined`: without legacy inputs the node gets no `input` key (the strict serializer refuses one).
+        ...(decisional_inputs === undefined ? {} : { input: decisional_inputs }),
         type: PipelineNodeTypes.Decision,
         id: decisionNodeId,
-      } as YamlPipelineNode);
+      });
     } else {
       migratedNodes.push(legacyNode);
     }

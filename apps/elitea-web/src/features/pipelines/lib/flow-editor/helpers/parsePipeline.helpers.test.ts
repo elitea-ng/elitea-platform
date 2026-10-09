@@ -1,4 +1,7 @@
+import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
+
+import { serializePipelineYaml } from '../../dumpYaml.helpers';
 
 import {
   extractPipelineNodeTypes,
@@ -60,6 +63,17 @@ describe('migerateLegacyNodes', () => {
     const decisionNode = result.yamlJson.nodes?.find(n => n.type === PipelineNodeTypes.Decision);
     expect(decisionNode).toMatchObject({ nodes: ['B'], default_output: 'C', input: ['x'] });
     expect(decisionNode).not.toHaveProperty('decisional_inputs');
+  });
+
+  it('writes no undefined input for a legacy decision without decisional_inputs, so the result serializes', () => {
+    const doc: YamlPipelineDocument = {
+      entry_point: 'Decision_1',
+      nodes: [{ id: 'Decision_1', decision: { nodes: ['LLM_1'] } }, { id: 'LLM_1', type: 'llm', transition: 'END' }],
+    };
+    const { yamlJson } = migerateLegacyNodes(doc) as { yamlJson: YamlPipelineDocument };
+    const decisionNode = yamlJson.nodes?.find(n => n.type === PipelineNodeTypes.Decision);
+    expect(decisionNode).not.toHaveProperty('input');
+    expect(load(serializePipelineYaml(yamlJson))).toStrictEqual(yamlJson);
   });
 
   it('leaves non-decision nodes untouched while migrating the ones that need it', () => {

@@ -44,11 +44,15 @@ import { FeedbackItem } from "./feedbackItem.zod";
 
 export const FeedbackListResponse = zod
   .object({
-    items: zod.array(FeedbackItem),
-    total: zod.int(),
+    total: zod
+      .int()
+      .describe(
+        "Count of ALL rows visible to the caller, independent of limit and offset.",
+      ),
+    rows: zod.array(FeedbackItem),
   })
   .describe(
-    "NOTE(W2): `{items, total}` envelope (internal/api/v2/social/handler.go:378) where `total` is simply `len(items)` — no real `COUNT(*)` and no pagination beyond the hardcoded `LIMIT 50` (:359). A query error is swallowed to `items: []` / `total: 0` rather than surfaced as an error (:361-377).\n",
+    "A page of the feedback the caller may see in the project: that project's rows (only the caller's own in the public project) plus the caller's own rows written before feedback recorded a project.\n",
   );
 
 export type FeedbackListResponse = zod.input<typeof FeedbackListResponse>;

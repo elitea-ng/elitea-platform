@@ -18,23 +18,33 @@ import (
 // GO-2026-6090 (crypto/tls), GO-2026-6091 (html/template) and GO-2026-6218
 // (net/url). Every one is fixed in go1.25.13 and in go1.26.6.
 //
-// The builder images stay on a SERIES tag (`golang:1.25-trixie`) so they keep
+// govulncheck on 2026-10-09 found thirteen more that the services reach or
+// import: GO-2026-6599 and GO-2026-6600 (html/template), GO-2026-6604 (os),
+// GO-2026-6605, GO-2026-6609 and GO-2026-6613 (net/http), GO-2026-6607
+// (crypto/tls), GO-2026-6608 (net/textproto), and the HTTP/2 server and
+// transport set GO-2026-6603, 6610, 6611, 6612 and 6617 (net/http). They are
+// fixed in go1.26.9 and in no 1.25 release, so every module moved to the 1.26
+// series and the 1.25 floor was retired.
+//
+// The builder images stay on a SERIES tag (`golang:1.26-trixie`) so they keep
 // taking patch releases; an exact patch pin freezes the standard library (see
 // services/elitea-llm-gateway/Containerfile). A series tag alone guarantees
 // nothing, though: a stale cached image builds with whatever patch it holds.
 // The `go` directive is what turns the floor into a guarantee. With the
 // golang image's GOTOOLCHAIN=local, an older toolchain refuses the module
 //
-//	go: go.mod requires go >= 1.25.13 (running go 1.25.12; GOTOOLCHAIN=local)
+//	go: go.mod requires go >= 1.26.9 (running go 1.26.8; GOTOOLCHAIN=local)
 //
 // and with GOTOOLCHAIN=auto it fetches the floor toolchain instead. Either way
 // no binary is built on a standard library below the floor.
 //
 // Raise a floor when govulncheck reports a reachable standard-library finding.
 // Never lower one.
+//
+// scripts/ci/check-gateway-toolchain.sh reads this constant by name from an
+// indented `stdlibFloorGo126 = "…"` line, so it stays inside a const block.
 const (
-	stdlibFloorGo125 = "1.25.13"
-	stdlibFloorGo126 = "1.26.6"
+	stdlibFloorGo126 = "1.26.9"
 )
 
 // toolchainFloors lists every Go module that ships an image, plus the
@@ -46,24 +56,24 @@ var toolchainFloors = []struct {
 	containerfile string
 	floor         string
 }{
-	{name: "go.work", goFile: "go.work", floor: stdlibFloorGo125},
+	{name: "go.work", goFile: "go.work", floor: stdlibFloorGo126},
 	{
 		name:          "elitea-main",
 		goFile:        "services/elitea-main/go.mod",
 		containerfile: "services/elitea-main/Containerfile",
-		floor:         stdlibFloorGo125,
+		floor:         stdlibFloorGo126,
 	},
 	{
 		name:          "elitea-scheduler",
 		goFile:        "services/elitea-scheduler/go.mod",
 		containerfile: "services/elitea-scheduler/Containerfile",
-		floor:         stdlibFloorGo125,
+		floor:         stdlibFloorGo126,
 	},
 	{
 		name:          "elitea-subapp-host",
 		goFile:        "services/elitea-subapp-host/go.mod",
 		containerfile: "services/elitea-subapp-host/Containerfile",
-		floor:         stdlibFloorGo125,
+		floor:         stdlibFloorGo126,
 	},
 	{
 		name:          "elitea-llm-gateway",

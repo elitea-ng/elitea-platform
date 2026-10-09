@@ -7,10 +7,12 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { isMcpToolkit } from '@/entities/toolkit';
 import type { Toolkit } from '@/entities/toolkit';
 import { getGetApplicationQueryKey, useGetApplication, useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationDetail } from '@/shared/api/generated/model';
-import { unwrapList } from '@/shared/api/unwrap';
+import { getToolkit } from '@/shared/api/generated/toolkits/toolkits';
+import { unwrapBody, unwrapList } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
 import { SearchParams } from '@/shared/lib/params';
 
@@ -22,7 +24,7 @@ import { setToolkitRelation } from '../lib/toolRelation';
 import { useFilterAddedItems } from '../lib/useFilterAddedItems';
 import type { AgentToolAssociation } from '../lib/types';
 
-import { EntityAddSection, InstanceAddSection, useEntityAssociationItems, useToolkitInstancePager } from './ToolMenuSections';
+import { EntityAddSection, InstanceAddSection, useEntityAssociationItems } from './ToolMenuSections';
 
 /**
  * Ported from
@@ -72,12 +74,11 @@ import { EntityAddSection, InstanceAddSection, useEntityAssociationItems, useToo
  *    to know (e.g. a future GA-tracking or toast integration); selecting a
  *    Toolkit/MCP row always attaches it now, matching the baseline, with or
  *    without either callback supplied.
- *  - `ListToolkitInstancesParams` only has `limit`/`offset` (no server-side
- *    type or name filter), ordered by name. The Toolkit and MCP dropdowns split
- *    ONE listing client-side by `isMcpToolkit` and filter names client-side; to
- *    keep both reachable when one type sorts past the other, the sections PAGE
- *    the listing (offset-based) until the open dropdown has a matching row — see
- *    `useToolkitInstancePager`/`InstanceAddSection` in `ToolMenuSections.tsx`.
+ *  - `ListToolkitInstancesParams` has `mcp` and `query` server-side filters
+ *    (ordered by name, then id), as EliteaUI's picker uses. Each of the Toolkit
+ *    and MCP dropdowns pages its OWN server-filtered cursor (`mcp=false` /
+ *    `mcp=true`, search sent as `query`) — see `useToolkitInstancePager` and
+ *    `InstanceAddSection` in `ToolMenuSections.tsx`.
  *  - `ListApplicationsParams` (agents/pipelines) has no page/pageSize
  *    param at all — the baseline's infinite-scroll agent/pipeline lists
  *    have no server-side "load more" to page through; this shows whatever
@@ -105,23 +106,17 @@ import { EntityAddSection, InstanceAddSection, useEntityAssociationItems, useToo
  * file's own module doc comment); this component owns the return watch.
  * `useSearch({ strict: false })` (this component isn't bound to one
  * specific route — `ApplicationTools.tsx` mounts it on both the agent and
- * pipeline editors) reads a returned `?newToolkitId=`/`?mcp=` pair, matches
- * it against the currently-fetched `useToolkitInstancePager` rows, and — if
- * found — calls `attachToolkit`/`attachMcp` (the same real-attach path a
- * manual dropdown click uses, `onAttachToolkit`/`onAttachMcp` fired only as
- * their post-success observer) before clearing all four round-trip params
- * from the URL. Two real, disclosed limits on this, not invented around:
- *  - No get-single-toolkit-by-id endpoint exists (only `listToolkitInstances`,
- *    `limit`/`offset`, no id filter — same gap the "no server-side search"
- *    bullet above already flags) — unlike baseline's dedicated
- *    `fetchToolkitDetails` unwrap call, this can only match against
- *    whatever pages are ALREADY loaded. A newly created toolkit that sorts
- *    past the pages fetched so far (the sections only auto-page while their
- *    dropdown is open, so on a fresh return only the first page is loaded) is
- *    invisible to this match and the round trip silently no-ops (URL still
- *    gets cleaned up, matching baseline's own "clean up even on failure"
- *    behaviour) rather than falling back to a toast the way baseline did —
- *    no toast/notification callback is threaded through this component.
+ * pipeline editors) reads a returned `?newToolkitId=` id, fetches that toolkit
+ * by id (`getToolkit`, so a toolkit that sorts past the first listing page is
+ * still found) and — if it resolves — calls `attachToolkit`/`attachMcp`
+ * (chosen by the fetched row's own `isMcpToolkit`, not the URL's `mcp` flag;
+ * the same real-attach path a manual dropdown click uses,
+ * `onAttachToolkit`/`onAttachMcp` fired only as their post-success observer)
+ * before clearing all four round-trip params from the URL. A non-numeric id,
+ * a 404 or any fetch error attaches nothing and still clears the params (once;
+ * a failed fetch is not retried), matching baseline's "clean up even on
+ * failure" behaviour with no toast, since none is threaded through this
+ * component. One real, disclosed limit on this, not invented around:
  *  - The RETURN navigation itself (a not-yet-built toolkit-creation page
  *    reading `SearchParams.ReturnUrl`/`SourceApplicationId` and appending
  *    `?newToolkitId=`/`?mcp=` on save) is out of this unit's ownership
@@ -265,44 +260,38 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
   const attachToolkit = useCallback((toolkit: Toolkit) => attachToolkitInstance(toolkit, onAttachToolkit), [attachToolkitInstance, onAttachToolkit]);
   const attachMcp = useCallback((toolkit: Toolkit) => attachToolkitInstance(toolkit, onAttachMcp), [attachToolkitInstance, onAttachMcp]);
 
-  // ONE offset-based cursor over the toolkit-instance listing; the Toolkit and
-  // MCP sections each page it independently against their own filtered rows (see
-  // `useToolkitInstancePager`). Replaces the baseline's single shared
-  // `instanceLimit`, which left a section unreachable when its rows sorted past
-  // the first page — the listing has no server-side type filter to split on.
-  const instancePager = useToolkitInstancePager(projectId);
-  const { rows: instanceRows, isFetching: instancesFetching } = instancePager;
-
   // "Create new toolkit" round trip — inbound half. See this module's own doc comment.
   const navigate = useNavigate();
   const returnSearch = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
   const processedReturnedToolkitIds = useRef<Set<string>>(new Set());
   useEffect(() => {
     const rawNewToolkitId = returnSearch[NEW_TOOLKIT_ID_PARAM];
-    const newToolkitId = typeof rawNewToolkitId === 'string' ? rawNewToolkitId : undefined;
-    if (newToolkitId === undefined || isEntityUnsaved || instancesFetching) return;
+    // A route without a `text()` schema hands a numeric id over as a number (the search parser is JSON-based).
+    const newToolkitId = typeof rawNewToolkitId === 'string' || typeof rawNewToolkitId === 'number' ? String(rawNewToolkitId) : undefined;
+    if (newToolkitId === undefined || projectId === undefined || isEntityUnsaved) return;
     if (processedReturnedToolkitIds.current.has(newToolkitId)) return;
     processedReturnedToolkitIds.current.add(newToolkitId);
 
-    const matched = instanceRows.find((row) => String(row.id) === newToolkitId);
-    if (matched !== undefined) {
-      const isMcpReturn = returnSearch[SearchParams.IsMCP] === 'true' || returnSearch[SearchParams.IsMCP] === '1';
-      (isMcpReturn ? attachMcp : attachToolkit)(matched);
-    }
-
-    void navigate({
-      to: '.',
-      search: (prev: Record<string, unknown>) => {
-        const next = { ...prev };
-        delete next[NEW_TOOLKIT_ID_PARAM];
-        delete next[SearchParams.IsMCP];
-        delete next[SearchParams.SourceApplicationId];
-        delete next[SearchParams.ReturnUrl];
-        return next;
-      },
-      replace: true,
-    });
-  }, [returnSearch, isEntityUnsaved, instancesFetching, instanceRows, attachToolkit, attachMcp, navigate]);
+    const toolId = Number(newToolkitId);
+    const resolved = Number.isInteger(toolId) && toolId > 0 ? getToolkit(projectId, toolId).then((response) => unwrapBody(response) as Toolkit) : Promise.resolve(undefined);
+    void resolved
+      .catch(() => undefined)
+      .then((toolkit) => {
+        if (toolkit !== undefined) (isMcpToolkit(toolkit) ? attachMcp : attachToolkit)(toolkit);
+        void navigate({
+          to: '.',
+          search: (prev: Record<string, unknown>) => {
+            const next = { ...prev };
+            delete next[NEW_TOOLKIT_ID_PARAM];
+            delete next[SearchParams.IsMCP];
+            delete next[SearchParams.SourceApplicationId];
+            delete next[SearchParams.ReturnUrl];
+            return next;
+          },
+          replace: true,
+        });
+      });
+  }, [returnSearch, projectId, isEntityUnsaved, attachToolkit, attachMcp, navigate]);
 
   const [agentAnchor, setAgentAnchor] = useState<HTMLElement | null>(null);
   const [agentSearch, setAgentSearch] = useState('');
@@ -344,7 +333,7 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
         isEntityUnsaved={isEntityUnsaved}
         tooltip={saveFirstToolkitTooltip}
         isMcp={false}
-        pager={instancePager}
+        projectId={projectId}
         addedToolkitIds={addedToolkitIds}
         onAttach={attachToolkit}
         createRoute="/toolkits/create"
@@ -362,7 +351,7 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
           isEntityUnsaved={isEntityUnsaved}
           tooltip={saveFirstMcpTooltip}
           isMcp={true}
-          pager={instancePager}
+          projectId={projectId}
           addedToolkitIds={addedToolkitIds}
           onAttach={attachMcp}
           createRoute="/mcps/create"
