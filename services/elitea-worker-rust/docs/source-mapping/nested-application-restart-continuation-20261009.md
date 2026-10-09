@@ -186,6 +186,10 @@ PostgreSQL database.
 - `LLM_INVOCATION_SEQUENCE` and the branch ordinal are per-process counters. **Not changed here**: see follow-up 3
   and the branch note under Changed paths.
 
+`security-review` on the branch diff: no findings. The child invocation id is a join key and a digest input, never
+an authorization or scoping credential (session authority is the claim). The new cause and message carry no data.
+The id stays inside the existing identity bounds. The dependency change adds no crate or source.
+
 ## Follow-ups
 
 1. Add the Worker × P12 row above to `docs/recovery-guarantees.md` once #1084 merges.
