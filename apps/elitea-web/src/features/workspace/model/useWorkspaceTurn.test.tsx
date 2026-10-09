@@ -1,0 +1,105 @@
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+
+import type { AgentEvent, TurnStartRequest } from '@/shared/desktop/workspaceIpc';
+import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
+
+import { useWorkspaceTurn } from './useWorkspaceTurn';
+
+const REQUEST: TurnStartRequest = {
+  workspace_id: 'w1',
+  project_id: 1,
+  conversation_id: 'c1',
+  application_id: 2,
+  version_id: 3,
+  prompt: 'do it',
+  plan_mode: false,
+};
+
+const ev = (seq: number, e: Omit<AgentEvent, 'turn_id' | 'seq'>): AgentEvent => ({ turn_id: 'turn-1', seq, ...e }) as AgentEvent;
+
+describe('useWorkspaceTurn', () => {
+  it('subscribes once, and unsubscribes on unmount', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { unmount } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    unmount();
+    expect(ipc.subscriberCount()).toBe(0);
+  });
+
+  it('starts a turn, folds its events, and stops being busy when it is done', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+
+    await act(() => result.current.start(REQUEST));
+    expect(ipc.calls.started).toEqual([REQUEST]);
+    expect(result.current.turnId).toBe('turn-1');
+    expect(result.current.busy).toBe(true);
+
+    act(() => {
+      ipc.emit(ev(1, { kind: 'status', payload: { phase: 'running' } }));
+      ipc.emit(ev(2, { kind: 'text_delta', payload: { text: 'working' } }));
+    });
+    expect(result.current.view.items[0]).toMatchObject({ text: 'working' });
+    expect(result.current.busy).toBe(true);
+
+    act(() => {
+      ipc.emit(ev(3, { kind: 'done', payload: { committed: true, conversation_id: 'c1', message_ids: [], changed_files: 0 } }));
+      ipc.emit(ev(4, { kind: 'status', payload: { phase: 'done' } }));
+    });
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('shows events that were emitted before start() returned', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+
+    const original = ipc.startTurn.bind(ipc);
+    ipc.startTurn = async (request) => {
+      const started = await original(request);
+      ipc.emit(ev(1, { kind: 'text_delta', payload: { text: 'first' } })); // the host races ahead of the reply
+      return started;
+    };
+    await act(() => result.current.start(REQUEST));
+    expect(result.current.view.items[0]).toMatchObject({ text: 'first' });
+  });
+
+  it('queues approvals, answers the head one, and tells the host', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+
+    const request = (id: string) => ({ request_id: id, tool: 't', title: id, detail: '', reason: '', can_remember: false });
+    act(() => {
+      ipc.emit(ev(1, { kind: 'approval_request', payload: request('a') }));
+      ipc.emit(ev(2, { kind: 'approval_request', payload: request('b') }));
+    });
+    expect(result.current.view.approvals.map((a) => a.request_id)).toEqual(['a', 'b']);
+
+    await act(() => result.current.answer('a', 'allow_once'));
+    expect(ipc.calls.approvals).toEqual([{ requestId: 'a', decision: 'allow_once' }]);
+    expect(result.current.view.approvals.map((a) => a.request_id)).toEqual(['b']);
+  });
+
+  it('cancels the active turn', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+    await act(() => result.current.cancel());
+    expect(ipc.calls.cancelled).toEqual(['turn-1']);
+  });
+
+  it('surfaces a failed start instead of staying busy', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    ipc.startTurn = () => Promise.reject(new Error('no agent runtime'));
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+    expect(result.current.startError).toBe('no agent runtime');
+    expect(result.current.busy).toBe(false);
+  });
+});
