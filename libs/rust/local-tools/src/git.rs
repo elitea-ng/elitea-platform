@@ -29,7 +29,10 @@
 //!    ([`dangerous_key`]).
 //!    Attributes ([`Repo::check_attributes`], before every call that reads
 //!    the work tree): when the person's global config defines filter, diff
-//!    or merge drivers with commands, no path may select one. A refusal is
+//!    or merge drivers with commands (the standard git-lfs filter aside),
+//!    no path may select one; a global config that cannot be listed
+//!    refuses everything, and a passing scan is reused until the paths,
+//!    an attributes file, the index or `HEAD` change. A refusal is
 //!    [`ErrorCode::UnsafeRepository`], shown to the agent and the person;
 //!    checkpoints then fall back to copies.
 //! 2. **Override on the command line** ([`HARDENING`]): hooks to
@@ -46,14 +49,18 @@
 //!    runs confined.
 //! 4. **Timeouts** on every call, killing the process group.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Write as _;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+use sha2::{Digest as _, Sha256};
 
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::policy::SandboxMode;
@@ -492,6 +499,11 @@ pub struct Repo {
     /// Config texts (`(file name, text)`) git's own reader already agreed
     /// on, so an unchanged config is not listed again on every call.
     verified: Arc<Mutex<Vec<(String, String)>>>,
+    /// The [`Repo::attribute_key`] of the last attribute scan that passed:
+    /// the same key again needs no `check-attr` over every path.
+    attributes_checked: Arc<Mutex<Option<[u8; 32]>>>,
+    /// How many full attribute scans ran (tests).
+    attribute_scans: Arc<AtomicUsize>,
 }
 
 impl Repo {
@@ -515,6 +527,8 @@ impl Repo {
             sandbox: sandbox.clone(),
             global_config: None,
             verified: Arc::default(),
+            attributes_checked: Arc::default(),
+            attribute_scans: Arc::default(),
         };
         repo.check()?;
         Ok(Some(repo))
@@ -668,6 +682,13 @@ impl Repo {
             .map_err(|_| unsafe_repo(format!(".git/{name} is not UTF-8")))
     }
 
+    /// How many full attribute scans ran.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn attribute_scans(&self) -> usize {
+        self.attribute_scans.load(Ordering::Relaxed)
+    }
+
     /// The files git reads as the global config.
     fn global_config_files(&self) -> Vec<PathBuf> {
         if let Some(path) = &self.global_config {
@@ -709,15 +730,23 @@ impl Repo {
                     error.message()
                 ))
             })?;
-        let mut out = BTreeSet::new();
+        let mut commands: BTreeMap<(String, String), Vec<(String, String)>> = BTreeMap::new();
         for item in listing.split(|byte| *byte == 0) {
             let item = String::from_utf8_lossy(item);
-            let key = item.split('\n').next().unwrap_or_default().to_owned();
-            if let Some(driver) = driver_of(&key) {
-                out.insert(driver);
+            let (key, value) = item.split_once('\n').unwrap_or((&item, ""));
+            if let Some(driver) = driver_of(key) {
+                let variable = key.rsplit('.').next().unwrap_or_default();
+                commands
+                    .entry(driver)
+                    .or_default()
+                    .push((variable.to_ascii_lowercase(), value.to_owned()));
             }
         }
-        Ok(out)
+        Ok(commands
+            .into_iter()
+            .filter(|(driver, commands)| !standard_lfs(driver, commands))
+            .map(|(driver, _)| driver)
+            .collect())
     }
 
     /// Layer 1 for attributes: no path in the work tree (nor in `extra`,
@@ -743,6 +772,15 @@ impl Repo {
             paths.extend_from_slice(path.as_bytes());
             paths.push(0);
         }
+        let key = self.attribute_key(&drivers, &paths);
+        if self
+            .attributes_checked
+            .lock()
+            .is_ok_and(|checked| checked.as_ref() == Some(&key))
+        {
+            return Ok(());
+        }
+        self.attribute_scans.fetch_add(1, Ordering::Relaxed);
         let attributes = self.git(&self.top).stdin(&paths).run(&[
             "check-attr",
             "-z",
@@ -763,7 +801,67 @@ impl Repo {
                 )));
             }
         }
+        if let Ok(mut checked) = self.attributes_checked.lock() {
+            *checked = Some(key);
+        }
         Ok(())
+    }
+
+    /// What the attribute scan's answer depends on: the drivers, the
+    /// paths (tracked, untracked and `extra`), the index and `HEAD` (an
+    /// index-only `.gitattributes` applies), and every `.gitattributes`
+    /// that could apply to one of the paths (one in each of their
+    /// directories, ignored ones included) and `info/attributes`, by
+    /// size, times and inode.
+    fn attribute_key(&self, drivers: &BTreeSet<(String, String)>, paths: &[u8]) -> [u8; 32] {
+        use std::os::unix::fs::MetadataExt as _;
+        let mut hash = Sha256::new();
+        let mut stat = |path: &Path| {
+            hash.update(path.as_os_str().as_encoded_bytes());
+            hash.update([0]);
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) => {
+                    for number in [
+                        meta.len(),
+                        meta.ino(),
+                        meta.mode().into(),
+                        meta.mtime().cast_unsigned(),
+                        meta.mtime_nsec().cast_unsigned(),
+                        meta.ctime().cast_unsigned(),
+                        meta.ctime_nsec().cast_unsigned(),
+                    ] {
+                        hash.update(number.to_le_bytes());
+                    }
+                }
+                Err(_) => hash.update([0xff]),
+            }
+        };
+        let mut dirs = BTreeSet::new();
+        dirs.insert(PathBuf::new());
+        for path in paths.split(|byte| *byte == 0) {
+            let path = Path::new(OsStr::from_bytes(path));
+            dirs.extend(path.ancestors().skip(1).map(Path::to_path_buf));
+        }
+        for dir in &dirs {
+            stat(&self.top.join(dir).join(".gitattributes"));
+        }
+        for name in ["index", "HEAD", "info/attributes", "packed-refs"] {
+            stat(&self.git_dir.join(name));
+        }
+        if let Ok(head) = std::fs::read_to_string(self.git_dir.join("HEAD")) {
+            if let Some(reference) = head.trim().strip_prefix("ref: ") {
+                stat(&self.git_dir.join(reference));
+            }
+            hash.update(head.as_bytes());
+        }
+        for (kind, name) in drivers {
+            hash.update(kind.as_bytes());
+            hash.update([0]);
+            hash.update(name.as_bytes());
+            hash.update([0]);
+        }
+        hash.update(Sha256::digest(paths));
+        hash.finalize().into()
     }
 
     /// The person's identity from their global git config (never the
@@ -821,6 +919,24 @@ impl Repo {
             worktree: false,
         }
     }
+}
+
+/// git-lfs as `git lfs install` writes it: a filter whose only commands
+/// are exactly `git-lfs clean -- %f`, `git-lfs smudge -- %f` and
+/// `git-lfs filter-process`. Trusted (it comes from the person's global
+/// config, and git runs it sandboxed without the network), so LFS
+/// repositories are not refused.
+fn standard_lfs(driver: &(String, String), commands: &[(String, String)]) -> bool {
+    driver.0 == "filter"
+        && driver.1 == "lfs"
+        && commands.iter().all(|(variable, value)| {
+            matches!(
+                (variable.as_str(), value.as_str()),
+                ("clean", "git-lfs clean -- %f")
+                    | ("smudge", "git-lfs smudge -- %f")
+                    | ("process", "git-lfs filter-process")
+            )
+        })
 }
 
 /// `(kind, name)` when `key` gives a filter, diff or merge driver a
@@ -1454,6 +1570,77 @@ mod tests {
             error.message()
         );
         assert!(repo.git(repo.top()).worktree().run(&["status"]).is_err());
+    }
+
+    /// git-lfs exactly as `git lfs install` writes it is trusted: LFS
+    /// repositories work. Any other command under `filter.lfs` is not.
+    #[test]
+    fn the_standard_git_lfs_filter_is_trusted() {
+        let (_dir, base, repo) = repo();
+        let global = base.join("gitconfig");
+        std::fs::write(
+            &global,
+            "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n",
+        )
+        .expect("global");
+        let repo = repo.with_global_config(global.clone());
+        std::fs::write(
+            repo.top().join(".gitattributes"),
+            "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        )
+        .expect("attrs");
+        std::fs::write(repo.top().join("a.bin"), "x").expect("file");
+        assert!(
+            repo.check_attributes(&[]).is_ok(),
+            "standard git-lfs is trusted"
+        );
+        assert_eq!(repo.attribute_scans(), 0, "no driver left to scan for");
+        std::fs::write(
+            &global,
+            "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tprocess = git-lfs filter-process --evil\n",
+        )
+        .expect("global");
+        let error = repo
+            .check_attributes(&[])
+            .expect_err("not the standard filter");
+        assert!(error.message().contains("a.bin"), "{}", error.message());
+    }
+
+    /// The scan is cached per repository and redone when anything it
+    /// depends on changes: a new untracked path, a `.gitattributes`.
+    #[test]
+    fn attribute_scans_are_cached_until_the_tree_changes() {
+        let (_dir, base, repo) = repo();
+        let global = base.join("gitconfig");
+        std::fs::write(&global, "[diff \"x\"]\n\ttextconv = cat\n").expect("global");
+        let repo = repo.with_global_config(global);
+        std::fs::create_dir(repo.top().join("sub")).expect("sub");
+        std::fs::write(repo.top().join("sub/.gitattributes"), "*.y diff=x\n").expect("attrs");
+        std::fs::write(repo.top().join("a.txt"), "x").expect("file");
+        assert!(repo.check_attributes(&[]).is_ok());
+        assert!(repo.check_attributes(&[]).is_ok());
+        assert!(repo.git(repo.top()).worktree().run(&["status"]).is_ok());
+        assert_eq!(repo.attribute_scans(), 1, "unchanged: scanned once");
+        std::fs::write(repo.top().join("sub/b.y"), "y").expect("new file");
+        assert!(repo.check_attributes(&[]).is_err(), "a new path is scanned");
+        std::fs::remove_file(repo.top().join("sub/b.y")).expect("remove");
+        assert!(repo.check_attributes(&[]).is_ok());
+        let scans = repo.attribute_scans();
+        std::fs::write(repo.top().join("sub/.gitattributes"), "*.txt diff=x\n").expect("attrs");
+        std::fs::write(repo.top().join("sub/c.txt"), "c").expect("file");
+        std::fs::remove_file(repo.top().join("sub/c.txt")).expect("remove");
+        assert!(repo.check_attributes(&[]).is_ok());
+        assert_eq!(
+            repo.attribute_scans(),
+            scans + 1,
+            "a changed .gitattributes is scanned"
+        );
+        std::fs::write(repo.top().join(".gitignore"), ".gitattributes\n").expect("ignore");
+        std::fs::write(repo.top().join(".gitattributes"), "*.txt diff=x\n").expect("ignored attrs");
+        assert!(
+            repo.check_attributes(&[]).is_err(),
+            "an ignored .gitattributes still applies and is seen"
+        );
     }
 
     #[test]
