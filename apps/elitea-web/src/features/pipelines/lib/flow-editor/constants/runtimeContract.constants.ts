@@ -96,6 +96,14 @@ const admittedNodeTypeSet: ReadonlySet<string> = new Set<string>(CompilerAdmitte
 /** Whether the pipeline compiler has a `parse_pipeline_node` arm for `type`. */
 export const isCompilerAdmittedNodeType = (type: string): boolean => admittedNodeTypeSet.has(type);
 
+/**
+ * A type the runtime knows but this deployment's build does not admit — the
+ * rehearsal-only shaping nodes. Main's save check names them the same way
+ * (`services/elitea-main/internal/domain/pipelinelimits`, `PIPELINE_NODE_TYPE_NOT_AVAILABLE`).
+ */
+export const isDeploymentGatedNodeType = (type: string): boolean =>
+  !admittedNodeTypeSet.has(type) && (type === PipelineNodeTypes.SplitOut || type === PipelineNodeTypes.Aggregate);
+
 // ─────────────────────────────────────────────────────────────────────────
 // Reserved state keys — `compiler.rs:2666` `reserved_user_state_key`
 // ─────────────────────────────────────────────────────────────────────────

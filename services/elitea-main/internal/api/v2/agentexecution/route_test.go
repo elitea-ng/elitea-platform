@@ -619,6 +619,14 @@ func TestCurrentApplicationStartRouteNamesThePipelineLimitItRefused(t *testing.T
 	}{
 		"bytes": {pipelinelimits.ErrInstructionsTooLarge, "PIPELINE_INSTRUCTIONS_TOO_LARGE", "512 KiB"},
 		"nodes": {pipelinelimits.ErrTooManyNodes, "PIPELINE_TOO_MANY_NODES", "128 nodes"},
+		"node type": {
+			pipelinelimits.CheckStart("nodes:\n  - id: split\n    type: split_out\n", nil),
+			pipelinelimits.CodeNodeTypeNotAvailable, `Node "split" uses the "split_out" node type, which is not available on this deployment.`,
+		},
+		"toolkit": {
+			pipelinelimits.CheckStart("nodes:\n  - id: fetch\n    type: toolkit\n    toolkit_name: jira\n", nil),
+			pipelinelimits.CodeToolkitNotAttached, `Attach "jira" under Tools → Toolkit`,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			// The shape the use case returns: the unsupported sentinel plus the limit.
