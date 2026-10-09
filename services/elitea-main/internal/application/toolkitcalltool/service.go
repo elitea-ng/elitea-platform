@@ -68,9 +68,12 @@ type RunRequest struct {
 	LLMModel                  string
 	MCPAuthorizationReference string
 	LLMSettings               json.RawMessage
-	// SensitiveApproval travels to the worker in the runtime context. Nil means
-	// no approval: a worker refuses a tool the policy marks sensitive.
-	SensitiveApproval *SensitiveActionApproval
+	// EnforceSensitiveGate and SensitiveApproval are set by the desktop's
+	// remote toolkit call only. With the gate, the worker refuses a tool the
+	// policy marks sensitive unless SensitiveApproval is present. Without it,
+	// neither key reaches the runtime context (RuntimeContext.SensitiveGate).
+	EnforceSensitiveGate bool
+	SensitiveApproval    *SensitiveActionApproval
 }
 
 func (r RunRequest) Validate() error {
@@ -98,7 +101,7 @@ func (r RunRequest) Validate() error {
 	if !validModelSettings(r.LLMSettings) {
 		return ErrInvalidToolRun
 	}
-	if !r.SensitiveApproval.valid() {
+	if !r.SensitiveApproval.valid() || (r.SensitiveApproval != nil && !r.EnforceSensitiveGate) {
 		return ErrInvalidToolRun
 	}
 	if len(r.Arguments) > MaxToolArgumentsBytes {

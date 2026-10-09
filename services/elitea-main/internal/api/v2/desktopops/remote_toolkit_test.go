@@ -128,6 +128,7 @@ func TestRemoteToolkitRunsTheCallersToolThroughTheSharedUseCase(t *testing.T) {
 	got := runs.request
 	if got.ProjectID != 3 || got.ToolkitID != 61 || got.ActorUserID != 7 || got.ToolName != "create_issue" ||
 		string(got.Arguments) != `{"title":"x"}` || got.RequestID != "r1" || got.SensitiveApproval != nil ||
+		!got.EnforceSensitiveGate ||
 		got.LLMModel != "version-model" || string(got.LLMSettings) != `{"temperature":0.2}` {
 		t.Fatalf("run request = %+v", got)
 	}

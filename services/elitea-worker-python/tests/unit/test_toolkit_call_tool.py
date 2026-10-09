@@ -101,6 +101,7 @@ def _request(
     tool_name: str = "get_issue",
     toolkit_security: dict[str, Any] | None = _NO_POLICY,
     approval: dict[str, Any] | None = None,
+    sensitive_gate: Any = None,
 ) -> ToolkitCallToolRequest:
     return ToolkitCallToolRequest(
         toolkit_type="github",
@@ -120,6 +121,7 @@ def _request(
         runtime_config={"metadata": {"tool_name": tool_name}},
         toolkit_security=toolkit_security,
         sensitive_action_approval=approval,
+        sensitive_gate=sensitive_gate,
     )
 
 
@@ -664,9 +666,13 @@ def test_an_unreadable_registry_does_not_refuse_the_run(
     assert sdk_adapter_module.unsupported_toolkit_type_reason("github") == ""
 
 
-# toolkit_security is enforced by the worker itself (defence in depth): the
-# Rust worker refuses a blocked and a sensitive tool on this path, and so does
-# this one, whoever produced the command.
+# toolkit_security is enforced by the worker itself (defence in depth). A
+# blocked tool is refused for every producer, as the Rust worker refuses it on
+# this path. A sensitive tool is refused without an approval only when the run
+# opts into the gate, which only the desktop's remote toolkit call does.
+
+_SENSITIVE_POLICY = {"blocked_toolkits": [], "blocked_tools": {}, "sensitive_tools": {"*": ["get_issue"]}}
+_APPROVAL = {"source": "user_confirmation", "approved_at": "2026-10-08T12:00:00Z"}
 
 
 def test_a_blocked_toolkit_or_tool_never_reaches_the_sdk() -> None:
@@ -675,40 +681,66 @@ def test_a_blocked_toolkit_or_tool_never_reaches_the_sdk() -> None:
             {"blocked_toolkits": ["GitHub"], "blocked_tools": {}, "sensitive_tools": {}},
             {"blocked_toolkits": [], "blocked_tools": {"github": ["GetIssue"]}, "sensitive_tools": {}},
         ):
-            sdk = _FakeSdk({"success": True, "result": {}, "tool_name": "get_issue"})
-            with pytest.raises(UnsupportedCapability):
-                # A routing prefix does not dodge the block.
-                await _run(sdk, _request(tool_name="github___get_issue", toolkit_security=policy))
-            assert sdk.calls == []
+            # Every producer's shape: without the gate (test_tool, MCP, code
+            # platform, index start) and with it (the remote toolkit call).
+            for gate in (None, "enforce"):
+                sdk = _FakeSdk({"success": True, "result": {}, "tool_name": "get_issue"})
+                with pytest.raises(UnsupportedCapability):
+                    # A routing prefix does not dodge the block.
+                    await _run(
+                        sdk,
+                        _request(tool_name="github___get_issue", toolkit_security=policy, sensitive_gate=gate),
+                    )
+                assert sdk.calls == []
 
     asyncio.run(run())
 
 
-def test_a_sensitive_tool_runs_only_with_an_approval() -> None:
-    policy = {"blocked_toolkits": [], "blocked_tools": {}, "sensitive_tools": {"*": ["get_issue"]}}
-
+def test_a_remote_toolkit_call_runs_a_sensitive_tool_only_with_an_approval() -> None:
     async def run() -> None:
         sdk = _FakeSdk({"success": True, "result": {}, "tool_name": "get_issue"})
         with pytest.raises(UnsupportedCapability):
-            await _run(sdk, _request(toolkit_security=policy))
+            await _run(sdk, _request(toolkit_security=_SENSITIVE_POLICY, sensitive_gate="enforce"))
         assert sdk.calls == []
 
-        with pytest.raises(InvalidInput):
-            await _run(sdk, _request(toolkit_security=policy, approval={"source": "whoever"}))
-        with pytest.raises(InvalidInput):
-            await _run(sdk, _request(toolkit_security=policy, approval={"source": "user_confirmation"}))
+        for approval in ({"source": "whoever"}, {"source": "user_confirmation"}, {"source": "configuration_test"}):
+            with pytest.raises(InvalidInput):
+                await _run(
+                    sdk, _request(toolkit_security=_SENSITIVE_POLICY, sensitive_gate="enforce", approval=approval)
+                )
         assert sdk.calls == []
 
-        await _run(
-            sdk,
-            _request(
-                toolkit_security=policy,
-                approval={"source": "user_confirmation", "approved_at": "2026-10-08T12:00:00Z"},
-            ),
-        )
-        # test_tool's configuration test keeps running sensitive tools.
-        await _run(sdk, _request(toolkit_security=policy, approval={"source": "configuration_test"}))
-        assert len(sdk.calls) == 2
+        await _run(sdk, _request(toolkit_security=_SENSITIVE_POLICY, sensitive_gate="enforce", approval=_APPROVAL))
+        assert len(sdk.calls) == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "producer",
+    ["test_tool", "mcp_toolkit_run", "code_platform_native_operation", "index_start"],
+)
+def test_producers_without_the_gate_keep_running_sensitive_tools(producer: str) -> None:
+    # These producers send the policy and nothing else about sensitivity: the
+    # runtime context they sent before the remote toolkit call existed.
+    del producer
+
+    async def run() -> None:
+        sdk = _FakeSdk({"success": True, "result": {}, "tool_name": "get_issue"})
+        await _run(sdk, _request(toolkit_security=_SENSITIVE_POLICY))
+        assert len(sdk.calls) == 1
+
+    asyncio.run(run())
+
+
+def test_a_malformed_gate_or_an_approval_without_the_gate_is_refused() -> None:
+    async def run() -> None:
+        sdk = _FakeSdk({"success": True, "result": {}, "tool_name": "get_issue"})
+        with pytest.raises(InvalidInput):
+            await _run(sdk, _request(toolkit_security=_NO_POLICY, sensitive_gate="off"))
+        with pytest.raises(InvalidInput):
+            await _run(sdk, _request(toolkit_security=_NO_POLICY, approval=_APPROVAL))
+        assert sdk.calls == []
 
     asyncio.run(run())
 
@@ -741,7 +773,8 @@ def test_request_from_carries_the_runtime_context_policy() -> None:
         settings=ResolvedToolkitCallToolInput(binding=_binding("settings", b"s"), value={}),
         arguments=ResolvedToolkitCallToolInput(binding=_binding("arguments", b"a"), value={}),
         runtime_config={},
-        runtime_context={"toolkit_security": policy, "sensitive_action_approval": approval},
+        runtime_context={"toolkit_security": policy, "sensitive_gate": "enforce", "sensitive_action_approval": approval},
     )
     assert request.toolkit_security == policy
     assert request.sensitive_action_approval == approval
+    assert request.sensitive_gate == "enforce"

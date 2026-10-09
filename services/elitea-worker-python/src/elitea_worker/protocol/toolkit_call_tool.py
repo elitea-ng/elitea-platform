@@ -82,6 +82,7 @@ def request_from(
         mcp_tokens=mcp_tokens,
         toolkit_security=security if isinstance(security, dict) else None,
         sensitive_action_approval=approval,
+        sensitive_gate=context.get("sensitive_gate"),
     )
 
 

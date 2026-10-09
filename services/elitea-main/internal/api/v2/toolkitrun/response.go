@@ -120,10 +120,6 @@ func DecodeRequest(
 		LLMModel:                  body.LLMModel,
 		LLMSettings:               body.LLMSettings,
 		MCPAuthorizationReference: body.MCPAuthorizationReference,
-		// test_tool is a configuration test by an editor of the toolkit
-		// (`tool.patch`): it has always run sensitive tools, and the worker
-		// needs this to keep running them now that it enforces the policy.
-		SensitiveApproval: toolkitcalltoolapp.ConfigurationTestApproval(),
 	}
 	if err := request.Validate(); err != nil {
 		return toolkitcalltoolapp.RunRequest{}, errInvalidBody
