@@ -79,11 +79,11 @@ What we deliberately do not port:
 | Worker × admission, no fenced writer | F | `direct_tool.rs:426-431` | `effectful_tool_requires_the_fenced_writer_before_any_call` |
 | Worker × sensitive pause / decision | R | `execute_sensitive`, digest-bound decision | `sensitive_effectful_pause_leaves_no_started_attempt_and_approval_runs_once` |
 | Worker × effectful call, result committed | R | `RecoverableNode` result replay | `effectful_direct_tool_runs_once_and_its_committed_result_is_replayed` |
-| Worker × crash after Started, before result | C | `direct_tool.rs:886`. Run recovery refuses a direct-tool frontier (`compiler.rs:766`). | `started_attempt_without_result_never_repeats_an_effectful_tool` |
+| Worker × crash after Started, before result | C | `direct_tool.rs:886`. Run recovery refuses a direct-tool frontier (`compiler.rs:766`). | `started_attempt_without_result_never_repeats_an_effectful_tool`; real PostgreSQL: `crash_after_started_before_result_never_repeats_the_effect` |
 | Worker × tool error | F (typed) + C record | `direct_tool.rs:574-592` | `effectful_tool_failure_stops_with_its_error_and_is_not_called_again` |
 | Worker × result not journaled after the call | F (typed) + C record | `direct_tool.rs` `dispatch` (`completed` flag) | `effect_whose_result_cannot_be_recorded_is_reported_and_never_repeated` |
 | Worker × block / skip | F (stop with message) | `direct_tool.rs:514`, `:719` | `blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_recovery`, `skipped_effectful_authorization_stops_the_whole_pipeline_under_node_recovery` |
-| PostgreSQL × journal append | Fenced | `StateWriterLease` in `postgres_checkpointer/node_attempts.rs` | Existing node-recovery Postgres tests (DB-gated) |
+| PostgreSQL × journal append and takeover | Fenced | `StateWriterLease` and writer activation in `postgres_checkpointer/node_attempts.rs`, `postgres_checkpointer.rs` `activate` | `src/state/postgres_checkpointer_tests/direct_tool_journal.rs` (5 DB-gated tests: process replacement, crash after Started, second-claim takeover, pause/block rows, replay) |
 
 ## Gaps
 
@@ -107,9 +107,13 @@ What we deliberately do not port:
 5. **Missing writer is detected at run time.** The authority is attached after assembly
    (`src/agents/session.rs:1606`). With the flag off, upstream nodes run before the effectful node
    refuses. The committed runtime configs enable the flag.
-6. **No real-PostgreSQL journal tests.** The direct-tool journal tests use the in-memory fixture
-   journal. No DB-gated test covers `postgres_checkpointer/node_attempts.rs` yet, for Code nodes
-   either. Crash-window and second-claim tests against PostgreSQL are a follow-up.
+6. **Root-writer fencing of new journal threads.** Journal threads are fenced per thread: an older claim can
+   never take over a thread a newer claim owns, and a newer claim always takes over and reads the durable
+   `Started`, so no effect is dispatched twice. However, opening a journal thread does not re-check that the
+   run's root writer is still this claim. A superseded claim whose in-process lease has not yet been revoked can
+   therefore start one effect in an activation nobody has opened yet. It is recorded durably and is never
+   repeated by the newer claim. The fix is to verify the root writer inside the journal-thread activation
+   transaction (defence in depth; Main's lease revocation is the primary guard).
 7. **LLM-node receipts.** Pipeline LLM nodes admit effectful sensitive tools without an effect
    receipt (`src/agents/graph/llm.rs:1326-1470`). They should move to the same journal so the two
    node kinds share one guarantee (Gate 6, `docs/remaining-gates.md:60`).

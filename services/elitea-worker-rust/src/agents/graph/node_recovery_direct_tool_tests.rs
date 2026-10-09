@@ -13,6 +13,7 @@ use adk_rust::graph::interrupt::Interrupt;
 use adk_rust::{Tool, ToolContext};
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicUsize;
+use tokio::sync::Notify;
 
 const NODE: &str = r"
 id: lookup
@@ -33,6 +34,14 @@ enum Behavior {
     Authorization(Arc<AtomicBool>),
     /// The call succeeds, then the writer lease is lost before the result commits.
     SucceedThenLoseLease(Arc<Lease>),
+    /// The call is held inside the tool until the gate releases it.
+    Gated(Arc<Gate>),
+}
+
+/// Holds a call inside the tool so a `PostgreSQL` proof can end or fence the process mid-effect.
+pub(crate) struct Gate {
+    pub(crate) entered: Notify,
+    pub(crate) release: Notify,
 }
 
 /// The shared fixture journal ignores the activation; a real journal is one per activation.
@@ -89,10 +98,12 @@ impl Tool for EffectTool {
                 lease.0.store(false, Ordering::SeqCst);
                 Ok(json!({"report": {"created": true}, "messages": []}))
             }
-            Behavior::Succeed | Behavior::Authorization(_) => Ok(json!({
-                "report": {"created": true},
-                "messages": [{"role": "assistant", "content": "created"}],
-            })),
+            Behavior::Gated(gate) => {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+                Ok(created_result())
+            }
+            Behavior::Succeed | Behavior::Authorization(_) => Ok(created_result()),
             Behavior::Fail => Err(adk_rust::AdkError::new(
                 adk_rust::ErrorComponent::Tool,
                 adk_rust::ErrorCategory::Internal,
@@ -101,6 +112,13 @@ impl Tool for EffectTool {
             )),
         }
     }
+}
+
+fn created_result() -> Value {
+    json!({
+        "report": {"created": true},
+        "messages": [{"role": "assistant", "content": "created"}],
+    })
 }
 
 struct Resolver {
@@ -138,6 +156,25 @@ fn node(
     behavior: Behavior,
     sensitive: bool,
 ) -> (DirectToolNode, Arc<AtomicUsize>) {
+    build(factory.clone(), behavior, sensitive)
+}
+
+/// The effectful node over any journal factory, so real-journal proofs reuse this fixture.
+pub(crate) fn journaled_node(
+    factory: Arc<dyn NodeRecoveryFactory>,
+    gate: Option<Arc<Gate>>,
+    sensitive: bool,
+) -> (Arc<dyn Node>, Arc<AtomicUsize>) {
+    let behavior = gate.map_or(Behavior::Succeed, Behavior::Gated);
+    let (node, calls) = build(factory, behavior, sensitive);
+    (Arc::new(node), calls)
+}
+
+fn build(
+    factory: Arc<dyn NodeRecoveryFactory>,
+    behavior: Behavior,
+    sensitive: bool,
+) -> (DirectToolNode, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let resolver = Arc::new(Resolver {
         tool: Arc::new(EffectTool {
@@ -152,17 +189,22 @@ fn node(
     ]);
     let definition = DirectToolNodeDefinition::from_yaml(NODE).expect("direct node");
     (
-        DirectToolNode::new(definition, types, resolver).with_node_recovery(factory.clone()),
+        DirectToolNode::new(definition, types, resolver).with_node_recovery(factory),
         calls,
     )
 }
 
-fn state() -> State {
+pub(crate) fn state() -> State {
     State::from([("input".to_owned(), json!(7))])
 }
 
 fn context(state: State) -> NodeContext {
     NodeContext::new(state, ExecutionConfig::new("root"), 2)
+}
+
+/// The journal activation this node derives for `context`, as a real journal sees it.
+pub(crate) fn node_activation(context: &NodeContext) -> NodeAttemptActivation {
+    NodeAttemptActivation::from_context("lookup", digest(), context).expect("activation")
 }
 
 fn digest() -> [u8; 32] {
@@ -186,7 +228,7 @@ async fn journal_for(
     (journal, snapshot)
 }
 
-fn recovery_card(output: &NodeOutput) -> bool {
+pub(crate) fn recovery_card(output: &NodeOutput) -> bool {
     matches!(
         &output.interrupt,
         Some(Interrupt::Dynamic { data: Some(data), .. })
@@ -194,14 +236,19 @@ fn recovery_card(output: &NodeOutput) -> bool {
     )
 }
 
-fn pause_data(output: NodeOutput) -> Value {
+pub(crate) fn pause_data(output: NodeOutput) -> Value {
     let Some(Interrupt::Dynamic { data, .. }) = output.interrupt else {
         panic!("expected a dynamic interrupt");
     };
     data.expect("interrupt data")
 }
 
-fn with_decision(mut state: State, data: &Value, action: &str, value: Option<&str>) -> State {
+pub(crate) fn with_decision(
+    mut state: State,
+    data: &Value,
+    action: &str,
+    value: Option<&str>,
+) -> State {
     let mut decision = json!({
         "definition_digest": data["definition_digest"],
         "tool_call_id": data["tool_call_id"],

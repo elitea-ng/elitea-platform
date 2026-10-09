@@ -50,6 +50,17 @@ New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 8 tests:
 - `effectful_tool_requires_the_fenced_writer_before_any_call`
 - `effect_whose_result_cannot_be_recorded_is_reported_and_never_repeated`
 
+`src/state/postgres_checkpointer_tests/direct_tool_journal.rs` (real PostgreSQL, DB-gated with the same `#[ignore]` reason as the neighbouring tests):
+- `committed_effect_result_survives_process_replacement`
+- `crash_after_started_before_result_never_repeats_the_effect`: the in-flight call is aborted and the pool closed;
+  SQL shows one `Started` row without a result; the replacement process calls the tool 0 times.
+- `second_claim_takeover_fences_the_old_writer_and_keeps_the_started_effect`
+- `pause_and_block_leave_no_postgres_journal_rows`
+- `replaying_a_completed_activation_never_repeats_the_effect`
+
+Run against a disposable PostgreSQL 18 (pgvector image): 5 passed. Removing the `recovering_started` guard makes
+the crash and takeover tests fail.
+
 `src/agents/graph/compiler_tests.rs`:
 - `blocked_pipeline_answers_with_its_stop_message_not_unwritten_outputs`
 
@@ -67,7 +78,7 @@ New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 8 tests:
 - the direct-node wording assertions in the toolkit and MCP scope tests.
 
 Results:
-- `cargo test --all-features`: lib 2031 passed, 0 failed, 63 ignored; all integration test targets pass. DB-gated tests are skipped without
+- `cargo test --all-features`: lib 2031 passed, 0 failed, 68 ignored (5 new DB-gated); all integration test targets pass. DB-gated tests are skipped without
   `ELITEA_TEST_DATABASE_URL`, and the new tests use the in-memory journal fixture.
 - `cargo clippy --all-targets --all-features -D warnings` and `cargo fmt --check` are clean.
 - Helm: `render-worker-sandbox.sh` passes, and `render-worker.sh` ran 8 assertions, all passed.
