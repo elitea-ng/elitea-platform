@@ -33,36 +33,36 @@ const MAX_TOTAL_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct Snapshot {
-    pub id: String,
-    pub revision: String,
-    pub source_scope: String,
-    pub name: String,
-    pub description: String,
-    pub content: String,
-    pub kind: String,
-    pub skill_id: Value,
-    pub icon_meta: Value,
+struct Snapshot {
+    id: String,
+    revision: String,
+    source_scope: String,
+    name: String,
+    description: String,
+    content: String,
+    kind: String,
+    skill_id: Value,
+    icon_meta: Value,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct InstructionPlan {
-    pub catalog: BTreeMap<String, Snapshot>,
-    pub active: BTreeSet<String>,
-    pub run_id: String,
-    pub resume: bool,
-    pub allow_new_scope_on_resume: bool,
-    pub pipeline_node: bool,
+    catalog: BTreeMap<String, Snapshot>,
+    active: BTreeSet<String>,
+    run_id: String,
+    resume: bool,
+    allow_new_scope_on_resume: bool,
+    pipeline_node: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct InstructionState {
-    pub schema: u32,
-    pub scope: String,
-    pub activated_run_id: String,
-    pub catalog: BTreeMap<String, Snapshot>,
-    pub active: BTreeSet<String>,
+struct InstructionState {
+    schema: u32,
+    scope: String,
+    activated_run_id: String,
+    catalog: BTreeMap<String, Snapshot>,
+    active: BTreeSet<String>,
 }
 
 impl InstructionPlan {
@@ -125,7 +125,7 @@ impl InstructionPlan {
         Ok(plan)
     }
 
-    pub fn add_project_context(
+    fn add_project_context(
         &mut self,
         context: &super::request::ProjectContextSnapshot,
     ) -> Result<(), NativeAgentAssemblyError> {
@@ -150,7 +150,7 @@ impl InstructionPlan {
         self.validate_bounds()
     }
 
-    pub fn add_skills(&mut self, skills: &[Value]) -> Result<(), NativeAgentAssemblyError> {
+    fn add_skills(&mut self, skills: &[Value]) -> Result<(), NativeAgentAssemblyError> {
         for skill in skills {
             let object = skill.as_object().ok_or_else(invalid)?;
             let content = object
@@ -211,7 +211,7 @@ impl InstructionPlan {
         self.validate_bounds()
     }
 
-    pub fn resolve_skill(&self, value: &Value) -> Result<String, NativeAgentAssemblyError> {
+    fn resolve_skill(&self, value: &Value) -> Result<String, NativeAgentAssemblyError> {
         if let Some(id) = value.get("id").and_then(Value::as_str) {
             return self
                 .catalog
@@ -320,11 +320,7 @@ impl InstructionPlan {
         })
     }
 
-    pub fn start(
-        &self,
-        stored: Option<Value>,
-        scope: String,
-    ) -> adk_core::Result<InstructionState> {
+    fn start(&self, stored: Option<Value>, scope: String) -> adk_core::Result<InstructionState> {
         if let Some(stored) = stored {
             let state: InstructionState = serde_json::from_value(stored).map_err(|_| corrupt())?;
             state.validate(&scope)?;
@@ -344,11 +340,62 @@ impl InstructionPlan {
     }
 }
 
+/// Fixtures for the worker's composition suites (`test-support`, never in a
+/// production build). They run the plan against worker sessions, internal
+/// tools and durable compaction, so they build it from frozen sources and
+/// read back only what a turn would show; the plan's internals stay private.
+#[cfg(any(test, feature = "test-support"))]
+impl InstructionPlan {
+    /// A plan for `run_id` (resumed or fresh) over these frozen skills and
+    /// project contexts.
+    pub fn fixture(
+        run_id: &str,
+        resume: bool,
+        skills: &[Value],
+        contexts: &[super::request::ProjectContextSnapshot],
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        let mut plan = Self {
+            run_id: run_id.to_owned(),
+            resume,
+            ..Self::default()
+        };
+        plan.add_skills(skills)?;
+        for context in contexts {
+            plan.add_project_context(context)?;
+        }
+        Ok(plan)
+    }
+
+    /// `(id, revision, content)` of every frozen source, in catalog order.
+    pub fn sources_for_test(&self) -> Vec<(String, String, String)> {
+        self.catalog
+            .values()
+            .map(|source| {
+                (
+                    source.id.clone(),
+                    source.revision.clone(),
+                    source.content.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// The instruction text this plan renders when it starts in `scope`
+    /// over `stored` authoritative state.
+    pub fn render_for_test(
+        &self,
+        stored: Option<Value>,
+        scope: String,
+    ) -> adk_core::Result<String> {
+        self.start(stored, scope).map(|state| state.render())
+    }
+}
+
 impl Snapshot {
     fn public(&self) -> Value {
         json!({"skill_id":self.skill_id,"name":self.name,"icon_meta":self.icon_meta,"id":self.id,"revision":self.revision})
     }
-    pub fn validate(&self) -> adk_core::Result<()> {
+    fn validate(&self) -> adk_core::Result<()> {
         if self.id.is_empty()
             || self.id.len() > 256
             || self.name.is_empty()
@@ -373,7 +420,7 @@ impl Snapshot {
 }
 
 impl InstructionState {
-    pub fn validate(&self, scope: &str) -> adk_core::Result<()> {
+    fn validate(&self, scope: &str) -> adk_core::Result<()> {
         if self.schema != 1
             || self.scope != scope
             || self.activated_run_id.is_empty()
@@ -398,7 +445,7 @@ impl InstructionState {
         Ok(())
     }
 
-    pub fn render(&self) -> String {
+    fn render(&self) -> String {
         let mut text = String::new();
         for source in self.catalog.values() {
             if self.active.contains(&source.id) {
@@ -491,7 +538,7 @@ impl Agent for InstructionAgent {
 // ADK dispatches a model's tool batch before publishing its result events.
 // Each instruction tool therefore starts from the same active set. Merge at
 // the publication boundary, after Runner persisted the preceding event.
-pub fn merge_activation_delta(value: &mut Value, previous: Option<Value>) -> adk_core::Result<()> {
+fn merge_activation_delta(value: &mut Value, previous: Option<Value>) -> adk_core::Result<()> {
     let Some(previous) = previous else {
         return Err(corrupt());
     };
@@ -712,3 +759,7 @@ fn invalid() -> NativeAgentAssemblyError {
         "the frozen instruction snapshot is invalid",
     )
 }
+
+#[cfg(test)]
+#[path = "instruction_authority_tests.rs"]
+mod tests;
