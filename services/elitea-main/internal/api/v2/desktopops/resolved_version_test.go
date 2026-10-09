@@ -125,3 +125,60 @@ func TestRouteConstructorsRequireTheCredentialPlane(t *testing.T) {
 }
 
 func apimwZero() apimw.AuthConfig { return apimw.AuthConfig{} }
+
+type projectContextResolver struct{ details string }
+
+func (f projectContextResolver) Resolve(_ context.Context, project, _ int64, application, version uint64) (storage.ClientApplicationVersion, error) {
+	return storage.ClientApplicationVersion{
+		SchemaVersion: storage.ClientApplicationVersionSchemaVersion,
+		ProjectID:     project, ApplicationID: int64(application), VersionID: int64(version),
+		VersionDetails:   json.RawMessage(f.details),
+		DefinitionSHA256: strings.Repeat("b", 64),
+		WithheldSecrets:  []string{"/instructions", "/project_context/content"},
+	}, nil
+}
+
+type fixedPermissions struct{ permissions []string }
+
+func (f fixedPermissions) ResolvePermissions(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+	return auth.PermissionResolution{UserID: 7, Permissions: f.permissions}, nil
+}
+
+// The frozen project context is project content behind its own read
+// permission; the resolved version carries it only for a caller who holds it.
+func TestResolvedVersionCarriesProjectContextOnlyForItsReaders(t *testing.T) {
+	const details = `{"tools":[],"instructions":"x","project_context":{"content":"PROJECT-CONTEXT-CANARY"}}`
+	token := &auth.User{ID: "7", UserID: "7", AuthType: "token", TokenID: "1"}
+	decode := func(t *testing.T, body []byte) storage.ClientApplicationVersion {
+		t.Helper()
+		var document storage.ClientApplicationVersion
+		if err := json.Unmarshal(body, &document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+
+	reader := &resolvedVersionHandler{useCase: projectContextResolver{details}, permissions: fixedPermissions{
+		[]string{ResolvedVersionPermission, ProjectContextViewPermission}}}
+	response := serveWith(t, http.MethodGet, ResolvedVersionPath, resolvedURL, "", token, reader.serve)
+	document := decode(t, response.Body.Bytes())
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "PROJECT-CONTEXT-CANARY") ||
+		document.ProjectContextWithheld {
+		t.Fatalf("a reader: status = %d, body %s", response.Code, response.Body)
+	}
+
+	other := &resolvedVersionHandler{useCase: projectContextResolver{details}, permissions: fixedPermissions{
+		[]string{ResolvedVersionPermission}}}
+	response = serveWith(t, http.MethodGet, ResolvedVersionPath, resolvedURL, "", token, other.serve)
+	document = decode(t, response.Body.Bytes())
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "PROJECT-CONTEXT-CANARY") ||
+		!document.ProjectContextWithheld {
+		t.Fatalf("a non-reader: status = %d, body %s", response.Code, response.Body)
+	}
+	if document.DefinitionSHA256 == strings.Repeat("b", 64) || response.Header().Get("ETag") != `"`+document.DefinitionSHA256+`"` {
+		t.Fatalf("the digest must describe the document served: %s / %s", document.DefinitionSHA256, response.Header().Get("ETag"))
+	}
+	if len(document.WithheldSecrets) != 1 || document.WithheldSecrets[0] != "/instructions" {
+		t.Fatalf("withheld_secrets = %v", document.WithheldSecrets)
+	}
+}

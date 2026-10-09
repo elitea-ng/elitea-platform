@@ -26,6 +26,10 @@ const (
 	// route gates on. The document is that version, frozen for execution and
 	// stripped of credentials, so reading it needs nothing more.
 	ResolvedVersionPermission = "models.applications.version.details"
+	// ProjectContextViewPermission is what the project context read routes
+	// gate on (router.go, requireProjectContextView). The resolved version
+	// includes the frozen project context only for a caller who holds it.
+	ProjectContextViewPermission = "models.project_context.view"
 	mode                      = auth.PermissionModeDefault
 )
 
@@ -58,7 +62,7 @@ func NewResolvedVersionRoute(
 	if authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidRoute
 	}
-	h := &resolvedVersionHandler{useCase: useCase}
+	h := &resolvedVersionHandler{useCase: useCase, permissions: permissions}
 	router := chi.NewRouter()
 	router.Method(http.MethodGet, ResolvedVersionPath, gate(authConfig, permissions, ResolvedVersionPermission, h.serve))
 	return router, nil
@@ -80,7 +84,27 @@ func gate(authConfig apimw.AuthConfig, permissions auth.PermissionResolver, perm
 }
 
 type resolvedVersionHandler struct {
-	useCase ResolvedVersionUseCase
+	useCase     ResolvedVersionUseCase
+	permissions auth.PermissionResolver
+}
+
+// mayViewProjectContext answers whether the caller holds
+// models.project_context.view in the project. An unreadable answer is "no":
+// the context is withheld rather than served on a guess.
+func (h *resolvedVersionHandler) mayViewProjectContext(request *http.Request, user auth.User, projectID int64) bool {
+	if h.permissions == nil {
+		return false
+	}
+	resolution, err := h.permissions.ResolvePermissions(request.Context(), user, mode, strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return false
+	}
+	for _, permission := range resolution.Permissions {
+		if permission == ProjectContextViewPermission {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *resolvedVersionHandler) serve(writer http.ResponseWriter, request *http.Request) {
@@ -128,6 +152,16 @@ func (h *resolvedVersionHandler) serve(writer http.ResponseWriter, request *http
 				"The version cannot be resolved right now. Retry.")
 		}
 		return
+	}
+	if resolved.WithheldSecrets == nil {
+		resolved.WithheldSecrets = []string{}
+	}
+	if !h.mayViewProjectContext(request, user, projectID) {
+		resolved, err = resolved.WithoutProjectContext()
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, "resolved_version_failed", "The version could not be encoded.")
+			return
+		}
 	}
 	encoded, err := json.Marshal(resolved)
 	if err != nil {

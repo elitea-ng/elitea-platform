@@ -3777,7 +3777,11 @@ export const getResolveApplicationVersionUrl = (
  * Memory recall is not part of the document: startLocalTurn answers it.
  *
  * WHO. Any authenticated caller with `models.applications.version.details`
- * in the project, browser sessions included (it is a read).
+ * in the project, browser sessions included (it is a read). The frozen
+ * `version_details.project_context` is included only for a caller who
+ * also holds `models.project_context.view`; otherwise it is omitted and
+ * `project_context_withheld` is true (the digest describes the document
+ * served).
  *
  * CACHING. `definition_sha256` (also the `ETag`) changes whenever the
  * resolved document does. The document is resolved on every call.

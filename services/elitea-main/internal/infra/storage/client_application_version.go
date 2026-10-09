@@ -70,6 +70,43 @@ type ClientApplicationVersion struct {
 	// local run would see the placeholder, not the value, and can run that
 	// agent in the cloud instead.
 	WithheldSecrets []string `json:"withheld_secrets"`
+	// ProjectContextWithheld is true when the version's frozen project
+	// context was removed because the caller may not read it
+	// (`models.project_context.view`). A local run then lacks the context a
+	// cloud turn would have.
+	ProjectContextWithheld bool `json:"project_context_withheld"`
+}
+
+// WithoutProjectContext answers the document with version_details'
+// `project_context` removed (and the digest recomputed over what remains),
+// flagged. A document that carries no project context is returned unchanged.
+func (document ClientApplicationVersion) WithoutProjectContext() (ClientApplicationVersion, error) {
+	decoder := json.NewDecoder(bytes.NewReader(document.VersionDetails))
+	decoder.UseNumber()
+	var details map[string]any
+	if err := decoder.Decode(&details); err != nil || details == nil {
+		return ClientApplicationVersion{}, errors.New("resolved version details are not one JSON object")
+	}
+	if _, present := details["project_context"]; !present {
+		return document, nil
+	}
+	delete(details, "project_context")
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		return ClientApplicationVersion{}, err
+	}
+	withheld := make([]string, 0, len(document.WithheldSecrets))
+	for _, pointer := range document.WithheldSecrets {
+		if pointer != "/project_context" && !strings.HasPrefix(pointer, "/project_context/") {
+			withheld = append(withheld, pointer)
+		}
+	}
+	document.VersionDetails = encoded
+	document.WithheldSecrets = withheld
+	document.ProjectContextWithheld = true
+	document.DefinitionSHA256 = clientApplicationVersionSHA256(
+		document.ProjectID, uint64(document.ApplicationID), uint64(document.VersionID), encoded)
+	return document, nil
 }
 
 // ClientApplicationVersionService serves one agent or pipeline version to a

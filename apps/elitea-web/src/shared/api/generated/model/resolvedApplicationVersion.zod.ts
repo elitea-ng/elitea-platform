@@ -60,6 +60,11 @@ export const ResolvedApplicationVersion = zod
       .describe(
         "JSON Pointers (RFC 6901, into `version_details`) of every string whose `{{secret.*}}` reference was replaced with `[secret withheld]`; empty when none. A local run of this version sees the placeholder, not the value: a client may run it in the cloud instead.",
       ),
+    project_context_withheld: zod
+      .boolean()
+      .describe(
+        "True when the version's frozen `project_context` was removed because the caller lacks `models.project_context.view` in the project; a local run then lacks the context a cloud turn has.",
+      ),
     version_details: ResolvedApplicationVersionDetails,
   })
   .describe(
