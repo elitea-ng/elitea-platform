@@ -13,6 +13,7 @@ import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { installContextMenuGuard } from '@/shared/desktop/contextMenu';
 import { createHostLogger, hostLog, installDiagnostics } from '@/shared/desktop/diagnostics';
 import { createHostBridge, tauriInvoke } from '@/shared/desktop/hostBridge';
 
@@ -33,6 +34,8 @@ const bridge = invoke === undefined ? undefined : createHostBridge(invoke);
 if (invoke !== undefined) {
   installDiagnostics(createHostLogger(invoke));
   hostLog('info', `webview started (${import.meta.env.MODE})`, 'boot');
+  // Inside the host only: the dev harness in a browser keeps its devtools menu.
+  installContextMenuGuard();
 }
 
 function renderShell(root: HTMLElement): void {
