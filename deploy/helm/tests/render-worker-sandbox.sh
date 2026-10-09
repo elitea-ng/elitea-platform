@@ -4,6 +4,19 @@ cd "$(dirname "$0")/../../.."
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cat > "$work/profiles.yaml" <<'YAML'
+# The node attempt journal runs Code as original-Code visits, which Main admits
+# only with original-Code owner recovery for the same supervisor audiences.
+main:
+  runtime:
+    sandboxAudiences: [dns:sandbox-python, dns:sandbox-rust]
+    codeOwnerRecovery:
+      enabled: true
+      mainWorkloadIdentity: spiffe://elitea.invalid/main
+      supervisors:
+        - audience: dns:sandbox-python
+          httpsOrigin: https://sandbox-python:9446
+        - audience: dns:sandbox-rust
+          httpsOrigin: https://sandbox-rust:9447
 worker:
   enabled: true
   implementation: rust
@@ -51,4 +64,11 @@ if helm template test deploy/helm/elitea "${args[@]}" --set worker.implementatio
   exit 1
 fi
 grep -Fq 'require the Rust worker' "$work/error"
+if helm template test deploy/helm/elitea "${args[@]}" --set main.runtime.codeOwnerRecovery.enabled=false \
+  --set main.runtime.codeOwnerRecovery.mainWorkloadIdentity= --set 'main.runtime.codeOwnerRecovery.supervisors=null' \
+  > "$work/error" 2>&1; then
+  echo 'Node recovery with sandbox runtimes rendered without original-Code owner recovery' >&2
+  exit 1
+fi
+grep -Fq 'Code nodes would be refused without original-Code owner recovery' "$work/error"
 echo 'Worker sandbox and recovery rendering checks passed'

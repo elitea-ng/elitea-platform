@@ -28,6 +28,15 @@
 #     requires. The worker refuses node recovery without that path
 #     (services/elitea-worker-rust/src/config.rs, validate).
 #
+#   * with the journal on, a Code node is an original-Code visit that
+#     elitea-main must admit, and Main admits it only with original-Code owner
+#     recovery (main.runtime.codeOwnerRecovery). So the journal together with
+#     sandbox runtimes and owner recovery off is refused: every Code node would
+#     fail at admission, before any sandbox dispatch, as the generic "The
+#     runtime operation failed." (_code-nodes.tpl, codeNodes.validateWorker).
+#     The journal without sandbox runtimes, sandbox runtimes without the
+#     journal, and all three together render.
+#
 # Run: deploy/helm/tests/render-worker-node-recovery.sh
 # Needs: helm, python3 with PyYAML. No cluster, no network.
 set -euo pipefail
@@ -163,6 +172,79 @@ refuses 'worker.runtime.agentModelCheckpointRecovery must be true or false' \
   --set worker.implementation=rust --set-string worker.runtime.agentModelCheckpointRecovery=false \
   && ok "rust, agentModelCheckpointRecovery as the string \"false\": refused too" \
   || bad "rust, agentModelCheckpointRecovery as the string \"false\": not refused"
+
+echo "== Code nodes with the journal need original-Code owner recovery in elitea-main =="
+# One Python Code backend, as render-worker-sandbox.sh writes it.
+cat >"$TMP/sandbox.yaml" <<'YAML'
+worker:
+  runtime:
+    sandboxRuntimes:
+      - language: python
+        target: sandbox-python:9446
+        audience: dns:sandbox-python
+        image_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy_revision: python-js-v1
+        timeout_seconds: 120
+YAML
+# Main's original-Code owner for that backend's supervisor audience.
+cat >"$TMP/owner.yaml" <<'YAML'
+main:
+  runtime:
+    sandboxAudiences: [dns:sandbox-python]
+    codeOwnerRecovery:
+      enabled: true
+      mainWorkloadIdentity: spiffe://elitea.invalid/main
+      supervisors:
+        - audience: dns:sandbox-python
+          httpsOrigin: https://sandbox-python:9446
+YAML
+CODE_REFUSAL='Code nodes would be refused without original-Code owner recovery'
+
+# code_backed <name> — the worker gets both the journal and the Code backend.
+code_backed() {
+  python3 - "$TMP/$1.yaml" <<'PY'
+import json, sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs if d["kind"] == "ConfigMap")
+config = json.loads(cm["data"]["runtime.json"])
+assert config["agent_node_recovery"] is True, config
+assert [p["language"] for p in config["sandbox_runtimes"]] == ["python"], config
+PY
+}
+
+# main_owner_on [helm args...] — Main's ConfigMap turns owner recovery on.
+main_owner_on() {
+  "$HELM" template t "$CHART" "${RENDER[@]}" "$@" --show-only templates/main/configmap.yaml 2>/dev/null \
+    | grep -qF 'ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"'
+}
+
+refuses "$CODE_REFUSAL" --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+  -f "$TMP/sandbox.yaml" \
+  && ok "rust, journal and sandbox runtimes, owner recovery off: refused" \
+  || bad "rust, journal and sandbox runtimes, owner recovery off: not refused with '$CODE_REFUSAL'"
+refuses "$CODE_REFUSAL" --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+  -f "$TMP/sandbox.yaml" --set main.runtime.codeOwnerRecovery.enabled=false \
+  && ok "rust, journal and sandbox runtimes, owner recovery explicitly false: refused" \
+  || bad "rust, journal and sandbox runtimes, owner recovery explicitly false: not refused with '$CODE_REFUSAL'"
+render rust-journal-no-code --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+  && [ "$(node_recovery rust-journal-no-code)" = "true" ] \
+  && ok "rust, journal without sandbox runtimes, owner recovery off: renders" \
+  || bad "rust, journal without sandbox runtimes: got $(node_recovery rust-journal-no-code 2>/dev/null || tail -1 "$TMP/rust-journal-no-code.err")"
+render rust-code-no-journal --set worker.implementation=rust -f "$TMP/sandbox.yaml" \
+  && [ "$(node_recovery rust-code-no-journal)" = "absent" ] \
+  && ok "rust, sandbox runtimes without the journal, owner recovery off: renders" \
+  || bad "rust, sandbox runtimes without the journal: got $(node_recovery rust-code-no-journal 2>/dev/null || tail -1 "$TMP/rust-code-no-journal.err")"
+render rust-journal-code-owner --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+  -f "$TMP/sandbox.yaml" -f "$TMP/owner.yaml" \
+  && code_backed rust-journal-code-owner \
+  && main_owner_on --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+    -f "$TMP/sandbox.yaml" -f "$TMP/owner.yaml" \
+  && ok "rust, journal, sandbox runtimes and owner recovery: renders, and Main gets owner recovery" \
+  || bad "rust, journal, sandbox runtimes and owner recovery: $(tail -1 "$TMP/rust-journal-code-owner.err")"
+refuses 'require the Rust worker' --set worker.implementation=python --set worker.runtime.agentNodeRecovery=true \
+  -f "$TMP/sandbox.yaml" \
+  && ok "python, journal and sandbox runtimes: refused as Rust-only, not as a Code owner gap" \
+  || bad "python, journal and sandbox runtimes: not refused with 'require the Rust worker'"
 
 echo
 RAN=$((PASS+FAIL))

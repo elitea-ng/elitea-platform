@@ -3723,6 +3723,9 @@ worker:
     # (deploy/runtime/worker-runtime.rust.json); a Kubernetes install that wants
     # parity sets it to true, and needs no extra material: the journal lives in
     # the AgentState database behind agent-checkpoint-connection.
+    # With sandboxRuntimes it also needs main.runtime.codeOwnerRecovery: the
+    # journal runs each Code node as an original-Code visit that elitea-main
+    # admits only with owner recovery, so the render refuses the pair without it.
     # A boolean only; true with the Python worker fails the render.
     agentNodeRecovery: false
     # Rust-only deployment-selected Code backends. These are never YAML node inputs.

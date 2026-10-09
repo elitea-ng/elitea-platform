@@ -108,6 +108,21 @@
 {{- end -}}
 {{- end -}}
 
+{{/*
+  The Rust worker's node attempt journal (worker.runtime.agentNodeRecovery)
+  runs every Code node as an original-Code visit that elitea-main admits
+  before any sandbox dispatch, and Main admits it only with original-Code
+  owner recovery. Without it each Code node fails at admission with the
+  generic runtime failure, and every pod still reports Ready.
+*/}}
+{{- define "elitea.codeNodes.validateWorker" -}}
+{{- $worker := .Values.worker.runtime | default dict -}}
+{{- $owner := (.Values.main.runtime | default dict).codeOwnerRecovery | default dict -}}
+{{- if and .Values.worker.enabled (eq $worker.agentNodeRecovery true) (gt (len ($worker.sandboxRuntimes | default list)) 0) (ne $owner.enabled true) -}}
+{{- fail "worker.runtime.agentNodeRecovery=true with worker.runtime.sandboxRuntimes needs main.runtime.codeOwnerRecovery.enabled=true: Code nodes would be refused without original-Code owner recovery, before any sandbox dispatch. Enable codeOwnerRecovery for the same supervisors, or clear agentNodeRecovery or sandboxRuntimes." -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "elitea.codeNodes.env" -}}
 {{- $runtime := .Values.main.runtime -}}
 {{- $dir := $runtime.material.mountPath | trimSuffix "/" -}}
