@@ -69,7 +69,8 @@ pub(crate) fn pipeline_configuration_assembly_error(
         PipelineConfigurationError::LimitExceeded(_) => {
             NativeAgentAssemblyErrorCode::AgentSettingsLimit
         }
-        PipelineConfigurationError::Unsupported(_) => {
+        PipelineConfigurationError::Unsupported(_)
+        | PipelineConfigurationError::NodeTypeNotAvailable(_) => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         PipelineConfigurationError::MalformedYaml { .. }

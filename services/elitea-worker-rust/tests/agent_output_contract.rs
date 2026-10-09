@@ -152,6 +152,12 @@ fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
             false,
         ),
         (
+            RuntimeFailureKind::PipelineNodeTypeNotAvailable,
+            RuntimeErrorCodeV1::UnsupportedCapability,
+            "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it.",
+            false,
+        ),
+        (
             RuntimeFailureKind::IncompatibleVersion,
             RuntimeErrorCodeV1::IncompatibleVersion,
             "The requested contract version is not compatible.",

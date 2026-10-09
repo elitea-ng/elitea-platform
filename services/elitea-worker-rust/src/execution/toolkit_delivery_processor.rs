@@ -1029,6 +1029,7 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::IncompatibleVersion => "runtime.incompatible_version",
         RuntimeFailureKind::InvalidInput => "runtime.invalid_input",
         RuntimeFailureKind::PipelineChildInputTypeInvalid => "pipeline.child_input_type_invalid",
+        RuntimeFailureKind::PipelineNodeTypeNotAvailable => "pipeline.node_type_not_available",
         RuntimeFailureKind::ResourceExhausted => "runtime.resource_exhausted",
         RuntimeFailureKind::ExecutionInputLimit
         | RuntimeFailureKind::ExecutionInputFieldLimit(_) => "runtime.execution_input_limit",
