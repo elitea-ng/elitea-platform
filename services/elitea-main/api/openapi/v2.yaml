@@ -25664,11 +25664,45 @@ paths:
         documented [1,1000]/default 20; offset<0 resets to 0 (:521-523).
         The caller must be a member of {project_id} (or a super-admin), and a
         repository failure is returned as a safe 500 error.
+
+        `mcp` and `query` filter on the server
+        (internal/api/v2/toolkits/handler.go, parseInstanceListFilter and
+        instanceWhere), so a picker can page MCP servers and plain toolkits
+        separately. `total` is the filtered total. Rows are ordered by name,
+        then id, so offset paging reaches every row once. A bad `mcp` or an
+        over-long `query` returns 400 `{"error": ...}`. That body has no
+        `error_description`, so it is not the InvalidClientVersionError the 400
+        entry below names: the client-contract lock allows no change to that
+        entry within this major.
+
+        When `mcp` is present (true or false) the list is the typed listing:
+        it also leaves out the `application` rows (agent-as-tool links), as the
+        legacy toolkits_listing does. When `mcp` is absent the raw listing is
+        unchanged and still holds them.
       tags: [toolkits, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
+        - name: mcp
+          in: query
+          required: false
+          description: |
+            `true` keeps MCP toolkits only, `false` drops them. A toolkit is an
+            MCP toolkit when its type is `mcp` or starts with `mcp_`, or its
+            `meta.mcp` is the boolean true (the web `isMcpToolkit` rule).
+            Absent means no MCP filter. Any other value returns 400.
+            A present `mcp` also excludes `application` rows.
+          schema: { type: boolean }
+        - name: query
+          in: query
+          required: false
+          description: |
+            Case-insensitive substring of the toolkit name or description.
+            The text is matched literally (`%`, `_` and `\` are not wildcards).
+            The server trims it; empty means no text filter. More than 128
+            characters returns 400.
+          schema: { type: string, maxLength: 128 }
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '400': { $ref: '#/components/responses/InvalidClientVersion' }

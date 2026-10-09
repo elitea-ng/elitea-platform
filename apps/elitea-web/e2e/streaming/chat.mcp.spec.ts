@@ -190,12 +190,11 @@ async function attachMcpThroughPicker(
   await expect(menu).toBeVisible({ timeout: 15_000 });
 
   // Drive the picker the way a user does: type the connection's name into the
-  // MCP section's own search box. The section pages the toolkit listing until a
-  // matching row is fetched (`useToolkitInstancePager` + `InstanceAddSection`'s
-  // auto-page effect), so a connection that sorts behind 20+ non-MCP toolkits is
-  // reachable by name alone — the picker's own pagination now guarantees this,
-  // which is why the earlier scroll-the-sibling-Toolkit-dropdown workaround is
-  // gone. A picker that could not reach it would fail the `toHaveCount(1)` below.
+  // MCP section's own search box. The section lists `mcp=true` rows only and
+  // sends the typed text as the server-side `query` parameter
+  // (`useToolkitInstancePager`), so a connection that sorts behind 20+ other
+  // toolkits is reachable by name alone, wherever it sorts in the listing. A
+  // picker that could not reach it would fail the `toHaveCount(1)` below.
   await page.getByPlaceholder('Search mcps...').fill(toolkitName);
 
   // NOT `exact`: the row renders name and description in one `ListItemText`
@@ -212,7 +211,7 @@ async function attachMcpThroughPicker(
     row,
     `the "+ MCP" picker must offer ${toolkitName} — an MCP-typed toolkit belongs in the MCP ` +
     'section, not the Toolkit one (`isMcpToolkit`, `entities/toolkit/model/selectors.ts:30-33`); ' +
-    'the wait covers the search debounce and the section paging the listing until it surfaces',
+    'the wait covers the search debounce and the server-side `mcp=true` + `query` fetch',
   ).toHaveCount(1, { timeout: 30_000 });
   await row.click();
 

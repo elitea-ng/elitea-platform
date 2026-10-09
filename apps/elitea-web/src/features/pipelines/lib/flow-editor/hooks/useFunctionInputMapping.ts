@@ -112,6 +112,8 @@ export interface UseFunctionInputMappingResult {
    * must never stand in for a failed read.
    */
   readonly dynamicToolsReadFailed: boolean;
+  /** `dynamicToolsReadFailed` because this deployment turned tool discovery off. A retry cannot help. */
+  readonly dynamicToolsDiscoveryDisabled: boolean;
   /** Reads the catalogue again. Connect it to the retry control of the error state. */
   readonly retryDynamicToolsRead: () => void;
   readonly dynamicArgsSchemas: Readonly<Record<string, unknown>>;
@@ -346,6 +348,7 @@ export function useFunctionInputMapping({ id, yamlJsonObject, setYamlJsonObject,
     selectedToolkit,
     dynamicToolNames,
     dynamicToolsReadFailed: dynamicTools.isError,
+    dynamicToolsDiscoveryDisabled: dynamicTools.isDiscoveryDisabled,
     retryDynamicToolsRead: dynamicTools.refetch,
     dynamicArgsSchemas,
     selectedTool,

@@ -25,6 +25,12 @@
  * and every caller must render it as its own state: an empty picker means
  * "this toolkit offers no tools", never "the read failed".
  *
+ * DISCOVERY OFF IS NOT A FAULT. A deployment that leaves
+ * `ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED` off answers the instance route
+ * 503 with one fixed body (`TOOLKIT_DISCOVERY_DISABLED_ERROR` below). Retrying
+ * cannot change that, so `useToolkitTools` reports it as `isDiscoveryDisabled`
+ * and the pickers draw a message without a retry button.
+ *
  * ENVELOPE. `eliteaFetch<T>` resolves orval's `{data, status, headers}`
  * envelope, not the body. Typing the call as the BODY is the recurring
  * defect (#132): every field reads back `undefined` on a 200. `fetchBody`
@@ -34,7 +40,7 @@ import { useCallback, useMemo, useRef } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
-import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 
 /**
  * One row of `writeJSON(w, 200, {"tools": tools, "total": len(tools)})` —
@@ -65,6 +71,22 @@ export interface ToolkitToolsPayload {
 async function fetchBody<T>(url: string, options?: RequestInit): Promise<T> {
   const envelope = await eliteaFetch<{ data: T }>(url, options);
   return envelope.data;
+}
+
+/**
+ * The `error` of the 503 that `Handler.AvailableTools` writes when the
+ * deployment composes no toolkit discovery
+ * (`services/elitea-main/internal/api/v2/toolkits/handler.go`). The same route
+ * answers other 503s for a runtime fault, which retry can fix, so the match is
+ * on status AND this exact body. `scripts/lib/e2e-live-assumptions.mjs`
+ * (`discoveryAbsentAnswer`) matches the same body for the e2e fixtures.
+ */
+const TOOLKIT_DISCOVERY_DISABLED_ERROR = 'toolkit discovery unavailable';
+
+function isToolkitDiscoveryDisabled(error: unknown): boolean {
+  if (!(error instanceof EliteaApiError) || error.failure.kind !== 'http' || error.failure.status !== 503) return false;
+  const { body } = error.failure;
+  return typeof body === 'object' && body !== null && (body as { readonly error?: unknown }).error === TOOLKIT_DISCOVERY_DISABLED_ERROR;
 }
 
 const TOOLKIT_TOOLS_QUERY_ROOT = ['toolkits', 'tools'] as const;
@@ -119,6 +141,8 @@ export interface UseToolkitToolsResult {
   readonly isFetching: boolean;
   /** The read failed. Render this as its own state — never as an empty list. */
   readonly isError: boolean;
+  /** The read failed because this deployment turned tool discovery off. Retrying cannot help, so show it without a retry. */
+  readonly isDiscoveryDisabled: boolean;
   /** The read ran, succeeded, and the toolkit offers no tools. Distinct from `isError`. */
   readonly isEmpty: boolean;
   readonly refetch: () => void;
@@ -186,6 +210,7 @@ export function useToolkitTools(params: UseToolkitToolsParams): UseToolkitToolsR
     toolNames,
     isFetching: query.isFetching,
     isError: query.isError,
+    isDiscoveryDisabled: isToolkitDiscoveryDisabled(query.error),
     isEmpty: discoveryIsEmpty(query.isSuccess, tools, query.data),
     refetch,
   };

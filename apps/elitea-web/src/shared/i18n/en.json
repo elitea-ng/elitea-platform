@@ -3735,6 +3735,7 @@
   "shared.ui.themeModeToggle.systemTooltip": "Follow the system theme",
   "features.toolkits.indexDetails.toolSchemaError": "The tool settings did not load. Try again.",
   "features.toolkits.testToolSettings.toolSchemaError": "The tool settings did not load. Try again.",
+  "shared.ui.toolListError.discoveryDisabled": "Tool discovery is turned off on this deployment. Ask an administrator to enable it.",
   "shared.ui.toolListError.message": "The tool list did not load. Try again.",
   "shared.ui.toolListError.retry": "Retry",
   "credentials.list.emptyDescription": "Create your first credential to get started. Credentials hold the provider keys your agents, toolkits and models authenticate with.",

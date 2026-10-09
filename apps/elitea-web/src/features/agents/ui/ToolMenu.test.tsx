@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { getGetPlatformSettingsMockHandler } from '@/shared/api/generated/admin/admin.msw';
 import { getGetApplicationMockHandler, getListApplicationsMockHandler, getUpdateApplicationRelationMockHandler } from '@/shared/api/generated/applications/applications.msw';
-import { getListToolkitInstancesMockHandler } from '@/shared/api/generated/toolkits/toolkits.msw';
+import { getGetToolkitMockHandler, getListToolkitInstancesMockHandler } from '@/shared/api/generated/toolkits/toolkits.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -114,31 +114,51 @@ interface FakeToolkitRow {
   readonly id: string;
   readonly type: string;
   readonly name: string;
+  readonly description?: string;
 }
 
 /** One `elitea_tools` row in the shape `listToolkitInstances` serves. */
 function toolkitRow(row: FakeToolkitRow) {
-  return { ...row, description: '', settings: {}, meta: {}, created_at: '2026-01-01T00:00:00Z', author_id: 1 };
+  return { description: '', ...row, settings: {}, meta: {}, created_at: '2026-01-01T00:00:00Z', author_id: 1 };
 }
 
 /**
- * A msw handler that PAGES like the real listing endpoint does
- * (`internal/api/v2/toolkits/handler.go`): it honours `limit`/`offset`, returns
- * the corresponding slice and the full `total`, and — critically — is ordered
- * by name, so `all` must already be name-sorted. `onOffset` records each offset
- * requested, letting a test assert that paging actually happened.
- *
- * This is what makes the pagination-defect tests real: a static
- * `{rows, total}` handler serves the SAME rows for every offset and so cannot
- * reproduce a section whose rows sort past the first page.
+ * The server-side filter of `GET /elitea_core/tools/prompt_lib/{project}`
+ * (`internal/api/v2/toolkits/handler.go`, `instanceWhere`): `mcp` keeps/drops MCP
+ * rows and — whenever it is present — drops `application` rows; `query` is a
+ * case-insensitive substring of name OR description. Absent params filter nothing.
  */
-function paginatedToolkitInstances(all: readonly FakeToolkitRow[], onOffset?: (offset: number) => void) {
+function serverFiltered(all: readonly FakeToolkitRow[], params: URLSearchParams): readonly FakeToolkitRow[] {
+  const mcp = params.get('mcp');
+  const query = (params.get('query') ?? '').toLowerCase();
+  return all.filter((row) => {
+    if (mcp !== null) {
+      const isMcp = row.type === 'mcp' || row.type.startsWith('mcp_');
+      if (row.type === 'application' || isMcp !== (mcp === 'true')) return false;
+    }
+    return query === '' || row.name.toLowerCase().includes(query) || (row.description ?? '').toLowerCase().includes(query);
+  });
+}
+
+/**
+ * A msw handler that PAGES and FILTERS like the real listing endpoint does
+ * (`internal/api/v2/toolkits/handler.go`): it honours `mcp`, `query`,
+ * `limit` and `offset`, returns the slice and the FILTERED `total`, and —
+ * critically — is ordered by name, so `all` must already be name-sorted.
+ * `onRequest` records the query string of each request, letting a test assert
+ * what the picker asked for and that paging actually happened.
+ *
+ * A static `{rows, total}` handler serves the SAME rows for every request and so
+ * cannot reproduce a section whose rows sort past the first page.
+ */
+function paginatedToolkitInstances(all: readonly FakeToolkitRow[], onRequest?: (params: URLSearchParams) => void) {
   return getListToolkitInstancesMockHandler((info) => {
-    const url = new URL(info.request.url);
-    const limit = Number(url.searchParams.get('limit') ?? '20');
-    const offset = Number(url.searchParams.get('offset') ?? '0');
-    onOffset?.(offset);
-    return { rows: all.slice(offset, offset + limit).map(toolkitRow), total: all.length };
+    const params = new URL(info.request.url).searchParams;
+    const limit = Number(params.get('limit') ?? '20');
+    const offset = Number(params.get('offset') ?? '0');
+    onRequest?.(params);
+    const matching = serverFiltered(all, params);
+    return { rows: matching.slice(offset, offset + limit).map(toolkitRow), total: matching.length };
   });
 }
 
@@ -374,23 +394,23 @@ describe('ToolMenu — saved entity', () => {
     expect(router.state.location.search).toMatchObject({ mcp: 'true', source_application_id: '42' });
   });
 
+  // ── "Create new" round trip, inbound half: the returned id is fetched BY ID ──
+
   it('auto-attaches a toolkit returned via ?newToolkitId= and clears the round-trip URL params', async () => {
     server.use(getGetApplicationMockHandler(applicationDetail()));
-    server.use(
-      getListToolkitInstancesMockHandler({
-        rows: [{ id: 'tk-9', type: 'github', name: 'GitHub', description: '', settings: {}, meta: {}, created_at: '2026-01-01T00:00:00Z', author_id: 1 }],
-        total: 1,
-      }),
-    );
+    server.use(getGetToolkitMockHandler(toolkitRow({ id: '9', type: 'github', name: 'GitHub' })));
+    const attachRequests: Array<Readonly<Record<string, string | readonly string[] | undefined>>> = [];
+    server.use(toolkitAttachMockHandler((_body, params) => attachRequests.push(params)));
 
     let attached: unknown;
     const { router } = renderToolMenu(
       { applicationId: 42, onAttachToolkit: (toolkit) => (attached = toolkit) },
       'proj-1',
-      ['/agents/tab/42?newToolkitId=tk-9&source_application_id=42&return_url=%2Fagents%2Ftab%2F42'],
+      ['/agents/tab/42?newToolkitId=9&source_application_id=42&return_url=%2Fagents%2Ftab%2F42'],
     );
 
-    await waitFor(() => expect(attached).toMatchObject({ id: 'tk-9', name: 'GitHub' }));
+    await waitFor(() => expect(attached).toMatchObject({ id: '9', name: 'GitHub' }));
+    expect(attachRequests).toEqual([expect.objectContaining({ toolkitId: '9' })]);
     // Reverted-bug guard: without this fix's watcher effect, `attached` never
     // gets set and `newToolkitId`/`return_url`/`source_application_id` stay in the URL forever.
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('newToolkitId'));
@@ -398,44 +418,93 @@ describe('ToolMenu — saved entity', () => {
     expect(router.state.location.search).not.toHaveProperty('return_url');
   });
 
-  it('does not auto-attach a returned toolkit id that is not in the currently-fetched instance page (disclosed limitation) but still cleans up the URL', async () => {
+  it('attaches nothing and still clears the URL when the returned id is a 404', async () => {
     server.use(getGetApplicationMockHandler(applicationDetail()));
-    server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
+    let getCalls = 0;
+    server.use(
+      http.get('*/elitea_core/tool/prompt_lib/:projectId/:toolId', () => {
+        getCalls += 1;
+        return HttpResponse.json({ error: 'not found' }, { status: 404 });
+      }),
+    );
+    let attachCalls = 0;
+    server.use(toolkitAttachMockHandler(() => (attachCalls += 1)));
 
-    let attachedCalls = 0;
+    let observed = 0;
     const { router } = renderToolMenu(
-      { applicationId: 42, onAttachToolkit: () => (attachedCalls += 1) },
+      { applicationId: 42, onAttachToolkit: () => (observed += 1), onAttachMcp: () => (observed += 1) },
       'proj-1',
-      ['/agents/tab/42?newToolkitId=tk-missing'],
+      ['/agents/tab/42?newToolkitId=777&mcp=%22true%22'],
     );
 
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('newToolkitId'));
-    expect(attachedCalls).toBe(0);
+    expect(router.state.location.search).not.toHaveProperty('mcp');
+    // One failed lookup, never retried; nothing attached.
+    expect(getCalls).toBe(1);
+    expect(attachCalls).toBe(0);
+    expect(observed).toBe(0);
   });
 
-  it('auto-attaches via onAttachMcp (not onAttachToolkit) when the round trip carries mcp=true', async () => {
+  it('does not even look up a non-numeric returned id, attaches nothing and clears the URL', async () => {
     server.use(getGetApplicationMockHandler(applicationDetail()));
+    let getCalls = 0;
     server.use(
-      getListToolkitInstancesMockHandler({
-        rows: [{ id: 'tk-mcp', type: 'mcp', name: 'Remote MCP Server', description: '', settings: {}, meta: {}, created_at: '2026-01-01T00:00:00Z', author_id: 1 }],
-        total: 1,
+      http.get('*/elitea_core/tool/prompt_lib/:projectId/:toolId', () => {
+        getCalls += 1;
+        return HttpResponse.json({}, { status: 404 });
       }),
     );
+    let attachCalls = 0;
+    server.use(toolkitAttachMockHandler(() => (attachCalls += 1)));
+
+    const { router } = renderToolMenu({ applicationId: 42 }, 'proj-1', ['/agents/tab/42?newToolkitId=tk-missing']);
+
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('newToolkitId'));
+    expect(getCalls).toBe(0);
+    expect(attachCalls).toBe(0);
+  });
+
+  it('attaches a returned MCP that is NOT on the first listing page (25 MCPs, the new one sorts last) as an MCP', async () => {
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    // The listing's first page holds 20 of the 25 MCPs; the new one (id 125) is the 25th.
+    const mcps = Array.from({ length: 25 }, (_unused, index) => ({ id: String(101 + index), type: 'mcp', name: `mcp-${String(index).padStart(2, '0')}` }));
+    server.use(paginatedToolkitInstances(mcps));
+    server.use(getGetToolkitMockHandler(toolkitRow({ id: '125', type: 'mcp', name: 'mcp-24' })));
+    const attachRequests: Array<Readonly<Record<string, string | readonly string[] | undefined>>> = [];
+    server.use(toolkitAttachMockHandler((_body, params) => attachRequests.push(params)));
 
     let attachedToolkit: unknown;
     let attachedMcp: unknown;
     const { router } = renderToolMenu(
       { applicationId: 42, onAttachToolkit: (toolkit) => (attachedToolkit = toolkit), onAttachMcp: (toolkit) => (attachedMcp = toolkit) },
       'proj-1',
-      // `mcp` must round-trip as the STRING 'true' (matching the real "Create new" outbound
-      // navigation, which JSON-quotes string search values for symmetric re-parsing — see
-      // `defaultParseSearch`/`defaultStringifySearch`, `@tanstack/router-core/searchParams.ts`)
-      // rather than the bare token `true`, which the router's JSON-based search parser would
-      // instead parse as the boolean `true`.
-      ['/agents/tab/42?newToolkitId=tk-mcp&mcp=%22true%22'],
+      ['/agents/tab/42?newToolkitId=125'],
     );
 
-    await waitFor(() => expect(attachedMcp).toMatchObject({ id: 'tk-mcp', name: 'Remote MCP Server' }));
+    await waitFor(() => expect(attachedMcp).toMatchObject({ id: '125', name: 'mcp-24' }));
+    // Picked as an MCP from the fetched row's own type, with no `mcp` flag in the URL.
+    expect(attachedToolkit).toBeUndefined();
+    expect(attachRequests).toEqual([expect.objectContaining({ toolkitId: '125' })]);
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('newToolkitId'));
+  });
+
+  it('auto-attaches via onAttachMcp (not onAttachToolkit) when the returned toolkit is an MCP', async () => {
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    server.use(getGetToolkitMockHandler(toolkitRow({ id: '15', type: 'mcp', name: 'Remote MCP Server' })));
+
+    let attachedToolkit: unknown;
+    let attachedMcp: unknown;
+    const { router } = renderToolMenu(
+      { applicationId: 42, onAttachToolkit: (toolkit) => (attachedToolkit = toolkit), onAttachMcp: (toolkit) => (attachedMcp = toolkit) },
+      'proj-1',
+      // `mcp` round-trips as the STRING 'true' (matching the real "Create new" outbound
+      // navigation, which JSON-quotes string search values — see `defaultParseSearch`/
+      // `defaultStringifySearch`, `@tanstack/router-core/searchParams.ts`); it is only
+      // cleaned up here, the attach kind comes from the fetched row.
+      ['/agents/tab/42?newToolkitId=15&mcp=%22true%22'],
+    );
+
+    await waitFor(() => expect(attachedMcp).toMatchObject({ id: '15', name: 'Remote MCP Server' }));
     expect(attachedToolkit).toBeUndefined();
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('newToolkitId'));
     expect(router.state.location.search).not.toHaveProperty('mcp');
@@ -582,7 +651,7 @@ describe('ToolMenu — saved entity', () => {
     const requestedOffsets: number[] = [];
     // 40 toolkits — two 20-row pages — so the first page fills the dropdown
     // (no auto-paging) and only a scroll fetches the second.
-    server.use(paginatedToolkitInstances(toolkitRows('kit', 'github', 40), (offset) => requestedOffsets.push(offset)));
+    server.use(paginatedToolkitInstances(toolkitRows('kit', 'github', 40), (params) => requestedOffsets.push(Number(params.get('offset')))));
     server.use(getGetApplicationMockHandler(applicationDetail()));
 
     renderToolMenu({ applicationId: 42 });
@@ -608,11 +677,11 @@ describe('ToolMenu — saved entity', () => {
     expect(await screen.findByText('kit-39')).toBeInTheDocument();
   });
 
-  // ── the pagination defect this change fixes ────────────────────────────────
-  // The listing endpoint has no server-side type or name filter (only
-  // limit/offset, ordered by name), so a section whose rows sort ENTIRELY past
-  // the first page used to be unreachable: the dropdown filtered one fetched
-  // page, and the scroll-to-load-more trigger never fired on its 0–2 row list.
+  // ── the pagination defect: sections sharing ONE unfiltered cursor ──────────
+  // The picker used to split a single name-ordered listing on the client, so a
+  // section whose rows sort past the first page (e.g. every MCP after 20+
+  // toolkits) stayed unreachable. Each section now sends `mcp` and `query` and
+  // pages its own server-filtered cursor, like EliteaUI's picker.
 
   it('surfaces every MCP in the MCP section even when 25 non-MCP toolkits sort ahead of them (auto-pages past the first page)', async () => {
     server.use(getGetApplicationMockHandler(applicationDetail()));
@@ -665,5 +734,157 @@ describe('ToolMenu — saved entity', () => {
     expect(await screen.findByText('kit-24', {}, { timeout: 3000 })).toBeInTheDocument();
     // The search is a real filter — unrelated first-page rows are gone.
     expect(screen.queryByText('kit-00')).not.toBeInTheDocument();
+  });
+
+  // ── server-filtered sections ───────────────────────────────────────────────
+
+  it('the Toolkit section asks the server for mcp=false and the MCP section for mcp=true', async () => {
+    const requests: URLSearchParams[] = [];
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    server.use(paginatedToolkitInstances([...toolkitRows('kit', 'github', 3), ...toolkitRows('zzz-mcp', 'mcp', 2)], (params) => requests.push(params)));
+
+    renderToolMenu({ applicationId: 42 });
+    await waitFor(() => expect(screen.getByTestId('agent-add-toolkit-button')).not.toBeDisabled());
+    await waitFor(() => expect(requests.some((params) => params.get('mcp') === 'false')).toBe(true));
+    expect(requests.some((params) => params.get('mcp') === 'true')).toBe(true);
+    // No search yet, so no `query` param is sent.
+    expect(requests.every((params) => !params.has('query'))).toBe(true);
+
+    fireEvent.click(screen.getByTestId('agent-add-toolkit-button'));
+    expect(await screen.findByText('kit-00')).toBeInTheDocument();
+    expect(screen.queryByText('zzz-mcp-00')).not.toBeInTheDocument();
+  });
+
+  it('reaches every one of 25 MCPs by scroll when 30 non-MCP toolkits sort ahead of them, each once', async () => {
+    const requests: URLSearchParams[] = [];
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    server.use(paginatedToolkitInstances([...toolkitRows('kit', 'github', 30), ...toolkitRows('zzz-mcp', 'mcp', 25)], (params) => requests.push(params)));
+
+    renderToolMenu({ applicationId: 42 });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'MCP' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'MCP' }));
+    await screen.findByText('zzz-mcp-00');
+    // A full first page of MCPs: the list overflows, so nothing pages until a scroll.
+    expect(screen.getByText('zzz-mcp-19')).toBeInTheDocument();
+    expect(screen.queryByText('zzz-mcp-20')).not.toBeInTheDocument();
+    expect(screen.queryByText('kit-00')).not.toBeInTheDocument();
+
+    const paper = screen.getByRole('menu').parentElement as HTMLElement;
+    Object.defineProperty(paper, 'scrollHeight', { value: 500, configurable: true });
+    Object.defineProperty(paper, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(paper, 'scrollTop', { value: 90, configurable: true });
+    fireEvent.scroll(paper);
+
+    expect(await screen.findByText('zzz-mcp-24')).toBeInTheDocument();
+    for (let index = 0; index < 25; index += 1) {
+      expect(screen.getAllByText(`zzz-mcp-${String(index).padStart(2, '0')}`)).toHaveLength(1);
+    }
+    expect(requests.filter((params) => params.get('mcp') === 'true').map((params) => params.get('offset'))).toEqual(['0', '20']);
+  });
+
+  it('keeps paging without a scroll while the MCP list is shorter than a page and the server has more (the regression)', async () => {
+    const offsets: string[] = [];
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    // Page N holds just TWO MCPs and the server reports six in all: the list never
+    // overflows the dropdown, so no scroll can ever fire. It must page by itself.
+    server.use(
+      getListToolkitInstancesMockHandler((info) => {
+        const params = new URL(info.request.url).searchParams;
+        const offset = Number(params.get('offset') ?? '0');
+        if (params.get('mcp') === 'true') offsets.push(String(offset));
+        const pageIndex = offset / 20;
+        return { rows: params.get('mcp') === 'true' ? toolkitRows('mcp', 'mcp', 6).slice(pageIndex * 2, pageIndex * 2 + 2).map(toolkitRow) : [], total: params.get('mcp') === 'true' ? 6 : 0 };
+      }),
+    );
+
+    renderToolMenu({ applicationId: 42 });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'MCP' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'MCP' }));
+
+    expect(await screen.findByText('mcp-05')).toBeInTheDocument();
+    for (let index = 0; index < 6; index += 1) expect(screen.getByText(`mcp-0${index}`)).toBeInTheDocument();
+    // Three pages, then it stops: the listing is exhausted.
+    expect(offsets).toEqual(['0', '20', '40']);
+  });
+
+  it('sends the search as a debounced server-side query and lists what the server returns', async () => {
+    const requests: URLSearchParams[] = [];
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    server.use(
+      paginatedToolkitInstances(
+        [...toolkitRows('kit', 'github', 25), { id: 'd', type: 'jira', name: 'unrelated-name', description: 'mentions the NEEDLE here' }].sort((a, b) => a.name.localeCompare(b.name)),
+        (params) => requests.push(params),
+      ),
+    );
+
+    renderToolMenu({ applicationId: 42 });
+    await waitFor(() => expect(screen.getByTestId('agent-add-toolkit-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('agent-add-toolkit-button'));
+    await screen.findByText('kit-00');
+
+    const input = screen.getByPlaceholderText('Search toolkits...');
+    fireEvent.change(input, { target: { value: 'n' } });
+    fireEvent.change(input, { target: { value: ' needle ' } });
+
+    // The server matches the description; the row appears and the old rows go.
+    expect(await screen.findByText('unrelated-name', {}, { timeout: 3000 })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('kit-00')).not.toBeInTheDocument());
+    // One request for the final, TRIMMED text — none for the intermediate keystroke.
+    const queries = requests.map((params) => params.get('query')).filter((query) => query !== null);
+    expect(queries.every((query) => query === 'needle')).toBe(true);
+    expect(queries.length).toBeGreaterThan(0);
+  });
+
+  it('never lists an `application` row in the Toolkit section, even if the server sent one', async () => {
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    // A server that ignores the filters (older build) still serves the agent-as-tool link.
+    server.use(
+      getListToolkitInstancesMockHandler({
+        rows: [toolkitRow({ id: 'a1', type: 'application', name: 'Cedar inspection child' }), toolkitRow({ id: 't1', type: 'github', name: 'real-toolkit' })],
+        total: 2,
+      }),
+    );
+
+    renderToolMenu({ applicationId: 42 });
+    await waitFor(() => expect(screen.getByTestId('agent-add-toolkit-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('agent-add-toolkit-button'));
+
+    expect(await screen.findByText('real-toolkit')).toBeInTheDocument();
+    expect(screen.queryByText('Cedar inspection child')).not.toBeInTheDocument();
+  });
+
+  it('shows a Loading row below the rows while the next page loads', async () => {
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const all = toolkitRows('kit', 'github', 40);
+    server.use(
+      getListToolkitInstancesMockHandler(async (info) => {
+        const offset = Number(new URL(info.request.url).searchParams.get('offset') ?? '0');
+        if (offset > 0) await gate;
+        return { rows: all.slice(offset, offset + 20).map(toolkitRow), total: all.length };
+      }),
+    );
+
+    renderToolMenu({ applicationId: 42 });
+    await waitFor(() => expect(screen.getByTestId('agent-add-toolkit-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('agent-add-toolkit-button'));
+    await screen.findByText('kit-19');
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+
+    const paper = screen.getByRole('menu').parentElement as HTMLElement;
+    Object.defineProperty(paper, 'scrollHeight', { value: 500, configurable: true });
+    Object.defineProperty(paper, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(paper, 'scrollTop', { value: 90, configurable: true });
+    fireEvent.scroll(paper);
+
+    // Rows stay, with the Loading row after them.
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByText('kit-19')).toBeInTheDocument();
+    release();
+    expect(await screen.findByText('kit-39')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Loading…')).not.toBeInTheDocument());
   });
 });

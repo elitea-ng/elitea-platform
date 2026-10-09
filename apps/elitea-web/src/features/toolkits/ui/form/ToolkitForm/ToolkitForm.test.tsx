@@ -17,6 +17,7 @@ const TOOLKIT_TYPES_URL = '/api/v2/elitea_core/toolkits/prompt_lib/:projectId';
 const CONFIGURATIONS_LIST_URL = '/api/v2/configurations/configurations/:projectId';
 const CONFIGURATIONS_AVAILABLE_URL = '/api/v2/configurations/available/';
 const DISCOVER_TOOLS_URL = '/api/v2/elitea_core/toolkit_discover_tools/prompt_lib/:projectId/:toolkitType';
+const AVAILABLE_TOOLS_URL = '/api/v2/elitea_core/toolkit_available_tools/prompt_lib/:projectId/:toolkitId';
 
 /**
  * `ToolkitForm.tsx` fires all four of these on mount
@@ -362,6 +363,38 @@ describe('ToolkitForm', () => {
       const { findByTestId, getByRole } = renderRuntimeToolkit();
 
       expect(await findByTestId('toolkit-form-tool-list-error')).toBeInTheDocument();
+      expect(getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    });
+
+    /** A saved toolkit reads the instance route, the one that answers 503 when the deployment turned discovery off. */
+    const savedDetail: ToolkitFormEditDetail = { ...editToolDetail, id: 'tk-1' };
+
+    function renderSavedRuntimeToolkit() {
+      return renderWithRouterSocketAndProject(
+        <ToolkitForm {...baseProps({ editToolDetail: savedDetail, formValues: savedDetail, formInitialValues: savedDetail })} />,
+        'proj-1',
+      );
+    }
+
+    it('says tool discovery is turned off, with no retry, when the deployment disabled it', async () => {
+      mockToolkitFormEndpoints(RUNTIME_TYPE_SCHEMAS);
+      server.use(http.get(AVAILABLE_TOOLS_URL, () => HttpResponse.json({ error: 'toolkit discovery unavailable' }, { status: 503 })));
+
+      const { findByTestId, getByText, queryByRole, queryByText } = renderSavedRuntimeToolkit();
+
+      expect(await findByTestId('toolkit-form-tool-list-error')).toBeInTheDocument();
+      expect(getByText('Tool discovery is turned off on this deployment. Ask an administrator to enable it.')).toBeInTheDocument();
+      expect(queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(queryByText('The tool list did not load. Try again.')).not.toBeInTheDocument();
+    });
+
+    it('keeps the generic message and the retry for any other 503 from the instance route', async () => {
+      mockToolkitFormEndpoints(RUNTIME_TYPE_SCHEMAS);
+      server.use(http.get(AVAILABLE_TOOLS_URL, () => HttpResponse.json({ error: 'toolkit settings could not be resolved' }, { status: 503 })));
+
+      const { findByText, getByRole } = renderSavedRuntimeToolkit();
+
+      expect(await findByText('The tool list did not load. Try again.')).toBeInTheDocument();
       expect(getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     });
 
