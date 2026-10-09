@@ -63,7 +63,7 @@ describe('the Workspaces route in the real app shell', () => {
 
     expect(await screen.findByTestId('workspaces-page')).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/workspaces');
-    expect(await screen.findByRole('heading', { name: 'Workspaces' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Local work' })).toBeInTheDocument();
     // The frame replaced the web sidebar: folders first, Elitea features below.
     const sidebar = await screen.findByTestId('desktop-sidebar');
     const folder = await within(sidebar).findByTestId('shell-folder');

@@ -109,7 +109,7 @@ export default function WorkspacesPage(): React.JSX.Element {
           <>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, paddingTop: 3 }}>
               <Typography component="h1" variant="headingMedium">
-                {t('workspace.title', 'Workspaces')}
+                {t('workspace.title', 'Local work')}
               </Typography>
               <Box sx={{ marginLeft: 'auto' }}>{openButton}</Box>
             </Box>

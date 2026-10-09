@@ -133,7 +133,8 @@ export function AgentPickers({
 }: AgentPickersProps): React.JSX.Element {
   const listed = projects.some((p) => p.id === projectId);
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+    // Not shrunk: the folder's path gives way first (the pickers cannot truncate).
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, flexShrink: 0 }}>
       <HeaderSelect
         label={t('workspace.project', 'Project')}
         value={listed ? String(projectId) : ''}

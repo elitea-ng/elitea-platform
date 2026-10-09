@@ -65,6 +65,11 @@ tauri-plugin-single-instance = "2"
 # Window size, position and maximized state across launches (src/window.rs).
 tauri-plugin-window-state = "2"
 
+# The app's own preferences domain (src/window.rs: the input-source
+# indicator). Already in the tree through tauri/tao; safe bindings only.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults"] }
+
 # The credentials file's owner check (geteuid) and O_NOFOLLOW, without
 # `unsafe` (src/credentials_file.rs). Already in the tree through tauri.
 [target.'cfg(unix)'.dependencies]

@@ -159,6 +159,8 @@ pub fn run() {
             });
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));
+            #[cfg(target_os = "macos")]
+            window::quiet_input_source_indicator();
             window::create_main_window(app.handle())?;
             app_events::drain_pending(app.handle());
             Ok(())

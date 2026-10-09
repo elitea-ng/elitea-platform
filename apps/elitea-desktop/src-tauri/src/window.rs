@@ -35,6 +35,22 @@ pub fn persisted_state() -> tauri_plugin_window_state::StateFlags {
     StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
 }
 
+/// macOS (14+) shows its input-source indicator, a small round bubble with
+/// the keyboard layout's letter ("A"), under the caret whenever a text field
+/// takes focus on a Mac with more than one input source. WKWebView leaves it
+/// sitting inside the composer, where it reads as a stray avatar. This turns
+/// it off for this app only (`TSMLanguageIndicatorEnabled` in the app's own
+/// defaults domain), unless the person set that key for the app themselves.
+#[cfg(target_os = "macos")]
+pub fn quiet_input_source_indicator() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let key = NSString::from_str("TSMLanguageIndicatorEnabled");
+    let defaults = NSUserDefaults::standardUserDefaults();
+    if defaults.objectForKey(&key).is_none() {
+        defaults.setBool_forKey(false, &key);
+    }
+}
+
 /// The main window. On macOS: no title bar of its own (overlay, hidden
 /// title), the traffic lights inset into the sidebar's top area, and a
 /// transparent window over the system sidebar material (README, "Native
