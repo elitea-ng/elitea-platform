@@ -167,11 +167,12 @@ pub fn run() {
                 workspaces: workspaces.clone(),
                 emitter: Arc::new(MainWindowEvents(app.handle().clone())),
                 retry: RetryPolicy::default(),
-                history,
+                history: history.clone(),
             })
             .map_err(|error| error.message)?;
             app.manage(LocalState {
                 workspaces,
+                history,
                 agents: Arc::new(agents),
             });
             app.manage(AppState { auth });
@@ -223,6 +224,13 @@ pub fn run() {
 
 #[allow(clippy::needless_pass_by_value)] // the signature `App::run` takes
 fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    // The history writer commits what it still holds before the process ends.
+    if matches!(event, tauri::RunEvent::Exit)
+        && let Some(local) = app.try_state::<LocalState>()
+        && let Some(history) = &local.history
+    {
+        history.flush();
+    }
     #[cfg(target_os = "macos")]
     match event {
         // A folder dropped on the dock icon (or opened with the app): the
