@@ -63,7 +63,10 @@ fn capture_detail() -> String {
         };
         for span in span.scope().take(MAX_SPANS) {
             let metadata = span.metadata();
-            if metadata.target().starts_with("elitea_worker_rust") {
+            if super::OWNED_TARGETS
+                .iter()
+                .any(|owned| metadata.target().starts_with(owned))
+            {
                 let _ignored = writeln!(output, "{} [{}]", metadata.name(), metadata.target());
                 if let Some(file) = metadata.file() {
                     let _ignored = write!(output, "    at {file}");
@@ -107,6 +110,30 @@ mod tests {
         assert!(!configured(None).unwrap());
         assert!(configured(Some("on")).unwrap());
         assert!(configured(Some("verbose")).is_err());
+    }
+
+    #[tokio::test]
+    async fn async_scope_names_runtime_crate_spans_but_not_dependency_spans() {
+        let subscriber = tracing_subscriber::registry();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let dependency = tracing::info_span!(target: "hyper::client", "dependency_span");
+        let output = async {
+            let runtime = tracing::info_span!(
+                target: "elitea_agent_runtime::graph::router",
+                "runtime_span",
+                state = "SECRET_STATE"
+            );
+            async { capture_detail() }.instrument(runtime).await
+        }
+        .instrument(dependency)
+        .await;
+        let async_scope = output.split("synchronous stack:").next().unwrap();
+        assert!(
+            async_scope.contains("runtime_span [elitea_agent_runtime::graph::router]"),
+            "{output}"
+        );
+        assert!(!async_scope.contains("dependency_span"), "{output}");
+        assert!(!output.contains("SECRET_STATE"));
     }
 
     #[test]
