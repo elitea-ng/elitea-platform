@@ -1521,7 +1521,8 @@ main:
     # entry in THIS list names them, each entry for its own range; link-local,
     # cloud-metadata, multicast and reserved addresses are always refused. A
     # self-hosted GitLab, Jira or Confluence on a private address needs its
-    # name AND its range, e.g. "gitlab.corp.example, 10.20.0.0/16".
+    # name AND its range, e.g. "gitlab.corp.example, 10.20.0.0/16". Name hosts
+    # without a port; a range or IP entry may pin one ("10.20.0.5:8443").
     #
     # UNSET IS NOT FAIL-CLOSED HERE, and that is the difference from the two
     # allowlists above. A clone reaches a URL somebody typed into a request; this
