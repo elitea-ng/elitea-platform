@@ -1008,6 +1008,23 @@ async fn agents_md_is_applied_after_the_agents_instructions_and_reported() {
 }
 
 #[tokio::test]
+async fn a_project_id_the_server_cannot_hold_is_refused_before_any_request() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    for bad in [0, -5, i64::from(i32::MAX) + 1, i64::from(u32::MAX) + 1] {
+        let mut req = request(&h.workspace_id);
+        req.project_id = bad;
+        let error = h.host.start(req).await.unwrap_err();
+        assert_eq!(error.code, "invalid_request", "{bad}");
+        assert_eq!(
+            h.host.bind_project(&h.workspace_id, bad).unwrap_err().code,
+            "invalid_request"
+        );
+    }
+    assert!(h.server.seen().is_empty(), "refused before any request");
+}
+
+#[tokio::test]
 async fn a_mention_outside_the_workspace_is_refused_before_any_request() {
     let server = serve(platform(agent_details(), &[])).await;
     let h = harness(

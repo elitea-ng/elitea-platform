@@ -79,8 +79,10 @@ inside the folder.
 
 `agent_turn_start` resolves the agent version, checks it, and starts the
 local turn on the platform before it resolves; the run then continues in
-the background and reports through events. `conversation_id` is the
-conversation's numeric id or its UUID. The conversation must hold the agent
+the background and reports through events. `project_id` is a project's id
+as the server holds it (1 to 2147483647; anything else is refused with
+`invalid_request` before any request, and so is `workspace_bind_project`'s).
+`conversation_id` is the conversation's numeric id or its UUID. The conversation must hold the agent
 as a participant pinned to `version_id` (`entity_settings.version_id`) or
 not pinned to any version; when every entry of the agent is pinned to
 another version the start is refused with `agent_version_mismatch`. A refusal rejects the call **and** is sent
@@ -108,9 +110,9 @@ session and kept turn: an earlier turn then answers `turn_unknown`.
 
 `mentions` are the workspace-relative paths the person referenced with "@"
 (a folder may end with `/`; at most 50). Each must resolve inside the
-workspace, exist as a file or folder (not a symlink) and not match
-`path_deny`, else the start is refused with `invalid_request` before any
-request. The checked paths are added to the user message, deduplicated, as
+workspace, exist as a file or folder (not a symlink), not match
+`path_deny` and hold no line break or other control character in its name,
+else the start is refused with `invalid_request` before any request. The checked paths are added to the user message, deduplicated, as
 
 ```text
 <prompt>
@@ -134,7 +136,12 @@ files past the cap are skipped. They are appended to the agent's system
 instructions, after the agent's own instructions (which keep priority, as
 the section's header says) and before the memory splice, as one
 `## Project instructions (AGENTS.md)` section with one
-`<agents_md path="…">` block per file. Edits apply from the next turn.
+`<agents_md path="…">` block per file. The path is escaped as an attribute
+value (`&`, `"`, `<`, `>` and control characters as entities); in the text,
+an opening or closing `agents_md` tag (any case) gets a backslash after its
+`<` (`<\/agents_md>`) and a line that would read as the section's own start
+or end heading gets one in front, so no file can close its block, open
+another or end the section. Edits apply from the next turn.
 
 ```ts
 type FileChange = {
