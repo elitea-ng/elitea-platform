@@ -150,7 +150,7 @@ func pgError() []byte {
 }
 
 func (p *recordingPostgres) serve(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	reader := bufio.NewReader(conn)
 	// Startup message: no type byte.
 	var length [4]byte
