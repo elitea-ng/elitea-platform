@@ -302,9 +302,13 @@ impl LocalSession {
         let approvals: Arc<dyn ApprovalChannel> =
             Arc::new(RuleApprovals::new(engine.clone(), config.prompt));
         let checkpoints = Checkpoints::open(&workspace, &config.session_id, &config.data_dir)?;
-        let shell = config.shell.unwrap_or_else(|| {
+        let mut shell = config.shell.unwrap_or_else(|| {
             ShellConfig::new(config.data_dir.join("tmp").join(&config.session_id))
         });
+        // Copy checkpoints, remembered choices and the host's state live in
+        // the data directory: no command reads them (the session's temporary
+        // directory inside it stays usable).
+        shell.deny_read.push(config.data_dir.clone());
         Ok(Arc::new(Self {
             workspace,
             ledger: ReadLedger::new(),

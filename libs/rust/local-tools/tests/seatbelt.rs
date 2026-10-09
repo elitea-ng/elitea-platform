@@ -1,6 +1,8 @@
 //! The macOS Seatbelt sandbox, proven on the real `sandbox-exec`: writes
 //! outside the workspace and network connections (loopback included) are
-//! blocked, and allowed again when the mode or the network switch says so.
+//! blocked, and allowed again when the mode or the network switch says so;
+//! every `.git` entry stays read-only; credentials, the host's data
+//! directory and `path_deny` files cannot be read; nothing listens.
 //!
 //! macOS only; elsewhere this file has no tests. Where `sandbox-exec` is
 //! missing each test skips, unless `ELITEA_REQUIRE_SEATBELT=1` (CI's macOS
@@ -35,13 +37,19 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(&[])
+}
+
+fn fixture_with(path_deny: &[&str]) -> Fixture {
     let dir = tempfile::tempdir().expect("dir");
     let root = dir.path().join("workspace");
     let outside = dir.path().join("outside");
     std::fs::create_dir_all(root.join(".git/hooks")).expect("workspace");
     std::fs::create_dir_all(&outside).expect("outside");
-    let workspace = Workspace::open(&root, &[]).expect("open");
-    let config = ShellConfig::new(dir.path().join("session-tmp"));
+    let deny: Vec<String> = path_deny.iter().map(|s| (*s).to_owned()).collect();
+    let workspace = Workspace::open(&root, &deny).expect("open");
+    let mut config = ShellConfig::new(dir.path().join("data/tmp/session"));
+    config.deny_read.push(dir.path().join("data"));
     Fixture {
         outside: std::fs::canonicalize(outside).expect("canonical"),
         _dir: dir,
@@ -64,7 +72,12 @@ async fn sh(fixture: &Fixture, command: &str, mode: SandboxMode, network: bool) 
     )
     .await
     .expect("run");
-    assert_eq!(output.enforcement, Enforcement::Full);
+    let expected = if mode == SandboxMode::FullAccess && network {
+        Enforcement::None
+    } else {
+        Enforcement::Full
+    };
+    assert_eq!(output.enforcement, expected);
     output
 }
 
@@ -150,48 +163,139 @@ async fn read_only_blocks_every_write_but_reads_work() {
     assert_eq!(devnull.exit_code, Some(0), "{}", devnull.stderr);
 }
 
+/// H1: not only hooks and config: the whole `.git`, any `.git` at any
+/// depth, under any spelling, cannot be moved, replaced or written, and no
+/// new one can be planted.
 #[tokio::test]
-async fn git_hooks_and_config_stay_read_only_inside_the_workspace() {
+async fn git_directories_stay_read_only_at_every_depth_and_spelling() {
     if !available() {
         return;
     }
     let fixture = fixture();
-    let hook = sh(
-        &fixture,
-        "touch .git/hooks/pre-commit",
-        SandboxMode::WorkspaceWrite,
-        false,
-    )
-    .await;
-    assert_ne!(hook.exit_code, Some(0));
-    assert!(
-        !fixture
-            .workspace
-            .root()
-            .join(".git/hooks/pre-commit")
-            .exists()
-    );
-    let config = sh(
-        &fixture,
-        "touch .git/config",
-        SandboxMode::WorkspaceWrite,
-        false,
-    )
-    .await;
-    assert_ne!(config.exit_code, Some(0));
-    let other = sh(
-        &fixture,
+    let root = fixture.workspace.root().to_path_buf();
+    std::fs::write(root.join(".git/config"), "[core]\n").expect("config");
+    std::fs::create_dir_all(root.join("vendor/lib/.git")).expect("nested");
+    for probe in [
+        "mv .git .gitold",
+        "rm -rf .git",
+        "touch .git/commondir",
         "touch .git/index",
+        "mkdir -p .git/modules/x && touch .git/modules/x/config",
+        "touch .git/hooks/pre-commit",
+        "echo '[filter \"x\"]' >> .git/config",
+        "touch .GIT/hooks/post-checkout",
+        "touch .Git/config",
+        "touch vendor/lib/.git/config",
+        "mkdir sub && mkdir sub/.git",
+        "mkdir -p sub2 && echo 'gitdir: /tmp/evil' > sub2/.git",
+        "ln -s /tmp sub3 && mv sub3 .git2 && mv .git2 .git",
+    ] {
+        let output = sh(&fixture, probe, SandboxMode::WorkspaceWrite, false).await;
+        assert_ne!(output.exit_code, Some(0), "`{probe}` succeeded");
+    }
+    assert!(root.join(".git").is_dir(), ".git is where it was");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".git/config")).expect("config"),
+        "[core]\n"
+    );
+    for planted in [
+        ".git/commondir",
+        ".git/index",
+        ".git/modules",
+        ".git/hooks/pre-commit",
+        "vendor/lib/.git/config",
+        "sub/.git",
+        "sub2/.git",
+    ] {
+        assert!(!root.join(planted).exists(), "{planted} was created");
+    }
+    let normal = sh(
+        &fixture,
+        "mkdir -p src && touch src/lib.rs .gitignore .github",
+        SandboxMode::WorkspaceWrite,
+        false,
+    )
+    .await;
+    assert_eq!(normal.exit_code, Some(0), "{}", normal.stderr);
+}
+
+/// M3: reads are confined too: `path_deny` files in the workspace, the
+/// host's data directory and the person's credentials cannot be read,
+/// though they stay listed; everything else reads as before.
+#[tokio::test]
+async fn path_deny_credentials_and_the_data_directory_are_unreadable() {
+    if !available() {
+        return;
+    }
+    let fixture = fixture_with(&[".env", "secrets/**"]);
+    let root = fixture.workspace.root().to_path_buf();
+    std::fs::write(root.join(".env"), "TOKEN=1").expect("env");
+    std::fs::create_dir_all(root.join("secrets")).expect("secrets");
+    std::fs::write(root.join("secrets/key"), "k").expect("key");
+    std::fs::write(root.join("readme"), "hello").expect("readme");
+    let data = fixture.config.deny_read.first().cloned().expect("data dir");
+    std::fs::create_dir_all(data.join("checkpoints")).expect("data");
+    std::fs::write(data.join("checkpoints/manifest.json"), "{}").expect("manifest");
+    let data = std::fs::canonicalize(data).expect("canonical");
+
+    for probe in [
+        "cat .env".to_owned(),
+        "cat ./sub/../.env".to_owned(),
+        "cat secrets/key".to_owned(),
+        "cp .env leaked".to_owned(),
+        "echo x > .env".to_owned(),
+        format!("cat {}", quoted(&data.join("checkpoints/manifest.json"))),
+        "ls \"$HOME/Library/Keychains\"".to_owned(),
+    ] {
+        let output = sh(&fixture, &probe, SandboxMode::WorkspaceWrite, false).await;
+        assert_ne!(
+            output.exit_code,
+            Some(0),
+            "`{probe}` read: {}",
+            output.stdout
+        );
+        assert!(!output.stdout.contains("TOKEN"), "{probe}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join(".env")).expect("env"),
+        "TOKEN=1"
+    );
+    let listed = sh(&fixture, "ls -a", SandboxMode::ReadOnly, false).await;
+    assert!(listed.stdout.contains(".env"), "metadata stays visible");
+    let read = sh(&fixture, "cat readme", SandboxMode::ReadOnly, false).await;
+    assert_eq!(read.stdout, "hello");
+    let tmp = sh(
+        &fixture,
+        "echo t > \"$TMPDIR/x\" && cat \"$TMPDIR/x\"",
         SandboxMode::WorkspaceWrite,
         false,
     )
     .await;
     assert_eq!(
-        other.exit_code,
-        Some(0),
-        "the rest of .git stays writable for git itself: {}",
-        other.stderr
+        tmp.stdout.trim(),
+        "t",
+        "the temporary directory inside the data directory stays usable: {}",
+        tmp.stderr
     );
+    let full = sh(&fixture, "cat .env", SandboxMode::FullAccess, false).await;
+    assert_ne!(full.exit_code, Some(0), "full access still keeps path_deny");
+}
+
+/// L2: with the network on, connections go out but nothing listens.
+#[tokio::test]
+async fn network_on_still_refuses_listening_sockets() {
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let listen = sh(
+        &fixture,
+        "/usr/bin/nc -l 127.0.0.1 0",
+        SandboxMode::WorkspaceWrite,
+        true,
+    )
+    .await;
+    assert_ne!(listen.exit_code, Some(0), "a sandboxed command listened");
 }
 
 #[tokio::test]

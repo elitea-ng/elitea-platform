@@ -13,8 +13,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use crate::command::{CommandShape, analyse};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::policy::SandboxMode;
-use crate::sandbox::{Enforcement, SandboxConfig, SandboxRequest, prepare};
-use crate::workspace::{EntryKind, PROTECTED_DIR, Workspace, WsPath};
+use crate::sandbox::{Enforcement, SandboxConfig, SandboxRequest, credential_paths, prepare};
+use crate::workspace::{EntryKind, Workspace, WsPath};
 
 /// Variables passed through from the host's environment; everything else
 /// is dropped (tokens, cloud credentials, the host's own settings).
@@ -51,6 +51,17 @@ pub struct ShellConfig {
     /// workspace-write).
     pub temp_dir: PathBuf,
     pub sandbox: SandboxConfig,
+    /// More files or directories commands may not read (the host's data
+    /// directory: the session adds it); see
+    /// [`SandboxRequest::deny_paths`].
+    pub deny_read: Vec<PathBuf>,
+    /// Deny reading [`credential_paths`] under `HOME` (on by default).
+    pub protect_credentials: bool,
+    /// Let commands with the network on listen for connections (off by
+    /// default).
+    pub allow_listen: bool,
+    /// Let commands reach the keychain's services (off by default).
+    pub allow_keychain: bool,
 }
 
 impl ShellConfig {
@@ -64,6 +75,10 @@ impl ShellConfig {
             env_passthrough: Vec::new(),
             temp_dir,
             sandbox: SandboxConfig::default(),
+            deny_read: Vec::new(),
+            protect_credentials: true,
+            allow_listen: false,
+            allow_keychain: false,
         }
     }
 }
@@ -181,12 +196,27 @@ pub fn sandbox_request(
     let temp = std::fs::canonicalize(&config.temp_dir).map_err(|error| {
         ToolError::io("cannot resolve the session's temporary directory", &error)
     })?;
-    let git = workspace.root().join(PROTECTED_DIR);
+    let mut deny_paths: Vec<PathBuf> = config
+        .deny_read
+        .iter()
+        .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()))
+        .collect();
+    if config.protect_credentials
+        && let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty())
+    {
+        deny_paths.extend(credential_paths(std::path::Path::new(&home)));
+    }
     Ok(SandboxRequest {
         mode,
         network,
         writable_roots: vec![workspace.root().to_path_buf(), temp],
-        protected: vec![git.join("hooks"), git.join("config")],
+        protected: Vec::new(),
+        git_roots: vec![workspace.root().to_path_buf()],
+        deny_paths,
+        deny_globs: workspace.deny_patterns().to_vec(),
+        deny_root: Some(workspace.root().to_path_buf()),
+        allow_listen: config.allow_listen,
+        allow_keychain: config.allow_keychain,
     })
 }
 

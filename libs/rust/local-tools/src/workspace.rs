@@ -336,6 +336,12 @@ impl Workspace {
         &self.root
     }
 
+    /// The `path_deny` patterns it was opened with.
+    #[must_use]
+    pub fn deny_patterns(&self) -> &[String] {
+        &self.deny_patterns
+    }
+
     /// The absolute path of `path` (for a child process's working directory
     /// or a git pathspec; never used to open files here).
     #[must_use]

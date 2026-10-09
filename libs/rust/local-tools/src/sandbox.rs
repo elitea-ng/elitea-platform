@@ -2,19 +2,33 @@
 //!
 //! | OS | Mechanism | Reported enforcement |
 //! |---|---|---|
-//! | macOS | Seatbelt: `/usr/bin/sandbox-exec -p <profile>` with a profile generated per command ([`seatbelt`]) | `full`: writes confined, network denied (loopback included) |
+//! | macOS | Seatbelt: `/usr/bin/sandbox-exec -p <profile>` with a profile generated per command ([`seatbelt`]) | `full`: writes confined, `.git` read-only, credentials and `path_deny` unreadable, network denied (loopback included) |
 //! | Linux | Landlock, applied by a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to | `partial`: file system per the kernel's ABI; network denial covers TCP only (Landlock has no UDP or raw-socket rules); no seccomp yet |
 //! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
 //!
-//! Reads are never confined: a command sees what the person's account sees.
-//! `path_deny` is enforced by the file tools, not inside commands.
+//! What every confined command gets, whatever the mode:
+//!
+//! * **`.git` is read-only** at any depth and in any case under the
+//!   [`SandboxRequest::git_roots`]: hooks, config, `commondir`, the object
+//!   store and the refs are where code and checkpoints live, and the host
+//!   runs git there.
+//! * **Credentials are unreadable**: [`credential_paths`] (SSH, cloud, git
+//!   and browser credentials, the keychains), the host's own data
+//!   directory, and the workspace's `path_deny` files. Metadata stays
+//!   visible (`ls`, `git status` work); contents do not. The keychain's mach
+//!   services are not reachable unless the host allows it.
+//! * **No listening sockets** when the network is allowed, unless the host
+//!   allows it.
+//!
+//! [`SandboxMode::FullAccess`] with the network on is no sandbox at all and
+//! reports [`Enforcement::None`].
 //!
 //! When a mode needs confinement the machine cannot give, [`prepare`]
 //! refuses ([`ErrorCode::SandboxUnavailable`]) unless the host opted into
 //! running unenforced; the result always states the enforcement level, so
 //! the UI can show it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -42,24 +56,101 @@ impl Enforcement {
 }
 
 /// What one command may do.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SandboxRequest {
     pub mode: SandboxMode,
     pub network: bool,
     /// Canonical directories writable in [`SandboxMode::WorkspaceWrite`]:
     /// the workspace root and the session's temporary directory.
     pub writable_roots: Vec<PathBuf>,
-    /// Canonical paths under a writable root that stay read-only (the
-    /// workspace's `.git/hooks` and `.git/config`: code runs from there).
+    /// Canonical paths under a writable root that stay read-only.
     pub protected: Vec<PathBuf>,
+    /// Canonical directories under which every `.git` entry (file or
+    /// directory, at any depth, in any case) and its whole subtree stay
+    /// read-only, whatever the mode: the workspace.
+    pub git_roots: Vec<PathBuf>,
+    /// Canonical files or directories whose contents cannot be read or
+    /// written (their metadata stays visible). A final component ending in
+    /// `*` matches every name with that prefix (`~/.config/elitea*`).
+    pub deny_paths: Vec<PathBuf>,
+    /// `path_deny` globs (see [`crate::workspace::Workspace::open`]), denied
+    /// like [`Self::deny_paths`] under [`Self::deny_root`].
+    pub deny_globs: Vec<String>,
+    /// The canonical workspace root the globs are relative to.
+    pub deny_root: Option<PathBuf>,
+    /// With the network on: may the command listen for connections.
+    pub allow_listen: bool,
+    /// May the command reach the keychain's services.
+    pub allow_keychain: bool,
 }
 
 impl SandboxRequest {
+    /// A request with only a mode and the network switch; nothing denied.
+    #[must_use]
+    pub fn new(mode: SandboxMode, network: bool) -> Self {
+        Self {
+            mode,
+            network,
+            ..Self::default()
+        }
+    }
+
     /// Whether this request needs no confinement at all.
     #[must_use]
     pub fn is_unconfined(&self) -> bool {
         self.mode == SandboxMode::FullAccess && self.network
     }
+}
+
+/// Credentials a command never needs to read: SSH and GPG keys, cloud and
+/// container credentials, git credentials, the keychains, browser profiles
+/// (cookies and saved passwords), and Elitea's own configuration. Caches
+/// and toolchains (`~/.cargo`, `~/.npm`, `~/.rustup`) stay readable.
+#[must_use]
+pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
+    const RELATIVE: &[&str] = &[
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".config/gcloud",
+        ".kube",
+        ".docker/config.json",
+        ".netrc",
+        ".git-credentials",
+        ".config/git/credentials",
+        ".config/gh",
+        ".config/hub",
+        ".cargo/credentials",
+        ".cargo/credentials.toml",
+        ".pypirc",
+        ".terraform.d/credentials.tfrc.json",
+        ".password-store",
+        ".local/share/keyrings",
+        ".config/elitea*",
+        ".mozilla",
+        ".config/google-chrome",
+        ".config/chromium",
+        ".config/BraveSoftware",
+        ".config/microsoft-edge",
+        "Library/Keychains",
+        "Library/Cookies",
+        "Library/Safari",
+        "Library/Application Support/Google/Chrome",
+        "Library/Application Support/Chromium",
+        "Library/Application Support/BraveSoftware",
+        "Library/Application Support/Microsoft Edge",
+        "Library/Application Support/Firefox",
+        "Library/Application Support/Arc",
+        "Library/Application Support/Vivaldi",
+        "Library/Application Support/com.operasoftware.Opera",
+        "Library/Application Support/elitea*",
+    ];
+    let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    RELATIVE
+        .iter()
+        .map(|relative| home.join(relative))
+        .collect()
 }
 
 /// The host's sandbox settings.
@@ -106,7 +197,8 @@ pub fn prepare(
     config: &SandboxConfig,
 ) -> ToolResult<Prepared> {
     if request.is_unconfined() {
-        return unwrapped(argv, Enforcement::Full);
+        // Full access with the network on: nothing is confined.
+        return unwrapped(argv, Enforcement::None);
     }
     match platform_prepare(request, argv, config)? {
         Some(prepared) => Ok(prepared),
@@ -183,17 +275,23 @@ fn platform_prepare(
 /// Written for this crate; the shape follows the public approach of
 /// sandboxing CLI agents with `sandbox-exec` (deny by default, allow reads,
 /// allow writes under parameterised roots, keep sub-paths read-only with
-/// `require-not`, network as a separate switch). Paths travel as `-D`
-/// parameters, never spliced into the profile text, so no path can change
-/// the profile's meaning.
+/// `require-not`, network as a separate switch). Later rules win, so the
+/// denials come after the allowances. Paths and the regular expressions
+/// built from them travel as `-D` parameters, never spliced into the
+/// profile text, so no path can change the profile's meaning.
 pub mod seatbelt {
     use std::fmt::Write as _;
+    use std::path::Path;
+
+    use unicode_normalization::UnicodeNormalization;
 
     use super::SandboxRequest;
     use crate::policy::SandboxMode;
 
     /// Services nearly every command-line program looks up (user and group
-    /// names, logging, notifications, certificate trust, preferences).
+    /// names, logging, notifications, certificate trust, preferences). Not
+    /// the keychain (`com.apple.SecurityServer`): see
+    /// [`KEYCHAIN_SERVICES`].
     const MACH_SERVICES: &[&str] = &[
         "com.apple.system.opendirectoryd.libinfo",
         "com.apple.system.opendirectoryd.membership",
@@ -201,7 +299,6 @@ pub mod seatbelt {
         "com.apple.system.logger",
         "com.apple.logd",
         "com.apple.diagnosticd",
-        "com.apple.SecurityServer",
         "com.apple.trustd.agent",
         "com.apple.cfprefsd.daemon",
         "com.apple.cfprefsd.agent",
@@ -209,6 +306,15 @@ pub mod seatbelt {
         "com.apple.lsd.mapdb",
         "com.apple.CoreServices.coreservicesd",
         "com.apple.PowerManagement.control",
+    ];
+
+    /// The keychain and credential services, only when the host allows it.
+    pub const KEYCHAIN_SERVICES: &[&str] = &[
+        "com.apple.SecurityServer",
+        "com.apple.securityd.xpc",
+        "com.apple.security.agent",
+        "com.apple.secd",
+        "com.apple.security.keychain-circle-notification",
     ];
 
     /// Name resolution, only when the network is allowed.
@@ -223,7 +329,7 @@ pub mod seatbelt {
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
 
-; reads are not confined
+; reads, except the denials below
 (allow file-read*)
 (allow sysctl-read)
 (allow user-preference-read)
@@ -252,12 +358,274 @@ pub mod seatbelt {
         out
     }
 
+    /// One character as a POSIX extended regular expression literal.
+    fn push_literal(out: &mut String, c: char) {
+        match c {
+            '^' | '\\' | '[' | ']' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '.' | '*' | '+' | '?' | '(' | ')' | '|' | '{' | '}' | '$' => {
+                out.push('[');
+                out.push(c);
+                out.push(']');
+            }
+            _ => out.push(c),
+        }
+    }
+
+    /// `text` as a regular expression matching exactly it.
+    #[must_use]
+    pub fn escape(text: &str) -> String {
+        let mut out = String::new();
+        for c in text.chars() {
+            push_literal(&mut out, c);
+        }
+        out
+    }
+
+    /// One glob character as a regular expression: both cases when
+    /// `fold_case`, and both Unicode normal forms (APFS keeps names as they
+    /// were written, NFC or NFD).
+    fn push_glob_char(out: &mut String, c: char, fold_case: bool) {
+        let mut forms: Vec<String> = Vec::new();
+        let mut add = |form: String| {
+            if !form.is_empty() && !forms.contains(&form) {
+                forms.push(form);
+            }
+        };
+        let variants: Vec<String> = if fold_case {
+            vec![
+                c.to_string(),
+                c.to_lowercase().collect(),
+                c.to_uppercase().collect(),
+            ]
+        } else {
+            vec![c.to_string()]
+        };
+        for variant in variants {
+            add(variant.nfc().collect());
+            add(variant.nfd().collect());
+        }
+        let single = forms.iter().all(|form| form.chars().count() == 1);
+        if forms.len() == 1 {
+            for c in forms[0].chars() {
+                push_literal(out, c);
+            }
+        } else if single
+            && forms
+                .iter()
+                .all(|form| form.chars().all(char::is_alphanumeric))
+        {
+            out.push('[');
+            for form in &forms {
+                out.push_str(form);
+            }
+            out.push(']');
+        } else {
+            out.push('(');
+            for (index, form) in forms.iter().enumerate() {
+                if index > 0 {
+                    out.push('|');
+                }
+                for c in form.chars() {
+                    push_literal(out, c);
+                }
+            }
+            out.push(')');
+        }
+    }
+
+    /// A glob (the `globset` syntax `path_deny` uses) as a regular
+    /// expression body over `/`-separated paths; `None` for a malformed one.
+    #[must_use]
+    pub fn glob_body(glob: &str, fold_case: bool) -> Option<String> {
+        let chars: Vec<char> = glob.chars().collect();
+        let mut out = String::new();
+        let mut braces = 0usize;
+        let mut index = 0usize;
+        while index < chars.len() {
+            let c = chars[index];
+            match c {
+                '*' if chars.get(index + 1) == Some(&'*') => {
+                    index += 1;
+                    if chars.get(index + 1) == Some(&'/') {
+                        index += 1;
+                        out.push_str("(.*/)?");
+                    } else {
+                        out.push_str(".*");
+                    }
+                }
+                '*' => out.push_str("[^/]*"),
+                '?' => out.push_str("[^/]"),
+                '[' => {
+                    let mut end = index + 1;
+                    if matches!(chars.get(end), Some('!' | '^')) {
+                        end += 1;
+                    }
+                    if chars.get(end) == Some(&']') {
+                        end += 1;
+                    }
+                    while chars.get(end).is_some_and(|c| *c != ']') {
+                        end += 1;
+                    }
+                    if end >= chars.len() {
+                        return None;
+                    }
+                    out.push('[');
+                    let mut inner = index + 1;
+                    if matches!(chars.get(inner), Some('!' | '^')) {
+                        out.push('^');
+                        inner += 1;
+                    }
+                    for c in &chars[inner..end] {
+                        if fold_case && c.is_alphabetic() {
+                            out.extend(c.to_lowercase());
+                            out.extend(c.to_uppercase());
+                        } else {
+                            out.push(*c);
+                        }
+                    }
+                    out.push(']');
+                    index = end;
+                }
+                '{' => {
+                    braces += 1;
+                    out.push('(');
+                }
+                ',' if braces > 0 => out.push('|'),
+                '}' if braces > 0 => {
+                    braces -= 1;
+                    out.push(')');
+                }
+                '\\' => {
+                    index += 1;
+                    push_glob_char(&mut out, *chars.get(index)?, fold_case);
+                }
+                _ => push_glob_char(&mut out, c, fold_case),
+            }
+            index += 1;
+        }
+        (braces == 0).then_some(out)
+    }
+
+    /// The regular expression denying `pattern` (a `path_deny` entry) under
+    /// `root`, and everything beneath what it matches.
+    #[must_use]
+    pub fn deny_glob_regex(root: &Path, pattern: &str, fold_case: bool) -> Option<String> {
+        let normalised: String = pattern.nfc().collect();
+        let trimmed = normalised.trim().trim_start_matches("./");
+        if trimmed.is_empty() {
+            return None;
+        }
+        let anchored = if trimmed.contains('/') {
+            trimmed.trim_start_matches('/').to_owned()
+        } else {
+            format!("**/{trimmed}")
+        };
+        let body = glob_body(&anchored, fold_case)?;
+        Some(format!(
+            "^{}/{body}(/.*)?$",
+            escape(&root.display().to_string())
+        ))
+    }
+
+    /// The regular expression for every `.git` entry under `root`.
+    #[must_use]
+    pub fn git_regex(root: &Path) -> String {
+        format!(
+            "^{}/(.*/)?[.][gG][iI][tT](/|$)",
+            escape(&root.display().to_string())
+        )
+    }
+
+    /// A denied path as a filter: a subpath, or a name prefix when its last
+    /// component ends with `*`.
+    fn deny_filter(path: &Path, name: &str, params: &mut Vec<(String, String)>) -> String {
+        let text = path.display().to_string();
+        if let Some(prefix) = text.strip_suffix('*') {
+            params.push((name.to_owned(), format!("^{}[^/]*(/|$)", escape(prefix))));
+            format!("(regex (param \"{name}\"))")
+        } else {
+            params.push((name.to_owned(), text));
+            format!("(subpath (param \"{name}\"))")
+        }
+    }
+
+    /// Credentials, the host's data directory and `path_deny`: contents
+    /// neither read nor written; then the writable roots inside a denied
+    /// directory are opened again.
+    fn push_denials(
+        text: &mut String,
+        params: &mut Vec<(String, String)>,
+        request: &SandboxRequest,
+    ) {
+        let mut denied = Vec::new();
+        for (index, path) in request.deny_paths.iter().enumerate() {
+            denied.push(deny_filter(path, &format!("DENY_{index}"), params));
+        }
+        if let Some(root) = &request.deny_root {
+            for (index, pattern) in request.deny_globs.iter().enumerate() {
+                if let Some(regex) =
+                    deny_glob_regex(root, pattern, crate::workspace::CASE_INSENSITIVE_FS)
+                {
+                    let name = format!("DENY_GLOB_{index}");
+                    denied.push(format!("(regex (param \"{name}\"))"));
+                    params.push((name, regex));
+                }
+            }
+        }
+        if !denied.is_empty() {
+            text.push_str("\n; credentials and path_deny: contents neither read nor written\n(deny file-read-data file-write*");
+            for filter in &denied {
+                let _ = write!(text, "\n  {filter}");
+            }
+            text.push_str(")\n");
+        }
+        // A writable root inside a denied directory (the session's temporary
+        // directory lives in the host's data directory) stays usable.
+        let reopened: Vec<usize> = request
+            .writable_roots
+            .iter()
+            .enumerate()
+            .filter(|(_, root)| {
+                request.deny_paths.iter().any(|path| {
+                    let text = path.display().to_string();
+                    text.strip_suffix('*').map_or_else(
+                        || root.starts_with(path),
+                        |prefix| root.display().to_string().starts_with(prefix),
+                    )
+                })
+            })
+            .map(|(index, _)| index)
+            .collect();
+        for index in reopened {
+            let _ = writeln!(
+                text,
+                "(allow file-read* file-read-data (subpath (param \"WRITABLE_ROOT_{index}\")))"
+            );
+            if request.mode == SandboxMode::WorkspaceWrite {
+                let _ = writeln!(
+                    text,
+                    "(allow file-write* (subpath (param \"WRITABLE_ROOT_{index}\")))"
+                );
+            }
+        }
+    }
+
     /// The profile text and its `-D` parameters for `request`.
     #[must_use]
     pub fn profile(request: &SandboxRequest) -> (String, Vec<(String, String)>) {
         let mut text = BASE.to_owned();
         text.push_str(&mach_lookup(MACH_SERVICES));
+        if request.allow_keychain {
+            text.push_str("\n; the keychain, allowed by the host\n");
+            text.push_str(&mach_lookup(KEYCHAIN_SERVICES));
+        }
         let mut params = Vec::new();
+        for (index, root) in request.writable_roots.iter().enumerate() {
+            params.push((format!("WRITABLE_ROOT_{index}"), root.display().to_string()));
+        }
         match request.mode {
             SandboxMode::ReadOnly => {
                 text.push_str("\n; read-only: no writes beyond the devices above\n");
@@ -288,14 +656,31 @@ pub mod seatbelt {
                         }
                         text.push(')');
                     }
-                    params.push((name, root.display().to_string()));
                 }
                 text.push_str(")\n");
             }
         }
+
+        push_denials(&mut text, &mut params, request);
+
+        if request.mode != SandboxMode::ReadOnly && !request.git_roots.is_empty() {
+            text.push_str(
+                "\n; every .git entry, any depth, any case: read-only\n(deny file-write*",
+            );
+            for (index, root) in request.git_roots.iter().enumerate() {
+                let name = format!("GIT_ROOT_{index}");
+                let _ = write!(text, "\n  (regex (param \"{name}\"))");
+                params.push((name, git_regex(root)));
+            }
+            text.push_str(")\n");
+        }
+
         if request.network {
             text.push_str("\n; network\n(allow network-outbound)\n(allow network-inbound)\n(allow system-socket)\n");
             text.push_str(&mach_lookup(DNS_SERVICES));
+            if !request.allow_listen {
+                text.push_str("; no listening sockets\n(deny network-bind)\n");
+            }
         } else {
             text.push_str(
                 "\n; no network: every socket, loopback included, is denied by default\n",
@@ -439,18 +824,17 @@ pub mod landlock {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
-    use super::{Enforcement, SandboxConfig, SandboxRequest, prepare, seatbelt};
+    use super::{Enforcement, SandboxConfig, SandboxRequest, credential_paths, prepare, seatbelt};
     use crate::error::ErrorCode;
     use crate::policy::SandboxMode;
 
     fn request(mode: SandboxMode, network: bool) -> SandboxRequest {
         SandboxRequest {
-            mode,
-            network,
             writable_roots: vec![PathBuf::from("/work/space"), PathBuf::from("/tmp/session")],
-            protected: vec![PathBuf::from("/work/space/.git/hooks")],
+            protected: vec![PathBuf::from("/work/space/vendor")],
+            ..SandboxRequest::new(mode, network)
         }
     }
 
@@ -468,13 +852,12 @@ mod tests {
         assert!(params.contains(&("WRITABLE_ROOT_0".to_owned(), "/work/space".to_owned())));
         assert!(params.contains(&(
             "WRITABLE_ROOT_0_PROTECTED_0".to_owned(),
-            "/work/space/.git/hooks".to_owned()
+            "/work/space/vendor".to_owned()
         )));
 
-        let (read_only, params) = seatbelt::profile(&request(SandboxMode::ReadOnly, true));
+        let (read_only, _) = seatbelt::profile(&request(SandboxMode::ReadOnly, true));
         assert!(!read_only.contains("(allow file-write*"));
         assert!(read_only.contains("(allow network-outbound)"));
-        assert!(params.is_empty());
 
         let (full, _) = seatbelt::profile(&request(SandboxMode::FullAccess, false));
         assert!(full.contains("(allow file-write*)\n"));
@@ -482,7 +865,95 @@ mod tests {
     }
 
     #[test]
-    fn unconfined_requests_run_as_they_are() {
+    fn git_entries_are_read_only_at_any_depth_and_case() {
+        let mut req = request(SandboxMode::WorkspaceWrite, false);
+        req.git_roots = vec![PathBuf::from("/work/space")];
+        let (text, params) = seatbelt::profile(&req);
+        let deny = text.find("(deny file-write*").expect("a .git denial");
+        let allow = text
+            .find("(allow file-write*")
+            .expect("the workspace allowance");
+        assert!(deny > allow, "the denial comes last, so it wins");
+        assert!(params.contains(&(
+            "GIT_ROOT_0".to_owned(),
+            "^/work/space/(.*/)?[.][gG][iI][tT](/|$)".to_owned()
+        )));
+        let full = SandboxRequest {
+            mode: SandboxMode::FullAccess,
+            ..req.clone()
+        };
+        assert!(seatbelt::profile(&full).0.contains("GIT_ROOT_0"));
+    }
+
+    #[test]
+    fn credentials_path_deny_keychain_and_listening_are_denied_by_default() {
+        let mut req = request(SandboxMode::WorkspaceWrite, true);
+        req.deny_paths = vec![
+            PathBuf::from("/home/me/.ssh"),
+            PathBuf::from("/home/me/.config/elitea*"),
+        ];
+        req.deny_globs = vec![".env".to_owned(), "secrets/**".to_owned()];
+        req.deny_root = Some(PathBuf::from("/work/space"));
+        let (text, params) = seatbelt::profile(&req);
+        assert!(text.contains("(deny file-read-data file-write*"));
+        assert!(text.contains("(subpath (param \"DENY_0\"))"));
+        assert!(params.contains(&(
+            "DENY_1".to_owned(),
+            "^/home/me/[.]config/elitea[^/]*(/|$)".to_owned()
+        )));
+        assert!(
+            !text.contains("com.apple.SecurityServer"),
+            "no keychain by default"
+        );
+        assert!(text.contains("(deny network-bind)"));
+        let env = params
+            .iter()
+            .find(|(name, _)| name == "DENY_GLOB_0")
+            .map(|(_, value)| value.clone())
+            .expect("glob");
+        assert!(env.starts_with("^/work/space/(.*/)?"), "{env}");
+        assert!(env.ends_with("(/.*)?$"), "{env}");
+
+        req.allow_keychain = true;
+        req.allow_listen = true;
+        let (allowed, _) = seatbelt::profile(&req);
+        assert!(allowed.contains("com.apple.SecurityServer"));
+        assert!(!allowed.contains("(deny network-bind)"));
+
+        let home = credential_paths(Path::new("/nonexistent-home"));
+        for wanted in [
+            ".ssh",
+            ".aws",
+            ".kube",
+            ".netrc",
+            ".git-credentials",
+            "Library/Keychains",
+        ] {
+            assert!(
+                home.contains(&Path::new("/nonexistent-home").join(wanted)),
+                "{wanted}"
+            );
+        }
+    }
+
+    #[test]
+    fn globs_translate_to_anchored_regexes() {
+        let root = Path::new("/w");
+        let regex = |glob: &str, fold| seatbelt::deny_glob_regex(root, glob, fold).expect("glob");
+        assert_eq!(regex("*.pem", false), "^/w/(.*/)?[^/]*[.]pem(/.*)?$");
+        assert_eq!(regex("secrets/**", false), "^/w/secrets/.*(/.*)?$");
+        assert_eq!(regex("a?{b,c}", false), "^/w/(.*/)?a[^/](b|c)(/.*)?$");
+        assert_eq!(regex("ab", true), "^/w/(.*/)?[aA][bB](/.*)?$");
+        assert!(
+            regex("caf\u{e9}", false).contains("(\u{e9}|e\u{301})"),
+            "both normal forms"
+        );
+        assert_eq!(seatbelt::escape("/a.b(c)^"), "/a[.]b[(]c[)]\\^");
+        assert!(seatbelt::glob_body("[abc", false).is_none());
+    }
+
+    #[test]
+    fn unconfined_requests_run_as_they_are_and_say_so() {
         let argv = vec!["echo".to_owned(), "hi".to_owned()];
         let prepared = prepare(
             &request(SandboxMode::FullAccess, true),
@@ -491,7 +962,11 @@ mod tests {
         )
         .expect("prepare");
         assert_eq!(prepared.program, PathBuf::from("echo"));
-        assert_eq!(prepared.enforcement, Enforcement::Full);
+        assert_eq!(
+            prepared.enforcement,
+            Enforcement::None,
+            "full access with the network is no sandbox"
+        );
     }
 
     #[test]
@@ -500,6 +975,11 @@ mod tests {
         let req = request(SandboxMode::WorkspaceWrite, false);
         let refused = prepare(&req, &argv, &SandboxConfig::default());
         if cfg!(target_os = "linux") {
+            if let Ok(prepared) = &refused {
+                // bubblewrap is installed: it enforces.
+                assert_eq!(prepared.enforcement, Enforcement::Full);
+                return;
+            }
             assert_eq!(
                 refused.expect_err("no helper").code(),
                 ErrorCode::SandboxUnavailable
@@ -508,8 +988,8 @@ mod tests {
                 &req,
                 &argv,
                 &SandboxConfig {
-                    linux_helper: None,
                     allow_unenforced: true,
+                    ..SandboxConfig::default()
                 },
             )
             .expect("allowed");

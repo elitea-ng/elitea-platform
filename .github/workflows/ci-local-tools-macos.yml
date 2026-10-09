@@ -84,6 +84,6 @@ jobs:
 
       - name: The Seatbelt tests ran
         run: |
-          ran=$(grep -cE '^test (workspace_write_confines|read_only_blocks|git_hooks_and_config|network_is_blocked)[a-z_]* \.\.\. ok$' "$RUNNER_TEMP/local-tools-test.log" || true)
+          ran=$(grep -cE '^test (workspace_write_confines|read_only_blocks|git_directories_stay|network_is_blocked|path_deny_credentials|network_on_still)[a-z_]* \.\.\. ok$' "$RUNNER_TEMP/local-tools-test.log" || true)
           echo "Seatbelt tests passed: $ran"
-          test "$ran" -eq 4
+          test "$ran" -eq 6
