@@ -90,6 +90,15 @@ Other Worker files:
 - `src/agents/graph/data_shaping.rs`: `decimal`, `exact_i64` and `exact_u64` delegate to `exact_number` with
   `Number::as_str()`. Shaping codes are unchanged (`number_code`).
 - Test helpers widened to `pub(super)`, no behaviour change: `static_pause_tests.rs`, `shaping_pg_tests.rs`.
+- `src/state/postgres_checkpointer.rs:33-42` and `src/agents/graph/map_reduce.rs:31`: compile-time assertions that a
+  typed channel at its bound fits one stored checkpoint (`MAX_REDUCED_BYTES` ≤ `MAX_DATABASE_PAYLOAD_BYTES`;
+  `MAX_APPEND_ELEMENTS` and `MAX_MERGE_KEYS` ≤ `MAX_DATABASE_JSON_NODES`) and the whole-state fan-out boundary
+  (`MAX_REDUCED_BYTES` ≤ `map_reduce::MAX_CHECKPOINT_BYTES`). A drift on either side fails the build.
+  - `MAX_DATABASE_MAP_ENTRIES` bounds top-level state keys, not the keys of one object, so it is not a counterpart of
+    `MAX_MERGE_KEYS`.
+  - No per-channel byte bound exists elsewhere.
+  - The 512 KiB value equals Track A's shaping byte ceiling and the Map per-item bound, but those bound different values
+    and are not asserted equal.
 
 ### `apps/elitea-web`: admission mirror, files not touched by #1084
 
@@ -141,6 +150,11 @@ New tests:
     (T-B6);
   - explicit `reducer: overwrite` keeps the golden digest;
   - the reducer fold is order-independent and tag-sensitive.
+- **Worker `state_reducer_parity_tests.rs` (2):** one parser. Over 27 edge cases (i64 min/max, ±0, `2.0`, `1e2`,
+  `1.50e1`, `100e-2`, `9223372036854775807.0`, values past both bounds, 21 digits, `2.5`, `1e-1`, a huge exponent),
+  Track A's `data_shaping::exact_i64` (`Number::as_str`) and typed `sum_int` (`Display` text through
+  `agent-runtime::exact_number`) must reach the same verdict under the Worker's `arbitrary_precision`. Any divergence
+  fails the Worker's CI run.
 - **Worker `pipeline_tests.rs` (1):**
   `typed_reducers_restart_from_defaults_on_regeneration_and_on_a_new_turn`, through the production pipeline assembler.
   It proves the expert's regeneration ASSUMPTION and adds the new-turn case.
@@ -208,7 +222,8 @@ No cell of `docs/recovery-guarantees.md` changes, and no L is introduced.
 - **Bounded:**
   - 10,000 elements, 1,000 keys and 512 KiB per typed channel, checked before ADK applies the update;
   - declared defaults are checked at compile time against the same bounds;
-  - limits are named constants in `agent-runtime` (`state_reducers.rs:21-25`, `exact_number.rs:11`).
+  - limits are named constants in `agent-runtime` (`state_reducers.rs:21-25`, `exact_number.rs:11`);
+  - they are compile-time asserted against the checkpoint and fan-out bounds (§2).
 - **Typed failures:**
   - `graph.state.reducer_type_mismatch`, `graph.state.reducer_limit`, `graph.state.reducer_overflow`;
   - the node message is `"<code>: <channel>"`.

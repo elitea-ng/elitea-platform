@@ -29,6 +29,16 @@ const MAX_DATABASE_CHECKPOINTS_PER_THREAD: usize = 4096;
 const MAX_DATABASE_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DATABASE_JSON_DEPTH: usize = 64;
 const MAX_DATABASE_JSON_NODES: usize = 65_536;
+// A typed state channel at its own bound (owned by agent-runtime) must fit one
+// stored checkpoint; these fail the build if either side drifts.
+const _: () = assert!(
+    elitea_agent_runtime::graph::state_reducers::MAX_REDUCED_BYTES <= MAX_DATABASE_PAYLOAD_BYTES
+);
+const _: () = assert!(
+    elitea_agent_runtime::graph::state_reducers::MAX_APPEND_ELEMENTS <= MAX_DATABASE_JSON_NODES
+);
+const _: () =
+    assert!(elitea_agent_runtime::graph::state_reducers::MAX_MERGE_KEYS <= MAX_DATABASE_JSON_NODES);
 #[allow(dead_code)] // Used once the sealed invocation coordinator constructs writer authority.
 const MAX_TENANT_BYTES: usize = 256;
 const MAX_THREAD_BYTES: usize = 512;
