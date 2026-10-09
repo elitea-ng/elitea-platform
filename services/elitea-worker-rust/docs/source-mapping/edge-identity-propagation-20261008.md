@@ -117,6 +117,18 @@ No row moves to L.
 
 ## Real-browser evidence
 
+**Status: the final proof on a stack built from merged `main` is pending.** The evidence below comes from a
+pre-rebase rehearsal (branch base `85cabcc8`). It counts for Main and the edge configuration. It does **not** count
+as proof of the Rust worker binary:
+
+- That base does not contain #1160 (the cargo-target cache fix).
+- The worker image's binary was not extracted and checked for a branch-unique string (delivery gate §3b).
+
+So the worker-toolkit leg and the post-tool observation below must be repeated on the new stack. The rebased branch
+contains #1160.
+
+### Pre-rebase rehearsal (2026-10-08)
+
 **Stack.**
 - Local compose rehearsal, project `elitea-sec-edge`, `deploy/docker-compose.standalone-full.yml` plus
   `docker-compose.standalone-rust-agent.yml` and a rehearsal overlay (unique image tags, optional subapps off).
@@ -151,7 +163,8 @@ check does not apply to the native worker). The new in-network probes:
   (`native_agent.event_failed`, upstream `agent.legacy`).
 - The worker logged `agent_tool_end` before the failure.
 - Main logged no refusal or error, and the edge logged 200 for the model call.
-- This was not reproduced against `origin/main` images, so it is recorded here and not attributed.
+- This was not reproduced against `origin/main` images, and the worker image predates #1160, so it is recorded
+  here and not attributed.
 
 **Fixtures.**
 - Users, PATs, model rows and the artifact toolkit come from the stack's seed subcommands (SQL and product API).
