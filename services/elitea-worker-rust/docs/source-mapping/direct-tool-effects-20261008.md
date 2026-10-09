@@ -178,7 +178,7 @@ terminal output instead of its stop message. `select_pipeline_result` now prefer
   sources and build with `--no-cache`.
 - **MCP tool discovery.** Main-side discovery (`mcp_sync_tools`) answers "MCP tool discovery failed" for the
   private `mcp-mock` host. Runtime calls go through the Worker and are not affected.
-- **Admin Guardrails form.** "Add toolkit" does not render a new row.
+- **Admin Guardrails form.** "Add toolkit" did not render a new row. It was fixed on `main` by #1170 and merged into this branch.
 
 ## Follow-ups
 
