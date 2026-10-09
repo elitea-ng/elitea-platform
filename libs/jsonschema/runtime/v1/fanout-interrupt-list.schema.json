@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-list.v1",
+  "title": "Open interrupts of one response",
+  "description": "GET .../{responseMessageID}/interrupts. Lists PENDING and DECIDED (not yet consumed) cards; at most 16 are open per response.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "response_message_id",
+    "decision_revision",
+    "interrupts"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-interrupt-list.v1"
+    },
+    "response_message_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "decision_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "interrupts": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "card",
+          "state",
+          "revision"
+        ],
+        "properties": {
+          "card": {
+            "$ref": "elitea.pipeline.fanout-interrupt-card.v1"
+          },
+          "state": {
+            "enum": [
+              "PENDING",
+              "DECIDED"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-decision-request.v1",
+  "title": "Public decision request",
+  "description": "Body of POST .../interrupts/{interruptKey}/decision. The canonical body is at most 8192 bytes and contains no secrets; delegated auth passes a token-store reference.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "expected_revision",
+    "action",
+    "value"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "expected_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "action": {
+      "enum": [
+        "approve",
+        "reject",
+        "edit",
+        "block_with_comment",
+        "answer",
+        "authorize",
+        "skip",
+        "continue"
+      ]
+    },
+    "value": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 8192,
+      "pattern": "^[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*$"
+    },
+    "credential_ref": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]{16,128}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "enum": [
+              "approve",
+              "reject",
+              "authorize",
+              "skip"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "maxLength": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "enum": [
+              "edit",
+              "block_with_comment",
+              "answer",
+              "continue"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "authorize"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "expected_revision",
+          "action",
+          "value",
+          "credential_ref"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "credential_ref"
+          ]
+        }
+      }
+    }
+  ]
+}

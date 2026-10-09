@@ -197,8 +197,12 @@ func executionIDFromHeader(h http.Header) string {
 // VerifyExecution returns false, nil for an id that fails the rule. An error
 // is a failed lookup, and the edge drops the id for it too: attribution is
 // never worth failing a model call for.
+//
+// tokenID and nativeClientID are the authenticating principal's
+// (auth.User.TokenID / NativeClientID, "" when absent): a desktop local turn
+// is attributed only to calls made with the credential family that started it.
 type ExecutionVerifier interface {
-	VerifyExecution(ctx context.Context, projectID, userID, executionID string) (bool, error)
+	VerifyExecution(ctx context.Context, projectID, userID, tokenID, nativeClientID, executionID string) (bool, error)
 }
 
 // CallbackExecutionPrefix marks an execution id that names a provider
@@ -247,7 +251,8 @@ func verifiedExecutionID(ctx context.Context, verifier ExecutionVerifier, id ide
 		}
 		return executionID
 	}
-	ok, err := verifier.VerifyExecution(ctx, id.projectID, id.userID, executionID)
+	principal, _ := auth.UserFromContext(ctx)
+	ok, err := verifier.VerifyExecution(ctx, id.projectID, id.userID, principal.TokenID, principal.NativeClientID, executionID)
 	if err != nil || !ok {
 		return ""
 	}
