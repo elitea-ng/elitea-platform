@@ -1510,8 +1510,19 @@ main:
     # bitbucket, jira, confluence) may reach, for the one authenticated metadata
     # GET that check makes. The base URL is tenant-authored (#13), so it is
     # checked before the dial, with the same matching rules the two facades
-    # above use: hostnames, case-insensitive, `*.` for DIRECT subdomains only,
-    # a bare `*` to disable the control out loud.
+    # above use: hostnames, case-insensitive, `*.` for DIRECT subdomains only.
+    # A bare `*` is NOT accepted here; it is dropped, and a list of only `*`
+    # refuses every host.
+    #
+    # Every dial then goes through Main's egress guard: the address is
+    # classified at dial time, no proxy is used, redirects are not followed.
+    # Loopback and private-network addresses (RFC 1918, ULA, CGNAT,
+    # benchmarking) are refused unless a CIDR block, IP literal or `localhost`
+    # entry in THIS list names them, each entry for its own range; link-local,
+    # cloud-metadata, multicast and reserved addresses are always refused. A
+    # self-hosted GitLab, Jira or Confluence on a private address needs its
+    # name AND its range, e.g. "gitlab.corp.example, 10.20.0.0/16". Name hosts
+    # without a port; a range or IP entry may pin one ("10.20.0.5:8443").
     #
     # UNSET IS NOT FAIL-CLOSED HERE, and that is the difference from the two
     # allowlists above. A clone reaches a URL somebody typed into a request; this
