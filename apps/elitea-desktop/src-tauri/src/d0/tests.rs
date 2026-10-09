@@ -903,3 +903,74 @@ async fn a_running_turn_keeps_its_workspace_on_its_project() {
         Some(2)
     );
 }
+
+/// The platform of [`platform`], with the version read held while `hold`
+/// is set (for at most five seconds); `entered` tells it arrived.
+async fn holding_resolve(hold: Arc<AtomicBool>, entered: Arc<AtomicBool>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    serve(move |req: &Req| {
+        if req
+            .path
+            .starts_with("/api/v2/elitea_core/resolved_version/")
+        {
+            entered.store(true, Ordering::SeqCst);
+            tokio::task::block_in_place(|| {
+                for _ in 0..250 {
+                    if !hold.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+        }
+        inner(req)
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workspace_removed_or_rebound_while_a_turn_prepares_is_not_used() {
+    for rebind in [false, true] {
+        let hold = Arc::new(AtomicBool::new(true));
+        let entered = Arc::new(AtomicBool::new(false));
+        let h = harness(
+            holding_resolve(hold.clone(), entered.clone()).await,
+            allowed(),
+            UiDecision::AllowOnce,
+        )
+        .await;
+        let starting = tokio::spawn({
+            let host = h.host.clone();
+            let request = request(&h.workspace_id);
+            async move { host.start(request).await }
+        });
+        // The start is reading the version: it holds no claim yet.
+        for _ in 0..250 {
+            if entered.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            entered.load(Ordering::SeqCst),
+            "the start reads the version"
+        );
+        if rebind {
+            h.host.bind_project(&h.workspace_id, 2).unwrap();
+        } else {
+            h.host.remove_workspace(&h.workspace_id).unwrap();
+        }
+        hold.store(false, Ordering::SeqCst);
+        let error = starting.await.unwrap().unwrap_err();
+        let expected = if rebind {
+            "workspace_project_mismatch"
+        } else {
+            "workspace_unknown"
+        };
+        assert_eq!(error.code, expected);
+        assert!(
+            seen(&h.server, "/local_turn/prompt_lib/1/42").is_empty(),
+            "no execution was opened for a workspace that changed"
+        );
+    }
+}

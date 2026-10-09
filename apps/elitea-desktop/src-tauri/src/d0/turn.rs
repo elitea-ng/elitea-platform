@@ -554,6 +554,10 @@ impl AgentHost {
         // Checked and taken atomically, per workspace id, before the session
         // may be rebuilt; released on every early return below.
         let claim = WorkspaceClaim::take(&self.busy, &request.workspace_id, TURN_RUNNING)?;
+        // Read again under the claim: the workspace may have been removed or
+        // re-bound while the version and the conversation were read (neither
+        // can happen from here on, both take the claim).
+        let workspace = self.bound_workspace(request)?;
         let workspace_session = self.session(
             &request.workspace_id,
             PathBuf::from(&workspace.path),
