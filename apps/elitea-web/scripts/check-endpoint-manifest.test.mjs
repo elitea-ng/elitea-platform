@@ -721,7 +721,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 311 -> 312 (client contract 1.6, ADR-0029 decision 5a):
 // resolveApplicationVersion, the desktop's resolved agent definition. The web
 // app does not call it, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 312;
+// 312 -> 313 (client contract 1.6, ADR-0029 decision 5b):
+// executeRemoteToolkitTool, the desktop's remote toolkit call. Token callers
+// only (a browser session is refused), so the manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 313;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

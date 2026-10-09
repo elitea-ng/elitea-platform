@@ -139,6 +139,12 @@ type RunOutcome struct {
 	AuthorizationRequired *executiondomain.ToolkitAuthorizationRequired
 	ToolkitType           string
 	ToolName              string
+	// FailureCode is the worker's RuntimeErrorCodeV1 name on a
+	// RunStatusRuntimeFailure outcome, and empty otherwise. It is what lets a
+	// caller tell "this worker cannot run that tool" (UNSUPPORTED_CAPABILITY —
+	// the Rust worker refuses an effectful tool in toolkit.call_tool.v1) from
+	// "the tool's provider failed", which the safe message alone does not.
+	FailureCode string
 }
 
 // AuthoritativeInputResolver reloads the saved toolkit and freezes its settings.
@@ -629,6 +635,7 @@ func decodeSettlement(admitted AdmittedRun, settlement Settlement) (RunOutcome, 
 			outcome.ErrorMessage = "the runtime operation failed"
 			return outcome, nil
 		}
+		outcome.FailureCode = failure.GetCode().String()
 		// SafeMessage is what the runtime chose to say; it is already bounded
 		// and carries no provider body, so it is the only field relayed.
 		outcome.ErrorMessage = failure.GetSafeMessage()

@@ -408,7 +408,8 @@ func TestRunToolMapsARuntimeFailure(t *testing.T) {
 		t.Fatalf("run tool: %v", err)
 	}
 	if outcome.Status != RunStatusRuntimeFailure ||
-		outcome.ErrorMessage != "The runtime operation failed." {
+		outcome.ErrorMessage != "The runtime operation failed." ||
+		outcome.FailureCode != "RUNTIME_ERROR_CODE_V1_INTERNAL" {
 		t.Fatalf("runtime failure mapped to %+v", outcome)
 	}
 }

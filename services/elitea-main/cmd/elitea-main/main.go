@@ -2325,6 +2325,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose resolved version route: %w", err)
 	}
+	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, workerImplementation, apiGroupAuth)
+	if err != nil {
+		return fmt.Errorf("compose remote toolkit route: %w", err)
+	}
 
 	r := api.NewRouter(api.RouterConfig{
 		AdminUI:                      adminUICfg,
@@ -2403,6 +2407,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentLocalTurns:          currentLocalTurns,
 		CurrentResolvedVersion:     currentResolvedVersion,
+		CurrentRemoteToolkit:       currentRemoteToolkit,
 		CurrentNodeRecovery:        currentNodeRecovery,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,

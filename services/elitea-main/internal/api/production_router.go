@@ -242,6 +242,9 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 	if cfg.CurrentResolvedVersion != nil {
 		r.Method(http.MethodGet, desktopopsapi.ResolvedVersionPath, cfg.CurrentResolvedVersion)
 	}
+	if cfg.CurrentRemoteToolkit != nil {
+		r.Method(http.MethodPost, desktopopsapi.RemoteToolkitPath, cfg.CurrentRemoteToolkit)
+	}
 	// One handler, two verbs, two permissions. They are registered separately
 	// because the route resolves a different permission per verb — polling is a
 	// read and stopping is not — the same reason the DeepWiki facade above

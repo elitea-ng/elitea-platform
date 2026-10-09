@@ -12226,6 +12226,763 @@
         }
       }
     },
+    "POST /elitea_core/remote_toolkit_call/prompt_lib/{project_id}/{toolkit_id}": {
+      "operation_id": "executeRemoteToolkitTool",
+      "parameters": {
+        "header:idempotency-key": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:toolkit_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "tool_name"
+            ],
+            "properties": {
+              "arguments": {
+                "type": "object",
+                "open": true
+              },
+              "llm_model": {
+                "type": "string"
+              },
+              "llm_settings": {
+                "type": "object",
+                "open": true
+              },
+              "mcp_authorization_reference": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string",
+                "max_length": 128
+              },
+              "tool_name": {
+                "type": "string",
+                "min_length": 1
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "501": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "502": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        },
+        "504": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "POST /social/pin/prompt_lib/{project_id}/{entity_type}/{entity_id}": {
       "operation_id": "pinEntity",
       "parameters": {

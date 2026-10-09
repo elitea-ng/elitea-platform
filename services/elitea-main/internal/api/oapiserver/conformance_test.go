@@ -249,6 +249,8 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// Client contract 1.6: resolveApplicationVersion, registered only
 		// when the route is composed (production_router.go).
 		CurrentResolvedVersion: http.NotFoundHandler(),
+		// Client contract 1.6: executeRemoteToolkitTool, likewise.
+		CurrentRemoteToolkit: http.NotFoundHandler(),
 		RuntimeRoutes: api.RuntimeRoutes{
 			Validation:      http.NotFoundHandler(),
 			ExecutionEvents: http.NotFoundHandler(),
