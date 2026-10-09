@@ -99,6 +99,7 @@ func raceConversationPins(pins *CurrentSocialPinsRepository, numericID string, u
 
 func TestConcurrentConversationPinsAndUnpinsNeverDeadlock(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
+	grantPinMembership(t, pool, 1, 7)
 	repo := NewConversationsRepo(pool)
 	pins := NewCurrentSocialPinsRepository(pool)
 	numericID, _, _ := seedConversationWithParticipant(t, repo, "contended")
@@ -160,6 +161,7 @@ func TestConcurrentConversationPinsAndUnpinsNeverDeadlock(t *testing.T) {
 // neither side may be aborted.
 func TestAnUnpinRacingTheConversationDeleteIsNotADeadlock(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
+	grantPinMembership(t, pool, 1, 7)
 	repo := NewConversationsRepo(pool)
 	pins := NewCurrentSocialPinsRepository(pool)
 	numericID, _, _ := seedConversationWithParticipant(t, repo, "unpin racing delete")

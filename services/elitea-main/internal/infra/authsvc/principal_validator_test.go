@@ -230,3 +230,74 @@ func TestPrincipalDatabaseIDRejectsBeforeNarrowing(t *testing.T) {
 		})
 	}
 }
+
+// The token's project binding is reloaded with the principal, so a token
+// authenticated through a forwarded projection carries the same binding as the
+// same token presented as a bearer. Storage is the only source: a binding the
+// incoming principal claims is replaced by what the row says.
+func TestPrincipalValidatorReloadsTokenProjectBinding(t *testing.T) {
+	bound := int32(5)
+	cases := []struct {
+		name       string
+		row        sqlcgen.GetActivePATPrincipalByIDRow
+		claimed    *int64
+		wantID     *int64
+		wantActive *bool
+	}{
+		{
+			name:       "bound to an active project",
+			row:        sqlcgen.GetActivePATPrincipalByIDRow{TokenID: 42, UserID: 7, ProjectID: &bound, BoundProjectActive: true},
+			wantID:     ptr(int64(5)),
+			wantActive: ptr(true),
+		},
+		{
+			name:       "bound to a suspended project",
+			row:        sqlcgen.GetActivePATPrincipalByIDRow{TokenID: 42, UserID: 7, ProjectID: &bound, BoundProjectActive: false},
+			wantID:     ptr(int64(5)),
+			wantActive: ptr(false),
+		},
+		{
+			name:    "unbound row replaces a claimed binding",
+			row:     sqlcgen.GetActivePATPrincipalByIDRow{TokenID: 42, UserID: 7},
+			claimed: ptr(int64(9)),
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			validator := &PrincipalValidator{queries: principalQueriesStub{
+				activePAT: func(context.Context, int32) (sqlcgen.GetActivePATPrincipalByIDRow, error) {
+					return testCase.row, nil
+				},
+			}}
+			got, err := validator.ValidatePrincipal(context.Background(), auth.User{
+				ID: "42", TokenID: "42", UserID: "7", AuthType: "token", TokenProjectID: testCase.claimed,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !equalPointer(got.TokenProjectID, testCase.wantID) || !equalPointer(got.TokenProjectActive, testCase.wantActive) {
+				t.Fatalf("binding = (%v, %v), want (%v, %v)",
+					deref(got.TokenProjectID), deref(got.TokenProjectActive), deref(testCase.wantID), deref(testCase.wantActive))
+			}
+			if want := testCase.wantActive != nil && !*testCase.wantActive; got.BoundProjectRefused() != want {
+				t.Fatalf("BoundProjectRefused() = %v, want %v", got.BoundProjectRefused(), want)
+			}
+		})
+	}
+}
+
+func ptr[T any](value T) *T { return &value }
+
+func equalPointer[T comparable](left, right *T) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func deref[T any](value *T) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}

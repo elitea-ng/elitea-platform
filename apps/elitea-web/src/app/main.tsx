@@ -1,3 +1,6 @@
+// Before any schema-defining module: see zodJitless.ts.
+import '@/shared/config/zodJitless';
+
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 

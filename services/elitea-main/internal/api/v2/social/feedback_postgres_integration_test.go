@@ -458,7 +458,14 @@ func prepareCurrentFeedbackDatabase(t *testing.T, pool *pgxpool.Pool) {
 CREATE SCHEMA centry;
 CREATE TABLE centry.project (
     id INTEGER PRIMARY KEY,
-    suspended BOOLEAN NOT NULL DEFAULT FALSE
+    suspended BOOLEAN NOT NULL DEFAULT FALSE,
+    create_success BOOLEAN NOT NULL DEFAULT TRUE
+);
+-- The token principal reload joins the project binding (shared migration 0071).
+CREATE SCHEMA IF NOT EXISTS elitea_identity;
+CREATE TABLE elitea_identity.token_project_binding (
+    token_id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL
 );
 INSERT INTO centry.project (id, suspended) VALUES
     (7, FALSE),

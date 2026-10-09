@@ -103,8 +103,9 @@ func productionEdgeAuthHandler(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	resolver, err := browserauth.NewTrustedProxyResolver(browserauth.TrustedProxyConfig{
-		TrustedProxyCIDRs: []string{"10.0.0.0/8"},
-		PublicOrigin:      "https://elitea.example.test",
+		TrustedProxyCIDRs:        []string{"10.0.0.0/8"},
+		PublicOrigin:             "https://elitea.example.test",
+		IdentityProjectionSecret: []byte("0123456789abcdef0123456789abcdef"),
 	})
 	if err != nil {
 		t.Fatal(err)

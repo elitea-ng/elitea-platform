@@ -1,3 +1,14 @@
 # Product names the storage documentation spells as they are spelled, not
 # code identifiers to put in backticks. ".." keeps clippy's default list.
 doc-valid-idents = ["PostgreSQL", "SQLite", ".."]
+
+# Untrusted YAML must go through elitea_agent_runtime::bounded_yaml, which bounds
+# anchor/alias expansion.
+disallowed-methods = [
+    { path = "serde_yaml_ng::from_str", reason = "use bounded_yaml::from_str" },
+    { path = "serde_yaml_ng::from_slice", reason = "use bounded_yaml::from_str" },
+    { path = "serde_yaml_ng::from_reader", reason = "use bounded_yaml::from_str" },
+    { path = "serde_yaml_ng::Deserializer::from_str", reason = "use bounded_yaml::from_str" },
+    { path = "serde_yaml_ng::Deserializer::from_slice", reason = "use bounded_yaml::from_str" },
+    { path = "serde_yaml_ng::Deserializer::from_reader", reason = "use bounded_yaml::from_str" },
+]

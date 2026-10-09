@@ -28,7 +28,7 @@ set -euo pipefail
 CHART="deploy/helm/elitea"
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
-      --set llmGateway.egressPosture=public-unrestricted
+      --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
       --set deepwiki.enabled=true
       --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com)
 

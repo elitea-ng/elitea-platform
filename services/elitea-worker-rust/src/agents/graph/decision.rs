@@ -16,12 +16,14 @@ use serde_json::Value;
 use thiserror::Error;
 use tracing::Instrument as _;
 
+use super::compiler::PIPELINE_YAML_BUDGET;
 use super::llm::{
     LlmExecutionInput, LlmNodeDefinition, PipelineLlmAgentFactory, normalize_mapping_value,
     parse_messages, render_fstring, run_model_agent_text,
 };
 use super::router::{RouteTargets, graph_target};
 use super::yaml::{valid_graph_id, valid_output_key};
+use crate::bounded_yaml;
 
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_DESCRIPTION_BYTES: usize = 32 * 1024;
@@ -66,8 +68,11 @@ impl DecisionNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(DecisionConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawDecisionNodeDefinition>(yaml)
-            .map_err(|source| DecisionConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawDecisionNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| DecisionConfigurationError::MalformedYaml { source })?;
         Self::from_raw(raw)
     }
 

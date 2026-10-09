@@ -90,9 +90,11 @@ func currentConfigurationsConfigFromEnv(
 		strings.ContainsAny(masterKeyFile, "\x00\r\n")) {
 		return currentConfigurationsConfig{}, errors.New("ELITEA_VAULT_MASTER_KEY_FILE is invalid")
 	}
-	// SECRETS_MASTER_KEY is validated but NOT required: the unwrapped shape is
-	// a real local one (deploy/scripts/standalone-stack.sh seeds it). It is
-	// read only on the enabled path, because the disabled path above rejects
+	// SECRETS_MASTER_KEY is validated here but not required here: start-up
+	// (requireVaultMasterKey in master_key_gate.go) already refuses a missing
+	// key unless the development opt-out is set, and that opt-out still leaves
+	// the unwrapped shape (deploy/scripts/standalone-stack.sh seeds it) valid
+	// for this loader. It is read only on the enabled path, because the disabled path above rejects
 	// Configurations settings and this variable belongs to the secrets
 	// handler, which runs either way. The DISABLED path's chat-config loader
 	// needs the same key and reads it from the environment directly, through

@@ -1265,7 +1265,7 @@ The variable has three states. They are not equivalent:
 | State | What `elitea-main` does | What is stored |
 |---|---|---|
 | Set, valid | Wraps each project vault key with the master key. | The key row is a Fernet token. |
-| **Not set** | Starts, and writes a **warning** to the log. | The key row is the project key **in the clear**. Anyone who can read the database can open every project secret. |
+| **Not set** | **Refuses to start**, unless `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true` is set (throwaway local stacks only); then it starts and writes a **warning** to the log. | With the opt-out, the key row is the project key **in the clear**. Anyone who can read the database can open every project secret. |
 | **Set, malformed** | **Refuses to start.** The message names the variable. | Nothing. |
 
 A malformed key stops the service on purpose (#412). Before that change the
@@ -1282,15 +1282,23 @@ stray space or tab **is** malformed.
   the table, and compose fails if you do not export it (#418).
 - `docker-compose.staging.yml` requires it from your shell, and compose fails
   if you do not export it.
-- No chart under `deploy/helm/` sets it. Supply it through a Kubernetes
-  Secret, or accept unwrapped storage.
-- The E2E stack sets no key on purpose. It seeds unwrapped key rows, so it
-  needs none.
+- The `elitea` chart gives `elitea-main` the Secret reference the LLM gateway
+  reads (`llmGateway.secrets.SECRETS_MASTER_KEY`, by default Secret
+  `elitea-llm-gateway-secrets`, key `secrets-master-key`), or
+  `main.secrets.SECRETS_MASTER_KEY.secretName` / `.key` when set. That Secret
+  must exist even with the gateway disabled. The render fails when there is no
+  source, and refuses the key as a plain `main.env` value.
+- The E2E stack, `docker-compose.standalone-full.yml` and the kind stack set
+  `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`. They seed unwrapped key rows, so
+  they need no key.
 
 ### Changing the key
 
 Rows written under a different key, or under no key, do not become readable
-when the key changes. Convert them with
+when the key changes. A deployment that ran without a key runs the script
+below with `--to-key` and `--apply` first, then starts `elitea-main` with that
+key. `elitea-main` checks this at start: with a key set, any project key still
+stored in the clear stops the start and names this script. Convert them with
 [`scripts/rewrap-centry-vault.py`](scripts/rewrap-centry-vault.py), on a copy
 first. It rewraps the project key and never rewrites the secret values.
 

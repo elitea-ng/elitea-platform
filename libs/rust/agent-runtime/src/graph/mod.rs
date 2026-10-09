@@ -13,6 +13,16 @@
               sections follow when the module's public API is reviewed"
 )]
 
+use crate::bounded_yaml::YamlBudget;
+
+/// Bounds a stored pipeline document, and every node fragment taken from it, after
+/// anchor/alias expansion.
+pub const PIPELINE_YAML_BUDGET: YamlBudget = YamlBudget {
+    nodes: 131_072,
+    scalar_bytes: 1024 * 1024,
+    depth: 64,
+};
+
 pub mod application_activation;
 pub mod code_platform_drive;
 pub mod hitl;

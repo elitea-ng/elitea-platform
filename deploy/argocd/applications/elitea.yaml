@@ -127,6 +127,19 @@ spec:
         # llmGateway.env.GATEWAY_EGRESS_ALLOWLIST as well.
         - name: llmGateway.egressPosture
           value: ""
+        # networkPolicies.main.ingressFrom names the pods that deliver outside
+        # traffic to elitea-main:8080: the Gateway API gateway (including one
+        # that serves deploy/gateway-api/httproute.yaml, applied outside this
+        # chart) or the ingress controller. The chart REFUSES to render while
+        # this and networkPolicies.main.extraIngressFrom are both empty and
+        # networkPolicies.main.noExternalIngress is not true. Set the namespace
+        # of that gateway here; if its pods also need a label match, or the
+        # peer is an ipBlock, put the full peer list in your own values file
+        # (valueFiles) instead. If nothing outside the chart reaches
+        # elitea-main (port-forward only), delete this parameter and set
+        # networkPolicies.main.noExternalIngress to "true".
+        - name: networkPolicies.main.ingressFrom[0].namespaceSelector.matchLabels.kubernetes\.io/metadata\.name
+          value: ""
   destination:
     server: https://kubernetes.default.svc
     namespace: elitea

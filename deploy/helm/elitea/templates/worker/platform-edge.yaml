@@ -39,13 +39,12 @@ data:
             keyFile: /run/edge-tls/tls.key
     http:
       routers:
-        # The execution-events SSE stream. It needs its own router because it
-        # is the one route here that accepts NO credential a client can
-        # present: production_runtime.go composes it with PrincipalValidator +
-        # ForwardedIdentityVerifier only, so the PAT that admitted the turn
-        # cannot read the turn's own stream. It is reachable exclusively
-        # through a auth edge that authenticates the caller and
-        # projects verified identity headers.
+        # The execution-events SSE stream. It has its own router because it
+        # runs the auth edge: runtime-auth authenticates the caller's
+        # credential and projects a signed identity (X-Auth-Signature), which
+        # production_runtime.go accepts alongside a bearer or session cookie it
+        # validates itself. strip-caller-auth-context runs first, so only the
+        # edge's own projection reaches elitea-main.
         #
         # Scoped to this exact path rather than applied to the catch-all: every
         # other route through this edge authenticates the worker's bearer
@@ -60,17 +59,25 @@ data:
             - strip-caller-auth-context
             - runtime-auth
           service: elitea-main
+        # Everything else the SDK asks for. It carries the strip middleware so
+        # no identity header a caller sets reaches elitea-main on any route,
+        # and it does not match elitea-main's internal address space
+        # (/internal), which holds the auth edge's own endpoint.
         platform:
-          rule: PathPrefix(`/`)
+          rule: PathPrefix(`/`) && !PathPrefix(`/internal`)
           entryPoints: [platform]
           tls: {}
+          middlewares:
+            - strip-caller-auth-context
           service: elitea-main
       middlewares:
         # MUST run before the edge-auth call, and its absence would be an
         # authentication bypass rather than an inconvenience: elitea-main
         # trusts X-Auth-* from a trusted proxy, so a caller that could set them
         # itself would choose its own identity. Traefik deletes a header whose
-        # customRequestHeaders value is empty.
+        # customRequestHeaders value is empty. X-Elitea-Execution-Id is
+        # deliberately absent: the runtime worker sends it on model calls
+        # through this origin.
         strip-caller-auth-context:
           headers:
             customRequestHeaders:
@@ -78,8 +85,16 @@ data:
               X-Auth-ID: ""
               X-Auth-User-ID: ""
               X-Auth-Reference: ""
+              X-Auth-Signature: ""
               X-Auth-Avatar: ""
               X-Auth-Avatar-State: ""
+              X-Auth-Session-Id: ""
+              X-Auth-Session-Name: ""
+              X-Auth-Session-Endpoint: ""
+              X-Elitea-Identity-Signature: ""
+              X-Elitea-Project-Id: ""
+              X-Elitea-User-Id: ""
+              X-Elitea-Tenant-Id: ""
         # An internal address, never a product route.
         runtime-auth:
           forwardAuth:
@@ -89,6 +104,7 @@ data:
               - X-Auth-ID
               - X-Auth-User-ID
               - X-Auth-Reference
+              - X-Auth-Signature
       services:
         elitea-main:
           loadBalancer:
