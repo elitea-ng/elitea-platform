@@ -86,8 +86,10 @@ VERIFY
 COPY libs/proto ./libs/proto
 # The /llm caller contract crate (elitea-llm-wire) and the shared agent
 # runtime (elitea-agent-runtime, ADR-0029) are path dependencies under
-# ../../libs/rust. The whole libs/rust workspace comes with them: the crates
-# inherit their package fields and lints from libs/rust/Cargo.toml.
+# ../../libs/rust, and so are the patched adk crates the worker's
+# [patch.crates-io] names (libs/rust/vendor). The whole libs/rust workspace
+# comes with them: the crates inherit their package fields and lints from
+# libs/rust/Cargo.toml.
 COPY libs/rust ./libs/rust
 COPY services/elitea-worker-rust ./services/elitea-worker-rust
 

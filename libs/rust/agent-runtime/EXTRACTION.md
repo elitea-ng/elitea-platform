@@ -159,13 +159,80 @@ keeps the worker's tests and pinned digests unchanged.
 
 | Stage | Moves | Enabling work | Effort |
 |---|---|---|---|
-| **1 (this change)** | Graph leaves (`yaml`, `printer`, `router`, `state_modifier`, `hitl`, `node_recovery` + codec, `turn_checkpointer`, `application_activation`, `parallel_control`, `code_platform_drive`, `http_action`), `tool_namespacing`; ≈4,800 lines + ≈1,250 test lines | Crate; host traits, with the cloud `ExecutionGuard` (`ClaimLeaseStateProbe`) and a local one; `canonical`; `test-support` / `test-preserve-order` features; CI | done |
-| **2 — shared vocabulary and patched adk** | `request`, `context_summary`; `NativeAgentAssemblyError`(+code) out of `runtime.rs` with `toolkits::delegated_auth` (its payload); then `instruction_authority`, `context_budget`, `context_status`, `context_management` | Move the vendored adk patches (`vendor/adk-agent`, `vendor/adk-runner`) to `libs/rust/vendor/` and patch them in both the worker and the libs workspace, or the runtime tests run unpatched adk; `impl From<RuntimeContextError> for NativeAgentAssemblyError` stays in the worker (allowed by the orphan rule) | 4–5 |
-| **3 — toolkits** | `toolkits/` except `families::artifact`, `materialize`'s artifact branch and `direct_request` (≈60k lines, ≈25k test lines): families, `mcp*`, `policy`, `invocation`, `tool_binding`, `snapshot`, `direct_execution`, `direct_runtime`, `sdk_conformance` | `families::sql` behind a `toolkit-sql` feature (sqlx postgres + mysql); TLS audit: `adk-tool`'s `http-transport` and reqwest 0.13 pull `aws-lc-rs` into today's worker build, so a ring-only desktop needs their features trimmed; canonical digests in `delegated_auth`, `direct_execution`, `mcp_tool_cache`; `ToolProvider` cloud adapter over `materialize_*` | 7–9 |
-| **4 — events and input protocol** | `events` (neutral projected event type; the `NodeEventV1` encoding stays in the worker behind `EventSink`), `agents::protocol` input parsing and `result` (split `protocol/` into the neutral input schema and the gRPC wire), `toolkits::direct_request` | `EventSink` cloud adapter over the output stream; frees the 14 dependents of `events` and the `agents` root re-exports | 7–8 |
+| **1** | Graph leaves (`yaml`, `printer`, `router`, `state_modifier`, `hitl`, `node_recovery` + codec, `turn_checkpointer`, `application_activation`, `parallel_control`, `code_platform_drive`, `http_action`), `tool_namespacing`; ≈4,800 lines + ≈1,250 test lines | Crate; host traits, with the cloud `ExecutionGuard` (`ClaimLeaseStateProbe`) and a local one; `canonical`; `test-support` / `test-preserve-order` features; CI | done |
+| **2 — shared vocabulary and patched adk** | `request`, `context_summary`; `NativeAgentAssemblyError`(+code) out of `runtime.rs` with `toolkits::delegated_auth` (its payload); then `instruction_authority`, `context_budget`, `context_status`, `context_management` | Move the vendored adk patches (`vendor/adk-agent`, `vendor/adk-runner`) to `libs/rust/vendor/` and patch them in both the worker and the libs workspace, or the runtime tests run unpatched adk; `impl From<RuntimeContextError> for NativeAgentAssemblyError` stays in the worker (allowed by the orphan rule) | done (below) |
+| **3 — toolkits** | `toolkits/` except `families::artifact`, `materialize`'s artifact branch and `direct_request` (≈60k lines, ≈25k test lines): families, `mcp*`, `policy`, `invocation`, `tool_binding`, `snapshot`, `direct_execution`, `direct_runtime`, `sdk_conformance` | `families::sql` behind a `toolkit-sql` feature (sqlx postgres + mysql); TLS audit: `adk-tool`'s `http-transport` and reqwest 0.13 pull `aws-lc-rs` into today's worker build, so a ring-only desktop needs their features trimmed; canonical digests in `delegated_auth`, `direct_execution`, `mcp_tool_cache`; `ToolProvider` cloud adapter over `materialize_*` | mostly done (below); TLS trim and the `ToolProvider` adapter open |
+| **4 — events and input protocol** | `events` (neutral projected event type; the `NodeEventV1` encoding stays in the worker behind `EventSink`), `agents::protocol` input parsing and `result` (split `protocol/` into the neutral input schema and the gRPC wire), `toolkits::direct_request` and `toolkits::direct_runtime` (it takes a `DirectToolkitRequest`) | `EventSink` cloud adapter over the output stream; frees the 14 dependents of `events` and the `agents` root re-exports | 7–8 |
 | **5 — sessions, models, state** | `session` (minus `AuthorizedNativeCommandBinding`), `model_scope`(+output), `model_checkpoint`, `runner_history`, `replay_history`, `context_compaction` | Adopt `ModelTransport`/`BoundModel` (`BoundOrdinaryAgentModel`), `StateStore` (`PostgresSessionService`, `PostgresCheckpointer`), `ExecutionGuard` in place of `StateWriterLease` in moved code; cloud adapters in the worker | 8–10 |
-| **6 — graph engine** | `graph::compiler`, `llm`, `direct_tool`, `resume`, `static_pause`, `static_tool_pause`, `application`, `parallel*`, `map_*`, `node_events*`, `node_recovery_{definition,receipt,runtime,owner}`, `decision`, `agent`; `pipeline/*`, `application_pipeline/*`, `direct_hitl`, `sensitive_tools`, `variables` | `ApprovalChannel` for HITL pauses; a code-execution host trait for `graph::code*` (the sandbox), see findings; canonical digests across the compiler, LLM, direct-tool and recovery receipts | 10–12 |
-| **7 — assembly and the `cloud` feature** | `runtime`, `ordinary`, `pipeline`, `native_runtime`, `assembly`, `application_tools`, `attachments`, `attachment_context`, `attachment_tools`, `internal_tools` | `DefinitionSource` and `MemoryStore` adoption (gate 7b memory tools land once, here); the platform-write capability (findings); the worker keeps `execution/`, `transport/`, `state/`, `spool`, `security`, `bootstrap`; one conformance fixture set run by both hosts | 8–10 |
+| **6 — graph engine** | `graph::compiler`, `llm`, `direct_tool`, `resume`, `static_pause`, `static_tool_pause`, `application`, `parallel*`, `map_*`, `node_events*`, `node_recovery_{definition,receipt,runtime,owner}`, `decision`, `agent`; `pipeline/*`, `application_pipeline/*`, `direct_hitl`, `sensitive_tools`, `variables` | `ApprovalChannel` for HITL pauses; the `CodeSandbox` cloud adapter over `sandbox::client::SandboxClient` for `graph::code*` (the trait landed with stage 3); canonical digests across the compiler, LLM, direct-tool and recovery receipts | 10–12 |
+| **7 — assembly and the `cloud` feature** | `runtime`, `ordinary`, `pipeline`, `native_runtime`, `assembly`, `application_tools`, `attachments`, `attachment_context`, `attachment_tools`, `internal_tools` | `DefinitionSource` and `MemoryStore` adoption (gate 7b memory tools land once, here); the builder tools onto `PlatformWriter` (the trait and its cloud adapter landed with stage 3); the worker keeps `execution/`, `transport/`, `state/`, `spool`, `security`, `bootstrap`; one conformance fixture set run by both hosts | 8–10 |
+
+### Stages 2 and 3 as landed
+
+Measured on `feat/desktop-agent-runtime-2` (parent `f084c75b4`).
+
+**Vendored adk (stage 2a).** `adk-agent`, `adk-runner` and `adk-sandbox`
+2.2.0 moved from `services/elitea-worker-rust/vendor/` to
+`libs/rust/vendor/` (provenance and patch notes: `vendor/README.md`). The
+worker's `[patch.crates-io]` points there; `libs/rust/Cargo.toml` applies
+the same patch for `adk-agent` and `adk-runner` (not `adk-sandbox`: only
+the worker's `sandbox-supervisor` links it, and Cargo warns on an unused
+patch). The runtime depends on both patched crates, `cargo tree -i` shows
+the vendor path in both workspaces, and `patched_adk` (in `lib.rs`)
+compiles only against the patched builders. A desktop host must carry the
+same two lines.
+
+**Shared vocabulary (stage 2).** `request`, `context_summary`,
+`assembly_error` (`NativeAgentAssemblyError` + code), `instruction_authority`,
+`context_budget`, `context_status`, `context_management`: 2.8k lines. The
+worker re-exports each at its old path. `instruction_authority`'s suite
+stays in the worker (it composes the authority with internal tools,
+Postgres sessions and durable compaction), so the `InstructionPlan`
+internals it drives are public.
+
+**Toolkits (stage 3).** 62.4k lines in 129 files: every family (the
+`artifact` family too, see below), `mcp`, `mcp_error`, `mcp_tool_cache`,
+`delegated_auth`, `policy`, `invocation`, `snapshot`, `tool_binding`,
+`direct_execution`, `materialize`. The worker re-exports the module whole
+(`pub(crate) use elitea_agent_runtime::toolkits::*`).
+
+- `artifact` moved instead of staying: it writes through the new
+  `host::PlatformWriter` (value types in `platform`), and the worker's
+  `transport::platform_writer::ClaimPlatformWriter` is the cloud adapter
+  over `PlatformClient` and the claim-bound authority. It maps
+  `RuntimeContextError` onto `HostErrorCode` (`Rejected` → `InvalidInput`)
+  and keeps the `runtime_context.*` code as the log reason
+  (`HostError::with_reason`); the model-visible failure text is unchanged.
+  No family depends on a claim, lease or transport type.
+- `sql` is behind `toolkit-sql` (sqlx postgres + mysql), enabled by the
+  worker; without it a `sql` toolkit is skipped as unsupported.
+- Digests: `delegated_auth`'s persisted requirement encoding writes its
+  nested metadata sorted (`serialize_sorted_metadata`, pinned with and
+  without `preserve_order`; byte-identical to the worker's output). The
+  `direct_execution` and `mcp_tool_cache` sites flagged above are byte-length
+  bounds, which member order cannot change: no change needed.
+- `host::CodeSandbox` (submit/cancel a `CodeJob`) joins the interface for
+  stage 6; nothing calls it yet, so it has no cloud adapter.
+
+**Still in the worker, by design or for a later stage:**
+
+- `direct_request` and `direct_runtime` (gRPC input parsing): stage 4.
+- The per-family behaviour suites (`toolkits/*_tests.rs`, 25.9k lines) and
+  `sdk_conformance` (+ exemptions): the gate `include_str!`s elitea-main's
+  toolkit schema snapshots, which a libs/rust-only checkout (the image
+  build, the libs CI path filter) does not watch. The suites reach the
+  families through the re-export and `test-support` fixtures; the
+  source-scanning ones read the moved files at their new paths. Moving
+  them needs the snapshots vendored or the libs CI filter widened.
+- `openapi_pipeline_tests` (the pipeline half of the OpenAPI expiry suite;
+  it needs the worker's graph): its fixtures are
+  `families::openapi::tools::test_support`.
+- The TLS trim (finding 3): the runtime now carries the `adk-tool`
+  `http-transport` → reqwest 0.13 → `aws-lc-rs` edge itself, so a ring-only
+  desktop build still needs those features trimmed upstream or patched.
+- The `ToolProvider` cloud adapter over `materialize_*`: nothing in the
+  runtime calls `ToolProvider` before assembly moves (stage 7), so the
+  worker still calls `materialize_*` directly.
 
 Total ≈ 44–54 engineer-days (9–11 weeks), inside ADR-0029's 8–12 week
 estimate for the extraction. Stages 2 and 3 are independent of each other
@@ -181,11 +248,14 @@ and of 4; 5 needs 2 and 4; 6 needs 3–5; 7 needs 6.
    `ToolProvider` or `ApprovalChannel`. Stage 7 needs a platform-write
    capability (or the artifact family as a remote toolkit) and stage 6 a
    code-execution trait, whose desktop implementation is decision 4's
-   sandbox.
+   sandbox. *Resolved in stages 2–3:* `PlatformWriter` (with the cloud
+   adapter, used by the moved `artifact` family) and `CodeSandbox` (trait
+   only) are in `host.rs`.
 2. **sqlx stays in the runtime.** The `sql` toolkit family uses sqlx with
    the postgres and mysql drivers to reach the user's databases. "sqlx-postgres
    behind `cloud`" holds only if that family is feature-gated; on the desktop
    it is a credentialed toolkit and goes through decision 3 anyway.
+   *Resolved in stage 3:* the `toolkit-sql` feature.
 3. **The worker is not ring-only today.** Its default build links
    `aws-lc-rs` through `adk-tool`'s `http-transport` (MCP) and reqwest 0.13's
    default rustls provider, besides `ring`. One-TLS-stack-ring for the
@@ -194,6 +264,13 @@ and of 4; 5 needs 2 and 4; 6 needs 3–5; 7 needs 6.
    on the worker's patched `adk-agent`/`adk-runner` (`[patch.crates-io]` in
    the worker). A library cannot carry a patch for its consumers; the libs
    workspace and every host must apply the same patches (stage 2).
+   *Resolved in stage 2:* `libs/rust/vendor/`, patched in both workspaces.
+7. **Some worker suites drive runtime internals.** `instruction_authority`'s
+   suite needs worker modules, so it stays there and the plan internals it
+   drives became public API; the family suites read elitea-main's schema
+   snapshots, so they stay too. The desktop host cannot run either: the
+   "one conformance fixture set run by both hosts" of stage 7 needs them
+   rewritten against the public surface.
 5. **`arbitrary_precision` is a second unification hazard** (number text,
    above). The ADR names only `preserve_order`, and its list of crates that
    enable it misses `content-source` and `conversation`.
