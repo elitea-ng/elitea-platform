@@ -99,7 +99,7 @@ func (f *fakeLedger) ConsumeConfirmation(_ context.Context, claim localturn.Conf
 		return localturn.ConfirmationOutcome{Accepted: true}, nil
 	}
 	next := localturn.ConfirmationInterruptID(claim.CallDigest, f.counts[claim.CallDigest])
-	if claim.InterruptID != next {
+	if claim.InterruptID != next || !claim.Fresh {
 		return localturn.ConfirmationOutcome{NextInterruptID: next}, nil
 	}
 	f.consumed[claim.InterruptID] = struct{ call, key string }{claim.CallDigest, claim.IdempotencyKey}
@@ -483,6 +483,12 @@ func TestRemoteToolkitConfirmationIsBoundAndSingleUse(t *testing.T) {
 	}
 	if response := call(`{"path":"a"}`, "2026-10-08T11:59:30Z", second, "k5"); response.Code != http.StatusOK || runs.calls != 2 {
 		t.Fatalf("the next approval: status = %d, runs %d", response.Code, runs.calls)
+	}
+	// Twenty minutes later the approval is stale, but the request that
+	// consumed it, polled with the same key and body, is still that call.
+	h.now = func() time.Time { return fixed.Add(20 * time.Minute) }
+	if response := call(`{"path":"a"}`, "2026-10-08T11:59:30Z", second, "k5"); response.Code != http.StatusOK || runs.calls != 3 {
+		t.Fatalf("a poll of the consuming request: status = %d, runs %d", response.Code, runs.calls)
 	}
 }
 

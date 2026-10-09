@@ -480,7 +480,7 @@ WHERE execution_id = $1 AND call_digest = $2`, claim.ExecutionID, claim.CallDige
 		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: count confirmations: %w", err)
 	}
 	next := localturn.ConfirmationInterruptID(claim.CallDigest, consumed)
-	if claim.InterruptID != next {
+	if claim.InterruptID != next || !claim.Fresh {
 		return localturn.ConfirmationOutcome{NextInterruptID: next}, nil
 	}
 	if _, err := tx.Exec(ctx, `

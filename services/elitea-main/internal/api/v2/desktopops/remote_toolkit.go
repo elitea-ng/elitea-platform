@@ -323,10 +323,11 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 			ToolName: call.toolName, ArgumentsSHA256: call.argumentsSHA256,
 		}.Digest()
 		next := ""
-		if body.Confirmation != nil && confirmationFresh {
+		if body.Confirmation != nil {
 			consumed, err := h.confirmations.ConsumeConfirmation(request.Context(), localturn.ConfirmationClaim{
 				ExecutionID: body.ExecutionID, CallDigest: confirmationCall,
 				InterruptID: body.Confirmation.InterruptID, IdempotencyKey: runRequest.IdempotencyKey,
+				Fresh: confirmationFresh,
 			})
 			if err != nil {
 				call.outcome = "confirmation_unavailable"

@@ -629,7 +629,7 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELEC
 	consume := func(digest, interrupt, key string) localturn.ConfirmationOutcome {
 		t.Helper()
 		outcome, err := repo.ConsumeConfirmation(ctx, localturn.ConfirmationClaim{
-			ExecutionID: execution, CallDigest: digest, InterruptID: interrupt, IdempotencyKey: key,
+			ExecutionID: execution, CallDigest: digest, InterruptID: interrupt, IdempotencyKey: key, Fresh: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -654,8 +654,19 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELEC
 	if next, err := repo.NextConfirmationInterruptID(ctx, execution, call); err != nil || next != second {
 		t.Fatalf("next interrupt after one use = %q, %v", next, err)
 	}
+	// A stale approval is not consumed; the consuming request repeated is
+	// accepted even once its approval is stale.
+	stale, err := repo.ConsumeConfirmation(ctx, localturn.ConfirmationClaim{
+		ExecutionID: execution, CallDigest: call, InterruptID: second, IdempotencyKey: "k2"})
+	if err != nil || stale.Accepted || stale.NextInterruptID != second {
+		t.Fatalf("a stale confirmation = %+v, %v", stale, err)
+	}
 	if outcome := consume(call, second, "k2"); !outcome.Accepted {
 		t.Fatalf("the next confirmation = %+v", outcome)
+	}
+	if repeat, err := repo.ConsumeConfirmation(ctx, localturn.ConfirmationClaim{
+		ExecutionID: execution, CallDigest: call, InterruptID: second, IdempotencyKey: "k2"}); err != nil || !repeat.Accepted {
+		t.Fatalf("the consuming request repeated with a stale approval = %+v, %v", repeat, err)
 	}
 	if _, err := repo.ConsumeConfirmation(ctx, localturn.ConfirmationClaim{
 		ExecutionID: strings.Repeat("6", 32), CallDigest: call, InterruptID: first, IdempotencyKey: "k1",
