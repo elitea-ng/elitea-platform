@@ -36,6 +36,10 @@ pub enum ErrorCode {
     Unsupported,
     /// git failed or the folder is not what the operation needs.
     Git,
+    /// The folder's git repository could run its own code in the host's
+    /// git (filter drivers, gpg.program, core.worktree, includes, a
+    /// relocated `.git`, submodules): the host does not run git there.
+    UnsafeRepository,
     Io,
 }
 
@@ -57,6 +61,7 @@ impl ErrorCode {
             Self::SandboxUnavailable => "local_tools.sandbox_unavailable",
             Self::Unsupported => "local_tools.unsupported",
             Self::Git => "local_tools.git",
+            Self::UnsafeRepository => "local_tools.unsafe_repository",
             Self::Io => "local_tools.io",
         }
     }

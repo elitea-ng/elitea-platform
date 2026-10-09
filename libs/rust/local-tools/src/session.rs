@@ -23,7 +23,7 @@ use crate::approvals::{
 use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::files;
-use crate::git::{Git, capped, check_revision};
+use crate::git::{capped, check_revision};
 use crate::ledger::ReadLedger;
 use crate::policy::{LocalWorkPolicy, SandboxMode};
 use crate::shell::{self, CommandSpec, ShellConfig};
@@ -301,7 +301,6 @@ impl LocalSession {
         )?);
         let approvals: Arc<dyn ApprovalChannel> =
             Arc::new(RuleApprovals::new(engine.clone(), config.prompt));
-        let checkpoints = Checkpoints::open(&workspace, &config.session_id, &config.data_dir)?;
         let mut shell = config.shell.unwrap_or_else(|| {
             ShellConfig::new(config.data_dir.join("tmp").join(&config.session_id))
         });
@@ -309,6 +308,12 @@ impl LocalSession {
         // the data directory: no command reads them (the session's temporary
         // directory inside it stays usable).
         shell.deny_read.push(config.data_dir.clone());
+        let checkpoints = Checkpoints::open_with(
+            &workspace,
+            &config.session_id,
+            &config.data_dir,
+            &shell.sandbox,
+        )?;
         Ok(Arc::new(Self {
             workspace,
             ledger: ReadLedger::new(),
@@ -408,7 +413,9 @@ impl LocalSession {
         if !policy.allowed {
             return Vec::new();
         }
-        let git = self.checkpoints.kind() == "git";
+        // An unsafe repository keeps its git tools, which answer with the
+        // refusal, so the agent and the person see why.
+        let git = self.checkpoints.kind() == "git" || self.checkpoints.git_refusal().is_some();
         let plan = self.engine.plan_mode();
         TOOLS
             .iter()
@@ -671,19 +678,26 @@ impl LocalSession {
         call.paths.clone_from(&paths);
         self.authorize(call_id, call, tool).await?;
         let mut command_line: Vec<String> = match tool {
-            "git_status" => vec!["status".into(), "--short".into(), "--branch".into()],
+            "git_status" => vec![
+                "status".into(),
+                "--short".into(),
+                "--branch".into(),
+                "--ignore-submodules=all".into(),
+            ],
             "git_branches" => vec!["branch".into(), "--list".into(), "-vv".into()],
             "git_log" => vec![
                 "log".into(),
                 format!("--max-count={}", args.max_count.unwrap_or(20).clamp(1, 200)),
                 "--date=short".into(),
                 "--format=%h %ad %an %s".into(),
+                "--no-show-signature".into(),
             ],
             _ => {
                 let mut diff = vec![
                     "diff".into(),
                     "--no-ext-diff".into(),
                     "--no-textconv".into(),
+                    "--ignore-submodules=all".into(),
                 ];
                 if args.staged {
                     diff.push("--cached".into());
@@ -699,11 +713,24 @@ impl LocalSession {
             command_line.push("--".into());
             command_line.extend(paths);
         }
-        let root = self.workspace.root().to_path_buf();
+        let reads_worktree = matches!(tool, "git_status" | "git_diff");
         let output = self
-            .blocking(move |_| {
+            .blocking(move |this| {
+                let repo = match (this.checkpoints.repo(), this.checkpoints.git_refusal()) {
+                    (Some(repo), _) => repo,
+                    (None, Some(refusal)) => return Err(refusal.clone()),
+                    (None, None) => {
+                        return Err(ToolError::new(ErrorCode::Git, "the folder is not in git"));
+                    }
+                };
+                let root = this.workspace.root();
                 let words: Vec<&str> = command_line.iter().map(String::as_str).collect();
-                Git::new(&root).run(&words)
+                let git = repo.git(root);
+                if reads_worktree {
+                    git.worktree().run(&words)
+                } else {
+                    git.run(&words)
+                }
             })
             .await?;
         let (text, truncated) = capped(&output);

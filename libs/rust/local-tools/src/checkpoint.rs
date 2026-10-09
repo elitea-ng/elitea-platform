@@ -23,6 +23,13 @@
 //! Restores write through a [`Workspace`] without `path_deny` (it is the
 //! person's undo, not the agent's write), so they are still confined to the
 //! folder and never follow a symlink out of it.
+//!
+//! Every git call goes through [`crate::git`]'s hardening: a repository
+//! that could run its own code in the host's git is refused
+//! ([`ErrorCode::UnsafeRepository`]) and checkpointed by copy instead
+//! ([`Checkpoints::git_refusal`] says why), and each git process runs in a
+//! sandbox that may write only the temporary index, `objects/` and
+//! `refs/elitea/` (the workspace too, for a restore).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -34,7 +41,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorCode, ToolError, ToolResult};
-use crate::git::{Git, toplevel};
+use crate::git::Repo;
+use crate::sandbox::SandboxConfig;
 use crate::workspace::{Workspace, WsPath, is_protected_name};
 
 /// The ref namespace checkpoints live under.
@@ -117,25 +125,55 @@ pub enum Checkpoints {
 
 impl Checkpoints {
     /// Git checkpoints when the workspace is in a git work tree, copies (under
-    /// `data_dir`) otherwise.
+    /// `data_dir`) otherwise; host git runs without a Linux sandbox helper.
     ///
     /// # Errors
     ///
     /// An invalid session id.
     pub fn open(workspace: &Workspace, session: &str, data_dir: &Path) -> ToolResult<Self> {
+        Self::open_with(workspace, session, data_dir, &SandboxConfig::default())
+    }
+
+    /// As [`Self::open`], running host git under `sandbox`'s settings. A
+    /// repository refused as unsafe gets copy checkpoints, and
+    /// [`Self::git_refusal`] keeps the reason.
+    ///
+    /// # Errors
+    ///
+    /// An invalid session id.
+    pub fn open_with(
+        workspace: &Workspace,
+        session: &str,
+        data_dir: &Path,
+        sandbox: &SandboxConfig,
+    ) -> ToolResult<Self> {
         check_session(session)?;
         let restorer = Workspace::open(workspace.root(), &[])?;
-        if let Some(top) = toplevel(workspace.root())
-            && let Ok(prefix) = workspace.root().strip_prefix(&top)
-        {
-            let prefix = WsPath::from_relative(prefix)?;
-            return Ok(Self::Git(GitCheckpoints {
-                top,
-                prefix,
-                session: session.to_owned(),
-                restorer,
-            }));
-        }
+        let refused = match Repo::discover(workspace.root(), sandbox).and_then(|repo| match repo {
+            Some(repo) => repo.check_attributes(&[]).map(|()| Some(repo)),
+            None => Ok(None),
+        }) {
+            Ok(Some(repo)) => {
+                if let Ok(prefix) = workspace.root().strip_prefix(repo.top()) {
+                    let prefix = WsPath::from_relative(prefix)?;
+                    return Ok(Self::Git(GitCheckpoints {
+                        repo,
+                        prefix,
+                        session: session.to_owned(),
+                        restorer,
+                    }));
+                }
+                None
+            }
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(
+                    reason = error.message(),
+                    "unsafe git repository: checkpoints by copy, git tools refused"
+                );
+                Some(error)
+            }
+        };
         let mut key = Sha256::new();
         key.update(workspace.root().as_os_str().as_encoded_bytes());
         let key = hex(&key.finalize()[..8]);
@@ -144,7 +182,26 @@ impl Checkpoints {
             objects: base.join("objects"),
             manifests: base.join("sessions").join(session),
             restorer,
+            refused,
         }))
+    }
+
+    /// Why the folder's git repository is not used, when it was refused.
+    #[must_use]
+    pub fn git_refusal(&self) -> Option<&ToolError> {
+        match self {
+            Self::Git(_) => None,
+            Self::Copy(copy) => copy.refused.as_ref(),
+        }
+    }
+
+    /// The checked repository, for git checkpoints.
+    #[must_use]
+    pub fn repo(&self) -> Option<&Repo> {
+        match self {
+            Self::Git(git) => Some(&git.repo),
+            Self::Copy(_) => None,
+        }
     }
 
     /// `git` or `copy`.
@@ -206,33 +263,45 @@ impl Checkpoints {
     }
 }
 
-/// A temporary index file, removed on drop.
-struct TempIndex(PathBuf);
+/// A temporary index in a private directory of its own (the sandbox lets
+/// git write that directory: the index and its lock), removed on drop.
+struct TempIndex {
+    dir: PathBuf,
+    index: PathBuf,
+}
 
 impl TempIndex {
-    fn new() -> Self {
-        Self(std::env::temp_dir().join(format!(
-            "elitea-checkpoint-{}-{}.index",
+    fn new() -> ToolResult<Self> {
+        let dir = std::env::temp_dir().join(format!(
+            "elitea-checkpoint-{}-{}",
             std::process::id(),
             TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        )))
+        ));
+        std::fs::create_dir(&dir)
+            .map_err(|error| ToolError::io("cannot create a temporary index", &error))?;
+        let dir = std::fs::canonicalize(&dir)
+            .map_err(|error| ToolError::io("cannot create a temporary index", &error))?;
+        Ok(Self {
+            index: dir.join("index"),
+            dir,
+        })
     }
 
     fn os(&self) -> &OsStr {
-        self.0.as_os_str()
+        self.index.as_os_str()
     }
 }
 
 impl Drop for TempIndex {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
 /// Checkpoints as commits on private refs.
 #[derive(Debug)]
 pub struct GitCheckpoints {
-    top: PathBuf,
+    repo: Repo,
     /// The workspace relative to the top level.
     prefix: WsPath,
     session: String,
@@ -240,16 +309,29 @@ pub struct GitCheckpoints {
 }
 
 impl GitCheckpoints {
+    fn top(&self) -> &Path {
+        self.repo.top()
+    }
+
     fn workspace_dir(&self) -> PathBuf {
-        let mut dir = self.top.clone();
+        let mut dir = self.top().to_path_buf();
         for component in self.prefix.components() {
             dir.push(component);
         }
         dir
     }
 
+    fn objects(&self) -> PathBuf {
+        self.repo.git_dir().join("objects")
+    }
+
+    fn refs(&self) -> PathBuf {
+        self.repo.git_dir().join("refs/elitea")
+    }
+
     fn head(&self) -> Option<String> {
-        Git::new(&self.top)
+        self.repo
+            .git(self.top())
             .text(&["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
             .ok()
             .filter(|head| !head.is_empty())
@@ -258,17 +340,37 @@ impl GitCheckpoints {
     /// The tree of the workspace as it is now (outside the workspace: as
     /// in HEAD).
     fn snapshot_tree(&self) -> ToolResult<String> {
-        let index = TempIndex::new();
+        let index = TempIndex::new()?;
+        let index_dir = [index.dir.clone()];
+        let with_objects = [index.dir.clone(), self.objects()];
         if let Some(head) = self.head() {
-            Git::new(&self.top)
+            self.repo
+                .git(self.top())
                 .env("GIT_INDEX_FILE", index.os())
+                .writes(&index_dir)
                 .run(&["read-tree", &head])?;
         }
-        Git::new(&self.workspace_dir())
+        let workspace_dir = self.workspace_dir();
+        self.repo
+            .git(&workspace_dir)
             .env("GIT_INDEX_FILE", index.os())
-            .run(&["add", "--all", "--", "."])?;
-        Git::new(&self.top)
+            .writes(&with_objects)
+            .worktree()
+            .run(&["add", "--all", "--ignore-submodules=all", "--", "."])
+            .or_else(|_| {
+                // Older gits lack the flag on add; submodules are refused
+                // before this point anyway.
+                self.repo
+                    .git(&workspace_dir)
+                    .env("GIT_INDEX_FILE", index.os())
+                    .writes(&with_objects)
+                    .worktree()
+                    .run(&["add", "--all", "--", "."])
+            })?;
+        self.repo
+            .git(self.top())
             .env("GIT_INDEX_FILE", index.os())
+            .writes(&with_objects)
             .text(&["write-tree"])
     }
 
@@ -281,20 +383,33 @@ impl GitCheckpoints {
         let seq = self.list()?.last().map_or(1, |last| last.seq + 1);
         let label = single_line(label);
         let message = format!("elitea checkpoint {seq}: {label}");
-        let mut args = vec!["commit-tree", tree.as_str(), "-m", message.as_str()];
+        let mut args = vec![
+            "commit-tree",
+            "--no-gpg-sign",
+            tree.as_str(),
+            "-m",
+            message.as_str(),
+        ];
         let head = self.head();
         if let Some(head) = &head {
             args.extend(["-p", head.as_str()]);
         }
         let identity = OsStr::new("Elitea checkpoints");
         let email = OsStr::new("checkpoints@elitea.invalid");
-        let commit = Git::new(&self.top)
+        let commit = self
+            .repo
+            .git(self.top())
             .env("GIT_AUTHOR_NAME", identity)
             .env("GIT_AUTHOR_EMAIL", email)
             .env("GIT_COMMITTER_NAME", identity)
             .env("GIT_COMMITTER_EMAIL", email)
+            .writes(&[self.objects()])
             .text(&args)?;
-        Git::new(&self.top).run(&["update-ref", &self.ref_name(seq), &commit])?;
+        self.repo.git(self.top()).writes(&[self.refs()]).run(&[
+            "update-ref",
+            &self.ref_name(seq),
+            &commit,
+        ])?;
         Ok(CheckpointInfo {
             seq,
             label,
@@ -305,7 +420,7 @@ impl GitCheckpoints {
 
     fn list(&self) -> ToolResult<Vec<CheckpointInfo>> {
         let prefix = format!("{REF_PREFIX}/{}/", self.session);
-        let text = Git::new(&self.top).text(&[
+        let text = self.repo.git(self.top()).text(&[
             "for-each-ref",
             "--format=%(refname)%09%(objectname)%09%(committerdate:unix)%09%(subject)",
             &prefix,
@@ -357,7 +472,9 @@ impl GitCheckpoints {
     }
 
     fn restore(&self, seq: u64, only: Option<&WsPath>) -> ToolResult<RestoreReport> {
-        let commit = Git::new(&self.top)
+        let commit = self
+            .repo
+            .git(self.top())
             .text(&[
                 "rev-parse",
                 "--verify",
@@ -371,11 +488,14 @@ impl GitCheckpoints {
             None if self.prefix.is_root() => ".".to_owned(),
             None => self.top_relative(&WsPath::root()),
         };
-        let changes = Git::new(&self.top).run(&[
+        let changes = self.repo.git(self.top()).run(&[
             "diff-tree",
             "-r",
             "-z",
             "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=all",
             "--name-status",
             &commit,
             &current,
@@ -404,18 +524,26 @@ impl GitCheckpoints {
             }
         }
         if !write_back.is_empty() {
-            let index = TempIndex::new();
-            Git::new(&self.top)
+            // Files written back get the attributes of now: none may select
+            // a smudge filter.
+            self.repo.check_attributes(&write_back)?;
+            let index = TempIndex::new()?;
+            self.repo
+                .git(self.top())
                 .env("GIT_INDEX_FILE", index.os())
+                .writes(std::slice::from_ref(&index.dir))
                 .run(&["read-tree", &commit])?;
             let mut stdin = Vec::new();
             for path in &write_back {
                 stdin.extend_from_slice(path.as_bytes());
                 stdin.push(0);
             }
-            Git::new(&self.top)
+            self.repo
+                .git(self.top())
                 .env("GIT_INDEX_FILE", index.os())
                 .stdin(&stdin)
+                .writes(&[index.dir.clone(), self.workspace_dir()])
+                .worktree()
                 .run(&["checkout-index", "--force", "-z", "--stdin"])?;
             report.restored = write_back
                 .iter()
@@ -449,6 +577,8 @@ pub struct CopyCheckpoints {
     objects: PathBuf,
     manifests: PathBuf,
     restorer: Workspace,
+    /// Why the folder's git repository was not used.
+    refused: Option<ToolError>,
 }
 
 /// The regular files of the workspace a copy checkpoint covers: not
