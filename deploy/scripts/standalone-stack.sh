@@ -77,7 +77,8 @@
 #   deploy/scripts/standalone-stack.sh certs
 #   deploy/scripts/standalone-stack.sh build
 #   deploy/scripts/standalone-stack.sh up
-#   # log in through the browser at http://localhost:${STANDALONE_PORT:-8084}/app/
+#   # log in through the browser at http://${STANDALONE_HOST:-localhost}:${STANDALONE_PORT:-8084}/app/
+#   #   (a second concurrent stack needs its own STANDALONE_HOST=<name>.localhost)
 #   #   (oidc-mock accepts any username; ELITEA_INITIAL_GLOBAL_ADMINS on the
 #   #   elitea-main service, or E2E_ADMIN_EMAIL-shaped identities via `seed`,
 #   #   decides who becomes a global administrator on first login)
@@ -109,7 +110,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # issuer is derived from the Host header, so published and container port must
 # match) but it can be MOVED: `E2E_OIDC_PORT` sets both at once, and it is the
 # same variable the E2E stack, its seeder and `e2e/auth.setup.ts` already read.
-# Unset it is 9400 and nothing changes.
+# Unset it is 9400 and nothing changes. A second stack also needs its own
+# browser host, STANDALONE_HOST=<name>.localhost (see HOST below), or the two
+# stacks sign each other's browser out.
 PROJECT="${STANDALONE_PROJECT:-elitea-standalone}"
 # Exported, not merely read: compose interpolates it out of the ENVIRONMENT,
 # and the seed step below hands it to apps/elitea-web/scripts/e2e-stack.sh,
@@ -162,6 +165,23 @@ standalone_psql_read() {
 }
 
 PORT="${STANDALONE_PORT:-8084}"
+# STANDALONE_HOST: the host the BROWSER uses for this stack. Browsers scope
+# cookies by host and ignore the port, so a second stack browsed on
+# `localhost:<other port>` overwrites this stack's `elitea_session` on every
+# sign-in, and this Main then refuses the browser with `session_unknown`.
+# Give each concurrent stack its own `<name>.localhost` (browsers resolve every
+# *.localhost name to loopback). Only the browser path uses it: compose puts
+# it into OIDC_REDIRECT_URI; the scripted checks below keep calling localhost.
+# Anything other than `localhost` or `<label>.localhost` is refused, so the
+# callback can never name a host off this machine.
+HOST="${STANDALONE_HOST:-localhost}"
+# [[ =~ ]] and not grep: grep matches line by line, so a value with an embedded
+# newline would pass on its first line.
+if ! [[ "$HOST" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)?localhost$ ]]; then
+  echo "ERROR: STANDALONE_HOST must be localhost or <label>.localhost (got '${HOST}')." >&2
+  exit 1
+fi
+export STANDALONE_HOST="$HOST"
 # SEED_EXTRA_PROJECTS: comma-separated project ids that `seed-llm` and
 # `seed-index` write model rows into IN ADDITION to project 1 and every
 # personal project. The gateway resolves a model per project (a row in
@@ -912,10 +932,10 @@ case "${1:-}" in
       fi
     fi
     echo "→ Stack ready."
-    echo "     web app       http://localhost:${PORT}/app/"
-    echo "     docs          http://localhost:${PORT}/docs/"
-    echo "     admin console http://localhost:${PORT}/admin/app/"
-    echo "     API           http://localhost:${PORT}/api/v2"
+    echo "     web app       http://${HOST}:${PORT}/app/"
+    echo "     docs          http://${HOST}:${PORT}/docs/"
+    echo "     admin console http://${HOST}:${PORT}/admin/app/"
+    echo "     API           http://${HOST}:${PORT}/api/v2"
     echo "     OIDC provider http://localhost:${OIDC_PORT}"
     echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
     echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
