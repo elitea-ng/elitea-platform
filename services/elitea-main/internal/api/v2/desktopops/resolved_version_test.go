@@ -182,3 +182,55 @@ func TestResolvedVersionCarriesProjectContextOnlyForItsReaders(t *testing.T) {
 		t.Fatalf("withheld_secrets = %v", document.WithheldSecrets)
 	}
 }
+
+type countingPermissions struct {
+	permissions []string
+	calls       int
+}
+
+func (c *countingPermissions) ResolvePermissions(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+	c.calls++
+	return auth.PermissionResolution{UserID: 7, Permissions: c.permissions}, nil
+}
+
+type tokenOnly struct{}
+
+func (tokenOnly) ValidateToken(context.Context, string) (auth.User, error) {
+	return auth.User{ID: "7", UserID: "7", AuthType: "token", TokenID: "1"}, nil
+}
+
+type passPrincipal struct{}
+
+func (passPrincipal) ValidatePrincipal(_ context.Context, user auth.User) (auth.User, error) {
+	return user, nil
+}
+
+// Through the real gate, one request asks the permission resolver ONCE: the
+// handler reads models.project_context.view from the set the gate resolved.
+func TestResolvedVersionResolvesPermissionsOnce(t *testing.T) {
+	const details = `{"tools":[],"project_context":{"content":"PROJECT-CONTEXT-CANARY"}}`
+	for _, granted := range [][]string{
+		{ResolvedVersionPermission, ProjectContextViewPermission},
+		{ResolvedVersionPermission},
+	} {
+		permissions := &countingPermissions{permissions: granted}
+		route, err := NewResolvedVersionRoute(projectContextResolver{details},
+			apimw.AuthConfig{Validator: tokenOnly{}, PrincipalValidator: passPrincipal{}}, permissions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodGet, resolvedURL, nil)
+		request.Header.Set("Authorization", "Bearer token")
+		recorder := httptest.NewRecorder()
+		route.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, body %s", recorder.Code, recorder.Body)
+		}
+		if permissions.calls != 1 {
+			t.Fatalf("the permission resolver was asked %d times, want 1", permissions.calls)
+		}
+		if reader := len(granted) == 2; strings.Contains(recorder.Body.String(), "PROJECT-CONTEXT-CANARY") != reader {
+			t.Fatalf("granted %v: project context served = %v", granted, !reader)
+		}
+	}
+}

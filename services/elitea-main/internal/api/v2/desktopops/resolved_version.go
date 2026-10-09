@@ -89,17 +89,25 @@ type resolvedVersionHandler struct {
 }
 
 // mayViewProjectContext answers whether the caller holds
-// models.project_context.view in the project. An unreadable answer is "no":
-// the context is withheld rather than served on a guess.
+// models.project_context.view in the project. It reads the permission set the
+// route's gate already resolved for this request (one RBAC lookup per call);
+// only a handler reached without that gate asks the resolver itself. An
+// unreadable answer is "no": the context is withheld rather than served on a
+// guess.
 func (h *resolvedVersionHandler) mayViewProjectContext(request *http.Request, user auth.User, projectID int64) bool {
-	if h.permissions == nil {
-		return false
+	project := strconv.FormatInt(projectID, 10)
+	permissions, resolved := apimw.ResolvedProjectPermissions(request.Context(), mode, project)
+	if !resolved {
+		if h.permissions == nil {
+			return false
+		}
+		resolution, err := h.permissions.ResolvePermissions(request.Context(), user, mode, project)
+		if err != nil {
+			return false
+		}
+		permissions = resolution.Permissions
 	}
-	resolution, err := h.permissions.ResolvePermissions(request.Context(), user, mode, strconv.FormatInt(projectID, 10))
-	if err != nil {
-		return false
-	}
-	for _, permission := range resolution.Permissions {
+	for _, permission := range permissions {
 		if permission == ProjectContextViewPermission {
 			return true
 		}
