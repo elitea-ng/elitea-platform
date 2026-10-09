@@ -56,10 +56,10 @@ use super::printer::{
 use super::resume::PipelineResume;
 use super::router::{RouterConfigurationError, RouterNode, RouterNodeDefinition};
 use super::split_out::{SplitOutNode, SplitOutNodeDefinition};
-use super::state_reducers::{ReducerGuard, StateReducer, reducers_digest};
 use super::state_modifier::{
     StateModifierConfigurationError, StateModifierNode, StateModifierNodeDefinition,
 };
+use super::state_reducers::{ReducerGuard, StateReducer, reducers_digest};
 use super::static_pause::{StaticPauseCatalog, StaticResumeCheckpointer};
 use super::yaml::{
     MAX_NODE_ID_BYTES, ParallelConfigurationError, ParallelNodeDefinition, valid_graph_id,
@@ -2809,7 +2809,7 @@ fn typed_reducer(
 }
 
 /// Channels whose writes must replace the value: a Map destination, a
-/// Parallel output, a shaping output, a HITL edit, a StateModifier clean, and
+/// Parallel output, a shaping output, a HITL edit, a `StateModifier` clean, and
 /// every output of a node that runs inside a Parallel or Map parent (its
 /// updates never pass the top-level [`ReducerGuard`]).
 fn validate_overwrite_channels(

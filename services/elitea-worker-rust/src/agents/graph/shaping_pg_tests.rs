@@ -43,7 +43,7 @@ const PHASE_ENV: &str = "ELITEA_SHAPING_PG_TEST_PHASE";
 const REFERENCE_ENV: &str = "ELITEA_SHAPING_PG_TEST_REFERENCE";
 const PAUSE_ENV: &str = "ELITEA_SHAPING_PG_TEST_PAUSE";
 const PAUSE_MARKER: &str = "SHAPING_PG_PAUSE=";
-const CHECKPOINT_MIGRATION: &str =
+pub(super) const CHECKPOINT_MIGRATION: &str =
     include_str!("../../../../elitea-main/migrations/agentstate/0001_agent_graph_checkpoints.sql");
 // `enrich` re-parses the rendered list, so the fixture holds only values the template engine
 // renders as JSON (it renders null and booleans as `none` and `True`).
@@ -94,7 +94,7 @@ fn bytes(value: &Value) -> Vec<u8> {
     serde_json::to_vec(value).expect("canonical JSON bytes")
 }
 
-async fn run(
+pub(super) async fn run(
     definition: &PipelineDefinition,
     checkpointer: Arc<dyn Checkpointer>,
     sessions: Arc<dyn SessionService>,
@@ -127,7 +127,7 @@ async fn run(
     events
 }
 
-async fn create_session(sessions: &dyn SessionService) {
+pub(super) async fn create_session(sessions: &dyn SessionService) {
     sessions
         .create(CreateRequest {
             app_name: APP.to_owned(),
@@ -208,7 +208,7 @@ fn bound_resume_payload(session: &dyn Session) -> AgentExecutionPayload {
     }
 }
 
-async fn continuation(
+pub(super) async fn continuation(
     definition: &PipelineDefinition,
     checkpointer: &dyn Checkpointer,
     sessions: &dyn SessionService,
@@ -296,14 +296,18 @@ async fn postgres_shaping_pause_replays_across_process_replacement() {
     db.pool.close().await;
 }
 
-struct Services {
-    pool: sqlx::PgPool,
-    sessions: Arc<PostgresSessionService>,
-    checkpointer: Arc<dyn Checkpointer>,
+pub(super) struct Services {
+    pub(super) pool: sqlx::PgPool,
+    pub(super) sessions: Arc<PostgresSessionService>,
+    pub(super) checkpointer: Arc<dyn Checkpointer>,
 }
 
 /// Activates the writer pair exactly like `activate_pipeline_postgres` for one claim attempt.
-async fn activate(database: &str, attempt: u64, definition: &PipelineDefinition) -> Services {
+pub(super) async fn activate(
+    database: &str,
+    attempt: u64,
+    definition: &PipelineDefinition,
+) -> Services {
     let options = sqlx::postgres::PgConnectOptions::from_str(
         &std::env::var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
     )
@@ -356,7 +360,7 @@ async fn activate(database: &str, attempt: u64, definition: &PipelineDefinition)
     }
 }
 
-async fn history(checkpointer: &dyn Checkpointer) -> Vec<Checkpoint> {
+pub(super) async fn history(checkpointer: &dyn Checkpointer) -> Vec<Checkpoint> {
     checkpointer
         .list(SESSION)
         .await

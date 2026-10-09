@@ -5058,3 +5058,72 @@ fn pipeline_identifier_refusals_stay_invalid_input_with_a_field_cause() {
     assert_eq!(cause.detail(), Some("entry_point"));
     assert!(!format!("{error:?} {error} {cause:?}").contains("9007199254740993"));
 }
+
+/// Each turn and each regeneration starts typed channels from their declared
+/// defaults; a new turn never reduces onto the previous turn's final state.
+#[cfg(feature = "graph-extensions-rehearsal")]
+#[tokio::test]
+async fn typed_reducers_restart_from_defaults_on_regeneration_and_on_a_new_turn() {
+    const LOOP: &str = r#"
+state:
+  count: {type: int, value: 0, reducer: sum_int}
+  findings: {type: list, value: [seed], reducer: append}
+entry_point: tick
+nodes:
+  - id: tick
+    type: state_modifier
+    template: "1"
+    output: [count]
+    transition: collect
+  - id: collect
+    type: state_modifier
+    template: '["visit {{ count }}"]'
+    input: [count]
+    output: [findings]
+    transition: choose
+  - id: choose
+    type: router
+    condition: "{{ 'tick' if count < 3 else 'END' }}"
+    input: [count]
+    routes: [tick, END]
+    default_output: END
+"#;
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(sessions, checkpointer.clone());
+    let mut request = pipeline_request();
+    request.payload.application["version_details"]["instructions"] = json!(LOOP);
+    let private_thread = private_pipeline_session_id(&request);
+    let expected = json!(["seed", "visit 1", "visit 2", "visit 3"]);
+    let mut terminal_ids = Vec::new();
+    for (execution, regenerate) in [
+        ("execution-first", false),
+        ("execution-regenerated", true),
+        ("execution-second", false),
+    ] {
+        request.payload.is_regenerate = regenerate;
+        let invocation = assembler
+            .assemble(authorized_execution(&request, execution))
+            .await
+            .expect("typed reducer turn assembly");
+        let (mut run, _, _) = invocation.start().expect("typed reducer turn start");
+        while run
+            .next_event()
+            .await
+            .expect("typed reducer event")
+            .is_some()
+        {}
+        let last = checkpointer
+            .load(&private_thread)
+            .await
+            .expect("load")
+            .expect("terminal checkpoint");
+        assert!(last.pending_nodes.is_empty(), "{execution}");
+        assert_eq!(last.state["count"], json!(3), "{execution}");
+        assert_eq!(last.state["findings"], expected, "{execution}");
+        terminal_ids.push(last.checkpoint_id);
+    }
+    // Every turn executed its nodes and wrote its own terminal checkpoint.
+    terminal_ids.dedup();
+    assert_eq!(terminal_ids.len(), 3);
+}

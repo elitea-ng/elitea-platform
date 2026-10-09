@@ -23,7 +23,7 @@ struct Emit {
 
 #[async_trait]
 impl Node for Emit {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "emit"
     }
 
@@ -94,7 +94,10 @@ async fn the_guard_fails_the_node_naming_only_code_and_channel() {
         (
             vec![(
                 "findings",
-                Value::Array(vec![json!("SENTINEL"); super::state_reducers::MAX_APPEND_ELEMENTS]),
+                Value::Array(vec![
+                    json!("SENTINEL");
+                    super::state_reducers::MAX_APPEND_ELEMENTS
+                ]),
             )],
             "graph.state.reducer_limit",
             "findings",
@@ -237,11 +240,31 @@ nodes:
         let hitl = "state:\n  summary: {type: dict, value: {}}\nentry_point: review\nnodes:\n  - id: review\n    type: hitl\n    input: [summary]\n    user_message: {type: fixed, value: Review.}\n    routes: {approve: END, reject: END, edit: END}\n    edit_state_key: summary\n";
         let clean = "state:\n  notes: list\n  out: str\nentry_point: tick\nnodes:\n  - {id: tick, type: state_modifier, template: x, output: [out], variables_to_clean: [notes], transition: END}\n";
         for (base, from, to) in [
-            (map, "mapped: {type: list, value: []}", "mapped: {type: list, value: [], reducer: append}"),
-            (parallel, "joined: list", "joined: {type: list, reducer: append}"),
-            (parallel, "detail: {type: dict, value: {}}", "detail: {type: dict, value: {}, reducer: merge}"),
-            (shaping, "lines: list", "lines: {type: list, reducer: append}"),
-            (hitl, "summary: {type: dict, value: {}}", "summary: {type: dict, value: {}, reducer: merge}"),
+            (
+                map,
+                "mapped: {type: list, value: []}",
+                "mapped: {type: list, value: [], reducer: append}",
+            ),
+            (
+                parallel,
+                "joined: list",
+                "joined: {type: list, reducer: append}",
+            ),
+            (
+                parallel,
+                "detail: {type: dict, value: {}}",
+                "detail: {type: dict, value: {}, reducer: merge}",
+            ),
+            (
+                shaping,
+                "lines: list",
+                "lines: {type: list, reducer: append}",
+            ),
+            (
+                hitl,
+                "summary: {type: dict, value: {}}",
+                "summary: {type: dict, value: {}, reducer: merge}",
+            ),
             (clean, "notes: list", "notes: {type: list, reducer: append}"),
         ] {
             if let Err(error) = PipelineDefinition::from_yaml(base) {
@@ -250,7 +273,10 @@ nodes:
             let typed = base.replace(from, to);
             assert_ne!(typed, base, "fixture substitution {from}");
             let refused = refusal(&typed);
-            assert!(refused.contains("must use the overwrite reducer"), "{refused}");
+            assert!(
+                refused.contains("must use the overwrite reducer"),
+                "{refused}"
+            );
         }
     }
 
@@ -321,7 +347,15 @@ nodes:
         // before/after pairs: each `after` pause and its resume append exactly one element.
         assert_eq!(
             appended,
-            [Some(1), Some(2), Some(2), Some(3), Some(3), Some(4), Some(4)]
+            [
+                Some(1),
+                Some(2),
+                Some(2),
+                Some(3),
+                Some(3),
+                Some(4),
+                Some(4)
+            ]
         );
         let last = checkpointer.load(THREAD).await.unwrap().unwrap();
         assert_eq!(last.state["findings"], visits(3));
@@ -331,7 +365,10 @@ nodes:
     #[tokio::test]
     async fn sum_int_overflow_fails_the_node_and_keeps_the_last_state() {
         let yaml = LOOP
-            .replace("value: 0, reducer: sum_int", "value: 9223372036854775806, reducer: sum_int")
+            .replace(
+                "value: 0, reducer: sum_int",
+                "value: 9223372036854775806, reducer: sum_int",
+            )
             .replace("count < 3", "true");
         let definition = PipelineDefinition::from_yaml(&yaml).expect("overflow fixture");
         let checkpointer = Arc::new(MemoryCheckpointer::new());
@@ -342,11 +379,17 @@ nodes:
             .await
             .expect_err("the second visit overflows");
         let message = error.to_string();
-        assert!(message.contains("graph.state.reducer_overflow: count"), "{message}");
+        assert!(
+            message.contains("graph.state.reducer_overflow: count"),
+            "{message}"
+        );
         assert!(!message.contains("9223372036854775"), "{message}");
         let history = checkpointer.list("overflow-thread").await.expect("history");
         let last = history.last().expect("checkpoint before the failure");
         assert_eq!(last.state["count"], json!(i64::MAX));
-        assert_eq!(last.state["findings"], json!(["seed", format!("visit {}", i64::MAX)]));
+        assert_eq!(
+            last.state["findings"],
+            json!(["seed", format!("visit {}", i64::MAX)])
+        );
     }
 }

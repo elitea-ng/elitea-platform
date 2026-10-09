@@ -86,7 +86,11 @@ impl StateReducer {
     }
 
     /// The value `current` becomes after `update`, or why the update is refused.
-    pub(super) fn reduce_checked(self, current: &Value, update: &Value) -> Result<Value, ReducerFailure> {
+    pub(super) fn reduce_checked(
+        self,
+        current: &Value,
+        update: &Value,
+    ) -> Result<Value, ReducerFailure> {
         let reduced = match (self, current, update) {
             (Self::Append, Value::Array(current), Value::Array(update)) => {
                 if current.len().saturating_add(update.len()) > MAX_APPEND_ELEMENTS {
@@ -105,7 +109,11 @@ impl StateReducer {
             }
             (Self::Merge, Value::Object(current), Value::Object(update)) => {
                 let mut values = current.clone();
-                values.extend(update.iter().map(|(key, value)| (key.clone(), value.clone())));
+                values.extend(
+                    update
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
                 Value::Object(values)
             }
             _ => return Err(ReducerFailure::TypeMismatch),

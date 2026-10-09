@@ -47,12 +47,15 @@ nodes:
 const MAP: &str = "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}'}\n";
 
 fn hex(yaml: &str) -> String {
-    PipelineDefinition::from_yaml(yaml)
+    use std::fmt::Write as _;
+    let digest = PipelineDefinition::from_yaml(yaml)
         .expect("golden fixture")
-        .definition_digest()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .definition_digest();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
 }
 
 const GOLDEN: [(&str, &str, &str); 3] = [
@@ -89,7 +92,10 @@ fn explicit_overwrite_keeps_the_golden_digest_and_typed_reducers_change_it() {
             "count: {type: int, value: 0}",
             "count: {type: int, value: 0, reducer: overwrite}",
         )
-        .replace("seen: {type: dict, value: {}}", "seen: {type: dict, value: {}, reducer: overwrite}");
+        .replace(
+            "seen: {type: dict, value: {}}",
+            "seen: {type: dict, value: {}, reducer: overwrite}",
+        );
     assert_eq!(hex(&explicit), GOLDEN[0].2);
     let append = LOOP.replace(
         "findings: {type: list, value: [seed]}",

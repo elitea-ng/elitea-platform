@@ -17,8 +17,14 @@ fn number(text: &str) -> Value {
 #[test]
 fn reducer_names_parse_to_typed_variants_and_overwrite_is_the_default() {
     assert_eq!(StateReducer::parse("overwrite"), Ok(None));
-    assert_eq!(StateReducer::parse("append"), Ok(Some(StateReducer::Append)));
-    assert_eq!(StateReducer::parse("sum_int"), Ok(Some(StateReducer::SumInt)));
+    assert_eq!(
+        StateReducer::parse("append"),
+        Ok(Some(StateReducer::Append))
+    );
+    assert_eq!(
+        StateReducer::parse("sum_int"),
+        Ok(Some(StateReducer::SumInt))
+    );
     assert_eq!(StateReducer::parse("merge"), Ok(Some(StateReducer::Merge)));
     for unknown in ["Append", "sum", "add", "custom", "", "extend"] {
         assert!(StateReducer::parse(unknown).is_err(), "{unknown}");
@@ -44,7 +50,13 @@ fn append_concatenates_in_order() {
 
 #[test]
 fn append_never_wraps_a_scalar_and_null_never_clears() {
-    for update in [json!(1), json!("x"), json!({"a": 1}), Value::Null, json!(true)] {
+    for update in [
+        json!(1),
+        json!("x"),
+        json!({"a": 1}),
+        Value::Null,
+        json!(true),
+    ] {
         assert_eq!(
             StateReducer::Append.reduce_checked(&json!([1]), &update),
             Err(ReducerFailure::TypeMismatch),
@@ -106,7 +118,13 @@ fn sum_int_adds_exact_integers_including_integral_spellings() {
 
 #[test]
 fn sum_int_refuses_fractions_and_non_numbers() {
-    for update in [number("2.5"), json!("3"), Value::Null, json!([1]), json!(true)] {
+    for update in [
+        number("2.5"),
+        json!("3"),
+        Value::Null,
+        json!([1]),
+        json!(true),
+    ] {
         assert_eq!(
             StateReducer::SumInt.reduce_checked(&json!(1), &update),
             Err(ReducerFailure::TypeMismatch),
@@ -200,7 +218,10 @@ fn failure_codes_are_stable_and_name_no_value() {
         "graph.state.reducer_type_mismatch"
     );
     assert_eq!(ReducerFailure::Limit.code(), "graph.state.reducer_limit");
-    assert_eq!(ReducerFailure::Overflow.code(), "graph.state.reducer_overflow");
+    assert_eq!(
+        ReducerFailure::Overflow.code(),
+        "graph.state.reducer_overflow"
+    );
 }
 
 #[test]
