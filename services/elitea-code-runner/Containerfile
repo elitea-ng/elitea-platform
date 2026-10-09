@@ -6,8 +6,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY adapters/rust ./adapters/rust
+# /target is shared by every build on the host and cargo judges local sources by
+# mtime; touching /src under the lock compiles this context, not another
+# checkout's (see services/elitea-worker-rust/Containerfile).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/target \
+    --mount=type=cache,target=/target,sharing=locked \
+    find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/target cargo auditable build --locked --release -j 2 && \
     cp /target/release/elitea-code-runner /usr/local/bin/elitea-code-runner && \
     cp /target/release/elitea-code-execute /usr/local/bin/elitea-code-execute && \
