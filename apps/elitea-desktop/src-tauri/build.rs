@@ -7,6 +7,7 @@ fn main() {
             "host_state",
             "host_connect",
             "host_sign_in",
+            "host_sign_in_cancel",
             "host_access_token",
             "host_refresh",
             "host_sign_out",

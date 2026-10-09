@@ -2,6 +2,7 @@ import { Alert, Box, Button, CircularProgress, Stack, TextField, Typography } fr
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import type { HostBridge, HostDeployment, HostState } from '@/shared/desktop/hostBridge';
+import { t } from '@/shared/i18n';
 
 import { launchApp } from './launchApp';
 
@@ -54,6 +55,8 @@ function AppHost({ bridge, state }: { bridge: HostBridge; state: HostState }) {
 export function DesktopShell({ bridge }: { bridge: HostBridge | undefined }) {
   const [phase, setPhase] = useState<Phase>(bridge === undefined ? { kind: 'no-host' } : { kind: 'loading' });
   const [url, setUrl] = useState('');
+  /** The attempt the person cancelled: its rejection is not an error to show. */
+  const cancelled = useRef(false);
 
   useEffect(() => {
     if (bridge === undefined) return;
@@ -85,11 +88,18 @@ export function DesktopShell({ bridge }: { bridge: HostBridge | undefined }) {
   };
 
   const signIn = (deployment: HostDeployment): void => {
+    cancelled.current = false;
     setPhase({ kind: 'signing-in', deployment });
     bridge.signIn().then(
       (state) => setPhase({ kind: 'app', state }),
-      (error: unknown) => setPhase({ kind: 'confirm', deployment, error: describe(error) }),
+      (error: unknown) =>
+        setPhase(cancelled.current ? { kind: 'confirm', deployment } : { kind: 'confirm', deployment, error: describe(error) }),
     );
+  };
+
+  const cancelSignIn = (): void => {
+    cancelled.current = true;
+    void bridge.cancelSignIn().catch(() => undefined);
   };
 
   if (phase.kind === 'connect') {
@@ -132,6 +142,7 @@ export function DesktopShell({ bridge }: { bridge: HostBridge | undefined }) {
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
             <CircularProgress size={20} />
             <Typography>Finish signing in in your browser.</Typography>
+            <Button onClick={cancelSignIn}>{t('desktop.signIn.cancel', 'Cancel')}</Button>
           </Stack>
         ) : (
           <>

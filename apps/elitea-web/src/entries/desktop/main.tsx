@@ -6,7 +6,8 @@
  *
  * The connect / sign-in screen is rendered before the app exists, with a bare
  * MUI theme: there is no brand pack to fetch until a deployment is chosen.
- * Its copy is English-only for that reason (no i18n catalogue is loaded yet).
+ * Its copy is English-only for that reason; strings added since go through
+ * `t()`, which resolves against the bundled `en` catalogue.
  */
 import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { StrictMode } from 'react';

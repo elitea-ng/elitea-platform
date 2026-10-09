@@ -1,4 +1,4 @@
-//! The connection and sign-in IPC surface: seven commands. The local-work
+//! The connection and sign-in IPC surface: eight commands. The local-work
 //! commands (workspaces, the agent turn) are in `local_commands.rs`; the
 //! whole surface is listed in `IPC.md`.
 //!
@@ -41,6 +41,12 @@ pub async fn host_connect(
 #[tauri::command]
 pub async fn host_sign_in(state: State<'_, AppState>) -> Result<HostState, HostError> {
     state.auth.sign_in().await
+}
+
+/// Abandon the sign-in waiting for the browser; `host_sign_in` then rejects.
+#[tauri::command]
+pub fn host_sign_in_cancel(state: State<'_, AppState>) {
+    state.auth.cancel_sign_in();
 }
 
 /// A usable access token, or `null` when there is no session.

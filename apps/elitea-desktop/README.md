@@ -49,7 +49,7 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
 
 - The window loads **only bundled assets**. `on_navigation` refuses every other
   origin, so remote content never sits next to the IPC commands.
-- IPC is an explicit allowlist: seven `host_*` commands plus the local-work
+- IPC is an explicit allowlist: eight `host_*` commands plus the local-work
   commands (workspaces and the D0 local agent turn), granted by
   `capabilities/default.json` to the `main` window only (no remote origin is
   listed). No command returns the refresh token. The whole surface, with the

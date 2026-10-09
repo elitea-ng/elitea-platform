@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use url::Url;
 
 use crate::discovery;
@@ -107,6 +107,8 @@ pub struct AuthService {
     /// could adopt its rotated token AFTER a sign-out and resurrect the session.
     refresh_gate: Mutex<()>,
     sign_in_deadline: Duration,
+    /// Ends the sign-in that is waiting for the browser (`cancel_sign_in`).
+    sign_in_cancel: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
 
 pub struct AuthConfig {
@@ -134,6 +136,7 @@ impl AuthService {
             unsaved: Mutex::new(None),
             refresh_gate: Mutex::new(()),
             sign_in_deadline: SIGN_IN_DEADLINE,
+            sign_in_cancel: std::sync::Mutex::new(None),
         }
     }
 
@@ -204,6 +207,10 @@ impl AuthService {
     // ---- sign in -------------------------------------------------------
 
     pub async fn sign_in(&self) -> Result<HostState, HostError> {
+        // Armed first, so a cancel that arrives while discovery is still
+        // loading is not lost. A newer attempt replaces (and so ends) an older one.
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        *self.sign_in_cancel.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel_tx);
         let settings = self.files.settings()?;
         let origin_text = settings.origin.clone().ok_or(HostError::NotConnected)?;
         let origin = Url::parse(&origin_text).map_err(|e| HostError::Internal(e.to_string()))?;
@@ -232,9 +239,12 @@ impl AuthService {
         )?;
         self.opener.open(&url)?;
 
-        let params = listener
-            .wait_for_callback(self.sign_in_deadline, &state)
-            .await?;
+        let params = tokio::select! {
+            params = listener.wait_for_callback(self.sign_in_deadline, &state) => params?,
+            // Dropping the listener closes the loopback port: a late browser
+            // redirect finds nothing to deliver its code to.
+            _ = cancel_rx => return Err(HostError::SignInAborted),
+        };
         let code = verify_callback(&params, &state, &auth.issuer)?;
 
         let outcome = self
@@ -275,6 +285,19 @@ impl AuthService {
                 self.state()
             }
             other => Err(map_exchange_failure(&other, &client_id)),
+        }
+    }
+
+    /// End the sign-in waiting for the browser, if any. It returns
+    /// `SignInAborted`; nothing is stored.
+    pub fn cancel_sign_in(&self) {
+        let pending = self
+            .sign_in_cancel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(cancel) = pending {
+            let _ = cancel.send(());
         }
     }
 

@@ -127,6 +127,7 @@ pub fn run() {
             commands::host_state,
             commands::host_connect,
             commands::host_sign_in,
+            commands::host_sign_in_cancel,
             commands::host_access_token,
             commands::host_refresh,
             commands::host_sign_out,

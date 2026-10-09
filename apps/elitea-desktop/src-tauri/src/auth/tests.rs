@@ -756,3 +756,24 @@ async fn sign_out_falls_back_to_the_stored_revocation_endpoint_when_discovery_fa
     );
     assert_eq!(h.pending.raw(), None);
 }
+
+#[tokio::test]
+async fn a_cancelled_sign_in_stops_waiting_and_stores_nothing() {
+    let server = deployment(Box::new(|_, _| None)).await;
+    let h = Arc::new(harness(|_, _| None)); // the browser never comes back
+    h.service.connect(&server.origin).await.unwrap();
+    let attempt = {
+        let h = h.clone();
+        tokio::spawn(async move { h.service.sign_in().await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    h.service.cancel_sign_in();
+    let result = tokio::time::timeout(Duration::from_secs(2), attempt)
+        .await
+        .expect("cancel ends the wait well before the deadline")
+        .unwrap();
+    assert!(matches!(result, Err(HostError::SignInAborted)), "{result:?}");
+    assert!(h.keychain.raw().is_none());
+    // Cancelling with nothing waiting is harmless.
+    h.service.cancel_sign_in();
+}

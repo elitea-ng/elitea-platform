@@ -40,6 +40,8 @@ export interface HostBridge {
   state(): Promise<HostState>;
   connect(url: string): Promise<HostDeployment>;
   signIn(): Promise<HostState>;
+  /** Abandon the sign-in waiting for the browser; the pending `signIn()` rejects. */
+  cancelSignIn(): Promise<void>;
   accessToken(): Promise<HostAccessToken | null>;
   /** Force a refresh-token exchange. `ended`: the server refused the refresh token. `unavailable`: try again later. */
   refresh(): Promise<'refreshed' | 'ended' | 'unavailable' | 'upgrade_required'>;
@@ -56,6 +58,7 @@ export function createHostBridge(invoke: HostInvoke): HostBridge {
     state: () => invoke<HostState>('host_state'),
     connect: (url) => invoke<HostDeployment>('host_connect', { url }),
     signIn: () => invoke<HostState>('host_sign_in'),
+    cancelSignIn: () => invoke<void>('host_sign_in_cancel'),
     accessToken: () => invoke<HostAccessToken | null>('host_access_token'),
     refresh: () => invoke<'refreshed' | 'ended' | 'unavailable' | 'upgrade_required'>('host_refresh'),
     signOut: () => invoke<void>('host_sign_out'),

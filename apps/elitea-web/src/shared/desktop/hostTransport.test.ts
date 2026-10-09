@@ -19,7 +19,7 @@ function bridge(overrides: Partial<Calls> = {}): HostBridge & { calls: Calls } {
     signOut: vi.fn<HostBridge['signOut']>().mockResolvedValue(),
     ...overrides,
   };
-  return { state: vi.fn(), connect: vi.fn(), signIn: vi.fn(), openExternal: vi.fn(), ...calls, calls };
+  return { state: vi.fn(), connect: vi.fn(), signIn: vi.fn(), cancelSignIn: vi.fn(), openExternal: vi.fn(), ...calls, calls };
 }
 
 function make(b: HostBridge, now = () => 1_000_000) {

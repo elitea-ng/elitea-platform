@@ -7,6 +7,7 @@
     "allow-host-state",
     "allow-host-connect",
     "allow-host-sign-in",
+    "allow-host-sign-in-cancel",
     "allow-host-access-token",
     "allow-host-refresh",
     "allow-host-sign-out",
