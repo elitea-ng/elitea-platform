@@ -41,9 +41,19 @@
  */
 import * as zod from "zod";
 
+export const executeRemoteToolkitToolHeadersIdempotencyKeyMax = 128;
+
+export const executeRemoteToolkitToolHeadersIdempotencyKeyRegExp = new RegExp(
+  "^[A-Za-z0-9_-]+$",
+);
+
 export const ExecuteRemoteToolkitToolHeaders = zod.object({
   "X-Client-Version": zod.string().optional(),
-  "Idempotency-Key": zod.string().optional(),
+  "Idempotency-Key": zod
+    .string()
+    .min(1)
+    .max(executeRemoteToolkitToolHeadersIdempotencyKeyMax)
+    .regex(executeRemoteToolkitToolHeadersIdempotencyKeyRegExp),
 });
 
 export type ExecuteRemoteToolkitToolHeaders = zod.input<

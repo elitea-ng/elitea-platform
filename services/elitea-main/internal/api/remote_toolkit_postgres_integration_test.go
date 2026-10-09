@@ -99,6 +99,7 @@ INSERT INTO public.auth_core__token (id, uuid, user_id, name) VALUES (%[1]d, 're
 			`"application_id":11,"version_id":12,"toolkit_ref":"tkr1_00112233445566778899aabbccddeeff",`+
 			`"tool_name":"read_file","arguments":{}}`))
 		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "gate-test")
 		recorder := httptest.NewRecorder()
 		route.ServeHTTP(recorder, testAuthHeader(request))
 		return recorder.Code, recorder.Body.String()

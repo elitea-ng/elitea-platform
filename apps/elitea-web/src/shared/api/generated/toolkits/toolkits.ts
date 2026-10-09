@@ -829,7 +829,16 @@ export const getExecuteRemoteToolkitToolUrl = (
  * BOUNDS. The body is at most 1 MiB and `arguments` one JSON object
  * within the input-entry bound. The call waits at most 60 seconds;
  * past that it answers 504 with the still-running `task_id`.
- * `Idempotency-Key` (or `request_id`) makes a retry replay the same run.
+ *
+ * IDEMPOTENCY. `Idempotency-Key` is REQUIRED (400
+ * `idempotency_key_required` without it): one key per intended call,
+ * repeated on every retry of it, scoped to the caller and the toolkit.
+ * A retry with the same key and body never runs the tool again: it
+ * answers the run's result once it has one, or 409
+ * `remote_toolkit_in_progress` (with `task_id`) while the run the first
+ * attempt admitted is still going. After a 504, replay with the SAME
+ * key; a new key is a new call. The same key with a different body is
+ * 409 `idempotency_conflict`.
  *
  * A TOOL THE WORKER CANNOT RUN answers 422 `remote_tool_unsupported`
  * with a reason, never a hang: a toolkit type or tool this deployment's

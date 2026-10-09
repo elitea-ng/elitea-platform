@@ -12230,8 +12230,12 @@
       "operation_id": "executeRemoteToolkitTool",
       "parameters": {
         "header:idempotency-key": {
+          "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "min_length": 1,
+            "max_length": 128,
+            "pattern": "^[A-Za-z0-9_-]+$"
           }
         },
         "header:x-client-version": {

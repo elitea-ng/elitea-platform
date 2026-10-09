@@ -330,6 +330,11 @@ func NewRunService(
 type PendingRun struct {
 	ExecutionID string
 	Waited      time.Duration
+	// Replayed is true when this request did not admit the run: the same
+	// idempotency key had already admitted it, so the caller is waiting on
+	// a run an earlier attempt started (and that attempt may still be
+	// waiting too). Nothing was dispatched a second time.
+	Replayed bool
 }
 
 func (e *PendingRun) Error() string {
@@ -558,6 +563,7 @@ func (s *RunService) await(ctx context.Context, admitted AdmittedRun) (RunOutcom
 			return RunOutcome{}, &PendingRun{
 				ExecutionID: admitted.Outcome.ExecutionID,
 				Waited:      s.deadline,
+				Replayed:    !admitted.Outcome.Created,
 			}
 		}
 		select {
