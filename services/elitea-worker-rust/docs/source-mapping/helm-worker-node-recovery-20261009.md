@@ -13,6 +13,8 @@ The recovery inventory (2026-10-08) recorded that the Helm chart had no key for 
 - **Silent coercion.** The template used `{{ if $r.agentNodeRecovery }}`. `--set-string ...agentNodeRecovery=false`,
   or a quoted `"false"` in a values file, is a non-empty string, so it is truthy. The journal, and with it model-step
   resume, turned on with no warning. `null` and `1` were also accepted.
+- **The same defect on `agentModelCheckpointRecovery`.** Its `{{ if }}` had the same truthy-string reading. Found
+  in code review of this change and fixed with the same guard.
 - **No dedicated proof.** The only assertion covered `true` together with sandbox profiles. Nothing covered the
   default, `false`, the Python worker, or wrong types. No task ran `render-worker-sandbox.sh`.
 - **Stale docs.** `recovery-guarantees.md` D1, note 2, the P09 row and the rank-1 backlog row still said the key
@@ -61,9 +63,9 @@ is one line in `values.yaml`, plus one assertion in the new test, once ranks 3 a
 
 | Path | Change |
 | --- | --- |
-| `deploy/helm/elitea/templates/worker/configmap-runtime.yaml:57-75` | Refuses a non-boolean `agentNodeRecovery` (`kindIs "bool"`), with the message "must be true or false". The Python refusal is kept. `agent_node_recovery: true` is still written only when set: absent is the Worker's serde default `false` (`services/elitea-worker-rust/src/config.rs:101-102`). This also keeps the default `runtime.json` byte-identical for both implementations, which `render-worker.sh` requires. |
+| `deploy/helm/elitea/templates/worker/configmap-runtime.yaml:57-77` | Refuses a non-boolean `agentNodeRecovery` or `agentModelCheckpointRecovery` (one `kindIs "bool"` loop over both recovery switches, `:62-66`), with the message "worker.runtime.<key> must be true or false". The Python refusal is kept. `agent_node_recovery: true` is still written only when set: absent is the Worker's serde default `false` (`services/elitea-worker-rust/src/config.rs:101-102`). This also keeps the default `runtime.json` byte-identical for both implementations, which `render-worker.sh` requires. |
 | `deploy/helm/elitea/values.yaml:3711-3724` | Documents the model-resume coupling, why the default is `false`, compose parity, the material, and the boolean-only rule. The value is unchanged (`false`). |
-| `deploy/helm/tests/render-worker-node-recovery.sh` (new) | 11 assertions, with a derived floor (`scripts/lib/assertion-floor.sh`). |
+| `deploy/helm/tests/render-worker-node-recovery.sh` (new) | 12 assertions, with a derived floor (`scripts/lib/assertion-floor.sh`). |
 | `Taskfile.yml` | New `helm:worker-node-recovery`, run by `helm:lint` after `helm:main-master-key`. `.github/workflows` is unchanged. |
 | `services/elitea-worker-rust/docs/recovery-guarantees.md` | D1 (key, guard, test, coupling), note 2, the Worker × P09 row, and backlog rank 1 (G-WORKER-01 closed; defaults still gated by ranks 3 and 4). |
 | `services/elitea-worker-rust/docs/direct-tool-effects-design.md` | §6: the corrected reason for the `false` default. |
@@ -73,7 +75,7 @@ is one line in `values.yaml`, plus one assertion in the new test, once ranks 3 a
 Local: helm v4.1.0+g4553a0a, Python 3 with PyYAML, Go toolchain from `go.work`, macOS arm64, `58abb650c` plus this
 change.
 
-`render-worker-node-recovery.sh`: 11 ran, 11 passed.
+`render-worker-node-recovery.sh`: 12 ran, 12 passed.
 
 | Case | Expected |
 | --- | --- |
@@ -86,12 +88,13 @@ change.
 | Rust, `null` | refused: "must be true or false" |
 | Rust, the string `"false"` | refused |
 | Rust, the number `1` | refused |
+| Rust, `agentModelCheckpointRecovery` as the string `"false"` | refused (same defect, same guard) |
 
 Mutation proof (each applied to the template, run, then restored):
 
 | Mutation | Caught by |
 | --- | --- |
-| `main`'s template (no type guard) | 3 FAIL: `null`, `"false"`, `1` not refused |
+| `main`'s template (no type guard) | 4 FAIL: `null`, `"false"`, `1` and the checkpoint-key string not refused |
 | Python refusal dropped for `agentNodeRecovery` | "python, true: the render was not refused" |
 | Key always written for Rust (`false` explicit) | 2 FAIL in this script, plus `render-worker.sh` "runtime.json differs between implementations" |
 
@@ -119,9 +122,9 @@ Skips:
 
 | Property | Mechanism | Proof | Measured |
 | --- | --- | --- | --- |
-| Performance | No runtime change; the default render is byte-identical to `main`. When an operator enables the key, the costs are: one journal open plus one load per Code-node visit, and one fenced append (about 6-9 statements in one transaction) before and after each effectful direct-tool call (`services/elitea-worker-rust/src/state/postgres_checkpointer.rs:392-411,477-560`). LLM nodes and read-only tools are never journaled. | `render-worker.sh` (identical default `runtime.json`) | Render test: about 1 s for 11 cases. The journal cost is derived from code, not measured here. No statement-count test exists for it (follow-up). |
+| Performance | No runtime change; the default render is byte-identical to `main`. When an operator enables the key, the costs are: one journal open plus one load per Code-node visit, and one fenced append (about 6-9 statements in one transaction) before and after each effectful direct-tool call (`services/elitea-worker-rust/src/state/postgres_checkpointer.rs:392-411,477-560`). LLM nodes and read-only tools are never journaled. | `render-worker.sh` (identical default `runtime.json`) | Render test: about 1 s for 12 cases. The journal cost is derived from code, not measured here. No statement-count test exists for it (follow-up). |
 | Durability | The default does not open a recovery path whose pod-replacement behaviour is unproven (D1/D2). When on, intent is recorded before the effect and a started effect is never repeated (unchanged, #1159). | Coupling: `node_recovery_prefrontier_test.go:21` | — |
-| Resilience | A non-boolean value is a typed render failure that names the key, instead of a silent switch. `true` without a durable store cannot render: `agent-checkpoint-connection` is mandatory material, and the Worker refuses the config otherwise (`config.rs:399-403`). | `render-worker-node-recovery.sh` refusal cases and `journal_backed` | 3 refusals hold; the mutation shows that `main` accepts all 3 |
+| Resilience | A non-boolean value is a typed render failure that names the key, instead of a silent switch. `true` without a durable store cannot render: `agent-checkpoint-connection` is mandatory material, and the Worker refuses the config otherwise (`config.rs:399-403`). | `render-worker-node-recovery.sh` refusal cases and `journal_backed` | 4 refusals hold; the mutation shows that `main` accepts all 4 |
 | Security | No secrets, no new material, no egress, no route. The connection is still passed by file reference (`agent_checkpoint_connection_path`), never inlined. Fail closed: a wrong-typed or Python-incompatible value refuses to render. | Same script | — |
 
 Security-review categories (`rules/security.md`):
@@ -135,7 +138,7 @@ Security-review categories (`rules/security.md`):
 
 | Component × phase | Before | After | Enforcing code | Proof |
 | --- | --- | --- | --- | --- |
-| Worker (Kubernetes, stock Helm) × P02, P03, P09-P12 | F (D1) | **F, unchanged by decision.** Recovery stays closed until ranks 3 and 4 pass. | `values.yaml:3724`, `configmap-runtime.yaml:62-75` | `render-worker-node-recovery.sh` "rust, default" |
+| Worker (Kubernetes, stock Helm) × P02, P03, P09-P12 | F (D1) | **F, unchanged by decision.** Recovery stays closed until ranks 3 and 4 pass. | `values.yaml:3724`, `configmap-runtime.yaml:62-77` | `render-worker-node-recovery.sh` "rust, default" |
 | Worker (Kubernetes, `agentNodeRecovery=true`) × P02, P03, P09-P12 | could be enabled, but `"false"` also enabled it | R (container restart, spool kept) / F on pod replacement (D2). Only an explicit boolean `true` enables it. | same | "rust, true" plus the 3 refusal cases |
 | Worker (compose) × same phases | R/F as recorded | unchanged | `deploy/runtime/worker-runtime.rust.json:21` | — |
 
@@ -156,8 +159,6 @@ None. Every case is a `helm template` of the in-repo chart with `values-standalo
 
 - Flip `agentNodeRecovery` (and `agentModelCheckpointRecovery`) to `true` once ranks 3 and 4 pass. Change the
   "rust, default" assertion in the same PR.
-- `agentModelCheckpointRecovery` has the same truthy-string defect (`configmap-runtime.yaml:65,70`). The same
-  `kindIs "bool"` guard and test belong in a separate change.
 - The Worker and Main keep the coupling implicit. The rendered config cannot show that `agent_node_recovery` implies
   model checkpoint inspection. A typed config field or a startup log line would make it visible.
 - No statement-count budget test exists for the node journal append (`postgres_checkpointer.rs:477-560`).

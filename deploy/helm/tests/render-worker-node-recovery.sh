@@ -20,8 +20,9 @@
 #     be the same document for both;
 #   * true reaches the Rust worker, and true with the Python worker fails the
 #     render;
-#   * anything that is not a boolean is refused: a string "false" is truthy
-#     in a template and would turn recovery on without a word;
+#   * anything that is not a boolean is refused, for this key and for
+#     agentModelCheckpointRecovery: a string "false" is truthy in a template
+#     and would turn recovery on without a word;
 #   * when the journal is on, agent_checkpoint_connection_path is present and
 #     agent-checkpoint-connection is in the material the init container
 #     requires. The worker refuses node recovery without that path
@@ -158,6 +159,10 @@ refuses 'worker.runtime.agentNodeRecovery must be true or false' \
   --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=1 \
   && ok "rust, the number 1: refused" \
   || bad "rust, the number 1: not refused"
+refuses 'worker.runtime.agentModelCheckpointRecovery must be true or false' \
+  --set worker.implementation=rust --set-string worker.runtime.agentModelCheckpointRecovery=false \
+  && ok "rust, agentModelCheckpointRecovery as the string \"false\": refused too" \
+  || bad "rust, agentModelCheckpointRecovery as the string \"false\": not refused"
 
 echo
 RAN=$((PASS+FAIL))

@@ -258,7 +258,7 @@ tasks:
       - task: helm:worker-node-recovery
 
   helm:worker-node-recovery:
-    desc: Check that worker.runtime.agentNodeRecovery reaches the Rust worker as an explicit boolean, never the Python worker, and that a non-boolean is refused
+    desc: Check that worker.runtime.agentNodeRecovery is written for the Rust worker only when true, never for the Python worker, and that a non-boolean recovery switch is refused
     cmds:
       # G-WORKER-01 (services/elitea-worker-rust/docs/recovery-guarantees.md).
       # Needs python3 with PyYAML.
