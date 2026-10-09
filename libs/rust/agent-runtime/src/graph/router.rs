@@ -18,8 +18,10 @@ use serde_json::Value;
 use thiserror::Error;
 use tracing::Instrument as _;
 
+use super::PIPELINE_YAML_BUDGET;
 use super::state_modifier::template_value;
 use super::yaml::{valid_graph_id, valid_output_key};
+use crate::bounded_yaml;
 
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_CONDITION_BYTES: usize = 64 * 1024;
@@ -151,8 +153,11 @@ impl RouterNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(RouterConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawRouterNodeDefinition>(yaml)
-            .map_err(|source| RouterConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawRouterNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| RouterConfigurationError::MalformedYaml { source })?;
         Self::from_raw(raw)
     }
 

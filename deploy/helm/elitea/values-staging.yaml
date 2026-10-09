@@ -23,3 +23,12 @@ main:
 
   podDisruptionBudget:
     enabled: false
+
+# This profile ships no edge in front of elitea-main, so nothing outside the
+# chart's own pods is admitted to elitea-main:8080. A deployment that fronts it
+# with an out-of-chart Gateway API HTTPRoute (deploy/gateway-api/httproute.yaml)
+# or an ingress controller lists that peer in networkPolicies.main.ingressFrom
+# and sets noExternalIngress back to false.
+networkPolicies:
+  main:
+    noExternalIngress: true

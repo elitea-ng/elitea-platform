@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "inline test fixtures, not stored or fetched documents"
+)]
+
 //! Compiler admission, state validation and graph execution of data shaping nodes.
 
 use super::compiler::shaping_node_admission;
@@ -10,30 +15,49 @@ fn yaml(text: &str) -> serde_yaml_ng::Value {
 }
 
 #[test]
-fn shaping_nodes_are_refused_as_not_enabled_while_the_gate_is_off() {
+fn shaping_nodes_are_refused_as_not_available_while_the_gate_is_off() {
     assert_eq!(
         shaping_node_admission(&yaml(SPLIT_NODE), false),
-        Err("graph.pipeline.unsupported_capability")
+        Err("graph.pipeline.node_type_not_available")
     );
     assert_eq!(shaping_node_admission(&yaml(SPLIT_NODE), true), Ok(()));
     assert_eq!(
         shaping_node_admission(&yaml(JOIN_NODE), false),
-        Err("graph.pipeline.unsupported_capability")
+        Err("graph.pipeline.node_type_not_available")
     );
     assert_eq!(shaping_node_admission(&yaml(JOIN_NODE), true), Ok(()));
+    // A type no build admits stays the generic unsupported refusal.
+    for gate in [false, true] {
+        assert_eq!(
+            shaping_node_admission(&yaml("id: x\ntype: custom\n"), gate),
+            Err("graph.pipeline.unsupported_capability")
+        );
+    }
 }
 
 #[cfg(not(feature = "graph-extensions-rehearsal"))]
 #[test]
-fn production_builds_refuse_shaping_yaml() {
-    let document = format!(
-        "state:\n  orders: list\n  lines: list\nentry_point: split\nnodes:\n  - {}",
-        SPLIT_NODE.trim_end().replace('\n', "\n    ")
-    );
-    let Err(error) = super::compiler::PipelineDefinition::from_yaml(&document) else {
-        panic!("a production build must not admit split_out");
-    };
-    assert_eq!(error.code(), "graph.pipeline.unsupported_capability");
+fn production_builds_refuse_shaping_yaml_naming_the_gated_type() {
+    use super::compiler::{PipelineConfigurationError, PipelineGatedNodeType};
+
+    for (node, gated) in [
+        (SPLIT_NODE, PipelineGatedNodeType::SplitOut),
+        (JOIN_NODE, PipelineGatedNodeType::Aggregate),
+    ] {
+        let document = format!(
+            "state:\n  orders: list\n  lines: list\n  orders_out: list\nentry_point: x\nnodes:\n  - {}",
+            node.trim_end().replace('\n', "\n    ")
+        );
+        let Err(error) = super::compiler::PipelineDefinition::from_yaml(&document) else {
+            panic!("a production build must not admit {gated}");
+        };
+        assert_eq!(error.code(), "graph.pipeline.node_type_not_available");
+        assert_eq!(error.cause_detail(), Some(gated.as_str()));
+        assert!(matches!(
+            error,
+            PipelineConfigurationError::NodeTypeNotAvailable(found) if found == gated
+        ));
+    }
 }
 
 #[cfg(feature = "graph-extensions-rehearsal")]

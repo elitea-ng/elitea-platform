@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 )
 
@@ -161,5 +162,49 @@ func TestSharedChatRoutesAreAbsentWithoutAStore(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "shared conversation not found") {
 		t.Fatalf("the shared-chat handler ran with no store: %s", rec.Body.String())
+	}
+}
+
+// TestSharedChatUnlockBudgetIsKeyedOnTheTrustedClientAddress proves the
+// composed router hands the deployment's trusted-proxy resolver to the unlock
+// route: behind a trusted proxy two callers have separate attempt budgets.
+// (That a direct caller cannot pick its key with X-Forwarded-For is covered in
+// the sharedchat package.)
+func TestSharedChatUnlockBudgetIsKeyedOnTheTrustedClientAddress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the real password KDF a dozen times")
+	}
+	resolver, err := scimapi.NewClientAddressResolver([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(RouterConfig{
+		AuthValidator:       testTokenValidator{user: authenticatedTestUser()},
+		PrincipalValidator:  testPrincipalValidator{},
+		SharedChatStore:     refusingSharedChatStore{},
+		SCIMClientAddresses: resolver,
+	})
+	const token = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+	unlock := func(peer, forwardedFor string) int {
+		req := httptest.NewRequest(http.MethodPost, strings.Replace(SharedChatUnlockPath, "{token}", token, 1),
+			strings.NewReader(`{"password":"x"}`))
+		req.RemoteAddr = peer
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Behind the trusted proxy the forwarded client is the key.
+	for i := 0; i < 10; i++ {
+		if got := unlock("10.0.0.1:1", "203.0.113.200"); got != http.StatusForbidden {
+			t.Fatalf("forwarded client attempt %d status = %d, want 403", i+1, got)
+		}
+	}
+	if got := unlock("10.0.0.1:1", "203.0.113.200"); got != http.StatusTooManyRequests {
+		t.Fatalf("forwarded client attempt 11 status = %d, want 429", got)
+	}
+	if got := unlock("10.0.0.1:1", "203.0.113.201"); got != http.StatusForbidden {
+		t.Fatalf("a second client behind the same proxy status = %d, want 403 (separate budget)", got)
 	}
 }

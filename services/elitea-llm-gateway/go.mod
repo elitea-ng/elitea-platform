@@ -1,6 +1,6 @@
 module github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/EliteaAI/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
@@ -85,7 +85,7 @@ require (
 	golang.org/x/arch v0.23.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect

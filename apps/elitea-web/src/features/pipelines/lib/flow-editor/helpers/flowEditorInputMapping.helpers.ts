@@ -219,9 +219,11 @@ const buildMappingEntry = (
     value: getMappingValue(foundMapping, value, defaultValueForType),
     multiline: value.multiline === true,
   };
-  const mapping = foundMapping
-    ? { ...foundMapping, enum: enumValues }
-    : { type: 'fixed', value: value.default !== undefined ? value.default : defaultValueForType, enum: enumValues };
+  // YAML holds no `undefined`: a schema without an enum leaves the entry without an `enum` key (baseline's
+  // js-yaml v3 dropped it silently; the strict serializer refuses it). A stale saved `enum` goes with it.
+  const { enum: _staleEnum, ...saved } = foundMapping ?? {};
+  const entry = foundMapping ? saved : { type: 'fixed', value: value.default !== undefined ? value.default : defaultValueForType };
+  const mapping = enumValues === undefined ? entry : { ...entry, enum: enumValues };
   return { mapping, info };
 };
 

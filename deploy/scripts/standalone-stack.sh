@@ -77,7 +77,8 @@
 #   deploy/scripts/standalone-stack.sh certs
 #   deploy/scripts/standalone-stack.sh build
 #   deploy/scripts/standalone-stack.sh up
-#   # log in through the browser at http://localhost:${STANDALONE_PORT:-8084}/app/
+#   # log in through the browser at http://${STANDALONE_HOST:-localhost}:${STANDALONE_PORT:-8084}/app/
+#   #   (a second concurrent stack needs its own STANDALONE_HOST=<name>.localhost)
 #   #   (oidc-mock accepts any username; ELITEA_INITIAL_GLOBAL_ADMINS on the
 #   #   elitea-main service, or E2E_ADMIN_EMAIL-shaped identities via `seed`,
 #   #   decides who becomes a global administrator on first login)
@@ -109,7 +110,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # issuer is derived from the Host header, so published and container port must
 # match) but it can be MOVED: `E2E_OIDC_PORT` sets both at once, and it is the
 # same variable the E2E stack, its seeder and `e2e/auth.setup.ts` already read.
-# Unset it is 9400 and nothing changes.
+# Unset it is 9400 and nothing changes. A second stack also needs its own
+# browser host, STANDALONE_HOST=<name>.localhost (see HOST below), or the two
+# stacks sign each other's browser out.
 PROJECT="${STANDALONE_PROJECT:-elitea-standalone}"
 # Exported, not merely read: compose interpolates it out of the ENVIRONMENT,
 # and the seed step below hands it to apps/elitea-web/scripts/e2e-stack.sh,
@@ -162,6 +165,23 @@ standalone_psql_read() {
 }
 
 PORT="${STANDALONE_PORT:-8084}"
+# STANDALONE_HOST: the host the BROWSER uses for this stack. Browsers scope
+# cookies by host and ignore the port, so a second stack browsed on
+# `localhost:<other port>` overwrites this stack's `elitea_session` on every
+# sign-in, and this Main then refuses the browser with `session_unknown`.
+# Give each concurrent stack its own `<name>.localhost` (browsers resolve every
+# *.localhost name to loopback). Only the browser path uses it: compose puts
+# it into OIDC_REDIRECT_URI; the scripted checks below keep calling localhost.
+# Anything other than `localhost` or `<label>.localhost` is refused, so the
+# callback can never name a host off this machine.
+HOST="${STANDALONE_HOST:-localhost}"
+# [[ =~ ]] and not grep: grep matches line by line, so a value with an embedded
+# newline would pass on its first line.
+if ! [[ "$HOST" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)?localhost$ ]]; then
+  echo "ERROR: STANDALONE_HOST must be localhost or <label>.localhost (got '${HOST}')." >&2
+  exit 1
+fi
+export STANDALONE_HOST="$HOST"
 # SEED_EXTRA_PROJECTS: comma-separated project ids that `seed-llm` and
 # `seed-index` write model rows into IN ADDITION to project 1 and every
 # personal project. The gateway resolves a model per project (a row in
@@ -912,10 +932,10 @@ case "${1:-}" in
       fi
     fi
     echo "→ Stack ready."
-    echo "     web app       http://localhost:${PORT}/app/"
-    echo "     docs          http://localhost:${PORT}/docs/"
-    echo "     admin console http://localhost:${PORT}/admin/app/"
-    echo "     API           http://localhost:${PORT}/api/v2"
+    echo "     web app       http://${HOST}:${PORT}/app/"
+    echo "     docs          http://${HOST}:${PORT}/docs/"
+    echo "     admin console http://${HOST}:${PORT}/admin/app/"
+    echo "     API           http://${HOST}:${PORT}/api/v2"
     echo "     OIDC provider http://localhost:${OIDC_PORT}"
     echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
     echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
@@ -1497,13 +1517,17 @@ SQL
     # Each assertion in this subcommand holds exactly one accepting arm, so the
     # accepting arms are the assertions. One site sits inside a loop and makes
     # one assertion per listener, so the listener list adds its extra rounds.
-    # The list is declared here, and counted here, so the two cannot disagree.
-    # Read scripts/lib/assertion-floor.sh.
+    # The edge identity probes hold two sites inside a loop over their targets,
+    # so that list adds two assertions per extra target. Both lists are
+    # declared here, and counted here, so the lists and the floor cannot
+    # disagree. Read scripts/lib/assertion-floor.sh.
     RUNTIME_LISTENERS=("control 9443" "output 9444" "content 9445")
+    IDENTITY_PROBE_TARGETS=("https://elitea-platform-edge/api/v2/social/author"
+                            "http://elitea-main:8080/api/v2/social/author")
     ASSERTION_SITE_PATTERN='(^|[^[:alnum:]_])ok[[:space:]]+"'
     ASSERTION_SITE_RANGE='/^  check)$/,/^    ;;$/'
     ASSERTION_SITES="$(derive_assertion_floor "$0" "$ASSERTION_SITE_PATTERN" "$ASSERTION_SITE_RANGE")"
-    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 ))
+    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 + 2 * (${#IDENTITY_PROBE_TARGETS[@]} - 1) ))
     ALLOW_SKIPS=0
     for check_arg in "${@:2}"; do
       case "$check_arg" in
@@ -1846,6 +1870,52 @@ sys.stdout.write(reply)
       *"Verify return code: 0"*) ok "platform-edge TLS verifies against the runtime CA" ;;
       *) fail "platform-edge did not present a runtime-CA certificate for elitea-platform-edge" ;;
     esac
+
+    # ── Edge identity projection, from inside the network ───────────────────
+    # elitea-main accepts X-Auth-* only with EdgeAuth's signature over the
+    # identity, method and request URI. These probes run where the worker
+    # runs: through the platform edge, and straight at elitea-main:8080, which
+    # compose cannot make unreachable. Each unsigned projection must be refused,
+    # and the same request with a real PAT must still answer as the PAT's own
+    # user — so a down edge or an unmounted route cannot pass for a refusal.
+    echo "→ edge identity projection (inside the network):"
+    if [ -z "${spoof_jwt:-}" ] || [ -z "${spoof_other:-}" ]; then
+      for target in "${IDENTITY_PROBE_TARGETS[@]}"; do
+        skip "no PAT and second user to contrast the ${target%%/api/*} probes against (run: $0 seed-runtime)"
+        skip "no PAT to show a real credential still works at ${target%%/api/*} (run: $0 seed-runtime)"
+      done
+    else
+      identity_probe() {
+        $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
+          --entrypoint python3 ghcr.io/eliteaai/elitea-mock-llm:standalone -c "
+import ssl, sys, urllib.error, urllib.request
+context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+headers = dict(item.split(': ', 1) for item in sys.argv[2:])
+request = urllib.request.Request(sys.argv[1], headers=headers)
+try:
+    response = urllib.request.urlopen(request, context=context, timeout=15)
+    print(response.status, response.read().decode()[:400])
+except urllib.error.HTTPError as error:
+    print(error.code)
+except Exception as error:
+    print('ERR', type(error).__name__)
+" "$@" 2>&1 || true
+      }
+      for target in "${IDENTITY_PROBE_TARGETS[@]}"; do
+        out="$(identity_probe "$target" 'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}" \
+                 "X-Auth-User-ID: ${spoof_other}" 'X-Auth-Signature: v1.0.AAAA')"
+        case "$out" in
+          401*|403*) ok "unsigned projection refused at ${target%%/api/*} (HTTP ${out%% *})" ;;
+          *) fail "unsigned projection at ${target%%/api/*} answered '${out%% *}', want 401/403" ;;
+        esac
+        out="$(identity_probe "$target" "Authorization: Bearer ${spoof_jwt}" \
+                 'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}")"
+        case "$out" in
+          200*"\"id\":\"${spoof_user}\""*) ok "a real PAT at ${target%%/api/*} still answers as its own user" ;;
+          *) fail "PAT at ${target%%/api/*} did not answer as user ${spoof_user}: '${out:0:80}'" ;;
+        esac
+      done
+    fi
 
     echo "→ execution actor PATs:"
     # Without an active PAT the worker's claim dies at actor_pat_issuance, long

@@ -80,3 +80,66 @@ func TestCurrentPipelineStartOverTheSharedBoundsReturnsTheTypedLimitError(t *tes
 		})
 	}
 }
+
+// A pipeline the runtime would refuse for a node type this deployment does not
+// run, or for a direct tool node whose toolkit is not attached, is refused at
+// start with a typed refusal naming the node — not the Worker's generic
+// "Configuration type is not supported." / "The execution input is invalid.".
+func TestCurrentPipelineStartNamesTheNodeTheRuntimeWouldRefuse(t *testing.T) {
+	for name, tc := range map[string]struct {
+		instructions string
+		code         string
+		text         []string
+	}{
+		"split_out":      {"entry_point: split\nnodes:\n  - id: split\n    type: split_out\n", pipelinelimits.CodeNodeTypeNotAvailable, []string{`Node "split"`, `"split_out"`, "not available on this deployment"}},
+		"unattached mcp": {"entry_point: fetch\nnodes:\n  - id: fetch\n    type: mcp\n    toolkit_name: github_mcp\n    tool: list_issues\n    transition: END\n", pipelinelimits.CodeToolkitNotAttached, []string{`Node "fetch"`, `"github_mcp"`, "Attach \"github_mcp\" under Tools → MCP"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			details, err := json.Marshal(map[string]any{"agent_type": "pipeline", "instructions": tc.instructions, "llm_settings": map[string]any{"model_name": "test", "model_project_id": 7, "openai_compatible": false}, "meta": map[string]any{}, "tools": []any{}})
+			require.NoError(t, err)
+			_, err = currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, SourceVersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, nil, "", "")
+			require.ErrorIs(t, err, ErrUnsupportedCurrentAgentStart)
+			refusal := pipelinelimits.Refusal(err)
+			require.NotNil(t, refusal, "start error %v carries no typed refusal", err)
+			require.Equal(t, tc.code, refusal.Code)
+			for _, want := range tc.text {
+				require.Contains(t, refusal.Message, want)
+			}
+		})
+	}
+}
+
+// The attached tools decide: a frozen toolkit (exact or legacy-key name)
+// starts, and so does one the version stores but freezing dropped (a
+// guardrail-blocked toolkit, or one whose schema this runtime lacks) — that
+// toolkit IS attached, and telling the author to attach it would be wrong, so
+// the Worker's own refusal stands. Undecodable lists and an unknown stored
+// version never yield a guessed verdict.
+func TestCurrentPipelineStartBindsDirectToolNodesToTheAttachedTools(t *testing.T) {
+	instructions := "entry_point: fetch\nnodes:\n  - id: fetch\n    type: mcp\n    toolkit_name: GitHub MCP\n    tool: list_issues\n    transition: END\n"
+	version := func(tools string) json.RawMessage {
+		return json.RawMessage(`{"agent_type":"pipeline","instructions":` + strconvQuote(instructions) + `,"tools":` + tools + `}`)
+	}
+	for name, tc := range map[string]struct {
+		frozen, stored json.RawMessage
+	}{
+		"legacy key match":          {version(`[{"toolkit_name":"github_mcp","type":"mcp"}]`), version(`[]`)},
+		"dropped by freezing":       {version(`[]`), version(`[{"name":"GitHub MCP","type":"mcp_github","id":4}]`)},
+		"undecodable frozen list":   {version(`[{"toolkit_name":42}]`), version(`[]`)},
+		"undecodable stored list":   {version(`[]`), version(`{"not":"a list"}`)},
+		"no stored version":         {version(`[]`), nil},
+		"stored toolkit_name match": {version(`[]`), version(`[{"toolkit_name":"github_mcp"}]`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := freezeCurrentHTTPActionRequests(31, 41, tc.frozen, tc.stored)
+			require.NoError(t, err)
+		})
+	}
+	_, err := freezeCurrentHTTPActionRequests(31, 41, version(`[{"toolkit_name":"jira"}]`), version(`[{"name":"jira"}]`))
+	require.Equal(t, pipelinelimits.CodeToolkitNotAttached, pipelinelimits.Refusal(err).Code)
+}
+
+func strconvQuote(value string) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
+}

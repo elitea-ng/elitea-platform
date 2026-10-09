@@ -64,6 +64,19 @@ function firstVersionInstructions(bodies: readonly Record<string, unknown>[]): s
   return typeof instructions === 'string' ? instructions : '';
 }
 
+/**
+ * Replaces the whole instructions document. JSON is YAML, and one line keeps
+ * the editor's auto-indent out of it; `{`/`[` are doubled because userEvent
+ * reads them as key descriptors.
+ */
+async function replaceInstructions(user: ReturnType<typeof userEvent.setup>, container: HTMLElement, text: string): Promise<void> {
+  const editor = container.querySelector('.cm-content');
+  if (!(editor instanceof HTMLElement)) throw new Error('the instructions editor did not render');
+  await user.click(editor);
+  await user.keyboard('{Control>}a{/Control}{Backspace}');
+  await user.type(editor, text.replace(/[{[]/g, (bracket) => bracket + bracket));
+}
+
 /** Opens the model menu and picks a row by its catalogue display name. */
 async function chooseModel(user: ReturnType<typeof userEvent.setup>, displayName: string): Promise<void> {
   await user.click(await screen.findByTestId('model-selector-name'));
@@ -352,20 +365,66 @@ describe('CreatePipeline', () => {
     const { container } = renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
 
     await screen.findByTestId('agent-name-input');
-    const editor = container.querySelector('.cm-content');
-    if (!(editor instanceof HTMLElement)) throw new Error('the instructions editor did not render');
-    await user.click(editor);
-    await user.type(editor, 'entry_point: MINE');
+    // The author's own graph must still be one the runtime admits: this used
+    // to type `entry_point: MINE` into the starter graph and store whatever
+    // that produced, which is exactly the create the admission gate refuses.
+    const starter = load(PIPELINE_STARTER_TEMPLATE) as StarterDocument & { nodes: { id: string; transition?: string }[] };
+    const mine = { ...starter, entry_point: 'mine', nodes: starter.nodes.map((node) => ({ ...node, id: 'mine' })) };
+    await replaceInstructions(user, container, JSON.stringify(mine));
+    expect(screen.queryByTestId('create-pipeline-admission')).not.toBeInTheDocument();
 
     await fillAndSave(user);
 
     await waitFor(() => expect(bodies).toHaveLength(1));
-    const versions = bodies[0]?.['versions'] as Record<string, unknown>[] | undefined;
-    const stored = versions?.[0]?.['instructions'];
-    // Not an equality check on the typed text: the editor now OPENS on the
-    // starter graph, so the author's keystrokes land inside that document.
-    // What the rule needs is that the stored graph is the edited one.
-    expect(stored).toContain('entry_point: MINE');
+    const stored = firstVersionInstructions(bodies);
     expect(stored).not.toBe(PIPELINE_STARTER_TEMPLATE);
+    expect((load(stored) as StarterDocument).entry_point).toBe('mine');
+  });
+
+  /*
+   * DEFECT this pins (post-merge browser pass on 0def77b22): a graph with a
+   * `type: split_out` node saved from this page as pipeline 161, although a
+   * production runtime refuses it and the editor's own save gate blocked every
+   * later save of it. The create page now applies the same admission verdict.
+   */
+  it('blocks Save with an inline reason when the graph holds a node type this deployment does not run', { timeout: 20_000 }, async () => {
+    const user = userEvent.setup({ delay: null });
+    const createSpy = vi.fn(() => HttpResponse.json({ id: '7', version_details: { id: '1' } }, { status: 201 }));
+    server.use(http.post('*/elitea_core/applications/prompt_lib/:projectId', createSpy));
+    const { container } = renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    await screen.findByTestId('agent-name-input');
+    await replaceInstructions(user, container, JSON.stringify({
+      entry_point: 'split',
+      state: { records: 'list', expanded: 'list' },
+      nodes: [{ id: 'split', type: 'split_out', source: 'records', split: { mode: 'list' }, destination: 'item', output: ['expanded'], transition: 'END' }],
+    }));
+    await user.type(screen.getByTestId('agent-name-input'), 'my-pipeline');
+    await user.type(screen.getByTestId('agent-description-input'), 'does a thing');
+
+    const alert = await screen.findByTestId('create-pipeline-admission');
+    expect(alert).toHaveTextContent('This pipeline cannot be saved');
+    expect(alert).toHaveTextContent('Node split: type: "split_out" is not available on this deployment');
+    const save = screen.getByTestId('pipeline-save-button');
+    expect(save).toBeDisabled();
+    expect(createSpy).not.toHaveBeenCalled();
+
+    // Fixing the graph lifts the veto.
+    await replaceInstructions(user, container, JSON.stringify(load(PIPELINE_STARTER_TEMPLATE)));
+    await waitFor(() => expect(screen.queryByTestId('create-pipeline-admission')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('pipeline-save-button')).not.toBeDisabled());
+  });
+
+  it('shows the server\'s readable refusal instead of the generic create error', { timeout: 20_000 }, async () => {
+    const user = userEvent.setup({ delay: null });
+    const refusal = 'Node "split" uses the "split_out" node type, which is not available on this deployment. Remove or replace that node before saving.';
+    server.use(http.post('*/elitea_core/applications/prompt_lib/:projectId', () => HttpResponse.json({ error: refusal }, { status: 400 })));
+    renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    await screen.findByTestId('agent-name-input');
+    await fillAndSave(user);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(refusal);
+    expect(screen.queryByText('Failed to create the pipeline.')).not.toBeInTheDocument();
   });
 });

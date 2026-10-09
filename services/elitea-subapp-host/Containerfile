@@ -6,7 +6,7 @@
 # build identically. Modules first, so a source change does not re-download
 # the driver; the retry loop is the scheduler's (a broken proxy stream is
 # not retried by Go itself).
-FROM golang:1.25-trixie AS builder
+FROM golang:1.26-trixie AS builder
 WORKDIR /src/services/elitea-subapp-host
 COPY services/elitea-subapp-host/go.mod services/elitea-subapp-host/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \

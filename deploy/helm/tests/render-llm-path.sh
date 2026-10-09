@@ -40,7 +40,7 @@ narrow_for() {
   esac
 }
 ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
-GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted"
+GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 MAIN="$REPO/deploy/helm/elitea"
@@ -66,7 +66,7 @@ done
 # variable is not passed or failed by a different one.
 GUARDS_OK=(
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1"
-  --set-string llmGateway.egressPosture=allowlist
+  --set-string llmGateway.egressPosture=allowlist --set networkPolicies.main.noExternalIngress=true
   --set-string llmGateway.env.GATEWAY_EGRESS_ALLOWLIST="vllm.ml.svc.cluster.local:8000"
 )
 
@@ -286,7 +286,7 @@ fi
 # The gateway, guard #1 at request time. There is no legitimate empty posture.
 refuses "an empty GATEWAY_SELF_LLM_ORIGINS" \
   "GATEWAY_SELF_LLM_ORIGINS" "$GATEWAY" \
-  --set-string llmGateway.egressPosture=public-unrestricted
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 
 # The gateway, the egress allowlist. The posture must be STATED, because the
 # empty value is permissive for public hosts and closed for private ones.
@@ -297,18 +297,18 @@ refuses "an unstated egress posture" \
 refuses "the allowlist posture with no allowlist" \
   "needs env.GATEWAY_EGRESS_ALLOWLIST" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=allowlist
+  --set-string llmGateway.egressPosture=allowlist --set networkPolicies.main.noExternalIngress=true
 
 refuses "an allowlist that contradicts the stated posture" \
   "contradicts" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
   --set-string llmGateway.env.GATEWAY_EGRESS_ALLOWLIST="vllm.ml.svc.cluster.local:8000"
 
 refuses "an egress posture that is not one of the two modes" \
   "egressPosture must be one of" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=off
+  --set-string llmGateway.egressPosture=off --set networkPolicies.main.noExternalIngress=true
 
 # The gateway, guard #3: budget enforcement at startup (issue #304). The budget
 # counters live in NATS, so a gateway with no NATS admits every request, bills
@@ -316,38 +316,38 @@ refuses "an egress posture that is not one of the two modes" \
 refuses "a gateway with no NATS to count budgets in" \
   "empty GATEWAY_NATS_URL" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
   --set-string nats.service=
 
 refuses "a require-enforcement value the binary does not read" \
   "must be one of auto, on or off" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
   --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=false
 
 refuses "the unmetered posture with no acknowledgement" \
   "acknowledgeUnenforcedBudgets" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
   --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=off
 
 # ...and the other direction, twice, because a guard that refused every value
 # would also pass every test above.
 renders "the acknowledged unmetered posture" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
   --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=off \
   --set llmGateway.acknowledgeUnenforcedBudgets=true
 
 renders "the strict startup posture" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
   --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=on
 
 # The setting has to REACH the container, not only survive the guard.
 helm template ${ONLY_GATEWAY} test-release "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
   --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=on >"$WORK/gw-require.yaml"
 if [ "$(deployEnv LLM_BUDGET_REQUIRE_ENFORCEMENT "$WORK/gw-require.yaml")" = "on" ]; then
   pass "LLM_BUDGET_REQUIRE_ENFORCEMENT reaches the container environment"
@@ -376,7 +376,7 @@ fi
 
 helm template ${ONLY_GATEWAY} test-release "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
-  --set-string llmGateway.egressPosture=public-unrestricted >"$WORK/gw-public.yaml"
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true >"$WORK/gw-public.yaml"
 if [ -z "$(deployEnv GATEWAY_EGRESS_ALLOWLIST "$WORK/gw-public.yaml")" ]; then
   pass "the public-unrestricted posture renders an empty allowlist, as it states"
 else
@@ -407,7 +407,7 @@ fi
 # every copy.
 FULL_RENDER=(
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1"
-  --set-string llmGateway.egressPosture=public-unrestricted
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
 
 # One value, set once, reaches every copy in the render.

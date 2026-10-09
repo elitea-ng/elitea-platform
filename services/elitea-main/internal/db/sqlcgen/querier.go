@@ -180,6 +180,9 @@ type Querier interface {
 	// actor issuer signs the selected row as a PAT JWT, and a native device anchor
 	// (ADR-0025, uuid NULL) must never be signed into one.
 	GetActivePATForUser(ctx context.Context, userID int32) (GetActivePATForUserRow, error)
+	// The project binding is reloaded with the principal, exactly as
+	// GetActivePATPrincipalByUUID reads it, so a token re-validated by row ID keeps
+	// the binding its bearer form carries.
 	GetActivePATPrincipalByID(ctx context.Context, tokenID int32) (GetActivePATPrincipalByIDRow, error)
 	// This is the single query the credential validator runs for every request.
 	// The token binding rides along on the row the validator already reads, so a

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
@@ -107,5 +108,30 @@ func TestStripIdentityHeaders_StripsBroadAuthMaterial(t *testing.T) {
 	// Non-auth headers must be untouched.
 	if v := h.Get("Content-Type"); v != "application/json" {
 		t.Errorf("Content-Type unexpectedly stripped or modified: %q", v)
+	}
+}
+
+// TestStripIdentityHeaders_StripsEveryEdgeProjectionHeader covers the whole
+// X-Auth-* family the edge projects, including the projection signature, so no
+// provider or gateway hop receives inbound edge authentication context.
+func TestStripIdentityHeaders_StripsEveryEdgeProjectionHeader(t *testing.T) {
+	h := http.Header{}
+	for _, name := range []string{
+		"X-Auth-Type", "X-Auth-Id", "X-Auth-User-Id", "X-Auth-Reference",
+		"X-Auth-Signature", "X-Auth-Avatar", "X-Auth-Avatar-State",
+	} {
+		h.Set(name, "value")
+	}
+	h.Set("X-Authz-Hint", "kept") // a different prefix survives
+
+	stripIdentityHeaders(h)
+
+	for name := range h {
+		if strings.HasPrefix(strings.ToLower(name), "x-auth-") {
+			t.Errorf("header %q not stripped", name)
+		}
+	}
+	if h.Get("X-Authz-Hint") != "kept" {
+		t.Error("X-Authz-Hint unexpectedly stripped")
 	}
 }

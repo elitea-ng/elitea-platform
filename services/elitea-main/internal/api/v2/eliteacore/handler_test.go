@@ -872,7 +872,6 @@ func TestDBHandlerMethodsExist(t *testing.T) {
 		h.PublishValidate,
 		h.VersionValidator,
 		h.Recommendations,
-		h.Feedbacks,
 		h.Pin,
 		h.Unpin,
 		h.ApplicationRelation,

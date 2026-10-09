@@ -64,6 +64,7 @@ use super::yaml::{
     MAX_NODE_ID_BYTES, ParallelConfigurationError, ParallelNodeDefinition, valid_graph_id,
     valid_output_key,
 };
+use elitea_agent_runtime::bounded_yaml::{self, BoundedYamlError};
 
 #[path = "map_compiler.rs"]
 mod map_compiler;
@@ -78,6 +79,10 @@ use parallel_compiler::validate_parallel_ownership;
 pub(crate) use parallel_compiler::{ParallelBranchContinuation, ParallelCompilerBinding};
 
 pub(crate) const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
+pub(crate) use elitea_agent_runtime::graph::PIPELINE_YAML_BUDGET;
+// An alias-free document within the source bound stays inside the expansion budget
+// (YAML escapes grow scalar text at most 1.5x).
+const _: () = assert!(PIPELINE_YAML_BUDGET.scalar_bytes >= 2 * MAX_PIPELINE_YAML_BYTES);
 const MAX_PIPELINE_NODES: usize = 128;
 const MAX_PIPELINE_STATE_KEYS: usize = 256;
 const MAX_STATIC_INTERRUPTS: usize = 128;
@@ -790,8 +795,22 @@ impl PipelineDefinition {
                 PipelineLimit::YamlBytes,
             ));
         }
-        let mut document = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml)
-            .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
+        let mut document =
+            bounded_yaml::from_str::<serde_yaml_ng::Value>(yaml, PIPELINE_YAML_BUDGET).map_err(
+                |error| match error {
+                    BoundedYamlError::BudgetExceeded(limit) => {
+                        tracing::warn!(
+                            event = "pipeline_yaml_budget_exceeded",
+                            limit = limit.as_str(),
+                            "refused a stored pipeline whose YAML exceeds its expansion budget"
+                        );
+                        PipelineConfigurationError::LimitExceeded(PipelineLimit::YamlExpansion)
+                    }
+                    BoundedYamlError::Malformed(source) => {
+                        PipelineConfigurationError::MalformedYaml { source }
+                    }
+                },
+            )?;
         // The typed parse below also bounds the node list, but it can only report
         // a generic parse failure. Count on the document so the limit is named.
         if document
@@ -2356,6 +2375,10 @@ fn parse_pipeline_node(
     parse_pipeline_node_admitting(raw_node, SHAPING_INTEGRATION_READY)
 }
 
+/// The typed cause code of [`PipelineConfigurationError::NodeTypeNotAvailable`];
+/// the lifecycle maps it to its own registered, data-free message.
+pub(crate) const NODE_TYPE_NOT_AVAILABLE_CODE: &str = "graph.pipeline.node_type_not_available";
+
 /// Production admission of data shaping nodes waits for deployed acceptance.
 /// Only rehearsal builds (`graph-extensions-rehearsal`) admit them.
 const SHAPING_INTEGRATION_READY: bool = cfg!(feature = "graph-extensions-rehearsal");
@@ -2458,6 +2481,14 @@ fn parse_pipeline_node_admitting(
         "aggregate" if shaping_admitted => AggregateNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Aggregate)
             .map_err(|_| PipelineConfigurationError::Invalid("an Aggregate node is invalid")),
+        // Known to this runtime, not admitted by this build: named as a
+        // deployment limit rather than as an unknown type.
+        "split_out" => Err(PipelineConfigurationError::NodeTypeNotAvailable(
+            PipelineGatedNodeType::SplitOut,
+        )),
+        "aggregate" => Err(PipelineConfigurationError::NodeTypeNotAvailable(
+            PipelineGatedNodeType::Aggregate,
+        )),
         _ => Err(PipelineConfigurationError::Unsupported(
             "the pipeline contains a node type that is not enabled",
         )),
@@ -2842,6 +2873,8 @@ pub(crate) enum PipelineLimit {
     YamlBytes,
     /// More than the maximum number of nodes.
     NodeCount,
+    /// The document expands past [`PIPELINE_YAML_BUDGET`] once anchors and aliases are applied.
+    YamlExpansion,
     /// One node of the named family exceeds its own size or entry-count bound.
     Node(PipelineNodeLimit),
 }
@@ -2866,6 +2899,7 @@ impl PipelineLimit {
         match self {
             Self::YamlBytes => "yaml_bytes",
             Self::NodeCount => "node_count",
+            Self::YamlExpansion => "yaml_expansion",
             Self::Node(PipelineNodeLimit::Agent) => "nodes[].agent",
             Self::Node(PipelineNodeLimit::Decision) => "nodes[].decision",
             Self::Node(PipelineNodeLimit::DirectTool) => "nodes[].direct_tool",
@@ -2930,6 +2964,30 @@ impl fmt::Display for PipelineIdentifierField {
     }
 }
 
+/// A node type this runtime knows but admits only in graph-extensions
+/// rehearsal builds (`SHAPING_INTEGRATION_READY`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PipelineGatedNodeType {
+    SplitOut,
+    Aggregate,
+}
+
+impl PipelineGatedNodeType {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::SplitOut => "split_out",
+            Self::Aggregate => "aggregate",
+        }
+    }
+}
+
+impl std::fmt::Display for PipelineGatedNodeType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable, data-free stored-pipeline admission failure.
 #[derive(Debug, Error)]
 pub(crate) enum PipelineConfigurationError {
@@ -2948,6 +3006,8 @@ pub(crate) enum PipelineConfigurationError {
     Invalid(&'static str),
     #[error("the stored pipeline requests an unavailable capability: {0}")]
     Unsupported(&'static str),
+    #[error("the stored pipeline uses a node type this deployment does not admit: {0}")]
+    NodeTypeNotAvailable(PipelineGatedNodeType),
     #[error("the stored pipeline graph could not be compiled")]
     Graph(#[source] GraphError),
 }
@@ -2959,11 +3019,15 @@ impl PipelineConfigurationError {
             Self::ResourceExhausted => "graph.pipeline.configuration_resource_exhausted",
             Self::LimitExceeded(PipelineLimit::YamlBytes) => "graph.pipeline.yaml_bytes_exceeded",
             Self::LimitExceeded(PipelineLimit::NodeCount) => "graph.pipeline.node_count_exceeded",
+            Self::LimitExceeded(PipelineLimit::YamlExpansion) => {
+                "graph.pipeline.yaml_expansion_exceeded"
+            }
             Self::LimitExceeded(PipelineLimit::Node(_)) => "graph.pipeline.node_limit_exceeded",
             Self::InvalidIdentifier(_) => "graph.pipeline.invalid_identifier",
             Self::MalformedYaml { .. } => "graph.pipeline.malformed_yaml",
             Self::Invalid(_) => "graph.pipeline.invalid_configuration",
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
+            Self::NodeTypeNotAvailable(_) => NODE_TYPE_NOT_AVAILABLE_CODE,
             Self::Graph(_) => "graph.pipeline.compile_failed",
         }
     }
@@ -2974,6 +3038,7 @@ impl PipelineConfigurationError {
         match self {
             Self::LimitExceeded(limit) => Some(limit.as_str()),
             Self::InvalidIdentifier(field) => Some(field.as_str()),
+            Self::NodeTypeNotAvailable(node_type) => Some(node_type.as_str()),
             Self::ResourceExhausted
             | Self::MalformedYaml { .. }
             | Self::Invalid(_)

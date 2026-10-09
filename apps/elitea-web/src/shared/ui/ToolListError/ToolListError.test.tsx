@@ -39,4 +39,18 @@ describe('ToolListError', () => {
     expect(getByText('The tool settings did not load. Try again.')).toBeInTheDocument();
     expect(queryByText('The tool list did not load. Try again.')).not.toBeInTheDocument();
   });
+
+  it('says tool discovery is turned off, with no retry, when the deployment disabled it', () => {
+    const { getByTestId, getByText, queryByRole, queryByText } = renderWithTheme(
+      <ToolListError
+        onRetry={vi.fn()}
+        discoveryDisabled
+      />,
+    );
+
+    expect(getByTestId('tool-list-error')).toBeInTheDocument();
+    expect(getByText('Tool discovery is turned off on this deployment. Ask an administrator to enable it.')).toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(queryByText('The tool list did not load. Try again.')).not.toBeInTheDocument();
+  });
 });

@@ -3735,6 +3735,7 @@
   "shared.ui.themeModeToggle.systemTooltip": "Follow the system theme",
   "features.toolkits.indexDetails.toolSchemaError": "The tool settings did not load. Try again.",
   "features.toolkits.testToolSettings.toolSchemaError": "The tool settings did not load. Try again.",
+  "shared.ui.toolListError.discoveryDisabled": "Tool discovery is turned off on this deployment. Ask an administrator to enable it.",
   "shared.ui.toolListError.message": "The tool list did not load. Try again.",
   "shared.ui.toolListError.retry": "Retry",
   "credentials.list.emptyDescription": "Create your first credential to get started. Credentials hold the provider keys your agents, toolkits and models authenticate with.",
@@ -4843,5 +4844,10 @@
   "features.chatConversationList.localWork.show": "Show Local work threads from the desktop app",
   "pages.chat.localWork.continue": "To continue it, open the thread in the Elitea desktop app on that computer. Here you can read it, export it, rename it or delete it.",
   "pages.chat.localWork.where": "This thread works on files on your computer.",
-  "pages.chat.localWork.whereFolder": "This thread works on files on your computer, in {{folder}}."
+  "pages.chat.localWork.whereFolder": "This thread works on files on your computer, in {{folder}}.",
+  "pages.pipelines.createPipeline.admissionBody": "The runtime would refuse this graph, so saving is blocked until it is fixed.",
+  "pages.pipelines.createPipeline.admissionNode": "Node",
+  "pages.pipelines.createPipeline.admissionTitle": "This pipeline cannot be saved",
+  "pages.pipelines.createPipeline.admissionUnparseable": "The YAML does not parse, so the runtime cannot read a graph out of it.",
+  "features.pipelines.editorPanel.serializationError": "This change could not be written as pipeline YAML, so the stored YAML was kept: {{reason}}"
 }

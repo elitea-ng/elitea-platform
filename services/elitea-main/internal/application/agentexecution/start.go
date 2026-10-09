@@ -419,12 +419,14 @@ func currentApplicationInput(
 	// appendCurrentApplicationProjectContext, off the frozen version's own
 	// meta (ELITEA-0945).
 	versionDetails = appendCurrentApplicationProjectContext(versionDetails, projectContextText)
-	versionDetails, err = freezeCurrentHTTPActionRequests(target.ApplicationID, target.ApplicationVersionID, versionDetails)
+	versionDetails, err = freezeCurrentHTTPActionRequests(target.ApplicationID, target.ApplicationVersionID, versionDetails, target.SourceVersionDetails)
 	if err != nil {
-		// A pipeline over the shared size bounds keeps the unsupported-start
-		// identity and also carries the typed limit, so the route can name it.
-		if errors.Is(err, pipelinelimits.ErrInstructionsTooLarge) || errors.Is(err, pipelinelimits.ErrTooManyNodes) {
-			return nil, unsupportedStartBecause("pipeline exceeds a size bound", err)
+		// A pipeline the shared admission refuses (a size bound, a node type
+		// this deployment does not run, an unattached toolkit) keeps the
+		// unsupported-start identity and also carries the typed refusal, so
+		// the route can name it.
+		if pipelinelimits.Refusal(err) != nil {
+			return nil, unsupportedStartBecause("pipeline refused by start admission", err)
 		}
 		return nil, ErrUnsupportedCurrentAgentStart
 	}

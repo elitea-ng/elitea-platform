@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
@@ -21,6 +20,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -35,6 +35,14 @@ type Handler struct {
 	// personalProjectWait bounds the wait GetAuthor puts on an ensure it just
 	// started. Zero means defaultPersonalProjectWait, the production value.
 	personalProjectWait time.Duration
+
+	// projectAccess answers the project-membership gate in front of the
+	// {projectID} routes. Nil means the database-backed gate over pool.
+	projectAccess apimw.ProjectAccessQuerier
+
+	// permissions resolves the feedback list/create grants. Nil fails the
+	// feedback routes closed (503).
+	permissions auth.PermissionResolver
 }
 
 // Option configures a Handler at construction time.
@@ -68,6 +76,24 @@ func WithPersonalProjectWait(wait time.Duration) Option {
 	}
 }
 
+// WithProjectAccessQuerier replaces the query behind the project-membership
+// gate. Production composes none (the gate reads the pool); router-level tests
+// inject the membership answer, as they do for the /elitea_core group. A nil
+// querier is ignored.
+func WithProjectAccessQuerier(querier apimw.ProjectAccessQuerier) Option {
+	return func(h *Handler) {
+		if querier != nil {
+			h.projectAccess = querier
+		}
+	}
+}
+
+// WithPermissionResolver wires the RBAC resolver behind the feedback routes
+// (models.social.feedbacks.list / .create). Without it they answer 503.
+func WithPermissionResolver(resolver auth.PermissionResolver) Option {
+	return func(h *Handler) { h.permissions = resolver }
+}
+
 func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
 	handler := &Handler{pool: pool}
 	for _, option := range options {
@@ -83,7 +109,11 @@ func (h *Handler) Routes() chi.Router {
 	r.Put("/author/", h.UpdateAuthor)
 	r.Put("/author", h.UpdateAuthor)
 	r.Group(func(r chi.Router) {
-		r.Use(apimw.RequireProjectAccess(h.pool))
+		if h.projectAccess != nil {
+			r.Use(apimw.RequireProjectAccessWith(h.projectAccess))
+		} else {
+			r.Use(apimw.RequireProjectAccess(h.pool))
+		}
 		r.Get("/authors/{projectID}", h.ListAuthors)
 		r.Get("/trending_authors/prompt_lib/{projectID}", h.TrendingAuthors)
 		r.Post("/like/prompt_lib/{projectID}/application/{applicationID}", h.Like)
@@ -92,8 +122,13 @@ func (h *Handler) Routes() chi.Router {
 		r.Delete("/like/prompt_lib/{projectID}/{entityType}/{entityID}", h.Unlike)
 		r.Post("/pin/prompt_lib/{projectID}/{entityType}/{entityID}", h.Pin)
 		r.Delete("/pin/prompt_lib/{projectID}/{entityType}/{entityID}", h.Unpin)
-		r.Get("/feedbacks/default/{projectID}", h.ListFeedbacks)
-		r.Post("/feedbacks/default/{projectID}", h.CreateFeedback)
+		list, create := feedbackHandlers(h.pool)
+		listGate := requireFeedbackPermission(h.permissions, CurrentFeedbackListPermission)
+		createGate := requireFeedbackPermission(h.permissions, CurrentFeedbackCreatePermission)
+		for _, path := range []string{CurrentFeedbackListSubPath, CurrentFeedbackListAliasSubPath} {
+			r.With(listGate).Method(http.MethodGet, path, list)
+			r.With(createGate).Method(http.MethodPost, path, create)
+		}
 	})
 	return r
 }
@@ -176,6 +211,7 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 		FROM centry.social_users su
 		LEFT JOIN auth_core__user au ON au.id = su.user_id
 		WHERE au.email = $1 OR su.user_id::text = $2
+		ORDER BY (su.user_id::text = $2) DESC
 		LIMIT 1
 	`, user.Email, user.ID).Scan(
 		&resp.Name,
@@ -686,23 +722,47 @@ func writeFieldError(w http.ResponseWriter, fieldErr *contextsettings.FieldError
 	}{Error: fieldErr.Message, Field: fieldErr.Field})
 }
 
+// maxProjectAuthors bounds one project's author listing.
+const maxProjectAuthors = 1000
+
+// ListAuthors lists the people who hold a role in the named project. The
+// route gate has already established that the caller is one of them. The list
+// carries e-mail addresses, so it must never reach past the project's members.
+// In the public project, which sign-up enrolment can give every user, only the
+// caller's own row carries one.
 func (h *Handler) ListAuthors(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
 	ctx := r.Context()
+	project, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 32)
+	if err != nil || project <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid project id"})
+		return
+	}
 	rows, err := h.pool.Query(ctx, `
-		SELECT su.user_id, COALESCE(au.name, ''), COALESCE(au.email, ''), COALESCE(su.avatar, ''), COALESCE(su.description, '')
-		FROM centry.social_users su
-		LEFT JOIN auth_core__user au ON au.id = su.user_id
-		LIMIT 50
-	`)
+		SELECT au.id, COALESCE(au.name, ''), COALESCE(au.email, ''), COALESCE(su.avatar, ''), COALESCE(su.description, '')
+		FROM (SELECT DISTINCT user_id FROM auth_core__project_user_role WHERE project_id = $1) member
+		JOIN auth_core__user au ON au.id = member.user_id
+		LEFT JOIN centry.social_users su ON su.user_id = au.id
+		WHERE au.email IS DISTINCT FROM ('system_user_' || $1::text || '@centry.user')
+		ORDER BY au.id
+		LIMIT $2
+	`, int32(project), maxProjectAuthors)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list authors"})
 		return
 	}
 	defer rows.Close()
+
+	caller := int64(-1)
+	if user, ok := auth.UserFromContext(ctx); ok {
+		if owner, ok := user.OwningUserID(); ok {
+			caller = owner
+		}
+	}
+	publicListing := int(project) == publicproject.ID()
 
 	items := make([]map[string]any, 0)
 	for rows.Next() {
@@ -711,10 +771,14 @@ func (h *Handler) ListAuthors(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&id, &name, &email, &avatar, &desc); err != nil {
 			continue
 		}
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"id": intToStr(id), "name": name, "email": email,
 			"avatar": avatar, "description": desc,
-		})
+		}
+		if publicListing && int64(id) != caller {
+			delete(item, "email")
+		}
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list authors"})
@@ -735,16 +799,27 @@ func (h *Handler) TrendingAuthors(w http.ResponseWriter, r *http.Request) {
 	if !schemaOK {
 		return
 	}
+	// tenantSchema accepted the id, so it is a plain positive decimal.
+	project, err := strconv.ParseInt(projectID, 10, 32)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid project id"})
+		return
+	}
 
+	// Only the project's own members are ranked: the listing carries e-mail
+	// addresses, and a social profile exists for every user on the platform.
 	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
 		SELECT su.user_id, COALESCE(au.name, ''), COALESCE(au.email, ''),
 			COALESCE(su.avatar, ''), COUNT(sl.id) as like_count
 		FROM centry.social_users su
 		JOIN auth_core__user au ON au.id = su.user_id
 		LEFT JOIN %s.social_likes sl ON sl.user_id = su.user_id
+		WHERE EXISTS (SELECT 1 FROM auth_core__project_user_role member
+		              WHERE member.project_id = $1 AND member.user_id = su.user_id)
+		  AND au.email IS DISTINCT FROM ('system_user_' || $1::text || '@centry.user')
 		GROUP BY su.user_id, au.name, au.email, su.avatar
-		ORDER BY like_count DESC
-		LIMIT 10`, schema))
+		ORDER BY like_count DESC, su.user_id
+		LIMIT 10`, schema), int32(project))
 
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list trending authors"})
@@ -865,123 +940,6 @@ func (h *Handler) Unpin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-// logTenantReadFault records a failed read of a per-project table.
-//
-// SQLSTATE 3F000 (invalid_schema_name) and 42P01 (undefined_table) get their
-// own message. After the project-existence check in RequireProjectAccess they
-// can no longer mean "unknown project id". They name a project row whose
-// tenant schema is absent or incomplete. The error text stays in the log; the
-// response body carries a fixed message.
-func logTenantReadFault(ctx context.Context, operation, projectID string, err error) {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && (pgErr.Code == "3F000" || pgErr.Code == "42P01") {
-		slog.ErrorContext(ctx, operation+": the tenant schema of an existing project is incomplete",
-			"project_id", projectID, "sqlstate", pgErr.Code, "error", err)
-		return
-	}
-	slog.ErrorContext(ctx, operation+": tenant read failed", "project_id", projectID, "error", err)
-}
-
-func (h *Handler) ListFeedbacks(w http.ResponseWriter, r *http.Request) {
-	if h.pool == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"items": []any{}, "total": 0})
-		return
-	}
-
-	projectID := chi.URLParam(r, "projectID")
-	ctx := r.Context()
-
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-	q := fmt.Sprintf(`
-		SELECT id, entity_name, entity_id, user_id, rating, COALESCE(comment, ''), created_at
-		FROM %s.social_feedbacks ORDER BY created_at DESC LIMIT 50`, s)
-
-	rows, err := h.pool.Query(ctx, q)
-	if err != nil {
-		// A missing tenant schema or table now means an INCONSISTENT database,
-		// not an unknown project: RequireProjectAccess answers 404 before this
-		// handler runs when centry.project holds no row for the id
-		// (internal/api/middleware/project_authorization.go). The status stays
-		// 500, and the cause is logged so the inconsistency is visible.
-		//
-		// The read is NOT downgraded to an empty list. A missing per-project
-		// table reported as "no data" is how a broken tenant looks healthy.
-		logTenantReadFault(ctx, "social_feedbacks_list", projectID, err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list feedback"})
-		return
-	}
-	items := make([]map[string]any, 0)
-	defer rows.Close()
-	for rows.Next() {
-		var id int
-		var entityName, entityID, userID, comment string
-		var rating int
-		var createdAt interface{}
-		if rows.Scan(&id, &entityName, &entityID, &userID, &rating, &comment, &createdAt) == nil {
-			items = append(items, map[string]any{
-				"id": intToStr(id), "entity_name": entityName, "entity_id": entityID,
-				"user_id": userID, "rating": rating, "comment": comment, "created_at": createdAt,
-			})
-		}
-	}
-	if err := rows.Err(); err != nil {
-		logTenantReadFault(ctx, "social_feedbacks_list", projectID, err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list feedback"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
-}
-
-func (h *Handler) CreateFeedback(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	user, ok := auth.UserFromContext(ctx)
-	if !ok {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": "0"})
-		return
-	}
-
-	if h.pool == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": "0"})
-		return
-	}
-
-	projectID := chi.URLParam(r, "projectID")
-
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
-		return
-	}
-
-	entityName, _ := body["entity_name"].(string)
-	entityID, _ := body["entity_id"].(string)
-	rating := 0
-	if r, ok := body["rating"].(float64); ok {
-		rating = int(r)
-	}
-	comment, _ := body["comment"].(string)
-
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-	q := fmt.Sprintf(`
-		INSERT INTO %s.social_feedbacks (entity_name, entity_id, user_id, rating, comment, created_at)
-		VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id`, s)
-
-	var id int
-	err := h.pool.QueryRow(ctx, q, entityName, entityID, user.ID, rating, comment).Scan(&id)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "failed to create feedback"})
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "id": intToStr(id)})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

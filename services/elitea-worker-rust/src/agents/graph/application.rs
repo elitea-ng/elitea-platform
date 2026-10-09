@@ -22,6 +22,7 @@ use thiserror::Error;
 use tracing::Instrument as _;
 
 use super::application_activation::ApplicationActivationCheckpointer;
+use super::compiler::PIPELINE_YAML_BUDGET;
 use super::direct_tool::{ensure_state_type, pipeline_tool_context};
 use super::llm::render_fstring;
 use super::node_events::{
@@ -31,6 +32,7 @@ use super::node_events::{
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::agents::application_tools::nested_application_interrupt_ids;
 use crate::agents::pipeline::scope_receipts::{GraphCallOutcome, PipelineGraphCallReceipt};
+use crate::bounded_yaml;
 use adk_rust::{Content, Event, Part};
 
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
@@ -107,8 +109,11 @@ impl ApplicationNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(ApplicationConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawApplicationNodeDefinition>(yaml)
-            .map_err(|source| ApplicationConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawApplicationNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| ApplicationConfigurationError::MalformedYaml { source })?;
         Self::from_raw(raw)
     }
 

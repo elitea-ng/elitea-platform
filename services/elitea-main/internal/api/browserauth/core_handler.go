@@ -249,6 +249,9 @@ func (h *CoreHandler) writeSuccess(writer http.ResponseWriter, decision forwarda
 		default:
 			return successInvalidAuthorizedData
 		}
+		if !signProjection(writer.Header(), h.sources, decision) {
+			return successInvalidAuthorizedData
+		}
 	case "header":
 		header, disposition := h.mappers.Header(decision)
 		switch disposition {
@@ -278,6 +281,26 @@ func (h *CoreHandler) writeDenied(writer http.ResponseWriter, request *http.Requ
 func (h *CoreHandler) writeLogin(writer http.ResponseWriter, request *http.Request, target string) {
 	query := url.Values{"target_to": {target}}
 	http.Redirect(writer, request, BasePath+LoginPath+"?"+query.Encode(), http.StatusFound)
+}
+
+// signProjection signs a user or token projection for the request EdgeAuth
+// authorized. A public projection names nobody, so it carries an explicit
+// placeholder instead: every allow response then sets IdentitySignatureHeader,
+// and an edge that copies it overwrites any value the caller sent.
+func signProjection(header http.Header, signer *TrustedProxyResolver, decision forwardapp.Decision) bool {
+	if decision.Authentication.Type == forwardapp.AuthenticationPublic {
+		header.Set(IdentitySignatureHeader, "-")
+		return true
+	}
+	if signer.SignIdentityProjection(header, decision.Source.Method, decision.Source.URI) != nil {
+		// Withdraw the unsigned projection: the edge relays the headers of a
+		// non-2xx EdgeAuth answer to the client.
+		for _, name := range []string{"X-Auth-Type", "X-Auth-ID", "X-Auth-User-ID", "X-Auth-Reference"} {
+			header.Del(name)
+		}
+		return false
+	}
+	return true
 }
 
 func writeEdgeAuthOK(writer http.ResponseWriter) {
