@@ -13,6 +13,7 @@
     "windows": [],
     "withGlobalTauri": false,
     "security": {
+      "dangerousDisableAssetCspModification": ["style-src"],
       "csp": {
         "default-src": "'self'",
         "script-src": "'self'",

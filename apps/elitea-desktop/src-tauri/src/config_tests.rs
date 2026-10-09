@@ -64,3 +64,20 @@ fn images_and_media_load_from_self_data_and_blob_only() {
     assert_eq!(csp["media-src"], csp["img-src"]);
     assert_eq!(csp["script-src"], "'self'");
 }
+
+/// MUI (emotion) injects `<style>` elements at runtime, which only
+/// `'unsafe-inline'` admits. Tauri hashes the bundled page's inline style
+/// into `style-src` unless told not to, and a hash in the directive makes
+/// the webview ignore `'unsafe-inline'` — every component then renders
+/// unstyled. Scripts keep Tauri's hashes and nonces.
+#[test]
+fn runtime_styles_are_not_switched_off_by_asset_hashes() {
+    let conf = json("tauri.conf.json");
+    let security = &conf["app"]["security"];
+    assert_eq!(
+        security["dangerousDisableAssetCspModification"],
+        serde_json::json!(["style-src"])
+    );
+    let style = security["csp"]["style-src"].as_str().expect("style-src");
+    assert!(style.split_whitespace().any(|s| s == "'unsafe-inline'"));
+}
