@@ -1,0 +1,158 @@
+name: Cancel runs of a merged PR
+
+# A pull request may merge before every workflow on it has finished — merging
+# is deliberately NOT blocked on the slow lanes. The runs left behind still
+# hold slots. The org is on the GitHub free plan (20 concurrent jobs for the
+# whole account) and the merge itself starts ~100 jobs on main, so a PR run
+# that can no longer change anything competes with the gates that can.
+#
+# On merge this workflow cancels every unfinished `pull_request` run that
+# belongs to THIS pull request, in every non-completed state (queued,
+# requested, waiting, pending, in_progress). It asks politely first, so
+# `if: always()` cleanup steps get to run, then force-cancels whichever of
+# those same runs is still alive after a grace period — a run stuck on an
+# `always()` step or a wedged runner ignores a plain cancel.
+#
+# A run belongs to the pull request when its event is `pull_request` and its
+# head sha is one of this PR's commits (plus the head repository, when it
+# still exists). The branch name is only the listing key, never the match: a
+# release PR whose head is `main` must not cancel the push runs (ci-*,
+# publish.yml) a merge starts on `main`. A run GitHub links to another PR and
+# not to this one is left alone, so a second open PR from the same branch
+# keeps its checks. Accepted limit: fork runs carry no PR link, so two open
+# PRs from the same fork branch at the same sha cannot be told apart.
+#
+# pull_request_target, not pull_request: a Dependabot or fork PR gets a
+# read-only GITHUB_TOKEN under pull_request, and cancelling needs
+# `actions: write`. This is safe here because the workflow never checks out
+# or executes anything from the PR — it only calls the Actions API with ids.
+
+on:
+  pull_request_target:
+    types:
+      - closed
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  pull-requests: read
+
+jobs:
+  cancel:
+    name: Cancel unfinished runs
+    # A PR closed without merging keeps its runs: someone may reopen it.
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Cancel, then force-cancel, this pull request's unfinished runs
+        # Pinned to the v9.0.0 commit: this job holds `actions: write` on
+        # every merged PR, fork PRs included, so a moved tag must not change
+        # the code it runs.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          GRACE_SECONDS: "60"
+        with:
+          # Retries 5xx and secondary rate limits. A listing that failed must
+          # fail the job, never come back short and read as "nothing to
+          # cancel". 409 ("already finished") is an answer, not a fault.
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,409,422
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            // head.repo is null when the fork was deleted; the sha match
+            // alone still identifies the PR's runs.
+            const headRepo = pr.head.repo?.full_name ?? null;
+            const graceMs = Number(process.env.GRACE_SECONDS) * 1000;
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            // Every sha this PR ever pointed at. The endpoint caps at 250
+            // commits; a PR that size has its older runs long finished.
+            const shas = new Set(
+              (await github.paginate(github.rest.pulls.listCommits, {
+                owner, repo, pull_number: pr.number, per_page: 100,
+              })).map((c) => c.sha),
+            );
+
+            const belongsToPr = (run) =>
+              run.status !== 'completed' &&
+              shas.has(run.head_sha) &&
+              (headRepo === null || run.head_repository?.full_name === headRepo) &&
+              (run.pull_requests.length === 0 ||
+                run.pull_requests.some((p) => p.number === pr.number));
+
+            // ONE listing with no status filter, keeping everything not
+            // completed. Listing per status misses a run that moves from one
+            // status to another between the calls.
+            const listed = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner, repo, branch: pr.head.ref, event: 'pull_request', per_page: 100,
+            });
+            const runs = listed.filter(belongsToPr);
+
+            const label = `PR #${pr.number} (${headRepo ?? 'deleted fork'}:${pr.head.ref})`;
+            if (runs.length === 0) {
+              core.info(`${label}: no unfinished runs`);
+              return;
+            }
+            core.info(`${label}: ${runs.length} unfinished run(s)`);
+            for (const run of runs) core.info(`  ${run.id} ${run.status} ${run.name}`);
+
+            // 409 means the run already finished, which is the outcome we
+            // want. Anything else (403 missing scope, 404) is a real failure.
+            const failures = [];
+            const post = async (action, run) => {
+              try {
+                await github.request(`POST /repos/{owner}/{repo}/actions/runs/{run_id}/${action}`, {
+                  owner, repo, run_id: run.id,
+                });
+                core.info(`${action}: ${run.id} ${run.name}`);
+                return true;
+              } catch (err) {
+                if (err.status === 409) {
+                  core.info(`${action}: ${run.id} ${run.name} already finished`);
+                } else {
+                  failures.push(`${action} of ${run.id} ${run.name}: ${err.status} ${err.message}`);
+                }
+                return false;
+              }
+            };
+
+            // A run counts as still alive unless a status read says it has
+            // completed or no longer exists; an unreadable status is reported,
+            // and the run stays in line for the force-cancel.
+            const stillAlive = async (run) => {
+              try {
+                const { data } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: run.id });
+                return data.status !== 'completed';
+              } catch (err) {
+                if (err.status === 404) return false;
+                core.warning(`status of ${run.id} ${run.name}: ${err.status} ${err.message}`);
+                return true;
+              }
+            };
+
+            let pending = [];
+            for (const run of runs) {
+              if (await post('cancel', run)) pending.push(run);
+            }
+
+            // Only the runs listed above are escalated: anything that appeared
+            // since is not ours to force-cancel without a polite cancel first.
+            // Poll so the job frees its own runner as soon as they stop.
+            const deadline = Date.now() + graceMs;
+            while (pending.length > 0 && Date.now() < deadline) {
+              await sleep(5000);
+              const alive = [];
+              for (const run of pending) {
+                if (await stillAlive(run)) alive.push(run);
+              }
+              pending = alive;
+            }
+
+            for (const run of pending) await post('force-cancel', run);
+
+            if (failures.length > 0) core.setFailed(failures.join('\n'));
