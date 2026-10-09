@@ -414,6 +414,23 @@ func TestRunToolMapsARuntimeFailure(t *testing.T) {
 	}
 }
 
+// A replay of a key whose run is still going dispatches nothing and says so.
+func TestRunToolMarksAReplayedPendingRun(t *testing.T) {
+	admitted := testAdmitted()
+	admitted.Outcome.Created = false
+	dispatcher := &stubDispatcher{}
+	service := newTestService(t, &stubResolver{inputs: testInputs()}, stubVerdict{supported: true},
+		&stubAdmissions{run: admitted}, dispatcher, &stubSettlements{found: false}, 50*time.Millisecond)
+	_, err := service.RunTool(context.Background(), validRequest())
+	var pending *PendingRun
+	if !errors.As(err, &pending) || !pending.Replayed || pending.ExecutionID != "exec-1" {
+		t.Fatalf("replayed pending = %+v (%v)", pending, err)
+	}
+	if dispatcher.calls != 0 {
+		t.Fatalf("a replay dispatched %d times", dispatcher.calls)
+	}
+}
+
 // The bounded wait expiring is NOT a failure of the run: the execution is
 // durable and still going, and the caller is told its id so it can be found.
 func TestRunToolReportsThePendingExecutionWhenTheWaitExpires(t *testing.T) {

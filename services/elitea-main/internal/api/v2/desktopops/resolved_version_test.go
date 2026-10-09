@@ -50,6 +50,7 @@ func serveWith(t *testing.T, method, pattern, path, body string, user *auth.User
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	request.Header.Set("Idempotency-Key", "test-key")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	return recorder

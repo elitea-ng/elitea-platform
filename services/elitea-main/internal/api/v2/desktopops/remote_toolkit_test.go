@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
@@ -392,5 +395,50 @@ func TestRemoteToolkitRateLimitsEachCaller(t *testing.T) {
 	other := &auth.User{ID: "8", UserID: "8", TokenID: "80", AuthType: "token"}
 	if response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, remoteBody(`"tool_name":"t"`), other, h.serve); response.Code != http.StatusOK {
 		t.Fatalf("another caller: status = %d", response.Code)
+	}
+}
+
+// A write may be retried after a timeout: the key is required, and a retry
+// of a key whose run is still going answers 409 in progress, never a second
+// run.
+func TestRemoteToolkitRequiresAnIdempotencyKeyAndNeverRunsAReplayTwice(t *testing.T) {
+	runs := &fakeToolRuns{}
+	h, _, _, _ := remoteHandler(runs, "python")
+	router := func(key string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, remoteURL, strings.NewReader(remoteBody(`"tool_name":"t"`)))
+		request.Header.Set("Content-Type", "application/json")
+		if key != "" {
+			request.Header.Set("Idempotency-Key", key)
+		}
+		request = request.WithContext(auth.ContextWithUser(request.Context(), *desktopToken()))
+		mux := chi.NewRouter()
+		mux.Post(RemoteToolkitPath, h.serve)
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+		return recorder
+	}
+	for _, key := range []string{"", "has space", strings.Repeat("k", 129)} {
+		if response := router(key); response.Code != http.StatusBadRequest ||
+			!strings.Contains(response.Body.String(), "idempotency_key_required") {
+			t.Fatalf("key %q: status = %d, body %s", key, response.Code, response.Body)
+		}
+	}
+	if runs.calls != 0 {
+		t.Fatalf("a keyless call reached the use case %d times", runs.calls)
+	}
+
+	runs.err = &toolkitcalltoolapp.PendingRun{ExecutionID: "e1"}
+	response := router("call-1")
+	if response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), "SAME Idempotency-Key") {
+		t.Fatalf("first wait: status = %d, body %s", response.Code, response.Body)
+	}
+	if runs.request.IdempotencyKey != "call-1" {
+		t.Fatalf("the key did not reach the admission: %+v", runs.request)
+	}
+	runs.err = &toolkitcalltoolapp.PendingRun{ExecutionID: "e1", Replayed: true}
+	response = router("call-1")
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "remote_toolkit_in_progress") ||
+		!strings.Contains(response.Body.String(), `"task_id":"e1"`) {
+		t.Fatalf("replay: status = %d, body %s", response.Code, response.Body)
 	}
 }

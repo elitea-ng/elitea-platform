@@ -235,6 +235,17 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	}
 	h.limiter.Fail(limitKey)
 
+	// REQUIRED, unlike test_tool's. A remote call may write, and a client
+	// that retries after a timeout or a dropped connection without the same
+	// key would admit and run the write a second time. With the key, a retry
+	// joins the run the first attempt admitted (the admission is idempotent
+	// on it, scoped to this actor and toolkit) and never starts another.
+	if !validIdempotencyKey(request.Header.Get("Idempotency-Key")) {
+		writeError(writer, http.StatusBadRequest, "idempotency_key_required",
+			"A remote toolkit call needs an Idempotency-Key header (1 to 128 letters, digits, '-' or '_'), "+
+				"unique per intended call and repeated on every retry of it.")
+		return
+	}
 	body, ok := decodeRemoteToolkitBody(writer, request)
 	if !ok {
 		return
@@ -338,6 +349,20 @@ func (h *remoteToolkitHandler) validConfirmation(confirmation *remoteToolkitConf
 }
 
 func positiveInt32(id int64) bool { return id > 0 && id <= math.MaxInt32 }
+
+// validIdempotencyKey is the admission's request-key shape
+// (toolkitcalltool.validRequestKey).
+func validIdempotencyKey(key string) bool {
+	if key == "" || len(key) > 128 {
+		return false
+	}
+	for _, ch := range key {
+		if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '-' && ch != '_' {
+			return false
+		}
+	}
+	return true
+}
 
 func validToolkitRef(ref string) bool {
 	if len(ref) != len(storage.ClientToolkitRefPrefix)+32 || !strings.HasPrefix(ref, storage.ClientToolkitRefPrefix) {
@@ -612,11 +637,19 @@ func clientAuthorizationRequest(outcome toolkitcalltoolapp.RunOutcome) map[strin
 func (h *remoteToolkitHandler) writeRunError(ctx context.Context, writer http.ResponseWriter, toolkitID int64, err error) {
 	var pending *toolkitcalltoolapp.PendingRun
 	switch {
+	case errors.As(err, &pending) && pending.Replayed:
+		// A retry of a key whose run another attempt admitted and is still
+		// running: nothing was started again.
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"ok": false, "error": "remote_toolkit_in_progress", "task_id": pending.ExecutionID, "toolkit_id": toolkitID,
+			"message": "The call with this Idempotency-Key is still running. Retry later with the same key and body; " +
+				"the retry answers its result once it finishes. It never runs the tool again.",
+		})
 	case errors.As(err, &pending):
 		writeJSON(writer, http.StatusGatewayTimeout, map[string]any{
 			"ok": false, "error": "remote_toolkit_timeout", "task_id": pending.ExecutionID, "toolkit_id": toolkitID,
-			"message": "The tool did not finish within the bounded wait. It is still running; " +
-				"poll the execution named by task_id for its result.",
+			"message": "The tool did not finish within the bounded wait and is still running. Replay this request " +
+				"with the SAME Idempotency-Key and body to receive its result; a new key would run the tool again.",
 		})
 	case errors.Is(err, toolkitcalltoolapp.ErrToolkitNotVisible):
 		writeError(writer, http.StatusNotFound, "toolkit_not_found", "The toolkit was not found in this project.")

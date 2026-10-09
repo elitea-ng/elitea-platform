@@ -17229,7 +17229,16 @@ paths:
         BOUNDS. The body is at most 1 MiB and `arguments` one JSON object
         within the input-entry bound. The call waits at most 60 seconds;
         past that it answers 504 with the still-running `task_id`.
-        `Idempotency-Key` (or `request_id`) makes a retry replay the same run.
+
+        IDEMPOTENCY. `Idempotency-Key` is REQUIRED (400
+        `idempotency_key_required` without it): one key per intended call,
+        repeated on every retry of it, scoped to the caller and the toolkit.
+        A retry with the same key and body never runs the tool again: it
+        answers the run's result once it has one, or 409
+        `remote_toolkit_in_progress` (with `task_id`) while the run the first
+        attempt admitted is still going. After a 504, replay with the SAME
+        key; a new key is a new call. The same key with a different body is
+        409 `idempotency_conflict`.
 
         A TOOL THE WORKER CANNOT RUN answers 422 `remote_tool_unsupported`
         with a reason, never a hang: a toolkit type or tool this deployment's
@@ -17242,9 +17251,9 @@ paths:
         - $ref: '#/components/parameters/XClientVersion'
         - name: Idempotency-Key
           in: header
-          required: false
-          schema: { type: string }
-          description: Replays the same run for a retried request.
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+          description: One key per intended call, repeated on every retry; a retry never runs the tool twice.
       requestBody:
         required: true
         content:
@@ -17264,7 +17273,8 @@ paths:
         '400':
           description: >-
             A malformed body, a missing `tool_name` or non-object `arguments`
-            (`invalid_remote_toolkit_call`), or an `X-Client-Version` that does
+            (`invalid_remote_toolkit_call`), no valid `Idempotency-Key`
+            (`idempotency_key_required`), or an `X-Client-Version` that does
             not parse.
           content:
             application/json:
@@ -17299,7 +17309,9 @@ paths:
             The tool needs the user to authorise (`mcp_authorization_required`,
             with `authorization_required`), a sensitive tool needs the user's
             confirmation (`confirmation_required`, with `hitl_interrupt`), the
-            turn is already committed (`local_turn_already_committed`), or the
+            turn is already committed (`local_turn_already_committed`), the
+            run this Idempotency-Key admitted is still going
+            (`remote_toolkit_in_progress`, with `task_id`), or the
             Idempotency-Key belongs to another input (`idempotency_conflict`).
           content:
             application/json:
@@ -17364,7 +17376,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/DesktopOperationError'
         '504':
-          description: The bounded wait passed (`remote_toolkit_timeout`); the run continues under `task_id`.
+          description: >-
+            The bounded wait passed (`remote_toolkit_timeout`); the run
+            continues under `task_id`. Replay with the same Idempotency-Key and
+            body for its result.
           content:
             application/json:
               schema:
