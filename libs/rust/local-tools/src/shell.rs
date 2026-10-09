@@ -5,6 +5,7 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -121,40 +122,73 @@ struct Captured {
     truncated: bool,
 }
 
-async fn capture<R: AsyncRead + Unpin>(mut reader: R, cap: usize) -> Captured {
-    let half = cap / 2;
-    let mut head = Vec::new();
-    let mut tail = std::collections::VecDeque::new();
-    let mut total = 0usize;
+/// What a reader has captured so far, shared with [`run`] so a reader
+/// that never finishes (a grandchild holding the pipe) still leaves its
+/// output behind.
+#[derive(Default)]
+struct Capture {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    total: usize,
+}
+
+impl Capture {
+    fn push(&mut self, bytes: &[u8], cap: usize) {
+        let half = cap / 2;
+        self.total += bytes.len();
+        for byte in bytes {
+            if self.head.len() < half {
+                self.head.push(*byte);
+            } else {
+                self.tail.push_back(*byte);
+                if self.tail.len() > cap - half {
+                    self.tail.pop_front();
+                }
+            }
+        }
+    }
+
+    /// The text so far; `cut_off` when the reader did not reach the end.
+    fn render(&self, cut_off: bool) -> Captured {
+        let omitted = self.total - self.head.len() - self.tail.len();
+        let mut text = String::from_utf8_lossy(&self.head).into_owned();
+        if omitted > 0 {
+            let _ = write!(text, "\n… [{omitted} bytes omitted] …\n");
+        }
+        let tail: Vec<u8> = self.tail.iter().copied().collect();
+        text.push_str(&String::from_utf8_lossy(&tail));
+        if cut_off {
+            text.push_str("\n… [output cut off: a process still held the stream] …\n");
+        }
+        Captured {
+            text,
+            truncated: omitted > 0 || cut_off,
+        }
+    }
+}
+
+type SharedCapture = Arc<Mutex<Capture>>;
+
+async fn capture<R: AsyncRead + Unpin>(mut reader: R, cap: usize, into: SharedCapture) {
     let mut buffer = [0u8; 8192];
     while let Ok(read) = reader.read(&mut buffer).await {
         if read == 0 {
             break;
         }
-        total += read;
-        for byte in &buffer[..read] {
-            if head.len() < half {
-                head.push(*byte);
-            } else {
-                tail.push_back(*byte);
-                if tail.len() > cap - half {
-                    tail.pop_front();
-                }
-            }
+        if let Ok(mut captured) = into.lock() {
+            captured.push(&buffer[..read], cap);
         }
     }
-    let truncated = total > head.len() + tail.len();
-    let mut text = String::from_utf8_lossy(&head).into_owned();
-    if truncated {
-        let _ = write!(
-            text,
-            "\n… [{} bytes omitted] …\n",
-            total - head.len() - tail.len()
-        );
-    }
-    let tail: Vec<u8> = tail.into_iter().collect();
-    text.push_str(&String::from_utf8_lossy(&tail));
-    Captured { text, truncated }
+}
+
+fn rendered(capture: &SharedCapture, cut_off: bool) -> Captured {
+    capture.lock().map_or_else(
+        |_| Captured {
+            text: String::new(),
+            truncated: true,
+        },
+        |captured| captured.render(cut_off),
+    )
 }
 
 fn environment(config: &ShellConfig) -> Vec<(String, String)> {
@@ -307,8 +341,9 @@ pub async fn run(
         .take()
         .ok_or_else(|| ToolError::new(ErrorCode::Io, "no stderr"))?;
     let cap = config.output_cap;
-    let readers =
-        tokio::spawn(async move { tokio::join!(capture(stdout, cap), capture(stderr, cap)) });
+    let (out_capture, err_capture) = (SharedCapture::default(), SharedCapture::default());
+    let mut out_reader = tokio::spawn(capture(stdout, cap, Arc::clone(&out_capture)));
+    let mut err_reader = tokio::spawn(capture(stderr, cap, Arc::clone(&err_capture)));
 
     let waited = tokio::time::timeout(timeout, child.wait()).await;
     let (status, timed_out) = if let Ok(status) = waited {
@@ -329,19 +364,18 @@ pub async fn run(
         // It may have created a `.git` or a denied file.
         config.sandbox.masks.invalidate();
     }
-    let (out, err) = match tokio::time::timeout(DRAIN_AFTER_KILL, readers).await {
-        Ok(Ok(captured)) => captured,
-        _ => (
-            Captured {
-                text: String::new(),
-                truncated: true,
-            },
-            Captured {
-                text: String::new(),
-                truncated: true,
-            },
-        ),
-    };
+    let _ = tokio::time::timeout(DRAIN_AFTER_KILL, async {
+        let _ = (&mut out_reader).await;
+        let _ = (&mut err_reader).await;
+    })
+    .await;
+    // A reader still running holds a pipe some escaped process keeps
+    // open: keep what it read, stop waiting for the rest.
+    let (out_cut, err_cut) = (!out_reader.is_finished(), !err_reader.is_finished());
+    out_reader.abort();
+    err_reader.abort();
+    let out = rendered(&out_capture, out_cut);
+    let err = rendered(&err_capture, err_cut);
     let exit_code = if timed_out {
         None
     } else {
@@ -436,6 +470,36 @@ mod tests {
         assert!(output.timed_out);
         assert_eq!(output.exit_code, None);
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// A grandchild that leaves the process group and keeps stdout open
+    /// does not cost the output read before it: the readers are cut off
+    /// after the drain, what they read is kept and marked truncated.
+    #[tokio::test]
+    async fn output_read_before_a_stuck_pipe_is_kept() {
+        if !std::path::Path::new("/usr/bin/perl").is_file() {
+            return;
+        }
+        let (_dir, workspace, config) = setup();
+        let started = std::time::Instant::now();
+        let output = run(
+            &workspace,
+            &config,
+            &spec(
+                "echo before; echo oops >&2; /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); sleep 6' & sleep 1",
+                SandboxMode::FullAccess,
+            ),
+        )
+        .await
+        .expect("run");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the drain is bounded"
+        );
+        assert!(output.stdout.starts_with("before\n"), "{:?}", output.stdout);
+        assert!(output.stdout_truncated);
+        assert!(output.stderr.starts_with("oops\n"), "{:?}", output.stderr);
+        assert!(output.stderr_truncated);
     }
 
     #[tokio::test]
