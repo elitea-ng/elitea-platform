@@ -55,6 +55,11 @@ export const ResolvedApplicationVersion = zod
       .describe(
         "SHA-256 (hex) of `version_details` and the three ids; also the ETag.",
       ),
+    withheld_secrets: zod
+      .array(zod.string())
+      .describe(
+        "JSON Pointers (RFC 6901, into `version_details`) of every string whose `{{secret.*}}` reference was replaced with `[secret withheld]`; empty when none. A local run of this version sees the placeholder, not the value: a client may run it in the cloud instead.",
+      ),
     version_details: ResolvedApplicationVersionDetails,
   })
   .describe(

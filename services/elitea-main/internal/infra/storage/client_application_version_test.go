@@ -135,6 +135,9 @@ func TestClientApplicationVersionCarriesNoSecretMaterial(t *testing.T) {
 	var details map[string]any
 	require.NoError(t, json.Unmarshal(resolved.VersionDetails, &details))
 	require.Equal(t, "Use [secret withheld] carefully.", details["instructions"])
+	// Every replaced reference is named, so the desktop can decide to run
+	// this agent in the cloud instead.
+	require.Equal(t, []string{"/instructions", "/variables/0/value"}, resolved.WithheldSecrets)
 	require.Equal(t, "[secret withheld]", details["variables"].([]any)[0].(map[string]any)["value"])
 	require.Len(t, details["skills"], 1, "frozen skills travel")
 
@@ -227,10 +230,23 @@ func TestClientApplicationVersionErrorTaxonomy(t *testing.T) {
 func TestProjectClientApplicationVersionRefusesAToolItCannotName(t *testing.T) {
 	t.Parallel()
 	identity := ClientVersionIdentity{ProjectID: 1, ApplicationID: 2, VersionID: 3}
-	_, err := ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":[{"type":"github","settings":{}}]}`))
+	_, _, err := ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":[{"type":"github","settings":{}}]}`))
 	require.Error(t, err, "a toolkit with no id has no reference to give")
-	_, err = ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":{}}`))
+	_, _, err = ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":{}}`))
 	require.Error(t, err)
-	_, err = ProjectClientApplicationVersion(ClientVersionIdentity{}, json.RawMessage(`{"tools":[]}`))
+	_, _, err = ProjectClientApplicationVersion(ClientVersionIdentity{}, json.RawMessage(`{"tools":[]}`))
 	require.Error(t, err)
+}
+
+func TestProjectClientApplicationVersionNamesEveryWithheldSecret(t *testing.T) {
+	t.Parallel()
+	_, withheld, err := ProjectClientApplicationVersion(ClientVersionIdentity{ProjectID: 1, ApplicationID: 2, VersionID: 3},
+		json.RawMessage(`{"tools":[],"instructions":"plain","meta":{"a/b":"{{ secret.x }}","list":["{{secret.y}}","ok"]}}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"/meta/a~1b", "/meta/list/0"}, withheld)
+	_, withheld, err = ProjectClientApplicationVersion(ClientVersionIdentity{ProjectID: 1, ApplicationID: 2, VersionID: 3},
+		json.RawMessage(`{"tools":[]}`))
+	require.NoError(t, err)
+	require.NotNil(t, withheld, "never null on the wire")
+	require.Empty(t, withheld)
 }

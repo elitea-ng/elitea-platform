@@ -10,6 +10,7 @@ import (
 	"errors"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -63,6 +64,12 @@ type ClientApplicationVersion struct {
 	VersionID        int64           `json:"version_id"`
 	VersionDetails   json.RawMessage `json:"version_details"`
 	DefinitionSHA256 string          `json:"definition_sha256"`
+	// WithheldSecrets are the JSON Pointers (RFC 6901, into version_details)
+	// of every string whose `{{secret.*}}` reference was replaced with
+	// "[secret withheld]". Never null. A desktop that finds one here knows the
+	// local run would see the placeholder, not the value, and can run that
+	// agent in the cloud instead.
+	WithheldSecrets []string `json:"withheld_secrets"`
 }
 
 // ClientApplicationVersionService serves one agent or pipeline version to a
@@ -137,7 +144,7 @@ func (service *ClientApplicationVersionService) Resolve(
 		return ClientApplicationVersion{}, ErrContentUnavailable
 	}
 	identity := ClientVersionIdentity{ProjectID: projectID, ApplicationID: int64(applicationID), VersionID: int64(versionID)}
-	projected, err := ProjectClientApplicationVersion(identity, frozen)
+	projected, withheld, err := ProjectClientApplicationVersion(identity, frozen)
 	clearContentBytes(frozen)
 	if err != nil {
 		return ClientApplicationVersion{}, ErrClientApplicationVersionUnresolvable
@@ -149,6 +156,7 @@ func (service *ClientApplicationVersionService) Resolve(
 		VersionID:        int64(versionID),
 		VersionDetails:   projected,
 		DefinitionSHA256: clientApplicationVersionSHA256(projectID, applicationID, versionID, projected),
+		WithheldSecrets:  withheld,
 	}, nil
 }
 
@@ -160,40 +168,44 @@ func (service *ClientApplicationVersionService) Resolve(
 // a future toolkit schema adds to `settings` or `meta` is withheld by
 // construction. Outside the tools, every `{{secret.*}}` reference is replaced
 // and the frozen-configuration marker is dropped wherever it appears.
-func ProjectClientApplicationVersion(identity ClientVersionIdentity, frozen json.RawMessage) (json.RawMessage, error) {
+//
+// It also answers the JSON Pointers of every replaced reference, sorted.
+func ProjectClientApplicationVersion(identity ClientVersionIdentity, frozen json.RawMessage) (json.RawMessage, []string, error) {
 	if !identity.valid() || len(frozen) == 0 ||
 		len(frozen) > maxRuntimeApplicationVersionResponseBytes*8 {
-		return nil, errors.New("frozen application version is invalid")
+		return nil, nil, errors.New("frozen application version is invalid")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(frozen))
 	decoder.UseNumber()
 	var version map[string]any
 	if err := decoder.Decode(&version); err != nil || version == nil {
-		return nil, errors.New("frozen application version is not one JSON object")
+		return nil, nil, errors.New("frozen application version is not one JSON object")
 	}
 	tools, ok := version["tools"].([]any)
 	if !ok {
-		return nil, errors.New("frozen application version has no tools array")
+		return nil, nil, errors.New("frozen application version has no tools array")
 	}
 	projectedTools := make([]any, 0, len(tools))
 	for _, value := range tools {
 		tool, ok := value.(map[string]any)
 		if !ok {
-			return nil, errors.New("a frozen tool is not an object")
+			return nil, nil, errors.New("a frozen tool is not an object")
 		}
 		projectedTool, ok := projectClientTool(identity, tool)
 		if !ok {
-			return nil, errors.New("a frozen tool could not be projected")
+			return nil, nil, errors.New("a frozen tool could not be projected")
 		}
 		projectedTools = append(projectedTools, projectedTool)
 	}
 	version["tools"] = projectedTools
-	scrubbed := scrubClientValue(version)
+	withheld := []string{}
+	scrubbed := scrubClientValue(version, "", &withheld)
+	sort.Strings(withheld)
 	encoded, err := json.Marshal(scrubbed)
 	if err != nil || len(encoded) == 0 || len(encoded) > maxRuntimeApplicationVersionResponseBytes {
-		return nil, errors.New("resolved application version is unencodable or too large")
+		return nil, nil, errors.New("resolved application version is unencodable or too large")
 	}
-	return encoded, nil
+	return encoded, withheld, nil
 }
 
 // ClientVersionIdentity names one agent version in one project.
@@ -304,8 +316,9 @@ func projectClientTool(identity ClientVersionIdentity, tool map[string]any) (map
 }
 
 // scrubClientValue walks a decoded JSON value: it drops the frozen
-// configuration marker and replaces every secret reference inside a string.
-func scrubClientValue(value any) any {
+// configuration marker and replaces every secret reference inside a string,
+// recording the JSON Pointer of each string it changed.
+func scrubClientValue(value any, path string, withheld *[]string) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, item := range typed {
@@ -313,22 +326,31 @@ func scrubClientValue(value any) any {
 				delete(typed, key)
 				continue
 			}
-			typed[key] = scrubClientValue(item)
+			typed[key] = scrubClientValue(item, path+"/"+jsonPointerToken(key), withheld)
 		}
 		return typed
 	case []any:
 		for index, item := range typed {
-			typed[index] = scrubClientValue(item)
+			typed[index] = scrubClientValue(item, path+"/"+strconv.Itoa(index), withheld)
 		}
 		return typed
 	case string:
 		if !strings.Contains(typed, "{{") {
 			return typed
 		}
-		return clientSecretReference.ReplaceAllString(typed, clientSecretWithheld)
+		replaced := clientSecretReference.ReplaceAllString(typed, clientSecretWithheld)
+		if replaced != typed {
+			*withheld = append(*withheld, path)
+		}
+		return replaced
 	default:
 		return value
 	}
+}
+
+// jsonPointerToken escapes one RFC 6901 reference token.
+func jsonPointerToken(key string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1")
 }
 
 func positiveClientJSONInteger(value any) (int64, bool) {
