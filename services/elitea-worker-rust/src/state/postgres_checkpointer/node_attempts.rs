@@ -63,6 +63,7 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
             &self.run_root_thread_id,
             self.limits,
             Arc::clone(&self.state_writer_lease),
+            &self.io,
         )
         .await?;
         Ok(NodeAttemptJournal::bound(

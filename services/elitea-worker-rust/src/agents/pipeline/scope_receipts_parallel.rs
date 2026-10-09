@@ -8,6 +8,7 @@ use super::{
 use crate::agents::graph::{
     ParallelActivation, ParallelBranchDefinition, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
+    ParallelChildRequest, ParentHead, ParentSaveProbe, PreparedChildCheckpoint,
 };
 
 /// One opaque authority supplies every checkpoint capability behind this overlay.
@@ -78,6 +79,53 @@ impl ParallelCheckpointAppender for PipelineGraphReceiptAuthority {
         // The store checks the complete expected parent under its writer lock.
         // No ordinary save or unchecked second parent load replaces this append.
         self.inner.append_after(expected_latest, &candidate).await
+    }
+
+    async fn probe_parent(
+        &self,
+        thread_id: &str,
+        candidate_id: &str,
+    ) -> Result<ParentSaveProbe, GraphError> {
+        self.inner.probe_parent(thread_id, candidate_id).await
+    }
+
+    async fn append_after_head(
+        &self,
+        expected: Option<&ParentHead>,
+        candidate: &Checkpoint,
+    ) -> Result<String, GraphError> {
+        let _guard = self.receipts.gate.lock().await;
+        if expected.is_some_and(|parent| parent.thread_id != candidate.thread_id) {
+            return Err(receipt_error());
+        }
+        // An immutable replay retains its original metadata and latest ordering.
+        if let Some(existing) = self.inner.load_by_id(&candidate.checkpoint_id).await? {
+            if serde_json::to_value(&existing).map_err(|_| receipt_error())?
+                != serde_json::to_value(candidate).map_err(|_| receipt_error())?
+            {
+                return Err(receipt_error());
+            }
+            return self.inner.append_after_head(expected, candidate).await;
+        }
+        // Receipts live in metadata. Only a receipt revision compares the
+        // parent's whole frontier, so only that rare path reads the full row.
+        let candidate = match expected {
+            None => retain_atomic_receipts(None, candidate)?,
+            Some(head) if receipt_revision_parent(candidate)?.is_some() => {
+                let parent = match head.snapshot.as_deref() {
+                    Some(snapshot) => snapshot.clone(),
+                    None => self
+                        .inner
+                        .load_by_id(&head.checkpoint_id)
+                        .await?
+                        .ok_or_else(receipt_error)?,
+                };
+                retain_atomic_receipts(Some(&parent), candidate)?
+            }
+            Some(head) => retain_atomic_receipts(Some(&head.stateless()), candidate)?,
+        };
+        // The store compares the expected parent identity under its writer lock.
+        self.inner.append_after_head(expected, &candidate).await
     }
 }
 
@@ -155,6 +203,17 @@ impl ParallelChildCheckpointerFactory for PipelineGraphReceiptAuthority {
     ) -> Result<ParallelChildCheckpoint, GraphError> {
         self.inner
             .for_branch(activation, branch, ordinal, input_digest, origin)
+            .await
+    }
+
+    async fn prepare_children(
+        &self,
+        activation: &ParallelActivation,
+        children: &[ParallelChildRequest<'_>],
+        origin: &crate::agents::graph::ParallelChildOrigin,
+    ) -> Result<Vec<PreparedChildCheckpoint>, GraphError> {
+        self.inner
+            .prepare_children(activation, children, origin)
             .await
     }
 }

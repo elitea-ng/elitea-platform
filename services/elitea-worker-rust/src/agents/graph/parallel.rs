@@ -1,6 +1,6 @@
 #![allow(dead_code)] // Composed by the next full YAML graph compiler slice.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::fanout_control::{FanoutCancellation, is_lease_lost, latch_cancelled};
+use super::fanout_trace::{self, ActivationOutcome, ChildOutcome, ChildStart, FanoutKind};
 use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
+use tracing::Instrument as _;
 
 #[path = "parallel_checkpoint.rs"]
 mod checkpoint;
@@ -27,6 +29,8 @@ mod structure;
 pub(in crate::agents::graph) use structure::{validate_state, validate_values};
 #[path = "parallel_published_resume.rs"]
 mod published_resume;
+#[cfg(test)]
+pub(crate) use checkpoint::MAX_PARENT_ROWS_PER_VISIT;
 use checkpoint::{BranchReceipt, BranchReceiptCheckpointer, FrozenBranchInput, FrozenOccurrence};
 pub(crate) use checkpoint::{ParallelBranchExecution, ParallelOccurrenceCheckpointer};
 #[allow(unused_imports)] // Parent proof is staged until continuation assembly is composed.
@@ -148,13 +152,104 @@ pub(crate) trait ParallelChildCheckpointerFactory: Send + Sync {
         input_digest: &[u8; 32],
         origin: &ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError>;
+
+    /// Activate every admitted child writer and read each child's latest
+    /// checkpoint, in request order. A durable store batches this into one
+    /// activation and one read transaction regardless of the child count.
+    async fn prepare_children(
+        &self,
+        activation: &ParallelActivation,
+        children: &[ParallelChildRequest<'_>],
+        origin: &ParallelChildOrigin,
+    ) -> Result<Vec<PreparedChildCheckpoint>, GraphError> {
+        let mut prepared = Vec::with_capacity(children.len());
+        for request in children {
+            let child = self
+                .for_branch(
+                    activation,
+                    request.branch,
+                    request.ordinal,
+                    request.input_digest,
+                    origin,
+                )
+                .await?;
+            let latest = child.checkpointer.load(&child.thread_id).await?;
+            prepared.push(PreparedChildCheckpoint { child, latest });
+        }
+        Ok(prepared)
+    }
+}
+
+/// One admitted child of a frozen occurrence.
+pub(crate) struct ParallelChildRequest<'a> {
+    pub(crate) branch: &'a ParallelBranchDefinition,
+    pub(crate) ordinal: usize,
+    pub(crate) input_digest: &'a [u8; 32],
+}
+
+/// An activated child writer and the latest checkpoint it held at activation.
+pub(crate) struct PreparedChildCheckpoint {
+    pub(crate) child: ParallelChildCheckpoint,
+    pub(crate) latest: Option<Checkpoint>,
+}
+
+/// The latest parent row without its business state: identity plus the
+/// frontier and metadata an occurrence wrapper needs to stamp the next save.
+#[derive(Clone, Debug)]
+pub(crate) struct ParentHead {
+    pub(crate) thread_id: String,
+    pub(crate) checkpoint_id: String,
+    /// The store's append order, when the store has one.
+    pub(crate) save_ordinal: Option<i64>,
+    pub(crate) step: usize,
+    pub(crate) pending_nodes: Vec<String>,
+    pub(crate) metadata: HashMap<String, Value>,
+    /// The full row, kept only by stores that had to load it anyway, so the
+    /// default append never loads it a second time.
+    pub(crate) snapshot: Option<Box<Checkpoint>>,
+}
+
+impl ParentHead {
+    pub(crate) fn of(checkpoint: Checkpoint) -> Self {
+        Self {
+            thread_id: checkpoint.thread_id.clone(),
+            checkpoint_id: checkpoint.checkpoint_id.clone(),
+            save_ordinal: None,
+            step: checkpoint.step,
+            pending_nodes: checkpoint.pending_nodes.clone(),
+            metadata: checkpoint.metadata.clone(),
+            snapshot: Some(Box::new(checkpoint)),
+        }
+    }
+
+    /// The head as a checkpoint without business state, for metadata readers.
+    pub(crate) fn stateless(&self) -> Checkpoint {
+        let mut checkpoint = Checkpoint::new(
+            &self.thread_id,
+            State::new(),
+            self.step,
+            self.pending_nodes.clone(),
+        );
+        checkpoint.checkpoint_id.clone_from(&self.checkpoint_id);
+        checkpoint.metadata.clone_from(&self.metadata);
+        checkpoint
+    }
+}
+
+/// What an occurrence wrapper needs before stamping one parent save.
+pub(crate) struct ParentSaveProbe {
+    /// The candidate id is already stored: an exact immutable replay.
+    pub(crate) candidate_exists: bool,
+    pub(crate) latest: Option<ParentHead>,
 }
 
 /// Atomic append on the existing parent checkpoint store. There is no fallback.
-/// The implementation must compare the complete expected latest snapshot under
-/// the same writer lock as insertion. For a new ID, `None` requires no latest row.
-/// Exact immutable by-ID replay must return unchanged without making it latest.
-/// The writer lock must also fence exact replay before any parent comparison.
+/// The implementation must prove the expected latest row under the same writer
+/// lock as insertion. Rows are immutable per checkpoint id, so comparing the
+/// latest row's identity is a complete comparison. For a new ID, `None`
+/// requires no latest row. Exact immutable by-ID replay must return unchanged
+/// without making it latest. The writer lock must also fence exact replay
+/// before any parent comparison.
 #[async_trait]
 pub(crate) trait ParallelCheckpointAppender: Checkpointer {
     async fn append_after(
@@ -162,6 +257,46 @@ pub(crate) trait ParallelCheckpointAppender: Checkpointer {
         expected_latest: Option<&Checkpoint>,
         candidate: &Checkpoint,
     ) -> Result<String, GraphError>;
+
+    /// One read for a wrapped parent save: whether `candidate_id` is already
+    /// stored, and the latest row's head. A durable store reads no state.
+    async fn probe_parent(
+        &self,
+        thread_id: &str,
+        candidate_id: &str,
+    ) -> Result<ParentSaveProbe, GraphError> {
+        let candidate_exists = self.load_by_id(candidate_id).await?.is_some();
+        let latest = self.load(thread_id).await?;
+        Ok(ParentSaveProbe {
+            candidate_exists,
+            latest: latest.map(ParentHead::of),
+        })
+    }
+
+    /// Append only while `expected` is still the latest row, by identity.
+    async fn append_after_head(
+        &self,
+        expected: Option<&ParentHead>,
+        candidate: &Checkpoint,
+    ) -> Result<String, GraphError> {
+        // The store's own atomic compare decides; a snapshot spares a reload.
+        let Some(expected) = expected else {
+            return self.append_after(None, candidate).await;
+        };
+        if let Some(snapshot) = expected.snapshot.as_deref() {
+            return self.append_after(Some(snapshot), candidate).await;
+        }
+        let latest = self.load(&candidate.thread_id).await?;
+        if latest.as_ref().map(|latest| latest.checkpoint_id.as_str())
+            != Some(expected.checkpoint_id.as_str())
+        {
+            return Err(GraphError::CheckpointError(
+                "checkpoint.conflict: the expected parent checkpoint is no longer latest"
+                    .to_owned(),
+            ));
+        }
+        self.append_after(latest.as_ref(), candidate).await
+    }
 }
 
 /// One admitted authority supplies both parent append and branch capabilities.
@@ -544,27 +679,49 @@ impl AdkParallelBranchRuntime {
         let mut prepared = Vec::with_capacity(inputs.len());
         let mut pauses = BTreeMap::new();
         let mut expected = Vec::new();
-        for (position, input) in inputs.iter().cloned().enumerate() {
-            let branch = definition
-                .branches()
-                .get(input.ordinal)
-                .ok_or_else(|| {
-                    parallel_error(
-                        "graph.parallel.corrupt_occurrence",
-                        "a frozen branch ordinal is invalid",
-                    )
-                })?
-                .clone();
-            let child = self
-                .checkpoints
-                .for_branch(
-                    activation,
-                    &branch,
-                    input.ordinal,
-                    &input.input_digest,
-                    origin,
-                )
-                .await?;
+        let branches = inputs
+            .iter()
+            .map(|input| {
+                definition
+                    .branches()
+                    .get(input.ordinal)
+                    .ok_or_else(|| {
+                        parallel_error(
+                            "graph.parallel.corrupt_occurrence",
+                            "a frozen branch ordinal is invalid",
+                        )
+                    })
+                    .cloned()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let requests = inputs
+            .iter()
+            .zip(&branches)
+            .map(|(input, branch)| ParallelChildRequest {
+                branch,
+                ordinal: input.ordinal,
+                input_digest: &input.input_digest,
+            })
+            .collect::<Vec<_>>();
+        // One batched activation and one batched receipt read for every child.
+        let children = self
+            .checkpoints
+            .prepare_children(activation, &requests, origin)
+            .await?;
+        if children.len() != inputs.len() {
+            return Err(parallel_error(
+                "graph.parallel.invalid_child_scope",
+                "the prepared child set does not match the frozen occurrence",
+            ));
+        }
+        for (position, ((input, branch), prepared_child)) in inputs
+            .iter()
+            .cloned()
+            .zip(branches)
+            .zip(children)
+            .enumerate()
+        {
+            let PreparedChildCheckpoint { child, latest } = prepared_child;
             if child_threads.get(position) != Some(&child.thread_id) {
                 return Err(parallel_error(
                     "graph.parallel.corrupt_occurrence",
@@ -586,7 +743,6 @@ impl AdkParallelBranchRuntime {
                 child.checkpointer,
                 child.thread_id.clone(),
             ));
-            let latest = checkpoint.load(&child.thread_id).await?;
             if latest
                 .as_ref()
                 .is_some_and(|saved| saved.thread_id != child.thread_id)
@@ -671,6 +827,7 @@ impl AdkParallelBranchRuntime {
             occurrence.cards.as_slice()
         };
         let incoming = decisions_for_activation(context, activation, published)?;
+        let published = published.to_vec();
         if let Some(accepted) = &occurrence.decisions {
             if incoming
                 .as_ref()
@@ -725,7 +882,7 @@ impl AdkParallelBranchRuntime {
                 }
             }
             self.parent
-                .record_decisions(occurrence, decisions, resume_inputs, context)
+                .record_decisions(occurrence, &published, decisions, resume_inputs, context)
                 .await?;
         }
         Ok(())
@@ -765,23 +922,14 @@ impl AdkParallelBranchRuntime {
                         "a parallel branch cannot route the parent graph",
                     ));
                 }
-                let saved = branch
-                    .checkpoint
-                    .load(&branch.thread_id)
-                    .await?
-                    .ok_or_else(|| {
-                        parallel_error(
-                            "graph.parallel.corrupt_receipt",
-                            "a completed child checkpoint is missing",
-                        )
-                    })?;
-                if saved.thread_id != branch.thread_id
-                    || !saved.pending_nodes.is_empty()
-                    || !matches!(
-                        BranchReceiptCheckpointer::receipt(&saved)?,
-                        Some(BranchReceipt::Completed)
+                // The fenced terminal save this branch just made is the proof.
+                let saved = branch.checkpoint.last_saved()?.ok_or_else(|| {
+                    parallel_error(
+                        "graph.parallel.corrupt_receipt",
+                        "a completed child checkpoint is missing",
                     )
-                {
+                })?;
+                if !saved.terminal || !matches!(saved.receipt, Some(BranchReceipt::Completed)) {
                     return Err(parallel_error(
                         "graph.parallel.corrupt_receipt",
                         "the completed child checkpoint is not proven",
@@ -792,21 +940,15 @@ impl AdkParallelBranchRuntime {
                 terminal_outcome(terminal)
             }
             Err(GraphError::Interrupted(interrupted)) => {
-                let saved = branch
-                    .checkpoint
-                    .load(&branch.thread_id)
-                    .await?
-                    .ok_or_else(|| {
-                        parallel_error(
-                            "graph.parallel.corrupt_receipt",
-                            "a paused child checkpoint is missing",
-                        )
-                    })?;
-                if saved.checkpoint_id != interrupted.checkpoint_id
-                    || !matches!(
-                        BranchReceiptCheckpointer::receipt(&saved)?,
-                        Some(BranchReceipt::Paused { .. })
+                let saved = branch.checkpoint.last_saved()?.ok_or_else(|| {
+                    parallel_error(
+                        "graph.parallel.corrupt_receipt",
+                        "a paused child checkpoint is missing",
                     )
+                })?;
+                if saved.checkpoint_id != interrupted.checkpoint_id
+                    || interrupted.thread_id != branch.thread_id
+                    || !matches!(saved.receipt, Some(BranchReceipt::Paused { .. }))
                 {
                     return Err(parallel_error(
                         "graph.parallel.corrupt_receipt",
@@ -876,6 +1018,40 @@ impl DurableParallelNode {
     }
 
     pub(crate) async fn execute_outcome(
+        &self,
+        context: &NodeContext,
+    ) -> Result<ParallelNodeOutcome, GraphError> {
+        let span = fanout_trace::activation_span(
+            FanoutKind::Parallel,
+            self.definition.id(),
+            context.step,
+            Some(self.definition.branches().len()),
+            usize::try_from(self.definition.max_concurrency()).unwrap_or(usize::MAX),
+            context
+                .state
+                .get(PARALLEL_RESUME_STATE_KEY)
+                .is_some_and(|value| !value.is_null()),
+        );
+        fanout_trace::activation_started(&span);
+        let result = self
+            .execute_outcome_inner(context)
+            .instrument(span.clone())
+            .await;
+        fanout_trace::activation_finished(
+            &span,
+            match &result {
+                Ok(ParallelNodeOutcome::Completed(_)) => ActivationOutcome::Joined,
+                Ok(ParallelNodeOutcome::Paused(_)) => ActivationOutcome::Paused,
+                Ok(ParallelNodeOutcome::Blocked(_)) => ActivationOutcome::Blocked,
+                Err(error) if is_lease_lost(error) => ActivationOutcome::LeaseLost,
+                Err(_) if self.stop_requested(context) => ActivationOutcome::Cancelled,
+                Err(_) => ActivationOutcome::Failed,
+            },
+        );
+        result
+    }
+
+    async fn execute_outcome_inner(
         &self,
         context: &NodeContext,
     ) -> Result<ParallelNodeOutcome, GraphError> {
@@ -1173,7 +1349,31 @@ impl DurableParallelNode {
     ) -> OrderedBranchOutcome {
         let ordinal = branch.ordinal;
         let definition = branch.branch.clone();
-        let result = self.runtime.invoke(&activation, branch, context).await;
+        let start = if branch.replay.is_some() {
+            ChildStart::Restored
+        } else if branch.input.keys().any(|key| is_resume_key(key)) {
+            ChildStart::Resumed
+        } else {
+            ChildStart::Fresh
+        };
+        let span = fanout_trace::child_span(FanoutKind::Parallel, self.definition.id(), ordinal);
+        fanout_trace::child_admitted(&span, start);
+        let result = self
+            .runtime
+            .invoke(&activation, branch, context)
+            .instrument(span.clone())
+            .await;
+        fanout_trace::child_finished(
+            &span,
+            match &result {
+                ParallelBranchOutcome::Completed(_) => ChildOutcome::Completed,
+                ParallelBranchOutcome::Paused(_) => ChildOutcome::Paused,
+                ParallelBranchOutcome::Blocked => ChildOutcome::Blocked,
+                ParallelBranchOutcome::Failed(_) => ChildOutcome::Failed,
+                ParallelBranchOutcome::Cancelled => ChildOutcome::Cancelled,
+                ParallelBranchOutcome::LeaseLost(_) => ChildOutcome::LeaseLost,
+            },
+        );
         (ordinal, definition, result)
     }
 }

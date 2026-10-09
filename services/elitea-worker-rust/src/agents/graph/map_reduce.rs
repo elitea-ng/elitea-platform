@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::fanout_control::{FanoutCancellation, is_lease_lost, latch_cancelled};
+use super::fanout_trace::{self, ActivationOutcome, ChildOutcome, ChildStart, FanoutKind};
+use tracing::Instrument as _;
 
 #[path = "map_reduce_checkpoint.rs"]
 mod checkpoint;
@@ -384,8 +386,38 @@ impl DurableMapNode {
         }
     }
 
-    #[allow(clippy::too_many_lines)] // Keep freeze, bounded admission, drain and atomic collection ordering together.
     pub(crate) async fn execute_outcome(
+        &self,
+        context: &NodeContext,
+    ) -> Result<MapNodeOutcome, GraphError> {
+        let span = fanout_trace::activation_span(
+            FanoutKind::Map,
+            &self.definition.id,
+            context.step,
+            None,
+            self.definition.max_concurrency,
+            false,
+        );
+        fanout_trace::activation_started(&span);
+        let result = self
+            .execute_outcome_inner(context)
+            .instrument(span.clone())
+            .await;
+        fanout_trace::activation_finished(
+            &span,
+            match &result {
+                Ok(MapNodeOutcome::Completed(_)) => ActivationOutcome::Joined,
+                Ok(MapNodeOutcome::Stopped(MapStop::Cancelled)) => ActivationOutcome::Cancelled,
+                Ok(MapNodeOutcome::Stopped(MapStop::Blocked { .. })) => ActivationOutcome::Blocked,
+                Err(error) if is_lease_lost(error) => ActivationOutcome::LeaseLost,
+                Ok(MapNodeOutcome::Stopped(_)) | Err(_) => ActivationOutcome::Failed,
+            },
+        );
+        result
+    }
+
+    #[allow(clippy::too_many_lines)] // Keep freeze, bounded admission, drain and atomic collection ordering together.
+    async fn execute_outcome_inner(
         &self,
         context: &NodeContext,
     ) -> Result<MapNodeOutcome, GraphError> {
@@ -407,6 +439,7 @@ impl DurableMapNode {
         }
         bounded(&proposed, MAX_PLAN_BYTES)?;
         let plan = self.parent.freeze(context, proposed).await?;
+        fanout_trace::activation_children(&tracing::Span::current(), plan.items.len());
         if let Some(stop) = plan.stop {
             return Ok(MapNodeOutcome::Stopped(stop));
         }
@@ -582,11 +615,26 @@ impl DurableMapNode {
         Result<Result<Map<String, Value>, MapStop>, GraphError>,
     ) {
         let index = item.index;
-        let result = match self.run_item_inner(item, child, context, siblings).await {
+        let span = fanout_trace::child_span(FanoutKind::Map, &self.definition.id, index);
+        let result = match self
+            .run_item_inner(item, child, context, siblings)
+            .instrument(span.clone())
+            .await
+        {
             Err(error) if is_lease_lost(&error) => Err(error),
             Err(_) => Ok(Err(MapStop::Failed { index })),
             Ok(result) => Ok(result),
         };
+        fanout_trace::child_finished(
+            &span,
+            match &result {
+                Ok(Ok(_)) => ChildOutcome::Completed,
+                Ok(Err(MapStop::Cancelled | MapStop::DeadlineExceeded)) => ChildOutcome::Cancelled,
+                Ok(Err(MapStop::Blocked { .. })) => ChildOutcome::Blocked,
+                Ok(Err(_)) => ChildOutcome::Failed,
+                Err(_) => ChildOutcome::LeaseLost,
+            },
+        );
         (index, result)
     }
 
@@ -603,7 +651,16 @@ impl DurableMapNode {
             child.thread_id.clone(),
             child.admitted_threads.clone(),
         ));
-        if let Some(saved) = checkpoint.load_item().await? {
+        let restored = checkpoint.load_item().await?;
+        fanout_trace::child_admitted(
+            &tracing::Span::current(),
+            if restored.is_some() {
+                ChildStart::Restored
+            } else {
+                ChildStart::Fresh
+            },
+        );
+        if let Some(saved) = restored {
             if let Some(receipt) = MapReceiptCheckpointer::receipt(&saved)? {
                 match receipt {
                     MapItemReceipt::Completed if saved.pending_nodes.is_empty() => {
