@@ -1101,10 +1101,11 @@ pub mod bubblewrap {
 /// Landlock restricts the calling thread, so it must run in the child
 /// between `fork` and `exec`. Doing that from `pre_exec` needs `unsafe`,
 /// which this workspace forbids; instead the host binary is re-executed
-/// with [`HELPER_FLAG`], restricts itself (single-threaded, at the top of
-/// `main`) and `exec`s the command. The host calls [`run_if_requested`]
-/// first thing in `main` and passes its own path as
-/// [`super::SandboxConfig::linux_helper`].
+/// with [`HELPER_FLAG`](landlock::HELPER_FLAG), restricts itself
+/// (single-threaded, at the top of `main`) and `exec`s the command. The
+/// host calls [`run_if_requested`](landlock::run_if_requested) first thing
+/// in `main` and passes its own path as
+/// [`SandboxConfig::linux_helper`].
 #[cfg(target_os = "linux")]
 pub mod landlock {
     use std::ffi::OsString;
