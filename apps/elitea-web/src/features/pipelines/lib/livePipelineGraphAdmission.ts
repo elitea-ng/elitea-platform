@@ -113,8 +113,15 @@ export function judgeLivePipelineGraph(yamlCode: string): LivePipelineGraphAdmis
  * The reactive read, for anything that DISABLES a control: a button whose
  * enabled-ness is judged once at mount would be wrong for the rest of the
  * session.
+ *
+ * `yamlCode` judges a document the caller holds instead of the editor store.
+ * The create page is that caller: its graph lives in its own form state (it
+ * mounts no flow editor), and before it passed one here the create path
+ * stored a graph the editor's save gate refuses on the first reopen. Taking
+ * an argument keeps this slice's public API at its 20-symbol budget.
  */
-export function useLivePipelineGraphAdmission(): LivePipelineGraphAdmission {
-  const yamlCode = usePipelineYamlStore((state) => state.yamlCode);
-  return useMemo(() => judgeLivePipelineGraph(yamlCode), [yamlCode]);
+export function useLivePipelineGraphAdmission(yamlCode?: string): LivePipelineGraphAdmission {
+  const storeYamlCode = usePipelineYamlStore((state) => state.yamlCode);
+  const judged = yamlCode ?? storeYamlCode;
+  return useMemo(() => judgeLivePipelineGraph(judged), [judged]);
 }

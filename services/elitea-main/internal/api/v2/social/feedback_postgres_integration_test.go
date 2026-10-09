@@ -310,7 +310,7 @@ func currentFeedbackIntegrationRequest(
 func assertCurrentFeedbackRows(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	rows, err := pool.Query(context.Background(), `
-SELECT user_id, referrer, description, rating, user_agent
+SELECT user_id, referrer, description, rating, user_agent, project_id
 FROM centry.social_feedbacks
 ORDER BY id`)
 	if err != nil {
@@ -324,6 +324,7 @@ ORDER BY id`)
 		description string
 		rating      int
 		userAgent   *string
+		projectID   *int64
 	}
 	got := make([]feedbackRow, 0, 3)
 	for rows.Next() {
@@ -334,6 +335,7 @@ ORDER BY id`)
 			&row.description,
 			&row.rating,
 			&row.userAgent,
+			&row.projectID,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -344,6 +346,11 @@ ORDER BY id`)
 	}
 	if len(got) != 3 {
 		t.Fatalf("feedback rows=%#v", got)
+	}
+	for _, row := range got {
+		if row.projectID == nil || *row.projectID != 7 {
+			t.Fatalf("feedback row not stamped with its project: %#v", row)
+		}
 	}
 	if got[0].userID != 41 ||
 		got[0].referrer == nil ||
@@ -374,17 +381,17 @@ ORDER BY id`)
 
 func assertCurrentFeedbackSharedTableShape(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	var projectColumns int
+	var dataType, nullable string
 	if err := pool.QueryRow(context.Background(), `
-SELECT COUNT(*)::integer
+SELECT data_type, is_nullable
 FROM information_schema.columns
 WHERE table_schema = 'centry'
   AND table_name = 'social_feedbacks'
-  AND column_name = 'project_id'`).Scan(&projectColumns); err != nil {
-		t.Fatal(err)
+  AND column_name = 'project_id'`).Scan(&dataType, &nullable); err != nil {
+		t.Fatalf("shared feedback table has no project_id column: %v", err)
 	}
-	if projectColumns != 0 {
-		t.Fatalf("shared feedback table unexpectedly has %d project_id columns", projectColumns)
+	if dataType != "integer" || nullable != "YES" {
+		t.Fatalf("project_id is %s nullable=%s, want nullable integer", dataType, nullable)
 	}
 }
 
@@ -507,6 +514,10 @@ CREATE TABLE public.auth_core__role_permission (
     role_id INTEGER NOT NULL,
     permission TEXT NOT NULL
 );
+CREATE TABLE public.auth_core__user_role (
+    user_id INTEGER NOT NULL,
+    role_id INTEGER NOT NULL
+);
 CREATE TABLE public.auth_core__project_role (
     id INTEGER PRIMARY KEY,
     project_id INTEGER NOT NULL,
@@ -560,7 +571,8 @@ CREATE TABLE centry.social_feedbacks (
         CHECK (description <> 'reject-current-feedback'),
     rating INTEGER NOT NULL,
     user_agent VARCHAR,
-    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now()
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now(),
+    project_id INTEGER NULL
 );`); err != nil {
 		t.Fatalf("prepare current Social feedback database: %v", err)
 	}

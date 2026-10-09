@@ -41,15 +41,19 @@
  */
 import * as zod from "zod";
 
+export const feedbackCreateRequestRatingMin = 0;
+export const feedbackCreateRequestRatingMax = 5;
+
 export const FeedbackCreateRequest = zod
   .object({
-    entity_name: zod.string().optional(),
-    entity_id: zod.string().optional(),
-    rating: zod.int().optional(),
-    comment: zod.string().optional(),
+    description: zod.string(),
+    rating: zod
+      .int()
+      .min(feedbackCreateRequestRatingMin)
+      .max(feedbackCreateRequestRatingMax),
   })
   .describe(
-    'NOTE(W2): decoded into map[string]any (internal/api/v2/social/handler.go:397-401); entity_name/entity_id are read via unchecked type assertions that silently default to `""` on a wrong type or missing key, and rating similarly defaults to 0 unless the JSON value decodes as float64 (:403-408). Malformed JSON (not just wrong field types) is the only 400 case (:398-401).\n',
+    "Unknown fields are ignored. The author, project, referrer and user agent are taken from the credential, the path and the request headers, never from the body.\n",
   );
 
 export type FeedbackCreateRequest = zod.input<typeof FeedbackCreateRequest>;

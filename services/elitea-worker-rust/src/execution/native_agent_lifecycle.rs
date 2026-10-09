@@ -1445,6 +1445,13 @@ where
 
 pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
     match error.code() {
+        NativeAgentAssemblyErrorCode::UnsupportedCapability
+            if error.cause().is_some_and(|cause| {
+                cause.code() == crate::agents::graph::compiler::NODE_TYPE_NOT_AVAILABLE_CODE
+            }) =>
+        {
+            RuntimeFailureKind::PipelineNodeTypeNotAvailable
+        }
         NativeAgentAssemblyErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability
         }
@@ -1587,6 +1594,59 @@ mod taxonomy_tests {
     /// The pipeline bounds are already registered as a readable message: the
     /// agent-settings input limit. Prove the whole chain from the real compiler
     /// error to the terminal text, and that the id-shape refusal stays generic.
+    #[cfg(not(feature = "graph-extensions-rehearsal"))]
+    #[test]
+    fn a_gated_node_type_ends_as_the_registered_deployment_message() {
+        use crate::agents::graph::compiler::PipelineDefinition;
+        use crate::protocol::output::{
+            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE, runtime_error_policy,
+        };
+
+        let Err(configuration) = PipelineDefinition::from_yaml(
+            "state:\n  records: list\n  expanded: list\nentry_point: split\nnodes:\n  - id: split\n    type: split_out\n    source: records\n    split: {mode: list}\n    destination: item\n    output: [expanded]\n    transition: END\n",
+        ) else {
+            panic!("a production build admitted split_out");
+        };
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &configuration,
+            "fixture",
+        );
+        assert_eq!(
+            error.code(),
+            NativeAgentAssemblyErrorCode::UnsupportedCapability
+        );
+        assert_eq!(
+            error.cause().map(NativeAgentAssemblyCause::detail),
+            Some(Some("split_out"))
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::PipelineNodeTypeNotAvailable);
+        let (code, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(
+            code,
+            crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
+        );
+        assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
+        assert!(message.contains("not available on this deployment"));
+        assert!(!message.contains("split"), "the message stays data-free");
+        assert!(!retryable);
+
+        // Any other unsupported capability keeps the generic message.
+        let Err(configuration) =
+            PipelineDefinition::from_yaml("entry_point: x\nnodes:\n  - id: x\n    type: custom\n")
+        else {
+            panic!("custom was admitted");
+        };
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &configuration,
+            "fixture",
+        );
+        assert_eq!(
+            assembly_failure(&error),
+            RuntimeFailureKind::UnsupportedCapability
+        );
+    }
+
     #[test]
     fn pipeline_bound_refusals_end_as_the_agent_settings_message() {
         use crate::agents::graph::compiler::PipelineDefinition;

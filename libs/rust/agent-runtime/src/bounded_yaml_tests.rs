@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use serde_yaml_ng::Value;
 
 use super::{BoundedYamlError, YamlBudget, YamlBudgetLimit, from_str, from_str_as_yaml_error};
@@ -137,4 +139,59 @@ fn yaml_error_variant_reports_budget_failures_as_malformed_documents() {
     let error =
         from_str_as_yaml_error::<Value>(&sequence(BUDGET.nodes), BUDGET).expect_err("over budget");
     assert!(error.to_string().contains("expansion budget"));
+}
+
+/// A six-level alias chain (`&a [l×8]` … `&f [*e×8]`, about 262k expanded nodes)
+/// trips `serde_yaml_ng`'s own alias-repetition guard before the meter crosses a
+/// large node budget. It is the same refusal (too much expansion), so it must be
+/// reported as the node budget, not as a malformed document.
+fn alias_chain(levels: usize) -> String {
+    let mut yaml = String::from("defs:\n");
+    let mut item = "l".to_owned();
+    for level in 0..levels {
+        let name = format!("x{level}");
+        writeln!(
+            yaml,
+            "  {name}: &{name} [{}]",
+            [item.as_str(); 8].join(", ")
+        )
+        .expect("write to string");
+        item = format!("*{name}");
+    }
+    write!(yaml, "state:\n  big:\n    type: list\n    value: {item}\n").expect("write to string");
+    yaml
+}
+
+#[test]
+fn parser_alias_repetition_guard_is_reported_as_the_node_budget() {
+    let large = YamlBudget {
+        nodes: 131_072,
+        scalar_bytes: 1024 * 1024,
+        depth: 64,
+    };
+    assert_eq!(limit(&alias_chain(6), large), Some(YamlBudgetLimit::Nodes));
+    // A small chain stays within both guards and parses.
+    assert_eq!(limit(&alias_chain(2), large), None);
+}
+
+/// Pins the parser text this module classifies: if a dependency bump changes
+/// it, this fails instead of the refusal silently turning generic again.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "pins the unbounded parser's own guard text that `from_str` classifies"
+)]
+fn the_classified_parser_guard_text_is_pinned() {
+    let Err(error) = serde_yaml_ng::from_str::<Value>(&alias_chain(6)) else {
+        panic!("the unbounded parser admitted the alias chain");
+    };
+    assert_eq!(error.to_string(), super::PARSER_REPETITION_GUARD);
+}
+
+#[test]
+fn a_genuinely_malformed_document_stays_malformed() {
+    assert!(matches!(
+        from_str::<Value>("a: [unterminated", BUDGET),
+        Err(BoundedYamlError::Malformed(_))
+    ));
 }

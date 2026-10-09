@@ -4837,5 +4837,9 @@
   "pipelines.graphExtensions.aggregateFlatDescription": "Group list rows and calculate explicit results. Each result row holds the group fields and the operation results side by side.",
   "pipelines.graphExtensions.regroup": "Regroup",
   "pipelines.graphExtensions.regroupHelp": "Parent rebuilds each split parent row from the split_out envelopes.",
-  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item."
+  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item.",
+  "pages.pipelines.createPipeline.admissionBody": "The runtime would refuse this graph, so saving is blocked until it is fixed.",
+  "pages.pipelines.createPipeline.admissionNode": "Node",
+  "pages.pipelines.createPipeline.admissionTitle": "This pipeline cannot be saved",
+  "pages.pipelines.createPipeline.admissionUnparseable": "The YAML does not parse, so the runtime cannot read a graph out of it."
 }
