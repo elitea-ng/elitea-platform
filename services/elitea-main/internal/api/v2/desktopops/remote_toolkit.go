@@ -274,6 +274,10 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		ToolName:                  call.toolName,
 		Arguments:                 arguments,
 		MCPAuthorizationReference: body.MCPAuthorizationReference,
+		// The worker refuses a sensitive tool without the approval below,
+		// whatever this route decided (defence in depth). Only this route
+		// opts in; test_tool and the MCP and code-platform runs do not.
+		EnforceSensitiveGate: true,
 	}
 	confirmedAt, confirmationOK := h.validConfirmation(body.Confirmation)
 	if err := runRequest.Validate(); err != nil || !localturn.ValidExecutionID(body.ExecutionID) ||

@@ -1,13 +1,19 @@
 """``toolkit_security`` enforcement for ``toolkit.call_tool.v1``.
 
 The producer (elitea-main) sends the platform guardrails policy in the run's
-runtime context (``toolkit.call_tool.runtime_context``), together with the only
-authority that may run a sensitive tool: ``sensitive_action_approval``. The
-Rust worker refuses a blocked tool and a sensitive one on this path
-(``services/elitea-worker-rust/src/toolkits/direct_execution.rs``,
-``execute_toolsets``); this module is the same refusal for the Python worker,
-so that a caller of ``toolkit.call_tool.v1`` other than the routes that check
-first cannot run what the policy forbids.
+runtime context (``toolkit.call_tool.runtime_context``). Two refusals follow
+from it:
+
+* A BLOCKED toolkit or tool is refused for every producer. The Rust worker
+  refuses it on this path too (``services/elitea-worker-rust/src/toolkits/
+  direct_execution.rs``, ``execute_toolsets``), for every producer.
+* A SENSITIVE tool is refused only when the run opts into the gate with
+  ``sensitive_gate: "enforce"`` and carries no ``sensitive_action_approval``.
+  Only the desktop's remote toolkit call (ADR-0029 decision 5b) opts in.
+  test_tool, the MCP toolkit run, the code platform's native operations and
+  index start send neither key and run a sensitive tool as they always have:
+  their producers decide who may run it (an editor's configuration test, an
+  MCP client the user connected, a code-platform admission).
 
 The matching rules are the SDK's (``elitea_sdk/runtime/toolkits/security.py``)
 as elitea-main's ``internal/domain/guardrails`` restates them: canonical keys
@@ -25,7 +31,8 @@ from typing import Any, Mapping
 from elitea_worker.execution.errors import InvalidInput, UnsupportedCapability
 
 
-APPROVAL_SOURCES = frozenset({"configuration_test", "user_confirmation"})
+APPROVAL_SOURCES = frozenset({"user_confirmation"})
+SENSITIVE_GATE_ENFORCE = "enforce"
 _WILDCARD = "*"
 _NON_ALNUM = re.compile(r"[^a-z0-9]")
 
@@ -69,11 +76,13 @@ def enforce_toolkit_security(
     *,
     toolkit_security: Mapping[str, Any] | None,
     approval: Mapping[str, Any] | None,
+    sensitive_gate: Any = None,
     toolkit_type: str,
     toolkit_name: str | None,
     tool_name: str,
 ) -> None:
-    """Refuse a blocked tool, and a sensitive one without an approval.
+    """Refuse a blocked tool, and (under the gate) a sensitive one without an
+    approval.
 
     An ABSENT policy is refused rather than read as "nothing is blocked": the
     producer always sends one, so its absence is a producer this worker does
@@ -81,6 +90,10 @@ def enforce_toolkit_security(
     prevent.
     """
 
+    if sensitive_gate is not None and sensitive_gate != SENSITIVE_GATE_ENFORCE:
+        raise InvalidInput("The sensitive gate is malformed.")
+    if approval is not None and sensitive_gate != SENSITIVE_GATE_ENFORCE:
+        raise InvalidInput("A sensitive action approval travels only with the sensitive gate.")
     if not isinstance(toolkit_security, Mapping):
         raise UnsupportedCapability("This tool run carries no toolkit security policy, so it was not run.")
     blocked_toolkits = toolkit_security.get("blocked_toolkits") or []
@@ -96,6 +109,8 @@ def enforce_toolkit_security(
     if candidates & blocked_tools.get(toolkit_key, set()):
         raise UnsupportedCapability("The requested toolkit operation is blocked by policy.")
 
+    if sensitive_gate != SENSITIVE_GATE_ENFORCE:
+        return
     identities = [key for key in (toolkit_key, canonical_key(toolkit_name)) if key]
     sensitive = any(candidates & sensitive_tools.get(key, set()) for key in identities) or bool(
         candidates & sensitive_tools.get(_WILDCARD, set())

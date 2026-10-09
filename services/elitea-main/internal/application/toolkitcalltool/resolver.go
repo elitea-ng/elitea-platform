@@ -143,8 +143,11 @@ func (r *CurrentAuthoritativeInputResolver) Resolve(
 	runtimePolicy := policy.Runtime()
 	frozenContext := RuntimeContext{
 		ToolkitSecurity: &runtimePolicy, LLMModel: request.LLMModel,
-		LLMConfiguration:        append(json.RawMessage(nil), request.LLMSettings...),
-		SensitiveActionApproval: request.SensitiveApproval.clone(),
+		LLMConfiguration: append(json.RawMessage(nil), request.LLMSettings...),
+	}
+	if request.EnforceSensitiveGate {
+		frozenContext.SensitiveGate = SensitiveGateEnforce
+		frozenContext.SensitiveActionApproval = request.SensitiveApproval.clone()
 	}
 	if request.MCPAuthorizationReference != "" {
 		if r.tokens == nil {
