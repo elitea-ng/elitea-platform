@@ -112,6 +112,7 @@ FROM python:3.12.14-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    TIKTOKEN_CACHE_DIR=/opt/elitea/tokenizer-cache \
     AZURE_DEVOPS_CACHE_DIR=/tmp/.azure-devops
 
 # THE `ADD` BELOW IS NOT A FILE THE IMAGE NEEDS. It is a cache stamp.
@@ -155,7 +156,8 @@ RUN . /etc/os-release \
 
 COPY --from=build /wheels /wheels
 COPY testdata/proto/runtime/v1 /opt/elitea/conformance
-RUN python -m pip install \
+RUN mkdir -p "${TIKTOKEN_CACHE_DIR}" \
+    && python -m pip install \
     --no-cache-dir \
     --disable-pip-version-check \
     --no-index \
@@ -229,31 +231,21 @@ RUN /usr/local/bin/deno cache --node-modules-dir=auto /opt/elitea/sandbox/main.t
     && chown -R 10001:10001 /opt/elitea/sandbox \
     && chmod -R go-w /opt/elitea/sandbox
 
-# THE ON-DISK CACHES THE BUILD LEAVES BEHIND AS ROOT, HANDED TO THE RUNTIME UID.
+# Azure DevOps needs a writable cache owned by the runtime user.
+# A runtime /tmp mount creates this directory through the normal SDK import.
+# Without that mount, the image directory must already have the correct owner.
+# Client._get_resource_locations writes its OPTIONS catalogue through FileCache.save_with_retry.
+# A root-owned cache can cause PermissionError during the first toolkit construction.
 #
-# Two libraries in this image cache to a fixed path under /tmp and both create
-# it at IMPORT time, as root, while the build is still running:
-#   * `azure-devops` — AZURE_DEVOPS_CACHE_DIR above; `_file_cache.get_cache_dir()`
-#     runs at module import, so the directory is baked into the image owned by
-#     root and mode 0755.
-#   * `tiktoken` — /tmp/data-gym-cache, the same way.
-# The container then runs as 10001 and cannot write either.
-#
-# For tiktoken that is a silent re-download. For azure-devops it is a FAILED
-# TOOL CALL: `Client._get_resource_locations` writes the OPTIONS catalogue to
-# the cache with `OPTIONS_FILE_CACHE[url] = …`, and `FileCache.save_with_retry`
-# lets the PermissionError out — so the FIRST ado_boards/ado_wiki/ado_repos/
-# ado_plans toolkit built in a fresh worker process dies inside its pydantic
-# model validator with an opaque ValidationError and the turn ends `INTERNAL`.
-# Every LATER build in the same process succeeds, because the failed write
-# still populated the cache's in-memory dict — which is why this reads as a
-# once-per-pod flake rather than as a broken feature.
-#
-# Creating both directories with the runtime's ownership is the whole fix; the
-# paths are the libraries' own and are pinned by the ENV above.
-RUN mkdir -p /tmp/.azure-devops /tmp/data-gym-cache \
-    && chown 10001:10001 /tmp/.azure-devops /tmp/data-gym-cache \
-    && chmod 0700 /tmp/.azure-devops /tmp/data-gym-cache
+# The indexing admission warms the tokenizer cache before runtime isolation.
+# Keep those public assets outside /tmp so a runtime tmpfs cannot hide them.
+# The runtime user reads the cache without writing or downloading it.
+RUN mkdir -p /tmp/.azure-devops \
+    && chown 10001:10001 /tmp/.azure-devops \
+    && chmod 0700 /tmp/.azure-devops \
+    && chmod -R a+rX,go-w "${TIKTOKEN_CACHE_DIR}"
 
 USER 10001:10001
+RUN --network=none python -c "from elitea_worker.indexing_runtime_capabilities import require_indexing_runtime_capabilities; print('indexing-runtime-profile=' + require_indexing_runtime_capabilities())" \
+    && python -c "from elitea_worker.agent_current_runtime_capabilities import require_agent_current_runtime_capabilities; print('agent-current-runtime-profile=' + require_agent_current_runtime_capabilities())"
 ENTRYPOINT ["elitea-worker"]
