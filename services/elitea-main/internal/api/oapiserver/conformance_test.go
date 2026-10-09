@@ -251,6 +251,10 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		CurrentResolvedVersion: http.NotFoundHandler(),
 		// Client contract 1.6: executeRemoteToolkitTool, likewise.
 		CurrentRemoteToolkit: http.NotFoundHandler(),
+		// listExecutionInterrupts and decideExecutionInterrupt: registered only
+		// when the interrupt route is composed (production_router.go), i.e.
+		// ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true.
+		CurrentExecutionInterrupts: http.NotFoundHandler(),
 		RuntimeRoutes: api.RuntimeRoutes{
 			Validation:      http.NotFoundHandler(),
 			ExecutionEvents: http.NotFoundHandler(),
