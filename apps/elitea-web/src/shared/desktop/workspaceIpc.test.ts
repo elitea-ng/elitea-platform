@@ -53,6 +53,18 @@ describe('createWorkspaceIpc', () => {
     ]);
   });
 
+  it('reads and deletes a thread\'s history, unwrapping the host\'s answers', async () => {
+    const turn = { turn_id: 't1', events: [] };
+    const invoke = vi.fn().mockResolvedValueOnce({ turns: [turn] }).mockResolvedValueOnce({ deleted: 1 });
+    const ipc = createWorkspaceIpc(invoke, noListen);
+    expect(await ipc.threadHistory('w1', '42')).toEqual([turn]);
+    expect(await ipc.deleteThreadHistory('w1', '42')).toBe(1);
+    expect(invoke.mock.calls).toEqual([
+      ['thread_history', { workspace_id: 'w1', conversation_id: '42' }],
+      ['thread_history_delete', { workspace_id: 'w1', conversation_id: '42' }],
+    ]);
+  });
+
   it("rejects with the host's {code, message} as a WorkspaceIpcError", async () => {
     const invoke = vi.fn().mockRejectedValueOnce({ code: 'workspace_busy', message: 'A turn is already running in this workspace.' });
     const ipc = createWorkspaceIpc(invoke, noListen);
@@ -130,6 +142,23 @@ describe('createFakeWorkspaceIpc', () => {
     ipc.failNext('restore', 'workspace_busy', 'busy');
     await expect(ipc.restore('t')).rejects.toMatchObject({ code: 'workspace_busy' });
     expect(await ipc.restore('t')).toEqual({ restored: ['f'] });
+  });
+
+  it('keeps a history per thread, and forgets a removed workspace\'s', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ id: 'w1', path: '/a', name: 'a', project_id: 1, is_git: false }] });
+    expect(await ipc.threadHistory('w1', '42')).toEqual([]);
+    const turn = {
+      turn_id: 't1', conversation_id: '42', conversation_uuid: null, prompt: 'hi', mentions: [], started_at: 1, finished_at: 2,
+      events: [], changes: null, events_truncated: false, state: 'done' as const, live: false,
+    };
+    ipc.setHistory('w1', '42', [turn]);
+    expect(await ipc.threadHistory('w1', '42')).toEqual([turn]);
+    expect(await ipc.threadHistory('w1', '43')).toEqual([]);
+    await ipc.remove('w1');
+    expect(await ipc.threadHistory('w1', '42')).toEqual([]);
+    ipc.setHistory('w1', '42', [turn]);
+    expect(await ipc.deleteThreadHistory('w1', '42')).toBe(1);
+    expect(await ipc.threadHistory('w1', '42')).toEqual([]);
   });
 
   it('delivers emitted events to subscribers until they unsubscribe', async () => {

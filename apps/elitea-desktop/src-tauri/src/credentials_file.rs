@@ -168,7 +168,7 @@ fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
     options.open(path)
 }
 
-fn create_private_file(path: &Path) -> std::io::Result<fs::File> {
+pub(crate) fn create_private_file(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -181,7 +181,10 @@ fn create_private_file(path: &Path) -> std::io::Result<fs::File> {
     options.open(path)
 }
 
-fn create_private_dir(dir: &Path) -> Result<(), HostError> {
+/// Create `dir` (and its parents) owner-only, or narrow an existing one to
+/// `0700`; refused when it is a symlink or not a directory. Also used by the
+/// thread history (`history.rs`), which lives in the same directory.
+pub(crate) fn create_private_dir(dir: &Path) -> Result<(), HostError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -191,19 +194,19 @@ fn create_private_dir(dir: &Path) -> Result<(), HostError> {
     }
     builder
         .create(dir)
-        .map_err(|e| io_error("could not create the credentials directory", &e))?;
+        .map_err(|e| io_error("could not create the app's private directory", &e))?;
     // An existing directory keeps its mode under `create`: narrow it.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         let meta = fs::symlink_metadata(dir)
-            .map_err(|e| io_error("could not inspect the credentials directory", &e))?;
+            .map_err(|e| io_error("could not inspect the app's private directory", &e))?;
         if meta.file_type().is_symlink() || !meta.is_dir() {
             return Err(refuse(dir, "is not a directory"));
         }
         if meta.permissions().mode() & 0o077 != 0 {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-                .map_err(|e| io_error("could not restrict the credentials directory", &e))?;
+                .map_err(|e| io_error("could not restrict the app's private directory", &e))?;
         }
     }
     Ok(())

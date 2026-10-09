@@ -413,6 +413,20 @@ impl PlatformApi {
         .into_ok()
     }
 
+    /// The signed-in user's id (`GET /api/v2/social/author`): with the
+    /// origin, whose thread history is whose (`history.rs`).
+    ///
+    /// # Errors
+    ///
+    /// Refused or failed, or the answer carries no numeric `id`.
+    pub async fn current_user_id(&self) -> Result<i64, ApiError> {
+        let author: Value = self
+            .send(Method::GET, "/api/v2/social/author", None, &[])
+            .await?
+            .into_ok()?;
+        author_id(&author)
+    }
+
     /// One remote toolkit call attempt; the caller reads the status.
     ///
     /// # Errors
@@ -486,6 +500,21 @@ fn conversation_uuid(detail: &Value) -> Result<String, ApiError> {
         })
 }
 
+fn author_id(author: &Value) -> Result<i64, ApiError> {
+    match author.get("id") {
+        Some(Value::Number(id)) => id.as_i64(),
+        Some(Value::String(id)) => id.parse().ok(),
+        _ => None,
+    }
+    .filter(|id| *id > 0)
+    .ok_or_else(|| {
+        ApiError::local(
+            "invalid_response",
+            "the platform did not say who is signed in",
+        )
+    })
+}
+
 fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Result<i64, ApiError> {
     let participants = detail
         .get("participants")
@@ -557,6 +586,20 @@ fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Resu
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_signed_in_user_is_the_authors_id() {
+        assert_eq!(author_id(&json!({"id": 3, "name": "Me"})).unwrap(), 3);
+        assert_eq!(author_id(&json!({"id": "17"})).unwrap(), 17);
+        for bad in [
+            json!({}),
+            json!({"id": 0}),
+            json!({"id": "me"}),
+            json!(null),
+        ] {
+            assert_eq!(author_id(&bad).unwrap_err().code, "invalid_response");
+        }
+    }
 
     #[test]
     fn the_conversation_uuid_comes_from_the_detail_in_canonical_form() {

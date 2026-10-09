@@ -55,6 +55,10 @@ adk-session = { version = "~2.2.0", default-features = false }
 adk-tool = { version = "~2.2.0", default-features = false }
 tauri-plugin-log = "2"
 log = "0.4"
+# The local thread history (src/history.rs). `bundled`: the SQLite the app
+# ships with, not whatever the OS has; the same libsqlite3-sys line sqlx
+# already pins in libs/rust.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"

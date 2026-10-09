@@ -100,6 +100,28 @@ export type AgentEvent =
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 
+/** One recorded turn of a thread (`thread_history`, IPC.md "Thread history"). */
+export interface StoredTurn {
+  turn_id: string;
+  conversation_id: string;
+  conversation_uuid: string | null;
+  /** As typed; the "@" references are `mentions`. */
+  prompt: string;
+  mentions: string[];
+  /** Unix ms. */
+  started_at: number;
+  finished_at: number | null;
+  /** The turn's `agent://event` stream: fold it like the live one. */
+  events: AgentEvent[];
+  /** What the turn changed, as it ended (`null` before it ended). */
+  changes: ChangedFile[] | null;
+  events_truncated: boolean;
+  /** `interrupted`: it never ended (the app quit while it ran). */
+  state: 'done' | 'running' | 'interrupted';
+  /** The host still keeps it: `turn_changes` / `checkpoint_restore` answer for it. */
+  live: boolean;
+}
+
 /**
  * A rejected workspace / turn command. The host rejects with `{code, message}`
  * (`IpcError` in `src-tauri/src/local_commands.rs`): `code` is what the UI
@@ -141,6 +163,10 @@ export interface WorkspaceIpc {
   turnChanges(turnId: string): Promise<TurnChanges>;
   /** Restore the whole turn, or one file when `path` is given. */
   restore(turnId: string, path?: string): Promise<{ restored: string[] }>;
+  /** The turns this machine recorded in a thread, oldest first; `[]` when it recorded none. */
+  threadHistory(workspaceId: string, conversationId: string): Promise<StoredTurn[]>;
+  /** Forget a thread's recorded turns (the conversation itself stays); resolves with how many. */
+  deleteThreadHistory(workspaceId: string, conversationId: string): Promise<number>;
   /** Subscribe to `agent://event`; resolves once the subscription is live, with its unsubscribe. */
   onEvent(handler: AgentEventHandler): Promise<() => void>;
 }
@@ -176,6 +202,10 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     turnChanges: (turnId) => invoke<TurnChanges>('turn_changes', { turn_id: turnId }),
     restore: (turnId, path) =>
       invoke<{ restored: string[] }>('checkpoint_restore', path === undefined ? { turn_id: turnId } : { turn_id: turnId, path }),
+    threadHistory: async (workspaceId, conversationId) =>
+      (await invoke<{ turns: StoredTurn[] }>('thread_history', { workspace_id: workspaceId, conversation_id: conversationId })).turns,
+    deleteThreadHistory: async (workspaceId, conversationId) =>
+      (await invoke<{ deleted: number }>('thread_history_delete', { workspace_id: workspaceId, conversation_id: conversationId })).deleted,
     onEvent: (handler) => listen(AGENT_EVENT_CHANNEL, (payload) => handler(payload as AgentEvent)),
   };
 }

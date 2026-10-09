@@ -141,6 +141,9 @@ fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) 
     let remote_calls = AtomicUsize::new(0);
     move |req: &Req| {
         let path = req.path.as_str();
+        if path == "/api/v2/social/author" {
+            return Res::json(200, &json!({"id": 1, "name": "Me"}));
+        }
         if path == "/api/v2/elitea_core/resolved_version/prompt_lib/1/5/9" {
             return Res::json(200, &resolved(&details, withheld));
         }
@@ -256,6 +259,9 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
                 attempts: 3,
                 delay: Duration::from_millis(10),
             },
+            history: Some(Arc::new(
+                crate::history::HistoryStore::open(app.path()).unwrap(),
+            )),
         })
         .unwrap(),
     );
@@ -1283,4 +1289,120 @@ async fn signing_out_cancels_running_turns_and_forgets_kept_ones() {
     for turn in [&finished.turn_id, &running.turn_id] {
         assert_eq!(h.host.changes(turn).unwrap_err().code, "turn_unknown");
     }
+}
+
+#[tokio::test]
+async fn a_finished_turn_is_in_its_threads_history_as_it_was_emitted() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // A refused start is not history.
+    let mut refused = request(&h.workspace_id);
+    refused.prompt = "  ".into();
+    assert!(h.host.start(refused).await.is_err());
+
+    let mut asked = request(&h.workspace_id);
+    std::fs::write(h.folder.path().join("README.md"), "x").unwrap();
+    asked.mentions = vec!["README.md".into()];
+    let started = h.host.start(asked).await.unwrap();
+    let emitted: Vec<AgentEvent> = until_done(&h.emitter)
+        .await
+        .into_iter()
+        .filter(|e| e.turn_id == started.turn_id)
+        .collect();
+
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    assert_eq!(turns.len(), 1, "only the turn that started");
+    let turn = &turns[0];
+    assert_eq!(turn.turn_id, started.turn_id);
+    assert_eq!(turn.prompt, "Write notes and file a bug", "as typed");
+    assert_eq!(turn.mentions, ["README.md"]);
+    assert_eq!(
+        turn.conversation_uuid.as_deref(),
+        Some("99999999-2222-4333-8444-555555555555")
+    );
+    assert_eq!(turn.state, "done");
+    assert!(turn.live, "the host still keeps it for review and undo");
+    assert_eq!(turn.changes.as_ref().unwrap()[0]["path"], "notes.txt");
+    // Every event is stored in order, the text deltas merged into one row.
+    let stored: Vec<(&str, u64)> = turn
+        .events
+        .iter()
+        .map(|e| (e.kind.as_str(), e.seq))
+        .collect();
+    let mut expected: Vec<(&str, u64)> = Vec::new();
+    for event in &emitted {
+        if event.kind == "text_delta" && expected.last().is_some_and(|(k, _)| *k == "text_delta") {
+            expected.pop();
+        }
+        expected.push((event.kind, event.seq));
+    }
+    assert_eq!(stored, expected);
+    let text: String = turn
+        .events
+        .iter()
+        .filter(|e| e.kind == "text_delta")
+        .map(|e| e.payload["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(text, "Done.");
+    // The thread is found by its UUID too; another thread is empty.
+    assert_eq!(
+        h.host
+            .thread_history(&h.workspace_id, "99999999-2222-4333-8444-555555555555")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        h.host
+            .thread_history(&h.workspace_id, "43")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // The user was looked up once for the session; a new sign-in asks again.
+    assert_eq!(seen(&h.server, "/social/author").len(), 1);
+    h.host.forget_identity();
+    let after = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    assert_eq!(after.len(), 1, "sign-out keeps the history (keyed by user)");
+    assert!(!after[0].live, "but the turn is no longer reviewable");
+    assert_eq!(seen(&h.server, "/social/author").len(), 2);
+
+    assert_eq!(
+        h.host
+            .delete_thread_history(&h.workspace_id, "42")
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        h.host
+            .thread_history(&h.workspace_id, "42")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn removing_a_workspace_forgets_its_threads() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h.emitter, &started.turn_id).await;
+    assert_eq!(
+        h.host
+            .thread_history(&h.workspace_id, "42")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    h.host.remove_workspace(&h.workspace_id).unwrap();
+    assert!(
+        h.host
+            .thread_history(&h.workspace_id, "42")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

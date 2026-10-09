@@ -25,6 +25,7 @@ use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
 use crate::d0::turn::{AgentHost, PolicySource, TurnError, TurnRequest, TurnStarted, TurnStatus};
 use crate::error::HostError;
+use crate::history::StoredTurn;
 use crate::settings::SettingsFiles;
 use crate::workspaces::{Workspace, WorkspaceStore};
 use elitea_local_tools::find::FoundPath;
@@ -414,6 +415,48 @@ pub fn approval_respond(
 }
 
 #[derive(Serialize)]
+pub struct ThreadHistory {
+    turns: Vec<StoredTurn>,
+}
+
+/// The stored turns of one thread of the signed-in account, oldest first,
+/// each with its `agent://event` stream (`history.rs`). Empty when nothing
+/// is stored (the thread ran elsewhere, or before this version).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_history(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    conversation_id: String,
+) -> Result<ThreadHistory, IpcError> {
+    Ok(ThreadHistory {
+        turns: state
+            .agents
+            .thread_history(&workspace_id, &conversation_id)
+            .await?,
+    })
+}
+
+#[derive(Serialize)]
+pub struct HistoryDeleted {
+    deleted: usize,
+}
+
+/// Forget one thread's stored turns (the signed-in account's only).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_history_delete(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    conversation_id: String,
+) -> Result<HistoryDeleted, IpcError> {
+    Ok(HistoryDeleted {
+        deleted: state
+            .agents
+            .delete_thread_history(&workspace_id, &conversation_id)
+            .await?,
+    })
+}
+
+#[derive(Serialize)]
 pub struct TurnChanges {
     files: Vec<FileChange>,
 }
@@ -453,6 +496,7 @@ mod tests {
         let error: IpcError = TurnError {
             code: "workspace_busy".into(),
             message: "A turn is already running in this workspace.".into(),
+            status: None,
         }
         .into();
         assert_eq!(

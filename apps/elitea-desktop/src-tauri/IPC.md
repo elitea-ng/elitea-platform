@@ -53,7 +53,7 @@ type Workspace = {
 | --- | --- | --- |
 | `workspace_open` | — | `Workspace \| null` — the native folder dialog; `null` when cancelled. Opening a folder that is already a workspace returns that workspace. |
 | `workspace_list` | — | `Workspace[]` |
-| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints) and its turns; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
+| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
@@ -156,6 +156,48 @@ cannot be undone here).
 The host keeps the last 20 turns of each workspace for `turn_changes` and
 `checkpoint_restore`; an older turn rejects with `turn_expired`, an id it
 never ran with `turn_unknown`.
+
+## Thread history (`src/history.rs`)
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `thread_history` | `{workspace_id, conversation_id}` | `{turns: StoredTurn[]}` — the turns of that thread the host recorded for the signed-in account, oldest first. `[]` when it has none (the thread ran on the web or another machine, or before this version) or runs without a store. `conversation_id` is the id the turns started with or the conversation's UUID. Rejects `invalid_request`, `not_signed_in`, `storage`, or the platform's code when the user lookup fails. |
+| `thread_history_delete` | `{workspace_id, conversation_id}` | `{deleted: number}` — forgets that thread's stored turns (the signed-in account's only). The conversation on the server is untouched. |
+
+```ts
+type StoredTurn = {
+  turn_id: string;
+  conversation_id: string;          // as the turn was started (the UI's id)
+  conversation_uuid: string | null;
+  prompt: string;                   // as typed; the "@" list is `mentions`
+  mentions: string[];
+  started_at: number;               // Unix ms
+  finished_at: number | null;       // when `done` was recorded
+  events: AgentEvent[];             // the turn's `agent://event` stream (below)
+  changes: FileChange[] | null;     // what it changed, as it ended
+  events_truncated: boolean;        // the turn outgrew the per-turn cap
+  state: "done" | "running" | "interrupted"; // interrupted: never ended (the app quit)
+  live: boolean;                    // turn_changes / checkpoint_restore still answer for it
+};
+```
+
+The host records every event of a started turn as it emits it, so the
+history survives a webview reload or crash; replaying a turn is folding its
+`events` exactly as the live stream (consecutive `text_delta` events are
+stored as one, numbered by the last of them). A refused start is not
+recorded. Bounds: a string in one event is cut at 16 KiB, a turn's events
+at 4 MiB (past it only `status`, `error` and `done` are kept and
+`events_truncated` is set), a stored diff at 64 KiB (1 MiB per turn), and a
+thread keeps its newest 200 turns within 32 MiB.
+
+The store is `threads.sqlite` in the app data directory (owner-only, like
+the credentials file; SQLite WAL, versioned with `PRAGMA user_version`).
+Rows are keyed by the deployment origin, the signed-in user's id
+(`GET /api/v2/social/author`, looked up once per sign-in), the workspace
+and the conversation: another account or deployment never reads them.
+**Sign-out keeps the history** (it is keyed by user, so the next sign-in of
+the same account sees it again, and another account does not);
+`workspace_remove` deletes the workspace's rows for every account.
 
 ## App and native shell (`src/platform.rs`, `src/local_commands.rs`)
 

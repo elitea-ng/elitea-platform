@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-history-delete"
+description = "Enables the thread_history_delete command without any pre-configured scope."
+commands.allow = ["thread_history_delete"]
+
+[[permission]]
+identifier = "deny-thread-history-delete"
+description = "Denies the thread_history_delete command without any pre-configured scope."
+commands.deny = ["thread_history_delete"]

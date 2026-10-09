@@ -22,6 +22,8 @@
     "allow-agent-turn-status",
     "allow-approval-respond",
     "allow-turn-changes",
+    "allow-thread-history",
+    "allow-thread-history-delete",
     "allow-checkpoint-restore",
     "allow-reveal-path",
     "allow-open-path",

@@ -22,6 +22,8 @@ fn main() {
             "agent_turn_status",
             "approval_respond",
             "turn_changes",
+            "thread_history",
+            "thread_history_delete",
             "checkpoint_restore",
             "reveal_path",
             "open_path",

@@ -56,6 +56,7 @@ use super::model::GatewayTransport;
 use super::recorder::{FileChange, Recorder};
 use super::remote_tools::{RemoteContext, RemoteToolProvider, RetryPolicy};
 use super::tools::{ObservedToolset, ToolObserver};
+use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, TurnTap};
 use crate::workspaces::{Workspace, WorkspaceStore};
 
 const APP_NAME: &str = "elitea-desktop";
@@ -75,6 +76,8 @@ pub trait PolicySource: Send + Sync {
 pub struct TurnError {
     pub code: String,
     pub message: String,
+    /// The platform's HTTP status when the platform refused; for the log.
+    pub status: Option<u16>,
 }
 
 impl TurnError {
@@ -82,6 +85,7 @@ impl TurnError {
         Self {
             code: code.to_owned(),
             message: message.into(),
+            status: None,
         }
     }
 }
@@ -91,8 +95,18 @@ impl From<ApiError> for TurnError {
         Self {
             code: error.code,
             message: error.message,
+            status: error.status,
         }
     }
+}
+
+/// `code`, plus `HTTP <status>` when the platform answered: what the log
+/// says of a failure (never a message, a prompt or a body).
+fn log_reason(code: &str, status: Option<u16>) -> String {
+    status.map_or_else(
+        || code.to_owned(),
+        |status| format!("{code} (HTTP {status})"),
+    )
 }
 
 impl std::fmt::Display for TurnError {
@@ -142,6 +156,8 @@ pub struct HostDeps {
     pub workspaces: Arc<WorkspaceStore>,
     pub emitter: Arc<dyn EventEmitter>,
     pub retry: RetryPolicy,
+    /// The local thread history; `None` runs without one.
+    pub history: Option<Arc<HistoryStore>>,
 }
 
 /// One workspace's local session and its prompt.
@@ -350,6 +366,9 @@ pub struct AgentHost {
     sessions: Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     busy: BusySet,
     turns: Mutex<TurnTable>,
+    /// Whose history the signed-in session writes: the session's identity
+    /// (origin and sign-in) and the owner it resolved to.
+    owner: Mutex<Option<(String, Owner)>>,
 }
 
 /// The agent's instructions, then the workspace's AGENTS.md files as one
@@ -430,6 +449,7 @@ impl AgentHost {
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
             turns: Mutex::new(TurnTable::default()),
+            owner: Mutex::new(None),
         })
     }
 
@@ -621,10 +641,32 @@ impl AgentHost {
     /// platform call.
     pub async fn start(self: &Arc<Self>, request: TurnRequest) -> Result<TurnStarted, TurnError> {
         let turn_id = uuid::Uuid::new_v4().to_string();
-        let events = Arc::new(TurnEvents::new(turn_id.clone(), self.deps.emitter.clone()));
+        let started_at = chrono::Utc::now().timestamp_millis();
+        let tap = TurnTap::new(self.deps.emitter.clone(), self.deps.history.clone());
+        let events = Arc::new(TurnEvents::new(turn_id.clone(), tap.clone()));
         events.status(Phase::Resolving, None);
-        match self.prepare(&request, &events).await {
+        match self.prepare(&request, &events, tap.clone()).await {
             Ok(prepared) => {
+                // The history keeps the prompt as typed, its "@" list apart.
+                match self.owner(&prepared.api).await {
+                    Ok(owner) => tap.activate(NewTurn {
+                        owner,
+                        workspace_id: request.workspace_id.clone(),
+                        conversation_id: prepared.conversation.clone(),
+                        conversation_uuid: Some(prepared.conversation_uuid.clone()),
+                        turn_id: turn_id.clone(),
+                        prompt: request.prompt.clone(),
+                        mentions: request.mentions.clone(),
+                        started_at,
+                    }),
+                    Err(error) => {
+                        log::warn!(
+                            "a local turn is not kept in the thread history: {}",
+                            log_reason(&error.code, error.status)
+                        );
+                        tap.discard();
+                    }
+                }
                 let started = TurnStarted {
                     turn_id: turn_id.clone(),
                     execution_id: prepared.started.execution_id.clone(),
@@ -647,6 +689,11 @@ impl AgentHost {
                 Ok(started)
             }
             Err(error) => {
+                log::warn!(
+                    "a local turn did not start: {}",
+                    log_reason(&error.code, error.status)
+                );
+                tap.discard();
                 events.error(&error.code, &error.message);
                 events.status(Phase::Error, Some(&error.message));
                 Err(error)
@@ -658,6 +705,7 @@ impl AgentHost {
         &self,
         request: &TurnRequest,
         events: &Arc<TurnEvents>,
+        tap: Arc<TurnTap>,
     ) -> Result<Prepared, TurnError> {
         let conversation = conversation_key(&request.conversation_id)?;
         if request.prompt.trim().is_empty() {
@@ -736,6 +784,9 @@ impl AgentHost {
             .await;
         let started = started?;
         Ok(Prepared {
+            conversation,
+            conversation_uuid: answering.conversation_uuid,
+            tap,
             project,
             request: request.clone(),
             events: events.clone(),
@@ -755,6 +806,7 @@ impl AgentHost {
         mut guard: LocalExecutionGuard,
     ) {
         let Prepared {
+            tap,
             project,
             request,
             events,
@@ -764,6 +816,7 @@ impl AgentHost {
             policy,
             claim,
             api,
+            ..
         } = prepared;
         let recorder = entry.recorder.clone();
         workspace.prompt.bind(Some(TurnBinding {
@@ -805,6 +858,8 @@ impl AgentHost {
         let Some(result) = outcome else {
             let _ = sink.finish(RunOutcome::Stopped).await;
             drop(claim);
+            let changes = recorder.changes(session.workspace());
+            tap.changes(&changes);
             events.status(Phase::Cancelled, None);
             entry.finish(
                 &events,
@@ -812,7 +867,7 @@ impl AgentHost {
                     "committed": false,
                     "conversation_id": conversation_id,
                     "message_ids": [],
-                    "changed_files": recorder.changes(session.workspace()).len(),
+                    "changed_files": changes.len(),
                 }),
             );
             return;
@@ -832,6 +887,10 @@ impl AgentHost {
             })
             .await;
         if let Some(error) = &failure {
+            log::warn!(
+                "a local turn's run failed: {}",
+                log_reason(&error.code, error.status)
+            );
             events.error(&error.code, &error.message);
         }
         events.status(Phase::Committing, None);
@@ -853,7 +912,15 @@ impl AgentHost {
             .await;
         // Free before `done`: the UI may send the next turn as soon as it sees it.
         drop(claim);
-        let changed_files = recorder.changes(session.workspace()).len();
+        let changes = recorder.changes(session.workspace());
+        tap.changes(&changes);
+        let changed_files = changes.len();
+        if let Err(error) = &committed {
+            log::warn!(
+                "a local turn was not saved: {}",
+                log_reason(&error.code, error.status)
+            );
+        }
         match committed {
             Ok(_) => {
                 if failure.is_some() {
@@ -1109,6 +1176,10 @@ impl AgentHost {
         }
         *turns = TurnTable::default();
         drop(turns);
+        *self
+            .owner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1141,7 +1212,109 @@ impl AgentHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .forget_workspace(workspace_id);
+        if let Some(history) = &self.deps.history
+            && let Err(error) = history.delete_workspace(workspace_id)
+        {
+            log::warn!("could not delete a removed workspace's thread history: {error}");
+        }
         Ok(())
+    }
+
+    /// Whose history the session signed in now writes and reads: the
+    /// deployment and the user there (looked up once per sign-in).
+    async fn owner(&self, api: &PlatformApi) -> Result<Owner, TurnError> {
+        let not_signed_in = || TurnError::new("not_signed_in", "Sign in to the deployment first.");
+        let identity = api.credentials().identity().ok_or_else(not_signed_in)?;
+        {
+            let cached = self
+                .owner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some((of, owner)) = cached.as_ref()
+                && *of == identity
+            {
+                return Ok(owner.clone());
+            }
+        }
+        let origin = api.credentials().bearer().await?.origin;
+        let user_id = api.current_user_id().await?;
+        // Both answers must be of the session the lookup began under.
+        if api.credentials().identity().as_deref() != Some(identity.as_str()) {
+            return Err(TurnError::new(
+                "identity_changed",
+                "You signed out or signed in again meanwhile.",
+            ));
+        }
+        let owner = Owner {
+            origin: origin.trim_end_matches('/').to_owned(),
+            user_id,
+        };
+        *self
+            .owner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((identity, owner.clone()));
+        Ok(owner)
+    }
+
+    /// `thread_history`: the stored turns of one thread of the signed-in
+    /// account, oldest first; empty without a history store.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `not_signed_in`, the user lookup failed, or the
+    /// store could not be read (`storage`).
+    pub async fn thread_history(
+        &self,
+        workspace_id: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<StoredTurn>, TurnError> {
+        let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
+        let Some(history) = self.deps.history.clone() else {
+            return Ok(Vec::new());
+        };
+        let owner = self.owner(&self.api).await?;
+        let mut turns = history
+            .thread(&owner, workspace_id, &conversation)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        let table = self
+            .turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for turn in &mut turns {
+            if let Some(entry) = table.entries.get(&turn.turn_id) {
+                turn.live = true;
+                let ended = entry
+                    .done
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some();
+                if !ended {
+                    turn.state = "running";
+                }
+            }
+        }
+        Ok(turns)
+    }
+
+    /// `thread_history_delete`: forget one thread's stored turns (the
+    /// signed-in account's only); the number deleted.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::thread_history`].
+    pub async fn delete_thread_history(
+        &self,
+        workspace_id: &str,
+        conversation_id: &str,
+    ) -> Result<usize, TurnError> {
+        let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
+        let Some(history) = self.deps.history.clone() else {
+            return Ok(0);
+        };
+        let owner = self.owner(&self.api).await?;
+        history
+            .delete_thread(&owner, workspace_id, &conversation)
+            .map_err(|e| TurnError::new("storage", e.to_string()))
     }
 
     /// `approval_respond`. False when no such question is open.
@@ -1202,6 +1375,12 @@ impl AgentHost {
 }
 
 struct Prepared {
+    /// The conversation as the UI named it (its id or UUID).
+    conversation: String,
+    /// Its canonical UUID, from the platform.
+    conversation_uuid: String,
+    /// The turn's events' recorder (the thread history).
+    tap: Arc<TurnTap>,
     /// The workspace's AGENTS.md files, read at the start.
     project: ProjectInstructions,
     request: TurnRequest,

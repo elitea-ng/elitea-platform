@@ -13,6 +13,7 @@ mod credentials_file;
 mod d0;
 mod discovery;
 mod error;
+mod history;
 mod http_scope;
 mod local_commands;
 mod logging;
@@ -44,6 +45,7 @@ use crate::credentials_file::CredentialsFile;
 use crate::d0::remote_tools::RetryPolicy;
 use crate::d0::turn::{AgentHost, HostDeps};
 use crate::error::HostError;
+use crate::history::HistoryStore;
 use crate::local_commands::{AuthCredentials, LocalState, MainWindowEvents, StoredPolicy};
 use crate::settings::SettingsFiles;
 use crate::tokens::TokenEndpoint;
@@ -129,6 +131,17 @@ pub fn run() {
             let stored_origin = auth.state().ok().and_then(|s| s.origin);
             http_scope::grant_stored(app.handle(), stored_origin.as_deref());
             // Local work (ADR-0029 D0): workspaces and the local agent turn.
+            // The thread history; the app runs without it when it is refused.
+            let history = match HistoryStore::open(&data_dir) {
+                Ok(store) => {
+                    log::info!("thread history: {}", store.path().display());
+                    Some(Arc::new(store))
+                }
+                Err(error) => {
+                    log::warn!("running without the thread history: {error}");
+                    None
+                }
+            };
             let workspaces = Arc::new(WorkspaceStore::new(data_dir));
             let agents = AgentHost::new(HostDeps {
                 credentials: Arc::new(AuthCredentials(auth.clone())),
@@ -137,6 +150,7 @@ pub fn run() {
                 workspaces: workspaces.clone(),
                 emitter: Arc::new(MainWindowEvents(app.handle().clone())),
                 retry: RetryPolicy::default(),
+                history,
             })
             .map_err(|error| error.message)?;
             app.manage(LocalState {
@@ -168,6 +182,8 @@ pub fn run() {
             local_commands::agent_turn_status,
             local_commands::approval_respond,
             local_commands::turn_changes,
+            local_commands::thread_history,
+            local_commands::thread_history_delete,
             local_commands::checkpoint_restore,
             local_commands::reveal_path,
             local_commands::open_path,

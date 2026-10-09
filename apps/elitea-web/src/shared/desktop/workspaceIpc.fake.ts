@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AgentEventHandler,
   ApprovalDecision,
+  StoredTurn,
   TurnChanges,
   TurnStartRequest,
   TurnStarted,
@@ -17,7 +18,18 @@ import type {
 } from './workspaceIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
-type FailableCommand = 'remove' | 'bindProject' | 'files' | 'startTurn' | 'cancelTurn' | 'turnStatus' | 'respondApproval' | 'turnChanges' | 'restore';
+type FailableCommand =
+  | 'remove'
+  | 'bindProject'
+  | 'files'
+  | 'startTurn'
+  | 'cancelTurn'
+  | 'turnStatus'
+  | 'respondApproval'
+  | 'turnChanges'
+  | 'restore'
+  | 'threadHistory'
+  | 'deleteThreadHistory';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
   /** Deliver an event to every subscriber. */
@@ -30,6 +42,8 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     fileQueries: { workspaceId: string; query: string; limit?: number }[];
   };
   setChanges(turnId: string, changes: TurnChanges): void;
+  /** What `thread_history` answers for one thread (default: nothing recorded). */
+  setHistory(workspaceId: string, conversationId: string, turns: StoredTurn[]): void;
   /** What `agent_turn_status` answers for `turnId` (default: running). */
   setTurnStatus(turnId: string, status: TurnStatus): void;
   /** Make the next call of `command` reject the way the host does: `{code, message}` as a `WorkspaceIpcError`. */
@@ -50,6 +64,8 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const handlers = new Set<AgentEventHandler>();
   const changes = new Map<string, TurnChanges>();
   const statuses = new Map<string, TurnStatus>();
+  const history = new Map<string, StoredTurn[]>();
+  const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
   const calls: FakeWorkspaceIpc['calls'] = { started: [], cancelled: [], approvals: [], restores: [], fileQueries: [] };
   let turnCounter = 0;
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
@@ -74,6 +90,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const failed = failure('remove');
       if (failed !== undefined) return failed;
       workspaces = workspaces.filter((w) => w.id !== id);
+      for (const key of [...history.keys()]) if (key.startsWith(`${id}\u0000`)) history.delete(key);
       return Promise.resolve();
     },
     bindProject(id, projectId) {
@@ -126,6 +143,19 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const files = changes.get(turnId)?.files ?? [];
       return Promise.resolve({ restored: path === undefined ? files.map((f) => f.path) : [path] });
     },
+    threadHistory(workspaceId, conversationId) {
+      const failed = failure('threadHistory');
+      if (failed !== undefined) return failed;
+      return Promise.resolve(history.get(historyKey(workspaceId, conversationId)) ?? []);
+    },
+    deleteThreadHistory(workspaceId, conversationId) {
+      const failed = failure('deleteThreadHistory');
+      if (failed !== undefined) return failed;
+      const key = historyKey(workspaceId, conversationId);
+      const deleted = history.get(key)?.length ?? 0;
+      history.delete(key);
+      return Promise.resolve(deleted);
+    },
     onEvent(handler) {
       handlers.add(handler);
       return Promise.resolve(() => {
@@ -138,6 +168,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     },
     setChanges(turnId, value) {
       changes.set(turnId, value);
+    },
+    setHistory(workspaceId, conversationId, turns) {
+      history.set(historyKey(workspaceId, conversationId), turns);
     },
     setTurnStatus(turnId, status) {
       statuses.set(turnId, status);
