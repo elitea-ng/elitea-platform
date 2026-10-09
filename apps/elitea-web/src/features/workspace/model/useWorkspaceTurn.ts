@@ -10,12 +10,16 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { ApprovalDecision, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 
 import { describeWorkspaceError } from './describeWorkspaceError';
-import { activeView, initialTurnsState, isTerminalPhase, turnReducer, type TurnView } from './turnReducer';
+import { activeView, initialTurnsState, turnReducer, type TurnView } from './turnReducer';
 
 export interface WorkspaceTurn {
   view: TurnView;
   turnId: string | null;
-  /** True from `start` until the turn reaches a terminal phase. */
+  /**
+   * True from `start` until the host's `done` event. Not on `error` or a
+   * terminal `status`: a failed run still commits after its `error`, and the
+   * host keeps the workspace until then (IPC.md: `done` is always last).
+   */
   busy: boolean;
   startError: string | null;
   start(request: TurnStartRequest): Promise<void>;
@@ -86,7 +90,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     [ipc, turnId],
   );
 
-  const busy = starting || (turnId !== null && !isTerminalPhase(view.phase) && view.done === undefined && view.error === undefined);
+  const busy = starting || (turnId !== null && view.done === undefined);
 
   return { view, turnId, busy, startError, start, cancel, answer };
 }

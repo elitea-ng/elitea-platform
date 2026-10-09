@@ -51,6 +51,27 @@ describe('useWorkspaceTurn', () => {
     expect(result.current.busy).toBe(false);
   });
 
+  it('stays busy after an error event until the host says done (the failed turn is still committing)', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+
+    act(() => {
+      ipc.emit(ev(1, { kind: 'status', payload: { phase: 'running' } }));
+      ipc.emit(ev(2, { kind: 'error', payload: { code: 'model_gateway.member_budget_exhausted', message: 'no budget' } }));
+      ipc.emit(ev(3, { kind: 'status', payload: { phase: 'committing' } }));
+    });
+    expect(result.current.view.error?.code).toBe('model_gateway.member_budget_exhausted');
+    expect(result.current.busy).toBe(true);
+
+    act(() => ipc.emit(ev(4, { kind: 'status', payload: { phase: 'error', message: 'no budget' } })));
+    expect(result.current.busy).toBe(true);
+
+    act(() => ipc.emit(ev(5, { kind: 'done', payload: { committed: true, conversation_id: 'c1', message_ids: [], changed_files: 0 } })));
+    expect(result.current.busy).toBe(false);
+  });
+
   it('shows events that were emitted before start() returned', async () => {
     const ipc = createFakeWorkspaceIpc();
     const { result } = renderHook(() => useWorkspaceTurn(ipc));

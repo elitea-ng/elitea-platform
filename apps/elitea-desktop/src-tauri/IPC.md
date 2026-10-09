@@ -138,7 +138,9 @@ Order of a turn: `status` `resolving` → `status` `starting` → `status`
 ends `status` `cancelled` → `done` with `committed: false`; nothing is
 committed and its execution expires on the server. A run that fails after
 the start is still committed, as a failed answer (`is_error`), and its
-`error` event comes before `status` `committing`.
+`error` event comes before `status` `committing`. `done` is always the last
+event of a started turn, and the host holds the workspace (`workspace_busy`)
+until it is sent, so the UI is busy until `done`, not until `error`.
 
 `message_ids` are the question's and the answer's message UUIDs, in that
 order, when committed. `approval_request.can_remember` is true when
