@@ -3,7 +3,9 @@
 The published contract every provider service is admitted against, plus the
 golden fixtures each provider is verified with.
 
-**This directory moved in P1.0**, from `services/elitea-deepwiki/conformance/`.
+**This directory moved in P1.0**, from `services/elitea-deepwiki/conformance/`
+(that Python service has since been removed; the Rust engine,
+`services/elitea-deepwiki-engine`, replaced it).
 It moved because a contract that lives inside one implementation's test
 directory is indistinguishable from that implementation's notes — you cannot
 generalise a runner against it, and the second provider has nowhere to put its
@@ -11,8 +13,9 @@ recordings. Fixtures are now grouped per provider under `fixtures/<provider>/`,
 and the protocol-generic half is `spi/contract.json`, which belongs to none of
 them.
 
-The original subject is unchanged: porting the legacy `deepwiki_plugin` into
-`services/elitea-deepwiki`, per
+The original subject was porting the legacy `deepwiki_plugin` into
+`services/elitea-deepwiki` (since replaced by `services/elitea-deepwiki-engine`
+and the Go host), per
 ADR-0022 (`elitea-docs`: `docs/internal/03-architecture/adrs/adr-0022-deepwiki-provider-service-port.mdx`)
 ("DeepWiki Ports as a Standalone Provider Service on PostgreSQL", Approved).
 
@@ -25,8 +28,12 @@ in this directory touches elitea-main, `v2.yaml` or any migration.
 conformance/provider/
 ├── pyproject.toml            no runtime deps; [record] extras only to re-record
 ├── spi/contract.json         THE CONTRACT: the SPI path set, provider-agnostic
-├── tools/                    the recorders (run against the legacy checkout)
+├── tools/                    the recorders (run against the legacy checkout), and
+│                             build_descriptor_v1.py (legacy-v0 -> legacy-v1)
 ├── tests/test_fixtures.py    invariants over the committed fixtures (stdlib + pytest)
+├── tests/test_descriptor_revision.py
+│                             legacy-v1 and the Go host's served copy are what
+│                             build_descriptor_v1.py builds
 └── fixtures/
     └── deepwiki/             one profile per provider
         ├── descriptor/legacy-v0/ the golden provider descriptor + inventory + digests
@@ -101,6 +108,11 @@ Replaying the committed fixtures needs only pytest:
 ```bash
 cd conformance/provider && python -m pytest -q
 ```
+
+The same run checks the DeepWiki descriptor revision: `legacy-v1` and
+`services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json` must be
+what `python tools/build_descriptor_v1.py` builds from `legacy-v0` (run it
+without `--check` to rewrite both).
 
 Re-recording needs a read-only legacy checkout and the `record` extras:
 

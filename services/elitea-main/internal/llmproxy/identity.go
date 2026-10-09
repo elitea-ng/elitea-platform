@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
@@ -196,8 +197,31 @@ func executionIDFromHeader(h http.Header) string {
 // VerifyExecution returns false, nil for an id that fails the rule. An error
 // is a failed lookup, and the edge drops the id for it too: attribution is
 // never worth failing a model call for.
+//
+// tokenID and nativeClientID are the authenticating principal's
+// (auth.User.TokenID / NativeClientID, "" when absent): a desktop local turn
+// is attributed only to calls made with the credential family that started it.
 type ExecutionVerifier interface {
-	VerifyExecution(ctx context.Context, projectID, userID, executionID string) (bool, error)
+	VerifyExecution(ctx context.Context, projectID, userID, tokenID, nativeClientID, executionID string) (bool, error)
+}
+
+// CallbackExecutionPrefix marks an execution id that names a provider
+// invocation rather than a runtime execution: `callback-<token uuid>`, where
+// the uuid is the callback token minted for that one invocation
+// (providerhost/material.CallbackSettings). A runtime execution id is 32 hex
+// characters, so the two never collide.
+const CallbackExecutionPrefix = "callback-"
+
+// CallbackExecutionVerifier is the optional half of a verifier that also
+// admits provider invocations. A provider engine (DeepWiki, Inventory) calls
+// /llm with the callback token minted for its invocation; there is no
+// execution_jobs row for that work, so the token IS the execution. The rule:
+// the id names the very token that authenticated this request (tokenID, the
+// principal's auth_core__token id), owned by userID, bound to projectID, and
+// not expired. Only the holder of that bearer can claim the id, and only
+// while the bearer lives.
+type CallbackExecutionVerifier interface {
+	VerifyCallbackExecution(ctx context.Context, projectID, userID, tokenID, tokenUUID string) (bool, error)
 }
 
 // executionVerifyTimeout bounds the lookup on the request path.
@@ -215,7 +239,20 @@ func verifiedExecutionID(ctx context.Context, verifier ExecutionVerifier, id ide
 	}
 	ctx, cancel := context.WithTimeout(ctx, executionVerifyTimeout)
 	defer cancel()
-	ok, err := verifier.VerifyExecution(ctx, id.projectID, id.userID, executionID)
+	if tokenUUID, ok := strings.CutPrefix(executionID, CallbackExecutionPrefix); ok {
+		callbacks, implemented := verifier.(CallbackExecutionVerifier)
+		user, authenticated := auth.UserFromContext(ctx)
+		if !implemented || !authenticated || user.TokenID == "" || tokenUUID == "" {
+			return ""
+		}
+		ok, err := callbacks.VerifyCallbackExecution(ctx, id.projectID, id.userID, user.TokenID, tokenUUID)
+		if err != nil || !ok {
+			return ""
+		}
+		return executionID
+	}
+	principal, _ := auth.UserFromContext(ctx)
+	ok, err := verifier.VerifyExecution(ctx, id.projectID, id.userID, principal.TokenID, principal.NativeClientID, executionID)
 	if err != nil || !ok {
 		return ""
 	}
@@ -230,7 +267,7 @@ func verifiedExecutionID(ctx context.Context, verifier ExecutionVerifier, id ide
 // Stripped headers:
 //   - X-Elitea-* (signed identity injected below; strip first to avoid leaking
 //     any client-spoofed value)
-//   - X-Auth-Type / X-Auth-Id / X-Auth-Reference (Traefik edge-auth headers)
+//   - X-Auth-* (the edge-auth identity projection, including its signature)
 //   - Authorization, X-Api-Key (bearer / API-key credentials)
 //   - Cookie (session cookies; must not reach the downstream gateway)
 //   - X-Project-Id / OpenAI-Organization (the edge project selector; the edge
@@ -255,11 +292,14 @@ func stripIdentityHeaders(h http.Header) {
 		h.Del(name)
 	}
 
-	// Traefik edge-auth headers that the auth middleware reads; remove so the
-	// gateway never sees inbound authentication context.
-	h.Del("X-Auth-Type")
-	h.Del("X-Auth-Id")
-	h.Del("X-Auth-Reference")
+	// The whole edge-auth projection family (type, ids, reference, signature,
+	// avatar) — the gateway and providers never see inbound authentication
+	// context, and a name added to the projection later is covered too.
+	for name := range h {
+		if len(name) >= len("x-auth-") && strings.EqualFold(name[:len("x-auth-")], "x-auth-") {
+			delete(h, name)
+		}
+	}
 
 	// Standard HTTP authentication material.
 	h.Del("Authorization")

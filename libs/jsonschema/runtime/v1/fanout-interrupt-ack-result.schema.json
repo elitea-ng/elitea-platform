@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-ack-result.v1",
+  "title": "Private decision ACK result",
+  "description": "applied -> CONSUMED, stale -> SUPERSEDED. A byte-identical replay under a current fence returns replay=true.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "interrupt_key",
+    "state",
+    "revision",
+    "replay"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-interrupt-ack-result.v1"
+    },
+    "interrupt_key": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "state": {
+      "enum": [
+        "CONSUMED",
+        "SUPERSEDED"
+      ]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "replay": {
+      "type": "boolean"
+    }
+  }
+}

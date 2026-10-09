@@ -52,6 +52,7 @@ pub enum RuntimeFailureKind {
     OutputProjectionLimit,
     PipelineInputInvalid,
     PipelineChildInputTypeInvalid,
+    PipelineNodeTypeNotAvailable,
     PipelineInputLimit,
     PipelineToolUnavailable,
     PipelineToolFailed,
@@ -698,6 +699,11 @@ impl RuntimeFailureKind {
     }
 }
 
+/// A stored pipeline holds a node type this build does not admit (`SplitOut` or
+/// `Aggregate` outside a graph-extensions rehearsal build). Data-free: the node is
+/// named by Main's start check and by the editor; Main registers this exact text.
+pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it.";
+
 // Keep every registered code/message/retry tuple in one exhaustive policy table.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn runtime_error_policy(
@@ -732,6 +738,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::ResourceExhausted => (
             RuntimeErrorCodeV1::ResourceExhausted,
             "The execution exceeded an approved resource limit.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineNodeTypeNotAvailable => (
+            RuntimeErrorCodeV1::UnsupportedCapability,
+            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE,
             false,
         ),
         RuntimeFailureKind::PipelineChildInputTypeInvalid => (
@@ -912,6 +923,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::OutputProjectionLimit,
         RuntimeFailureKind::PipelineInputInvalid,
         RuntimeFailureKind::PipelineChildInputTypeInvalid,
+        RuntimeFailureKind::PipelineNodeTypeNotAvailable,
         RuntimeFailureKind::PipelineInputLimit,
         RuntimeFailureKind::PipelineToolUnavailable,
         RuntimeFailureKind::PipelineToolFailed,

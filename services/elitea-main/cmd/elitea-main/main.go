@@ -35,6 +35,7 @@ import (
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -194,20 +195,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The key bytes are discarded on purpose. Every handler reads the variable
 	// again, so passing them on would create a SECOND key source, and one key
 	// source is the rule #411/#399 established. This call decides one thing
-	// only: whether the process may continue.
-	masterKey, err := v2secrets.MasterKeyFromEnv(os.Getenv)
+	// only: whether the process may continue. An ABSENT key stops the process
+	// too, unless the development opt-out is set (master_key_gate.go).
+	masterKeyWarning, err := requireVaultMasterKey(os.Getenv)
 	if err != nil {
 		return err
 	}
-	if masterKey == nil {
-		// The ABSENT case stays supported: no compose file and no chart in
-		// deploy/ except the staging one supplies a key, and the E2E stack
-		// seeds unwrapped key rows on purpose. It is a real local shape, so it
-		// must not stop the service — but it must not be quiet either, because
-		// the operator cannot tell it apart from a key that failed to arrive.
-		logger.Warn("no project vault master key: every project vault key is stored UNWRAPPED, "+
-			"so anyone who can read the database can open every project secret",
-			"variable", v2secrets.MasterKeyEnvVar)
+	if masterKeyWarning != "" {
+		// The development opt-out. Loud on purpose: the operator cannot tell
+		// this shape apart from a key that failed to arrive.
+		logger.Warn(masterKeyWarning,
+			"variable", v2secrets.MasterKeyEnvVar, "opt_out", v2secrets.AllowUnwrappedEnvVar)
 	}
 
 	// APPLICATION_SECRET_KEY signs personal access tokens. internal/api/router.go
@@ -261,6 +259,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 	defer pool.Close()
+	if os.Getenv(v2secrets.MasterKeyEnvVar) != "" {
+		if err := refuseUnwrappedVaultKeys(ctx, pool); err != nil {
+			return err
+		}
+	}
 
 	// The `centry.audit_events` writer.
 	//
@@ -1650,6 +1653,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// as "configured" downstream, and both consumers decide on `!= nil`.
 	var toolkitToolRun toolkitrun.UseCase
 	var toolkitDiscovery discovery.UseCase
+	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
+	// under the same guard so an absent agent plane leaves a NIL interface.
+	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
+	// The remote toolkit call's authorizer: the SAME service, under the same
+	// guard, so an absent agent plane leaves a NIL interface and the route
+	// answers 501.
+	var remoteToolAuthorizer desktopopsapi.RemoteToolAuthorizer
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	// The unattended pipeline entry points (issues 192, 193).
 	//
@@ -1659,6 +1669,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// for the tick and the settings routes to disagree on a dependency.
 	var pipelineTriggers *v2pipelinetriggers.Handler
 	var currentNodeRecovery http.Handler
+	var currentExecutionInterrupts http.Handler
 	var currentAgentCancel http.Handler
 	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
@@ -1805,6 +1816,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Index ingestion can remain disabled for that deployment.
 		toolkitDiscovery = publicRoutes.ToolkitDiscovery
 		toolkitToolRun = publicRoutes.ToolkitCallTool
+		if publicRoutes.ClientApplicationVersions != nil {
+			clientApplicationVersions = publicRoutes.ClientApplicationVersions
+			remoteToolAuthorizer = publicRoutes.ClientApplicationVersions
+		}
 		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
 			if publicRoutes.ToolkitCallTool != nil {
@@ -1892,6 +1907,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		if publicRoutes.NodeRecovery != nil {
 			currentNodeRecovery, err = agentexecutionapi.NewCurrentNodeRecoveryRoute(publicRoutes.NodeRecovery, apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
+			if err != nil {
+				return err
+			}
+		}
+		if publicRoutes.ExecutionInterrupts != nil {
+			currentExecutionInterrupts, err = agentexecutionapi.NewCurrentExecutionInterruptRoute(publicRoutes.ExecutionInterrupts, apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
 			if err != nil {
 				return err
 			}
@@ -2034,6 +2055,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
 	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
 	// the gateway service is reachable.
+	// The ONE native policy reader, built here because the /llm edge's
+	// execution verifier needs it too: it stops attributing an uncommitted
+	// local turn the moment `local_work.allowed` is turned off.
+	nativePolicy := native.policy(pool)
 	var gatewayProxy http.Handler
 	var gatewayProjectResolver apimw.PersonalProjectResolver
 	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
@@ -2047,7 +2072,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// The analytics reads decide active users and run spend from
 			// the inbound execution id, so the edge keeps it only for a live
 			// execution of the caller.
-			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool),
+			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(nativePolicy),
 		})
 		if gwErr != nil {
 			return fmt.Errorf("compose llm gateway proxy: %w", gwErr)
@@ -2303,6 +2328,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("load SCIM caller-address settings: %w", err)
 	}
 
+	// One native policy reader for the router (discovery, token responses,
+	// the 426 gate, the admin save's invalidation) AND the local turn start,
+	// so a save that turns local work off is seen by both at once.
+	currentLocalTurns, err := composeLocalTurns(pool, nativePolicy, auditRecorder, apiGroupAuth, logger)
+	if err != nil {
+		return fmt.Errorf("compose local turn routes: %w", err)
+	}
+	currentResolvedVersion, err := composeResolvedVersion(pool, clientApplicationVersions, apiGroupAuth)
+	if err != nil {
+		return fmt.Errorf("compose resolved version route: %w", err)
+	}
+	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, remoteToolAuthorizer, workerImplementation,
+		nativePolicy, auditRecorder, apiGroupAuth, logger)
+	if err != nil {
+		return fmt.Errorf("compose remote toolkit route: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
@@ -2311,7 +2353,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PublicOrigin:                 publicOrigin,
 		NativeClients:                native.registry,
 		NativeStore:                  native.store,
-		NativePolicy:                 native.policy(pool),
+		NativePolicy:                 nativePolicy,
 		NativeAccess:                 native.validator,
 		NativeSecureCookies:          os.Getenv("COOKIE_SECURE") != "false",
 		Mailer:                       mailComposer,
@@ -2378,7 +2420,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SCIMAccessTokenTTL:         scimAccessTokenTTL,
 		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
+		CurrentLocalTurns:          currentLocalTurns,
+		CurrentResolvedVersion:     currentResolvedVersion,
+		CurrentRemoteToolkit:       currentRemoteToolkit,
 		CurrentNodeRecovery:        currentNodeRecovery,
+		CurrentExecutionInterrupts: currentExecutionInterrupts,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,

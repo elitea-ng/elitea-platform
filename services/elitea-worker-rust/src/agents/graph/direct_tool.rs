@@ -6,6 +6,7 @@
 //! exactly once. It never creates a second agent/model turn.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use adk_rust::graph::{END, GraphError, Node, NodeContext, NodeOutput, State};
@@ -21,9 +22,15 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 use tracing::Instrument as _;
 
+use super::compiler::PIPELINE_YAML_BUDGET;
+use super::node_recovery::{NodeFailure, NodeFailureClass, NodeRecoveryPolicy, ReplaySafety};
+use super::node_recovery_runtime::{
+    NodeAttemptAuthority, NodeAttemptBody, NodeRecoveryFactory, RecoverableNode,
+};
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::agents::application_tools::PIPELINE_APPLICATION_NODE_METADATA_KEY;
 use crate::agents::events::mask_sensitive_arguments;
+use crate::bounded_yaml;
 use crate::toolkits::{
     DelegatedAuthorizationRequirement, SensitiveToolPolicy, delegated_authorization_requirement,
 };
@@ -140,8 +147,11 @@ impl DirectToolNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(DirectToolConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawDirectToolNodeDefinition>(yaml)
-            .map_err(|source| DirectToolConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawDirectToolNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| DirectToolConfigurationError::MalformedYaml { source })?;
         Self::from_raw(raw)
     }
 
@@ -370,11 +380,14 @@ impl ResolvedDirectTool {
 }
 
 /// Native graph node that invokes one exact ADK tool.
+#[derive(Clone)]
 pub(super) struct DirectToolNode {
     events: Option<super::node_events::PipelineNodeEventSender>,
-    definition: DirectToolNodeDefinition,
-    state_types: BTreeMap<String, String>,
+    definition: Arc<DirectToolNodeDefinition>,
+    state_types: Arc<BTreeMap<String, String>>,
     resolver: Arc<dyn PipelineDirectToolResolver>,
+    // Effectful tools run only behind the fenced Started journal.
+    recovery: Option<Arc<dyn NodeRecoveryFactory>>,
 }
 
 impl DirectToolNode {
@@ -392,11 +405,17 @@ impl DirectToolNode {
         resolver: Arc<dyn PipelineDirectToolResolver>,
     ) -> Self {
         Self {
-            definition,
-            state_types,
+            definition: Arc::new(definition),
+            state_types: Arc::new(state_types),
             resolver,
             events: None,
+            recovery: None,
         }
+    }
+
+    pub(super) fn with_node_recovery(mut self, authority: Arc<dyn NodeRecoveryFactory>) -> Self {
+        self.recovery = Some(authority);
+        self
     }
 
     async fn execute_mapped(&self, context: &NodeContext) -> Result<NodeOutput, DirectNodeFailure> {
@@ -410,10 +429,10 @@ impl DirectToolNode {
             .resolver
             .resolve(self.definition.selection())
             .map_err(|cause| DirectNodeFailure::new("tool_binding", cause))?;
-        if !tool.is_read_only() {
+        if !tool.is_read_only() && self.recovery.is_none() {
             return Err(DirectNodeFailure::policy(
                 "tool_binding",
-                "The selected tool does not permit direct pipeline execution.",
+                "A tool with external effects requires its current fenced node writer.",
             ));
         }
         let tool_context = pipeline_tool_context(context, self.name(), tool.name());
@@ -435,8 +454,9 @@ impl DirectToolNode {
         {
             return match decision {
                 McpAuthorizationDecision::Authorize(remaining) => {
-                    self.invoke_and_project(
-                        tool.as_ref(),
+                    self.dispatch(
+                        context,
+                        &tool,
                         tool_context,
                         arguments,
                         Some(remaining),
@@ -451,7 +471,7 @@ impl DirectToolNode {
         }
         if let Some(policy) = sensitive.as_ref() {
             return self
-                .execute_sensitive(context, tool.as_ref(), tool_context, arguments, policy)
+                .execute_sensitive(context, &tool, tool_context, arguments, policy)
                 .await;
         }
         if context
@@ -465,14 +485,14 @@ impl DirectToolNode {
                 "The saved tool decision does not match this node invocation.",
             ));
         }
-        self.invoke_and_project(tool.as_ref(), tool_context, arguments, None, false)
+        self.dispatch(context, &tool, tool_context, arguments, None, false)
             .await
     }
 
     async fn execute_sensitive(
         &self,
         context: &NodeContext,
-        tool: &dyn Tool,
+        tool: &Arc<dyn Tool>,
         tool_context: Arc<dyn ToolContext>,
         arguments: Value,
         policy: &SensitiveToolPolicy,
@@ -487,8 +507,15 @@ impl DirectToolNode {
                 data,
             )),
             SensitiveDirectToolDecision::Approve(remaining) => {
-                self.invoke_and_project(tool, tool_context, arguments, Some(remaining), false)
-                    .await
+                self.dispatch(
+                    context,
+                    tool,
+                    tool_context,
+                    arguments,
+                    Some(remaining),
+                    false,
+                )
+                .await
             }
             SensitiveDirectToolDecision::Block {
                 remaining,
@@ -508,6 +535,72 @@ impl DirectToolNode {
                 )
                 .with_goto([END])),
         }
+    }
+
+    /// Pauses, blocks and skips are decided before this point and never reach the
+    /// journal. Only the dispatch of a tool with external effects is journaled.
+    async fn dispatch(
+        &self,
+        context: &NodeContext,
+        tool: &Arc<dyn Tool>,
+        tool_context: Arc<dyn ToolContext>,
+        arguments: Value,
+        remaining: Option<Value>,
+        authorization_refresh: bool,
+    ) -> Result<NodeOutput, DirectNodeFailure> {
+        let Some(authority) = self.recovery.as_ref().filter(|_| !tool.is_read_only()) else {
+            return self
+                .invoke_and_project(
+                    tool.as_ref(),
+                    tool_context,
+                    arguments,
+                    remaining,
+                    authorization_refresh,
+                )
+                .await;
+        };
+        let control = Arc::new(Mutex::new(None));
+        let completed = Arc::new(AtomicBool::new(false));
+        let attempt = DirectToolAttempt {
+            node: self.clone(),
+            tool: Arc::clone(tool),
+            tool_context,
+            arguments,
+            remaining,
+            authorization_refresh,
+            control: Arc::clone(&control),
+            completed: Arc::clone(&completed),
+        };
+        let recoverable = RecoverableNode::new(
+            Arc::new(attempt),
+            self.definition.config_digest(),
+            NodeRecoveryPolicy::default(),
+            Arc::clone(authority),
+            None,
+        );
+        let result = recoverable.execute(context).await;
+        // This visit's own outcome wins over the journal's projection of it: an
+        // authorization challenge cannot pass through the journal as an interrupt, and
+        // a failed call stops the pipeline with its typed error while the journal keeps
+        // the uncertain effect so the same attempt is never dispatched again.
+        if let Some(handed_over) = control
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            return handed_over;
+        }
+        result.map_err(|error| {
+            tracing::error!(failure_reason = %error, "pipeline direct-tool node recovery stopped");
+            DirectNodeFailure::policy(
+                "tool_execution",
+                if completed.load(Ordering::SeqCst) {
+                    "The tool completed, but its result could not be recorded. It will not run again."
+                } else {
+                    "The tool attempt was stopped by node recovery."
+                },
+            )
+        })
     }
 
     async fn invoke_and_project(
@@ -751,6 +844,111 @@ impl Node for DirectToolNode {
                     node: self.name().to_owned(),
                     message: format!("{}: {}", failure.stage, failure.cause),
                 })
+            }
+        }
+    }
+}
+
+/// One journaled dispatch of a tool with external effects. Everything that can
+/// pause, block or skip was decided before the Started append.
+struct DirectToolAttempt {
+    node: DirectToolNode,
+    tool: Arc<dyn Tool>,
+    tool_context: Arc<dyn ToolContext>,
+    arguments: Value,
+    remaining: Option<Value>,
+    authorization_refresh: bool,
+    control: Arc<Mutex<Option<Result<NodeOutput, DirectNodeFailure>>>>,
+    // Set once the call returned a result, so a failed journal commit is not reported
+    // as a failed tool.
+    completed: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Node for DirectToolAttempt {
+    fn name(&self) -> &str {
+        self.node.name()
+    }
+
+    async fn execute(&self, _: &NodeContext) -> Result<NodeOutput, GraphError> {
+        Err(GraphError::NodeExecutionFailed {
+            node: self.name().to_owned(),
+            message: "A journaled tool attempt has no direct execution.".to_owned(),
+        })
+    }
+}
+
+#[async_trait]
+impl NodeAttemptBody for DirectToolAttempt {
+    async fn execute_attempt(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+    ) -> Result<NodeOutput, NodeFailure> {
+        let effect_id = authority.dispatch_activation();
+        let unknown = ReplaySafety::UnknownExternalEffect { effect_id };
+        if !authority.matches(
+            self.name(),
+            self.node.definition.config_digest(),
+            context.step,
+        ) {
+            return Err(NodeFailure::new(
+                NodeFailureClass::AuthorizationDenied,
+                ReplaySafety::NoExternalEffect,
+            ));
+        }
+        // A Started record without a committed result may already have reached the tool.
+        if authority.recovering_started() {
+            return Err(NodeFailure::new(
+                NodeFailureClass::WorkerInterrupted,
+                unknown,
+            ));
+        }
+        let result = self
+            .node
+            .invoke_and_project(
+                self.tool.as_ref(),
+                Arc::clone(&self.tool_context),
+                self.arguments.clone(),
+                self.remaining.clone(),
+                self.authorization_refresh,
+            )
+            .await;
+        match result {
+            Ok(output) if output.interrupt.is_some() || output.goto.is_some() => {
+                *self
+                    .control
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Ok(output));
+                Err(NodeFailure::new(
+                    NodeFailureClass::AuthenticationDenied,
+                    ReplaySafety::NoExternalEffect,
+                ))
+            }
+            Ok(output) => {
+                self.completed.store(true, Ordering::SeqCst);
+                Ok(output)
+            }
+            Err(failure) => {
+                let recorded = match failure.stage {
+                    "argument_digest" => NodeFailure::new(
+                        NodeFailureClass::InvalidInput,
+                        ReplaySafety::NoExternalEffect,
+                    ),
+                    "state_projection" => NodeFailure::new(
+                        NodeFailureClass::InvalidResult,
+                        ReplaySafety::CompletedExternalEffect {
+                            receipt_id: effect_id,
+                        },
+                    ),
+                    _ => NodeFailure::new(NodeFailureClass::Unknown, unknown),
+                };
+                // The node reports the typed failure itself, as for read-only tools.
+                *self
+                    .control
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Err(failure));
+                Err(recorded)
             }
         }
     }
@@ -1441,7 +1639,8 @@ enum DirectNodeFailureCause {
 impl DirectNodeFailure {
     fn public_code(&self) -> &'static str {
         match (&self.cause, self.stage) {
-            (DirectNodeFailureCause::Tool, _) => "pipeline.tool_failed",
+            (DirectNodeFailureCause::Tool, _)
+            | (DirectNodeFailureCause::Policy(_), "tool_execution") => "pipeline.tool_failed",
             (_, "tool_binding" | "authorization") => "pipeline.tool_unavailable",
             (
                 DirectNodeFailureCause::Execution(DirectToolExecutionError::ResourceExhausted),

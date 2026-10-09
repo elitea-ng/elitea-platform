@@ -51,6 +51,11 @@ export const ConversationSummary = zod
       .int()
       .describe("Always -1 today; see the schema description."),
     message_groups_count: zod.int(),
+    is_pinned: zod
+      .boolean()
+      .describe(
+        'Client contract 1.4. The conversation is pinned in its project: the project holds a conversation pin for it (pinEntity with entity_type `conversation`, the pin the web app\'s "Pin on top" sets). A pin is shared by the project, not kept per member, and the row never says who pinned it. A pin or unpin re-delivers the row in the `changes_since` delta; it does not change `updated_at`. A server before 1.4 omits the field, which means not pinned.\n',
+      ),
     meta: zod
       .record(zod.string(), zod.unknown())
       .nullish()

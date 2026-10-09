@@ -253,8 +253,9 @@ fi
 
 # ── 2. Name the Go modules this run does NOT cover ───────────────────────────
 #
-# services/elitea-llm-gateway is on a newer Go release and sits outside
-# go.work on purpose. It builds with GOWORK=off and has its own ci-gateway.yml.
+# services/elitea-llm-gateway sits outside go.work on purpose (it was on a
+# newer Go release than the workspace when that split was made). It builds
+# with GOWORK=off and has its own ci-gateway.yml.
 # That separation is correct. A summary that says "all modules passed" after
 # never opening it is not. This block finds every go.mod on disk, subtracts the
 # workspace modules, and prints the difference. A new out-of-workspace module

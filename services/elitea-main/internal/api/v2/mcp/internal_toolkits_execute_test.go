@@ -58,6 +58,16 @@ func (repo *fakeInternalToolkitRepo) ListToolkits(
 	return repo.listRows, repo.listTotal, nil
 }
 
+func (repo *fakeInternalToolkitRepo) ListToolkitInstances(
+	ctx context.Context,
+	projectID string,
+	_ toolkitsapi.InstanceListFilter,
+	page int,
+	pageSize int,
+) ([]map[string]any, int, error) {
+	return repo.ListToolkits(ctx, projectID, page, pageSize)
+}
+
 func (repo *fakeInternalToolkitRepo) CreateToolkit(
 	_ context.Context,
 	projectID string,

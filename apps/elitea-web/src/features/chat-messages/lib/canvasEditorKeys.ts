@@ -70,3 +70,32 @@ export function canvasEditorKeyAction(event: CanvasEditorKeyEvent, context: Canv
   if (key !== 'z') return 'ignore';
   return event.shiftKey ? 'redo' : 'undo';
 }
+
+/**
+ * Whether an Escape that reached the drawer was ALREADY CONSUMED by a widget
+ * inside the editor, so the drawer must not also close (and save) on it.
+ *
+ * MUI's modal closes on Escape without looking at `defaultPrevented` (its own
+ * `useModal` says so), and `canvasEditorKeyAction` above only intercepts in
+ * full screen. So one press that closed CodeMirror's search panel or its
+ * autocomplete list, or cancelled a table cell edit, ALSO closed the whole
+ * editor — the reader lost their place to dismiss a popup.
+ *
+ * Two signals, because the two widgets report differently:
+ *
+ *  * CodeMirror prevents the default of every key a binding HANDLED (its
+ *    search panel's Escape, completion's Escape, multi-cursor collapse) and
+ *    leaves an unhandled Escape alone — so `defaultPrevented` is exactly
+ *    "CodeMirror used this press". Its listener is native on the editor and
+ *    runs before React's delegated one, so the flag is set by the time the
+ *    drawer sees the event.
+ *  * The DataGrid's edit cancel happens in its own handler on the cell; the
+ *    target is still inside the editing cell/row while the drawer's handler
+ *    runs (React commits the grid's state change after the dispatch).
+ */
+export function isEscapeConsumedInside(event: { readonly defaultPrevented: boolean; readonly target: EventTarget | null }): boolean {
+  if (event.defaultPrevented) return true;
+  const target = event.target;
+  if (typeof Element === 'undefined' || !(target instanceof Element)) return false;
+  return target.closest('.MuiDataGrid-cell--editing, .MuiDataGrid-row--editing') !== null;
+}

@@ -106,22 +106,34 @@ func TestAnArtifactFolderIsNotCheckedAgainstTheGitAllowlist(t *testing.T) {
 	}
 }
 
-func TestAFolderIsNamedWithoutItsScheme(t *testing.T) {
-	// The wiki id is an object-key prefix and the string the browser matches
-	// a manifest on. Left as `artifact://…` the `//` becomes four dashes.
-	folder := map[string]any{"repository": "artifact://handbook-bucket/docs/product"}
-	if got := run.WikiIDFor(folder, "v3"); got != "handbook-bucket--docs--product--v3" {
-		t.Fatalf("wiki id %q", got)
+func TestAFolderIsNamedAsItsGenerationNamesIt(t *testing.T) {
+	// ONE id per folder: the one the engine's generation files it under,
+	// normalize_wiki_id of `artifact://bucket/prefix:{branch}:{sha8}`.
+	for _, c := range []struct{ repository, branch, want string }{
+		{"artifact://docs/handbook", "main", "artifact--docs--handbook--main"},
+		{"ARTIFACT://Docs/handbook/", "", "artifact--docs--handbook--main"},
+		{"artifact://handbook-bucket/docs/product", "v3", "artifact--handbook-bucket--docs--product--v3"},
+		{"artifact://handbook", "", "artifact--handbook--main"},
+		{"artifact://docs", " Release/V1 ", "artifact--docs--release-v1"},
+		{"artifact://my-b/a b/c.d_e", "dev", "artifact--my-b--a-b--c-d-e--dev"},
+		// Split on `:` from the right, as the engine does: the head of the
+		// branch joins the repository (the browser makes the same split).
+		{"artifact://docs/handbook", "v1:rc", "artifact--docs--handbook-v1--rc"},
+	} {
+		if got := run.WikiIDFor(map[string]any{"repository": c.repository}, c.branch); got != c.want {
+			t.Fatalf("WikiIDFor(%q, %q) = %q, want %q", c.repository, c.branch, got, c.want)
+		}
 	}
+	// The display form (titles, the fixture manifest) still drops the scheme.
+	folder := map[string]any{"repository": "artifact://handbook-bucket/docs/product"}
 	if got := run.DisplayRepositoryFor(folder); got != "handbook-bucket/docs/product" {
 		t.Fatalf("display repository %q", got)
 	}
-	// A bucket with no folder inside it.
-	if got := run.WikiIDFor(map[string]any{"repository": "artifact://handbook"}, ""); got != "handbook--main" {
+	// A git source is named exactly as it was: no lower-casing, no folding.
+	if got := run.WikiIDFor(map[string]any{"repository": "acme/notes"}, "main"); got != "acme--notes--main" {
 		t.Fatalf("wiki id %q", got)
 	}
-	// And a git source is named exactly as it was.
-	if got := run.WikiIDFor(map[string]any{"repository": "acme/notes"}, "main"); got != "acme--notes--main" {
+	if got := run.WikiIDFor(map[string]any{"repository": "Acme/My_Repo"}, "Feature/X"); got != "Acme--My_Repo--Feature/X" {
 		t.Fatalf("wiki id %q", got)
 	}
 }
@@ -144,8 +156,8 @@ func TestTheFixtureGenerationNamesAFolderSourceCorrectly(t *testing.T) {
 	if body["status"] != "Completed" {
 		t.Fatalf("%v", body)
 	}
-	manifest := uploadedManifest(t, client, "handbook-bucket--docs--main")
-	if manifest["wiki_id"] != "handbook-bucket--docs--main" {
+	manifest := uploadedManifest(t, client, "artifact--handbook-bucket--docs--main")
+	if manifest["wiki_id"] != "artifact--handbook-bucket--docs--main" {
 		t.Fatalf("wiki_id %v", manifest["wiki_id"])
 	}
 	if manifest["repository"] != "handbook-bucket/docs" {

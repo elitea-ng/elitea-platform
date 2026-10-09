@@ -254,6 +254,16 @@ tasks:
       - task: helm:bf02b
       - task: helm:compiled-snapshots
       - task: helm:code-consumers
+      - task: helm:main-master-key
+
+  helm:main-master-key:
+    desc: Check that elitea-main is handed SECRETS_MASTER_KEY from a Secret, and that the chart refuses a values set without one
+    cmds:
+      # #1176 made every render declare who may reach elitea-main. #1175,
+      # merged after it from an older base, added this script without that
+      # decision, and no workflow or task ran it, so it failed four checks on
+      # main with nothing reporting it. Needs yq.
+      - bash deploy/helm/tests/render-main-master-key.sh
 
   helm:code-consumers:
     desc: Check opt-in Code consumers and private material boundaries

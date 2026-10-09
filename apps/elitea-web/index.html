@@ -14,9 +14,10 @@
          BrandThemeProvider.tsx), so this static inline script is the ONE real
          anti-flash mechanism. The body is the same as
          src/entries/admin/public/assets/scheme-init.js; the admin entry loads
-         it as a file because its CSP hash-pins one inline script, while nginx
-         sets no script-src for this SPA. src/app/schemeInit.test.ts pins the
-         two bodies equal. -->
+         it as a file because its CSP hash-pins one inline script; nginx pins
+         THIS script by hash in nginx/security-headers.conf, so editing it means
+         re-hashing it there. src/app/schemeInit.test.ts pins the two bodies
+         equal. -->
     <script>
       {
         let mode = "dark";

@@ -502,7 +502,24 @@ type RouterConfig struct {
 	// rediscovering.
 	PipelineTriggers    *v2pipelinetriggers.Handler
 	CurrentNodeRecovery http.Handler
-	CurrentAgentCancel  http.Handler
+	// CurrentExecutionInterrupts serves the per-interrupt HITL list/decision
+	// API. It is nil unless ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED.
+	CurrentExecutionInterrupts http.Handler
+	CurrentAgentCancel         http.Handler
+	// CurrentLocalTurns serves startLocalTurn and commitLocalTurn, the
+	// desktop local turn operations (ADR-0029 decision 5c, client contract
+	// 1.5). Composed in cmd/elitea-main wherever a database is configured;
+	// it needs no runtime, because no worker runs a local turn.
+	CurrentLocalTurns http.Handler
+	// CurrentResolvedVersion serves resolveApplicationVersion (ADR-0029
+	// decision 5a, client contract 1.6). Composed in cmd/elitea-main wherever
+	// a database is configured; it answers 501 where no agent plane is.
+	CurrentResolvedVersion http.Handler
+	// CurrentRemoteToolkit serves executeRemoteToolkitTool (ADR-0029
+	// decision 5b, client contract 1.6) over the toolkit.call_tool.v1 use
+	// case. Composed wherever a database is configured; 501 where no toolkit
+	// worker is.
+	CurrentRemoteToolkit http.Handler
 	// CurrentApplicationTask serves the legacy application_task path (issue
 	// 254 P2): GET polls the run bound to a response message, DELETE stops
 	// it through the SAME use case CurrentAgentCancel runs.
@@ -3758,10 +3775,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/check_version_in_use/prompt_lib/{projectID}/{appID}/{versionID}", coreHandler.ApplicationRelation)
 
 				// Authors / trending. /author names no project in its path —
-				// pylon's author.py is a ProjectAPI whose id is the AUTHOR's —
-				// so there is nothing for a project gate to resolve against and
-				// it stays as it is; the social plugin serves the same resource
-				// ungated (#161).
+				// its id is the AUTHOR's — so there is no project for a route
+				// gate to resolve against. The decision is the handler's: it
+				// reads the caller and the author's shared projects and returns
+				// the e-mail and the counts only for the caller themself or a
+				// caller who shares a project with the author.
 				r.Get("/author/prompt_lib/{authorID}", coreHandler.Author)
 				r.With(projectPermission("models.applications.trending_authors.list")).
 					Get("/trending_authors/prompt_lib/{projectID}", coreHandler.TrendingAuthors)
@@ -3792,12 +3810,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(projectPermission("models.applications.applications.list")).
 					Get("/recommendations/prompt_lib/{projectID}", coreHandler.Recommendations)
 
-				// Feedbacks — left ungated on purpose. #302's acceptance notes
-				// name feedbacks.py among the modules legacy does not gate, and
-				// pylon serves this resource from the SOCIAL plugin, whose
-				// feedback.py guard is a different resource (one feedback row by
-				// id, not the project listing this path returns).
-				r.Get("/feedbacks/default/{projectID}", coreHandler.Feedbacks)
+				// Feedbacks — the same listing as the social twin
+				// (/social/feedbacks/default/{projectID}), from the shared
+				// centry.social_feedbacks table, behind the same project gate
+				// and the same permission.
+				r.With(projectScoped, projectPermission(v2social.CurrentFeedbackListPermission)).
+					Method(http.MethodGet, "/feedbacks/default/{projectID}", v2social.NewFeedbackListHandler(cfg.Pool))
 
 				// Analytics (flat paths matching UI expectations). All seven
 				// pylon analytics_*.py modules declare the SAME string as
@@ -3872,10 +3890,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(projectPermission(v2messagetraces.DetailPermission)).
 					Get("/message_trace/prompt_lib/{projectID}/{stepID}", traceHandler.Get)
 
-				// Icons. default_icons.py carries no `check_api` at all — it
-				// returns the deployment's built-in icon set, the same list for
-				// every project — so it stays ungated, as #302's acceptance
-				// notes require for the modules legacy leaves open. upload_icon.py
+				// Icons. default_icons returns the deployment's built-in icon
+				// set, the same list for every project, so there is no project
+				// data for a gate to protect (it is on the route-walk
+				// allowlist with that reason). upload_icon.py
 				// declares all four verbs, and the legacy matrix withholds every
 				// one of them from a viewer INCLUDING the GET, which is why the
 				// listing is gated on `.get` rather than treated as a free read.
@@ -3924,12 +3942,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/export_import/prompt_lib/{projectID}/{entityID}", coreHandler.ExportImportGet)
 				r.Post("/export_converter/prompt_lib", coreHandler.ExportConverter)
 
-				// Pin — left ungated on purpose, as #302's acceptance notes
-				// require: pylon serves it from social/api/v2/pin.py, which the
-				// legacy catalogue lists among the UNGUARDED handlers. Both verbs
-				// share one project/entity row. Handlers enforce chat visibility.
-				r.Post("/pin/prompt_lib/{projectID}/{entityType}/{entityID}", coreHandler.Pin)
-				r.Delete("/pin/prompt_lib/{projectID}/{entityType}/{entityID}", coreHandler.Unpin)
+				// Pin. Both verbs share one project/entity row. The route takes
+				// the project-membership gate (as the social twin does), and
+				// the repository repeats the membership decision inside the
+				// write itself, so a membership revoked between the two is
+				// still refused. Handlers enforce chat visibility.
+				r.With(projectScoped).Post("/pin/prompt_lib/{projectID}/{entityType}/{entityID}", coreHandler.Pin)
+				r.With(projectScoped).Delete("/pin/prompt_lib/{projectID}/{entityType}/{entityID}", coreHandler.Unpin)
 
 				// Project info/context. project_info.py, project_icon.py and
 				// project_context.py all declare the same pair —
@@ -3990,24 +4009,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireProjectContextEdit).
 					Delete(strings.TrimPrefix(v2promptcontextreads.CurrentProjectContextPath, "/api/v2/elitea_core"), coreHandler.DeleteProjectContext)
 
-				// Platform settings — left ungated on purpose, and the reason is
-				// recorded here because a project in the path makes the route
-				// look gateable. platform_settings.py is one of the thirty-seven
-				// handlers testdata/legacy/legacy-rbac-static-catalog.json lists
-				// as UNGUARDED, so there is no permission to transcribe, and
-				// #302's acceptance notes forbid tightening what legacy leaves
-				// open.
-				//
-				// The handler DOES read the project: eliteacore/handler.go:104
-				// overlays `p_{projectID}.configuration` where
-				// type = 'environment_settings' onto ten built-in defaults. So
-				// this is not an ungated route that happens to read nothing. What
-				// it discloses is the project's own feature switches —
-				// chat_enabled, mcp_enabled and eight more booleans of the same
-				// shape — which the web app reads to decide which menu entries to
-				// draw. No credential, no member, no content.
-				// TestEliteaCoreLegacyUngatedRoutesStayUngated pins this.
-				r.Get("/platform_settings/prompt_lib/{projectID}", coreHandler.PlatformSettings)
+				// Platform settings. The project-less form is the platform's
+				// own switches and is what the web app reads before and after
+				// sign-in, so it stays open to any authenticated caller. The
+				// {projectID} form overlays the project's own
+				// `environment_settings` configuration row, so it is a project
+				// read and takes the membership gate.
+				r.With(projectScoped).Get("/platform_settings/prompt_lib/{projectID}", coreHandler.PlatformSettings)
 				r.Get("/platform_settings/prompt_lib", coreHandler.PlatformSettings)
 
 				// Search
@@ -4309,6 +4317,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				socialOptions = append(socialOptions,
 					v2social.WithPersonalProjectEnsurer(personalProjects))
 			}
+			// Through a local, for the reason given at projectAccessQuerier
+			// above: this decides which gate answers, not whether the routes
+			// are registered.
+			socialProjectAccess := cfg.ProjectAccessQuerier
+			if socialProjectAccess != nil {
+				socialOptions = append(socialOptions,
+					v2social.WithProjectAccessQuerier(socialProjectAccess))
+			}
+			// The feedback routes carry an RBAC gate of their own; the resolver is
+			// the one projectPermission uses. Without it they answer 503.
+			socialOptions = append(socialOptions, v2social.WithPermissionResolver(coreResolver))
 			r.Mount("/social", v2social.NewHandler(cfg.Pool, socialOptions...).Routes())
 
 			// === Tracing plugin (issue #250) ===

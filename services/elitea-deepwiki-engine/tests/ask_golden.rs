@@ -2,7 +2,7 @@
 //!
 //! `tests/fixtures/ask/ref` is the Python engine's run of the scripted
 //! conversation in `tests/fixtures/ask/script.json` against
-//! `services/elitea-deepwiki/e2e/llm_stub.py` (see
+//! `services/elitea-deepwiki-engine/testdata/llm_stub.py` (see
 //! `parity/python_ask_dump.py`). Here the Rust agents run the same script
 //! over the replay index of the same rows, and:
 //!

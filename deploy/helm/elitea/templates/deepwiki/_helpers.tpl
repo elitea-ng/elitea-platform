@@ -36,15 +36,49 @@ without editing a shared file.
 {{- end }}
 
 {{/*
-elitea-deepwiki.validateGuards — the two settings that are silently wrong
-rather than loudly missing.
+elitea-deepwiki.validateGuards — the settings that are silently wrong rather
+than loudly missing.
 
-Both are checked at `helm template` time and not only at container start,
+Each is checked at `helm template` time and not only at container start,
 because the container's own refusal is a CrashLoopBackOff an operator has to
 go read logs for, and this is a message in the terminal that ran the command.
 */}}
+{{/*
+elitea-deepwiki.callbackBaseUrl — the origin the provider calls back to: an
+explicit main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL, else platform-edge when
+deepwiki.callbackViaPlatformEdge is on, else empty (which validateDeepWiki
+refuses for an enabled facade).
+*/}}
+{{- define "elitea-deepwiki.callbackBaseUrl" -}}
+{{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
+{{- if $explicit -}}
+{{- $explicit -}}
+{{- else if .Values.deepwiki.callbackViaPlatformEdge -}}
+{{- .Values.worker.runtime.platformOrigin -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Where both containers find the runtime CA for the callback hop. */}}
+{{- define "elitea-deepwiki.runtimeCaPath" -}}/run/elitea-runtime-ca{{- end -}}
+
 {{- define "elitea-deepwiki.validateGuards" -}}
 {{- $env := .Values.deepwiki.env | default dict -}}
+
+{{/*
+  Guard #0: the callback hop through platform-edge (ADR-0027). The edge is a
+  worker component, so without the worker there is nothing to dial; and an
+  explicit callback URL that is not the edge would leave the runtime CA
+  mounted for a hop that never uses it.
+*/}}
+{{- if .Values.deepwiki.callbackViaPlatformEdge -}}
+{{- if not (and .Values.worker.enabled .Values.worker.platformEdge.enabled) -}}
+{{- fail "deepwiki.callbackViaPlatformEdge is on, but platform-edge is not rendered: it needs worker.enabled and worker.platformEdge.enabled. Turn those on, or leave the callback hop on main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL (cleartext in-cluster)." -}}
+{{- end -}}
+{{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
+{{- if and $explicit (ne $explicit (.Values.worker.runtime.platformOrigin | toString)) -}}
+{{- fail (printf "deepwiki.callbackViaPlatformEdge is on, so the callback hop is %s, but main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL says %q. Leave it unset (the chart fills it in) or turn the flag off." .Values.worker.runtime.platformOrigin $explicit) -}}
+{{- end -}}
+{{- end -}}
 
 {{/*
   Guard #1: the git-host allowlist.
@@ -64,18 +98,21 @@ go read logs for, and this is a message in the terminal that ran the command.
 {{/*
   Guard #2: the runner.
 
-  The published image carries the engine SOURCE but not its dependency
-  closure, so the default runner REFUSES every tool. That is correct for the
-  default image and wrong for an operator who set `runner: legacy` expecting
-  work to happen — they need the engine image, and nothing else in this chart
-  would tell them.
+  The Python engine is gone (ADR-0026): the sidecar is always the native
+  image, running its native or its fixture runner. A value from before that
+  change — `legacy` on either switch, or the Python image's own keys — would
+  otherwise be read as something else or ignored, so each is refused with
+  the setting that replaces it.
 */}}
 {{- $runner := get $env "ELITEA_DEEPWIKI_RUNNER" | toString -}}
-{{- $sidecar := include "elitea-deepwiki.sidecar" . -}}
-{{- $engineTag := include "elitea-deepwiki.engineTag" . -}}
-{{- if and (eq $sidecar "python") (eq $runner "legacy") (not (contains "-engine" $engineTag)) -}}
-{{- fail (printf "deepwiki.env.ELITEA_DEEPWIKI_RUNNER is \"legacy\" but the engine sidecar's image tag (%s) does not end in \"-engine\". The plain elitea-deepwiki image carries the engine SOURCE and not its ~92-package closure (torch, transformers, faiss-cpu, tree-sitter), so the sidecar cannot import it and every tool fails at invocation time rather than at start. Set deepwiki.engine.image.tag to the -engine variant (the default derives it from the chart-wide tag), or set the runner to unavailable." $engineTag) -}}
+{{- if eq $runner "legacy" -}}
+{{- fail "deepwiki.env.ELITEA_DEEPWIKI_RUNNER is \"legacy\", which named the Python engine sidecar. That engine is removed and the sidecar is now the native image (ADR-0026). Set it to \"native\" (the default) to run the sidecar, and choose its runner with deepwiki.engine.runner (native or fixture). See docs/UPGRADING.md." -}}
 {{- end -}}
+{{- $engine := .Values.deepwiki.engine | default dict -}}
+{{- if or (hasKey $engine "image") (hasKey $engine "resources") -}}
+{{- fail "deepwiki.engine.image and deepwiki.engine.resources configured the Python engine sidecar, which is removed (ADR-0026). The sidecar is the native image: set deepwiki.engine.native.image and deepwiki.engine.native.resources instead, and remove the old keys. See docs/UPGRADING.md." -}}
+{{- end -}}
+{{- $sidecar := include "elitea-deepwiki.sidecar" . -}}
 
 {{/*
   Guard #3: the native engine's database.
@@ -89,57 +126,38 @@ go read logs for, and this is a message in the terminal that ran the command.
   A plain deepwiki.env value is not enough: the Job never receives it, so the
   pre-install migration would fail after a render that passed.
 */}}
-{{- if eq $sidecar "native" -}}
+{{- if and (eq $sidecar "native") (eq (.Values.deepwiki.engine.runner | toString) "native") -}}
 {{- $secrets := fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL")) -}}
 {{- if not (hasKey $secrets "ELITEA_DEEPWIKI_DATABASE_URL") -}}
-{{- fail "deepwiki.engine.runner is \"native\" but no ELITEA_DEEPWIKI_DATABASE_URL secret reaches the engine and its migrate Job: neither deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL nor postgresql.existingSecret is set (a plain deepwiki.env value reaches the engine but not the migrate Job). The native engine stages and publishes every index in the deepwiki PostgreSQL database and has no other storage, so it refuses to start without one, and the pod would never become ready. Name the secret that holds the database URL, or use runner legacy or fixture." -}}
+{{- fail "deepwiki.engine.runner is \"native\" but no ELITEA_DEEPWIKI_DATABASE_URL secret reaches the engine and its migrate Job: neither deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL nor postgresql.existingSecret is set (a plain deepwiki.env value reaches the engine but not the migrate Job). The native engine stages and publishes every index in the deepwiki PostgreSQL database and has no other storage, so it refuses to start without one, and the pod would never become ready. Name the secret that holds the database URL, or use runner fixture." -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
 
 {{/*
-elitea-deepwiki.sidecar — which engine sidecar the pod runs, from the two
-runner settings:
+elitea-deepwiki.sidecar — whether the pod runs the engine sidecar:
 
-  none    deepwiki.env.ELITEA_DEEPWIKI_RUNNER is anything but legacy or native
+  none    deepwiki.env.ELITEA_DEEPWIKI_RUNNER is anything but native
           (unavailable: the host refuses every tool; fixture: the host's own
           canned results). No sidecar is rendered.
-  native  deepwiki.engine.runner is native: the Rust engine
-          (elitea-deepwiki-engine-native, ADR-0026). The host's runner is
-          rendered as native whatever env says, so the one switch cannot
-          leave the host dialling a Python engine that is not there.
-  python  otherwise: the Python -engine image, its runner the
-          deepwiki.engine.runner value (legacy or fixture).
-
-A host runner of native with a Python sidecar is refused: it names the
-native engine and would talk to the Python one.
+  native  ELITEA_DEEPWIKI_RUNNER is native: the host dials the Rust engine
+          (elitea-deepwiki-engine-native, ADR-0026) over the shared socket.
+          The sidecar's own runner is deepwiki.engine.runner: native (the
+          engine) or fixture (its canned results, no database needed).
 */}}
 {{- define "elitea-deepwiki.sidecar" -}}
 {{- $runner := get (.Values.deepwiki.env | default dict) "ELITEA_DEEPWIKI_RUNNER" | toString -}}
 {{- $engineRunner := .Values.deepwiki.engine.runner | toString -}}
-{{- if not (has $engineRunner (list "legacy" "fixture" "native")) -}}
-{{- fail (printf "deepwiki.engine.runner must be legacy, fixture or native, got %q" $engineRunner) -}}
+{{- if eq $engineRunner "legacy" -}}
+{{- fail "deepwiki.engine.runner is \"legacy\", which ran the Python engine sidecar. That engine is removed (ADR-0026): set native (the default) to run the native engine, or fixture for its canned results. See docs/UPGRADING.md." -}}
 {{- end -}}
-{{- if not (has $runner (list "legacy" "native")) -}}
+{{- if not (has $engineRunner (list "native" "fixture")) -}}
+{{- fail (printf "deepwiki.engine.runner must be native or fixture, got %q" $engineRunner) -}}
+{{- end -}}
+{{- if eq $runner "native" -}}
+native
+{{- else -}}
 none
-{{- else if eq $engineRunner "native" -}}
-native
-{{- else if eq $runner "native" -}}
-{{- fail (printf "deepwiki.env.ELITEA_DEEPWIKI_RUNNER is \"native\" but deepwiki.engine.runner is %q, which runs the PYTHON sidecar. Set deepwiki.engine.runner to native: that one switch selects the native image and renders the host's runner." $engineRunner) -}}
-{{- else -}}
-python
-{{- end -}}
-{{- end }}
-
-{{/*
-elitea-deepwiki.hostRunner — the host's ELITEA_DEEPWIKI_RUNNER: native when
-the native sidecar runs, else the env value as written.
-*/}}
-{{- define "elitea-deepwiki.hostRunner" -}}
-{{- if eq (include "elitea-deepwiki.sidecar" .) "native" -}}
-native
-{{- else -}}
-{{- get (.Values.deepwiki.env | default dict) "ELITEA_DEEPWIKI_RUNNER" | toString -}}
 {{- end -}}
 {{- end }}
 
@@ -183,15 +201,3 @@ must be at least 1205Mi.
 {{- $cap -}}
 {{- end }}
 
-{{/*
-elitea-deepwiki.engineTag — the engine sidecar's image tag: the value set,
-else the chart-wide tag with "-engine" appended, which is how the
-`-engine` variant is published.
-*/}}
-{{- define "elitea-deepwiki.engineTag" -}}
-{{- if .Values.deepwiki.engine.image.tag -}}
-{{- .Values.deepwiki.engine.image.tag -}}
-{{- else -}}
-{{- printf "%s-engine" (.Values.image.tag | toString) -}}
-{{- end -}}
-{{- end }}

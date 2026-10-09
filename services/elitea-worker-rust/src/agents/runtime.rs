@@ -30,13 +30,14 @@ use super::events::{
     AgentEventProjectionError, AgentEventProjector, CompletedAgentBrowserOutput,
     ProjectedAgentEventBatch,
 };
+use super::graph::compiler::PipelineConfigurationError;
 use super::graph::resume::{
     PipelineContinuationDecision, PipelineMcpAuthorizationContinuation, PipelineResumeError,
     PipelineResumeErrorCode,
 };
 use super::graph::static_pause::PipelineTextContinuation;
 use super::pipeline::PipelineExecutionProfile;
-use super::request::AgentExecutionRequest;
+use super::request::{AgentExecutionPayload, AgentExecutionRequest};
 use super::session::{AuthorizedNativeCommandBinding, OrdinaryNativeAgentPlan};
 use crate::protocol::control::{ClaimBoundRuntimeContextAuthority, ClaimBoundSessionAuthority};
 use crate::state::StateWriterLease;
@@ -47,104 +48,44 @@ use crate::toolkits::{
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::{ClaimScopedEliteaContext, RuntimeContextError};
 
-/// Stable native assembly and result-selection failures.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NativeAgentAssemblyErrorCode {
-    InvalidConfiguration,
-    InvalidInput,
-    UnsupportedCapability,
-    ResourceExhausted,
-    AuthorizationFailed,
-    DependencyUnavailable,
-    InvalidResult,
-}
+pub(crate) use elitea_agent_runtime::assembly_error::{
+    NativeAgentAssemblyCause, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
+};
 
-impl NativeAgentAssemblyErrorCode {
-    #[must_use]
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::InvalidConfiguration => "native_agent.invalid_configuration",
-            Self::InvalidInput => "native_agent.invalid_input",
-            Self::UnsupportedCapability => "native_agent.unsupported_capability",
-            Self::ResourceExhausted => "native_agent.resource_exhausted",
-            Self::AuthorizationFailed => "native_agent.authorization_failed",
-            Self::DependencyUnavailable => "native_agent.dependency_unavailable",
-            Self::InvalidResult => "native_agent.invalid_result",
-        }
-    }
-}
-
-/// Failure before or after one native ADK stream.
+/// Classify a stored-pipeline admission failure.
 ///
-/// The message and code remain data-free. The ONE exception is a delegated
-/// authorization requirement (#982): when a remote MCP server answers the
-/// assembly dial with a `401` challenge, the sanitized
-/// [`DelegatedAuthorizationRequirement`] the toolkit built — toolkit name,
-/// endpoint and the resource-metadata URL, never a token or a response body —
-/// travels with the error so the lifecycle can tell the person WHICH of their
-/// connections is asking to be authorized. Discarding it left every challenge
-/// indistinguishable from any other runtime failure.
-pub(crate) struct NativeAgentAssemblyError {
-    code: NativeAgentAssemblyErrorCode,
+/// Bound refusals use the registered agent-settings message; a value that
+/// cannot be a graph identifier stays `InvalidInput` and keeps its typed code
+/// in [`NativeAgentAssemblyError::cause`]. A free function because the error
+/// type is owned by `elitea_agent_runtime` and the pipeline error by the worker.
+pub(crate) fn pipeline_configuration_assembly_error(
+    error: &PipelineConfigurationError,
     message: &'static str,
-    authorization: Option<Box<DelegatedAuthorizationRequirement>>,
-}
-
-impl NativeAgentAssemblyError {
-    pub(crate) const fn new(code: NativeAgentAssemblyErrorCode, message: &'static str) -> Self {
-        Self {
-            code,
-            message,
-            authorization: None,
+) -> NativeAgentAssemblyError {
+    let code = match error {
+        PipelineConfigurationError::ResourceExhausted => {
+            NativeAgentAssemblyErrorCode::ResourceExhausted
         }
-    }
-
-    /// Attach the sanitized delegated-authorization requirement, when the
-    /// failure is one.
-    #[must_use]
-    pub(crate) fn with_authorization(
-        mut self,
-        authorization: Option<DelegatedAuthorizationRequirement>,
-    ) -> Self {
-        self.authorization = authorization.map(Box::new);
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn authorization(&self) -> Option<&DelegatedAuthorizationRequirement> {
-        self.authorization.as_deref()
-    }
-
-    #[must_use]
-    pub(crate) const fn code(&self) -> NativeAgentAssemblyErrorCode {
-        self.code
-    }
-
-    #[must_use]
-    pub(crate) const fn retryable(&self) -> bool {
-        matches!(
-            self.code,
-            NativeAgentAssemblyErrorCode::DependencyUnavailable
-        )
+        PipelineConfigurationError::LimitExceeded(_) => {
+            NativeAgentAssemblyErrorCode::AgentSettingsLimit
+        }
+        PipelineConfigurationError::Unsupported(_)
+        | PipelineConfigurationError::NodeTypeNotAvailable(_) => {
+            NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        PipelineConfigurationError::MalformedYaml { .. }
+        | PipelineConfigurationError::Invalid(_)
+        | PipelineConfigurationError::InvalidIdentifier(_) => {
+            NativeAgentAssemblyErrorCode::InvalidInput
+        }
+        PipelineConfigurationError::Graph(_) => NativeAgentAssemblyErrorCode::InvalidConfiguration,
+    };
+    let assembled = NativeAgentAssemblyError::new(code, message);
+    match error.cause_detail() {
+        Some(detail) => assembled.with_cause(error.code(), Some(detail)),
+        None => assembled,
     }
 }
-
-impl fmt::Debug for NativeAgentAssemblyError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("NativeAgentAssemblyError")
-            .field("code", &self.code)
-            .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for NativeAgentAssemblyError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
-    }
-}
-
-impl std::error::Error for NativeAgentAssemblyError {}
 
 impl From<RuntimeContextError> for NativeAgentAssemblyError {
     fn from(error: RuntimeContextError) -> Self {
@@ -421,47 +362,7 @@ pub(super) fn admit_pipeline_plan<'a>(
     tracing::Span::current().record("stage", "start_admission");
     let has_continuation = has_continuation(request);
     let start = if has_continuation {
-        if request
-            .payload
-            .meta
-            .contains_key(super::graph::static_tool_pause::STATIC_TOOL_RESUME_META_KEY)
-        {
-            let decisions =
-                super::graph::static_tool_pause::parse_static_tool_decisions(&request.payload.meta)
-                    .map_err(|_| {
-                        NativeAgentAssemblyError::new(
-                            NativeAgentAssemblyErrorCode::InvalidInput,
-                            "the static graph selection is malformed",
-                        )
-                    })?
-                    .ok_or_else(|| {
-                        NativeAgentAssemblyError::new(
-                            NativeAgentAssemblyErrorCode::InvalidInput,
-                            "the static graph selection is missing",
-                        )
-                    })?;
-            // The common typed transport rejects HITL/meta mixing and client checkpoint selectors.
-            DirectHitlDecisionSet::from_payload(&request.payload)
-                .map_err(|error| direct_hitl_admission_error(&error))?;
-            PipelineNativeStart::StaticTools(decisions)
-        } else if request.payload.should_continue && !request.payload.hitl_resume {
-            if !request.payload.mcp_tokens.is_empty()
-                || !request.payload.ignored_mcp_servers.is_empty()
-                || !request.payload.user_declined_mcp_servers.is_empty()
-            {
-                PipelineMcpAuthorizationContinuation::from_payload(&request.payload)
-                    .map(PipelineNativeStart::McpAuthorization)
-                    .map_err(|error| pipeline_hitl_admission_error(&error))?
-            } else {
-                PipelineTextContinuation::from_payload(&request.payload)
-                    .map(PipelineNativeStart::Text)
-                    .map_err(|error| pipeline_hitl_admission_error(&error))?
-            }
-        } else {
-            PipelineContinuationDecision::from_payload(&request.payload)
-                .map(PipelineNativeStart::Hitl)
-                .map_err(|error| pipeline_hitl_admission_error(&error))?
-        }
+        pipeline_continuation_start(&request.payload)?
     } else if request.payload.is_regenerate {
         PipelineNativeStart::Regenerate
     } else {
@@ -495,6 +396,57 @@ pub(super) fn admit_pipeline_plan<'a>(
         start.is_hitl_resume(),
     )?;
     Ok((profile, plan, toolsets, start))
+}
+
+/// Select the typed pipeline continuation from Main's payload alone.
+///
+/// This is routing, not authorization: every variant still binds its decision
+/// to the latest durable graph event and checkpoint before the graph resumes.
+pub(crate) fn pipeline_continuation_start(
+    payload: &AgentExecutionPayload,
+) -> Result<PipelineNativeStart, NativeAgentAssemblyError> {
+    Ok(
+        if payload
+            .meta
+            .contains_key(super::graph::static_tool_pause::STATIC_TOOL_RESUME_META_KEY)
+        {
+            let decisions =
+                super::graph::static_tool_pause::parse_static_tool_decisions(&payload.meta)
+                    .map_err(|_| {
+                        NativeAgentAssemblyError::new(
+                            NativeAgentAssemblyErrorCode::InvalidInput,
+                            "the static graph selection is malformed",
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        NativeAgentAssemblyError::new(
+                            NativeAgentAssemblyErrorCode::InvalidInput,
+                            "the static graph selection is missing",
+                        )
+                    })?;
+            // The common typed transport rejects HITL/meta mixing and client checkpoint selectors.
+            DirectHitlDecisionSet::from_payload(payload)
+                .map_err(|error| direct_hitl_admission_error(&error))?;
+            PipelineNativeStart::StaticTools(decisions)
+        } else if payload.should_continue && !payload.hitl_resume {
+            if !payload.mcp_tokens.is_empty()
+                || !payload.ignored_mcp_servers.is_empty()
+                || !payload.user_declined_mcp_servers.is_empty()
+            {
+                PipelineMcpAuthorizationContinuation::from_payload(payload)
+                    .map(PipelineNativeStart::McpAuthorization)
+                    .map_err(|error| pipeline_hitl_admission_error(&error))?
+            } else {
+                PipelineTextContinuation::from_payload(payload)
+                    .map(PipelineNativeStart::Text)
+                    .map_err(|error| pipeline_hitl_admission_error(&error))?
+            }
+        } else {
+            PipelineContinuationDecision::from_payload(payload)
+                .map(PipelineNativeStart::Hitl)
+                .map_err(|error| pipeline_hitl_admission_error(&error))?
+        },
+    )
 }
 
 pub(crate) enum PipelineNativeStart {

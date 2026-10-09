@@ -15,9 +15,9 @@ import (
 )
 
 // PostgresStore is the durable invocation store (ADR-0023 H2b): the
-// `invocations` and `invocation_events` tables the Python package's
-// migrations own (services/elitea-deepwiki/…/migrations/0002_invocations.sql),
-// used exactly as the Python shell used them — one statement per operation,
+// `invocations` and `invocation_events` tables the DeepWiki engine's
+// migrations own (services/elitea-deepwiki-engine/migrations/0002_invocations.sql),
+// used exactly as the retired Python shell used them — one statement per operation,
 // events drained with a single DELETE … RETURNING so two pollers cannot
 // interleave, rows owned by the process that accepted them.
 //

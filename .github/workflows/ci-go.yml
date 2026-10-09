@@ -147,7 +147,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           # This job lints nine modules now, so the cache key reads every module
           # that has a go.sum. tools/uictl has none — it declares no external
           # dependency. The block below is a literal string, so a comment
@@ -218,7 +218,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache-dependency-path: |
             services/elitea-main/go.sum
             services/elitea-scheduler/go.sum
@@ -345,7 +345,8 @@ jobs:
           GCS_ENDPOINT: "http://127.0.0.1:4443/storage/v1/"
           ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
           # The sub-application host's durable invocation store (ADR-0023
-          # H2b): its tests apply the Python package's migration into a
+          # H2b): its tests apply the DeepWiki engine's migration
+          # (services/elitea-deepwiki-engine/migrations/0002) into a
           # throwaway schema of this database and skip loudly without it.
           ELITEA_SUBAPP_HOST_TEST_DSN: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
           ELITEA_AGENTSTATE_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
@@ -468,7 +469,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -511,7 +512,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache-dependency-path: services/elitea-main/go.sum
       - name: Run database integration tests
         env:

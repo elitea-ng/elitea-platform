@@ -115,6 +115,9 @@ updates:
       - /services/elitea-code-runner
       - /services/elitea-code-runner/adapters/rust
       - /services/elitea-deepwiki-engine
+      - /libs/rust
+      - /services/elitea-inventory-engine
+      - /apps/elitea-desktop/src-tauri
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:
@@ -135,18 +138,18 @@ updates:
       - dependency-name: opentelemetry-otlp
       - dependency-name: opentelemetry_sdk
 
-  # The DeepWiki and Inventory packages carry byte-frozen copies of their
-  # analysis engines (COPY_MANIFEST.json), each resolved against a pinned
-  # closure in the `engine` extra. A bump anywhere inside that closure makes
-  # the extra ResolutionImpossible and the engine image unbuildable — and no
-  # CI job builds those images, so only the weekly real-engine run notices.
-  # Eight such bumps (#677, #678, #679, #757–#761) did exactly that. The pins
+  # The Inventory package carries a byte-frozen copy of its analysis engine
+  # (COPY_MANIFEST.json), resolved against a pinned closure in the `engine`
+  # extra. A bump anywhere inside that closure makes the extra
+  # ResolutionImpossible and the engine image unbuildable — and no CI job
+  # builds that image. Eight such bumps (#677, #678, #679, #757–#761) did
+  # exactly that to the Python DeepWiki engine (since deleted), and #740/#741
+  # to Inventory's. The pins
   # move together with a re-copy of the engine, never one at a time; the SPI
   # shell's own dependencies are ranges and need no bumping. Security alerts
   # still show in the repository's Dependabot tab.
   - package-ecosystem: pip
     directories:
-      - /services/elitea-deepwiki
       - /services/elitea-inventory
     schedule:
       interval: weekly
@@ -182,6 +185,7 @@ updates:
   - package-ecosystem: npm
     directories:
       - /apps/elitea-web
+      - /apps/elitea-desktop
       - /tools/parity-extract
     multi-ecosystem-group: weekly
     patterns: ["*"]

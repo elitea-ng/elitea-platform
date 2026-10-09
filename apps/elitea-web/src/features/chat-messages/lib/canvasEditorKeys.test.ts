@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { canvasEditorKeyAction } from './canvasEditorKeys';
+import { canvasEditorKeyAction, isEscapeConsumedInside } from './canvasEditorKeys';
 
 const press = (key: string, modifiers: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {}) => ({
   key,
@@ -46,5 +46,31 @@ describe('canvasEditorKeyAction', () => {
     // Even from inside the code pane: full screen is the editor's own mode.
     expect(canvasEditorKeyAction(press('Escape'), { isFullScreen: true, fromCodePane: true })).toBe('exit-full-screen');
     expect(canvasEditorKeyAction(press('Escape'), OUTSIDE_CODE)).toBe('ignore');
+  });
+});
+
+describe('isEscapeConsumedInside', () => {
+  it('is true when a widget prevented the default (CodeMirror search panel, autocomplete)', () => {
+    expect(isEscapeConsumedInside({ defaultPrevented: true, target: document.body })).toBe(true);
+  });
+
+  it('is true inside an editing DataGrid cell or row, false elsewhere', () => {
+    const row = document.createElement('div');
+    row.className = 'MuiDataGrid-row';
+    const cell = document.createElement('div');
+    cell.className = 'MuiDataGrid-cell MuiDataGrid-cell--editing';
+    const input = document.createElement('input');
+    cell.append(input);
+    row.append(cell);
+    expect(isEscapeConsumedInside({ defaultPrevented: false, target: input })).toBe(true);
+    cell.className = 'MuiDataGrid-cell';
+    expect(isEscapeConsumedInside({ defaultPrevented: false, target: input })).toBe(false);
+    row.className = 'MuiDataGrid-row MuiDataGrid-row--editing';
+    expect(isEscapeConsumedInside({ defaultPrevented: false, target: input })).toBe(true);
+  });
+
+  it('is false for a plain Escape so the drawer still closes', () => {
+    expect(isEscapeConsumedInside({ defaultPrevented: false, target: document.createElement('div') })).toBe(false);
+    expect(isEscapeConsumedInside({ defaultPrevented: false, target: null })).toBe(false);
   });
 });

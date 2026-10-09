@@ -1,6 +1,6 @@
 # The MINIMAL chart values for the kind stack: elitea-main serving the DeepWiki
 # facade, and the DeepWiki provider pod in its shipping two-container shape
-# (ADR-0023 H2) — the Go sub-application host plus the Python engine sidecar.
+# (ADR-0023 H2) — the Go sub-application host plus the native engine sidecar.
 #
 # Everything the facade does not need is off. Read deploy/kind/README.md for
 # what `up` installs around this file.
@@ -110,6 +110,9 @@ main:
   env:
     APPLICATION_SECRET_KEY: "changeme-kind"
     COOKIE_SECURE: "false"
+    # Throwaway cluster: no master-key Secret is created, so Main opts out of
+    # the mandatory key explicitly.
+    ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "true"
 
     # The Configurations plane. It is on for ONE reason: ELITEA_AI_PROJECT_ID
     # below is refused unless it is (cmd/elitea-main/configurations_config.go
@@ -150,26 +153,27 @@ deepwiki:
     tag: kind
     pullPolicy: IfNotPresent
   engine:
-    image:
-      repository: ghcr.io/elitea-ng/elitea-deepwiki
-      # Ends in -engine, which is what elitea-deepwiki.validateGuards requires
-      # of a runner=legacy install.
-      tag: kind-engine
-      pullPolicy: IfNotPresent
-    # The HOST runs `legacy`, so it reaches the sidecar over the socket; the
-    # SIDECAR runs `fixture`, so the engine answers with canned tool results
-    # and no LLM or git host is needed.
+    # The HOST runs `native`, so it reaches the sidecar over the socket; the
+    # SIDECAR (the native image) runs `fixture`, so the engine answers with
+    # canned tool results and no LLM or git host is needed.
     runner: fixture
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 2Gi
+    native:
+      image:
+        repository: ghcr.io/elitea-ng/elitea-deepwiki-engine-native
+        tag: kind
+        pullPolicy: IfNotPresent
+      # The fixture runs no generation worker, but the chart derives the
+      # worker's cap from this limit, which must be at least 1205Mi.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 64Mi
+        limits:
+          memory: 2Gi
   env:
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
     ELITEA_DEEPWIKI_MODEL_ALLOWLIST: "*"
-    ELITEA_DEEPWIKI_RUNNER: "legacy"
+    ELITEA_DEEPWIKI_RUNNER: "native"
     ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS: "1"
     ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: https://elitea-deepwiki-svc:8443
   resources:
@@ -178,3 +182,9 @@ deepwiki:
       memory: 256Mi
     limits:
       memory: 2Gi
+
+# The kind stack reaches elitea-main by kubectl port-forward (kind-stack.sh), so
+# no pod outside the chart needs to open a connection to it.
+networkPolicies:
+  main:
+    noExternalIngress: true

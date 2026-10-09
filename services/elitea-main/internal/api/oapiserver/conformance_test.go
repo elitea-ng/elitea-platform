@@ -132,7 +132,9 @@ const (
 	// participant.deleteParticipantFromConversation).
 	// 49 -> 48, when client contract 1.3 described the agent-execution stop
 	// (pipelines.stopLlmTask, now cancelChatExecution).
-	maxAllowlistEntries = 48
+	// 48 -> 47, when client contract 1.4 described the conversation PUT
+	// (conversation.edit, now updateConversation).
+	maxAllowlistEntries = 47
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production
@@ -241,6 +243,18 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// Client contract 1.3: cancelChatExecution, registered only when the
 		// cancel route is composed (production_router.go).
 		CurrentAgentCancel: http.NotFoundHandler(),
+		// Client contract 1.5: startLocalTurn and commitLocalTurn, registered
+		// only when the local turn route is composed (production_router.go).
+		CurrentLocalTurns: http.NotFoundHandler(),
+		// Client contract 1.6: resolveApplicationVersion, registered only
+		// when the route is composed (production_router.go).
+		CurrentResolvedVersion: http.NotFoundHandler(),
+		// Client contract 1.6: executeRemoteToolkitTool, likewise.
+		CurrentRemoteToolkit: http.NotFoundHandler(),
+		// listExecutionInterrupts and decideExecutionInterrupt: registered only
+		// when the interrupt route is composed (production_router.go), i.e.
+		// ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true.
+		CurrentExecutionInterrupts: http.NotFoundHandler(),
 		RuntimeRoutes: api.RuntimeRoutes{
 			Validation:      http.NotFoundHandler(),
 			ExecutionEvents: http.NotFoundHandler(),

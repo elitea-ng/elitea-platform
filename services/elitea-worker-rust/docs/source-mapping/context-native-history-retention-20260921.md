@@ -12,8 +12,8 @@ The user requires compaction during long executions, preserved authority, and du
 
 | Source or contract | Rust implementation |
 | --- | --- |
-| ADK 2.2.0 `adk-agent/src/llm_agent.rs`, model callback loop | `vendor/adk-agent/src/llm_agent.rs`, optional prepared-history retention |
-| ADK 2.2.0 `adk-runner/src/runner.rs`, root and transfer streams | `vendor/adk-runner/src/runner.rs`, optional session refresh |
+| ADK 2.2.0 `adk-agent/src/llm_agent.rs`, model callback loop | `libs/rust/vendor/adk-agent/src/llm_agent.rs`, optional prepared-history retention |
+| ADK 2.2.0 `adk-runner/src/runner.rs`, root and transfer streams | `libs/rust/vendor/adk-runner/src/runner.rs`, optional session refresh |
 | Elitea durable prepared model request | `src/agents/model_checkpoint.rs`, history retention activation |
 | Model-local child compaction | `src/agents/model_scope.rs`, scoped history retention activation |
 | Elitea native invocation | `src/agents/runtime.rs`, session refresh activation |
@@ -56,7 +56,7 @@ The worktree suite reports zero failed or ignored tests.
 Clippy, formatting, and the release build pass.
 Repeated live compaction remains a separate acceptance requirement.
 
-See `../../vendor/README.md` for package provenance and upgrade requirements.
+See `../../../../libs/rust/vendor/README.md` for package provenance and upgrade requirements.
 
 ## Rehearsal deployment
 

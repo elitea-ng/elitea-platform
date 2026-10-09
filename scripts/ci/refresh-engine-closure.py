@@ -4,15 +4,16 @@
 WHY THIS EXISTS
 ===============
 
-`services/elitea-deepwiki` and `services/elitea-inventory` each vendor a
-byte-frozen copy of an analysis engine (`src/*/engine/`, verified against
-`COPY_MANIFEST.json` by each package's `tools/refresh_engine_copy.py`), and each
-pins that copy's resolved dependency closure in an `engine` extra.
+`services/elitea-inventory` vendors a byte-frozen copy of an analysis engine
+(`src/elitea_inventory/engine/`, verified against `COPY_MANIFEST.json` by
+`tools/refresh_engine_copy.py`), and pins that copy's resolved dependency
+closure in an `engine` extra. (The Python DeepWiki service had the same shape
+until the Rust engine replaced it and it was deleted.)
 
-Ten Dependabot bumps moved single pins inside those closures and made them
-unsatisfiable — #677-#679 and #757-#761 for DeepWiki, #740 and #741 for
-Inventory. `.github/dependabot.yml` therefore gives both packages their own pip
-entry with `ignore: "*"` and `open-pull-requests-limit: 0`.
+Ten Dependabot bumps moved single pins inside such closures and made them
+unsatisfiable — #677-#679 and #757-#761 for the Python DeepWiki engine, #740
+and #741 for Inventory. `.github/dependabot.yml` therefore gives the package
+its own pip entry with `ignore: "*"` and `open-pull-requests-limit: 0`.
 
 That silence has a cost, and it is the reason this file exists: the closure
 carries open security advisories (aiohttp among them) with no automated route
@@ -29,17 +30,17 @@ THE INVARIANT, STATED ONCE
 
 Both halves are enforced rather than documented:
 
-  * one at a time -> `scripts/ci/check-engine-closures.sh` resolves both extras
+  * one at a time -> `scripts/ci/check-engine-closures.sh` resolves the extra
     on every pull request and every day, and a single moved pin is a
     ResolutionImpossible it reports in seconds.
-  * together with the copy -> each pyproject carries
+  * together with the copy -> the pyproject carries
     `# closure-stamp: COPY_MANIFEST.json sha256 <digest>`. This tool writes it;
     that gate refuses a tree where the copy moved and the stamp did not.
 
 WHAT IT DOES
 ============
 
-    python3 scripts/ci/refresh-engine-closure.py                 # both packages
+    python3 scripts/ci/refresh-engine-closure.py                 # every package
     python3 scripts/ci/refresh-engine-closure.py PACKAGE ...     # named ones
 
     --check       resolve and report drift; change nothing; exit 3 when the
@@ -63,16 +64,14 @@ It resolves METADATA. Nothing here proves the frozen copy's own imports still
 work against the versions it lands on — #677 (anthropic 0.84 -> 1.2.0) resolved
 perfectly well and would have changed an API the copy calls. That question is
 answered by running the thing, and the two gates that run it are named in the
-checklist this tool prints:
+checklist this tool prints: the `-engine` image build, and a run of the engine
+itself against the new versions.
 
-  * the `-engine` image build, and
-  * `.github/workflows/deepwiki-real-engine.yml`
-    (`gh workflow run deepwiki-real-engine.yml`).
-
-A refresh is a PROPOSAL until both are green. The scheduled workflow opens it
+A refresh is a PROPOSAL until both are done. The scheduled workflow opens it
 as a draft pull request carrying that checklist, and never merges it.
 
-Only fully-pinned closures are rewritten. `services/elitea-inventory`'s `engine`
+Only fully-pinned closures are rewritten, and today no package has one.
+`services/elitea-inventory`'s `engine`
 extra is deliberately a mix of exact pins and ranges, each with paragraphs of
 measured reasoning attached (`langsmith`'s h11 bound, and the I8 ledger beside
 each exact pin recording what it unlocked), and mechanically
@@ -147,12 +146,6 @@ class Package:
 
 
 PACKAGES = [
-    Package(
-        "services/elitea-deepwiki",
-        "services/elitea-deepwiki/src/elitea_deepwiki/engine/COPY_MANIFEST.json",
-        ["engine", "storage-postgres"],
-        rewritable=True,
-    ),
     Package(
         "services/elitea-inventory",
         "services/elitea-inventory/src/elitea_inventory/engine/COPY_MANIFEST.json",
@@ -381,18 +374,16 @@ This is a re-resolution of a frozen engine's dependency closure. It is a
 PROPOSAL: everything below resolves, and nothing below has been run.
 
 - [ ] The `-engine` image builds.
-      `podman build -f services/elitea-deepwiki/Containerfile \\
-          --build-arg EXTRAS="[engine,storage-postgres]" -t elitea-deepwiki:engine .`
-      (~2 GB, tens of minutes, needs >35 GB free. No CI job does this, which is
-      why it is a checklist item and not a check.)
-- [ ] The weekly real-engine run is green ON THIS BRANCH.
-      `gh workflow run deepwiki-real-engine.yml --ref <this branch>`
-      This is the only gate that runs the frozen copy's own imports against the
-      versions this pull request lands on. A resolution says nothing about
-      whether `anthropic` still has the method the copy calls (#677 was exactly
-      that shape).
+      `podman build -f services/elitea-inventory/Containerfile \\
+          --build-arg 'EXTRAS=[engine]' -t elitea-inventory:engine .`
+      (Tens of minutes. No CI job does this, which is why it is a checklist
+      item and not a check.)
+- [ ] The engine runs against these versions: a real Inventory tool call on
+      the `-engine` image built from THIS BRANCH. A resolution says nothing
+      about whether a package still has the method the frozen copy calls
+      (#677, anthropic 0.84 -> 1.2.0, was exactly that shape).
 - [ ] The engine copy is unchanged, or moved deliberately in the same pull
-      request. `python tools/refresh_engine_copy.py --check` in each package.
+      request. `python tools/refresh_engine_copy.py --check` in the package.
 - [ ] Any advisory this refresh was opened for is actually closed by it —
       check the resolved version against the advisory's fixed-in version, do
       not assume the newest version carries the fix.
@@ -524,7 +515,7 @@ def main(argv=None) -> int:
                 "with:\n    python3 scripts/ci/refresh-engine-closure.py"
             )
             return 3
-        print("\nboth closures are at their newest compatible set")
+        print("\nevery closure is at its newest compatible set")
         return 0
 
     if drifted:

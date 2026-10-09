@@ -35,6 +35,12 @@ func mountSharedChatAnonymousRoutes(r chi.Router, cfg RouterConfig) {
 		return
 	}
 	h := sharedchat.NewHandler(cfg.SharedChatStore, cfg.SharedChatTranscript, []byte(cfg.SessionSecret))
+	// The unlock route's per-client budget is keyed on the same trusted-proxy
+	// interpretation the SCIM and native token endpoints use. The field is
+	// checked for nil so an unset pointer never becomes a non-nil interface.
+	if cfg.SCIMClientAddresses != nil {
+		h.WithClientAddresses(cfg.SCIMClientAddresses)
+	}
 	r.Get(SharedChatViewPath, h.View)
 	r.Post(SharedChatUnlockPath, h.Unlock)
 }

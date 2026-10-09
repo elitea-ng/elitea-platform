@@ -117,6 +117,41 @@ func TestProductionRouterMountsCurrentAgentCancelOnlyWhenComposed(t *testing.T) 
 	}
 }
 
+func TestProductionRouterMountsExecutionInterruptsOnlyWhenComposed(t *testing.T) {
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusTeapot)
+	})
+	list := "/api/v2/elitea_core/task/prompt_lib/2/10000000-0000-4000-8000-000000000051/interrupts"
+	decide := list + "/node-1/decision"
+	composed := reviewedRoutesRouter(RouterConfig{CurrentExecutionInterrupts: handler})
+	// A composed cancel route must not make the interrupt paths reachable.
+	uncomposed := reviewedRoutesRouter(RouterConfig{CurrentAgentCancel: handler})
+	for _, test := range []struct {
+		name   string
+		router http.Handler
+		method string
+		path   string
+		want   int
+	}{
+		{name: "list", router: composed, method: http.MethodGet, path: list, want: http.StatusTeapot},
+		{name: "decide", router: composed, method: http.MethodPost, path: decide, want: http.StatusTeapot},
+		{name: "list wrong method", router: composed, method: http.MethodPost, path: list, want: http.StatusMethodNotAllowed},
+		{name: "decide wrong method", router: composed, method: http.MethodGet, path: decide, want: http.StatusMethodNotAllowed},
+		{name: "list uncomposed", router: uncomposed, method: http.MethodGet, path: list, want: http.StatusNotFound},
+		{name: "decide uncomposed", router: uncomposed, method: http.MethodPost, path: decide, want: http.StatusNotFound},
+		{name: "list empty config", router: reviewedRoutesRouter(RouterConfig{}), method: http.MethodGet, path: list, want: http.StatusNotFound},
+		{name: "decide empty config", router: reviewedRoutesRouter(RouterConfig{}), method: http.MethodPost, path: decide, want: http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			test.router.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+			if response.Code != test.want {
+				t.Fatalf("status=%d want=%d body=%q", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestProductionRouterMountsCurrentApplicationTaskOnlyWhenComposed(t *testing.T) {
 	// Both verbs ride ONE handler, so a mount that registered only the DELETE —
 	// the shape the legacy SPA's dead mutation would still have exercised —
@@ -1980,6 +2015,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/social/author/",
 		"GET /api/v2/social/authors/{projectID}",
 		"GET /api/v2/social/feedbacks/default/{projectID}",
+		"GET /api/v2/social/feedbacks/{projectID}",
 		"GET /api/v2/social/trending_authors/prompt_lib/{projectID}",
 		"GET /api/v2/support_assistant/attachments/{bucket}/*",
 		"GET /api/v2/support_assistant/config",
@@ -2155,6 +2191,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/secrets/secret/{mode}/{projectID}/{name}",
 		"POST /api/v2/secrets/secrets/{mode}/{projectID}",
 		"POST /api/v2/social/feedbacks/default/{projectID}",
+		"POST /api/v2/social/feedbacks/{projectID}",
 		"POST /api/v2/social/like/prompt_lib/{projectID}/application/{applicationID}",
 		"POST /api/v2/social/like/prompt_lib/{projectID}/{entityType}/{entityID}",
 		"POST /api/v2/social/pin/prompt_lib/{projectID}/{entityType}/{entityID}",

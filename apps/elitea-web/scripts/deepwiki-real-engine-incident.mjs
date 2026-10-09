@@ -19,17 +19,12 @@ async function main() {
   const runUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
     ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
     : '(local run)';
-  const engineImage = process.env.DEEPWIKI_ENGINE_IMAGE || '(default: local bake of elitea-deepwiki-engine)';
+  const engineImage = process.env.DEEPWIKI_ENGINE_IMAGE || '(default: local bake of elitea-deepwiki-engine-native)';
   const sha = process.env.GITHUB_SHA || '(unknown)';
-  // The workflow's `engine` matrix axis. The legacy leg keeps the title it
-  // always had, so an open issue keeps collecting its comments; the native
-  // leg gets its own issue, de-duplicated the same way.
-  const engine = process.env.DEEPWIKI_REAL_ENGINE === 'native' ? 'native' : 'legacy';
-
-  const issueTitle =
-    engine === 'native'
-      ? 'DeepWiki real-engine incident (native engine): weekly run failed'
-      : 'DeepWiki real-engine incident: weekly run failed';
+  // The native engine is the only one. The title is the one its leg had
+  // when the workflow ran two engines, so an open issue keeps collecting
+  // its comments.
+  const issueTitle = 'DeepWiki real-engine incident (native engine): weekly run failed';
   const issueBody = [
     '## DeepWiki real-engine — incident report',
     '',
@@ -41,7 +36,7 @@ async function main() {
     '|-------|-------|',
     `| Run | ${runUrl} |`,
     `| Commit | ${sha} |`,
-    `| Engine | ${engine} |`,
+    '| Engine | native |',
     `| Engine image | ${engineImage} |`,
     '',
     '### What this job alone catches',
@@ -54,20 +49,15 @@ async function main() {
     '',
     '### Action required',
     '',
-    `Open the run above, pull the \`playwright-report-deepwiki-real-engine${engine === 'native' ? '-native' : ''}\``,
+    'Open the run above, pull the `playwright-report-deepwiki-real-engine`',
     'artifact, and determine whether this is real drift or an infrastructure',
-    'flake (disk pressure building the ~2 GB engine image is the most common',
-    'non-drift cause). Re-run via `workflow_dispatch` after a fix; pass',
-    '`engine_image` to pin a known-good image while triaging.',
-    ...(engine === 'native'
-      ? [
-          '',
-          'Native leg: if the log stops at "is at <sha>, not the pinned <sha>",',
-          'github.com/kharkevich-engineering-lab/floe moved past the pin. That is',
-          'not drift in the engine: re-verify and move the pin (see the workflow',
-          'header), or dispatch with `native_ref` set to a tag at the pin.',
-        ]
-      : []),
+    'flake. Re-run via `workflow_dispatch` after a fix; pass `engine_image`',
+    'to pin a known-good image while triaging.',
+    '',
+    'If the log stops at "is at <sha>, not the pinned <sha>",',
+    'github.com/kharkevich-engineering-lab/floe moved past the pin. That is',
+    'not drift in the engine: re-verify and move the pin (see the workflow',
+    'header), or dispatch with `native_ref` set to a tag at the pin.',
   ].join('\n');
 
   await createOrUpdateGitHubIssue(issueTitle, issueBody, {

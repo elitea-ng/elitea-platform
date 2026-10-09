@@ -35,6 +35,7 @@ import (
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -989,72 +990,6 @@ func (h *Handler) Notifications(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rows": items, "total": len(items)})
-}
-
-func (h *Handler) Author(w http.ResponseWriter, r *http.Request) {
-	authorID := chi.URLParam(r, "authorID")
-	ctx := r.Context()
-
-	var name, email, avatar, desc string
-	err := h.pool.QueryRow(ctx, `
-		SELECT COALESCE(au.name, ''), COALESCE(au.email, ''), COALESCE(su.avatar, ''), COALESCE(su.description, '')
-		FROM auth_core__user au
-		LEFT JOIN centry.social_users su ON su.user_id = au.id
-		WHERE au.id = $1
-	`, authorID).Scan(&name, &email, &avatar, &desc)
-
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{})
-		return
-	}
-
-	// Count applications owned by this author — only in projects they belong to
-	var totalApps, totalPipelines, totalToolkits, totalCollections int
-	schemaRows, _ := h.pool.Query(ctx,
-		`SELECT DISTINCT 'p_' || project_id FROM auth_core__project_user_role WHERE user_id = $1`, authorID)
-	if schemaRows != nil {
-		var schemas []string
-		for schemaRows.Next() {
-			var s string
-			if schemaRows.Scan(&s) != nil {
-				continue
-			}
-			schemas = append(schemas, s)
-		}
-		schemaRows.Close()
-		for _, name := range schemas {
-			s := catalogueSchema(name)
-			var cnt int
-			// Each Scan failure leaves cnt=0, which is safe for counting
-			// The author of an agent is the author of its VERSIONS.
-			// `applications.owner_id` is the owning PROJECT (#533), so
-			// `a.owner_id = $1` counted the agents of the project whose id
-			// happens to equal this user id — a different set, and usually an
-			// empty one.
-			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE EXISTS (SELECT 1 FROM %s.application_versions av WHERE av.application_id = a.id AND av.author_id = $1) AND NOT EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s, s), authorID).Scan(&cnt)
-			totalApps += cnt
-			cnt = 0
-			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE EXISTS (SELECT 1 FROM %s.application_versions av WHERE av.application_id = a.id AND av.author_id = $1) AND EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s, s), authorID).Scan(&cnt)
-			totalPipelines += cnt
-			cnt = 0
-			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.elitea_tools WHERE author_id = $1`, s), authorID).Scan(&cnt)
-			totalToolkits += cnt
-			cnt = 0
-			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.prompt_collections WHERE author_id = $1`, s), authorID).Scan(&cnt)
-			totalCollections += cnt
-		}
-	}
-
-	aid, _ := strconv.Atoi(authorID)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id": aid, "name": name, "email": email,
-		"avatar": avatar, "title": "", "description": desc,
-		"total_conversations": 0, "public_conversations": 0,
-		"public_applications": 0, "total_applications": totalApps,
-		"public_pipelines": 0, "total_pipelines": totalPipelines,
-		"total_toolkits": totalToolkits, "public_collections": 0,
-		"total_collections": totalCollections, "rewards": 0,
-	})
 }
 
 // publishActorID names the user a published version is attributed to, and
@@ -2856,36 +2791,6 @@ func (h *Handler) Recommendations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"applications": items, "total": len(items)})
 }
 
-func (h *Handler) Feedbacks(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-	ctx := r.Context()
-
-	q := fmt.Sprintf(`SELECT id, entity_name, entity_id, user_id, rating, COALESCE(comment, ''), created_at FROM %s.social_feedbacks ORDER BY created_at DESC LIMIT 50`, s)
-	rows, err := h.pool.Query(ctx, q)
-	items := make([]map[string]any, 0)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id int
-			var entityName, entityID, userID, comment string
-			var rating int
-			var createdAt interface{}
-			if rows.Scan(&id, &entityName, &entityID, &userID, &rating, &comment, &createdAt) != nil {
-				continue
-			}
-			items = append(items, map[string]any{
-				"id": fmt.Sprintf("%d", id), "entity_name": entityName, "entity_id": entityID,
-				"user_id": userID, "rating": rating, "comment": comment,
-			})
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
-}
-
 func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	versionID := chi.URLParam(r, "versionID")
@@ -3266,6 +3171,28 @@ func storedAgentType(raw string) (string, bool) {
 	}
 }
 
+// pipelineLimitRefusal applies the shared save-time pipeline bounds to every
+// pipeline version an import or fork body carries. It runs before the
+// application row is written, so a refused entry leaves nothing behind. Entries
+// that are not JSON objects are skipped here and reported by the loop that
+// handles them.
+func pipelineLimitRefusal(versions []any) error {
+	for _, raw := range versions {
+		version, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if agentType, _ := version["agent_type"].(string); agentType != "pipeline" {
+			continue
+		}
+		instructions, _ := version["instructions"].(string)
+		if err := pipelinelimits.Check(instructions); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -3485,6 +3412,12 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 				importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
 				continue
 			}
+		}
+
+		if err := pipelineLimitRefusal(versions); err != nil {
+			errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: " + err.Error()})
+			importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
+			continue
 		}
 
 		if destinationOwnerErr != nil {
@@ -4313,6 +4246,15 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		}
 		name, _ := app["name"].(string)
 		desc, _ := app["description"].(string)
+
+		forkVersions, _ := app["versions"].([]any)
+		if err := pipelineLimitRefusal(forkVersions); err != nil {
+			errorAgents = append(errorAgents, map[string]any{
+				"index": entityIdx, "name": name,
+				"msg": "Fork function has been failed: " + err.Error(),
+			})
+			continue
+		}
 
 		if destinationOwnerErr != nil {
 			errorAgents = append(errorAgents, map[string]any{

@@ -25,7 +25,7 @@ import {
 import type { AdmissionGraph, AdmissionNode, GraphAdmissionIssue, GraphAdmissionRule } from './graphAdmission.types';
 import { admissionIssue, countNonStringEntries, toStringList } from './graphAdmission.types';
 
-const { MAX_NODE_ID_BYTES, isCompilerAdmittedNodeType } = RuntimeContractConstants;
+const { MAX_NODE_ID_BYTES, isCompilerAdmittedNodeType, isDeploymentGatedNodeType } = RuntimeContractConstants;
 
 /** The one route/transition target legal without naming a node — `compiler.rs:484`, `router.rs:331`, `hitl.rs:464`. */
 const END_TARGET: string = FlowEditorConstants.PipelineNodeTypes.End;
@@ -46,7 +46,9 @@ const nodeTypeRule: GraphAdmissionRule = {
           node.id,
           'type',
           node.type,
-          `type: "${node.type}" is not a node type this runtime can run — the whole pipeline is refused.`,
+          isDeploymentGatedNodeType(node.type)
+            ? `type: "${node.type}" is not available on this deployment — the whole pipeline is refused.`
+            : `type: "${node.type}" is not a node type this runtime can run — the whole pipeline is refused.`,
         ),
       ),
 };

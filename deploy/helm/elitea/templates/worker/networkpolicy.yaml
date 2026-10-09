@@ -1,0 +1,21 @@
+{{- if and .Values.worker.enabled .Values.networkPolicies.enabled }}
+# The worker pods listen on nothing and are only ever clients, so they admit no
+# inbound connection at all. Egress is deliberately NOT restricted here: the
+# worker reaches elitea-main, NATS, PostgreSQL, the sandbox supervisors and,
+# through toolkits, arbitrary external hosts. Egress controls are a separate
+# piece of work.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-worker-python.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-worker-python.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-worker-python.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Ingress
+{{- end }}

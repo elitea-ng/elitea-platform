@@ -112,13 +112,15 @@ up with `--no-deps` — but a normal `up` no longer needs it.
 
 ### DeepWiki and Inventory — canned data with no engine closure
 
-Both sub-applications run their Go host (`elitea-subapp-host`) with
-`RUNNER=legacy`, reaching an engine SIDECAR (`elitea-deepwiki`,
-`elitea-inventory`) over a shared Unix socket — the socket hop this stack
-exists to exercise, not just the Go half. Neither sidecar carries the real
-analysis engine's dependency closure here; both serve their `fixture`
-runner instead, so `up` shows a populated wiki and a populated Inventory
-graph with no repository, no model and no ~1 GB+ engine image.
+Both sub-applications run their Go host (`elitea-subapp-host`) reaching an
+engine SIDECAR over a shared Unix socket — the socket hop this stack exists
+to exercise, not just the Go half. DeepWiki's host runs `RUNNER=native`
+and its sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`,
+with its migration service); Inventory's host runs `RUNNER=legacy` and its
+sidecar is `elitea-inventory` without the engine closure. Both sidecars
+serve their `fixture` runner, so `up` shows a populated wiki and a
+populated Inventory graph with no repository and no model.
+`DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead.
 
 Inventory's fixture graph (six entities, two source toolkits, five
 relations) is the SAME one the Go sub-application host's own fixture runner
@@ -246,12 +248,12 @@ nothing. Both halves refuse to render while half configured
 (`elitea-deepwiki.validateGuards`, `elitea-main.validateDeepWiki`), because the
 container's own refusal is a CrashLoopBackOff somebody has to go read logs for.
 
-Two things about it are worth knowing before turning it on. The published
-image carries the engine SOURCE but not its ~92-package closure, so it serves
-the whole SPI and REFUSES every tool; the `-engine` image tag is the one that
-can run a generation, and the chart refuses the combination of
-`ELITEA_DEEPWIKI_RUNNER=legacy` with a non-engine tag. And
-`ELITEA_DEEPWIKI_GIT_ALLOWLIST` is read by BOTH halves and is fail-closed on
+Two things about it are worth knowing before turning it on. The engine
+sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`), and its
+default `native` runner keeps every index in PostgreSQL, so the chart
+refuses to render without an `ELITEA_DEEPWIKI_DATABASE_URL` secret
+(`deepwiki.secrets` or `postgresql.existingSecret`); the same image runs the
+migrate Job. And `ELITEA_DEEPWIKI_GIT_ALLOWLIST` is read by BOTH halves and is fail-closed on
 both: the facade checks it before opening the vault, the provider before
 building a clone URL, and two values that disagree mean an invocation that
 starts and then fails.
@@ -1263,7 +1265,7 @@ The variable has three states. They are not equivalent:
 | State | What `elitea-main` does | What is stored |
 |---|---|---|
 | Set, valid | Wraps each project vault key with the master key. | The key row is a Fernet token. |
-| **Not set** | Starts, and writes a **warning** to the log. | The key row is the project key **in the clear**. Anyone who can read the database can open every project secret. |
+| **Not set** | **Refuses to start**, unless `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true` is set (throwaway local stacks only); then it starts and writes a **warning** to the log. | With the opt-out, the key row is the project key **in the clear**. Anyone who can read the database can open every project secret. |
 | **Set, malformed** | **Refuses to start.** The message names the variable. | Nothing. |
 
 A malformed key stops the service on purpose (#412). Before that change the
@@ -1280,15 +1282,23 @@ stray space or tab **is** malformed.
   the table, and compose fails if you do not export it (#418).
 - `docker-compose.staging.yml` requires it from your shell, and compose fails
   if you do not export it.
-- No chart under `deploy/helm/` sets it. Supply it through a Kubernetes
-  Secret, or accept unwrapped storage.
-- The E2E stack sets no key on purpose. It seeds unwrapped key rows, so it
-  needs none.
+- The `elitea` chart gives `elitea-main` the Secret reference the LLM gateway
+  reads (`llmGateway.secrets.SECRETS_MASTER_KEY`, by default Secret
+  `elitea-llm-gateway-secrets`, key `secrets-master-key`), or
+  `main.secrets.SECRETS_MASTER_KEY.secretName` / `.key` when set. That Secret
+  must exist even with the gateway disabled. The render fails when there is no
+  source, and refuses the key as a plain `main.env` value.
+- The E2E stack, `docker-compose.standalone-full.yml` and the kind stack set
+  `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`. They seed unwrapped key rows, so
+  they need no key.
 
 ### Changing the key
 
 Rows written under a different key, or under no key, do not become readable
-when the key changes. Convert them with
+when the key changes. A deployment that ran without a key runs the script
+below with `--to-key` and `--apply` first, then starts `elitea-main` with that
+key. `elitea-main` checks this at start: with a key set, any project key still
+stored in the clear stops the start and names this script. Convert them with
 [`scripts/rewrap-centry-vault.py`](scripts/rewrap-centry-vault.py), on a copy
 first. It rewraps the project key and never rewrites the secret values.
 

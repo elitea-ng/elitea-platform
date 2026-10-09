@@ -8,9 +8,9 @@
 //! `deepwiki_build`) and publishes it into the ADR-0022 tables in one
 //! transaction.
 //!
-//! * [`migrate`] applies the service migrations, which stay in the Python
-//!   package (`services/elitea-deepwiki/src/elitea_deepwiki/migrations/`)
-//!   and are embedded here. Both runners write one checksum ledger.
+//! * [`migrate`] applies the service migrations (`migrations/` in this
+//!   crate), which are embedded here. Their bytes are frozen: databases
+//!   hold each file's SHA-256 in the `schema_migrations` ledger.
 //! * [`rows`] maps graph rows onto the ADR-0022 columns as `publish.py`
 //!   maps the `.wiki.db` rows.
 //! * [`build`] stages a graph (`COPY`), publishes it, and reconciles
@@ -21,6 +21,9 @@
 //!   `resolve_wiki` use: a port of `storage/unified_db_adapter.py`.
 //! * [`text`] holds the tokenizer and the BM25 arithmetic both sides share.
 //! * [`topology`] is Phase 2's index over a build's staged rows.
+//! * [`scope`] is the tenancy key: every index row belongs to one
+//!   platform project, and every reader and build is made with one
+//!   ([`ProjectScope`], [`WikiKey`]; migration 0005).
 //!
 //! A DSN carries a password. Nothing in this module logs or formats one,
 //! and a DSN that does not parse is reported without its text.
@@ -35,10 +38,12 @@ pub mod build;
 mod copy;
 pub mod migrate;
 pub mod rows;
+pub mod scope;
 pub mod search;
 pub mod text;
 pub mod topology;
 
+pub use scope::{PROJECT_ARG, ProjectScope, WikiKey};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use std::str::FromStr;
 use std::time::Duration;

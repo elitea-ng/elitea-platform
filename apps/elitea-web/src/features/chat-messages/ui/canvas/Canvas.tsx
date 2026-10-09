@@ -155,7 +155,9 @@ export function Canvas({
 
   const editButtonTitle = useMemo(
     () => {
-      if (type === 'document') return t('features.chatMessages.canvas.block.openDocument', 'Edit document');
+      // Neutral, like the block's own title: "Edit document" read as a MODE
+      // the reader was stuck in (#1097), when the control only opens it.
+      if (type === 'document') return t('features.chatMessages.canvas.block.openDocument', 'Open document');
       if (type === 'code' && language !== 'mermaid') return t('features.chatMessages.canvas.block.openCode', 'Edit code');
       if (type === 'diagram' || language === 'mermaid') return t('features.chatMessages.canvas.block.openDiagram', 'Edit diagram');
       return t('features.chatMessages.canvas.block.openTable', 'Edit table');
@@ -225,7 +227,7 @@ export function Canvas({
   const blockTitle = realEditors.length > 0 ? editingTitle : (name ?? editButtonTitle);
 
   return (
-    <Box sx={{ width: '100%' }} data-testid="canvas-block">
+    <Box sx={{ width: '100%' }} data-testid="canvas-block" {...(canvasId ? { 'data-canvas-id': canvasId } : {})}>
       {/* Toolbar row */}
       <Box
         sx={{

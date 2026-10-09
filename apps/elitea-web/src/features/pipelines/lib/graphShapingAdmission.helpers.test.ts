@@ -56,11 +56,57 @@ describe('explicit data shaping contracts', () => {
   ])('refuses exact Aggregate field %s at %s', (patch, field) => {
     expect(fields({ ...aggregate, ...patch })).toContain(field);
   });
-  it('checks duplicates within sections and permits equal group and operation aliases', () => {
+  it('checks duplicates within sections and refuses equal group and operation aliases', () => {
     const configured = { ...aggregate, group_by: [{ path: '/a', output: 'count' }] };
-    expect(fields(configured)).toEqual([]);
+    expect(fields(configured)).toContain('operations[0]');
+    expect(fields({ ...configured, group_by: [{ path: '/a', output: 'a' }] })).toEqual([]);
     expect(fields({ ...configured, group_by: [{ path: '/a', output: 'a' }, { path: '/b', output: 'a' }] })).toContain('group_by[1]');
     expect(fields({ ...configured, operations: [{ operation: 'count_rows', output: 'count' }, { operation: 'count_rows', output: 'count' }] })).toContain('operations[1]');
+  });
+  it('mirrors the per-type limit keys and the values ceiling', () => {
+    expect(fields({ ...split, limits: { values: 32_768 } })).toEqual([]);
+    expect(fields({ ...split, limits: { values: 32_769 } })).toContain('limits.values');
+    expect(fields({ ...split, limits: { groups: 5 } })).toContain('limits.groups');
+    expect(fields({ ...aggregate, limits: { groups: 1_000, values: 32_768 } })).toEqual([]);
+    expect(fields({ ...aggregate, limits: { groups: 1_001 } })).toContain('limits.groups');
+  });
+  const regrouped = { ...aggregate, layout: 'split_out', regroup: 'parent',
+    operations: [{ operation: 'collect', output: 'items', field: { path: '/items' } }] };
+  it('admits regroup parent only with split_out layout, no group_by and no collect_rows', () => {
+    expect(fields(regrouped)).toEqual([]);
+    expect(fields({ ...regrouped, regroup: 'none' })).toEqual([]);
+    expect(fields({ ...regrouped, regroup: 'child' })).toContain('regroup');
+    expect(fields({ ...regrouped, layout: 'plain' })).toContain('regroup');
+    expect(fields({ ...regrouped, layout: undefined })).toContain('regroup');
+    expect(fields({ ...regrouped, group_by: [{ path: '/a', output: 'a' }] })).toContain('group_by');
+    expect(fields({ ...regrouped, group_by: [] })).toEqual([]);
+    expect(fields({ ...regrouped, operations: [{ operation: 'collect_rows', output: 'rows' }] })).toContain('operations[0].operation');
+  });
+  it.each(['sum_int', 'min_int', 'max_int'])('refuses null keep for %s but not for list operations', (operation) => {
+    const field = { path: '/x', null: 'keep' };
+    expect(fields({ ...aggregate, operations: [{ operation, output: 'v', field }] })).toContain('operations[0].field.null');
+    expect(fields({ ...aggregate, operations: [{ operation, output: 'v', field: { path: '/x', null: 'skip' } }] })).toEqual([]);
+    expect(fields({ ...aggregate, operations: [{ operation: 'first', output: 'v', field }] })).toEqual([]);
+  });
+  it('refuses collect_rows retain none', () => {
+    const rows = (retain: unknown) => ({ ...aggregate, operations: [{ operation: 'collect_rows', output: 'r', retain }] });
+    expect(fields(rows({ mode: 'none' }))).toContain('operations[0].retain.mode');
+    for (const mode of ['all', 'only', 'except']) expect(fields(rows({ mode, ...(mode === 'all' ? {} : { fields: [] }) }))).toEqual([]);
+  });
+  it('validates pointers like the Worker', () => {
+    const at = (path: string) => fields({ ...split, source: 'row', split: { mode: 'row_field', path } });
+    expect(at('/' + Array.from({ length: 31 }, () => 'a').join('/'))).toEqual([]);
+    expect(at('/' + Array.from({ length: 32 }, () => 'a').join('/'))).toEqual([]);
+    expect(at('/' + Array.from({ length: 33 }, () => 'a').join('/'))).toContain('split.path');
+    expect(at('/' + 'a'.repeat(511))).toEqual([]);
+    expect(at('/' + 'a'.repeat(512))).toContain('split.path');
+    for (const bad of ['/a~2', '/a~', 'a/b', '']) expect(at(bad)).toContain('split.path');
+    expect(at('/a~0b/~1/')).toEqual([]);
+  });
+  it('cites the Worker definitions', () => {
+    const citation = (node: unknown) => graphShapingIssues(documentFor({ ...(node as object), guessed: 1 }))[0]?.citation;
+    expect(citation(split)).toBe('split_out.rs::SplitOutNodeDefinition::from_yaml');
+    expect(citation(aggregate)).toBe('aggregate.rs::AggregateNodeDefinition::from_yaml');
   });
   it.each(['collect', 'sum_int', 'min_int', 'max_int', 'first', 'last'])('accepts explicit %s selectors with unknown values', (operation) => {
     expect(fields({ ...aggregate, operations: [{ operation, output: 'value', field: { path: '/opaque', missing: 'skip', null: 'error' } }] })).toEqual([]);

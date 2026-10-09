@@ -239,8 +239,8 @@ services:
       #     bash deploy/scripts/gen-deepwiki-certs.sh
       #     ELITEA_DEEPWIKI_ENABLED=true podman compose --profile deepwiki up -d
       ELITEA_DEEPWIKI_ENABLED: "${ELITEA_DEEPWIKI_ENABLED:-false}"
-      # 8080: the port the provider listens on (uvicorn in __main__.py, EXPOSE in
-      # its Containerfile, the Helm chart). This said 8443 and nothing checked
+      # 8080: the port the provider listens on (the sub-application host's
+      # default, EXPOSE in its Containerfile, the Helm chart). This said 8443 and nothing checked
       # it — the hop was refused on connect, before any of the mTLS refusals
       # this file documents could happen.
       ELITEA_DEEPWIKI_BASE_URL: "https://elitea-deepwiki:8080"
@@ -278,8 +278,8 @@ services:
   # ── DeepWiki provider service (ADR-0022) ───────────────────────────────────
   #
   # OPT-IN: `podman compose --profile deepwiki up -d`. Out of the default stack
-  # because the image it can actually run tools with carries a torch-sized
-  # dependency closure, and because it needs certificates generated first.
+  # because it needs certificates generated first, and because the engine
+  # image compiles ~420 crates on its first build.
   #
   # BEFORE the first run:
   #     bash deploy/scripts/gen-deepwiki-certs.sh
@@ -288,24 +288,27 @@ services:
   # script's header. A dev-only relaxation in the production code path is how a
   # deployment ends up serving without mTLS while believing it has it.
   #
-  # WHAT THIS IMAGE CAN DO. The default build serves the whole SPI and REFUSES
-  # every tool: it carries the engine SOURCE but not its ~92-package closure.
-  # GET /health names the active runner, so it cannot look like it has an
-  # engine. For a stack that actually generates a wiki, build the engine image
-  # (`docker buildx bake elitea-deepwiki-engine`) and set
-  # ELITEA_DEEPWIKI_RUNNER=legacy here.
+  # The shape the chart ships (ADR-0023 H2): the Go sub-application host
+  # serves the SPI and reaches the Rust-native engine (ADR-0026) over a Unix
+  # socket the two share. The engine runs its `native` runner (generation
+  # through the invocation's llm_settings, every index in PostgreSQL);
+  # DEEPWIKI_NATIVE_RUNNER=fixture gives canned results instead, and
+  # =unavailable refuses every tool.
   elitea-deepwiki:
     profiles: ["deepwiki"]
     build:
       context: ..
-      dockerfile: services/elitea-deepwiki/Containerfile
-      args:
-        EXTRAS: "[storage-postgres]"
-    image: ghcr.io/elitea-ng/elitea-deepwiki:dev
+      dockerfile: services/elitea-subapp-host/Containerfile
+    image: ghcr.io/elitea-ng/elitea-subapp-host:dev
     environment:
-      # The service's OWN storage (decision 3): its wiki index and its
-      # invocation rows. The same database as the platform here, because a
-      # dev stack has one; the ownership is still separate, and the migrate
+      ELITEA_SUBAPP: deepwiki
+      # The host dials the engine sidecar over the shared socket, whichever
+      # runner the engine serves.
+      ELITEA_DEEPWIKI_RUNNER: "native"
+      ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
+      # The service's OWN storage (decision 3): its invocation rows here, its
+      # wiki index in the engine. The same database as the platform, because
+      # a dev stack has one; the ownership is still separate, and the migrate
       # service below is what applies its schema.
       ELITEA_DEEPWIKI_DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
       ELITEA_DEEPWIKI_TLS_CERTFILE: /certs/deepwiki-server.crt
@@ -320,30 +323,72 @@ services:
       # else; elitea-main carries the same string, and two that disagree mean
       # an invocation that starts and then fails.
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
-      ELITEA_DEEPWIKI_MODEL_ALLOWLIST: "huggingface.co,*.huggingface.co"
-      ELITEA_DEEPWIKI_RUNNER: "unavailable"
-      ELITEA_DEEPWIKI_SCRATCH_PATH: /var/scratch/deepwiki
+      ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
       ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "https://elitea-deepwiki:8080"
     volumes:
       - ./certs:/certs:ro
+      - deepwiki-engine-sock:/run/deepwiki
+    depends_on:
+      elitea-deepwiki-engine:
+        condition: service_healthy
+    healthcheck:
+      # Distroless; the binary's own probe is a TCP accept (the listener is
+      # TLS, so a plain HTTP GET would not be one).
+      test: ["CMD", "/elitea-subapp-host", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # The engine sidecar: one distroless binary on the socket the host dials.
+  # No port, no TLS, no identity — the shared volume is the only way in.
+  elitea-deepwiki-engine:
+    profiles: ["deepwiki"]
+    build:
+      context: ..
+      dockerfile: services/elitea-deepwiki-engine/Containerfile
+    image: ghcr.io/elitea-ng/elitea-deepwiki-engine-native:dev
+    # The image's own ENTRYPOINT/CMD: `elitea-deepwiki-engine serve`.
+    environment:
+      ELITEA_DEEPWIKI_RUNNER: "${DEEPWIKI_NATIVE_RUNNER:-native}"
+      ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
+      # Directly, not through a pooler: the migration and the publish hold
+      # session-level advisory locks.
+      ELITEA_DEEPWIKI_DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
+      # A container's hostname changes on every recreate, and the startup
+      # reconciliation deletes this owner's earlier builds, so the owner is
+      # a fixed name. (Helm uses the pod name.)
+      ELITEA_DEEPWIKI_BUILD_OWNER: "dev-deepwiki-engine"
+      # The engine checks the same allowlist again before it clones.
+      ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+      ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
+    volumes:
+      - deepwiki-engine-sock:/run/deepwiki
     depends_on:
       postgres:
         condition: service_healthy
       elitea-deepwiki-migrate:
         condition: service_completed_successfully
+    healthcheck:
+      # Distroless: no shell. The binary probes its own socket.
+      test: ["CMD", "/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
-  # The service's own migrations, run once before it starts. Separate from the
-  # platform's own migrations for the reason the chart's Job header gives: the
-  # service owns this schema and versions it independently.
+  # The service's own migrations, run once before the engine starts, from the
+  # engine's image (the binary embeds them). Separate from the platform's own
+  # migrations for the reason the chart's Job header gives: the service owns
+  # this schema and versions it independently.
   elitea-deepwiki-migrate:
     profiles: ["deepwiki"]
     build:
       context: ..
-      dockerfile: services/elitea-deepwiki/Containerfile
-      args:
-        EXTRAS: "[storage-postgres]"
-    image: ghcr.io/elitea-ng/elitea-deepwiki:dev
-    entrypoint: ["python", "-m", "elitea_deepwiki.storage"]
+      dockerfile: services/elitea-deepwiki-engine/Containerfile
+    image: ghcr.io/elitea-ng/elitea-deepwiki-engine-native:dev
+    # The image's ENTRYPOINT is the binary; this replaces its CMD (`serve`).
+    command: ["migrate"]
     environment:
       ELITEA_DEEPWIKI_DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
     depends_on:
@@ -401,5 +446,8 @@ services:
 
 volumes:
   postgres_data:
+  # The DeepWiki engine sidecar's Unix socket, shared by the host and the
+  # engine only.
+  deepwiki-engine-sock:
   rustfs_data:
   nats_data:

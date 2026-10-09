@@ -7,7 +7,7 @@
  * logic looks arbitrary it is preserved and the reason is written down.
  */
 import type { RepositoryIdentity, Toolkit, ToolkitSettings } from '../model/types';
-import { artifactDisplayRepository, getArtifactSource } from './artifactSource';
+import { artifactRepoIdentity, getArtifactSource } from './artifactSource';
 import { parseRepositoryIdentity, extractAdoOrganization } from './repoUrl';
 import { mergePlainObjects } from './wikiId';
 
@@ -201,10 +201,7 @@ export function getConfiguredRepoIdentity(
   // matches no wiki this project owns.
   const folder = getArtifactSource(merged);
   if (folder) {
-    return {
-      repository: artifactDisplayRepository(folder),
-      branch: firstFrom(sources, getBranchFromSettings),
-    };
+    return artifactRepoIdentity(folder, firstFrom(sources, getBranchFromSettings));
   }
 
   const repository = firstFrom(sources, getRepositoryFromSettings);

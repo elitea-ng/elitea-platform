@@ -68,10 +68,16 @@ type RunRequest struct {
 	LLMModel                  string
 	MCPAuthorizationReference string
 	LLMSettings               json.RawMessage
+	// EnforceSensitiveGate and SensitiveApproval are set by the desktop's
+	// remote toolkit call only. With the gate, the worker refuses a tool the
+	// policy marks sensitive unless SensitiveApproval is present. Without it,
+	// neither key reaches the runtime context (RuntimeContext.SensitiveGate).
+	EnforceSensitiveGate bool
+	SensitiveApproval    *SensitiveActionApproval
 }
 
 func (r RunRequest) Validate() error {
-	if r.IdempotencyKey != "" && !validRequestKey(r.IdempotencyKey) {
+	if r.IdempotencyKey != "" && !ValidRequestKey(r.IdempotencyKey) {
 		return ErrInvalidToolRun
 	}
 	if len(r.RequestID) > 128 || !utf8.ValidString(r.RequestID) || strings.ContainsAny(r.RequestID, "\x00\r\n") || r.RequestID != strings.TrimSpace(r.RequestID) {
@@ -95,6 +101,9 @@ func (r RunRequest) Validate() error {
 	if !validModelSettings(r.LLMSettings) {
 		return ErrInvalidToolRun
 	}
+	if !r.SensitiveApproval.valid() || (r.SensitiveApproval != nil && !r.EnforceSensitiveGate) {
+		return ErrInvalidToolRun
+	}
 	if len(r.Arguments) > MaxToolArgumentsBytes {
 		return ErrInvalidToolRun
 	}
@@ -107,6 +116,7 @@ func (r RunRequest) Validate() error {
 func (r RunRequest) Clone() RunRequest {
 	r.Arguments = append(json.RawMessage(nil), r.Arguments...)
 	r.LLMSettings = append(json.RawMessage(nil), r.LLMSettings...)
+	r.SensitiveApproval = r.SensitiveApproval.clone()
 	return r
 }
 
@@ -139,6 +149,15 @@ type RunOutcome struct {
 	AuthorizationRequired *executiondomain.ToolkitAuthorizationRequired
 	ToolkitType           string
 	ToolName              string
+	// FailureCode is the worker's RuntimeErrorCodeV1 name on a
+	// RunStatusRuntimeFailure outcome, and empty otherwise. It is what lets a
+	// caller tell "this worker cannot run that tool" (UNSUPPORTED_CAPABILITY —
+	// the Rust worker refuses an effectful tool in toolkit.call_tool.v1) from
+	// "the tool's provider failed", which the safe message alone does not.
+	FailureCode string
+	// Replayed is true when this request did not admit the run: its
+	// idempotency key had already admitted it, and this is that run's result.
+	Replayed bool
 }
 
 // AuthoritativeInputResolver reloads the saved toolkit and freezes its settings.
@@ -158,6 +177,14 @@ type AuthoritativeInputResolver interface {
 // says why rather than restating "unsupported".
 type ToolkitTypeVerdict interface {
 	SupportsToolkitType(toolkitType string) (bool, string)
+}
+
+// ToolVerdict is the optional per-tool half of a ToolkitTypeVerdict: a type
+// the worker runs may still lack one of its tools (a partial native family,
+// ADR-0027). A verdict that implements it is asked after the type passes,
+// with the same before-any-write rule.
+type ToolVerdict interface {
+	SupportsTool(toolkitType, toolName string) (bool, string)
 }
 
 // Settlement is one terminal row of the durable output inbox.
@@ -309,6 +336,11 @@ func NewRunService(
 type PendingRun struct {
 	ExecutionID string
 	Waited      time.Duration
+	// Replayed is true when this request did not admit the run: the same
+	// idempotency key had already admitted it, so the caller is waiting on
+	// a run an earlier attempt started (and that attempt may still be
+	// waiting too). Nothing was dispatched a second time.
+	Replayed bool
 }
 
 func (e *PendingRun) Error() string {
@@ -354,6 +386,14 @@ func (s *RunService) runTool(ctx context.Context, request RunRequest, exactRevis
 			reason = "This deployment cannot run the " + inputs.ToolkitType + " toolkit."
 		}
 		return RunOutcome{}, &UnsupportedToolkitTypeError{ToolkitType: inputs.ToolkitType, Reason: reason}
+	}
+	if tools, ok := s.verdict.(ToolVerdict); ok {
+		if supported, reason := tools.SupportsTool(inputs.ToolkitType, request.ToolName); !supported {
+			if reason == "" {
+				reason = "This deployment cannot run the " + request.ToolName + " tool of the " + inputs.ToolkitType + " toolkit."
+			}
+			return RunOutcome{}, &UnsupportedToolkitTypeError{ToolkitType: inputs.ToolkitType, Reason: reason}
+		}
 	}
 	inputs.ToolName = request.ToolName
 	inputs.Arguments = append(json.RawMessage(nil), request.Arguments...)
@@ -529,6 +569,7 @@ func (s *RunService) await(ctx context.Context, admitted AdmittedRun) (RunOutcom
 			return RunOutcome{}, &PendingRun{
 				ExecutionID: admitted.Outcome.ExecutionID,
 				Waited:      s.deadline,
+				Replayed:    !admitted.Outcome.Created,
 			}
 		}
 		select {
@@ -547,7 +588,9 @@ func (s *RunService) await(ctx context.Context, admitted AdmittedRun) (RunOutcom
 			return RunOutcome{}, fmt.Errorf("read tool-run settlement: %w", err)
 		}
 		if found {
-			return decodeSettlement(admitted, settlement)
+			outcome, err := decodeSettlement(admitted, settlement)
+			outcome.Replayed = !admitted.Outcome.Created
+			return outcome, err
 		}
 
 		interval *= 2
@@ -613,6 +656,7 @@ func decodeSettlement(admitted AdmittedRun, settlement Settlement) (RunOutcome, 
 			outcome.ErrorMessage = "the runtime operation failed"
 			return outcome, nil
 		}
+		outcome.FailureCode = failure.GetCode().String()
 		// SafeMessage is what the runtime chose to say; it is already bounded
 		// and carries no provider body, so it is the only field relayed.
 		outcome.ErrorMessage = failure.GetSafeMessage()

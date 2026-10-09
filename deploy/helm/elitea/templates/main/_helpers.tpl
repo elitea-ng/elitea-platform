@@ -593,7 +593,7 @@ reads, which looks configured and does nothing.
 {{- if not (hasPrefix "https://" $url) -}}
 {{- fail (printf "env.ELITEA_DEEPWIKI_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; NewProxy catches it at startup." $url) -}}
 {{- end -}}
-{{- if not (get $env "ELITEA_DEEPWIKI_CALLBACK_BASE_URL") -}}
+{{- if not (include "elitea-deepwiki.callbackBaseUrl" .) -}}
 {{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, so env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL must name the origin the PROVIDER calls back to for artifacts and models. Without it a generation runs to completion and then cannot hand back what it produced — the failure arrives at the end of the most expensive operation the facade offers. Set it to this deployment's own in-cluster origin, e.g. http://elitea-main:8080." -}}
 {{- end -}}
 {{- if not (get $env "ELITEA_DEEPWIKI_GIT_ALLOWLIST") -}}
@@ -1153,6 +1153,9 @@ ELITEA_RUNTIME_ENABLED: "true"
 ELITEA_RUNTIME_COMMAND_STREAM: {{ $runtime.commandStream | quote }}
 ELITEA_RUNTIME_MAX_OUTSTANDING: {{ $runtime.maxOutstanding | toString | quote }}
 ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED: {{ ((get $runtime "toolkitDiscovery" | default dict).enabled | default false) | toString | quote }}
+{{/* The per-interrupt HITL list/decision API (Point 5 Track M2). Off: no
+     Wave 1 caller exists, and the admission gate stays false until Wave 2. */}}
+ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED: "false"
 {{/* The SSE stream caps. Optional: the built-in defaults (16/4/8) stay when
      runtime.sse is absent. The cap is process-local, so the cluster admits
      maxStreams x replicas streams at once. */}}
@@ -1246,4 +1249,47 @@ identity sits at nats.tls.mountPath in the same pod.
 {{- define "elitea-main.runtimeNatsMountPath" -}}
 {{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}
 {{- get $runtimeNats "mountPath" | default "/etc/elitea/runtime-nats-client" | trimSuffix "/" -}}
+{{- end }}
+
+{{/*
+elitea-main.masterKeyRef — the Secret reference SECRETS_MASTER_KEY is read from,
+as JSON, or "" when there is none and the development opt-out is set.
+
+elitea-main refuses to start without the key (cmd/elitea-main/
+master_key_gate.go): it stores every project vault key wrapped with it, and it
+will not store them in the clear. The chart therefore fails the RENDER when
+nothing would supply the key, rather than leaving the operator a pod that
+restarts with the reason in its log.
+
+Source, in order: an explicit main.secrets.SECRETS_MASTER_KEY; otherwise the
+reference the LLM gateway reads (llmGateway.secrets.SECRETS_MASTER_KEY).
+elitea-main and the gateway read the same centry.secrets_key rows, so they must
+carry the SAME value, and sharing the reference is how the chart keeps that
+true. The key is never accepted as a plaintext value: main.env lands in a
+ConfigMap.
+
+The development opt-out is main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true.
+It does not remove the reference, only makes it optional, so an install that
+has the Secret still wraps its keys. The gateway's own `optional` is NOT
+inherited: the gateway tolerates a missing key, elitea-main does not.
+*/}}
+{{- define "elitea-main.masterKeyRef" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- if hasKey $env "SECRETS_MASTER_KEY" -}}
+{{- fail "main.env.SECRETS_MASTER_KEY is refused: main.env is rendered into a ConfigMap, and the vault master key must not be. Reference a Secret instead: main.secrets.SECRETS_MASTER_KEY.secretName / .key." -}}
+{{- end -}}
+{{- $secrets := .Values.main.secrets | default dict -}}
+{{- $ref := get $secrets "SECRETS_MASTER_KEY" -}}
+{{- if not (hasKey $secrets "SECRETS_MASTER_KEY") -}}
+{{- $ref = get (.Values.llmGateway.secrets | default dict) "SECRETS_MASTER_KEY" -}}
+{{- end -}}
+{{- $optOut := eq (toString (get $env "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS")) "true" -}}
+{{- if $ref -}}
+{{- if or (not $ref.secretName) (not $ref.key) -}}
+{{- fail "main.secrets.SECRETS_MASTER_KEY (or, when unset, llmGateway.secrets.SECRETS_MASTER_KEY) needs both secretName and key." -}}
+{{- end -}}
+{{- toJson (dict "secretName" $ref.secretName "key" $ref.key "optional" $optOut) -}}
+{{- else if not $optOut -}}
+{{- fail "elitea-main has no SECRETS_MASTER_KEY source and refuses to start without one: it will not store project vault keys unwrapped. Set main.secrets.SECRETS_MASTER_KEY.secretName / .key (a Secret holding a base64url 32-byte Fernet key; the gateway must carry the same value), or, for a throwaway local install only, set main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=\"true\"." -}}
+{{- end -}}
 {{- end }}

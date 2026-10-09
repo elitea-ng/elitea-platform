@@ -17,6 +17,11 @@
 //!   git allowlist again before the credential is used (`ingest::admit`).
 //!   The Phase 2 path prefixes are directories of the clone, bound as query
 //!   parameters, never caller text.
+//! * **The project is the host's.** The wiki is published into the project
+//!   in `_elitea_project_id` ([`crate::storage::PROJECT_ARG`]), which the
+//!   Go host sets from the verified identity of the hop and overwrites when
+//!   a caller supplied one. A request without it is refused before any
+//!   work: an index is never written without its project (migration 0005).
 //! * **`llm_settings.api_base` is the platform's.** elitea-main's facade
 //!   replaces the block (`material.CallbackSettings`: `{platform}/llm/v1`,
 //!   a short-lived callback bearer, the project as `organization`) and lifts
@@ -32,8 +37,10 @@
 //! the worker child).
 
 use crate::errors::{EngineError, ErrorType};
+use crate::ingest::artifact::{PlatformObjects, names_artifact_folder};
 use crate::llm::{ModelSettings, embedding_model_name};
 use crate::source::{py_str, py_truthy};
+use crate::storage::ProjectScope;
 use crate::structure::PlannerChoice;
 use serde_json::{Map, Value};
 
@@ -47,6 +54,9 @@ pub const PLANNER_ENV: &str = "DEEPWIKI_STRUCTURE_PLANNER";
 /// credential) is redacted and the model key is a secret.
 #[derive(Clone)]
 pub struct GenerateRequest {
+    /// The project the index is published into: the host's
+    /// [`crate::storage::PROJECT_ARG`].
+    pub project: ProjectScope,
     pub query: String,
     pub model: ModelSettings,
     pub embedding_model: String,
@@ -60,11 +70,16 @@ pub struct GenerateRequest {
     pub planner_mode: Option<String>,
     /// `exclude_tests` when the request set it (`None`: the environment).
     pub exclude_tests: Option<bool>,
+    /// The platform object API an artifact-folder source is read through
+    /// (`llm_settings`' base, bearer and project); `None` for a git source,
+    /// which has no use for the bearer there.
+    pub platform_objects: Option<PlatformObjects>,
 }
 
 impl std::fmt::Debug for GenerateRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GenerateRequest")
+            .field("project", &self.project)
             .field("query", &self.query)
             .field("model", &self.model)
             .field("embedding_model", &self.embedding_model)
@@ -72,6 +87,7 @@ impl std::fmt::Debug for GenerateRequest {
             .field("requested_branch", &self.requested_branch)
             .field("planner_mode", &self.planner_mode)
             .field("exclude_tests", &self.exclude_tests)
+            .field("platform_objects", &self.platform_objects)
             .finish()
     }
 }
@@ -89,17 +105,17 @@ impl GenerateRequest {
     /// required"), invalid `llm_settings`, a missing embedding model or a
     /// `repo_config` that is not an object.
     pub fn parse(arguments: &Map<String, Value>) -> Result<Self, EngineError> {
+        let project = ProjectScope::from_arguments(arguments)?;
         let query = arguments
             .get("query")
             .filter(|value| py_truthy(value))
             .map(py_str)
             .ok_or_else(|| value_error("Task parameter is required"))?;
-        let model = ModelSettings::from_llm_settings(
-            arguments
-                .get("llm_settings")
-                .filter(|value| py_truthy(value))
-                .unwrap_or(&Value::Null),
-        )?;
+        let llm_settings = arguments
+            .get("llm_settings")
+            .filter(|value| py_truthy(value))
+            .unwrap_or(&Value::Null);
+        let model = ModelSettings::from_llm_settings(llm_settings)?;
         let embedding_model =
             embedding_model_name(arguments.get("embedding_model").unwrap_or(&Value::Null))?;
         let repo_config = match arguments.get("repo_config") {
@@ -121,7 +137,13 @@ impl GenerateRequest {
             .get("exclude_tests")
             .filter(|value| !value.is_null())
             .map(py_truthy);
+        let platform_objects = if names_artifact_folder(&repo_config) {
+            Some(PlatformObjects::from_llm_settings(llm_settings)?)
+        } else {
+            None
+        };
         Ok(Self {
+            project,
             query,
             model,
             embedding_model,
@@ -129,6 +151,7 @@ impl GenerateRequest {
             requested_branch,
             planner_mode,
             exclude_tests,
+            platform_objects,
         })
     }
 
@@ -175,6 +198,7 @@ mod tests {
 
     fn base() -> Value {
         json!({
+            "_elitea_project_id": "7",
             "query": "Document it",
             "llm_settings": {"api_base": "http://gw/llm/v1", "api_key": "k", "model_name": "m"},
             "embedding_model": "e",
@@ -202,6 +226,32 @@ mod tests {
             assert!(!text.contains(secret), "{text}");
         }
         assert!(text.contains("Document it"), "{text}");
+    }
+
+    #[test]
+    fn only_a_folder_source_reads_the_platform_credential() {
+        let Ok(git) = GenerateRequest::parse(&arguments(base())) else {
+            panic!("refused");
+        };
+        assert!(git.platform_objects.is_none());
+        let mut value = base();
+        value["repo_config"] =
+            json!({"provider_type": "artifact", "repository": "artifact://docs/handbook"});
+        value["llm_settings"]["organization"] = json!("42");
+        value["llm_settings"]["api_key"] = json!("callback-bearer-secret");
+        let Ok(folder) = GenerateRequest::parse(&arguments(value.clone())) else {
+            panic!("refused");
+        };
+        let platform = folder.platform_objects.as_ref().map(|p| p.base().as_str());
+        assert_eq!(platform, Some("http://gw/"));
+        assert!(!format!("{folder:?}").contains("callback-bearer-secret"));
+        // A folder source without a project is refused up front.
+        value["llm_settings"]["organization"] = Value::Null;
+        let error = GenerateRequest::parse(&arguments(value)).err();
+        assert!(
+            error.is_some_and(|e| e.message.contains("llm_settings.organization")),
+            "accepted"
+        );
     }
 
     #[test]
@@ -268,6 +318,30 @@ mod tests {
         let mut missing = arguments(base());
         missing.remove("query");
         assert!(GenerateRequest::parse(&missing).is_err());
+    }
+
+    #[test]
+    fn a_request_without_the_host_project_is_refused() {
+        let Ok(request) = GenerateRequest::parse(&arguments(base())) else {
+            panic!("refused");
+        };
+        assert_eq!(request.project.id(), 7);
+        for project in [Value::Null, json!(""), json!("0"), json!("x")] {
+            let mut value = base();
+            value["_elitea_project_id"] = project.clone();
+            let error = GenerateRequest::parse(&arguments(value)).err();
+            assert_eq!(
+                error.map(|e| e.error_type),
+                Some(ErrorType::Value),
+                "{project}"
+            );
+        }
+        // `llm_settings.organization` is not a substitute for it.
+        let mut value = base();
+        value["llm_settings"]["organization"] = json!("7");
+        let mut map = arguments(value);
+        map.remove("_elitea_project_id");
+        assert!(GenerateRequest::parse(&map).is_err());
     }
 
     #[test]

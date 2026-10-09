@@ -52,7 +52,7 @@ name: CI — Image scan
 #
 # TWO IMAGES DO NOT BLOCK, AND THEY SAY SO
 #
-# `elitea-worker-python` and `elitea-deepwiki` are scanned, report their full
+# `elitea-worker-python` and `elitea-inventory` are scanned, report their full
 # finding counts, and do NOT fail the merge. Every other image blocks.
 #
 # A THIRD used to. `pylon-indexer` carried 604 findings, all of them from
@@ -63,9 +63,10 @@ name: CI — Image scan
 # to have: a cause, and an end.
 #
 # They are exempt for different reasons, and the difference is the point.
-# elitea-deepwiki's 54 are ALL from the Debian base, none from this project's
-# own packages, and none has a published fixed version. Both #635 and #636 hold
-# that measurement and the path that ends it.
+# elitea-inventory's are ALL from the Debian base, none from this project's own
+# packages, and none has a published fixed version (measured as 54 on
+# 2026-09-06 on the retired elitea-deepwiki image, which had the same base).
+# Both #635 and #636 hold that measurement and the path that ends it.
 #
 # elitea-worker-python is the MIXED case the register's criterion 1 was widened
 # for: 82 of its 101 lines come from a Debian base with no fix published, and
@@ -105,12 +106,11 @@ on:
       - "services/elitea-scheduler/**"
       - "services/elitea-subapp-host/**"
       - "services/elitea-llm-gateway/**"
-      # The DeepWiki image is in the scan matrix below, and its path was NOT in
-      # this list. A change to services/elitea-deepwiki/Containerfile therefore
-      # did not run the scan that guards it: the exemption in
-      # .github/image-scan-exempt.txt was re-measured only by the daily run.
-      - "services/elitea-deepwiki/**"
+      # Every image in the scan matrix below has its path here; one that was
+      # missing once (the retired Python DeepWiki image) was re-measured only
+      # by the daily run.
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "apps/elitea-web/**"
       # The elitea-ui image builds the apps/elitea-ui submodule, so a submodule
       # pointer bump changes the image without changing a file in this tree.
@@ -143,8 +143,8 @@ on:
       - "services/elitea-scheduler/**"
       - "services/elitea-subapp-host/**"
       - "services/elitea-llm-gateway/**"
-      - "services/elitea-deepwiki/**"
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "apps/elitea-web/**"
       - "apps/elitea-ui"
       - "deploy/docker/**"
@@ -423,41 +423,6 @@ jobs:
             target: ""
             expect_type: rustbinary
             blocking: true
-          # The DeepWiki provider service (ADR-0022 P3). Repo ROOT context: the
-          # Containerfile COPYs services/elitea-deepwiki from there.
-          #
-          # Built WITHOUT the engine extra, exactly as publish.yml releases it.
-          # Scanning the engine image instead would report on a multi-GB ML
-          # closure nobody publishes, which is a scan of something that does not
-          # ship — the shape this gate exists to avoid in the other direction.
-          #
-          # EXEMPT, and the exemption is measured rather than assumed.
-          #
-          # It was written `blocking: false` with no register entry, which the
-          # coverage check refused; it then ran as `blocking: true`, and THAT
-          # is the run that produced the numbers. 73 HIGH/CRITICAL, every one
-          # from the Debian base and none from this project's own packages.
-          #
-          # The base then moved from python:3.12.10-slim (Debian 12.11) to
-          # 3.12.14-slim (trixie), taking it to 19, and the three that had a
-          # published fix are closed by an --only-upgrade in the Containerfile.
-          #
-          # RE-MEASURED 2026-09-06 on a cold local build: 54 lines now, and
-          # still every one from the Debian base with no fixed version
-          # published. The rise from 16 is the util-linux and systemd waves,
-          # not a regression here — which is criterion 1 of
-          # .github/image-scan-exempt.txt exactly.
-          #
-          # Findings #635, retirement #636. Both files must agree, and the
-          # coverage job fails when they do not.
-          - name: elitea-deepwiki
-            context: .
-            dockerfile: ./services/elitea-deepwiki/Containerfile
-            target: ""
-            build_args: |
-              EXTRAS=[storage-postgres]
-            expect_type: python-pkg
-            blocking: false
           # The Inventory provider engine (ADR-0023 H4c). Repo ROOT context:
           # the Containerfile COPYs services/elitea-inventory from there.
           #
@@ -465,11 +430,10 @@ jobs:
           # `-engine` build instead would report on a closure nobody publishes,
           # which is a scan of something that does not ship.
           #
-          # EXEMPT, and the exemption is INHERITED rather than measured again:
-          # this image is python:3.12.14-slim with the same --only-upgrade of
-          # the three packages Debian trixie has a fix for, so its base
-          # findings are elitea-deepwiki's base findings. That is the same
-          # cause, so it is the same register entry — findings #635,
+          # EXEMPT on Debian base findings with no published fix. The cause
+          # was measured on the retired elitea-deepwiki image, which had the
+          # same base: python:3.12.14-slim with the same --only-upgrade of
+          # the three packages Debian trixie has a fix for. Findings #635,
           # retirement #636 — and the coverage job holds this field and
           # .github/image-scan-exempt.txt in step.
           - name: elitea-inventory
@@ -480,8 +444,8 @@ jobs:
             expect_type: python-pkg
             blocking: false
           # The Rust-native DeepWiki engine (ADR-0026 phase 7). Repo ROOT
-          # context: the binary embeds the service migrations from
-          # services/elitea-deepwiki, outside the crate. `rustbinary` and
+          # context: the Containerfile COPYs services/elitea-deepwiki-engine
+          # from there. `rustbinary` and
           # blocking for elitea-worker-rust's reasons: cargo-auditable makes
           # the crate graph readable. The runtime is distroless
           # base-nossl-debian13 plus libgcc_s: no system OpenSSL to scan.
@@ -515,9 +479,9 @@ jobs:
           # Empty for single-target images, which build their last stage. Same
           # expression publish.yml uses.
           target: ${{ matrix.image.target }}
-          # Empty for every image but elitea-deepwiki, which needs its storage
-          # extra to be the image publish.yml actually releases. Scanning a
-          # different build than the one that ships is a scan of nothing.
+          # Empty for every image today. When set, it must be what publish.yml
+          # passes: scanning a different build than the one that ships is a
+          # scan of nothing.
           build-args: ${{ matrix.image.build_args }}
           push: false
           load: true

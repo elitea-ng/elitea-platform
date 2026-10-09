@@ -116,7 +116,7 @@ Set `STANDALONE_OVERLAY` to a space-separated list of compose files after the ba
 `STANDALONE_WORKER=rust deploy/scripts/standalone-stack.sh build && … up` layers `docker-compose.standalone-rust-agent.yml`: it replaces the worker with the native Rust runtime and disables the index-ingest dispatch path (the native worker skips toolkit families it can't build).
 </Card>
 <Card title="DeepWiki real engine" icon="git-branch">
-`STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-real-engine.yml DEEPWIKI_ENGINE_IMAGE=<tag> deploy/scripts/standalone-stack.sh up` swaps the DeepWiki fixture engine for the real analysis engine, with a git daemon serving a sample repository and a deterministic LLM stub at the gateway's allowlisted mock address.
+`STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native-real-engine.yml DEEPWIKI_ENGINE_IMAGE=<tag> deploy/scripts/standalone-stack.sh up` switches the DeepWiki native engine from its fixture runner to the real analysis engine, cloning a public repository from github.com, with a deterministic LLM stub at the gateway's allowlisted mock address.
 </Card>
 <Card title="Staging" icon="database">
 `docker-compose.staging.yml` (used with the plain `deploy/docker-compose.yml`, not this stack) points elitea-main at a restored staging database dump and requires `SECRETS_MASTER_KEY` from your shell — it decrypts vault data the dump already carries.
@@ -149,7 +149,7 @@ The variable has three states, and they are not equivalent: **set and valid** �
 {/* source: deploy/docker-compose.standalone-full.yml:636-670 (real-llm profile) */}
 {/* source: deploy/scripts/standalone-stack.sh:498-520 (vllm provider config and LLM_API_BASE guard) */}
 {/* source: deploy/docker-compose.standalone-rust-agent.yml:1-19 */}
-{/* source: deploy/docker-compose.deepwiki-real-engine.yml:1-19 */}
+{/* source: deploy/docker-compose.deepwiki-native-real-engine.yml:1-30 */}
 {/* source: deploy/docker-compose.staging.yml:1-24 */}
 {/* source: deploy/scripts/standalone-stack.sh:792-808 (port 9400 conflict check) */}
 {/* source: deploy/scripts/standalone-stack.sh:769-786 (mTLS material checks) */}

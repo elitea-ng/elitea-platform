@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -247,6 +249,14 @@ type Participant struct {
 
 type Repository interface {
 	AuthorizeChatResource(ctx context.Context, projectID, resourceKind, resourceID string) error
+	// AuthorizeChatWrite is the WRITE rule for content the model will later
+	// read as part of the conversation (a canvas): the actor must be a user
+	// participant of the owning conversation — the rule sending a message
+	// applies (agent_chat.sql's author_mapping join). AuthorizeChatResource
+	// is the READ rule, which a public conversation grants to every project
+	// member; using it for a canvas write let a non-participant rewrite text
+	// the history then hands the model as its own earlier answer.
+	AuthorizeChatWrite(ctx context.Context, projectID, resourceKind, resourceID string) error
 	List(ctx context.Context, projectID string, page, pageSize int) (ListResponse, error)
 	Get(ctx context.Context, projectID, conversationID string) (Conversation, error)
 	Create(ctx context.Context, projectID string, conv Conversation) (Conversation, error)
@@ -550,7 +560,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch conversations
 	args = append(args, limit, offset)
-	q := conversationSelectSQL(s, false) + fmt.Sprintf(`
+	q := conversationSelectSQL(s, projectID, false) + fmt.Sprintf(`
 		%s
 		ORDER BY c.created_at DESC, c.id DESC
 		LIMIT $%d OFFSET $%d`, baseWhere, argIdx, argIdx+1)
@@ -793,9 +803,21 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var conv Conversation
-	if name, ok := body["name"].(string); ok {
-		conv.Name = name
+	name, err := conversationNameFromBody(body)
+	if err != nil {
+		// A name identical to the stored one is not a rename. Create stores
+		// any string (a first message with a newline, a name past the rename
+		// limit), and the web's Make public / Make private echo the stored
+		// name with `is_private`; refusing that echo would block a valid
+		// privacy change over a name the server itself accepted. Only the
+		// refusal path pays for the extra read.
+		if !h.statesStoredName(r, projectID, conversationID, body) {
+			apierr.Write(w, err)
+			return
+		}
+		name = ""
 	}
+	conv.Name = name
 	if folderID, exists := body["folder_id"]; exists {
 		if folderID == nil {
 			nullStr := ""
@@ -838,6 +860,63 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// statesStoredName reports whether the body's `name` is exactly the name the
+// conversation already has, so an echo of it is no rename at all.
+func (h *Handler) statesStoredName(r *http.Request, projectID, conversationID string, body map[string]any) bool {
+	stated, ok := body["name"].(string)
+	if !ok {
+		return false
+	}
+	current, err := h.repo.Get(r.Context(), projectID, conversationID)
+	if err != nil {
+		return false
+	}
+	return current.Name == stated
+}
+
+// MaxConversationNameLength is the longest name a rename stores, in
+// characters (runes). Pylon's ConversationUpdate capped it at 50
+// (elitea_core/utils/chat_constants.py); the create route here never did, so
+// conversations named from a first message are longer, and a rename of one
+// must still be able to send its name back. 256 bounds what a client can
+// write without refusing a name the product itself produces, and is the
+// limit agent-zefir's rename field (CONVERSATION_NAME_MAX) enforces, so the
+// app's longest accepted title is never refused here.
+const MaxConversationNameLength = 256
+
+// conversationNameFromBody reads the `name` a PUT states (client contract 1.4
+// updateConversation, and the web rail's rename). Absent or null means the
+// request does not rename, and "" is returned. A stated name must be a string
+// that is not blank after trimming, at most MaxConversationNameLength
+// characters and free of control characters; it is returned trimmed.
+//
+// Before 1.4 a non-string name was dropped and an empty one was stored as no
+// change, so a client that cleared the field got 200 and the old title back
+// on its next sync. Both are 400 now, before anything is written.
+func conversationNameFromBody(body map[string]any) (string, error) {
+	raw, present := body["name"]
+	if !present || raw == nil {
+		return "", nil
+	}
+	name, ok := raw.(string)
+	if !ok {
+		return "", apierr.BadRequest("name must be a string")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", apierr.BadRequest("name must not be empty")
+	}
+	if utf8.RuneCountInString(name) > MaxConversationNameLength {
+		return "", apierr.BadRequest(fmt.Sprintf("name must be at most %d characters", MaxConversationNameLength))
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", apierr.BadRequest("name must not contain control characters")
+		}
+	}
+	return name, nil
 }
 
 // Delete removes a conversation and, with it, the stored bytes of every
@@ -1620,20 +1699,31 @@ func (h *Handler) DeselectConversation(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apierr.Write(w, apierr.BadRequest("invalid request body"))
+	if !decodeCanvasBody(w, r, &body) {
 		return
 	}
-	if err := h.repo.AuthorizeChatResource(r.Context(), projectID, "message", fmt.Sprint(body["message_group_id"])); err != nil {
+	// The participant rule, not the read rule: see AuthorizeChatWrite.
+	if err := h.repo.AuthorizeChatWrite(r.Context(), projectID, "message", fmt.Sprint(body["message_group_id"])); err != nil {
 		apierr.Write(w, err)
 		return
 	}
 	canvas, err := h.repo.CreateCanvas(r.Context(), projectID, body)
 	if err != nil {
-		apierr.Write(w, err)
+		writeCanvasError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, canvas)
+}
+
+// writeCanvasError answers a canvas write's failure: the size refusal as its
+// own 413 shape, everything else as apierr does.
+func writeCanvasError(w http.ResponseWriter, err error) {
+	var tooLarge *CanvasTooLargeError
+	if errors.As(err, &tooLarge) {
+		writeCanvasTooLarge(w, tooLarge)
+		return
+	}
+	apierr.Write(w, err)
 }
 
 func (h *Handler) GetCanvas(w http.ResponseWriter, r *http.Request) {
@@ -1651,18 +1741,28 @@ func (h *Handler) GetCanvas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateCanvas(w http.ResponseWriter, r *http.Request) {
-	if !h.authorizeConversation(w, r) {
-		return
-	}
 	projectID := chi.URLParam(r, "projectID")
 	canvasID := chi.URLParam(r, "canvasID")
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apierr.Write(w, apierr.BadRequest("invalid request body"))
+	// The participant rule, not the read rule GetCanvas keeps: see
+	// AuthorizeChatWrite.
+	if err := h.repo.AuthorizeChatWrite(r.Context(), projectID, "canvas", canvasID); err != nil {
+		apierr.Write(w, err)
 		return
 	}
+	var body map[string]any
+	if !decodeCanvasBody(w, r, &body) {
+		return
+	}
+	// Refused here as well as in the repository, so an oversized edit is
+	// answered before the canvas is read.
+	if content, ok := body["canvas_content"].(string); ok {
+		if err := CheckCanvasContent(content); err != nil {
+			writeCanvasError(w, err)
+			return
+		}
+	}
 	if err := h.repo.UpdateCanvas(r.Context(), projectID, canvasID, body); err != nil {
-		apierr.Write(w, err)
+		writeCanvasError(w, err)
 		return
 	}
 	// Answer the SAVED canvas, not `{"ok": true}`. The client normalises this

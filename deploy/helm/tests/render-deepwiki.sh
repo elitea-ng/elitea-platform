@@ -19,7 +19,7 @@ CHART="deploy/helm/elitea"
 # The chart's LLM gateway refuses to render until an operator states its two
 # postures, so every render below supplies them. They are render-only values
 # (.invalid is reserved by RFC 2606).
-GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1"
+GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1"
 
 # A complete, correct DeepWiki install. Every refusal case below is this minus
 # exactly one thing, so a case can never pass because of a second omission.
@@ -67,13 +67,13 @@ do
 done
 
 echo "== the migration Job runs the migration command, not the server =="
-command_json="$(printf '%s' "$manifest" \
+args_json="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Job" and .metadata.name == "elitea-deepwiki-migrate")
-      | .spec.template.spec.containers[0].command | join(" ")' -)"
-if [ "$command_json" != "python -m elitea_deepwiki.storage" ]; then
-  fail "the migrate Job runs '$command_json'; the image ENTRYPOINT starts the SERVER, so a Job that does not override it never migrates anything"
+      | .spec.template.spec.containers[0].args | join(" ")' -)"
+if [ "$args_json" != "migrate" ]; then
+  fail "the migrate Job runs args '$args_json'; the image's default CMD starts the SIDECAR, so a Job that does not override it never migrates anything"
 else
-  note "command: $command_json"
+  note "args: $args_json"
 fi
 
 echo "== the migration Job runs BEFORE the Deployment =="
@@ -147,7 +147,27 @@ refuses "facade with no client certificate"     --set main.env.ELITEA_DEEPWIKI_C
 refuses "facade with a path outside the mount"  --set main.env.ELITEA_DEEPWIKI_CA_FILE=/elsewhere/ca.crt
 refuses "facade with no material mounted"       --set main.fileConfig.deepwikiClientMaterial.enabled=false
 refuses "an unrecognised ENABLED spelling"      --set main.env.ELITEA_DEEPWIKI_ENABLED=ture
-refuses "legacy runner on a non-engine image"   --set deepwiki.engine.image.tag=1.2.3
+
+# The retired Python engine's settings. Each must be refused by ITS guard,
+# which names the upgrade note: a value refused for some other reason (an
+# unknown runner, say) would pass `refuses` and prove nothing about the
+# message an upgrading operator reads.
+refuses_retired() {
+  local description="$1"; shift
+  local output
+  if output="$(render $COMPLETE "$@" 2>&1)"; then
+    fail "accepted: $description"
+  else
+    case "$output" in
+      *docs/UPGRADING.md*) note "refused: $description" ;;
+      *) fail "refused without the upgrade note ($description): $output" ;;
+    esac
+  fi
+}
+refuses_retired "the retired legacy engine runner"  --set deepwiki.engine.runner=legacy
+refuses_retired "the retired legacy host runner"    --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=legacy
+refuses_retired "the retired Python image key"      --set deepwiki.engine.image.tag=1.2.3-engine
+refuses_retired "the retired Python resources key"  --set deepwiki.engine.resources.limits.memory=4Gi
 
 # The reverse direction: material configured with the facade off is a mounted
 # Secret nothing reads, which looks configured and does nothing.
@@ -169,19 +189,10 @@ else
   note "no DeepWiki objects in the default render"
 fi
 
-# ── 4. The legacy runner IS accepted on an engine tag ────────────────────────
+# ── 4. The default is the native engine sidecar ─────────────────────────────
 #
-# The guard must refuse the wrong combination and permit the right one. A
-# guard that refuses both is indistinguishable from a broken template.
-
-echo "== the legacy runner renders on an engine image =="
-if render $COMPLETE \
-     --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=legacy \
-     --set deepwiki.engine.image.tag=1.2.3-engine >/dev/null 2>&1; then
-  note "runner=legacy with an -engine tag renders"
-else
-  fail "the guard refuses the CORRECT combination too, so it is not a guard"
-fi
+# Both runners run the SAME native image; only the sidecar's own
+# ELITEA_DEEPWIKI_RUNNER differs. The host always dials the socket (native).
 
 echo "== the provider pod is the Go host plus the engine sidecar over one socket (ADR-0023 H2) =="
 containers="$(printf '%s' "$manifest" \
@@ -203,17 +214,9 @@ engine_image="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
       | .spec.template.spec.containers[1].image' -)"
 case "$engine_image" in
-  ghcr.io/elitea-ng/elitea-deepwiki:*-engine) note "engine image: $engine_image" ;;
-  *) fail "the engine sidecar runs '$engine_image'; without the -engine closure every tool fails at invocation time" ;;
+  ghcr.io/elitea-ng/elitea-deepwiki-engine-native:*) note "engine image: $engine_image" ;;
+  *) fail "the engine sidecar runs '$engine_image', not the native engine" ;;
 esac
-engine_command="$(printf '%s' "$manifest" \
-  | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
-      | .spec.template.spec.containers[1].command | join(" ")' -)"
-if [ "$engine_command" != "python -m elitea_deepwiki.sidecar" ]; then
-  fail "the engine sidecar runs '$engine_command'; the image ENTRYPOINT is the SPI shell, which would listen on a port nothing calls"
-else
-  note "engine command: $engine_command"
-fi
 for container in 0 1; do
   socket_mount="$(printf '%s' "$manifest" \
     | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\")
@@ -236,8 +239,8 @@ migrate_image="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Job" and .metadata.name == "elitea-deepwiki-migrate")
       | .spec.template.spec.containers[0].image' -)"
 case "$migrate_image" in
-  ghcr.io/elitea-ng/elitea-deepwiki:*) note "migrate image: $migrate_image" ;;
-  *) fail "the migrate Job runs '$migrate_image'; the migrations are the Python package's, and the host image has no python" ;;
+  ghcr.io/elitea-ng/elitea-deepwiki-engine-native:*) note "migrate image: $migrate_image" ;;
+  *) fail "the migrate Job runs '$migrate_image'; the migrations are embedded in the native engine, and the host image has none" ;;
 esac
 echo "== an unavailable runner renders no sidecar =="
 solo="$(render $COMPLETE --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=unavailable)" || fail "runner=unavailable does not render"
@@ -250,15 +253,15 @@ else
   note "containers: $solo_containers"
 fi
 
-# ── 5. The native runner (ADR-0026 phase 7) ──────────────────────────────────
+# ── 5. The native runner (ADR-0026), the DEFAULT ─────────────────────────────
 #
-# One switch, deepwiki.engine.runner=native: the Rust image as the sidecar,
-# the host's runner rendered native, the binary as the probe, the pod name as
-# the build owner, the database secret, and the migrate Job on the same image.
+# Nothing set: the Rust image as the sidecar, the host's runner native, the
+# binary as the probe, the pod name as the build owner, the database secret,
+# and the migrate Job on the same image.
 
-echo "== the native runner renders the Rust sidecar =="
-native="$(render $COMPLETE --set deepwiki.engine.runner=native --set image.tag=9.9.9)" \
-  || fail "runner=native does not render: $native"
+echo "== the default runner renders the native sidecar =="
+native="$(render $COMPLETE --set image.tag=9.9.9)" \
+  || fail "the default runner does not render: $native"
 dw() { printf '%s' "$native" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
 job() { printf '%s' "$native" | yq eval-all "select(.kind == \"Job\" and .metadata.name == \"elitea-deepwiki-migrate\") | $1" -; }
 expect() {
@@ -289,25 +292,59 @@ expect "a smaller limit moves the cap with it" \
       | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value' -)" \
   "5476083265"
 
-if render $COMPLETE --set deepwiki.engine.runner=native --set deepwiki.engine.image.tag=1.2.3 >/dev/null 2>&1; then
-  note "runner=native ignores the Python -engine tag guard"
-else
-  fail "runner=native is refused by the Python image's -engine tag guard, which it does not use"
-fi
-
 echo "== the native runner's refusals =="
 refuses "native with no database URL"            --set deepwiki.engine.runner=native --set postgresql.existingSecret=
 refuses "native with an env-only database URL"   --set deepwiki.engine.runner=native --set postgresql.existingSecret= --set deepwiki.env.ELITEA_DEEPWIKI_DATABASE_URL=postgresql://x@db/deepwiki
-refuses "host runner native, Python sidecar"     --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=native
 refuses "an unknown engine runner"               --set deepwiki.engine.runner=rust
 refuses "native memory limit below 1Gi"          --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=512Mi
 refuses "native memory limit whose 85% cap is below 1GiB" --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=1Gi
 refuses "native memory limit not in Gi or Mi"    --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=16G
 
-echo "== the fixture runner keeps the Python sidecar =="
-fixture="$(render $COMPLETE --set deepwiki.engine.runner=fixture)" || fail "runner=fixture does not render"
-expect "fixture engine runner" "$(printf '%s' "$fixture" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value' -)" "fixture"
-expect "fixture host runner" "$(printf '%s' "$fixture" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value' -)" "legacy"
+# The fixture runner: the SAME native image, its canned results. It reads no
+# database, so the native runner's database guard does not apply to it.
+echo "== the fixture runner runs the native image =="
+fixture="$(render $COMPLETE --set deepwiki.engine.runner=fixture --set image.tag=9.9.9)" || fail "runner=fixture does not render: $fixture"
+fx() { printf '%s' "$fixture" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+expect "fixture containers" "$(fx '.spec.template.spec.containers[].name' | tr '\n' ' ')" "elitea-deepwiki engine "
+expect "fixture engine image" "$(fx '.spec.template.spec.containers[1].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
+expect "fixture engine runner" "$(fx '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "fixture"
+expect "fixture host runner" "$(fx '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
+expect "fixture migrate image" "$(printf '%s' "$fixture" | yq eval-all 'select(.kind == "Job" and .metadata.name == "elitea-deepwiki-migrate") | .spec.template.spec.containers[0].image' -)" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
+if render $COMPLETE --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= >/dev/null 2>&1; then
+  note "runner=fixture renders with no database URL secret"
+else
+  fail "runner=fixture is refused for a missing database URL, which the fixture never reads"
+fi
+
+# ── The callback hop through platform-edge (ADR-0027) ────────────────────────
+#
+# On: elitea-main's callback origin becomes the edge, and BOTH containers trust
+# the runtime CA — that one key of the worker's material Secret and nothing
+# else. Refused: the flag without the edge, and the flag beside an explicit
+# origin that is not the edge. Off (every render above): neither appears.
+
+echo "== deepwiki.callbackViaPlatformEdge routes the callback hop through the edge =="
+EDGE="-f $CHART/values-standalone.yaml --set worker.enabled=true --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL="
+edge="$(render $COMPLETE $EDGE)" || fail "the callback hop through the edge does not render: $edge"
+expect "callback origin in elitea-main" \
+  "$(printf '%s' "$edge" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_DEEPWIKI_CALLBACK_BASE_URL' -)" \
+  "https://elitea-platform-edge"
+ed() { printf '%s' "$edge" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+expect "host callback CA" "$(ed '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_CALLBACK_CA_FILE") | .value')" "/run/elitea-runtime-ca/runtime-ca.crt"
+expect "engine callback CA" "$(ed '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_CALLBACK_CA_FILE") | .value')" "/run/elitea-runtime-ca/runtime-ca.crt"
+expect "runtime CA mounted in both containers" "$(ed '.spec.template.spec.containers[].volumeMounts[] | select(.name == "runtime-ca") | .mountPath' | tr '\n' ' ')" "/run/elitea-runtime-ca /run/elitea-runtime-ca "
+expect "only runtime-ca.crt leaves the worker Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "runtime-ca") | .secret.items[].key' | tr '\n' ' ')" "runtime-ca.crt "
+expect "the flag off mounts nothing" "$(printf '%s' "$manifest" | grep -c 'runtime-ca\|CALLBACK_CA_FILE')" "0"
+if render $COMPLETE --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
+  fail "callbackViaPlatformEdge renders with no platform-edge to dial"
+else
+  note "refused without worker.platformEdge"
+fi
+if render $COMPLETE -f $CHART/values-standalone.yaml --set worker.enabled=true --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
+  fail "callbackViaPlatformEdge renders beside an explicit non-edge callback origin"
+else
+  note "refused beside http://elitea-main:8080"
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "render-deepwiki: $failures assertion(s) failed" >&2

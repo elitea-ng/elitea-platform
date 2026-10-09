@@ -60,6 +60,8 @@ import type {
   ErrorResponse,
   FeedbackCreateRequest,
   FeedbackListResponse,
+  InvalidClientVersionError,
+  ListFeedbacksParams,
   N400Response,
   N401Response,
   N403Response,
@@ -2352,7 +2354,7 @@ export type pinEntityResponse200 = {
 };
 
 export type pinEntityResponse400 = {
-  data: N400Response;
+  data: ErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
@@ -2369,6 +2371,11 @@ export type pinEntityResponse403 = {
 export type pinEntityResponse404 = {
   data: N404Response;
   status: 404;
+};
+
+export type pinEntityResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type pinEntityResponse500 = {
@@ -2389,6 +2396,7 @@ export type pinEntityResponseError = (
   | pinEntityResponse401
   | pinEntityResponse403
   | pinEntityResponse404
+  | pinEntityResponse426
   | pinEntityResponse500
   | pinEntityResponse503
 ) & {
@@ -2410,8 +2418,16 @@ export const getPinEntityUrl = (
  * Store one shared pin per project, entity type, and entity identifier.
  * Repeated requests update the last pinner and timestamp.
  * Conversation pins require the caller's existing chat detail access.
- * NOTE(W2): internal/infra/db/repos/social_pins.go:66 implements the shared
+ * NOTE(W2): internal/infra/db/repos/social_pins.go:73 implements the shared
  * centry.social_pins key defined by migrations/shared/0064_centry_social_pins.sql.
+ *
+ * Client contract 1.4 (entity_type `conversation`, entity_id the
+ * conversation's numeric id): the pin is the project's, shared by its
+ * members, and shows as `is_pinned` on the conversation's list row. A
+ * new pin re-delivers that row in the `changes_since` delta of every
+ * member who can see the conversation, so a pin set in the web app
+ * reaches the caller's devices and the other way round. A conversation
+ * the caller cannot see answers 404 and pins nothing.
  * @summary Pin an entity for the project
  */
 export const pinEntity = async (
@@ -2443,7 +2459,12 @@ export const getPinEntityQueryKey = (
 export const getPinEntityQueryOptions = <
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2486,12 +2507,22 @@ export type PinEntityQueryResult = NonNullable<
   Awaited<ReturnType<typeof pinEntity>>
 >;
 export type PinEntityQueryError =
-  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse;
 
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2517,7 +2548,12 @@ export function usePinEntity<
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2543,7 +2579,12 @@ export function usePinEntity<
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2565,7 +2606,12 @@ export function usePinEntity<
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2601,7 +2647,7 @@ export type unpinEntityResponse200 = {
 };
 
 export type unpinEntityResponse400 = {
-  data: N400Response;
+  data: ErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
@@ -2618,6 +2664,11 @@ export type unpinEntityResponse403 = {
 export type unpinEntityResponse404 = {
   data: N404Response;
   status: 404;
+};
+
+export type unpinEntityResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type unpinEntityResponse500 = {
@@ -2638,6 +2689,7 @@ export type unpinEntityResponseError = (
   | unpinEntityResponse401
   | unpinEntityResponse403
   | unpinEntityResponse404
+  | unpinEntityResponse426
   | unpinEntityResponse500
   | unpinEntityResponse503
 ) & {
@@ -2658,7 +2710,11 @@ export const getUnpinEntityUrl = (
 /**
  * Remove the project pin regardless of which member last pinned it.
  * Repeated requests succeed. Conversation access is required before removal.
- * NOTE(W2): internal/infra/db/repos/social_pins.go:108 uses the canonical shared key.
+ * NOTE(W2): internal/infra/db/repos/social_pins.go:137 uses the canonical shared key.
+ *
+ * Client contract 1.4: removing a conversation pin re-delivers the
+ * conversation's list row (`is_pinned: false`) in the `changes_since`
+ * delta; a repeated unpin removes nothing and re-delivers nothing.
  * @summary Remove a shared project pin
  */
 export const unpinEntity = async (
@@ -2690,7 +2746,12 @@ export const getUnpinEntityQueryKey = (
 export const getUnpinEntityQueryOptions = <
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2735,12 +2796,22 @@ export type UnpinEntityQueryResult = NonNullable<
   Awaited<ReturnType<typeof unpinEntity>>
 >;
 export type UnpinEntityQueryError =
-  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse;
 
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2766,7 +2837,12 @@ export function useUnpinEntity<
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2792,7 +2868,12 @@ export function useUnpinEntity<
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2814,7 +2895,12 @@ export function useUnpinEntity<
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2849,6 +2935,11 @@ export type listFeedbacksResponse200 = {
   status: 200;
 };
 
+export type listFeedbacksResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
 export type listFeedbacksResponse401 = {
   data: N401Response;
   status: 401;
@@ -2860,15 +2951,24 @@ export type listFeedbacksResponse403 = {
 };
 
 export type listFeedbacksResponse500 = {
-  data: N500Response;
+  data: ErrorResponse;
   status: 500;
+};
+
+export type listFeedbacksResponse503 = {
+  data: ErrorResponse;
+  status: 503;
 };
 
 export type listFeedbacksResponseSuccess = listFeedbacksResponse200 & {
   headers: Headers;
 };
 export type listFeedbacksResponseError = (
-  listFeedbacksResponse401 | listFeedbacksResponse403 | listFeedbacksResponse500
+  | listFeedbacksResponse400
+  | listFeedbacksResponse401
+  | listFeedbacksResponse403
+  | listFeedbacksResponse500
+  | listFeedbacksResponse503
 ) & {
   headers: Headers;
 };
@@ -2876,39 +2976,64 @@ export type listFeedbacksResponseError = (
 export type listFeedbacksResponse =
   listFeedbacksResponseSuccess | listFeedbacksResponseError;
 
-export const getListFeedbacksUrl = (projectId: string) => {
-  return `/social/feedbacks/default/${projectId}`;
+export const getListFeedbacksUrl = (
+  projectId: string,
+  params?: ListFeedbacksParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/social/feedbacks/default/${projectId}?${stringifiedParams}`
+    : `/social/feedbacks/default/${projectId}`;
 };
 
 /**
- * NOTE(W2): internal/api/v2/social/handler.go:347-379 (ListFeedbacks).
- * Queries p_{project_id}.social_feedbacks, matching the migration
- * (internal/infra/db/migrations/001_initial.sql:337-347). {items,
- * total} envelope where total is simply len(items) (no real COUNT(*),
- * no offset — hardcoded LIMIT 50, :359); a query error is swallowed to
- * items: [] / total: 0 when no feedback exists. Database failures are
- * returned as safe 500 errors.
- * @summary List feedback entries for a project
+ * Reads the shared centry.social_feedbacks table in one statement. The
+ * caller must be a member of the project and hold
+ * `models.social.feedbacks.list`. Visible rows are the project's rows
+ * (only the caller's own in the public project) and the caller's own
+ * legacy rows that carry no project. `total` counts all visible rows.
+ * The same listing is served at `/elitea_core/feedbacks/default/{project_id}`.
+ * @summary List the feedback the caller may see in a project
  */
 export const listFeedbacks = async (
   projectId: string,
+  params?: ListFeedbacksParams,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<listFeedbacksResponse> => {
-  return eliteaFetch<listFeedbacksResponse>(getListFeedbacksUrl(projectId), {
-    ...options,
-    method: "GET",
-  });
+  return eliteaFetch<listFeedbacksResponse>(
+    getListFeedbacksUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
 };
 
-export const getListFeedbacksQueryKey = (projectId: string) => {
-  return [`/social/feedbacks/default/${projectId}`] as const;
+export const getListFeedbacksQueryKey = (
+  projectId: string,
+  params?: ListFeedbacksParams,
+) => {
+  return [
+    `/social/feedbacks/default/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
 };
 
 export const getListFeedbacksQueryOptions = <
   TData = Awaited<ReturnType<typeof listFeedbacks>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
+  params?: ListFeedbacksParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listFeedbacks>>, TError, TData>
@@ -2919,11 +3044,11 @@ export const getListFeedbacksQueryOptions = <
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
   const queryKey =
-    queryOptions?.queryKey ?? getListFeedbacksQueryKey(projectId);
+    queryOptions?.queryKey ?? getListFeedbacksQueryKey(projectId, params);
 
   const queryFn: QueryFunction<Awaited<ReturnType<typeof listFeedbacks>>> = ({
     signal,
-  }) => listFeedbacks(projectId, { signal, ...requestOptions });
+  }) => listFeedbacks(projectId, params, { signal, ...requestOptions });
 
   return {
     queryKey,
@@ -2941,13 +3066,14 @@ export type ListFeedbacksQueryResult = NonNullable<
   Awaited<ReturnType<typeof listFeedbacks>>
 >;
 export type ListFeedbacksQueryError =
-  N401Response | N403Response | N500Response;
+  ErrorResponse | N401Response | N403Response;
 
 export function useListFeedbacks<
   TData = Awaited<ReturnType<typeof listFeedbacks>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
+  params: undefined | ListFeedbacksParams,
   options: {
     query: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listFeedbacks>>, TError, TData>
@@ -2968,9 +3094,10 @@ export function useListFeedbacks<
 };
 export function useListFeedbacks<
   TData = Awaited<ReturnType<typeof listFeedbacks>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
+  params?: ListFeedbacksParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listFeedbacks>>, TError, TData>
@@ -2991,9 +3118,10 @@ export function useListFeedbacks<
 };
 export function useListFeedbacks<
   TData = Awaited<ReturnType<typeof listFeedbacks>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
+  params?: ListFeedbacksParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listFeedbacks>>, TError, TData>
@@ -3005,14 +3133,15 @@ export function useListFeedbacks<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary List feedback entries for a project
+ * @summary List the feedback the caller may see in a project
  */
 
 export function useListFeedbacks<
   TData = Awaited<ReturnType<typeof listFeedbacks>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
+  params?: ListFeedbacksParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listFeedbacks>>, TError, TData>
@@ -3023,7 +3152,7 @@ export function useListFeedbacks<
 ): UseQueryResult<TData, TError> & {
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
-  const queryOptions = getListFeedbacksQueryOptions(projectId, options);
+  const queryOptions = getListFeedbacksQueryOptions(projectId, params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,
@@ -3039,7 +3168,7 @@ export type createFeedbackResponse201 = {
 };
 
 export type createFeedbackResponse400 = {
-  data: N400Response;
+  data: ErrorResponse;
   status: 400;
 };
 
@@ -3053,9 +3182,24 @@ export type createFeedbackResponse403 = {
   status: 403;
 };
 
+export type createFeedbackResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type createFeedbackResponse415 = {
+  data: ErrorResponse;
+  status: 415;
+};
+
 export type createFeedbackResponse500 = {
-  data: SocialActionErrorResponse;
+  data: ErrorResponse;
   status: 500;
+};
+
+export type createFeedbackResponse503 = {
+  data: ErrorResponse;
+  status: 503;
 };
 
 export type createFeedbackResponseSuccess = createFeedbackResponse201 & {
@@ -3065,7 +3209,10 @@ export type createFeedbackResponseError = (
   | createFeedbackResponse400
   | createFeedbackResponse401
   | createFeedbackResponse403
+  | createFeedbackResponse413
+  | createFeedbackResponse415
   | createFeedbackResponse500
+  | createFeedbackResponse503
 ) & {
   headers: Headers;
 };
@@ -3078,11 +3225,11 @@ export const getCreateFeedbackUrl = (projectId: string) => {
 };
 
 /**
- * NOTE(W2): internal/api/v2/social/handler.go:381-423 (CreateFeedback).
- * INSERTs into p_{project_id}.social_feedbacks RETURNING id; responds
- * 201 on success (:422). See CreateFeedbackResponse's schema
- * description for the unreachable-in-production 200 degraded shortcut.
- * @summary Submit feedback for an entity
+ * Inserts one row into centry.social_feedbacks stamped with the path
+ * project. The caller must be a member of the project and hold
+ * `models.social.feedbacks.create`; the statement repeats the membership
+ * check. The body is capped at 64 KiB.
+ * @summary Submit feedback in a project
  */
 export const createFeedback = async (
   projectId: string,
@@ -3134,8 +3281,7 @@ export const getCreateFeedbackQueryKey = (
 
 export const getCreateFeedbackQueryOptions = <
   TData = Awaited<ReturnType<typeof createFeedback>>,
-  TError =
-    N400Response | N401Response | N403Response | SocialActionErrorResponse,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
   feedbackCreateRequest: FeedbackCreateRequest,
@@ -3176,12 +3322,11 @@ export type CreateFeedbackQueryResult = NonNullable<
   Awaited<ReturnType<typeof createFeedback>>
 >;
 export type CreateFeedbackQueryError =
-  N400Response | N401Response | N403Response | SocialActionErrorResponse;
+  ErrorResponse | N401Response | N403Response;
 
 export function useCreateFeedback<
   TData = Awaited<ReturnType<typeof createFeedback>>,
-  TError =
-    N400Response | N401Response | N403Response | SocialActionErrorResponse,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
   feedbackCreateRequest: FeedbackCreateRequest,
@@ -3205,8 +3350,7 @@ export function useCreateFeedback<
 };
 export function useCreateFeedback<
   TData = Awaited<ReturnType<typeof createFeedback>>,
-  TError =
-    N400Response | N401Response | N403Response | SocialActionErrorResponse,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
   feedbackCreateRequest: FeedbackCreateRequest,
@@ -3230,8 +3374,7 @@ export function useCreateFeedback<
 };
 export function useCreateFeedback<
   TData = Awaited<ReturnType<typeof createFeedback>>,
-  TError =
-    N400Response | N401Response | N403Response | SocialActionErrorResponse,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
   feedbackCreateRequest: FeedbackCreateRequest,
@@ -3246,13 +3389,12 @@ export function useCreateFeedback<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Submit feedback for an entity
+ * @summary Submit feedback in a project
  */
 
 export function useCreateFeedback<
   TData = Awaited<ReturnType<typeof createFeedback>>,
-  TError =
-    N400Response | N401Response | N403Response | SocialActionErrorResponse,
+  TError = ErrorResponse | N401Response | N403Response,
 >(
   projectId: string,
   feedbackCreateRequest: FeedbackCreateRequest,

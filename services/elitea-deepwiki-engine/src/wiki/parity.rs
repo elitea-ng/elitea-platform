@@ -7,7 +7,7 @@
 //! `result.json`, `requests.jsonl`, `summary.json`) for
 //! `parity/compare_pages.py`.
 //!
-//! [`StubModel`] is `services/elitea-deepwiki/e2e/llm_stub.py` in Rust:
+//! [`StubModel`] is `services/elitea-deepwiki-engine/testdata/llm_stub.py` in Rust:
 //! the same canned answers, chosen the same way from the prompt, streamed
 //! as SSE when asked, and every request body recorded. The golden tests
 //! use it too, so they need neither Python nor a network.
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn the_stub_routes_like_python() {
-        // python3 -c "import sys; sys.path.insert(0,'services/elitea-deepwiki/e2e'); import llm_stub; print(llm_stub.answer('json')[:40])"
+        // python3 -c "import sys; sys.path.insert(0,'services/elitea-deepwiki-engine/testdata'); import llm_stub; print(llm_stub.answer('json')[:40])"
         assert!(
             stub_answer("give me json")
                 .starts_with("{\"executive_summary\": \"A small notes service")

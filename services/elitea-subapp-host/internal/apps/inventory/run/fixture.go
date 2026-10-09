@@ -439,7 +439,7 @@ func fixtureSearch(_, _ string, params Params) map[string]any {
 	matches := fixtureMatch(query)
 	rows := make([]any, 0, len(matches))
 	var text strings.Builder
-	fmt.Fprintf(&text, "# Results for %q (%d)\n\n", query, len(matches))
+	fmt.Fprintf(&text, "# Results for %s (%d)\n\n", pyRepr(query), len(matches))
 	for _, entity := range matches {
 		rows = append(rows, fixtureEntityRow(entity))
 		fmt.Fprintf(&text, "- **%s** (%s, %s) — %s\n",
@@ -632,8 +632,8 @@ func fixtureInvestigate(_, _ string, params Params) map[string]any {
 		fmt.Fprintf(&lines, "- %s (%s)\n", entity.Name, entity.FilePath)
 	}
 	answer := fmt.Sprintf(
-		"[fixture] Answer to %q, from the canned graph:\n\n%s",
-		question, lines.String())
+		"[fixture] Answer to %s, from the canned graph:\n\n%s",
+		pyRepr(question), lines.String())
 	return fixtureAnswer(params,
 		map[string]any{"question": question, "answer": answer, "entities": cited}, answer)
 }
@@ -739,7 +739,7 @@ func fixtureNotFound(params Params, what string) map[string]any {
 		params["preset"], params["preset_name"], "")))
 	return map[string]any{
 		"success":        false,
-		"error":          fmt.Sprintf("No %s %q in this graph.", what, id),
+		"error":          fmt.Sprintf("No %s %s in this graph.", what, pyRepr(id)),
 		"error_category": "resource_not_found",
 	}
 }
@@ -796,7 +796,7 @@ func fixtureFiltered(params Params, key string, of func(FixtureEntity) string) m
 	wanted := strings.TrimSpace(str(firstTruthy(params[key], params["type"], params["value"], "")))
 	rows := make([]any, 0, len(FixtureEntities))
 	var text strings.Builder
-	fmt.Fprintf(&text, "# Entities where %s = %q\n\n", key, wanted)
+	fmt.Fprintf(&text, "# Entities where %s = %s\n\n", key, pyRepr(wanted))
 	for _, entity := range FixtureEntities {
 		if wanted != "" && !strings.EqualFold(of(entity), wanted) {
 			continue
@@ -852,6 +852,42 @@ func NewFixtureRunner(settings spi.Settings, step time.Duration) *Runner {
 	return &Runner{
 		RunnerName: "fixture",
 		Tools:      FixtureTools(step),
-		Artifacts:  ArtifactClientFrom(settings.TLSCAFile),
+		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
 	}
+}
+
+// pyRepr is Python's repr() of a string, the quoting the Python engine — and
+// the Rust engine that replaces it — writes into these answers: single quotes
+// unless the text holds one and no double quote, backslash escapes for \\,
+// \n, \r, \t and the quote, \xNN for other C0/C1 controls. Go's %q differs
+// (always double quotes, \u escapes), and a fixture that quoted differently
+// from the engine it stands in for would be a third answer to one question.
+func pyRepr(text string) string {
+	quote := '\''
+	if strings.ContainsRune(text, '\'') && !strings.ContainsRune(text, '"') {
+		quote = '"'
+	}
+	var out strings.Builder
+	out.WriteRune(quote)
+	for _, r := range text {
+		switch {
+		case r == '\\':
+			out.WriteString(`\\`)
+		case r == '\n':
+			out.WriteString(`\n`)
+		case r == '\r':
+			out.WriteString(`\r`)
+		case r == '\t':
+			out.WriteString(`\t`)
+		case r == quote:
+			out.WriteRune('\\')
+			out.WriteRune(r)
+		case r <= 0x1f || (r >= 0x7f && r <= 0x9f):
+			fmt.Fprintf(&out, `\x%02x`, r)
+		default:
+			out.WriteRune(r)
+		}
+	}
+	out.WriteRune(quote)
+	return out.String()
 }

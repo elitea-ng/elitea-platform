@@ -1,19 +1,17 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { useInfiniteQuery } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 
 import { isMcpToolkit } from '@/entities/toolkit';
 import type { Toolkit } from '@/entities/toolkit';
-import { getListToolkitInstancesQueryKey, listToolkitInstances } from '@/shared/api/generated/toolkits/toolkits';
-import { unwrapListPage } from '@/shared/api/unwrap';
 import type { Application } from '@/shared/api/generated/model';
 import { SearchParams } from '@/shared/lib/params';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { PlusIcon } from '@/shared/ui/icons/plus-icon';
 
 import type { AssociationCandidate } from '../api/useAgentPipelineAssociation';
+import { INSTANCE_PAGE_SIZE, useToolkitInstancePager } from '../api/useToolkitInstancePager';
 
 import { EntityIcon } from './EntityIcon';
 import { ToolMenuDropdown } from './ToolMenuDropdown';
@@ -43,86 +41,12 @@ import type { ToolMenuDropdownItem } from './ToolMenuDropdown';
  * this file's sibling owns.
  */
 
-function toToolkitInstance(row: unknown): Toolkit {
-  return row as Toolkit;
-}
-
 /** `Application` row -> the `{data: {id}}` shape `useFilterAddedItems`'s `filterAgents`/`filterPipelines` match against. */
 function toEntityMenuItem(app: Application): { readonly data: { readonly id: string }; readonly app: Application } {
   return { data: { id: app.id }, app };
 }
 
-/* ── toolkit instances (shared source for the Toolkit and MCP dropdowns) ──── */
-
-/**
- * One page of `listToolkitInstances` is 20 rows — the same page the baseline's
- * `instanceLimit` started at. Kept SMALL, not raised to the server's 100-row
- * ceiling, on purpose: paging is OFFSET-based here (`offset = page *
- * INSTANCE_PAGE_SIZE`), so `limit` stays a constant 20 and never trips the
- * handler's `limit > 100 → reset to 20` clamp
- * (`internal/api/v2/toolkits/handler.go:787-789`) the way a growing single
- * `limit` would past 100 rows. Offset itself has no such ceiling, so this
- * pages the whole `elitea_tools` listing however large it grows.
- */
-const INSTANCE_PAGE_SIZE = 20;
-
-/**
- * A cursor over the project's toolkit-instance listing that BOTH the Toolkit
- * and the MCP dropdown draw from.
- *
- * The listing endpoint has no server-side type or name filter — only
- * `limit`/`offset`, ordered by name (`handler.go:781-803`, `ListToolkits`
- * `:1196-1246`) — so a section whose rows sort past the first page (e.g. the
- * MCP section on a project whose first 20 toolkits are all non-MCP) cannot be
- * reached by filtering one already-fetched page. The fix is to keep PAGING
- * until the section that needs a row has one; `hasMore`/`fetchMore` expose that
- * cursor and each `InstanceAddSection` drives it independently against its OWN
- * filtered emptiness (see the auto-page effect there). A single shared
- * infinite query — rather than one query per section — because with no
- * server-side type filter both sections would otherwise fetch the identical
- * rows twice; here a page fetched to surface an MCP is immediately available to
- * the Toolkit section too, and react-query dedupes the fetches.
- */
-export interface ToolkitInstancePager {
-  readonly rows: readonly Toolkit[];
-  readonly isFetching: boolean;
-  readonly hasMore: boolean;
-  readonly fetchMore: () => void;
-}
-
-export function useToolkitInstancePager(projectId: string | undefined): ToolkitInstancePager {
-  const query = useInfiniteQuery({
-    queryKey: [...getListToolkitInstancesQueryKey(projectId ?? ''), 'pager'] as const,
-    enabled: projectId !== undefined,
-    initialPageParam: 0,
-    queryFn: async ({ pageParam }) =>
-      unwrapListPage<unknown>(
-        await listToolkitInstances(projectId ?? '', { limit: INSTANCE_PAGE_SIZE, offset: pageParam * INSTANCE_PAGE_SIZE }),
-        'listToolkitInstances',
-      ),
-    getNextPageParam: (lastPage, allPages) => {
-      // A short/empty page means the server has nothing more to give, even if
-      // its reported `total` disagrees — stop rather than re-request the same
-      // exhausted offset forever.
-      if (lastPage.rows.length === 0) return undefined;
-      const fetched = allPages.reduce((sum, page) => sum + page.rows.length, 0);
-      return fetched < lastPage.total ? allPages.length : undefined;
-    },
-  });
-
-  // useMemo, not a bare expression: this flattened array is a prop/dep
-  // downstream, and `flatMap`/`map` return FRESH arrays each render.
-  const rows = useMemo(
-    () => (query.data?.pages ?? []).flatMap((page) => page.rows).map(toToolkitInstance),
-    [query.data],
-  );
-  const fetchMore = useCallback(() => {
-    void query.fetchNextPage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `query.fetchNextPage` is a stable TanStack Query identity per query key
-  }, [query.fetchNextPage]);
-
-  return { rows, isFetching: query.isFetching, hasMore: query.hasNextPage, fetchMore };
-}
+/* ── toolkit instances (one server-filtered cursor per Toolkit/MCP dropdown) ── */
 
 // elitea_issues #5296 — exported for its own direct unit test: this is the
 // ONE place that builds the Agents-page toolkit-attach dropdown's item
@@ -138,8 +62,18 @@ export function buildInstanceItems(
   onClose: () => void,
 ): readonly ToolMenuDropdownItem[] {
   const lowerSearch = search.toLowerCase();
+  // The server already filters by `mcp`, drops `application` rows and matches the
+  // text; these guards stay as defence. The text match (name OR description, like
+  // the server's) keeps the `keepPreviousData` rows shown while a new search
+  // loads consistent with the new text.
   return rows
-    .filter((toolkit) => isMcpToolkit(toolkit) === isMcp && !addedToolkitIds.has(toolkit.id) && toolkit.name.toLowerCase().includes(lowerSearch))
+    .filter(
+      (toolkit) =>
+        toolkit.type !== 'application' &&
+        isMcpToolkit(toolkit) === isMcp &&
+        !addedToolkitIds.has(toolkit.id) &&
+        (toolkit.name.toLowerCase().includes(lowerSearch) || (toolkit.description ?? '').toLowerCase().includes(lowerSearch)),
+    )
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((toolkit) => ({
       key: toolkit.id,
@@ -229,8 +163,8 @@ export interface InstanceSectionProps {
   readonly isEntityUnsaved: boolean;
   readonly tooltip: string;
   readonly isMcp: boolean;
-  /** The shared toolkit-instance cursor (see {@link useToolkitInstancePager}); this section pages it independently against its own filtered emptiness. */
-  readonly pager: ToolkitInstancePager;
+  /** The section pages its own server-filtered cursor (see {@link useToolkitInstancePager}) for this project. */
+  readonly projectId: string | undefined;
   readonly addedToolkitIds: ReadonlySet<string | number>;
   readonly onAttach: ((toolkit: Toolkit) => void) | undefined;
   readonly createRoute: '/toolkits/create' | '/mcps/create';
@@ -238,7 +172,7 @@ export interface InstanceSectionProps {
   readonly sourceApplicationId: number | undefined;
 }
 
-export function InstanceAddSection({ copy, testId, isEntityUnsaved, tooltip, isMcp, pager, addedToolkitIds, onAttach, createRoute, sourceApplicationId }: InstanceSectionProps): ReactNode {
+export function InstanceAddSection({ copy, testId, isEntityUnsaved, tooltip, isMcp, projectId, addedToolkitIds, onAttach, createRoute, sourceApplicationId }: InstanceSectionProps): ReactNode {
   const navigate = useNavigate();
   const currentHref = useRouterState({ select: (routerState) => routerState.location.href });
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -249,25 +183,25 @@ export function InstanceAddSection({ copy, testId, isEntityUnsaved, tooltip, isM
     setSearch('');
   }, []);
 
-  const { rows, isFetching, hasMore, fetchMore } = pager;
+  // `search` is already debounced: `SimpleSearchBar` (inside the dropdown) only
+  // calls `onSearchChange` ~300 ms after the last keystroke.
+  const { rows, isFetching, hasMore, fetchMore } = useToolkitInstancePager(projectId, { mcp: isMcp, query: search });
   const items = useMemo(
     () => buildInstanceItems(rows, addedToolkitIds, isMcp, search, onAttach, closeAnchor),
     [rows, addedToolkitIds, isMcp, search, onAttach, closeAnchor],
   );
 
-  // THE FIX. The server cannot filter this listing by type or by name (only
-  // `limit`/`offset`, ordered by name), so a section whose rows sort past the
-  // first fetched page — the MCP section on a project with 20+ non-MCP toolkits
-  // ahead of it, or a name search that matches a row not yet fetched — would
-  // otherwise show an empty dropdown forever: `buildInstanceItems` can only
-  // filter what is already fetched, and the scroll-to-load-more trigger never
-  // fires on a 0–2 row list because the paper does not scroll. So while THIS
-  // section's OPEN dropdown has no matching row and the listing still has more
-  // pages, page again. It terminates: every `fetchMore` advances the offset and
-  // `hasMore` goes false once the listing is exhausted. Gated on `anchor` so a
-  // closed section never pages the whole table in the background.
+  // Keep paging while the OPEN dropdown holds less than a page of items. The
+  // scroll-near-end trigger (below) cannot fire until the list overflows the
+  // 23.3rem paper, and rows are ≥ 36px tall under ~85px of search box and
+  // "Create new" row, so about 8 rows already overflow it; a full page (20)
+  // always does. Rows the server sent but the client drops (already attached)
+  // can leave the list short, hence this check on the VISIBLE count rather than
+  // on the fetched count. Terminates: each `fetchMore` advances the offset and
+  // `hasMore` goes false at the end of the listing. Gated on `anchor` so a
+  // closed section never pages in the background.
   useEffect(() => {
-    if (anchor === null || isFetching || !hasMore || items.length > 0) return;
+    if (anchor === null || isFetching || !hasMore || items.length >= INSTANCE_PAGE_SIZE) return;
     fetchMore();
   }, [anchor, isFetching, hasMore, items.length, fetchMore]);
 

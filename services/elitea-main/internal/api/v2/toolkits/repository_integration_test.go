@@ -17,6 +17,8 @@ package toolkits
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -302,6 +304,234 @@ func TestToolkitRepositoryLifecycleAgainstPostgres(t *testing.T) {
 		}
 		if total != 0 {
 			t.Errorf("total=%d after deleting every row", total)
+		}
+	})
+}
+
+// instanceSeed is one elitea_tools row of the filter fixture. isMCP and isApp
+// are the EXPECTED classification, written by hand from the web rule
+// (selectors.ts isMcpToolkit), so the SQL predicate is checked against an
+// independent statement of it rather than against itself.
+type instanceSeed struct {
+	name, typ, desc string
+	meta            string // "" stores SQL NULL
+	isMCP, isApp    bool
+}
+
+func instanceFilterFixture() []instanceSeed {
+	var seeds []instanceSeed
+	// 25 plain toolkits that sort BEFORE every MCP, so the first page of an
+	// unfiltered list holds no MCP at all (the picker regression). Every third
+	// has a NULL meta: NOT(mcp predicate) must keep a NULL meta row.
+	for i := 0; i < 25; i++ {
+		seed := instanceSeed{name: fmt.Sprintf("a-tool-%02d", i), typ: "github", meta: `{}`}
+		if i%3 == 0 {
+			seed.meta = ""
+		}
+		seeds = append(seeds, seed)
+	}
+	seeds = append(seeds,
+		// The three MCP shapes.
+		instanceSeed{name: "mcp-type", typ: "mcp", meta: `{}`, isMCP: true},
+		instanceSeed{name: "mcp-prefix", typ: "mcp_context7", desc: "Library docs", meta: `{}`, isMCP: true},
+		instanceSeed{name: "mcp-meta", typ: "github", meta: `{"mcp": true}`, isMCP: true},
+		// Duplicate names, on both sides of the split.
+		instanceSeed{name: "dup-mcp", typ: "mcp", meta: `{}`, isMCP: true},
+		instanceSeed{name: "dup-mcp", typ: "mcp_x", meta: `{}`, isMCP: true},
+		instanceSeed{name: "dup-mcp", typ: "github", meta: `{"mcp": true}`, isMCP: true},
+		instanceSeed{name: "dup-tool", typ: "jira", meta: `{}`},
+		instanceSeed{name: "dup-tool", typ: "jira", meta: `{}`},
+		// Near misses the web rule treats as NOT MCP.
+		instanceSeed{name: "near-no-underscore", typ: "mcpxctx", meta: `{}`},           // `_` is not a wildcard
+		instanceSeed{name: "near-meta-string", typ: "github", meta: `{"mcp": "true"}`}, // string, not boolean
+		instanceSeed{name: "near-meta-false", typ: "github", meta: `{"mcp": false}`},
+		// Agent-as-tool links: never in a typed listing, in the raw one.
+		instanceSeed{name: "a-tool-05-agent", typ: "application", meta: `{}`, isApp: true},
+		instanceSeed{name: "mcp-agent-link", typ: "application", meta: `{"mcp": true}`, isApp: true},
+		instanceSeed{name: "zz-agent-link", typ: "application", meta: ``, isApp: true},
+		instanceSeed{name: "dup-tool", typ: "application", meta: `{}`, isApp: true},
+		// Text-search targets.
+		instanceSeed{name: "100% done", typ: "jira", desc: "wildcard percent", meta: `{}`},
+		instanceSeed{name: "snake_case", typ: "jira", desc: "wildcard underscore", meta: `{}`},
+		instanceSeed{name: "snakeXcase", typ: "jira", desc: "not a literal underscore", meta: `{}`},
+		instanceSeed{name: "back\\slash", typ: "jira", desc: "wildcard backslash", meta: `{}`},
+		instanceSeed{name: "plain-name", typ: "jira", desc: "Mentions QUARTZ Here", meta: `{}`},
+		instanceSeed{name: "Quartz-Cap", typ: "mcp", meta: `{}`, isMCP: true},
+	)
+	return seeds
+}
+
+func TestToolkitInstanceListFiltersAgainstPostgres(t *testing.T) {
+	pool := newToolkitsIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	if err := db.RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("run baseline migrations: %v", err)
+	}
+	repo := &pgRepo{pool: pool}
+
+	seeds := instanceFilterFixture()
+	byID := map[string]instanceSeed{}
+	for _, seed := range seeds {
+		var meta any
+		if seed.meta != "" {
+			meta = seed.meta
+		}
+		var id int
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, meta)
+			VALUES ($1, $2, NULLIF($3, ''), 1, 1, $4::jsonb) RETURNING id`,
+			seed.name, seed.typ, seed.desc, meta).Scan(&id); err != nil {
+			t.Fatalf("seed %q: %v", seed.name, err)
+		}
+		byID[strconv.Itoa(id)] = seed
+	}
+
+	boolRef := func(v bool) *bool { return &v }
+	contains := func(haystack, needle string) bool {
+		return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+	}
+	// want returns the ids the filter must select, by the hand-written
+	// classification above.
+	want := func(mcp *bool, query string) map[string]bool {
+		ids := map[string]bool{}
+		for id, seed := range byID {
+			if mcp != nil && (seed.isApp || seed.isMCP != *mcp) {
+				continue
+			}
+			if query != "" && !contains(seed.name, query) && !contains(seed.desc, query) {
+				continue
+			}
+			ids[id] = true
+		}
+		return ids
+	}
+	// readAll pages with the given size until a short page, the way the picker
+	// does, and returns the ids in the order served plus the first total.
+	readAll := func(t *testing.T, filter InstanceListFilter, size int) ([]string, int) {
+		t.Helper()
+		var served []string
+		firstTotal := -1
+		for page := 1; page < 100; page++ {
+			rows, total, err := repo.ListToolkitInstances(ctx, "1", filter, page, size)
+			if err != nil {
+				t.Fatalf("ListToolkitInstances page %d: %v", page, err)
+			}
+			if firstTotal == -1 {
+				firstTotal = total
+			}
+			if total != firstTotal {
+				t.Fatalf("total changed from %d to %d between pages", firstTotal, total)
+			}
+			if len(rows) > size {
+				t.Fatalf("page %d holds %d rows, more than the size %d", page, len(rows), size)
+			}
+			for _, row := range rows {
+				served = append(served, row["id"].(string))
+			}
+			if len(rows) < size {
+				break
+			}
+		}
+		return served, firstTotal
+	}
+
+	cases := []struct {
+		name  string
+		mcp   *bool
+		query string
+	}{
+		{"no filter", nil, ""},
+		{"mcp=true", boolRef(true), ""},
+		{"mcp=false", boolRef(false), ""},
+		{"query matches the name, any case", nil, "QUARTZ"},
+		{"query matches the description, any case", nil, "quartz here"},
+		{"mcp=true with a query", boolRef(true), "quartz"},
+		{"mcp=false with a query", boolRef(false), "quartz"},
+		{"a percent is literal", nil, "%"},
+		{"an underscore is literal", nil, "_"},
+		{"a backslash is literal", nil, `\`},
+		{"nothing matches", nil, "zzz-no-such-toolkit"},
+	}
+	for _, testCase := range cases {
+		for _, size := range []int{7, 20} {
+			t.Run(fmt.Sprintf("%s, size %d: every row once, filtered total", testCase.name, size), func(t *testing.T) {
+				filter := InstanceListFilter{MCP: testCase.mcp, Query: testCase.query}
+				served, total := readAll(t, filter, size)
+				expected := want(testCase.mcp, testCase.query)
+
+				if total != len(expected) {
+					t.Errorf("total=%d, want the filtered count %d", total, len(expected))
+				}
+				seen := map[string]bool{}
+				for _, id := range served {
+					if seen[id] {
+						t.Errorf("row %s (%s) served twice across pages", id, byID[id].name)
+					}
+					seen[id] = true
+					if !expected[id] {
+						t.Errorf("row %s (%q, type %q) must not match this filter", id, byID[id].name, byID[id].typ)
+					}
+				}
+				for id := range expected {
+					if !seen[id] {
+						t.Errorf("row %s (%q, type %q) never served", id, byID[id].name, byID[id].typ)
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("the order is name then id, so duplicate names keep a stable order", func(t *testing.T) {
+		served, _ := readAll(t, InstanceListFilter{}, 5)
+		for i := 1; i < len(served); i++ {
+			prev, cur := byID[served[i-1]], byID[served[i]]
+			prevID, _ := strconv.Atoi(served[i-1])
+			curID, _ := strconv.Atoi(served[i])
+			if prev.name == cur.name && prevID > curID {
+				t.Errorf("rows named %q are served with id %d before id %d", cur.name, prevID, curID)
+			}
+		}
+		again, _ := readAll(t, InstanceListFilter{}, 5)
+		if strings.Join(served, ",") != strings.Join(again, ",") {
+			t.Error("two reads served the rows in a different order")
+		}
+	})
+
+	t.Run("page one of the raw list holds no MCP, which is why the picker filters on the server", func(t *testing.T) {
+		rows, _, err := repo.ListToolkitInstances(ctx, "1", InstanceListFilter{}, 1, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if byID[row["id"].(string)].isMCP {
+				t.Fatalf("fixture error: %q is an MCP on the first raw page", row["name"])
+			}
+		}
+		mcpRows, mcpTotal, err := repo.ListToolkitInstances(ctx, "1", InstanceListFilter{MCP: boolRef(true)}, 1, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mcpTotal != len(want(boolRef(true), "")) || len(mcpRows) != mcpTotal {
+			t.Errorf("mcp=true page one: rows=%d total=%d, want every MCP (%d)", len(mcpRows), mcpTotal, len(want(boolRef(true), "")))
+		}
+	})
+
+	t.Run("the raw list still serves the application rows", func(t *testing.T) {
+		served, _ := readAll(t, InstanceListFilter{}, 20)
+		apps := 0
+		for _, id := range served {
+			if byID[id].isApp {
+				apps++
+			}
+		}
+		if apps != 4 {
+			t.Errorf("raw list served %d application rows, want 4", apps)
+		}
+		// ListToolkits is the same call with the empty filter.
+		_, total, err := repo.ListToolkits(ctx, "1", 1, 5)
+		if err != nil || total != len(seeds) {
+			t.Errorf("ListToolkits total=%d err=%v, want %d", total, err, len(seeds))
 		}
 	})
 }

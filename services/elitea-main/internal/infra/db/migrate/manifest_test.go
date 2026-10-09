@@ -633,7 +633,30 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// Redis: elitea_auth.form_sessions, form_login_transactions and
 	// browser_attempt_windows (bytea records, expiry read on every access,
 	// swept by elitea-scheduler's authstateretention). No permission.
-	require.EqualValues(t, 153, Head(shared))
+	//
+	// 154: shared/0154_agent_stop_question_author.sql, the question author a
+	// chat stop removed, so a repeated stop by that author still replays
+	// (client contract 1.3). Nullable, no backfill, no permission.
+	//
+	// 155: shared/0155_local_turn_executions.sql, the execution of a desktop
+	// local turn (ADR-0029 decision 5c, client contract 1.5): the id the /llm
+	// edge keeps, its project/actor/conversation binding, its 24 h deadline
+	// and its one commit. No permission (`models.chat.messages.create`).
+	//
+	// 156: shared/0156_remote_toolkit_execute_permission.sql, the default-mode
+	// grant of `models.applications.tool.execute` to admin, editor and viewer
+	// (ADR-0029 decision 5b, the desktop's remote toolkit call), with its
+	// per-project override block.
+	//
+	// 157: shared/0157_execution_interrupts.sql, the per-interrupt HITL
+	// decision ledger (execution_interrupts, its per-response revision row
+	// and audit; fanout-interrupt-decisions-v1 §5). New tables only, no
+	// backfill, no permission; unwired until Wave 2.
+	//
+	// 158: shared/0158_social_feedbacks_project.sql, the legacy shared
+	// centry.social_feedbacks table (created if absent) with a nullable
+	// project_id and two indexes. No tenant table, no permission.
+	require.EqualValues(t, 158, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -818,7 +841,16 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// counts the sweep's resumes of a run whose process died, so the sweep
 	// fails a run that keeps dying after MaxResumes and not after a fixed age.
 	// A column and no permission, so no shared sibling.
-	require.EqualValues(t, 146, Head(tenant))
+	// 147: tenant/0147_chat_canvas_versions_newest_index.sql, an index on
+	// chat_canvas_versions (canvas_item_id, created_at DESC, id DESC) for the
+	// "newest version of this canvas" lookup the turn resolvers now make for
+	// every canvas on every turn (canvas text in chat history, #1097). An
+	// index and no permission, so no shared sibling.
+	// 148: tenant/0148_chat_message_group_author_newest_index.sql, an index on
+	// chat_message_group (author_participant_id, created_at DESC) for the
+	// "user's previous turn" lookup memory recall makes on every turn
+	// (ADR-0029 decision 8). An index and no permission, so no shared sibling.
+	require.EqualValues(t, 148, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

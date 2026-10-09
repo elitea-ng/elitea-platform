@@ -183,3 +183,34 @@ func currentAgentCancelRequest(method, projectID, responseID string) *http.Reque
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }
+
+// The path parameter is declared `format: uuid`, which admits either case. A
+// client that re-serialises the id it was given (Swift's uuidString is
+// upper-case) must still stop its run, and the use case must see the same
+// canonical spelling the server stored, so a repeated stop replays.
+func TestCurrentAgentCancelRouteCanonicalisesAnUpperCaseResponseID(t *testing.T) {
+	canceller := &currentAgentCancellerStub{}
+	route := newCurrentAgentCancelRoute(t, canceller, currentStartPermissionResolverFunc(func(
+		context.Context,
+		auth.User,
+		string,
+		string,
+	) (auth.PermissionResolution, error) {
+		return auth.PermissionResolution{UserID: 11, Permissions: []string{CurrentAgentCancelPermission}}, nil
+	}))
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentAgentCancelRequest(http.MethodDelete, "7", "1000000A-0000-4000-8000-00000000004B"))
+	if response.Code != http.StatusNoContent || canceller.calls != 1 {
+		t.Fatalf("status=%d body=%q calls=%d", response.Code, response.Body.String(), canceller.calls)
+	}
+	if canceller.request.ResponseMessageID != "1000000a-0000-4000-8000-00000000004b" {
+		t.Fatalf("response message id=%q, want the lowercase canonical spelling", canceller.request.ResponseMessageID)
+	}
+	for _, malformed := range []string{"{1000000a-0000-4000-8000-00000000004b}", "1000000a00004000800000000000004b"} {
+		response = httptest.NewRecorder()
+		route.ServeHTTP(response, currentAgentCancelRequest(http.MethodDelete, "7", malformed))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("%q status=%d, want 400", malformed, response.Code)
+		}
+	}
+}

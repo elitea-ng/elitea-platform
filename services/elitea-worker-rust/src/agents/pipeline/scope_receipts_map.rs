@@ -136,14 +136,26 @@ impl MapChildCheckpointerFactory for PipelineMapReceiptAuthority {
     fn execution_identity(&self, root_thread: &str) -> Result<MapExecutionIdentity, GraphError> {
         self.inner.execution_identity(root_thread)
     }
+    fn item_thread_id(
+        &self,
+        activation: &MapActivation,
+        item: &FrozenMapItem,
+        worker: &str,
+        origin: &MapExecutionIdentity,
+    ) -> Result<String, GraphError> {
+        self.inner.item_thread_id(activation, item, worker, origin)
+    }
     async fn for_item(
         &self,
         activation: &MapActivation,
         item: &FrozenMapItem,
         worker: &str,
         kind: MapWorkerKind,
+        origin: &MapExecutionIdentity,
     ) -> Result<MapChildCheckpoint, GraphError> {
-        self.inner.for_item(activation, item, worker, kind).await
+        self.inner
+            .for_item(activation, item, worker, kind, origin)
+            .await
     }
 }
 impl crate::agents::graph::map_authority::sealed::Sealed for PipelineMapReceiptAuthority {}

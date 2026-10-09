@@ -11,6 +11,15 @@
 {{- if and $pg.existingSecret (not (hasKey $secrets "DATABASE_URL")) }}
 {{- $secrets = merge (deepCopy $secrets) (dict "DATABASE_URL" (dict "secretName" $pg.existingSecret "key" (required "postgresql.key is required when postgresql.existingSecret is set" $pg.key))) }}
 {{- end }}
+{{- /*
+  SECRETS_MASTER_KEY: elitea-main refuses to start without it (see
+  elitea-main.masterKeyRef). An explicit main.secrets entry is already in
+  $secrets and wins; otherwise the shared reference is added here.
+*/ -}}
+{{- $masterKeyRef := include "elitea-main.masterKeyRef" . }}
+{{- if and $masterKeyRef (not (hasKey $secrets "SECRETS_MASTER_KEY")) }}
+{{- $secrets = merge (deepCopy $secrets) (dict "SECRETS_MASTER_KEY" (fromJson $masterKeyRef)) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

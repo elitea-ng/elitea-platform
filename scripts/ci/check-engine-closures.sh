@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
 #
-# The two FROZEN analysis-engine closures still resolve.
+# The FROZEN analysis-engine closure still resolves.
 #
-# WHAT THIS CLOSES. `services/elitea-deepwiki` and `services/elitea-inventory`
-# each vendor a byte-frozen copy of an analysis engine under `src/*/engine/`,
-# and each pins that copy's resolved dependency closure in an `engine` extra.
-# Nothing in CI installs those extras and nothing in CI builds the `-engine`
-# images: ADR-0022 keeps DeepWiki's out of the default bake group because it is
-# torch-sized, and `deepwiki-real-engine.yml` — the one job that does build it —
-# is weekly plus dispatch. So a change INSIDE a closure has no per-change gate
-# at all, and "no gate reported anything" reads as "nothing is wrong".
+# WHAT THIS CLOSES. `services/elitea-inventory` vendors a byte-frozen copy of
+# an analysis engine under `src/elitea_inventory/engine/`, and pins that copy's
+# resolved dependency closure in an `engine` extra. Nothing in CI installs that
+# extra and nothing in CI builds the `-engine` image. So a change INSIDE the
+# closure has no per-change gate at all, and "no gate reported anything" reads
+# as "nothing is wrong".
 #
 # It happened twice:
 #
-#   * eight Dependabot bumps (#677-#679, #757-#761) landed inside DeepWiki's
-#     closure and made `pip install '.[engine,storage-postgres]'`
-#     ResolutionImpossible. The `-engine` image could not be built at all, for
-#     days, before the weekly run said so. #799 restored it.
+#   * eight Dependabot bumps (#677-#679, #757-#761) landed inside the closure
+#     of the Python DeepWiki engine (services/elitea-deepwiki, since replaced
+#     by the Rust engine and deleted) and made its `-engine` image unbuildable
+#     for days, before a weekly run said so. #799 restored it.
 #   * #740 and #741 did the same to Inventory's, and that one was STILL broken
 #     on main at 67f1e147 — found by running this script.
 #
-# .github/dependabot.yml now gives both packages their own pip entry with
+# .github/dependabot.yml now gives the package its own pip entry with
 # `ignore: "*"` and `open-pull-requests-limit: 0`, so that particular route in
 # is shut. This script is the gate for every OTHER route: a hand edit, a
 # re-copy of the engine, an `elitea-sdk` release, or the world changing under a
@@ -28,34 +26,25 @@
 #
 # WHAT IT DOES, AND WHAT IT DELIBERATELY DOES NOT.
 #
-# It RESOLVES. It does not install, and it does not build an image: the
-# DeepWiki engine image is ~2 GB and needs tens of minutes and >35 GB of disk,
-# which is the whole reason its build is not a per-change gate. Resolution is
-# what the failure class actually is — every one of the ten bumps above turned
-# a satisfiable requirement set into an unsatisfiable one, and a resolver says
-# so in seconds without fetching a single torch wheel.
+# It RESOLVES. It does not install, and it does not build an image: an engine
+# image needs tens of minutes, which is the whole reason its build is not a
+# per-change gate. Resolution is what the failure class actually is — every
+# one of the ten bumps above turned a satisfiable requirement set into an
+# unsatisfiable one, and a resolver says so in seconds.
 #
-# Each package is resolved with the resolver ITS OWN image uses, because a gate
+# The package is resolved with the resolver ITS OWN image uses, because a gate
 # that passes with a resolver the build does not use proves nothing about the
-# build:
-#
-#   deepwiki   pip. services/elitea-deepwiki/Containerfile runs `pip wheel`
-#              over the extra directly. `pip install --dry-run
-#              --ignore-installed` performs the same resolution and stops
-#              before installing; modern PyPI serves per-wheel metadata
-#              (PEP 658), so pip reads torch's metadata without downloading
-#              torch. MEASURED: ~10 s warm, ~3 s to REJECT the #760 bump.
-#   inventory  uv. services/elitea-inventory/Containerfile states, measured
-#              over six image builds, that pip cannot resolve this closure in
-#              any reasonable time (the blanket SDK extras were 356 packages)
-#              and hands the job to `uv pip compile`. So does this gate, at the
-#              same pinned uv version the Containerfile installs.
+# build: uv. services/elitea-inventory/Containerfile states, measured over six
+# image builds, that pip cannot resolve this closure in any reasonable time
+# (the blanket SDK extras were 356 packages) and hands the job to `uv pip
+# compile`. So does this gate, at the same pinned uv version the Containerfile
+# installs.
 #
 # THE THIRD CHECK: the closure and the copy move TOGETHER. The pins in an
 # `engine` extra are the resolution OF a particular frozen copy. Moving one
 # without the other is how a copy ends up running against versions nobody
 # resolved it against, and neither the copy's own digest test nor the
-# resolution above can see it. So each pyproject carries a `closure-stamp`
+# resolution above can see it. So the pyproject carries a `closure-stamp`
 # line naming the sha256 of the engine copy's COPY_MANIFEST.json, and this
 # script refuses a tree where the two disagree.
 # `scripts/ci/refresh-engine-closure.py` is what re-resolves and re-stamps.
@@ -100,15 +89,15 @@ bad() { printf '::error::%s\n' "$*" >&2; fail=1; }
 
 # ── The interpreter ──────────────────────────────────────────────────────────
 #
-# pip resolves for the interpreter it runs on, and both packages declare
+# The resolver targets this interpreter's version, and the package declares
 # `requires-python = ">=3.12,<3.13"`. On 3.13 pip would refuse the package
 # itself and the run would be red for a reason that has nothing to do with the
 # closure; on 3.11 it would resolve a DIFFERENT set. Check rather than assume.
 python_version=$("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 if [ "$python_version" != "3.12" ]; then
   echo "FAIL: ENGINE_CLOSURE_PYTHON (${PYTHON}) is Python ${python_version}." >&2
-  echo "Both packages declare requires-python >=3.12,<3.13, and pip resolves for" >&2
-  echo "the interpreter it runs on. Point ENGINE_CLOSURE_PYTHON at a 3.12." >&2
+  echo "The package declares requires-python >=3.12,<3.13. Point" >&2
+  echo "ENGINE_CLOSURE_PYTHON at a 3.12." >&2
   exit 1
 fi
 note "interpreter     ${PYTHON} (Python ${python_version})"
@@ -197,41 +186,18 @@ resolve_with_uv() {
   fi
 }
 
-resolve_with_pip() {
-  local package=$1 extras=$2
-  local started elapsed
-  started=$SECONDS
-  # --ignore-installed so the resolution is of the extra and not of whatever
-  # the runner's environment happens to already satisfy; --dry-run so nothing
-  # is downloaded past the metadata pip needs to decide.
-  if "$PYTHON" -m pip install --dry-run --ignore-installed --quiet \
-      --disable-pip-version-check \
-      --report "${WORK}/deepwiki-report.json" \
-      "./${package}${extras}"; then
-    elapsed=$((SECONDS - started))
-    note "${package}: pip resolved ${extras} in ${elapsed}s"
-  else
-    elapsed=$((SECONDS - started))
-    bad "${package}: pip could NOT resolve ${extras} (${elapsed}s). This is the exact resolution ${package}/Containerfile performs, so the -engine image cannot be built from this revision. Move the 'engine' extra as a SET with scripts/ci/refresh-engine-closure.py, never one pin at a time."
-  fi
-}
-
-check_stamp services/elitea-deepwiki \
-  services/elitea-deepwiki/src/elitea_deepwiki/engine/COPY_MANIFEST.json
 check_stamp services/elitea-inventory \
   services/elitea-inventory/src/elitea_inventory/engine/COPY_MANIFEST.json
 note ""
 
-# DeepWiki: pip is the Containerfile's resolver, so pip is the authority here.
-resolve_with_pip services/elitea-deepwiki "[engine,storage-postgres]"
 # Inventory: uv is the Containerfile's resolver, and its Containerfile records
 # why pip is not (six killed builds).
 resolve_with_uv services/elitea-inventory --extra engine
 note ""
 
 if [ "$fail" -ne 0 ]; then
-  echo "FAIL: an engine closure does not resolve, or a closure-stamp is stale." >&2
+  echo "FAIL: the engine closure does not resolve, or the closure-stamp is stale." >&2
   exit 1
 fi
 
-echo "OK: both frozen engine closures resolve, and both closure-stamps match their engine copy."
+echo "OK: the frozen engine closure resolves, and its closure-stamp matches the engine copy."

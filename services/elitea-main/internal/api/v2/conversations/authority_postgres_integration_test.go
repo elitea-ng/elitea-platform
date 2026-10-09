@@ -106,6 +106,8 @@ func chatAuthorityRouter(pool *pgxpool.Pool) http.Handler {
 	r.Put("/{projectID}/conversations/{conversationID}/participants/{participantID}", h.UpdateEntitySettings)
 	r.Get("/{projectID}/messages/{messageID}", h.GetMessage)
 	r.Get("/{projectID}/canvas/{canvasID}", h.GetCanvas)
+	r.Put("/{projectID}/canvas/{canvasID}", h.UpdateCanvas)
+	r.Post("/{projectID}/canvases", h.CreateCanvas)
 	r.Get("/{projectID}/folders", f.List)
 	r.Post("/{projectID}/folders", f.Create)
 	r.Put("/{projectID}/folders/{folderID}", f.Update)
@@ -398,6 +400,67 @@ func TestChatAuthorityMessageCanvasAndTokenOwner(t *testing.T) {
 	unresolved := auth.ContextWithUser(context.Background(), auth.User{ID: "99", TokenID: "99", AuthType: "token"})
 	if err := repo.AuthorizeChatResource(unresolved, "1", "conversation", conversation.ID); err == nil {
 		t.Fatal("unresolved token received user access")
+	}
+}
+
+// A canvas WRITE takes the participant rule (the rule sending a message
+// applies), not the read rule. On a PUBLIC conversation every project member
+// may READ the canvas, but a non-participant must not rewrite text the chat
+// history hands the model as its own earlier answer — neither by editing an
+// existing canvas nor by carving a new one out of a message. Adding the member
+// as a participant is what grants the write.
+func TestChatAuthorityCanvasWritesRequireParticipant(t *testing.T) {
+	pool := newChatAuthorityPool(t)
+	repo := repos.NewConversationsRepo(pool)
+	ctx := context.Background()
+	publicFlag := false
+	conversation, err := repo.Create(chatActor("7"), "1", conversations.Conversation{Name: "Public canvas", IsPrivate: &publicFlag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messageID, canvasID, canvasUUID string
+	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_group(conversation_id) VALUES ($1) RETURNING id::text`, conversation.ID).Scan(&messageID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_items(message_group_id,item_type) VALUES ($1,'canvas_message') RETURNING id::text,uuid::text`, messageID).Scan(&canvasID, &canvasUUID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO p_1.chat_messages_canvas(id) VALUES ($1)`, canvasID); err != nil {
+		t.Fatal(err)
+	}
+	router := chatAuthorityRouter(pool)
+	for _, id := range []string{canvasID, canvasUUID} {
+		// The READ rule still admits the member: the conversation is public.
+		if err := repo.AuthorizeChatResource(chatActor("8"), "1", "canvas", id); err != nil {
+			t.Fatalf("public canvas read refused: %v", err)
+		}
+		if err := repo.AuthorizeChatWrite(chatActor("8"), "1", "canvas", id); err == nil {
+			t.Fatal("a non-participant may write a public conversation's canvas")
+		}
+		callChatAuthority(t, router, "8", "PUT", "/1/canvas/"+id, `{"canvas_content":"rewritten"}`, 404)
+		// The author is a participant (Create maps them).
+		if err := repo.AuthorizeChatWrite(chatActor("7"), "1", "canvas", id); err != nil {
+			t.Fatalf("the author cannot write their own canvas: %v", err)
+		}
+	}
+	callChatAuthority(t, router, "8", "POST", "/1/canvases", fmt.Sprintf(`{"message_group_id":%s,"message_item_id":1}`, messageID), 404)
+	if err := repo.AuthorizeChatWrite(chatActor("8"), "1", "message", messageID); err == nil {
+		t.Fatal("a non-participant may carve a canvas in a public conversation")
+	}
+	// An administrator's read exceptions do not extend to writes either.
+	if err := repo.AuthorizeChatWrite(chatActor("9"), "1", "canvas", canvasID); err == nil {
+		t.Fatal("a non-participant administrator may write a canvas")
+	}
+	if err := repo.AddParticipant(ctx, "1", conversation.ID, map[string]any{"entity_name": "user", "entity_meta": map[string]any{"id": 8}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct{ kind, id string }{{"canvas", canvasID}, {"canvas", canvasUUID}, {"message", messageID}} {
+		if err := repo.AuthorizeChatWrite(chatActor("8"), "1", check.kind, check.id); err != nil {
+			t.Fatalf("a participant cannot write %s %s: %v", check.kind, check.id, err)
+		}
+	}
+	if err := repo.AuthorizeChatWrite(context.Background(), "1", "canvas", canvasID); err == nil {
+		t.Fatal("an unauthenticated write was admitted")
 	}
 }
 

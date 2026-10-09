@@ -2,17 +2,17 @@
  * The folder source, against the three implementations it has to agree with.
  *
  * The bucket and prefix rules are elitea-main's
- * (`internal/providerhost/material/artifact.go`); the display form is the one
- * the wiki id is built from, and it has a Go twin (`run.DisplayRepositoryFor`)
- * and a Python twin (`wiki_context.display_repository_for`). A case here that
- * disagrees with either of those is a browser that looks for a wiki under an
- * id nothing wrote — which reads, on screen, as a generation that produced
- * nothing.
+ * (`internal/providerhost/material/artifact.go`). The wiki id is the one the
+ * generation files a folder under, `artifact--{bucket}--{prefix}--{branch}`,
+ * with a Go twin (`run.ArtifactWikiID`) and a Rust twin
+ * (`source::artifact_wiki_id`). A case here that disagrees with either of
+ * those is a browser that looks for a wiki under an id nothing wrote — which
+ * reads, on screen, as a generation that produced nothing.
  */
 import { describe, expect, it } from 'vitest';
 
 import { getArtifactSource, readArtifactSource } from './artifactSource';
-import { filterManifestsByRepo } from './repoMatch';
+import { filterManifestsByRepo, normalizeRepoToWikiIdPrefix } from './repoMatch';
 import { getConfiguredRepoIdentity } from './toolkitSettings';
 
 describe('readArtifactSource', () => {
@@ -128,14 +128,57 @@ describe('readArtifactSource', () => {
 });
 
 describe('the identity a folder source resolves to', () => {
-  it('is the DISPLAY form, not the artifact:// form', () => {
-    // The scheme is what the facade derives for the provider. The wiki is
-    // named after this form, and `artifact:----docs--handbook--main` is not
-    // a name anybody asked for.
+  it('is the generation id form: artifact/bucket/prefix', () => {
+    // The wiki is filed under `artifact--{bucket}--{prefix}--{branch}`, the id
+    // its generation derives; these parts normalise to exactly that.
     expect(getConfiguredRepoIdentity(null, { artifact_configuration: { bucket: 'docs', prefix: 'handbook' } }, null))
-      .toEqual({ repository: 'docs/handbook', branch: null });
+      .toEqual({ repository: 'artifact/docs/handbook', branch: null });
     expect(getConfiguredRepoIdentity(null, { artifact_configuration: { bucket: 'docs', prefix: '' } }, null))
-      .toEqual({ repository: 'docs', branch: null });
+      .toEqual({ repository: 'artifact/docs', branch: null });
+    expect(
+      normalizeRepoToWikiIdPrefix(
+        getConfiguredRepoIdentity(null, { artifact_configuration: { bucket: 'docs', prefix: 'handbook' }, branch: 'main' }, null),
+      ),
+    ).toBe('artifact--docs--handbook--main');
+    // A git repository is named exactly as before.
+    expect(normalizeRepoToWikiIdPrefix({ repository: 'acme/notes', branch: 'main' })).toBe('acme--notes--main');
+  });
+
+  it('splits a branch with a colon as the engine does: the head joins the repository', () => {
+    // The engine and the Go host split `artifact://docs/handbook:v1:rc:{sha8}`
+    // on `:` from the right, so the wiki is `artifact--docs--handbook-v1--rc`.
+    // Folding the colon into the branch would look for
+    // `artifact--docs--handbook--v1-rc`, an id nothing writes.
+    const identity = getConfiguredRepoIdentity(
+      null,
+      { artifact_configuration: { bucket: 'docs', prefix: 'handbook' }, branch: 'v1:rc' },
+      null,
+    );
+    expect(identity).toEqual({ repository: 'artifact/docs/handbook-v1', branch: 'rc' });
+    expect(normalizeRepoToWikiIdPrefix(identity)).toBe('artifact--docs--handbook-v1--rc');
+    // Two colons: only the last one splits.
+    expect(
+      normalizeRepoToWikiIdPrefix(
+        getConfiguredRepoIdentity(null, { artifact_configuration: { bucket: 'docs' }, branch: 'a:b:c' }, null),
+      ),
+    ).toBe('artifact--docs-a-b--c');
+    // A slash in the head makes a new repository part, as in the engine.
+    expect(
+      normalizeRepoToWikiIdPrefix(
+        getConfiguredRepoIdentity(
+          null,
+          { artifact_configuration: { bucket: 'docs', prefix: 'handbook' }, branch: 'feat/x:rc' },
+          null,
+        ),
+      ),
+    ).toBe('artifact--docs--handbook-feat--x--rc');
+    const manifests = [
+      { wiki_id: 'artifact--docs--handbook-v1--rc', repository: 'artifact://docs/handbook', branch: 'v1:rc' },
+      { wiki_id: 'artifact--docs--handbook--v1-rc', repository: 'artifact://docs/handbook', branch: 'v1-rc' },
+    ];
+    expect(filterManifestsByRepo(manifests, identity).map((m) => m.wiki_id)).toEqual([
+      'artifact--docs--handbook-v1--rc',
+    ]);
   });
 
   it('carries the branch the settings name, under every alias', () => {
@@ -145,7 +188,7 @@ describe('the identity a folder source resolves to', () => {
         { artifact_configuration: { bucket: 'docs' }, active_branch: 'release' },
         null,
       ),
-    ).toEqual({ repository: 'docs', branch: 'release' });
+    ).toEqual({ repository: 'artifact/docs', branch: 'release' });
   });
 
   it('wins over a repository stored beside it', () => {
@@ -159,7 +202,7 @@ describe('the identity a folder source resolves to', () => {
         { artifact_configuration: { bucket: 'docs' }, github_repository: 'acme/notes' },
         null,
       )?.repository,
-    ).toBe('docs');
+    ).toBe('artifact/docs');
   });
 
   it('is not read from a hand-written artifact:// repository', () => {
@@ -170,21 +213,21 @@ describe('the identity a folder source resolves to', () => {
     expect(getArtifactSource({ repository: 'artifact://docs/handbook' })).toBeNull();
   });
 
-  it('matches the wiki id the two fixture runners write', () => {
-    // wiki_id_for: `{display repository with / as --}--{branch}`. Both twins
-    // build it from the display form, so these ids are the ones the manifests
-    // are stored under.
+  it('matches the wiki id the generation and both fixture runners write', () => {
+    // One rule everywhere: `artifact--{bucket}--{prefix}--{branch}`.
     const identity = getConfiguredRepoIdentity(
       null,
       { artifact_configuration: { bucket: 'docs', prefix: 'handbook' }, branch: 'main' },
       null,
     );
     const manifests = [
-      { wiki_id: 'docs--handbook--main', repository: 'artifact://docs/handbook', branch: 'main' },
+      { wiki_id: 'artifact--docs--handbook--main', repository: 'artifact://docs/handbook', branch: 'main' },
+      // The id the fixture runners wrote before the one rule: not this wiki.
+      { wiki_id: 'docs--handbook--main', repository: 'docs/handbook', branch: 'main' },
       { wiki_id: 'acme--notes--main', repository: 'acme/notes', branch: 'main' },
     ];
     expect(filterManifestsByRepo(manifests, identity).map((m) => m.wiki_id)).toEqual([
-      'docs--handbook--main',
+      'artifact--docs--handbook--main',
     ]);
   });
 });

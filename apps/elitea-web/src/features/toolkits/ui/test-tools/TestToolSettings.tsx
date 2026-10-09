@@ -182,6 +182,8 @@ interface ToolPickerProps {
   /** Whether the dynamic tier is the one in use — an error from a tier nobody reads is not this picker's error. */
   readonly dynamicTierActive: boolean;
   readonly readFailed: boolean;
+  /** `readFailed` is only because this deployment turned tool discovery off: no retry. */
+  readonly discoveryDisabled: boolean;
   readonly onRetry: () => void;
   readonly value: string;
   readonly options: readonly SingleSelectOption[];
@@ -196,8 +198,15 @@ interface ToolPickerProps {
  * no tools; it must never stand in for a failure. Split into its own
  * component to keep `TestToolSettings` under the §3.5 complexity budget.
  */
-function ToolPicker({ dynamicTierActive, readFailed, onRetry, value, options, onSelect, onClear }: ToolPickerProps): ReactNode {
-  if (dynamicTierActive && readFailed) return <ToolListError onRetry={onRetry} />;
+function ToolPicker({ dynamicTierActive, readFailed, discoveryDisabled, onRetry, value, options, onSelect, onClear }: ToolPickerProps): ReactNode {
+  if (dynamicTierActive && readFailed) {
+    return (
+      <ToolListError
+        onRetry={onRetry}
+        discoveryDisabled={discoveryDisabled}
+      />
+    );
+  }
 
   return (
     <SingleSelect
@@ -326,6 +335,7 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
           {discoveryPicker(projectId, dynamicTools, props, <ToolPicker
             dynamicTierActive={usesDynamicTier}
             readFailed={toolListReadFailed(dynamicTools, schemasReadFailed)}
+            discoveryDisabled={dynamicTools.isDiscoveryDisabled && !schemasReadFailed}
             onRetry={onRetryToolList}
             value={selectedTool ?? ''}
             options={allToolsOptions}

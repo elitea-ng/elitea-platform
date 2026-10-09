@@ -107,7 +107,9 @@ CREATE TABLE p_1.chat_conversations (
     folder_id integer,
     meta jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamp NOT NULL DEFAULT now(),
-    updated_at timestamp
+    updated_at timestamp,
+    -- tenant/0144: a conversation pin stamps sync_at (client contract 1.4).
+    sync_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE TABLE p_1.chat_participants(id integer PRIMARY KEY,entity_name text,entity_meta jsonb);
 INSERT INTO p_1.chat_participants VALUES (7,'user','{"id":7}'),(8,'user','{"id":8}');

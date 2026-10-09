@@ -65,14 +65,17 @@ func WithWorkerCapability(source ToolkitCapabilitySource) Option {
 // names: the web client reads metadata.hidden to drop a tile and
 // metadata.categories[0] to group it.
 const (
-	metadataKey                = "metadata"
-	metadataHiddenKey          = "hidden"
-	metadataUnavailableKey     = "unavailable"
-	metadataUnavailableReason  = "unavailable_reason"
-	metadataLabelKey           = "label"
-	toolkitNameAnnotation      = "toolkit_name"
-	toolkitNameRequiredKey     = "name_required"
-	toolkitSettingsPropertyKey = "properties"
+	metadataKey               = "metadata"
+	metadataHiddenKey         = "hidden"
+	metadataUnavailableKey    = "unavailable"
+	metadataUnavailableReason = "unavailable_reason"
+	// metadataUnavailableToolsKey lists the tools of a runnable type the
+	// worker does not serve (ADR-0027); absent when it serves them all.
+	metadataUnavailableToolsKey = "unavailable_tools"
+	metadataLabelKey            = "label"
+	toolkitNameAnnotation       = "toolkit_name"
+	toolkitNameRequiredKey      = "name_required"
+	toolkitSettingsPropertyKey  = "properties"
 )
 
 // nativeToolkitTypeMetadata labels the four types the SDK does not define.
@@ -212,10 +215,42 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 	// rendering its flat list. See tool_groups.go.
 	typeSchema = withToolGroups(typeSchema)
 
-	return withToolkitMetadata(
-		typeSchema,
-		h.toolkitTypeMetadata(toolkitType, metadata, catalogued),
-	), nil
+	typeMetadata := h.toolkitTypeMetadata(toolkitType, metadata, catalogued)
+	if unavailable := h.unavailableTools(toolkitType, typeSchema); len(unavailable) > 0 {
+		typeMetadata[metadataUnavailableToolsKey] = unavailable
+	}
+	return withToolkitMetadata(typeSchema, typeMetadata), nil
+}
+
+// ToolCapabilitySource is the optional per-tool half of a
+// ToolkitCapabilitySource: a type the worker runs may still lack some of its
+// tools (a partial native family, ADR-0027).
+type ToolCapabilitySource interface {
+	SupportsTool(toolkitType, toolName string) (bool, string)
+}
+
+// unavailableTools lists, sorted, the tools of the type's
+// `properties.selected_tools` the configured worker does not serve. They stay
+// in the schema — a saved selection holding one must still validate — and
+// metadata.unavailable_tools tells the client which of them to disable.
+func (h *Handler) unavailableTools(toolkitType string, typeSchema map[string]any) []string {
+	if h == nil || h.workerCapability == nil {
+		return nil
+	}
+	tools, ok := h.workerCapability.(ToolCapabilitySource)
+	if !ok {
+		return nil
+	}
+	properties, _ := typeSchema["properties"].(map[string]any)
+	selected, _ := properties["selected_tools"].(map[string]any)
+	var unavailable []string
+	for _, name := range toolNamesFromSelectedTools(selected) {
+		if served, _ := tools.SupportsTool(toolkitType, name); !served {
+			unavailable = append(unavailable, name)
+		}
+	}
+	sort.Strings(unavailable)
+	return unavailable
 }
 
 func (h *Handler) toolkitCatalogueEntry(

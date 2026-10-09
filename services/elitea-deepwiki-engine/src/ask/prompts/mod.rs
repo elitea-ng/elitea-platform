@@ -6,8 +6,8 @@
 //! names, per file, its source and the SHA-256 of the value:
 //!
 //! * the engine's own prompts (`ask_prompts.py`, `research_prompts.py`,
-//!   `wiki_query.py`): `tests/ask_prompts.rs` re-derives each hash from the
-//!   Python source with `python3`;
+//!   `wiki_query.py`, historical paths in the deleted Python engine):
+//!   `tests/ask_prompts.rs` holds each file to its recorded hash;
 //! * the third-party texts the Python agents sent (`LangChain`'s todo list
 //!   and summary prompts, the `deepagents` summary prompt), pinned by
 //!   package version: the parity golden holds them to the recorded request
@@ -42,7 +42,7 @@ pub const RESOLUTION: &str = include_str!("resolution.txt");
 /// `langchain.agents.middleware.todo.WRITE_TODOS_SYSTEM_PROMPT`.
 pub const TODO_SYSTEM: &str = include_str!("todo_system.txt");
 /// `langchain.agents.middleware.summarization.DEFAULT_SUMMARY_PROMPT`.
-pub const SUMMARY: &str = include_str!("summary_prompt.txt");
+pub const SUMMARY: &str = elitea_conversation::DEFAULT_SUMMARY_PROMPT;
 /// `deepagents.middleware.summarization.DEEPAGENTS_DEFAULT_SUMMARY_PROMPT`.
 pub const SUMMARY_DEEPAGENTS: &str = include_str!("summary_prompt_deepagents.txt");
 /// The tool definitions.

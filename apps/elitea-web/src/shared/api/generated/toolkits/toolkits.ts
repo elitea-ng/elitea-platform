@@ -54,6 +54,7 @@ import type {
 
 import type {
   ClientUpgradeRequiredResponse,
+  DesktopOperationError,
   ErrorResponse,
   GetToolkitToolResult202,
   GetToolkitToolResultParams,
@@ -61,6 +62,7 @@ import type {
   IndexWriteAck,
   IndexWriteRefusal,
   InternalMcpPatStatus,
+  InvalidClientVersionError,
   InvalidClientVersionResponse,
   ListToolkitAvailableTools200,
   ListToolkitInstancesParams,
@@ -76,6 +78,8 @@ import type {
   N403Response,
   N404Response,
   N500Response,
+  RemoteToolkitCallRequest,
+  RemoteToolkitCallResult,
   RuntimeCapabilities,
   ToolkitCreateRequest,
   ToolkitInstance,
@@ -652,6 +656,456 @@ export function useRegisterMcpOAuthClient<
   const queryOptions = getRegisterMcpOAuthClientQueryOptions(
     projectId,
     mcpDcrProxyRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type executeRemoteToolkitToolResponse200 = {
+  data: RemoteToolkitCallResult;
+  status: 200;
+};
+
+export type executeRemoteToolkitToolResponse400 = {
+  data: DesktopOperationError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type executeRemoteToolkitToolResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type executeRemoteToolkitToolResponse403 = {
+  data: DesktopOperationError;
+  status: 403;
+};
+
+export type executeRemoteToolkitToolResponse404 = {
+  data: DesktopOperationError;
+  status: 404;
+};
+
+export type executeRemoteToolkitToolResponse409 = {
+  data: RemoteToolkitCallResult;
+  status: 409;
+};
+
+export type executeRemoteToolkitToolResponse410 = {
+  data: DesktopOperationError;
+  status: 410;
+};
+
+export type executeRemoteToolkitToolResponse413 = {
+  data: DesktopOperationError;
+  status: 413;
+};
+
+export type executeRemoteToolkitToolResponse415 = {
+  data: DesktopOperationError;
+  status: 415;
+};
+
+export type executeRemoteToolkitToolResponse422 = {
+  data: RemoteToolkitCallResult;
+  status: 422;
+};
+
+export type executeRemoteToolkitToolResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type executeRemoteToolkitToolResponse429 = {
+  data: DesktopOperationError;
+  status: 429;
+};
+
+export type executeRemoteToolkitToolResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type executeRemoteToolkitToolResponse501 = {
+  data: DesktopOperationError;
+  status: 501;
+};
+
+export type executeRemoteToolkitToolResponse502 = {
+  data: RemoteToolkitCallResult;
+  status: 502;
+};
+
+export type executeRemoteToolkitToolResponse503 = {
+  data: DesktopOperationError;
+  status: 503;
+};
+
+export type executeRemoteToolkitToolResponse504 = {
+  data: RemoteToolkitCallResult;
+  status: 504;
+};
+
+export type executeRemoteToolkitToolResponseSuccess =
+  executeRemoteToolkitToolResponse200 & {
+    headers: Headers;
+  };
+export type executeRemoteToolkitToolResponseError = (
+  | executeRemoteToolkitToolResponse400
+  | executeRemoteToolkitToolResponse401
+  | executeRemoteToolkitToolResponse403
+  | executeRemoteToolkitToolResponse404
+  | executeRemoteToolkitToolResponse409
+  | executeRemoteToolkitToolResponse410
+  | executeRemoteToolkitToolResponse413
+  | executeRemoteToolkitToolResponse415
+  | executeRemoteToolkitToolResponse422
+  | executeRemoteToolkitToolResponse426
+  | executeRemoteToolkitToolResponse429
+  | executeRemoteToolkitToolResponse500
+  | executeRemoteToolkitToolResponse501
+  | executeRemoteToolkitToolResponse502
+  | executeRemoteToolkitToolResponse503
+  | executeRemoteToolkitToolResponse504
+) & {
+  headers: Headers;
+};
+
+export type executeRemoteToolkitToolResponse =
+  | executeRemoteToolkitToolResponseSuccess
+  | executeRemoteToolkitToolResponseError;
+
+export const getExecuteRemoteToolkitToolUrl = (
+  projectId: string,
+  toolkitId: number,
+) => {
+  return `/elitea_core/remote_toolkit_call/prompt_lib/${projectId}/${toolkitId}`;
+};
+
+/**
+ * Client contract 1.6 (ADR-0029 decisions 3 and 5b). Runs ONE tool of
+ * ONE saved toolkit in the caller's project on a cloud worker, through
+ * the same `toolkit.call_tool.v1` path test_tool uses, and answers what
+ * the tool returned. Write operations are allowed. The toolkit's
+ * settings and credentials are resolved server-side from the saved row
+ * under the caller's grants; the request never carries settings, and no
+ * credential is ever returned. MCP OAuth references resolve
+ * server-side; a tool that needs the user to authorise answers 409
+ * `mcp_authorization_required` with the request in the fields a chat
+ * stream's `mcp_authorization_required` frame carries.
+ *
+ * WHO. Only a native access token or a personal access token; a browser
+ * session answers 403 `remote_toolkit_requires_token`. The caller needs
+ * `models.applications.tool.execute` in the project (admin, editor and
+ * viewer hold it).
+ *
+ * THE AUTHORITY OF A CHAT TURN. The call names a live local turn
+ * (`execution_id`: started by this caller in this project, not
+ * committed, not past its deadline, local work allowed) and the agent
+ * version the desktop is running in it (`application_id`,
+ * `version_id`): the turn's agent, or a nested agent that agent reaches
+ * through its `application` tools. The server resolves that version with
+ * the same freeze a cloud turn uses and runs the tool only when the
+ * toolkit is one of the version's tools and `tool_name` is in its
+ * `selected_tools` (empty means every tool, as in chat), the guardrails
+ * block neither, and `toolkit_ref` is the one resolveApplicationVersion
+ * gives that toolkit of that version. A model turn (no agent) can call
+ * no toolkit. A tool the guardrails mark sensitive answers 409
+ * `confirmation_required` with `hitl_interrupt` (the chat HITL shape,
+ * `guardrail_type: sensitive_tool`) until the call carries a
+ * `confirmation` echoing that interrupt's `interrupt_id`, which approves
+ * this call only (these arguments, this tool, this turn) and only once;
+ * the desktop asks the user as a cloud turn would pause.
+ * Every call that names a tool is audited (caller, project, toolkit,
+ * tool, turn, confirmation, outcome, a SHA-256 of the arguments).
+ *
+ * RATE. At most 60 admitted runs a minute per caller on each server
+ * replica; past that, 429 `rate_limited` with Retry-After. Only a call
+ * that admits a new run counts: a refused or invalid call, and a retry
+ * whose Idempotency-Key already admitted its run, cost nothing.
+ *
+ * BOUNDS. The body is at most 1 MiB and `arguments` one JSON object
+ * within the input-entry bound. The call waits at most 60 seconds;
+ * past that it answers 504 with the still-running `task_id`.
+ *
+ * IDEMPOTENCY. `Idempotency-Key` is REQUIRED (400
+ * `idempotency_key_required` without it): one key per intended call,
+ * repeated on every retry of it, scoped to the caller and the toolkit.
+ * A retry with the same key and body never runs the tool again: it
+ * answers the run's result once it has one, or 409
+ * `remote_toolkit_in_progress` (with `task_id`) while the run the first
+ * attempt admitted is still going. After a 504, replay with the SAME
+ * key; a new key is a new call. The same key with a different body is
+ * 409 `idempotency_conflict`.
+ *
+ * A TOOL THE WORKER CANNOT RUN answers 422 `remote_tool_unsupported`
+ * with a reason, never a hang: a toolkit type or tool this deployment's
+ * worker does not support is refused before anything runs, and a tool
+ * the worker refuses (the Rust worker runs only read-only, non-sensitive
+ * tools in this path) answers `reason: worker_refused`. A deployment
+ * with no toolkit worker answers 501 `remote_toolkit_unavailable`.
+ * @summary Run one tool of one saved toolkit on a cloud worker
+ */
+export const executeRemoteToolkitTool = async (
+  projectId: string,
+  toolkitId: number,
+  remoteToolkitCallRequest: RemoteToolkitCallRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<executeRemoteToolkitToolResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<executeRemoteToolkitToolResponse>(
+    getExecuteRemoteToolkitToolUrl(projectId, toolkitId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(remoteToolkitCallRequest),
+    },
+  );
+};
+
+export const getExecuteRemoteToolkitToolQueryKey = (
+  projectId: string,
+  toolkitId: number,
+  remoteToolkitCallRequest?: RemoteToolkitCallRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/remote_toolkit_call/prompt_lib/${projectId}/${toolkitId}`,
+    remoteToolkitCallRequest,
+  ] as const;
+};
+
+export const getExecuteRemoteToolkitToolQueryOptions = <
+  TData = Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | RemoteToolkitCallResult
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  toolkitId: number,
+  remoteToolkitCallRequest: RemoteToolkitCallRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getExecuteRemoteToolkitToolQueryKey(
+      projectId,
+      toolkitId,
+      remoteToolkitCallRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof executeRemoteToolkitTool>>
+  > = ({ signal }) =>
+    executeRemoteToolkitTool(projectId, toolkitId, remoteToolkitCallRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      toolkitId !== null &&
+      toolkitId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ExecuteRemoteToolkitToolQueryResult = NonNullable<
+  Awaited<ReturnType<typeof executeRemoteToolkitTool>>
+>;
+export type ExecuteRemoteToolkitToolQueryError =
+  | DesktopOperationError
+  | InvalidClientVersionError
+  | N401Response
+  | RemoteToolkitCallResult
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useExecuteRemoteToolkitTool<
+  TData = Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | RemoteToolkitCallResult
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  toolkitId: number,
+  remoteToolkitCallRequest: RemoteToolkitCallRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+          TError,
+          Awaited<ReturnType<typeof executeRemoteToolkitTool>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExecuteRemoteToolkitTool<
+  TData = Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | RemoteToolkitCallResult
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  toolkitId: number,
+  remoteToolkitCallRequest: RemoteToolkitCallRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+          TError,
+          Awaited<ReturnType<typeof executeRemoteToolkitTool>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExecuteRemoteToolkitTool<
+  TData = Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | RemoteToolkitCallResult
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  toolkitId: number,
+  remoteToolkitCallRequest: RemoteToolkitCallRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Run one tool of one saved toolkit on a cloud worker
+ */
+
+export function useExecuteRemoteToolkitTool<
+  TData = Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | RemoteToolkitCallResult
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  toolkitId: number,
+  remoteToolkitCallRequest: RemoteToolkitCallRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof executeRemoteToolkitTool>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getExecuteRemoteToolkitToolQueryOptions(
+    projectId,
+    toolkitId,
+    remoteToolkitCallRequest,
     options,
   );
 
@@ -1932,6 +2386,21 @@ export const getListToolkitInstancesUrl = (
  * documented [1,1000]/default 20; offset<0 resets to 0 (:521-523).
  * The caller must be a member of {project_id} (or a super-admin), and a
  * repository failure is returned as a safe 500 error.
+ *
+ * `mcp` and `query` filter on the server
+ * (internal/api/v2/toolkits/handler.go, parseInstanceListFilter and
+ * instanceWhere), so a picker can page MCP servers and plain toolkits
+ * separately. `total` is the filtered total. Rows are ordered by name,
+ * then id, so offset paging reaches every row once. A bad `mcp` or an
+ * over-long `query` returns 400 `{"error": ...}`. That body has no
+ * `error_description`, so it is not the InvalidClientVersionError the 400
+ * entry below names: the client-contract lock allows no change to that
+ * entry within this major.
+ *
+ * When `mcp` is present (true or false) the list is the typed listing:
+ * it also leaves out the `application` rows (agent-as-tool links), as the
+ * legacy toolkits_listing does. When `mcp` is absent the raw listing is
+ * unchanged and still holds them.
  * @summary List toolkit (tool) instances for a project
  */
 export const listToolkitInstances = async (

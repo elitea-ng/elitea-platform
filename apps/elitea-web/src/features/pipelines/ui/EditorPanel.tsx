@@ -32,6 +32,7 @@ import { combineSx } from '@/shared/ui/lib/combineSx';
 import type { AiAssistantLlmSettings } from '../api/aiAssistantPredict';
 import { useIsPipelineYamlCodeDirty, isChatPath } from '../lib/hooks/useIsPipelineYamlCodeDirty';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
+import { usePipelineYamlSerialization } from '../lib/hooks/usePipelineYamlSerialization';
 import { parseYaml } from '../lib/flow-editor/helpers/parsePipeline.helpers';
 import type { RunSocketEvent } from '../lib/flow-editor/helpers/parseRunsByEvent.support';
 import type { FlowEdge, FlowNode, SetYamlJsonObject } from '../lib/flow-editor/reactFlowTypes';
@@ -41,6 +42,7 @@ import { AddNodeMenu } from './AddNodeMenu';
 import type { PipelineNodeType } from '../lib/flow-editor/constants/flowEditor.constants';
 import type { FlowEditorHandle } from './FlowEditor';
 import type { PipelineToolEntry } from './select/pipelineToolEntry.types';
+import { PipelineYamlSerializationAlert } from './PipelineYamlSerializationAlert';
 import { YamlCodeEditor } from './YamlCodeEditor';
 import type { PipelineEditorModeValue } from './FlowWrapper';
 
@@ -72,23 +74,15 @@ const FlowWrapperLazy = lazy(() => import('./FlowWrapper').then((m) => ({ defaul
  *    — the baseline's OWN `AddNodeMenu.jsx` already used plain MUI
  *    `Tooltip` for the identical "add node" affordance; no behavioural
  *    difference beyond default MUI tooltip chrome.
- *  - `ChunkHelpers.lazyWithRetry` (not ported anywhere in this worktree,
- *    verified: `grep -rl lazyWithRetry src` — zero hits) -> plain React
- *    `lazy()`. The retry-on-chunk-load-failure behaviour is dropped, but
- *    this file's own `ErrorBoundary` fallback already offers a "Reload the
- *    page" recovery action for exactly that failure mode.
- *  - `react-error-boundary` (not a dependency of this app — verified:
- *    `grep -n react-error-boundary package.json`, zero hits) -> a small
- *    local class-component error boundary, React's own documented pattern
- *    for exactly this (no third-party API surface beyond what React itself
- *    provides).
+ *  - `ChunkHelpers.lazyWithRetry` (not ported) -> plain React `lazy()`; the
+ *    error boundary's "Reload the page" action covers chunk-load failures.
+ *  - `react-error-boundary` (not a dependency of this app) -> a small local
+ *    class-component error boundary.
  *  - `data-tour={PIPELINE_TOUR_TARGET_IDS.workspace}` (baseline:
  *    `features/interactive-tours`) — dropped, same treatment this batch's
  *    other pipelines files already give that out-of-scope domain.
- *  - `useToast` — no toast/snackbar primitive exists yet in this app (see
- *    `usePipelineChatSwitchVersion.ts`'s own doc comment for the established
- *    convention); the "code copied" confirmation toast is dropped, the copy
- *    action itself is real.
+ *  - `useToast` — no toast primitive exists yet; the "code copied" toast is
+ *    dropped, the copy action itself is real.
  */
 export interface EditorPanelHandle {
   readonly onRcvAgentEvent: (event: unknown) => void;
@@ -231,9 +225,20 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const clearResetFlag = usePipelineYamlStore((state) => state.clearResetFlag);
   const setLayoutVersion = usePipelineYamlStore((state) => state.setLayoutVersion);
 
+  const { serializationError, serializeDocument, reportSerializationError } = usePipelineYamlSerialization(
+    yamlCode,
+    yamlJsonObject,
+  );
+
   const setYamlJsonObject = useCallback<SetYamlJsonObject>(
-    (next, options) => editPipelineYamlDocument(next, options),
-    [editPipelineYamlDocument],
+    (next, options) => {
+      try {
+        editPipelineYamlDocument(next, options);
+      } catch (caught) {
+        reportSerializationError(caught);
+      }
+    },
+    [editPipelineYamlDocument, reportSerializationError],
   );
 
   const onParseCodeToJson = useCallback(
@@ -298,10 +303,14 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
         const code = currentCode === storedCode.replace(/\r\n?/g, '\n') ? storedCode : currentCode;
         storeSetYamlCode(code);
         onParseCodeToJson(code);
+      } else {
+        const yamlString = serializeDocument(yamlJsonObject, { originalYaml: yamlCode });
+        if (yamlString !== undefined && Object.keys(yamlJsonObject).length && yamlString !== yamlCode)
+          storeSetYamlCode(yamlString);
       }
       setMode(newMode as PipelineEditorModeValue);
     },
-    [mode, onParseCodeToJson, storeSetYamlCode],
+    [mode, onParseCodeToJson, serializeDocument, storeSetYamlCode, yamlJsonObject, yamlCode],
   );
 
   const onAddNode = useCallback((type: PipelineNodeType) => {
@@ -311,6 +320,12 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const onCopy = useCallback(() => {
     void handleCopy(yamlCode);
   }, [yamlCode]);
+  useEffect(() => {
+    const nodes = (yamlJsonObject as { readonly nodes?: readonly { readonly decision?: unknown }[] }).nodes;
+    const yamlString = nodes?.find((node) => node.decision) ? serializeDocument(yamlJsonObject, { originalYaml: yamlCode }) : undefined;
+    if (yamlString !== undefined) onParseCodeToJson(yamlString);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [yamlJsonObject]);
 
   const initialNodes: readonly FlowNode[] = useMemo(() => parseYaml(yamlJsonObject).nodes as unknown as readonly FlowNode[], [yamlJsonObject]);
   const initialEdges: readonly FlowEdge[] = useMemo(() => parseYaml(yamlJsonObject).edges as unknown as readonly FlowEdge[], [yamlJsonObject]);
@@ -346,6 +361,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
           )}
         </Box>
       </Box>
+      <PipelineYamlSerializationAlert error={serializationError} />
       <Box sx={editorContainerSx}>
         <FlowEditorErrorBoundary display={mode}>
           <Suspense fallback={<Box sx={{ flex: 1 }}>Preparing the flow editor...</Box>}>

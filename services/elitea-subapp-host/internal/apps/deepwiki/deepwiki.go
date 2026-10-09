@@ -13,15 +13,16 @@
 //	chat_history              sent on every wiki-chat turn since the port,
 //	                          and never declared by the legacy plugin
 //
-// It is generated, not hand-edited: services/elitea-deepwiki/tools/
+// It is generated, not hand-edited: conformance/provider/tools/
 // build_descriptor_v1.py derives it from legacy-v0 and writes both this
-// copy and the fixture, so the two cannot disagree. legacy-v0 stays in the
+// copy and the fixture, so the two cannot disagree (its --check runs in
+// conformance/provider/tests/test_descriptor_revision.py). legacy-v0 stays in the
 // fixtures as the record of what the legacy plugin actually declared.
 //
-// The engine stays where it is (services/elitea-deepwiki, Python); reaching
-// it from this host is ADR-0023 stage H2. Until then a host serving this
-// application runs the unavailable runner, or the echo runner on a stack
-// that needs the invoke → poll → cancel path with no engine.
+// The engine is the Rust sidecar (services/elitea-deepwiki-engine, ADR-0026),
+// reached over a Unix socket (ADR-0023 H2) by the native runner. A host with
+// no engine runs the unavailable runner, the fixture runner, or the echo
+// runner on a stack that needs the invoke → poll → cancel path only.
 package deepwiki
 
 import (

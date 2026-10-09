@@ -41,18 +41,29 @@
  */
 import * as zod from "zod";
 
+export const feedbackItemRatingMin = 0;
+export const feedbackItemRatingMax = 5;
+
 export const FeedbackItem = zod
   .object({
-    id: zod.string(),
-    entity_name: zod.string(),
-    entity_id: zod.string(),
-    user_id: zod.string(),
-    rating: zod.int(),
-    comment: zod.string(),
-    created_at: zod.iso.datetime({ offset: true }),
+    id: zod.int(),
+    user_id: zod.int(),
+    project_id: zod
+      .int()
+      .nullable()
+      .describe(
+        "The project the feedback was submitted in. Null on rows written before the column existed; those are listed to their author only.\n",
+      ),
+    referrer: zod.string().nullable(),
+    description: zod.string(),
+    rating: zod.int().min(feedbackItemRatingMin).max(feedbackItemRatingMax),
+    user_agent: zod.string().nullable(),
+    created_at: zod
+      .string()
+      .describe("ISO-8601 timestamp without an offset, as stored."),
   })
   .describe(
-    "NOTE(W2): ListFeedbacks row (internal/api/v2/social/handler.go:347-379, fields at :371-374) querying `p_{project_id}.social_feedbacks` — matches the `social_feedbacks` table shape in internal/infra/db/migrations/001_initial.sql:337-347 exactly.\n",
+    "One row of centry.social_feedbacks (internal/infra/db/repos/social_feedbacks.go, FeedbackRow).\n",
   );
 
 export type FeedbackItem = zod.input<typeof FeedbackItem>;

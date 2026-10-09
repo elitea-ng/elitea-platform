@@ -112,12 +112,19 @@ const BrokenMermaidPage = "# Request flow\n\nThe diagram below is deliberately b
 
 // WikiIDFor is the canonical {owner}--{repo}--{branch} the engine derives.
 //
-// An ARTIFACT FOLDER is named by DisplayRepositoryFor, which drops the
-// `artifact://` scheme first. Feeding the raw string in would turn `//` into
-// four dashes and make the wiki id — which is also an object-key prefix and
-// the string the browser matches a manifest on — unreadable.
+// An ARTIFACT FOLDER has ONE wiki id, the one its generation files it under:
+// ArtifactWikiID, `artifact--{bucket}--{prefix segments}--{branch}`. Every
+// reader (the fixture runner, the context paths, the browser, the engine's
+// own ask) derives that id. A git repository is unchanged.
 func WikiIDFor(repoConfig map[string]any, branch string) string {
-	repository := DisplayRepositoryFor(repoConfig)
+	repository := str(repoConfig["repository"])
+	if repository == "" {
+		repository = str(object(repoConfig["provider_config"])["repository"])
+	}
+	if source, ok := ParseArtifactRepository(repository); ok {
+		return ArtifactWikiID(source, branch)
+	}
+	repository = DisplayRepositoryFor(repoConfig)
 	if repository == "" {
 		repository = "fixture/repository"
 	}
@@ -306,7 +313,7 @@ func fixtureDeepResearch(arguments map[string]any) map[string]any {
 // its progress by step, with the egress policy and the callback CA from
 // the host's settings.
 func NewFixtureRunner(settings spi.Settings, step time.Duration) *Runner {
-	transport := ArtifactClientFrom(settings.TLSCAFile)
+	transport := ArtifactClientFrom(settings.CallbackCA())
 	canned := FixtureTools(step)
 	tools := map[string]Tool{}
 	for name, tool := range canned {

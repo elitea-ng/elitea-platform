@@ -18,13 +18,31 @@
 #![allow(dead_code)]
 
 use elitea_deepwiki_engine::storage::rows::IndexNode;
-use elitea_deepwiki_engine::storage::{connect_options, migrate};
+use elitea_deepwiki_engine::storage::{ProjectScope, WikiKey, connect_options, migrate};
 use serde_json::Value;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::path::PathBuf;
 
 pub const DSN_ENV: &str = "DEEPWIKI_TEST_DSN";
 pub const REQUIRE_ENV: &str = "DEEPWIKI_REQUIRE_POSTGRES";
+
+/// The project a single-project test publishes into.
+pub const PROJECT: i32 = 1;
+
+/// A project scope (the id must be positive).
+pub fn project(id: i32) -> ProjectScope {
+    ProjectScope::new(id).expect("a positive project id")
+}
+
+/// `wiki_id` of the default test project ([`PROJECT`]).
+pub fn key(wiki_id: &str) -> WikiKey {
+    WikiKey::new(project(PROJECT), wiki_id)
+}
+
+/// `wiki_id` of project `id`.
+pub fn key_in(id: i32, wiki_id: &str) -> WikiKey {
+    WikiKey::new(project(id), wiki_id)
+}
 
 /// The DSN, or `None` to skip. Panics when the database is required.
 pub fn dsn() -> Option<String> {
@@ -46,6 +64,13 @@ pub fn dsn() -> Option<String> {
 
 /// A freshly created and migrated database for one test.
 pub async fn fresh_database(name: &str) -> Option<PgPool> {
+    let pool = empty_database(name).await?;
+    migrate::apply_all(&pool).await.expect("migrate");
+    Some(pool)
+}
+
+/// A freshly created database with no migration applied.
+pub async fn empty_database(name: &str) -> Option<PgPool> {
     let dsn = dsn()?;
     let database = format!("dwt_{name}");
     assert!(
@@ -77,7 +102,6 @@ pub async fn fresh_database(name: &str) -> Option<PgPool> {
         .connect_with(options.database(&database))
         .await
         .expect("connect to the test database");
-    migrate::apply_all(&pool).await.expect("migrate");
     Some(pool)
 }
 

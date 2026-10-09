@@ -10,7 +10,9 @@
 //! 1. the arguments ([`arguments`]) and the environment flags, refused up
 //!    front when invalid;
 //! 2. ingest: the clone target from `repo_config`, the git allowlist again,
-//!    the shallow clone into this job's scratch directory;
+//!    the shallow clone into this job's scratch directory; or, for an
+//!    artifact-folder source, the folder listed and downloaded there from
+//!    the platform's object API ([`ingest::artifact`]);
 //! 3. Phase 1 + 1c: discovery, the eight parsers, the code graph;
 //! 4. a build in the `deepwiki_build` space: the graph staged (`COPY`), then
 //!    every node with text embedded and its vector staged ([`embed`]);
@@ -47,9 +49,10 @@ use crate::graph::clustering::{
 use crate::graph::flags::Phase1cFlags;
 use crate::graph::topology::{self, CalibrationProfile, Phase2Config};
 use crate::graph::{CodeGraph, builder, discover, node_row};
-use crate::ingest::{self, ClonedRepository};
+use crate::ingest::{self, Admitted, ClonedRepository};
 use crate::llm::{ChatClient, EmbeddingClient, EmbeddingOptions, Transport, TransportSettings};
 use crate::runner::Context;
+use crate::storage::WikiKey;
 use crate::storage::build::{Build, BuildSpace, WikiRecord};
 use crate::storage::topology::PgTopologyStore;
 use crate::storage::{self, StorageError};
@@ -278,6 +281,8 @@ impl Pipeline<'_> {
             request.provider_label()
         ));
         let transport = Transport::new(&TransportSettings::from(&settings.model))?;
+        // An artifact folder is read over the same TLS stack.
+        let objects = transport.clone();
         let chat = ChatClient::new(transport.clone(), request.model.clone());
         let embeddings = EmbeddingClient::new(
             transport,
@@ -288,13 +293,17 @@ impl Pipeline<'_> {
         context.thinking(format!("[worker] Embeddings: {}", request.embedding_model));
 
         // Ingest: the derived host is checked against the allowlist BEFORE
-        // the credential is used.
-        let admitted = ingest::admit(&request.repo_config, &settings.ingest.git_allowlist)?;
-        let provider = admitted.target().provider().value().to_owned();
-        let repository = admitted.target().repo_identifier().to_owned();
+        // the credential is used. An artifact folder has no git host.
+        let admitted = ingest::admit_source(&request.repo_config, &settings.ingest.git_allowlist)?;
+        let provider = admitted.provider().to_owned();
+        let repository = admitted.repository().to_owned();
+        let folder = match &admitted {
+            Admitted::Artifact(target) => Some(target.source().url()),
+            Admitted::Git(_) => None,
+        };
         context.thinking(format!(
             "[worker] Clone config built: {provider} - {repository} @ {}",
-            admitted.target().branch()
+            admitted.branch()
         ));
         context.thinking(format!(
             "[worker] Starting wiki generation: {}",
@@ -302,9 +311,16 @@ impl Pipeline<'_> {
         ));
         context.thinking(format!(
             "Getting local repository path for {repository} (branch: {})",
-            admitted.target().branch()
+            admitted.branch()
         ));
-        let cloned = self.clone_repository(admitted).await?;
+        let cloned = self.fetch_source(admitted, &objects).await?;
+        drop(objects);
+        if let Some(folder) = folder {
+            context.thinking(format!(
+                "Materialised {folder}: {} objects, {} bytes",
+                cloned.tree.files, cloned.tree.bytes
+            ));
+        }
         let commit = cloned.identity.commit().to_owned();
         let branch = cloned.identity.branch().to_owned();
         let repo_identifier = build_repo_identifier(&repository, &branch, Some(&commit));
@@ -336,7 +352,7 @@ impl Pipeline<'_> {
             space = space.with_boot_id(boot_id);
         }
         let build = space
-            .begin(&wiki_id)
+            .begin(&WikiKey::new(request.project, wiki_id.clone()))
             .await
             .map_err(|e| storage_failure("opening a build", &e))?;
         (self.job.on_build)(build.build_id());
@@ -550,10 +566,12 @@ impl Pipeline<'_> {
         Ok(Value::Object(result))
     }
 
-    /// The clone, stopped by the invocation's stop.
-    async fn clone_repository(
+    /// The clone, or the folder's download, stopped by the invocation's
+    /// stop.
+    async fn fetch_source(
         &self,
-        admitted: ingest::egress::AdmittedTarget,
+        admitted: Admitted,
+        objects: &Transport,
     ) -> Result<ClonedRepository, EngineError> {
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = self.context.stop_signal();
@@ -562,13 +580,33 @@ impl Pipeline<'_> {
             stop.stopped().await;
             flag.store(true, Ordering::Release);
         });
-        let outcome = ingest::ingest_admitted(
-            admitted,
-            self.settings.ingest.limits,
-            self.job.scratch,
-            cancel,
-        )
-        .await;
+        let outcome = match admitted {
+            Admitted::Artifact(target) => match self.request.platform_objects.as_ref() {
+                Some(platform) => {
+                    ingest::ingest_artifact(
+                        &target,
+                        platform,
+                        objects.http_client(),
+                        &self.settings.ingest,
+                        self.job.scratch,
+                        cancel,
+                    )
+                    .await
+                }
+                None => Err(value_error(
+                    "an artifact source needs the platform artifact credentials, and this invocation has none",
+                )),
+            },
+            Admitted::Git(admitted) => {
+                ingest::ingest_admitted(
+                    admitted,
+                    self.settings.ingest.limits,
+                    self.job.scratch,
+                    cancel,
+                )
+                .await
+            }
+        };
         watcher.abort();
         // A stop during the clone is the stop line, whatever the clone said.
         self.context.checkpoint()?;

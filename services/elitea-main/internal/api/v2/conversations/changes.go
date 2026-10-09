@@ -20,15 +20,30 @@ import (
 // shared by the legacy page and the delta so a delta row is byte-identical to
 // the legacy row. withSync appends c.sync_at (the cursor position, never a
 // wire field). The caller appends WHERE / ORDER BY / LIMIT.
-func conversationSelectSQL(s string, withSync bool) string {
+//
+// `is_pinned` (client contract 1.4) is whether the project holds a
+// conversation pin for the row (centry.social_pins, one shared pin per
+// project and entity, the pin the web rail sets). Only the flag is read: the
+// pin's user_id (its last pinner) never reaches the row. A pin or unpin
+// stamps the conversation's sync_at (repos.CurrentSocialPinsRepository), so
+// the delta re-delivers the row with the new flag. projectID is the path's
+// project id, already validated as a tenant id by the caller; it is written
+// as an integer literal so the projection binds no argument of its own.
+func conversationSelectSQL(s, projectID string, withSync bool) string {
 	sync := ""
 	if withSync {
 		sync = ", c.sync_at"
 	}
+	project, err := strconv.ParseInt(projectID, 10, 32)
+	if err != nil {
+		project = -1 // no project has this id, so no row reads as pinned
+	}
 	return fmt.Sprintf(`
 		SELECT c.id, c.name, c.created_at, COALESCE(c.updated_at, c.created_at), c.meta,
-			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id)%s
-		FROM %s.chat_conversations c`, s, sync, s)
+			(SELECT COUNT(*) FROM %[1]s.chat_message_group mg WHERE mg.conversation_id = c.id),
+			EXISTS (SELECT 1 FROM centry.social_pins sp
+			        WHERE sp.entity = 'conversation' AND sp.project_id = %[3]d AND sp.entity_id = c.id)%[2]s
+		FROM %[1]s.chat_conversations c`, s, sync, project)
 }
 
 // scanConversationRow reads one conversationSelectSQL row into the wire map.
@@ -38,8 +53,9 @@ func scanConversationRow(rows pgx.Rows, withSync bool) (map[string]any, changesy
 	var createdAt, updatedAt time.Time
 	var metaBytes []byte
 	var msgCount int
+	var pinned bool
 	var syncAt time.Time
-	dest := []any{&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount}
+	dest := []any{&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount, &pinned}
 	if withSync {
 		dest = append(dest, &syncAt)
 	}
@@ -63,6 +79,7 @@ func scanConversationRow(rows pgx.Rows, withSync bool) (map[string]any, changesy
 		"meta":                 meta,
 		"duration":             -1,
 		"message_groups_count": msgCount,
+		"is_pinned":            pinned,
 	}
 	return row, changesync.Position{At: syncAt, ID: int64(id)}, nil
 }
@@ -173,7 +190,7 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 	rowsStart := cursor.RowsStart()
 	n := len(q.args)
 	rowArgs := append(append([]any{}, q.args...), rowsStart.At, rowsStart.ID, limit+1)
-	rows, err := pool.Query(ctx, conversationSelectSQL(s, true)+fmt.Sprintf(`
+	rows, err := pool.Query(ctx, conversationSelectSQL(s, q.projectID, true)+fmt.Sprintf(`
 		WHERE %s AND (c.sync_at, c.id) > ($%d::timestamptz, $%d::bigint)
 		ORDER BY c.sync_at, c.id
 		LIMIT $%d`, where, n+1, n+2, n+3), rowArgs...)

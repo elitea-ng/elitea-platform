@@ -1,0 +1,127 @@
+name: CI — Inventory native engine
+
+# ADR-0027: the Rust-native Inventory engine behind the engine sidecar socket.
+#
+# One job, on purpose: the repository's Actions plan runs 20 jobs at a time,
+# and every check here needs the same compiled dependency graph.
+#
+#   * fmt, Clippy (all + pedantic, deny), rustdoc with warnings denied;
+#   * the crate's tests: the graph against the Python engine's own
+#     (tests/fixtures/graph_store, written by the Python KnowledgeGraph) and
+#     through a REAL PostgreSQL with pgvector (the `postgres` service; the store's
+#     migrations, save/load, tenancy). INVENTORY_REQUIRE_POSTGRES=1 turns
+#     their "no database → skip" into a failure;
+#   * the fixture runner against every Inventory golden
+#     (conformance/provider/fixtures/inventory — the files the Go and Python
+#     fixture runners are held to), the tool table against the descriptor
+#     the host serves, and the engine over a REAL Unix socket;
+#   * the release binary, and then the Go sub-application host's own tests
+#     against it (internal/apps/inventory/run, native_engine_test.go): the
+#     host's sidecar client, composition and upload over the Rust engine,
+#     answering what the host's own fixture runner answers.
+#     ELITEA_REQUIRE_NATIVE_ENGINE=1 turns their "no binary → skip" into a
+#     failure here. ci-go.yml builds no Rust; it declares the skip.
+
+on:
+  pull_request:
+    paths:
+      - "services/elitea-inventory-engine/**"
+      - "libs/rust/**"
+      - "services/elitea-subapp-host/internal/engine/**"
+      - "services/elitea-subapp-host/internal/apps/inventory/**"
+      - "conformance/provider/fixtures/inventory/**"
+      - ".github/workflows/ci-inventory-engine.yml"
+      - "scripts/go/declared-skips.txt"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/elitea-inventory-engine/**"
+      - "libs/rust/**"
+      - "services/elitea-subapp-host/internal/engine/**"
+      - "services/elitea-subapp-host/internal/apps/inventory/**"
+      - "conformance/provider/fixtures/inventory/**"
+      - ".github/workflows/ci-inventory-engine.yml"
+      - "scripts/go/declared-skips.txt"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine:
+    name: Engine — lint, test, and the Go host against the binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: services/elitea-inventory-engine
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.5-pg16-trixie
+        env:
+          POSTGRES_USER: inventory
+          POSTGRES_PASSWORD: inventory
+          POSTGRES_DB: inventory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inventory"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show pinned toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      # Read everywhere, write on main only: a pull request's target
+      # directory duplicated per branch would crowd the 10 GB Actions cache.
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: services/elitea-inventory-engine
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps --all-features
+
+      - name: Run the crate's tests
+        env:
+          INVENTORY_TEST_DSN: postgresql://inventory:inventory@127.0.0.1:5432/inventory
+          INVENTORY_REQUIRE_POSTGRES: "1"
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Build the release binary
+        run: cargo build --locked --release
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache-dependency-path: services/elitea-subapp-host/go.sum
+
+      - name: Run the Go host's sidecar tests against the binary
+        working-directory: services/elitea-subapp-host
+        env:
+          ELITEA_INVENTORY_NATIVE_ENGINE_BIN: ${{ github.workspace }}/services/elitea-inventory-engine/target/release/elitea-inventory-engine
+          ELITEA_REQUIRE_NATIVE_ENGINE: "1"
+        run: go test -race -count=1 -run 'NativeEngine' -v ./internal/apps/inventory/run

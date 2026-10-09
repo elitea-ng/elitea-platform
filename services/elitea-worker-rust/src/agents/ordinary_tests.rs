@@ -44,6 +44,9 @@ const TOKEN: &str = "ephemeral-ordinary-fixture-token";
 #[path = "ordinary_scope_tests.rs"]
 mod model_scope_tests;
 
+#[path = "image_turn_tests.rs"]
+mod image_turn_tests;
+
 fn empty_tool_policy() -> Arc<ToolAdmissionPolicy> {
     Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("empty toolkit policy"))
 }
@@ -2107,8 +2110,8 @@ async fn saved_agent_is_resolved_once_and_runs_as_an_adk_agent_tool() {
     assert_eq!(
         *context_paths.lock().expect("runtime-context paths"),
         [
-            "/executions/execution%2Fone/generations/2/runtime-context/elitea-client-token",
-            "/executions/execution%2Fone/generations/2/runtime-context/applications/31/versions/41",
+            "/executions/execution-one/generations/2/runtime-context/elitea-client-token",
+            "/executions/execution-one/generations/2/runtime-context/applications/31/versions/41",
         ]
     );
     let _ = invocation
@@ -4082,7 +4085,7 @@ async fn ordinary_model_checkpoint_proof(with_instructions: bool) {
         .expect("checkpoint inspection");
     assert_eq!(context_calls.load(Ordering::Acquire), 1);
     let (claim, control) =
-        crate::protocol::control::test_checkpoint_authorizer("execution/one", 3, evidence.digest());
+        crate::protocol::control::test_checkpoint_authorizer("execution-one", 3, evidence.digest());
     let authorization = claim
         .authorize(&control, evidence)
         .await

@@ -123,8 +123,8 @@ describe('framesFromChatPoll', () => {
  *
  * Every body below is the browser hop of
  * `conformance/provider/fixtures/deepwiki/stream/token_events.json`, which the
- * Python engine and the Go host answer to as well
- * (`services/elitea-deepwiki/tests/unit/test_answer_tokens.py`,
+ * engine and the Go host answer to as well
+ * (`services/elitea-deepwiki-engine/tests/conformance.rs`,
  * `services/elitea-subapp-host/internal/apps/deepwiki/run/stream_test.go`).
  */
 describe('framesFromChatPoll: answer tokens', () => {

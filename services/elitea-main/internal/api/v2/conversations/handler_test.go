@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,11 +18,13 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // mockRepo implements conversations.Repository for testing.
 type mockRepo struct {
 	authorizeFn               func(context.Context, string, string) error
+	authorizeWriteFn          func(ctx context.Context, projectID, kind, resourceID string) error
 	listFn                    func(ctx context.Context, projectID string, page, pageSize int) (conversations.ListResponse, error)
 	getFn                     func(ctx context.Context, projectID, conversationID string) (conversations.Conversation, error)
 	createFn                  func(ctx context.Context, projectID string, conv conversations.Conversation) (conversations.Conversation, error)
@@ -1243,6 +1246,123 @@ func TestUpdateCanvas_Error(t *testing.T) {
 	}
 }
 
+// A canvas WRITE is authorized with the participant rule, never the read rule
+// (AuthorizeChatResource), for both the create and the edit; the read keeps
+// the read rule. The Postgres half of this — a non-participant on a PUBLIC
+// conversation refused — is TestChatAuthorityCanvasWritesRequireParticipant.
+func TestCanvasWritesUseTheParticipantRuleAndReadsTheReadRule(t *testing.T) {
+	var writes []string
+	reads := 0
+	repo := &mockRepo{
+		authorizeFn: func(context.Context, string, string) error {
+			reads++
+			return nil
+		},
+		authorizeWriteFn: func(_ context.Context, _, kind, id string) error {
+			writes = append(writes, kind+":"+id)
+			return apierr.NotFound("chat resource not found")
+		},
+		createCanvasFn: func(context.Context, string, map[string]any) (map[string]any, error) {
+			t.Fatal("a refused create reached the repository")
+			return nil, nil
+		},
+		updateCanvasFn: func(context.Context, string, string, map[string]any) error {
+			t.Fatal("a refused edit reached the repository")
+			return nil
+		},
+		getCanvasFn: func(_ context.Context, _, canvasID string) (map[string]any, error) {
+			return map[string]any{"uuid": canvasID}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	for _, call := range []struct{ method, path, body string }{
+		{http.MethodPost, "/projects/proj-1/conversations/canvas", `{"message_group_id":7}`},
+		{http.MethodPut, "/projects/proj-1/conversations/canvas/canvas-1", `{"canvas_content":"x"}`},
+	} {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(call.method, call.path, bytes.NewBufferString(call.body)))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s %s: status %d, want 404", call.method, call.path, w.Code)
+		}
+	}
+	if !reflect.DeepEqual(writes, []string{"message:7", "canvas:canvas-1"}) {
+		t.Fatalf("write authority asked about %v", writes)
+	}
+	if reads != 0 {
+		t.Fatalf("a canvas write consulted the READ rule %d times", reads)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/projects/proj-1/conversations/canvas/canvas-1", nil))
+	if w.Code != http.StatusOK || reads != 1 {
+		t.Fatalf("canvas read: status %d, read-rule calls %d", w.Code, reads)
+	}
+}
+
+// An edit above MaxCanvasContentBytes is a 413 carrying a safe_message the
+// editor shows beside its save, and it never reaches the repository. One at
+// the cap is accepted.
+func TestUpdateCanvasRefusesOversizedContentWithASafeMessage(t *testing.T) {
+	stored := 0
+	repo := &mockRepo{
+		updateCanvasFn: func(context.Context, string, string, map[string]any) error {
+			stored++
+			return nil
+		},
+		getCanvasFn: func(_ context.Context, _, canvasID string) (map[string]any, error) {
+			return map[string]any{"uuid": canvasID}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	put := func(content string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"canvas_content": content})
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/projects/proj-1/conversations/canvas/canvas-1", bytes.NewReader(body)))
+		return w
+	}
+	w := put(strings.Repeat("a", conversations.MaxCanvasContentBytes+1))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized edit: status %d, want 413", w.Code)
+	}
+	var refusal map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&refusal); err != nil {
+		t.Fatal(err)
+	}
+	if refusal["code"] != "canvas_too_large" || !strings.Contains(fmt.Sprint(refusal["safe_message"]), "too large to save") ||
+		refusal["error"] != refusal["safe_message"] || refusal["limit_bytes"] != float64(conversations.MaxCanvasContentBytes) {
+		t.Fatalf("refusal body %v", refusal)
+	}
+	if stored != 0 {
+		t.Fatal("an oversized edit reached the repository")
+	}
+	if w := put(strings.Repeat("a", conversations.MaxCanvasContentBytes)); w.Code != http.StatusOK || stored != 1 {
+		t.Fatalf("an edit at the cap: status %d stored %d", w.Code, stored)
+	}
+	// A body past the decode bound is refused unread, with the same shape.
+	huge := `{"canvas_content":"` + strings.Repeat("a", 9*conversations.MaxCanvasContentBytes) + `"}`
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/projects/proj-1/conversations/canvas/canvas-1", strings.NewReader(huge)))
+	if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "canvas_too_large") {
+		t.Fatalf("oversized body: status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+// The repository's refusal of a create (whose text is a slice of a stored
+// message, so only the repository knows its size) reaches the caller as the
+// same 413.
+func TestCreateCanvasAnswersTheRepositorySizeRefusalAs413(t *testing.T) {
+	repo := &mockRepo{
+		createCanvasFn: func(context.Context, string, map[string]any) (map[string]any, error) {
+			return nil, conversations.CheckCanvasContent(strings.Repeat("a", conversations.MaxCanvasContentBytes+1))
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/canvas", bytes.NewBufferString(`{"message_group_id":7}`)))
+	if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "safe_message") {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // UpdateAttachmentStorage
 // ---------------------------------------------------------------------------
@@ -1904,6 +2024,13 @@ func (m *mockRepo) AuthorizeChatResource(ctx context.Context, projectID, resourc
 	return nil
 }
 
+func (m *mockRepo) AuthorizeChatWrite(ctx context.Context, projectID, resourceKind, resourceID string) error {
+	if m.authorizeWriteFn != nil {
+		return m.authorizeWriteFn(ctx, projectID, resourceKind, resourceID)
+	}
+	return nil
+}
+
 // TestAddParticipant_AnswersOnlyTheAddedRowsInRequestOrder pins the legacy
 // body: the rows of this request, in request order, once each. It is not the
 // whole conversation (F5).
@@ -1938,5 +2065,142 @@ func TestAddParticipant_AnswersOnlyTheAddedRowsInRequestOrder(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].ID != 30 || got[1].ID != 20 {
 		t.Fatalf("answer = %+v, want participants 30 then 20 only", got)
+	}
+}
+
+// TestUpdate_ValidatesTheName pins the rename half of client contract 1.4
+// (updateConversation): a `name` the body states must be a string that is not
+// blank after trimming, at most 256 characters and free of control
+// characters, and it is stored trimmed. A body that does not state `name`
+// (or states null) is a settings write and passes the repository no name.
+func TestUpdate_ValidatesTheName(t *testing.T) {
+	long := strings.Repeat("ж", conversations.MaxConversationNameLength)
+	appLimit := strings.Repeat("n", 256)
+	cases := []struct {
+		label    string
+		body     string
+		status   int
+		wantName string
+	}{
+		{"a number", `{"name": 123}`, http.StatusBadRequest, ""},
+		{"an object", `{"name": {"x": 1}}`, http.StatusBadRequest, ""},
+		{"empty", `{"name": ""}`, http.StatusBadRequest, ""},
+		{"blank", `{"name": "   \t "}`, http.StatusBadRequest, ""},
+		{"too long", `{"name": "` + long + `x"}`, http.StatusBadRequest, ""},
+		{"a newline", `{"name": "one\ntwo"}`, http.StatusBadRequest, ""},
+		{"a NUL", `{"name": "one\u0000two"}`, http.StatusBadRequest, ""},
+		{"padded", `{"name": "  Trip notes  "}`, http.StatusOK, "Trip notes"},
+		{"at the limit", `{"name": "` + long + `"}`, http.StatusOK, long},
+		// agent-zefir PR #63 caps its rename field at CONVERSATION_NAME_MAX =
+		// 256 and sends what it accepts; the server must take that name.
+		{"the app's 256 limit", `{"name": "` + appLimit + `"}`, http.StatusOK, appLimit},
+		{"null is absent", `{"name": null, "is_private": true}`, http.StatusOK, ""},
+		{"absent", `{"meta": {"k": 1}}`, http.StatusOK, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			called := false
+			var stored string
+			repo := &mockRepo{
+				getFn: func(_ context.Context, _, conversationID string) (conversations.Conversation, error) {
+					return conversations.Conversation{ID: conversationID, Name: "Old title"}, nil
+				},
+				updateFn: func(_ context.Context, _, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
+					called = true
+					stored = conv.Name
+					conv.ID = conversationID
+					return conv, nil
+				},
+			}
+			router := newRouter(conversations.NewHandler(repo))
+			req := httptest.NewRequest(http.MethodPut, "/projects/1/conversations/5", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tc.status, w.Body.String())
+			}
+			if tc.status != http.StatusOK {
+				if called {
+					t.Fatal("a refused name reached the repository")
+				}
+				var body map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["error"] == nil {
+					t.Fatalf("400 body = %s, want the JSON {error} shape", w.Body.String())
+				}
+				return
+			}
+			if stored != tc.wantName {
+				t.Fatalf("stored name = %q, want %q", stored, tc.wantName)
+			}
+		})
+	}
+}
+
+// TestUpdate_EchoedStoredNameIsNotValidated is the regression for review F1
+// on PR #1139. Create stores any string as the name (a first message with a
+// newline, a name past the rename limit, repeated "(copy)"), and the web's
+// Make public / Make private PUTs `{name: <stored name>, is_private}`. A name
+// identical to the stored one is not a rename, so the rename rules must not
+// refuse it: the privacy change is written and the name is left alone.
+func TestUpdate_EchoedStoredNameIsNotValidated(t *testing.T) {
+	cases := map[string]string{
+		"a newline":      "Hi\nplease summarise",
+		"too long":       strings.Repeat("n", conversations.MaxConversationNameLength+40),
+		"blank":          "   ",
+		"a vertical tab": "one\vtwo",
+	}
+	for label, storedName := range cases {
+		t.Run(label, func(t *testing.T) {
+			var got *conversations.Conversation
+			repo := &mockRepo{
+				getFn: func(_ context.Context, _, conversationID string) (conversations.Conversation, error) {
+					return conversations.Conversation{ID: conversationID, Name: storedName}, nil
+				},
+				updateFn: func(_ context.Context, _, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
+					got = &conv
+					conv.ID = conversationID
+					return conv, nil
+				},
+			}
+			router := newRouter(conversations.NewHandler(repo))
+			body, _ := json.Marshal(map[string]any{"name": storedName, "is_private": false})
+			req := httptest.NewRequest(http.MethodPut, "/projects/7/conversations/5", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+			}
+			if got == nil {
+				t.Fatal("the privacy change never reached the repository")
+			}
+			if got.Name != "" {
+				t.Fatalf("repository got name %q, want no rename", got.Name)
+			}
+			if got.IsPrivate == nil || *got.IsPrivate {
+				t.Fatalf("is_private = %v, want false written", got.IsPrivate)
+			}
+		})
+	}
+
+	// A different invalid name is still refused, even though the stored
+	// name is itself invalid.
+	repo := &mockRepo{
+		getFn: func(_ context.Context, _, conversationID string) (conversations.Conversation, error) {
+			return conversations.Conversation{ID: conversationID, Name: "a\nb"}, nil
+		},
+		updateFn: func(_ context.Context, _, _ string, _ conversations.Conversation) (conversations.Conversation, error) {
+			t.Fatal("a changed invalid name reached the repository")
+			return conversations.Conversation{}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	req := httptest.NewRequest(http.MethodPut, "/projects/7/conversations/5", strings.NewReader(`{"name": "a\nc"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("changed invalid name: status = %d, want 400", w.Code)
 	}
 }

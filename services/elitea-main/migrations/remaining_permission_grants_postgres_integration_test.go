@@ -157,7 +157,7 @@ var (
 	}
 
 	// shared/0080_social_permissions.sql, and shared/0083 for the two avatar
-	// strings.
+	// strings. `.list` comes from shared/0158 with the same split as `.create`.
 	//
 	// The matrix gives `models.social.avatar.get` to admin alone, and has no
 	// entry for `models.social.avatar.update`; 0080 mapped the second onto
@@ -170,6 +170,7 @@ var (
 	socialGrants = []surfaceGrant{
 		{"models.social.authors.get", []string{"admin", "editor", "viewer"}},
 		{"models.social.feedbacks.create", []string{"admin", "editor", "viewer"}},
+		{"models.social.feedbacks.list", []string{"admin", "editor", "viewer"}},
 		{"models.social.avatar.get", []string{"admin", "editor", "viewer"}},
 		{"models.social.avatar.update", []string{"admin", "editor", "viewer"}},
 	}
@@ -236,6 +237,9 @@ var defaultModeSurfaces = map[string][]surfaceGrant{
 // asserted rather than trusted, so a table edited down to fewer strings cannot
 // pass quietly.
 //
+// 43 → 44: `models.social.feedbacks.list`, granted by
+// shared/0158_social_feedbacks_project.sql for the project feedback listing.
+//
 // 42 → 43: `toolkit_catalogue.type.manage`, granted by
 // shared/0114_toolkit_type_policy.sql for the five routes of the new
 // `Admin › Toolkits` surface.
@@ -246,7 +250,7 @@ var defaultModeSurfaces = map[string][]surfaceGrant{
 // unmeasured on a clean database — which is the whole failure class #386 exists
 // for. The number moves with the table on purpose: a count derived with len()
 // would agree with any table, including one somebody deleted rows from.
-const remainingPermissionCount = 43
+const remainingPermissionCount = 44
 
 /* ── the ledger: what a clean database grants ──────────────────────────── */
 

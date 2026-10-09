@@ -92,7 +92,10 @@ on:
       - "apps/elitea-web/**"
       - "tools/uictl/**"
       - "services/elitea-main/**"
-      - "services/elitea-deepwiki/**"
+      # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
+      # its fixture runner).
+      - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "services/elitea-subapp-host/**"
       # The `chat-stream-rust` job runs the journeys against the native Rust
       # runtime, so a change to it can break a browser journey while touching
@@ -120,7 +123,10 @@ on:
       - "apps/elitea-web/**"
       - "tools/uictl/**"
       - "services/elitea-main/**"
-      - "services/elitea-deepwiki/**"
+      # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
+      # its fixture runner).
+      - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "services/elitea-subapp-host/**"
       # The `chat-stream-rust` job runs the journeys against the native Rust
       # runtime, so a change to it can break a browser journey while touching
@@ -814,7 +820,7 @@ jobs:
             exit 0
           fi
           changed="$(git diff --name-only "${BASE_SHA}...HEAD")"
-          pattern='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|services/elitea-worker-python/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-web-e2e\.yml)'
+          pattern='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|services/elitea-worker-python/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-web-e2e\.yml)'
           if printf '%s\n' "$changed" | grep -qE "$pattern"; then
             echo "reaches-model=true" >> "$GITHUB_OUTPUT"
             echo "model path touched:"; printf '%s\n' "$changed" | grep -E "$pattern"
@@ -1123,7 +1129,9 @@ jobs:
   deepwiki-stack:
     name: DeepWiki journeys through the facade and the provider
     # The provider-backed DeepWiki journeys (DWIKI-005/006/010/011/012):
-    # generate → the provider's fixture engine → pages uploaded through the
+    # generate → the provider's native engine sidecar on its fixture runner
+    # (built from services/elitea-deepwiki-engine, cache scope
+    # elitea-deepwiki-engine-native-linux-amd64) → pages uploaded through the
     # callback bearer → read back by the browser; stop, resume, settings,
     # delete and chat. The FULL standalone stack, because the facade needs
     # production Form authentication and the E2E stack is OIDC-only — see
@@ -1209,7 +1217,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache-dependency-path: conformance/nativeclient/go.sum
       - name: Build the stack images (shared cache)
         # The same bake every standalone-stack job here uses: the images are

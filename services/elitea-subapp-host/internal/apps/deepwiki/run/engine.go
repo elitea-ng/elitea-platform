@@ -43,26 +43,31 @@ func NewEngineClient(socket string) *EngineClient {
 	return engine.NewClient(socket, EngineLabel)
 }
 
-// NewEngineRunner is the shared runner over the Python sidecar's tools, with
-// the host's egress policy and callback CA. It reports itself as "legacy".
+// NewEngineRunner is the shared runner over the engine sidecar's tools (the
+// Rust engine, ADR-0026), with the host's egress policy and callback CA. It
+// reports itself as "native".
 func NewEngineRunner(settings spi.Settings) *Runner {
-	return NewNamedEngineRunner(settings, "legacy")
+	return NewNamedEngineRunner(settings, "native")
 }
 
-// NewNamedEngineRunner is NewEngineRunner reporting itself as name. The
-// Rust engine (ADR-0026) serves the same sidecar protocol on the same
-// socket, so the two engines differ to this host only in the runner name
-// GET /health reports: "native" for the Rust sidecar, "legacy" for Python.
+// NewNamedEngineRunner is NewEngineRunner reporting itself as name in
+// GET /health.
 func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	client := NewEngineClient(settings.EngineSocket)
 	sidecar := map[string]Tool{}
 	for _, name := range SidecarTools {
 		tool := name
 		sidecar[tool] = func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
-			return client.Invoke(ctx, tool, arguments, tc)
+			// Every call to the engine carries the invocation's
+			// authenticated project, and only that one (project.go).
+			stamped, err := StampProject(ctx, tool, arguments)
+			if err != nil {
+				return nil, err
+			}
+			return client.Invoke(ctx, tool, stamped, tc)
 		}
 	}
-	transport := ArtifactClientFrom(settings.TLSCAFile)
+	transport := ArtifactClientFrom(settings.CallbackCA())
 	tools := map[string]Tool{}
 	for name, tool := range sidecar {
 		if name == ResolveWikiTool {
@@ -81,9 +86,10 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 		tools[name] = tool
 	}
 	return &Runner{
-		RunnerName: name,
-		Tools:      tools,
-		Egress:     spi.ParseEgressPolicy(settings.GitAllowlist),
-		Artifacts:  transport,
+		RunnerName:       name,
+		Tools:            tools,
+		Egress:           spi.ParseEgressPolicy(settings.GitAllowlist),
+		Artifacts:        transport,
+		VerifiedIdentity: settings.IdentitySecret != "",
 	}
 }

@@ -115,3 +115,17 @@ func (s Scope) Predicate(schema, alias string, parameter int, kind ReadKind) (st
 	}
 	return fmt.Sprintf(`(%s.is_private=false OR %s)`, alias, member), []any{strconv.FormatInt(s.ActorID, 10)}
 }
+
+// ParticipantPredicate is the WRITE rule for conversation content the model
+// reads back (a canvas): the actor is a USER participant mapped to the
+// conversation. It is the rule sending a message applies (agent_chat.sql's
+// author_mapping join), and it has none of Predicate's read exceptions — not
+// `is_private=false`, not the administrator's single-participant run, not the
+// support project. A public conversation is readable by every project member;
+// it is writable only by the people in it.
+func ParticipantPredicate(schema, alias string, parameter int, actorID int64) (string, []any) {
+	return fmt.Sprintf(`EXISTS (SELECT 1 FROM %[1]s.chat_participant_mapping write_mapping
+	 JOIN %[1]s.chat_participants write_participant ON write_participant.id=write_mapping.participant_id
+	 WHERE write_mapping.conversation_id=%[2]s.id AND write_participant.entity_name='user'
+	 AND write_participant.entity_meta->>'id'=$%[3]d::text)`, schema, alias, parameter), []any{strconv.FormatInt(actorID, 10)}
+}

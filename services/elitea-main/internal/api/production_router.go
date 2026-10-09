@@ -12,9 +12,11 @@ import (
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	deepwikiapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	inventoryapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	localturnsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/localturns"
 	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
 	projectinfoapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
@@ -230,8 +232,22 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 		r.Method(http.MethodGet, agentexecutionapi.CurrentNodeRecoveryPath, cfg.CurrentNodeRecovery)
 		r.Method(http.MethodPost, agentexecutionapi.CurrentNodeRecoveryActionPath, cfg.CurrentNodeRecovery)
 	}
+	if cfg.CurrentExecutionInterrupts != nil {
+		r.Method(http.MethodGet, agentexecutionapi.CurrentExecutionInterruptsPath, cfg.CurrentExecutionInterrupts)
+		r.Method(http.MethodPost, agentexecutionapi.CurrentExecutionInterruptDecisionPath, cfg.CurrentExecutionInterrupts)
+	}
 	if cfg.CurrentAgentCancel != nil {
 		r.Method(http.MethodDelete, agentexecutionapi.CurrentAgentCancelPath, cfg.CurrentAgentCancel)
+	}
+	if cfg.CurrentLocalTurns != nil {
+		r.Method(http.MethodPost, localturnsapi.StartPath, cfg.CurrentLocalTurns)
+		r.Method(http.MethodPost, localturnsapi.CommitPath, cfg.CurrentLocalTurns)
+	}
+	if cfg.CurrentResolvedVersion != nil {
+		r.Method(http.MethodGet, desktopopsapi.ResolvedVersionPath, cfg.CurrentResolvedVersion)
+	}
+	if cfg.CurrentRemoteToolkit != nil {
+		r.Method(http.MethodPost, desktopopsapi.RemoteToolkitPath, cfg.CurrentRemoteToolkit)
 	}
 	// One handler, two verbs, two permissions. They are registered separately
 	// because the route resolves a different permission per verb — polling is a

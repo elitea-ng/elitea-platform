@@ -17,6 +17,10 @@ name: CI — DeepWiki native engine
 #     `loopback-git-http` feature, which --all-features turns on).
 #     DEEPWIKI_REQUIRE_POSTGRES=1 turns their "no database → skip" into a
 #     failure here;
+#   * the shared engine crates in libs/rust (ADR-0027) — fmt, Clippy,
+#     rustdoc and their own tests — in this job rather than one of their
+#     own, because the engine compiles the same crates and a separate job
+#     would spend a slot of the 20 on a duplicate dependency build;
 #   * the release binary, and then the Go sub-application host's own tests
 #     against it (internal/apps/deepwiki/run, native_engine_test.go): the
 #     host's sidecar client, composition and upload over the Rust engine.
@@ -28,12 +32,16 @@ on:
   pull_request:
     paths:
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
+      # The /llm caller contract both Rust callers assert (worker, engine model client).
+      - "conformance/llm-caller/**"
+      # The agent runtime's SDK schema gate reads both
+      # (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs).
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
-      # The engine embeds the service migrations (include_str!).
-      - "services/elitea-deepwiki/src/elitea_deepwiki/migrations/**"
-      - "services/elitea-deepwiki/src/elitea_deepwiki/storage/migrate.py"
       - ".github/workflows/ci-deepwiki-engine.yml"
       - "scripts/go/declared-skips.txt"
   push:
@@ -41,12 +49,16 @@ on:
       - main
     paths:
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
+      # The /llm caller contract both Rust callers assert (worker, engine model client).
+      - "conformance/llm-caller/**"
+      # The agent runtime's SDK schema gate reads both
+      # (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs).
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
-      # The engine embeds the service migrations (include_str!).
-      - "services/elitea-deepwiki/src/elitea_deepwiki/migrations/**"
-      - "services/elitea-deepwiki/src/elitea_deepwiki/storage/migrate.py"
       - ".github/workflows/ci-deepwiki-engine.yml"
       - "scripts/go/declared-skips.txt"
   workflow_dispatch:
@@ -99,7 +111,44 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: services/elitea-deepwiki-engine
+          workspaces: |
+            services/elitea-deepwiki-engine
+            libs/rust
+
+      - name: Shared crates — formatting, Clippy, rustdoc, tests
+        working-directory: libs/rust
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo doc --locked --workspace --no-deps --all-features
+          cargo test --locked --workspace --all-targets --all-features
+
+      # The workspace run above links serde_json `preserve_order` (other
+      # members enable it), which is how a desktop binary would link the
+      # agent runtime. Built alone with `toolkit-sql`, the runtime has it off
+      # and links sqlx, which is how the worker links it (the desktop build
+      # drops `toolkit-sql`). Its digest tests pin the same values both ways
+      # (ADR-0029 decision 2); the explicit feature run asserts the feature
+      # really reaches serde_json, with `toolkit-sql` so the SQL family's
+      # encodings are covered too.
+      - name: Agent runtime — digests with and without preserve_order
+        working-directory: libs/rust
+        run: |
+          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql
+          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql
+
+      # The workspace Clippy run above uses --all-features, which turns on
+      # `test-support`, and that switches off the crate's
+      # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the
+      # two production feature sets with the guard on: the worker's
+      # (`toolkit-sql`) and the desktop host's (no features).
+      - name: Agent runtime — production feature sets (panic guard on)
+        working-directory: libs/rust
+        run: |
+          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql -- -D warnings
+          cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -123,7 +172,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache-dependency-path: services/elitea-subapp-host/go.sum
 
       - name: Run the Go host's sidecar tests against the binary

@@ -1,9 +1,9 @@
 //! The page-generation prompts, verbatim (ADR-0026 decision 8).
 //!
 //! Each prompt is a data file next to this module, byte for byte the
-//! Python value; `PROMPTS_MANIFEST.json` records where it came from and
-//! the SHA-256 of the Python value, and `tests/wiki_prompts.rs` re-derives
-//! every hash from the Python source in this repository.
+//! Python value; `PROMPTS_MANIFEST.json` records where it came from (the
+//! deleted Python engine) and the SHA-256 of the Python value, and
+//! `tests/wiki_prompts.rs` holds every file to that hash.
 //!
 //! MERGE NOTE: the structure-planner port keeps its prompts in its own
 //! manifest; the two manifests merge into one list.

@@ -5,7 +5,7 @@ package social_test
 // `RequireProjectAccess` asked only "may this user enter?". Its central
 // administrator branch matches on a role row, not on the project, so it
 // admitted a super_admin to EVERY project id. The request then reached
-// ListFeedbacks, which built the schema name `p_<id>` and ran the query, and
+// the old tenant-table feedback list, which built the schema name `p_<id>` and ran the query, and
 // PostgreSQL answered SQLSTATE 3F000 (invalid_schema_name). The handler maps
 // every query error to `500 {"error":"failed to list feedback"}`.
 //
@@ -39,13 +39,14 @@ import (
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
+	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
 func TestFeedbacksAnswer404ForAProjectThatDoesNotExist(t *testing.T) {
 	pool := newSocialFeedbackPool(t)
 	adminID := seedPlatformAdministrator(t, pool)
 
-	routes := handler.NewHandler(pool).Routes()
+	routes := handler.NewHandler(pool, handler.WithPermissionResolver(feedbackGrantAll{})).Routes()
 	do := func(path string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request = request.WithContext(auth.ContextWithUser(request.Context(),
@@ -87,7 +88,7 @@ func TestFeedbacksAnswer403ForANonMemberOfAnAbsentProject(t *testing.T) {
 	request = request.WithContext(auth.ContextWithUser(request.Context(),
 		auth.User{ID: fmt.Sprintf("%d", strangerID)}))
 	recorder := httptest.NewRecorder()
-	handler.NewHandler(pool).Routes().ServeHTTP(recorder, request)
+	handler.NewHandler(pool, handler.WithPermissionResolver(feedbackGrantAll{})).Routes().ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (body %s)", recorder.Code, recorder.Body.String())
@@ -169,6 +170,15 @@ func newSocialFeedbackPool(t *testing.T) *pgxpool.Pool {
 
 	if err := infradb.RunMigrations(ctx, pool); err != nil {
 		t.Fatalf("run baseline migrations: %v", err)
+	}
+	// The shared feedback table comes from the shared history, which this
+	// helper does not run; apply the one file the feedback routes need.
+	feedbackSQL, err := platformmigrations.Files.ReadFile("shared/0158_social_feedbacks_project.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(feedbackSQL)); err != nil {
+		t.Fatalf("apply shared feedback migration: %v", err)
 	}
 	return pool
 }

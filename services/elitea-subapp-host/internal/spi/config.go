@@ -46,6 +46,13 @@ type Settings struct {
 	TLSCertFile    string
 	TLSKeyFile     string
 	TLSCAFile      string
+	// CallbackCAFile is the bundle trusted on the CALLBACK hop — the
+	// artifact uploads to `llm_settings.api_base` — when that hop is TLS
+	// through platform-edge (ADR-0027), whose certificate the runtime CA
+	// signs. It is separate from TLSCAFile, which is the client CA of this
+	// process's own mTLS listener. Empty keeps the old behaviour: the
+	// callback trusts TLSCAFile (see CallbackCA).
+	CallbackCAFile string
 	IdentitySecret string
 	GitAllowlist   string
 	ListenAddr     string
@@ -125,6 +132,7 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 		TLSCertFile:        raw("TLS_CERTFILE", ""),
 		TLSKeyFile:         raw("TLS_KEYFILE", ""),
 		TLSCAFile:          raw("TLS_CA_FILE", ""),
+		CallbackCAFile:     raw("CALLBACK_CA_FILE", ""),
 		IdentitySecret:     raw("IDENTITY_SECRET", ""),
 		GitAllowlist:       raw("GIT_ALLOWLIST", ""),
 		ListenAddr:         raw("LISTEN_ADDR", ":8080"),
@@ -163,3 +171,13 @@ func (s Settings) TerminatesMTLS() bool {
 // MTLSRequired reports whether the SPI routes refuse a hop that is not
 // mutually authenticated — on whenever a client CA is configured.
 func (s Settings) MTLSRequired() bool { return s.TLSCAFile != "" }
+
+// CallbackCA is the bundle the callback hop trusts: CALLBACK_CA_FILE when
+// set, else TLS_CA_FILE, which is what the hop trusted before the two were
+// separated (the engine reads the same pair, in the same order).
+func (s Settings) CallbackCA() string {
+	if s.CallbackCAFile != "" {
+		return s.CallbackCAFile
+	}
+	return s.TLSCAFile
+}

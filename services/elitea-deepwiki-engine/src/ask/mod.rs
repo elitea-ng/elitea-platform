@@ -324,7 +324,17 @@ pub fn parse_request(arguments: &Map<String, Value>) -> Result<QueryRequest, Val
     } else {
         override_id
     };
-    let wiki_id = crate::wiki::compose::normalize_wiki_id(keyed);
+    // An artifact folder is named as its generation names it
+    // (`source::artifact_wiki_id`): `normalize_wiki_id("artifact://…:branch")`
+    // would read the scheme's colon as the branch separator.
+    let folder = if override_id.is_empty() && crate::source::is_artifact_source(&repository) {
+        crate::source::parse_artifact_source(&repository)
+            .ok()
+            .map(|source| crate::source::artifact_wiki_id(&source, Some(active)))
+    } else {
+        None
+    };
+    let wiki_id = folder.unwrap_or_else(|| crate::wiki::compose::normalize_wiki_id(keyed));
     let history = match arguments.get("chat_history") {
         Some(Value::Array(items)) => {
             let start = items.len().saturating_sub(4);
@@ -571,7 +581,8 @@ pub async fn run_agent<S: IndexStore, M: Model>(
 /// # Errors
 ///
 /// An unknown tool (`KeyError`), malformed `llm_settings` or
-/// `embedding_model` (`ValueError`),
+/// `embedding_model` or a missing project
+/// ([`crate::storage::PROJECT_ARG`]) (`ValueError`),
 /// a model failure, or the stop line.
 pub async fn run_tool(
     tool: &str,
@@ -593,6 +604,11 @@ pub async fn run_tool(
             ));
         }
     };
+    // The project the host authenticated (migration 0005): the index is
+    // read within it and nowhere else. A wiki id, from
+    // `repo_identifier_override` or from the repository, resolves in the
+    // caller's project only.
+    let project = crate::storage::ProjectScope::from_arguments(arguments)?;
     let request = match parse_request(arguments) {
         Ok(request) => request,
         Err(result) => return Ok(result),
@@ -633,7 +649,7 @@ pub async fn run_tool(
     };
     let store = PgIndex::new(crate::storage::adapter::UnifiedDb::new(
         deps.pool.clone(),
-        request.wiki_id.clone(),
+        crate::storage::WikiKey::new(project, request.wiki_id.clone()),
     ));
     run_agent(&spec, &request, &client, &store, &embedder, context).await
 }
@@ -672,6 +688,39 @@ mod tests {
         assert_eq!(lines[0], "Assistant: b");
         assert_eq!(lines[2], "Assistant: d");
         assert_eq!(lines[3].len(), "User: ".len() + 300);
+    }
+
+    #[test]
+    fn an_artifact_folder_is_asked_under_its_generation_id() {
+        let wiki_id = |arguments: Value| {
+            parse_request(arguments.as_object().unwrap_or(&Map::new()))
+                .map(|r| r.wiki_id)
+                .unwrap_or_default()
+        };
+        for config in [
+            json!({"provider_type": "artifact", "repository": "artifact://docs/handbook", "branch": "main"}),
+            json!({"provider_type": "artifact", "repository": "ARTIFACT://Docs/handbook/"}),
+        ] {
+            assert_eq!(
+                wiki_id(json!({"question": "q", "repo_config": config})),
+                "artifact--docs--handbook--main"
+            );
+        }
+        // The manifest's identifier still wins when the host passes it.
+        assert_eq!(
+            wiki_id(
+                json!({"question": "q", "repo_config": {"repository": "artifact://docs/handbook"},
+                "repo_identifier_override": "artifact://docs/handbook:v2:abcdef01"})
+            ),
+            "artifact--docs--handbook--v2"
+        );
+        // A git repository is unchanged.
+        assert_eq!(
+            wiki_id(
+                json!({"question": "q", "repo_config": {"repository": "acme/notes", "branch": "main"}})
+            ),
+            "acme--notes--main"
+        );
     }
 
     #[test]

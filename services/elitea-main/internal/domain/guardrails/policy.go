@@ -324,6 +324,57 @@ func (p Policy) MessageTemplate() string {
 	return p.messageTemplate
 }
 
+// SensitiveAction is the approval copy for one sensitive tool call: the SDK's
+// `get_sensitive_tool_policy` action name and rendered policy message
+// (elitea_sdk/runtime/toolkits/security.py), which the chat HITL card shows as
+// `action_label` and `policy_message`.
+type SensitiveAction struct {
+	MatchedIdentifier string
+	ActionLabel       string
+	PolicyMessage     string
+}
+
+// SensitiveAction answers the approval copy for toolName when the policy marks
+// it sensitive under any of toolkitIdentifiers, and false otherwise.
+//
+// toolkitLabel is what the SDK calls the toolkit in the message (the instance
+// name, falling back to the type); toolkitType is the toolkit's TYPE. The
+// template's placeholders are the SDK's: {company_name}, {tool_name},
+// {toolkit_name}, {toolkit_type}, {toolkit_label} and {action_name}.
+// {toolkit_type} is the type (the label when the type is unknown), so an
+// operator's "approve {tool_name} on {toolkit_type}" names `github`, not the
+// instance; the SDK's get_sensitive_tool_policy currently fills it with the
+// label. An unknown placeholder is left as it is, where the SDK's str.format
+// would fall back to the default template; the admin form documents only the
+// known ones.
+func (p Policy) SensitiveAction(toolName, toolkitLabel, toolkitType string, toolkitIdentifiers ...string) (SensitiveAction, bool) {
+	matched, ok := p.SensitiveMatch(toolName, toolkitIdentifiers...)
+	if !ok {
+		return SensitiveAction{}, false
+	}
+	label := strings.TrimSpace(toolkitLabel)
+	if label == "" {
+		label = matched
+	}
+	if label == "" {
+		label = "this toolkit"
+	}
+	action := label + "." + toolName
+	kind := strings.TrimSpace(toolkitType)
+	if kind == "" {
+		kind = label
+	}
+	message := strings.NewReplacer(
+		"{company_name}", p.CompanyName(),
+		"{tool_name}", toolName,
+		"{toolkit_name}", label,
+		"{toolkit_type}", kind,
+		"{toolkit_label}", label,
+		"{action_name}", action,
+	).Replace(p.MessageTemplate())
+	return SensitiveAction{MatchedIdentifier: matched, ActionLabel: action, PolicyMessage: message}, true
+}
+
 // RuntimePolicy is the projection handed to the worker in the agent execution
 // input, and it is deliberately a separate type from Policy.
 //

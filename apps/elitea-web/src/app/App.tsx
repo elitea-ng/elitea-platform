@@ -205,11 +205,25 @@ export function App() {
        * authorize page instead of the page it was loading. A signed-in user who
        * reloads early was thrown into a re-login.
        *
+       * Correction (2026-10): this was not the only thing behind that "Frame
+       * load interrupted". The same unload also cancels any lazy ROUTE CHUNK
+       * still loading, and TanStack Router answered that chunk error with
+       * `window.location.reload()`, which replaced the navigation under way —
+       * the more frequent cause in CI traces, now fixed in
+       * `shared/lib/chunk-load-guard.ts`. The OIDC-landing half of the
+       * measurement is this redirect, and the check below stays for it.
+       *
        * Not redirecting is also the right answer away from that race: when the
        * probe cannot reach elitea-main, the login form it would send the browser
        * to is served by that same unreachable elitea-main.
        */
       if (probeStatus === undefined) return;
+
+      // Desktop (ADR-0029): never navigate the privileged webview to a login URL.
+      // A native client has no cookie plane; its transport signs out and the
+      // shell returns to the connect screen. Statically false in every other
+      // build mode, so the branch is removed from them.
+      if (import.meta.env.MODE === 'desktop') return;
 
       const returnTo = window.location.pathname + window.location.search;
       window.location.assign(buildLoginUrl(authPlaneFromProbeStatus(probeStatus), returnTo));

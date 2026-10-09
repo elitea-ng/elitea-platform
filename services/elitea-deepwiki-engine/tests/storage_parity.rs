@@ -28,7 +28,7 @@ const WIKI: &str = "acme--notes-service--main";
 async fn published(name: &str) -> Option<(PgPool, IndexReader)> {
     let pool = common::fresh_database(name).await?;
     let space = BuildSpace::new(pool.clone(), "parity");
-    let mut build = space.begin(WIKI).await.expect("begin");
+    let mut build = space.begin(&common::key(WIKI)).await.expect("begin");
     build
         .stage_nodes(common::corpus())
         .await
@@ -44,7 +44,7 @@ async fn published(name: &str) -> Option<(PgPool, IndexReader)> {
         .expect("publish");
     assert_eq!(counts.nodes, 20);
     assert_eq!(counts.embeddings, 20);
-    Some((pool.clone(), IndexReader::new(pool, WIKI)))
+    Some((pool.clone(), IndexReader::new(pool, common::key(WIKI))))
 }
 
 fn ids(hits: &[Hit]) -> Vec<String> {

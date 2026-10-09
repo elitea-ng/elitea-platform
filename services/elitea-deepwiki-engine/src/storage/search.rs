@@ -26,8 +26,8 @@
 //! autocommit statements; a publish between two of them could mix two
 //! indexes in one answer.
 
-use crate::storage::Result;
 use crate::storage::text::{self, BRANCH_BM25, BRANCH_FTS};
+use crate::storage::{Result, WikiKey};
 use indexmap::IndexMap;
 use sqlx::Row;
 use sqlx::postgres::{PgConnection, PgPool};
@@ -181,11 +181,12 @@ pub fn rrf_fuse(fts: &[Hit], dense: &[Hit], fusion: &Fusion) -> Vec<Hit> {
 }
 
 /// Searches over one wiki's published index (`PostgresBackend`'s read
-/// half).
+/// half), within one project: every statement filters by the
+/// [`WikiKey`]'s `(project_id, wiki_id)`.
 #[derive(Debug, Clone)]
 pub struct IndexReader {
     pool: PgPool,
-    wiki_id: String,
+    key: WikiKey,
 }
 
 /// One branch's statistics (`wiki_bm25_meta`), for health and reports.
@@ -206,18 +207,22 @@ pub struct IndexStats {
 }
 
 impl IndexReader {
-    /// The reader of `wiki_id`.
-    pub fn new(pool: PgPool, wiki_id: impl Into<String>) -> Self {
-        Self {
-            pool,
-            wiki_id: wiki_id.into(),
-        }
+    /// The reader of one project's wiki.
+    #[must_use]
+    pub fn new(pool: PgPool, key: WikiKey) -> Self {
+        Self { pool, key }
     }
 
     /// The wiki this reader is scoped to.
     #[must_use]
     pub fn wiki_id(&self) -> &str {
-        &self.wiki_id
+        self.key.wiki_id()
+    }
+
+    /// The project and wiki this reader is scoped to.
+    #[must_use]
+    pub fn key(&self) -> &WikiKey {
+        &self.key
     }
 
     /// The pool, for the adapter's own statements.
@@ -232,7 +237,7 @@ impl IndexReader {
     /// [`crate::storage::StorageError::Database`].
     pub async fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<Hit>> {
         let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_fts(&mut tx, &self.wiki_id, query, limit).await?;
+        let hits = search_fts(&mut tx, &self.key, query, limit).await?;
         tx.commit().await?;
         Ok(hits)
     }
@@ -245,7 +250,7 @@ impl IndexReader {
     /// dimension differs from the stored ones.
     pub async fn search_dense(&self, embedding: &[f64], k: usize) -> Result<Vec<Hit>> {
         let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_dense(&mut tx, &self.wiki_id, embedding, k).await?;
+        let hits = search_dense(&mut tx, &self.key, embedding, k).await?;
         tx.commit().await?;
         Ok(hits)
     }
@@ -257,7 +262,7 @@ impl IndexReader {
     /// [`crate::storage::StorageError::Database`].
     pub async fn search_bm25(&self, query: &str, k: usize) -> Result<Vec<Hit>> {
         let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_bm25(&mut tx, &self.wiki_id, query, k).await?;
+        let hits = search_bm25(&mut tx, &self.key, query, k).await?;
         tx.commit().await?;
         Ok(hits)
     }
@@ -275,7 +280,7 @@ impl IndexReader {
         params: &Hybrid,
     ) -> Result<Vec<Hit>> {
         let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_hybrid(&mut tx, &self.wiki_id, query, embedding, params).await?;
+        let hits = search_hybrid(&mut tx, &self.key, query, embedding, params).await?;
         tx.commit().await?;
         Ok(hits)
     }
@@ -287,21 +292,26 @@ impl IndexReader {
     /// [`crate::storage::StorageError::Database`].
     pub async fn stats(&self) -> Result<IndexStats> {
         let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let node_count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM wiki_nodes WHERE wiki_id = $1")
-                .bind(&self.wiki_id)
-                .fetch_one(&mut *tx)
-                .await?;
-        let vector_count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM wiki_node_embeddings WHERE wiki_id = $1")
-                .bind(&self.wiki_id)
-                .fetch_one(&mut *tx)
-                .await?;
+        let node_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM wiki_nodes WHERE wiki_id = $1 AND project_id = $2",
+        )
+        .bind(self.key.wiki_id())
+        .bind(self.key.project_id())
+        .fetch_one(&mut *tx)
+        .await?;
+        let vector_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM wiki_node_embeddings WHERE wiki_id = $1 AND project_id = $2",
+        )
+        .bind(self.key.wiki_id())
+        .bind(self.key.project_id())
+        .fetch_one(&mut *tx)
+        .await?;
         let rows = sqlx::query(
             "SELECT branch, doc_count, avgdl, k1, b FROM wiki_bm25_meta \
-             WHERE wiki_id = $1 ORDER BY branch",
+             WHERE wiki_id = $1 AND project_id = $2 ORDER BY branch",
         )
-        .bind(&self.wiki_id)
+        .bind(self.key.wiki_id())
+        .bind(self.key.project_id())
         .fetch_all(&mut *tx)
         .await?;
         let mut branches = Vec::with_capacity(rows.len());
@@ -330,7 +340,7 @@ impl IndexReader {
 /// query-term multiplicity, `Counter(terms)`).
 pub(crate) async fn bm25_scores(
     tx: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     branch: &str,
     terms: &[String],
 ) -> Result<HashMap<String, f64>> {
@@ -338,10 +348,12 @@ pub(crate) async fn bm25_scores(
         return Ok(HashMap::new());
     }
     let meta = sqlx::query(
-        "SELECT doc_count, avgdl, k1, b FROM wiki_bm25_meta WHERE wiki_id = $1 AND branch = $2",
+        "SELECT doc_count, avgdl, k1, b FROM wiki_bm25_meta \
+         WHERE wiki_id = $1 AND branch = $2 AND project_id = $3",
     )
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(branch)
+    .bind(key.project_id())
     .fetch_optional(&mut *tx)
     .await?;
     let Some(meta) = meta else {
@@ -375,16 +387,18 @@ pub(crate) async fn bm25_scores(
                 ) AS score \
          FROM wiki_bm25_postings p \
          JOIN wiki_bm25_terms t \
-           ON t.wiki_id = p.wiki_id \
+           ON t.project_id = p.project_id \
+          AND t.wiki_id = p.wiki_id \
           AND t.branch  = p.branch \
           AND t.term    = p.term \
          JOIN wiki_bm25_docs d \
-           ON d.wiki_id = p.wiki_id \
+           ON d.project_id = p.project_id \
+          AND d.wiki_id = p.wiki_id \
           AND d.branch  = p.branch \
           AND d.doc_idx = p.doc_idx \
          JOIN unnest($7::text[], $8::float8[]) AS q(term, query_tf) \
            ON q.term = p.term \
-         WHERE p.wiki_id = $9 AND p.branch = $10 AND t.df > 0 \
+         WHERE p.wiki_id = $9 AND p.branch = $10 AND p.project_id = $11 AND t.df > 0 \
          GROUP BY d.node_id",
     )
     .bind(f64::from(doc_count))
@@ -395,8 +409,9 @@ pub(crate) async fn bm25_scores(
     .bind(avgdl)
     .bind(&keys)
     .bind(&values)
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(branch)
+    .bind(key.project_id())
     .fetch_all(&mut *tx)
     .await?;
     let mut scores = HashMap::with_capacity(rows.len());
@@ -409,7 +424,7 @@ pub(crate) async fn bm25_scores(
 /// `_node_metadata` + `_hits`: attach path, name and type to scored ids.
 async fn hits(
     tx: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     scored: Vec<(String, Scores)>,
 ) -> Result<Vec<Hit>> {
     if scored.is_empty() {
@@ -418,10 +433,11 @@ async fn hits(
     let ids: Vec<&str> = scored.iter().map(|(id, _)| id.as_str()).collect();
     let rows = sqlx::query(
         "SELECT node_id, rel_path, symbol_name, symbol_type \
-         FROM wiki_nodes WHERE wiki_id = $1 AND node_id = ANY($2)",
+         FROM wiki_nodes WHERE wiki_id = $1 AND node_id = ANY($2) AND project_id = $3",
     )
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(&ids)
+    .bind(key.project_id())
     .fetch_all(&mut *tx)
     .await?;
     let mut metadata: HashMap<String, (String, String, String)> =
@@ -460,7 +476,7 @@ fn sql_limit(limit: usize) -> i64 {
 /// statistics, negated to FTS5's sign, ties broken by node id.
 pub(crate) async fn search_fts(
     tx: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     query: &str,
     limit: usize,
 ) -> Result<Vec<Hit>> {
@@ -471,13 +487,14 @@ pub(crate) async fn search_fts(
     let matched: Vec<String> = sqlx::query_scalar(
         "SELECT n.node_id \
          FROM wiki_nodes n \
-         WHERE n.wiki_id = $1 \
+         WHERE n.wiki_id = $1 AND n.project_id = $3 \
            AND n.fts @@ plainto_tsquery( \
                    'deepwiki_porter', regexp_replace($2, '[^[:alnum:]]+', ' ', 'g') \
                )",
     )
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(query)
+    .bind(key.project_id())
     .fetch_all(&mut *tx)
     .await?;
     if matched.is_empty() {
@@ -493,7 +510,7 @@ pub(crate) async fn search_fts(
     .bind(query)
     .fetch_one(&mut *tx)
     .await?;
-    let scores = bm25_scores(tx, wiki, BRANCH_FTS, &terms.unwrap_or_default()).await?;
+    let scores = bm25_scores(tx, key, BRANCH_FTS, &terms.unwrap_or_default()).await?;
 
     let mut ranked: Vec<(String, Scores)> = matched
         .into_iter()
@@ -517,7 +534,7 @@ pub(crate) async fn search_fts(
             .then_with(|| a.0.cmp(&b.0))
     });
     ranked.truncate(limit);
-    hits(tx, wiki, ranked).await
+    hits(tx, key, ranked).await
 }
 
 /// `PostgresBackend.search_dense`: exact L2 KNN. The query vector is sent as
@@ -525,20 +542,21 @@ pub(crate) async fn search_fts(
 /// `float4` values.
 pub(crate) async fn search_dense(
     tx: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     embedding: &[f64],
     k: usize,
 ) -> Result<Vec<Hit>> {
     let rows = sqlx::query(
         "SELECT e.node_id, e.embedding <-> $1::text::vector AS distance \
          FROM wiki_node_embeddings e \
-         WHERE e.wiki_id = $2 \
+         WHERE e.wiki_id = $2 AND e.project_id = $4 \
          ORDER BY distance, e.node_id \
          LIMIT $3",
     )
     .bind(vector_literal(embedding))
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(sql_limit(k))
+    .bind(key.project_id())
     .fetch_all(&mut *tx)
     .await?;
     let mut scored = Vec::with_capacity(rows.len());
@@ -552,18 +570,18 @@ pub(crate) async fn search_dense(
             },
         ));
     }
-    hits(tx, wiki, scored).await
+    hits(tx, key, scored).await
 }
 
 /// `PostgresBackend.search_bm25`.
 pub(crate) async fn search_bm25(
     tx: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     query: &str,
     k: usize,
 ) -> Result<Vec<Hit>> {
     let terms: Vec<String> = text::whitespace_tokens(query).map(str::to_owned).collect();
-    let scores = bm25_scores(tx, wiki, BRANCH_BM25, &terms).await?;
+    let scores = bm25_scores(tx, key, BRANCH_BM25, &terms).await?;
     let mut ordered: Vec<(String, f64)> = scores.into_iter().collect();
     ordered.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     ordered.truncate(k);
@@ -579,21 +597,21 @@ pub(crate) async fn search_bm25(
             )
         })
         .collect();
-    hits(tx, wiki, ranked).await
+    hits(tx, key, ranked).await
 }
 
 /// `PostgresBackend.search_hybrid`.
 pub(crate) async fn search_hybrid(
     tx: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     query: &str,
     embedding: Option<&[f64]>,
     params: &Hybrid,
 ) -> Result<Vec<Hit>> {
-    let fts = search_fts(tx, wiki, query, params.fts_pool).await?;
+    let fts = search_fts(tx, key, query, params.fts_pool).await?;
     let dense = match embedding {
         Some(vector) if !vector.is_empty() => {
-            search_dense(tx, wiki, vector, params.vec_pool).await?
+            search_dense(tx, key, vector, params.vec_pool).await?
         }
         _ => Vec::new(),
     };

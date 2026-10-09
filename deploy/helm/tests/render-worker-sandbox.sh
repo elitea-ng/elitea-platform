@@ -9,6 +9,7 @@ worker:
   implementation: rust
   runtime:
     agentModelCheckpointRecovery: true
+    agentNodeRecovery: true
     sandboxRuntimes:
       - language: python
         target: sandbox-python:9446
@@ -31,7 +32,7 @@ worker:
 YAML
 args=(-f deploy/helm/elitea/values-standalone.yaml -f "$work/profiles.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
-  --set llmGateway.egressPosture=public-unrestricted)
+  --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 helm template test deploy/helm/elitea "${args[@]}" \
   --show-only templates/worker/configmap-runtime.yaml > "$work/config.yaml"
 python3 - "$work/config.yaml" "$work/profiles.yaml" <<'PY'
@@ -42,6 +43,7 @@ assert config['sandbox_runtimes']==values['sandboxRuntimes']
 assert config['sandbox_runtimes'][0]['preparation']==values['sandboxRuntimes'][0]['preparation']
 assert 'preparation' not in config['sandbox_runtimes'][1]
 assert config['agent_model_checkpoint_recovery'] is True
+assert config['agent_node_recovery'] is True
 assert config['consumer_id'].endswith('__ELITEA_POD_NAME__')
 PY
 if helm template test deploy/helm/elitea "${args[@]}" --set worker.implementation=python > "$work/error" 2>&1; then

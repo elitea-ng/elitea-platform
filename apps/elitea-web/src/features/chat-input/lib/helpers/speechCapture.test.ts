@@ -46,7 +46,7 @@ class FakeAudioContext {
   state: 'running' | 'closed' = 'running';
   destination = {};
   audioWorklet = {
-    addModule: vi.fn(() => (FakeAudioContext.failAddModule ? Promise.reject(new Error('no worklet')) : Promise.resolve())),
+    addModule: vi.fn((_moduleUrl: string) => (FakeAudioContext.failAddModule ? Promise.reject(new Error('no worklet')) : Promise.resolve())),
   };
   close = vi.fn(() => {
     this.state = 'closed';
@@ -69,14 +69,6 @@ beforeEach(() => {
   FakeAudioContext.failAddModule = false;
   vi.stubGlobal('AudioContext', FakeAudioContext);
   vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode);
-  // Extends the REAL URL constructor so `new URL(...)` elsewhere still works.
-  vi.stubGlobal(
-    'URL',
-    class extends URL {
-      static override createObjectURL = vi.fn(() => 'blob:fake');
-      static override revokeObjectURL = vi.fn();
-    },
-  );
   track = { stop: vi.fn() };
   getUserMedia = vi.fn(() => Promise.resolve({ getTracks: () => [track] }));
   Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
@@ -118,7 +110,10 @@ describe('startSpeechCapture', () => {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     const ctx = FakeAudioContext.instances[0];
-    expect(ctx?.audioWorklet.addModule).toHaveBeenCalledWith('blob:fake');
+    // A same-origin module URL: script-src admits no blob: or data: source.
+    const moduleUrl = String(vi.mocked(ctx!.audioWorklet.addModule).mock.calls[0]?.[0]);
+    expect(moduleUrl).toMatch(/audioChunkProcessor\.worklet\.js/);
+    expect(moduleUrl).not.toMatch(/^(blob|data):/);
     const worklet = FakeAudioWorkletNode.instances[0];
     expect(worklet?.name).toBe(AUDIO_CHUNK_PROCESSOR_NAME);
     expect(worklet?.connect).toHaveBeenCalledWith(ctx?.destination);

@@ -12,16 +12,20 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type stubExecutionVerifier struct {
-	ok    bool
-	err   error
-	calls []string
+	ok          bool
+	err         error
+	calls       []string
+	credentials []string
 }
 
-func (s *stubExecutionVerifier) VerifyExecution(_ context.Context, projectID, userID, executionID string) (bool, error) {
+func (s *stubExecutionVerifier) VerifyExecution(_ context.Context, projectID, userID, tokenID, nativeClientID, executionID string) (bool, error) {
 	s.calls = append(s.calls, projectID+"|"+userID+"|"+executionID)
+	s.credentials = append(s.credentials, tokenID+"|"+nativeClientID)
 	return s.ok, s.err
 }
 
@@ -123,3 +127,79 @@ func newDiscardWriter() *discardWriter               { return &discardWriter{hea
 func (w *discardWriter) Header() http.Header         { return w.header }
 func (w *discardWriter) Write(b []byte) (int, error) { return len(b), nil }
 func (w *discardWriter) WriteHeader(int)             {}
+
+// stubCallbackVerifier admits provider invocations too.
+type stubCallbackVerifier struct {
+	stubExecutionVerifier
+	callbackOK bool
+	callbacks  []string
+}
+
+func (s *stubCallbackVerifier) VerifyCallbackExecution(_ context.Context, projectID, userID, tokenID, tokenUUID string) (bool, error) {
+	s.callbacks = append(s.callbacks, projectID+"|"+userID+"|"+tokenID+"|"+tokenUUID)
+	return s.callbackOK, nil
+}
+
+func callbackCtx(tokenID string) context.Context {
+	ctx := fullCtx()
+	return auth.ContextWithUser(ctx, auth.User{ID: "user-7", TokenID: tokenID})
+}
+
+// A provider invocation's id `callback-<uuid>` goes to the callback rule with
+// the AUTHENTICATING token's id, never to the execution_jobs rule.
+func TestInjectIdentity_ACallbackIDIsCheckedAgainstTheAuthenticatingToken(t *testing.T) {
+	const id = CallbackExecutionPrefix + "11111111-1111-4111-8111-111111111111"
+	cases := map[string]struct {
+		ctx      context.Context
+		verifier ExecutionVerifier
+		want     string
+		asked    string
+	}{
+		"the caller's own token is kept": {callbackCtx("31"), &stubCallbackVerifier{callbackOK: true}, id,
+			"42|user-7|31|11111111-1111-4111-8111-111111111111"},
+		"a token the rule refuses is dropped": {callbackCtx("31"), &stubCallbackVerifier{}, "",
+			"42|user-7|31|11111111-1111-4111-8111-111111111111"},
+		"a session principal (no token) is dropped":     {callbackCtx(""), &stubCallbackVerifier{callbackOK: true}, "", ""},
+		"a verifier without the callback rule drops it": {callbackCtx("31"), &stubExecutionVerifier{ok: true}, "", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			out := http.Header{}
+			out.Set(HeaderExecutionID, id)
+			injectIdentity(tc.ctx, out, []byte(frozenSecret), tc.verifier)
+			if got := out.Get(HeaderExecutionID); got != tc.want {
+				t.Fatalf("execution id header = %q, want %q", got, tc.want)
+			}
+			switch v := tc.verifier.(type) {
+			case *stubCallbackVerifier:
+				if len(v.calls) != 0 {
+					t.Fatalf("the execution_jobs rule was asked %v for a callback id", v.calls)
+				}
+				if tc.asked == "" && len(v.callbacks) != 0 || tc.asked != "" && (len(v.callbacks) != 1 || v.callbacks[0] != tc.asked) {
+					t.Fatalf("callback rule calls = %v, want %q", v.callbacks, tc.asked)
+				}
+			case *stubExecutionVerifier:
+				if len(v.calls) != 0 {
+					t.Fatalf("the execution_jobs rule was asked %v for a callback id", v.calls)
+				}
+			}
+			if !verifyIdentitySignature(out, []byte(frozenSecret)) {
+				t.Fatal("the forwarded identity does not verify")
+			}
+		})
+	}
+}
+
+// The verifier is told the authenticating credential family, so a desktop
+// local turn is attributed only to calls from the device or token that
+// started it.
+func TestInjectIdentity_PassesTheCallersCredentialToTheVerifier(t *testing.T) {
+	verifier := &stubExecutionVerifier{ok: true}
+	ctx := auth.ContextWithUser(fullCtx(), auth.User{ID: "user-7", TokenID: "70", NativeClientID: "ai.elitea.desktop"})
+	out := http.Header{}
+	out.Set(HeaderExecutionID, "exec-9")
+	injectIdentity(ctx, out, []byte(frozenSecret), verifier)
+	if len(verifier.credentials) != 1 || verifier.credentials[0] != "70|ai.elitea.desktop" {
+		t.Fatalf("verifier credentials = %v, want the principal's token and native client", verifier.credentials)
+	}
+}

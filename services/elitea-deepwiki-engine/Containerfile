@@ -45,18 +45,20 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install cargo-auditable --locked --version 0.7.5
 
 WORKDIR /src/services/elitea-deepwiki-engine
+# The shared engine crates are path dependencies at ../../libs/rust, so the
+# repository layout is kept under /src (ADR-0027).
+COPY libs/rust /src/libs/rust
 COPY services/elitea-deepwiki-engine ./
-# The service migrations, which the binary embeds (include_str!) from the
-# Python package's directory: one set of files for both runners. Load-bearing:
-# src/storage/migrate.rs reads them by a path OUTSIDE the crate
-# (../elitea-deepwiki/...), and without this line the build fails with
-# "couldn't read …/0001_wiki_index_storage.sql". `migrate` writes the same
-# schema_migrations ledger (same SHA-256 checksums) as the Python entry point.
-COPY services/elitea-deepwiki/src/elitea_deepwiki/migrations ../elitea-deepwiki/src/elitea_deepwiki/migrations
 
+# /cargo-target is shared with every other build on the host, and cargo judges
+# a path crate fresh by mtime, so a context older than another checkout's build
+# would ship that build's binary. Touching /src under the lock recompiles the
+# engine and its libs/rust crates from this context while registry crates stay
+# cached (see the worker's Containerfile).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target \
+    --mount=type=cache,target=/cargo-target,sharing=locked \
+    find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-deepwiki-engine /usr/local/bin/elitea-deepwiki-engine
 

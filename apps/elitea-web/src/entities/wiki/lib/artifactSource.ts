@@ -16,6 +16,7 @@
  * already rewritten. These settings are the facade's INPUT, and its input is
  * the two JSON tags on `ArtifactSourceIn`.
  */
+import type { RepositoryIdentity } from '../model/types';
 
 /** The keys a folder source arrives under, prefixed or not. */
 const ARTIFACT_SOURCE_KEYS = [
@@ -137,17 +138,38 @@ export function getArtifactSource(settings: unknown): ArtifactFolderSource | nul
 }
 
 /**
- * A folder source as the wiki id and the manifest spell it: `bucket`, or
- * `bucket/prefix`.
+ * A folder source, with its branch, as the identity its wiki id is derived
+ * from: `artifact/bucket[/prefix]` on the branch.
  *
- * NOT the `artifact://` form. That form is what the facade derives for the
- * provider; the wiki is NAMED after this one. The Go and Python twins
- * (`run.DisplayRepositoryFor`, `wiki_context.display_repository_for`) strip
- * the scheme for the same reason: so that the id reads as a folder and not as
- * `artifact:----docs--handbook--main`. All three must agree, or this browser
- * looks for a wiki under an id nothing wrote.
+ * ONE RULE, the engine's: a folder's wiki id is the one its generation files
+ * it under, `normalize_wiki_id("artifact://bucket/prefix:{branch}:{sha8}")`.
+ * The scheme's `artifact:` becomes the first part, so `artifact://docs/handbook`
+ * on `main` is `artifact--docs--handbook--main`.
+ *
+ * A COLON IN THE BRANCH MOVES ITS HEAD INTO THE REPOSITORY. normalize_wiki_id
+ * splits the identifier on `:` from the right (Python's `rsplit(":", 2)`), so
+ * only the text after the branch's LAST colon is the branch; the text before
+ * it joins the last repository part. `artifact://docs/handbook` on `v1:rc`
+ * is `artifact--docs--handbook-v1--rc`, not `artifact--docs--handbook--v1-rc`.
+ * The Rust engine (`source::artifact_wiki_id`) and the Go host
+ * (`run.ArtifactWikiID`) both produce that id, and the engine writes the
+ * wiki under it, so this function makes the same split. The head is joined
+ * with `-` (`artifact/docs/handbook-v1` on `rc`), which normalises the same. Joined with `/`,
+ * the parts normalise (repoMatch's `normalizeWikiIdPart`, the same rule) to
+ * exactly that id. If one of the three changes, all three must change, or
+ * this browser looks for a wiki under an id nothing wrote.
  */
-export function artifactDisplayRepository(source: ArtifactFolderSource): string {
-  return source.prefix === '' ? source.bucket : `${source.bucket}/${source.prefix}`;
+export function artifactRepoIdentity(source: ArtifactFolderSource, branch: string | null): RepositoryIdentity {
+  let repository = source.prefix === '' ? `artifact/${source.bucket}` : `artifact/${source.bucket}/${source.prefix}`;
+  if (branch === null) return { repository, branch: null };
+  let label = branch.trim();
+  const colon = label.lastIndexOf(':');
+  if (colon >= 0) {
+    // `-`, not `:`: the matcher re-parses the repository and would read a
+    // `:` in it as a branch. Every character outside [a-z0-9-] normalises
+    // to `-`, so the parts come out as the engine's.
+    repository += `-${label.slice(0, colon).replaceAll(':', '-')}`;
+    label = label.slice(colon + 1);
+  }
+  return { repository, branch: label || null };
 }
-

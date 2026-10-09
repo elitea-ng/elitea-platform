@@ -32,7 +32,8 @@ use crate::agents::events::{
     ProjectedAgentEventBatch,
 };
 use crate::agents::runtime::{
-    NativeAgentAssembler, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode, NativeAgentRun,
+    NativeAgentAssembler, NativeAgentAssemblyCause, NativeAgentAssemblyError,
+    NativeAgentAssemblyErrorCode, NativeAgentRun,
 };
 use crate::protocol::control::AgentControlClient;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
@@ -288,6 +289,8 @@ where
             tracing::error!(
                 event = "agent_native_assembly_failed",
                 error_code = error.code().as_str(),
+                cause_code = error.cause().map(NativeAgentAssemblyCause::code),
+                cause_detail = error.cause().and_then(NativeAgentAssemblyCause::detail),
                 failure_reason = %error,
                 "native agent assembly failed; execution cannot start"
             );
@@ -1442,6 +1445,13 @@ where
 
 pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
     match error.code() {
+        NativeAgentAssemblyErrorCode::UnsupportedCapability
+            if error.cause().is_some_and(|cause| {
+                cause.code() == crate::agents::graph::compiler::NODE_TYPE_NOT_AVAILABLE_CODE
+            }) =>
+        {
+            RuntimeFailureKind::PipelineNodeTypeNotAvailable
+        }
         NativeAgentAssemblyErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability
         }
@@ -1452,6 +1462,11 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
         NativeAgentAssemblyErrorCode::ResourceExhausted => RuntimeFailureKind::ResourceExhausted,
         NativeAgentAssemblyErrorCode::AuthorizationFailed => {
             RuntimeFailureKind::AuthorizationFailed
+        }
+        NativeAgentAssemblyErrorCode::AgentSettingsLimit => {
+            RuntimeFailureKind::ExecutionInputFieldLimit(
+                crate::protocol::InputLimitField::AgentSettings,
+            )
         }
         NativeAgentAssemblyErrorCode::InvalidConfiguration
         | NativeAgentAssemblyErrorCode::InvalidResult => RuntimeFailureKind::Internal,
@@ -1475,7 +1490,9 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
 #[cfg(test)]
 mod taxonomy_tests {
     use super::assembly_failure;
-    use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
+    use crate::agents::runtime::{
+        NativeAgentAssemblyCause, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
+    };
     use crate::protocol::output::{ModelBudgetScope, RuntimeFailureKind};
 
     #[test]
@@ -1572,6 +1589,113 @@ mod taxonomy_tests {
             RuntimeFailureKind::Internal
         );
         assert_eq!(super::model_failure(None), RuntimeFailureKind::Internal);
+    }
+
+    /// The pipeline bounds are already registered as a readable message: the
+    /// agent-settings input limit. Prove the whole chain from the real compiler
+    /// error to the terminal text, and that the id-shape refusal stays generic.
+    #[cfg(not(feature = "graph-extensions-rehearsal"))]
+    #[test]
+    fn a_gated_node_type_ends_as_the_registered_deployment_message() {
+        use crate::agents::graph::compiler::PipelineDefinition;
+        use crate::protocol::output::{
+            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE, runtime_error_policy,
+        };
+
+        let Err(configuration) = PipelineDefinition::from_yaml(
+            "state:\n  records: list\n  expanded: list\nentry_point: split\nnodes:\n  - id: split\n    type: split_out\n    source: records\n    split: {mode: list}\n    destination: item\n    output: [expanded]\n    transition: END\n",
+        ) else {
+            panic!("a production build admitted split_out");
+        };
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &configuration,
+            "fixture",
+        );
+        assert_eq!(
+            error.code(),
+            NativeAgentAssemblyErrorCode::UnsupportedCapability
+        );
+        assert_eq!(
+            error.cause().map(NativeAgentAssemblyCause::detail),
+            Some(Some("split_out"))
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::PipelineNodeTypeNotAvailable);
+        let (code, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(
+            code,
+            crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
+        );
+        assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
+        assert!(message.contains("not available on this deployment"));
+        assert!(!message.contains("split"), "the message stays data-free");
+        assert!(!retryable);
+
+        // Any other unsupported capability keeps the generic message.
+        let Err(configuration) =
+            PipelineDefinition::from_yaml("entry_point: x\nnodes:\n  - id: x\n    type: custom\n")
+        else {
+            panic!("custom was admitted");
+        };
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &configuration,
+            "fixture",
+        );
+        assert_eq!(
+            assembly_failure(&error),
+            RuntimeFailureKind::UnsupportedCapability
+        );
+    }
+
+    #[test]
+    fn pipeline_bound_refusals_end_as_the_agent_settings_message() {
+        use crate::agents::graph::compiler::PipelineDefinition;
+        use crate::protocol::InputLimitField;
+        use crate::protocol::output::runtime_error_policy;
+
+        let mut nodes = String::from("entry_point: n0\nnodes:\n");
+        for n in 0..129 {
+            std::fmt::Write::write_fmt(
+                &mut nodes,
+                format_args!("  - id: n{n}\n    type: state_modifier\n    transition: END\n"),
+            )
+            .expect("write to string");
+        }
+        let Err(configuration) = PipelineDefinition::from_yaml(&nodes) else {
+            panic!("129 nodes were admitted");
+        };
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &configuration,
+            "fixture",
+        );
+        assert_eq!(
+            error.code(),
+            NativeAgentAssemblyErrorCode::AgentSettingsLimit
+        );
+        assert!(!error.retryable());
+        let kind = assembly_failure(&error);
+        assert_eq!(
+            kind,
+            RuntimeFailureKind::ExecutionInputFieldLimit(InputLimitField::AgentSettings)
+        );
+        let (_, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(message, InputLimitField::AgentSettings.safe_message());
+        assert!(!retryable);
+
+        let Err(configuration) = PipelineDefinition::from_yaml(
+            "entry_point: 1.5\nnodes:\n  - id: a\n    type: state_modifier\n",
+        ) else {
+            panic!("a float id was admitted");
+        };
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &configuration,
+            "fixture",
+        );
+        assert_eq!(assembly_failure(&error), RuntimeFailureKind::InvalidInput);
+        assert_eq!(
+            error.cause().map(NativeAgentAssemblyCause::code),
+            Some("graph.pipeline.invalid_identifier")
+        );
     }
 
     #[test]

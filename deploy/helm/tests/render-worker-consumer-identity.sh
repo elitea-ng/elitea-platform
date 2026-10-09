@@ -38,7 +38,7 @@ CHART="deploy/helm/elitea"
 # that never render — the failure mode render-workload-session.sh records.
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
-      --set llmGateway.egressPosture=public-unrestricted
+      --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
       --set worker.enabled=true)
 
 failures=0

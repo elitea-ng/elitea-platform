@@ -91,6 +91,9 @@ var requiredStrippedHeaders = []string{
 	"X-Auth-ID",
 	"X-Auth-User-ID",
 	"X-Auth-Reference",
+	// The detached signature elitea-main requires beside the X-Auth-*
+	// projection. Only the auth edge's own response may supply it.
+	"X-Auth-Signature",
 	"X-Auth-Avatar",
 	"X-Auth-Avatar-State",
 	"X-Auth-Session-Id",

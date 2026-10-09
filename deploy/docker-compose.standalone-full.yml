@@ -506,8 +506,8 @@ services:
     # Build context is the repository ROOT: the module replaces
     # libs/go/egresslib, which sits outside services/elitea-llm-gateway. The
     # image still does not inherit the root go.work — the Containerfile never
-    # copies it and the build sets GOWORK=off — so Go 1.25.8 for
-    # elitea-main/elitea-scheduler stays out of this build.
+    # copies it and the build sets GOWORK=off — so the workspace toolchain
+    # of elitea-main/elitea-scheduler stays out of this build.
     build:
       context: ..
       dockerfile: services/elitea-llm-gateway/Containerfile
@@ -884,13 +884,23 @@ services:
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
+      # Main refuses to start without the key unless a local stack opts out
+      # explicitly. A supplied key is used either way.
+      ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "${ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS-true}"
       ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme-standalone"
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
-      OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/auth/oidc/callback"
+      # The host the browser signs in on. Cookies are scoped by host, never by
+      # port, so two stacks both browsed on `localhost:<port>` write the same
+      # `elitea_session` and each sign-in evicts the other's session (the
+      # other Main logs `session_unknown`). A second stack sets
+      # STANDALONE_HOST=<name>.localhost and is browsed on that host; the
+      # callback must be on the same host. standalone-stack.sh refuses any value
+      # but localhost or <label>.localhost; plain `docker compose` does not check.
+      OIDC_REDIRECT_URI: "http://${STANDALONE_HOST:-localhost}:${STANDALONE_PORT:-8084}/auth/oidc/callback"
       COOKIE_SECURE: "false"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). deploy/runtime/auth.form.yml's
@@ -1174,6 +1184,16 @@ services:
       # on elitea-index-worker-v1) is the alternative shape.
       ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
 
+      # Toolkit tool discovery: GET .../toolkit_available_tools/prompt_lib/...,
+      # which fills the tool lists on the toolkit and MCP pages. Unset, the
+      # route answers 503 "toolkit discovery unavailable" and those pages show
+      # "The tool list did not load". The worker serves it in both worker modes
+      # (the Rust overlay inherits this value; toolkit_route.go picks the
+      # stream), and it needs the object store (STORAGE_BACKEND above). Set it
+      # to false to turn it off. The Helm chart keeps it opt-in
+      # (main.runtime.toolkitDiscovery.enabled=false).
+      ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED: "${ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED:-true}"
+
       # Plaintext here (compose posture; docker-compose.nats-secure.yml layers
       # the elitea-main-runtime identity on).
       ELITEA_RUNTIME_NATS_URL: "nats://nats:4222"
@@ -1293,23 +1313,40 @@ services:
     # the network; no host port.
     restart: unless-stopped
 
-  # ── The DeepWiki provider, SPI shell over the FIXTURE runner ─────────────
-  # ELITEA_DEEPWIKI_RUNNER=fixture is the real LegacyToolRunner with its tools
-  # injected (the P0 composition tests' own mechanism): parameter merge,
-  # egress check, composition and the artifact upload are the production
-  # code; only what the engine would have computed is canned. The journeys
-  # in apps/elitea-web/e2e/journeys/deepwiki (Playwright project
-  # `deepwiki-stack`, scripts/deepwiki-e2e.sh) drive generate → land → read
-  # against it.
+  # ── The DeepWiki provider: the Go host and the native engine sidecar ─────
+  # The Go sub-application host (ADR-0023 H1.1) serves the SPI and reaches
+  # the Rust-native engine (ADR-0026) over a Unix socket the two share
+  # (ADR-0023 H2). Parameter merge, egress check, composition and the
+  # artifact upload are the production code on both sides.
   #
-  # No ELITEA_DEEPWIKI_DATABASE_URL: invocations stay in memory and index
-  # publishing is skipped, which is fine for a stack that never asks a second
-  # replica. The mTLS material comes from gen-deepwiki-certs.sh, which
+  # THE ENGINE RUNNER. `fixture` by default: canned results, paced progress,
+  # a stop that lands, so the journeys in apps/elitea-web/e2e/journeys/deepwiki
+  # (Playwright project `deepwiki-stack`, scripts/deepwiki-e2e.sh) drive
+  # generate → land → read without the analysis engine. `native` runs the
+  # engine itself — generate_wiki in a worker child process, ask /
+  # deep_research / resolve_wiki in process, every index in PostgreSQL:
+  #
+  #   DEEPWIKI_NATIVE_RUNNER=native deploy/scripts/standalone-stack.sh up
+  #
+  # The real-engine journey (DWIKI-014) runs with
+  # docker-compose.deepwiki-native-real-engine.yml applied after this file
+  # (apps/elitea-web/scripts/deepwiki-real-engine.sh): see "Real-engine
+  # journey" in services/elitea-deepwiki-engine/README.md.
+  #
+  # THE DATABASE is the stack's own PostgreSQL and its `elitea` database,
+  # directly and NOT through pgbouncer: the migration and the publish hold
+  # session-level advisory locks, which a transaction-mode pooler does not
+  # keep on one backend. The service owns its tables there, as the Helm
+  # chart's default (postgresql.existingSecret) makes the platform database
+  # the service database too. The fixture runner reads none of it, but the
+  # migration runs either way, so switching runner needs no other step.
+  #
+  # The host has no ELITEA_DEEPWIKI_DATABASE_URL: its invocations stay in
+  # memory, which is fine for a stack that never asks a second replica. The
+  # mTLS material comes from gen-deepwiki-certs.sh, which
   # `standalone-stack.sh certs` runs after the gateway's, sharing its CA.
   elitea-deepwiki:
-    # The Go sub-application host (ADR-0023 H1.1) serving DeepWiki's SPI in
-    # the Python shell's place: same ELITEA_DEEPWIKI_* settings, same fixture
-    # runner, one static binary. ELITEA_SUBAPP names the application.
+    # ELITEA_SUBAPP names the application.
     image: ghcr.io/elitea-ng/elitea-subapp-host:standalone
     build:
       context: ..
@@ -1317,13 +1354,10 @@ services:
     environment:
       ELITEA_SUBAPP: deepwiki
       # The Go host reaches the engine over the sidecar's Unix socket
-      # (ADR-0023 H2); the engine service below runs the fixture engine, so
-      # this stack proves the hop without the analysis engine's image.
-      ELITEA_DEEPWIKI_RUNNER: "legacy"
+      # (ADR-0023 H2), whichever runner the engine below serves; GET /health
+      # reports `runner: native`.
+      ELITEA_DEEPWIKI_RUNNER: "native"
       ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
-      # One second between progress steps: long enough for a browser to see
-      # the run in flight and stop it, short enough for a CI job.
-      ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS: "${DEEPWIKI_FIXTURE_STEP_SECONDS:-1}"
       ELITEA_DEEPWIKI_TLS_CERTFILE: /certs/deepwiki-server.crt
       ELITEA_DEEPWIKI_TLS_KEYFILE: /certs/deepwiki-server.key
       # Setting the CA turns mutual authentication ON (496 without a client cert).
@@ -1342,8 +1376,8 @@ services:
       elitea-deepwiki-engine:
         condition: service_healthy
     healthcheck:
-      # The image has python and nothing else; a TCP accept is the liveness
-      # signal (the listener is TLS, so a plain HTTP GET would not be one).
+      # Distroless; the binary's own probe is a TCP accept (the listener is
+      # TLS, so a plain HTTP GET would not be one).
       test: ["CMD", "/elitea-subapp-host", "healthcheck"]
       interval: 5s
       timeout: 3s
@@ -1351,31 +1385,72 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # ── The DeepWiki ENGINE sidecar (ADR-0023 H2) ──────────────────────────────
-  # The Python engine process the Go host calls over a Unix socket: the
-  # copied tool layer and, in production, its dependency closure (the
-  # `-engine` image). Here it serves the FIXTURE engine — canned results,
-  # paced progress, a stop that lands — so the hop is exercised end to end
-  # without the analysis engine. No SPI, no TLS, no identity: the socket is
-  # reachable only through the shared volume.
-  elitea-deepwiki-engine:
-    image: ghcr.io/elitea-ng/elitea-deepwiki:standalone
+  # The service migrations, from the native image (the binary embeds the SQL
+  # files and writes the schema_migrations ledger). Exits 0 at the newest
+  # migration; the engine waits for it.
+  elitea-deepwiki-migrate:
+    image: ghcr.io/elitea-ng/elitea-deepwiki-engine-native:standalone
+    # The same build as the engine below (a cache hit after the first), so
+    # compose never tries to PULL a tag that only exists locally.
     build:
       context: ..
-      dockerfile: services/elitea-deepwiki/Containerfile
-    # The image's ENTRYPOINT is the SPI shell; the sidecar is a different
-    # module, so the entrypoint is replaced rather than appended to.
-    entrypoint: ["python", "-m", "elitea_deepwiki.sidecar"]
+      dockerfile: services/elitea-deepwiki-engine/Containerfile
+    # The image's ENTRYPOINT is the binary; this replaces its CMD (`serve`).
+    command: ["migrate"]
     environment:
-      ELITEA_DEEPWIKI_RUNNER: "fixture"
+      ELITEA_DEEPWIKI_DATABASE_URL: "postgresql://elitea:elitea@postgres:5432/elitea"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # db-init creates the vector extension too; two concurrent
+      # CREATE EXTENSION IF NOT EXISTS can fail the loser on a fresh volume.
+      db-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # ── The DeepWiki ENGINE sidecar (ADR-0023 H2, ADR-0026) ───────────────────
+  # One distroless binary on the socket the Go host dials. No SPI, no TLS, no
+  # identity: the socket is reachable only through the shared volume.
+  elitea-deepwiki-engine:
+    image: ghcr.io/elitea-ng/elitea-deepwiki-engine-native:standalone
+    build:
+      context: ..
+      dockerfile: services/elitea-deepwiki-engine/Containerfile
+    # The image's own ENTRYPOINT/CMD: `elitea-deepwiki-engine serve`.
+    environment:
+      ELITEA_DEEPWIKI_RUNNER: "${DEEPWIKI_NATIVE_RUNNER:-fixture}"
+      # One second between fixture progress steps: long enough for a browser
+      # to see the run in flight and stop it, short enough for a CI job.
       ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS: "${DEEPWIKI_FIXTURE_STEP_SECONDS:-1}"
       ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
+      ELITEA_DEEPWIKI_DATABASE_URL: "postgresql://elitea:elitea@postgres:5432/elitea"
+      # The build-space owner. A container's hostname is its id, which
+      # changes on every recreate; the startup reconciliation deletes this
+      # owner's earlier builds, so the owner must survive a recreate. One
+      # engine on this stack, so one fixed name. (Helm uses the pod name.)
+      ELITEA_DEEPWIKI_BUILD_OWNER: "standalone-deepwiki-engine"
+      # The same allowlist the Go host checks; the engine checks it again
+      # before it clones.
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
+      # A generation worker's limits, at the engine defaults, stated so a
+      # reader of this file sees them: 16 GiB of address space, 4 h of CPU.
+      # There is no ELITEA_DEEPWIKI_MODEL_ALLOWLIST: the native engine
+      # downloads no model; every model call goes to the invocation's
+      # llm_settings.api_base (the platform's /llm/v1).
+      ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES: "17179869184"
+      ELITEA_DEEPWIKI_WORKER_CPU_SECONDS: "14400"
     volumes:
       - deepwiki-engine-sock:/run/deepwiki
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elitea-deepwiki-migrate:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/deepwiki/engine.sock'); s.close()"]
+      # Distroless: no shell, no python. The binary probes its own socket
+      # with GET /engine/health.
+      test: ["CMD", "/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -1390,8 +1465,8 @@ services:
   # identity secret.
   #
   # RUNNER=legacy, reaching the engine sidecar below over a shared Unix socket
-  # — the same shape DeepWiki runs here, and the reason this stack proves the
-  # socket hop rather than only the Go half. The sidecar runs the PYTHON
+  # — the same socket shape DeepWiki runs here (with its native engine), and
+  # the reason this stack proves the socket hop rather than only the Go half. The sidecar runs the PYTHON
   # fixture engine, so no engine closure is needed. (The E2E stack takes the
   # other arm: the Go host's own fixture runner and no sidecar at all. Two
   # fixture runners, kept in step by hand — the trap DeepWiki records.)
@@ -1818,7 +1893,7 @@ services:
 
 volumes:
   # The engine sidecar's Unix socket, shared between the Go host and the
-  # Python engine (ADR-0023 H2). Nothing else mounts it.
+  # native engine (ADR-0023 H2). Nothing else mounts it.
   deepwiki-engine-sock:
   # The same, for the second provider. A separate volume, not a shared one:
   # each host must reach ITS engine, and one socket directory for two pairs

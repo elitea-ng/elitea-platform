@@ -18,6 +18,60 @@ type RuntimeContext struct {
 	ToolkitSecurity   *guardrails.RuntimePolicy `json:"toolkit_security"`
 	LLMModel          string                    `json:"llm_model,omitempty"`
 	MCPTokenReference *MCPTokenReference        `json:"mcp_token_reference,omitempty"`
+	// SensitiveGate and SensitiveActionApproval are the desktop's remote
+	// toolkit call's, and ONLY its (ADR-0029 decision 5b). SensitiveGate
+	// "enforce" tells the worker to refuse a tool the toolkit_security policy
+	// marks sensitive unless SensitiveActionApproval records the caller's
+	// confirmation. Every other producer (test_tool, the MCP toolkit run, the
+	// code platform's native operations, index start) sends neither key, so
+	// its runtime context, and therefore its idempotency identity, is byte for
+	// byte what it was before these keys existed, and a worker built before
+	// them (which refuses an unknown key) still accepts it.
+	SensitiveGate           string                   `json:"sensitive_gate,omitempty"`
+	SensitiveActionApproval *SensitiveActionApproval `json:"sensitive_action_approval,omitempty"`
+}
+
+// SensitiveGateEnforce is the one SensitiveGate value.
+const SensitiveGateEnforce = "enforce"
+
+// ApprovalSourceUserConfirmation is a remote toolkit call whose caller
+// confirmed this sensitive call (ADR-0029 decision 5b), the desktop's answer
+// to the same approval a chat turn pauses for.
+const ApprovalSourceUserConfirmation = "user_confirmation"
+
+// SensitiveActionApproval records who approved a sensitive call and when.
+type SensitiveActionApproval struct {
+	Source     string `json:"source"`
+	ApprovedAt string `json:"approved_at,omitempty"`
+}
+
+func (a *SensitiveActionApproval) valid() bool {
+	if a == nil {
+		return true
+	}
+	return a.Source == ApprovalSourceUserConfirmation &&
+		a.ApprovedAt != "" && len(a.ApprovedAt) <= 64 && utf8.ValidString(a.ApprovedAt) &&
+		!strings.ContainsAny(a.ApprovedAt, "\x00\r\n")
+}
+
+// validSensitiveGate: an approval only travels with the gate it answers.
+func validSensitiveGate(gate string, approval *SensitiveActionApproval) bool {
+	switch gate {
+	case "":
+		return approval == nil
+	case SensitiveGateEnforce:
+		return approval.valid()
+	default:
+		return false
+	}
+}
+
+func (a *SensitiveActionApproval) clone() *SensitiveActionApproval {
+	if a == nil {
+		return nil
+	}
+	copied := *a
+	return &copied
 }
 
 func validRuntimeContext(raw []byte) bool {
@@ -37,6 +91,9 @@ func validRuntimeContext(raw []byte) bool {
 		return false
 	}
 	if value.MCPTokenReference != nil && !value.MCPTokenReference.valid() {
+		return false
+	}
+	if !validSensitiveGate(value.SensitiveGate, value.SensitiveActionApproval) {
 		return false
 	}
 	if !validModelSettings(value.LLMConfiguration) {

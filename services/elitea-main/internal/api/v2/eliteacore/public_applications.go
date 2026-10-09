@@ -271,6 +271,25 @@ func publicApplicationsOrderBy(f publicApplicationsFilter) string {
 	return fmt.Sprintf(" ORDER BY %s %s, a.id DESC", column, direction)
 }
 
+// writePublicApplicationsQueryError answers a refused catalogue query with
+// 400 and the InvalidQueryParameterError body v2.yaml declares for
+// listPublicApplications. Client contract 1.3 locked that 400 as
+// {error, error_description} (the version gate's body), and a locked
+// response cannot drop a required key, so this body carries
+// error_description too; `param` and `msg` stay for the web app.
+func writePublicApplicationsQueryError(w http.ResponseWriter, err error) {
+	body := map[string]any{
+		"error":             "invalid_query_parameter",
+		"error_description": err.Error(),
+	}
+	var paramErr *publicApplicationsParamError
+	if errors.As(err, &paramErr) {
+		body["param"] = paramErr.Param
+		body["msg"] = paramErr.Message
+	}
+	writeJSON(w, http.StatusBadRequest, body)
+}
+
 // PublicApplications lists the published applications of the public project.
 func (h *Handler) PublicApplications(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
@@ -287,13 +306,7 @@ func (h *Handler) PublicApplications(w http.ResponseWriter, r *http.Request) {
 
 	filter, err := parsePublicApplicationsFilter(r.URL.Query())
 	if err != nil {
-		body := map[string]any{"error": "invalid_query_parameter"}
-		var paramErr *publicApplicationsParamError
-		if errors.As(err, &paramErr) {
-			body["param"] = paramErr.Param
-			body["msg"] = paramErr.Message
-		}
-		writeJSON(w, http.StatusBadRequest, body)
+		writePublicApplicationsQueryError(w, err)
 		return
 	}
 

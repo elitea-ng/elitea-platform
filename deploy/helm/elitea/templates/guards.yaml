@@ -22,6 +22,50 @@
 {{- fail "runtimeRedis is removed: the platform runs without Redis (the runtime command bus is NATS JetStream, Form sign-in state is in PostgreSQL). Delete the runtimeRedis block from your values, then delete the leftover elitea-runtime-redis Deployment, Service, ConfigMap, PVC and the elitea-runtime-redis-material Secret. See docs/UPGRADING.md, \"runtime-redis removed\"." }}
 {{- end }}
 
+{{- if and (not .Values.networkPolicies.enabled) (not .Values.networkPolicies.externallyManaged) }}
+{{- fail "networkPolicies.enabled is false. The chart's NetworkPolicies are what keep pods without a role off elitea-main, the platform edge, the worker and the sandbox supervisors. If your own NetworkPolicy already does this, say so with networkPolicies.externallyManaged=true." }}
+{{- end }}
+
+{{- if and .Values.networkPolicies.enabled .Values.main.enabled (not .Values.networkPolicies.main.ingressFrom) (not .Values.networkPolicies.main.extraIngressFrom) (not .Values.networkPolicies.main.noExternalIngress) }}
+{{- fail "networkPolicies.enabled=true needs an explicit decision about who may reach elitea-main:8080 from outside this chart. List the Gateway API gateway or ingress controller as NetworkPolicyPeer entries in networkPolicies.main.ingressFrom (or networkPolicies.main.extraIngressFrom) - this includes a Gateway API HTTPRoute applied outside the chart, such as deploy/gateway-api/httproute.yaml - or set networkPolicies.main.noExternalIngress=true when only this chart's own pods reach elitea-main (for example access by kubectl port-forward only). Alternatively set networkPolicies.enabled=false together with networkPolicies.externallyManaged=true if your own policy covers elitea-main." }}
+{{- end }}
+
+{{- if and .Values.networkPolicies.enabled .Values.main.enabled .Values.main.ingress.enabled (not .Values.networkPolicies.main.ingressFrom) }}
+{{- fail "main.ingress.enabled=true with networkPolicies.enabled=true needs networkPolicies.main.ingressFrom: the policy on elitea-main admits only the listed peers, and the chart cannot see the labels or namespace of your Gateway API gateway or ingress controller. List them as NetworkPolicyPeer entries, or set networkPolicies.enabled=false together with networkPolicies.externallyManaged=true if your own policy covers elitea-main." }}
+{{- end }}
+
+{{- range $key := list "ingressFrom" "extraIngressFrom" }}
+{{- range $peer := (index $.Values.networkPolicies.main $key) }}
+{{- range $label, $value := (dig "namespaceSelector" "matchLabels" dict $peer) }}
+{{- if eq (toString $value) "" }}
+{{- fail (printf "networkPolicies.main.%s has a namespaceSelector label %q with an empty value, which selects no namespace: the entry is an unfilled placeholder. Give it the gateway's namespace, or remove it." $key $label) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if and .Values.networkPolicies.enabled .Values.worker.enabled .Values.worker.platformEdge.enabled (ne .Values.worker.platformEdge.mainService (include "elitea-main.fullname" .)) }}
+{{- fail (printf "worker.platformEdge.mainService is %q, but the platform edge NetworkPolicy admits egress only to this chart's elitea-main pods (Service %q). Point the edge at that Service, or set networkPolicies.enabled=false together with networkPolicies.externallyManaged=true and admit the edge's real upstream in your own policy." .Values.worker.platformEdge.mainService (include "elitea-main.fullname" .)) }}
+{{- end }}
+
+{{- if and .Values.networkPolicies.main.noExternalIngress .Values.main.enabled .Values.main.ingress.enabled }}
+{{- fail "networkPolicies.main.noExternalIngress=true contradicts main.ingress.enabled=true: the Ingress or HTTPRoute exists to carry outside traffic to elitea-main. Set one of them to false, or keep noExternalIngress=false and list the gateway in networkPolicies.main.ingressFrom." }}
+{{- end }}
+
+{{- if and .Values.main.enabled .Values.main.ingress.enabled (not .Values.main.ingress.gatewayApi) .Values.main.fileConfig.authConfig.enabled (not .Values.main.ingress.identityHeadersStrippedByController) }}
+{{- fail "main.ingress.enabled=true with main.ingress.gatewayApi=false renders a plain networking.k8s.io/v1 Ingress, which has no portable way to remove inbound identity headers, while main.fileConfig.authConfig.enabled=true makes elitea-main read the X-Auth-* projection. Either use main.ingress.gatewayApi=true (the HTTPRoute removes main.ingress.stripIdentityHeaders), or configure the ingress controller to delete X-Auth-Type, X-Auth-ID, X-Auth-User-ID, X-Auth-Reference, X-Auth-Signature and the other names in main.ingress.stripIdentityHeaders from inbound requests and then set main.ingress.identityHeadersStrippedByController=true." }}
+{{- end }}
+
+{{- if and .Values.main.enabled .Values.main.ingress.enabled .Values.main.ingress.gatewayApi }}
+{{- $stripped := list }}
+{{- range .Values.main.ingress.stripIdentityHeaders }}{{- $stripped = append $stripped (lower .) }}{{- end }}
+{{- range $required := list "X-Auth-Type" "X-Auth-ID" "X-Auth-User-ID" "X-Auth-Signature" }}
+{{- if not (has (lower $required) $stripped) }}
+{{- fail (printf "main.ingress.stripIdentityHeaders must name %s: the HTTPRoute removes only the headers listed there, and a name left out reaches elitea-main exactly as the caller sent it. Extend the list; do not shorten it." $required) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- if and .Values.worker.enabled (not .Values.main.runtime.enabled) }}
 {{- fail "worker.enabled=true needs main.runtime.enabled=true. The worker dials elitea-main's control, output and content listeners, and those exist only when the runtime plane is composed. Without them every chat turn is admitted over HTTP, never claimed, and durably quarantined by the worker — with nothing logged on either side. Set main.runtime.enabled=true (and its fileConfig.authConfig), or set worker.enabled=false." }}
 {{- end }}

@@ -1,0 +1,56 @@
+{
+  "schema_version": "elitea.llm-caller-contract.v1",
+  "description": "What every Rust caller of the platform /llm edge (the agent worker, the engine model client) must send and how it must read the answer. One fixture, asserted by both: services/elitea-worker-rust (transport/openai_compatible_facade_tests.rs) and libs/rust/model-client (tests/caller_contract.rs). The prose is libs/rust/model-client/docs/llm-caller-contract.md.",
+  "request": {
+    "route": "/llm/v1/chat/completions",
+    "headers": {
+      "authorization": "Bearer {token}",
+      "x-project-id": "{project_id}",
+      "x-elitea-execution-id": "{execution_id}"
+    },
+    "headers_absent": ["openai-organization", "openai-project"],
+    "execution_id": {
+      "max_bytes": 128,
+      "alphabet": "A-Za-z0-9-_.",
+      "valid": ["0123456789abcdef0123456789abcdef", "callback-6f1c2d4e-8a7b-4c3d-9e2f-1a2b3c4d5e6f"],
+      "invalid": ["", "a:b", "execution id", "a/b"]
+    }
+  },
+  "refusals": [
+    {"name": "member budget", "status": 402, "body": {"error": {"type": "budget_exceeded", "code": "member_budget_exceeded", "scope": "member", "message": "member budget exhausted for this billing period"}}, "code": "model_gateway.member_budget_exhausted", "retryable": false},
+    {"name": "member budget, older gateway without scope", "status": 402, "body": {"error": {"type": "budget_exceeded", "code": "member_budget_exceeded", "message": "member budget exhausted for this billing period"}}, "code": "model_gateway.member_budget_exhausted", "retryable": false},
+    {"name": "project budget", "status": 402, "body": {"error": {"type": "budget_exceeded", "code": "insufficient_quota", "scope": "project", "message": "project budget exhausted for this billing period"}}, "code": "model_gateway.project_budget_exhausted", "retryable": false},
+    {"name": "provider quota, unscoped", "status": 402, "body": {"error": {"type": "budget_exceeded", "code": "insufficient_quota", "message": "provider quota"}}, "code": "model_gateway.budget_exhausted", "retryable": false},
+    {"name": "unknown scope is unscoped", "status": 402, "body": {"error": {"type": "budget_exceeded", "code": "insufficient_quota", "scope": "provider", "message": "provider quota"}}, "code": "model_gateway.budget_exhausted", "retryable": false},
+    {"name": "not a budget_exceeded type", "status": 402, "body": {"error": {"type": "insufficient_quota", "message": "provider quota"}}, "code": "model_gateway.budget_exhausted", "retryable": false},
+    {"name": "credential refused", "status": 401, "body": {"error": {"type": "authentication_error", "message": "no"}}, "code": "model_gateway.unauthorized", "retryable": false},
+    {"name": "project refused", "status": 403, "body": {"error": {"type": "permission_error", "code": "project_inactive", "message": "no"}}, "code": "model_gateway.forbidden", "retryable": false},
+    {"name": "request timeout", "status": 408, "body": {}, "code": "model_gateway.upstream_timeout", "retryable": true},
+    {"name": "gateway timeout", "status": 504, "body": {}, "code": "model_gateway.upstream_timeout", "retryable": true},
+    {"name": "rate limited", "status": 429, "body": {"error": {"type": "rate_limit_error", "message": "slow down"}}, "code": "model_gateway.rate_limited", "retryable": true},
+    {"name": "conflict", "status": 409, "body": {}, "code": "model_gateway.conflict", "retryable": true},
+    {"name": "internal error", "status": 500, "body": {}, "code": "model_gateway.unavailable", "retryable": true},
+    {"name": "bad gateway", "status": 502, "body": {}, "code": "model_gateway.unavailable", "retryable": true},
+    {"name": "unavailable", "status": 503, "body": {}, "code": "model_gateway.unavailable", "retryable": true},
+    {"name": "bad request", "status": 400, "body": {"error": {"type": "invalid_request_error", "code": "project_scope_conflict", "message": "no"}}, "code": "model_gateway.rejected", "retryable": false},
+    {"name": "unknown model", "status": 404, "body": {"error": {"type": "invalid_request_error", "message": "no such model"}}, "code": "model_gateway.rejected", "retryable": false},
+    {"name": "unprocessable", "status": 422, "body": {}, "code": "model_gateway.rejected", "retryable": false}
+  ],
+  "reasoning": {
+    "request_field": "reasoning_effort",
+    "efforts": ["none", "low", "medium", "high"],
+    "message_fields": ["reasoning_content", "reasoning"],
+    "usage": {
+      "reasoning_tokens": "completion_tokens_details.reasoning_tokens",
+      "cached_tokens": "prompt_tokens_details.cached_tokens"
+    },
+    "stream": [
+      {"choices": [{"index": 0, "delta": {"role": "assistant", "reasoning_content": "Think "}}]},
+      {"choices": [{"index": 0, "delta": {"reasoning_content": "first."}}]},
+      {"choices": [{"index": 0, "delta": {"content": "The answer."}}]},
+      {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+      {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 9, "total_tokens": 19, "completion_tokens_details": {"reasoning_tokens": 6}, "prompt_tokens_details": {"cached_tokens": 4}}}
+    ],
+    "expected": {"content": "The answer.", "reasoning": "Think first.", "reasoning_tokens": 6, "cached_tokens": 4}
+  }
+}

@@ -5,9 +5,10 @@ package run
 // The four legacy providers all name a remote to clone. A fifth kind of
 // source names a folder in the INVOKING PROJECT's artifact store: a bucket,
 // and optionally a prefix inside it. The engine still indexes a directory —
-// the Python side downloads the folder into the one a clone would have
-// produced (elitea_deepwiki/artifact_source.py) — so everything downstream of
-// the repo_config is unchanged.
+// the engine downloads the folder into the one a clone would have produced
+// (src/ingest/artifact.rs in the Rust engine, a port of the retired Python
+// artifact_source.py) — so everything downstream of the repo_config is
+// unchanged.
 //
 // THE SOURCE IS SPELLED IN THE REPOSITORY STRING, `artifact://{bucket}` or
 // `artifact://{bucket}/{prefix}`. The repository is the one value that
@@ -125,7 +126,7 @@ func safeKeyPrefix(prefix string) bool {
 }
 
 // artifactRepoConfig is the normalised repo_config an artifact source
-// produces. The Python twin is elitea_deepwiki.artifact_source.repo_config_for.
+// produces. Its twin was the retired Python artifact_source.repo_config_for.
 func artifactRepoConfig(source ArtifactSource, branch any) RepoConfig {
 	name := trimSpace(str(branch))
 	if name == "" {
@@ -158,3 +159,47 @@ func DisplayRepositoryFor(repoConfig map[string]any) string {
 	}
 	return strings.Trim(trimSpace(repository), "/")
 }
+
+// ArtifactWikiID is the wiki id a generation of the folder on branch is
+// filed under: the engine's normalize_wiki_id of
+// `artifact://bucket/prefix:{branch}:{sha8}`. The repository part is split on
+// `/` (the scheme's `artifact:` becomes `artifact`), every part and the branch
+// are lower-cased with each other character folded to `-`, runs collapsed and
+// the ends trimmed, and the parts are joined with `--`. So
+// `artifact://docs/handbook` on `main` is `artifact--docs--handbook--main`.
+func ArtifactWikiID(source ArtifactSource, branch string) string {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		branch = "main"
+	}
+	// The engine splits `{repository}:{branch}:{sha8}` from the right, so a
+	// `:` inside the branch moves its head into the repository half.
+	repository := source.Repository()
+	if index := strings.LastIndex(branch, ":"); index >= 0 {
+		repository += ":" + branch[:index]
+		branch = branch[index+1:]
+	}
+	parts := make([]string, 0, 4)
+	for _, segment := range strings.Split(strings.Trim(lower(repository), "/"), "/") {
+		if part := wikiIDPart(segment); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, "--") + "--" + wikiIDPart(branch)
+}
+
+// wikiIDPart is normalize_wiki_id's rule for one part: lower case, every
+// character outside [a-z0-9-] a `-`, runs of `-` collapsed, the ends trimmed.
+func wikiIDPart(text string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(text) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(dashRuns.ReplaceAllString(b.String(), "-"), "-")
+}
+
+var dashRuns = regexp.MustCompile(`-+`)

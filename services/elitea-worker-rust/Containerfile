@@ -84,6 +84,13 @@ awk '$2 == "=>" && $3 !~ /^\/runtime-root\// { exit 1 }' /tmp/runtime-libraries
 VERIFY
 
 COPY libs/proto ./libs/proto
+# The /llm caller contract crate (elitea-llm-wire) and the shared agent
+# runtime (elitea-agent-runtime, ADR-0029) are path dependencies under
+# ../../libs/rust, and so are the patched adk crates the worker's
+# [patch.crates-io] names (libs/rust/vendor). The whole libs/rust workspace
+# comes with them: the crates inherit their package fields and lints from
+# libs/rust/Cargo.toml.
+COPY libs/rust ./libs/rust
 COPY services/elitea-worker-rust ./services/elitea-worker-rust
 
 WORKDIR /src/services/elitea-worker-rust
@@ -91,6 +98,9 @@ WORKDIR /src/services/elitea-worker-rust
 FROM builder-base AS builder
 # Optional build-only concurrency bound for shared development hosts.
 ARG CARGO_BUILD_JOBS
+# Optional rehearsal-only Cargo features, for example graph-extensions-rehearsal.
+# Production images leave it empty.
+ARG WORKER_REHEARSAL_FEATURES=""
 
 # The dependency build lives in the THREE CACHE MOUNTS below, not in a layer,
 # and that is deliberate: a cargo-chef style `target/` inside the image would
@@ -101,12 +111,27 @@ ARG CARGO_BUILD_JOBS
 #
 # They were simply not working: see the 391 KB restore recorded in that
 # action's policy step. With the mount entry real, a pull request that touches
-# only src/ recompiles this crate and relinks it, instead of building all 418
-# crates from an empty registry.
+# only src/ recompiles the local crates (this one and vendor/*) and relinks,
+# instead of building all 418 crates from an empty registry.
+#
+# ── EVERY LOCAL CRATE IS REBUILT; ONLY REGISTRY CRATES COME FROM THE CACHE ──
+#
+# /cargo-target is one mount for every build on a host: every worktree, the
+# supervisor stage below and the DeepWiki engine. Cargo decides a path crate is
+# fresh by comparing source mtimes with its last compile, and COPY keeps the
+# build context's mtimes. A file last edited before ANOTHER checkout's build
+# therefore looked older than that build, and the image shipped the other
+# checkout's binary. `touch` puts every file under /src after any compile in the
+# mount, so each local crate (this one, vendor/*, the libs/proto build script)
+# is compiled from this context; registry and git crates are untouched.
+# `sharing=locked` keeps a concurrent build from compiling or overwriting the
+# binary between this step's touch and its copy.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target \
-    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
+    --mount=type=cache,target=/cargo-target,sharing=locked \
+    find /src -type f -exec touch {} + && \
+    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release \
+      ${WORKER_REHEARSAL_FEATURES:+--features "$WORKER_REHEARSAL_FEATURES"} && \
     cp /cargo-target/release/elitea-worker-rust /usr/local/bin/elitea-worker-rust
 
 # Check audit metadata, diagnostics, CA roots, and the complete runtime library closure.
@@ -126,9 +151,11 @@ ENTRYPOINT ["/usr/local/bin/elitea-worker-rust"]
 FROM builder-base AS supervisor-builder
 # Optional build-only concurrency bound for shared development hosts.
 ARG CARGO_BUILD_JOBS
+# Local sources are touched under the lock for the reason given in `builder`.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target \
+    --mount=type=cache,target=/cargo-target,sharing=locked \
+    find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release \
       --features sandbox-supervisor --bin elitea-sandbox-supervisor && \
     cp /cargo-target/release/elitea-sandbox-supervisor /usr/local/bin/elitea-sandbox-supervisor

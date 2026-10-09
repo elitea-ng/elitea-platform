@@ -118,6 +118,19 @@ async function seedBucketWithFiles(request: APIRequestContext, projectId: string
  *
  * No assertion is weakened. The wait ends BEFORE the navigation begins, so
  * everything after it still judges a fresh document.
+ *
+ * WHY IT WAS CANCELLED (traced later): not the boot calls. WebKit cancels a
+ * lazy route chunk still loading when the next navigation begins, and TanStack
+ * Router answered that chunk error with `window.location.reload()`, which
+ * replaced the `goto`. `src/shared/lib/chunk-load-guard.ts` removes that
+ * reload — and the wait is STILL load-bearing. With the guard in place, PR
+ * #1142's webkit run lost J20f's first attempt (and ELITEA-2483, every
+ * attempt) to a second `goto` fired into boot traffic: the cancelled boot
+ * calls failed "due to access control checks", the next document's
+ * `config.js` failed with "WebKit encountered an internal error", and its
+ * session probe went out WITHOUT the session cookie, so the app sent the
+ * browser to the OIDC authorize page. Every second entry here goes through
+ * this helper.
  */
 async function reenterArtifacts(page: Page, url: string): Promise<void> {
   await page.waitForLoadState('networkidle');
@@ -308,6 +321,12 @@ test.describe('J20 artifacts lifecycle', () => {
      * the notification SSE stream stays open across it and does not hold it.
      *
      * No assertion is weakened: the three below still judge a FRESH document.
+     *
+     * The cancellation itself was TanStack Router's chunk-error reload, not the
+     * boot calls: WebKit cancels a lazy route chunk still in flight, and the
+     * router reloaded on that error, replacing this reload/goto. Fixed in
+     * `src/shared/lib/chunk-load-guard.ts`; see `reenterArtifacts` above for
+     * why the wait is kept for now.
      */
     await page.waitForLoadState('networkidle');
 
@@ -540,8 +559,7 @@ test.describe('J20 artifacts lifecycle', () => {
     // 2. The artifacts feature ACTS on it. One MiB over the served limit and
     //    under the client's 150 MB fallback, so only a client that received
     //    the config rejects this file.
-    await page.goto(`${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
-    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    await reenterArtifacts(page, `${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
     await expect(page.getByRole('row').filter({ hasText: SECOND_FILE_NAME })).toBeVisible({ timeout: 15_000 });
 
     const oversizedName = 'j20f-oversized-art.bin';
@@ -622,7 +640,7 @@ test.describe('J20 artifacts lifecycle', () => {
     const projectId = await selectedProjectId(page);
     await seedBucketWithFiles(request, projectId);
 
-    await page.goto(`${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
+    await reenterArtifacts(page, `${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
     await expect(page.getByRole('row').filter({ hasText: FILE_NAME })).toBeVisible({ timeout: 15_000 });
     // The precondition the whole test rests on: the empty state, and with it
     // its own upload button, is gone.

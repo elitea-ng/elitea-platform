@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-card.v1",
+  "title": "Interrupt card (raise)",
+  "description": "One per-interrupt card raised by the Worker in a non-terminal agent_interrupt_pending frame and stored by Main in execution_interrupts. Covers fan-out members and coordinator (root) pauses. Main treats interrupt_key as opaque.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "interrupt_key",
+    "interrupt_id",
+    "kind",
+    "available_actions",
+    "payload_sha256",
+    "display",
+    "parent_agent_name",
+    "parent_agent_call_id",
+    "parent_agent_path",
+    "fanout_v1"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-interrupt-card.v1"
+    },
+    "interrupt_key": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "interrupt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[\\x21-\\x7e][\\x20-\\x7e]{0,511}$"
+    },
+    "kind": {
+      "enum": [
+        "tool_guard",
+        "hitl_node",
+        "ask_user",
+        "delegated_auth"
+      ]
+    },
+    "available_actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "approve",
+          "reject",
+          "edit",
+          "block_with_comment",
+          "answer",
+          "authorize",
+          "skip",
+          "continue"
+        ]
+      }
+    },
+    "payload_sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message",
+        "guardrail_type"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "guardrail_type": {
+          "enum": [
+            "sensitive_tool",
+            "pipeline_hitl",
+            "pipeline_static",
+            "clarifying_question",
+            "mcp_auth"
+          ]
+        },
+        "node_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "tool_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "toolkit_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "toolkit_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "action_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "tool_args_json": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "policy_message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "interaction_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "edit_state_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        "server_url": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 2048,
+          "pattern": "^https://[^\\x00-\\x20\\x7f]+$"
+        }
+      },
+      "maxProperties": 13
+    },
+    "parent_agent_name": {
+      "$ref": "elitea.pipeline.fanout-hierarchy.v1#/properties/parent_agent_name"
+    },
+    "parent_agent_call_id": {
+      "$ref": "elitea.pipeline.fanout-hierarchy.v1#/properties/parent_agent_call_id"
+    },
+    "parent_agent_path": {
+      "$ref": "elitea.pipeline.fanout-hierarchy.v1#/properties/parent_agent_path"
+    },
+    "fanout_v1": {
+      "oneOf": [
+        {
+          "$ref": "elitea.pipeline.fanout-member.v1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "parent_agent_name": {
+              "type": "null"
+            },
+            "parent_agent_call_id": {
+              "type": "null"
+            },
+            "parent_agent_path": {
+              "maxItems": 0
+            }
+          }
+        },
+        {
+          "properties": {
+            "parent_agent_name": {
+              "type": "string"
+            },
+            "parent_agent_call_id": {
+              "type": "string"
+            },
+            "parent_agent_path": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "fanout_v1": {
+            "type": "object"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "parent_agent_path": {
+            "minItems": 1,
+            "contains": {
+              "required": [
+                "sibling_ordinal"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "display": {
+            "properties": {
+              "guardrail_type": {
+                "const": "pipeline_static"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "const": "continue"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "display": {
+            "properties": {
+              "guardrail_type": {
+                "const": "pipeline_hitl"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "approve",
+                "reject",
+                "edit"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "tool_guard"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "approve",
+                "reject",
+                "edit",
+                "block_with_comment"
+              ]
+            }
+          },
+          "display": {
+            "properties": {
+              "guardrail_type": {
+                "enum": [
+                  "sensitive_tool"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "hitl_node"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "approve",
+                "reject",
+                "edit",
+                "continue"
+              ]
+            }
+          },
+          "display": {
+            "properties": {
+              "guardrail_type": {
+                "enum": [
+                  "pipeline_hitl",
+                  "pipeline_static"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "ask_user"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "answer"
+              ]
+            }
+          },
+          "display": {
+            "properties": {
+              "guardrail_type": {
+                "enum": [
+                  "clarifying_question"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "delegated_auth"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "authorize",
+                "skip"
+              ]
+            }
+          },
+          "display": {
+            "properties": {
+              "guardrail_type": {
+                "enum": [
+                  "mcp_auth"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

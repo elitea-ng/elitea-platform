@@ -82,6 +82,8 @@ interface ToolCatalogueRead {
   readonly toolNames: readonly string[];
   /** The read failed AND left the "Tools" section with nothing to show. A failed read that still produced a list keeps the working picker. */
   readonly readFailed: boolean;
+  /** `readFailed` because this deployment turned tool discovery off, and nothing else failed. A retry cannot help. */
+  readonly discoveryDisabled: boolean;
   readonly retry: () => void;
 }
 
@@ -120,7 +122,12 @@ function useToolCatalogueRead(args: ToolCatalogueReadArgs): ToolCatalogueRead {
   }, [retryDynamicToolsRead, retrySchemasRead]);
 
   const nothingToShow = staticToolNames.length === 0 && dynamicTools.toolNames.length === 0;
-  return { toolNames: dynamicTools.toolNames, readFailed: (dynamicTools.isError || schemasReadFailed) && nothingToShow, retry };
+  return {
+    toolNames: dynamicTools.toolNames,
+    readFailed: (dynamicTools.isError || schemasReadFailed) && nothingToShow,
+    discoveryDisabled: dynamicTools.isDiscoveryDisabled && !schemasReadFailed && nothingToShow,
+    retry,
+  };
 }
 
 export interface CoreState {
@@ -145,6 +152,8 @@ export interface CoreState {
   readonly effectiveToolSchema: RawToolkitTypeSchema | undefined;
   /** A read that feeds the "Tools" section failed — the type schemas, or the tool catalogue (#440). */
   readonly toolListReadFailed: boolean;
+  /** `toolListReadFailed` is only because tool discovery is turned off (no retry). */
+  readonly toolListDiscoveryDisabled: boolean;
   /** Runs both reads again. */
   readonly retryToolListRead: () => void;
   readonly ToolComponent: ToolFormComponent | undefined;
@@ -285,6 +294,7 @@ export function useToolkitFormCore(props: ResolvedToolkitFormProps): CoreState {
     toolType,
     effectiveToolSchema,
     toolListReadFailed: toolCatalogue.readFailed,
+    toolListDiscoveryDisabled: toolCatalogue.discoveryDisabled,
     retryToolListRead: toolCatalogue.retry,
     ToolComponent,
     isValidSchema,

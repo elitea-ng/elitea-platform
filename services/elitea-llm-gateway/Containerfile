@@ -1,9 +1,12 @@
 # syntax=docker/dockerfile:1.7
 #
 # elitea-llm-gateway is a STANDALONE Go module that needs Go 1.26.4 or above
-# (required by github.com/maximhq/bifrost/core). It is deliberately NOT part of
-# the root go.work workspace — that workspace stays on Go 1.25.8 for elitea-main
-# and elitea-scheduler, whose toolchain must not be bumped.
+# (required by github.com/maximhq/bifrost/core); its go.mod asks for 1.26.9,
+# the standard-library security floor held by
+# services/elitea-main/tests/buildcontext/toolchain_floor_test.go. It is
+# deliberately NOT part of the root go.work workspace. The workspace was kept
+# off it while elitea-main and elitea-scheduler were on the Go 1.25 series;
+# both are on the 1.26 series now, so the build stays standalone by choice.
 #
 # ── THE BUILD CONTEXT IS THE REPOSITORY ROOT ─────────────────────────────────
 #
@@ -28,7 +31,7 @@
 # in ci-image-scan.yml reported 9 HIGH findings against stdlib v1.26.4, all
 # fixed in 1.26.6 (#433). The series tag still satisfies the 1.26.4 minimum
 # and takes each patch release, which is what elitea-main and elitea-scheduler
-# already do with `golang:1.25-trixie`. It names `trixie` because every image
+# do with the same `golang:1.26-trixie`. It names `trixie` because every image
 # this repository builds sits on Debian 13; the builder was `-alpine` until
 # 2026-10. CGO_ENABLED=0 below keeps the binary static, so the glibc builder
 # does not change what static-debian13 has to provide.

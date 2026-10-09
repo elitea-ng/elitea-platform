@@ -71,15 +71,7 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 			if !ok {
 				return errors.New("current agent cancellation query is unavailable")
 			}
-			row, queryErr := queries.CancelCurrentAgentExecution(
-				ctx,
-				sqlcgen.CancelCurrentAgentExecutionParams{
-					ResponseMessageID: responseMessageID,
-					ProjectID:         projectID,
-					ActorUserID:       request.ActorUserID,
-				},
-			)
-			if errors.Is(queryErr, pgx.ErrNoRows) {
+			isReplay := func() (bool, error) {
 				replay, replayErr := queries.IsCurrentAgentCancellationReplay(
 					ctx,
 					sqlcgen.IsCurrentAgentCancellationReplayParams{
@@ -89,7 +81,22 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 					},
 				)
 				if replayErr != nil {
-					return fmt.Errorf("resolve current agent cancellation replay: %w", replayErr)
+					return false, fmt.Errorf("resolve current agent cancellation replay: %w", replayErr)
+				}
+				return replay, nil
+			}
+			row, queryErr := queries.CancelCurrentAgentExecution(
+				ctx,
+				sqlcgen.CancelCurrentAgentExecutionParams{
+					ResponseMessageID: responseMessageID,
+					ProjectID:         projectID,
+					ActorUserID:       request.ActorUserID,
+				},
+			)
+			if errors.Is(queryErr, pgx.ErrNoRows) {
+				replay, replayErr := isReplay()
+				if replayErr != nil {
+					return replayErr
 				}
 				if !replay {
 					return agentexecutionapp.ErrCurrentAgentCancelNotAllowed
@@ -131,6 +138,24 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 				}
 				outcome.Deleted = true
 				return nil
+			}
+			if !projection.Deleted && !projection.Retained && !projection.Salvaged &&
+				!projection.QuestionDeleted {
+				// A concurrent stop of the same empty turn: this statement's
+				// target CTE saw the answer before the other stop committed,
+				// waited on the job row and matched its CANCELLED desired
+				// state, but the other stop has since deleted the answer and
+				// its question, so the projection finds nothing. For a caller
+				// the replay check admits that is the repeated stop the
+				// contract answers 204.
+				replay, replayErr := isReplay()
+				if replayErr != nil {
+					return replayErr
+				}
+				if replay {
+					outcome.Replay = true
+					return nil
+				}
 			}
 			if !projection.Retained || projection.QuestionDeleted {
 				return errors.New("current agent cancellation projection did not settle")

@@ -151,17 +151,27 @@ export function CanvasEditHeader({
           alignItems: 'center',
         }}
       >
+        {/*
+          The way OUT of the editor, and it says so. It was a bare glyph with no
+          tooltip — the one control in this header nobody could name by hovering
+          it — and the owner's report of the "Edit document" mode was "no
+          buttons to exit from it". Escape does the same thing (the drawer's
+          own close, which saves); the tooltip names both.
+        */}
         {onClose && (
-          <IconButtonAny
-            variant="elitea"
-            color="tertiary"
-            size="small"
-            onClick={onClose}
-            data-testid="canvas-edit-close"
-            aria-label="Close editor"
-          >
-            ✕
-          </IconButtonAny>
+          <Tooltip title={t('features.chatMessages.canvas.editor.closeHint', 'Close (Esc)')} placement="top">
+            <IconButtonAny
+              variant="elitea"
+              color="tertiary"
+              size="small"
+              onClick={onClose}
+              data-testid="canvas-edit-close"
+              aria-label={t('features.chatMessages.canvas.editor.close', 'Close editor')}
+              aria-keyshortcuts="Escape"
+            >
+              ✕
+            </IconButtonAny>
+          </Tooltip>
         )}
         <Typography
           variant="bodyMedium"

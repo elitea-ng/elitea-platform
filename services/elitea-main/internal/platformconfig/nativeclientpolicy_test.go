@@ -3,19 +3,20 @@ package platformconfig
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
 func TestNativeClientPolicyDefaultsOnEmptySection(t *testing.T) {
 	got := NativeClientPolicyFromValues(Values{})
-	if got != DefaultNativeClientPolicy() {
+	if !reflect.DeepEqual(got, DefaultNativeClientPolicy()) {
 		t.Fatalf("empty section = %+v, want defaults", got)
 	}
 	if !got.OfflineEnabled() {
 		t.Fatal("offline must be enabled by default (retention 30)")
 	}
 	policy, err := LoadNativeClientPolicy(context.Background(), nil)
-	if err != nil || policy != DefaultNativeClientPolicy() {
+	if err != nil || !reflect.DeepEqual(policy, DefaultNativeClientPolicy()) {
 		t.Fatalf("nil pool = %+v, %v; want defaults, nil", policy, err)
 	}
 }
@@ -32,7 +33,7 @@ func TestNativeClientPolicyOverlay(t *testing.T) {
 	want := DefaultNativeClientPolicy()
 	want.RequireDeviceLock, want.IdleLockSeconds, want.AllowScreenshots = true, 300, false
 	want.OfflineRetentionDays, want.OfflineMaxMB, want.OfflineAttachments, want.MinClientVersion = 0, 64, false, "1.4.0"
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("overlay = %+v, want %+v", got, want)
 	}
 	if got.OfflineEnabled() {
@@ -48,7 +49,7 @@ func TestNativeClientPolicyIgnoresOutOfRangeAndWrongType(t *testing.T) {
 		"offline_attachments": null}`), &values); err != nil {
 		t.Fatal(err)
 	}
-	if got := NativeClientPolicyFromValues(values); got != DefaultNativeClientPolicy() {
+	if got := NativeClientPolicyFromValues(values); !reflect.DeepEqual(got, DefaultNativeClientPolicy()) {
 		t.Fatalf("hand-written junk must keep defaults, got %+v", got)
 	}
 	values = Values{KeyNativeIdleLockSeconds: 1.5}
@@ -65,7 +66,10 @@ func TestNativeClientPolicyJSONKeyOrder(t *testing.T) {
 	want := `{"require_device_lock":false,"idle_lock_seconds":0,"allow_screenshots":true,` +
 		`"offline_retention_days":30,"offline_max_mb":512,"offline_attachments":true,"min_client_version":"",` +
 		`"allow_share_out":true,"allow_share_in":true,"allow_cloud_stt":false,"notification_preview":"none",` +
-		`"allow_notification_actions":true,"allow_system_surfaces":false}`
+		`"allow_notification_actions":true,"allow_system_surfaces":false,` +
+		`"local_work":{"allowed":false,"shell":true,"max_sandbox_mode":"workspace-write","network":false,` +
+		`"command_allow":[],"command_deny":[],"path_deny":[],"local_mcp":false,"local_index":true,` +
+		`"cloud_sync":false,"memory_write":true}}`
 	if string(body) != want {
 		t.Fatalf("client_policy JSON = %s\nwant %s", body, want)
 	}

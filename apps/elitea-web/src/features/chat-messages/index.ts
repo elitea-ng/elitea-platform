@@ -98,6 +98,7 @@ export { ApplicationAnswer } from './ui/chat-box/ApplicationAnswer';
 export type { ApplicationAnswerProps } from './ui/chat-box/ApplicationAnswer.types';
 export type { AnswerCanvasSelection } from './ui/chat-box/AnswerContent';
 export { canvasByteRange, canvasKindForSelection } from './lib/canvasSelection';
+export { isEscapeConsumedInside } from './lib/canvasEditorKeys';
 export { ChatContinue } from './ui/chat-continue/ChatContinue';
 export type { ChatContinueProps } from './ui/chat-continue/ChatContinue';
 export { ChatHitlActions } from './ui/chat-hitl-actions/ChatHitlActions';

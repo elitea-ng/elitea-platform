@@ -52,6 +52,7 @@ import type {
   McpDcrProxyResponse,
   McpOAuthProxyResponse,
   McpRegisteredServer,
+  RemoteToolkitCallResult,
   RuntimeCapabilities,
   ToolkitInstance,
   ToolkitInstanceListResponse,
@@ -156,6 +157,201 @@ export const getRegisterMcpOAuthClientResponseMock = (
   ]),
   scope: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getExecuteRemoteToolkitToolResponseMock = (
+  overrideResponse: Partial<Extract<RemoteToolkitCallResult, object>> = {},
+): RemoteToolkitCallResult => ({
+  ok: faker.datatype.boolean(),
+  status: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  task_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  toolkit_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  toolkit_type: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  tool_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  result: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([{}, null]),
+    null,
+  ]),
+  truncated: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  error: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  message: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  authorization_required: faker.helpers.arrayElement([
+    {
+      server_url: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      resource_metadata_url: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      www_authenticate: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      resource_metadata: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([null]),
+        undefined,
+      ]),
+      tool_run_id: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      tool_name: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      toolkit_name: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      toolkit_type: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  hitl_interrupt: faker.helpers.arrayElement([
+    {
+      interrupt_id: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      tool_call_id: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      message: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      available_actions: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      guardrail_type: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      action_label: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      policy_message: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      tool_name: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      toolkit_name: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      tool_args: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([{}, null]),
+        null,
+      ]),
+      questions: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({})),
+        undefined,
+      ]),
+      parent_agent_name: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  authorization_retry: faker.helpers.arrayElement([
+    {
+      tool_name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      tool_params: faker.helpers.arrayElement([{}, undefined]),
+    },
     undefined,
   ]),
   ...overrideResponse,
@@ -400,6 +596,32 @@ export const getRegisterMcpOAuthClientMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getRegisterMcpOAuthClientResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getExecuteRemoteToolkitToolMockHandler = (
+  overrideResponse?:
+    | RemoteToolkitCallResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<RemoteToolkitCallResult> | RemoteToolkitCallResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/remote_toolkit_call/prompt_lib/:projectId/:toolkitId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getExecuteRemoteToolkitToolResponseMock(),
         { status: 200 },
       );
     },
@@ -774,6 +996,7 @@ export const getGetInternalMcpPatStatusMockHandler = (
 export const getToolkitsMock = () => [
   getExchangeMcpOAuthGrantMockHandler(),
   getRegisterMcpOAuthClientMockHandler(),
+  getExecuteRemoteToolkitToolMockHandler(),
   getGetToolkitMockHandler(),
   getUpdateToolkitMockHandler(),
   getGetRuntimeCapabilitiesMockHandler(),

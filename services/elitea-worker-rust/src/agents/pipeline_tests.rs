@@ -1258,6 +1258,12 @@ fn admission_error(
     }
 }
 
+fn assert_direct_tool_node_message(error: &super::runtime::NativeAgentAssemblyError) {
+    let message = error.to_string();
+    assert!(message.contains("direct tool node"), "{message}");
+    assert!(!message.contains("LLM node"), "{message}");
+}
+
 fn timestamp(second: u32) -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, second)
         .single()
@@ -1467,6 +1473,9 @@ fn llm_tool_scope_is_exact_sensitive_tools_bind_and_blocked_authority_fails_clos
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        let message = error.to_string();
+        assert!(message.contains("LLM node"), "{message}");
+        assert!(!message.contains("direct tool node"), "{message}");
     }
 
     let sensitive = runtime_tool_policy(&json!({
@@ -1497,6 +1506,7 @@ fn toolkit_node_scope_is_exact_and_sensitive_read_is_bound_for_graph_confirmatio
     ] {
         let error = admission_error(authorized(&invalid).admit_pipeline_with_policy(&empty_policy));
         assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+        assert_direct_tool_node_message(&error);
     }
 
     for policy in [
@@ -1512,6 +1522,7 @@ fn toolkit_node_scope_is_exact_and_sensitive_read_is_bound_for_graph_confirmatio
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        assert_direct_tool_node_message(&error);
     }
     let sensitive = runtime_tool_policy(&json!({
         "toolkit_security": {"sensitive_tools": {"gitlab_org": ["get_issues"]}}
@@ -1543,6 +1554,7 @@ fn mcp_node_scope_is_exact_and_sensitive_read_uses_the_graph_confirmation() {
     ] {
         let error = admission_error(authorized(&invalid).admit_pipeline_with_policy(&empty_policy));
         assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+        assert_direct_tool_node_message(&error);
     }
 
     for policy in [
@@ -1558,6 +1570,7 @@ fn mcp_node_scope_is_exact_and_sensitive_read_uses_the_graph_confirmation() {
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        assert_direct_tool_node_message(&error);
     }
     let sensitive = runtime_tool_policy(&json!({
         "toolkit_security": {"sensitive_tools": {"mcp": ["lookup_release"]}}
@@ -1741,8 +1754,8 @@ async fn direct_saved_agent_node_streams_one_exact_pipeline_hierarchy() {
     assert_eq!(
         paths.lock().expect("runtime paths").as_slice(),
         [
-            "/executions/execution%2Fone/generations/2/runtime-context/elitea-client-token",
-            "/executions/execution%2Fone/generations/2/runtime-context/applications/3/versions/4"
+            "/executions/execution-one/generations/2/runtime-context/elitea-client-token",
+            "/executions/execution-one/generations/2/runtime-context/applications/3/versions/4"
         ]
     );
 }
@@ -2521,8 +2534,8 @@ async fn saved_pipeline_participant_loads_exact_version_and_runs_as_child_subgra
     assert_eq!(
         paths.lock().expect("runtime paths").as_slice(),
         [
-            "/executions/execution%2Fone/generations/2/runtime-context/applications/3/versions/4",
-            "/executions/execution%2Fone/generations/2/runtime-context/elitea-client-token"
+            "/executions/execution-one/generations/2/runtime-context/applications/3/versions/4",
+            "/executions/execution-one/generations/2/runtime-context/elitea-client-token"
         ]
     );
     assert!(
@@ -2691,6 +2704,9 @@ async fn saved_pipeline_sensitive_llm_keeps_call_identity_and_wrapper_hierarchy(
         .as_str()
         .expect("nested sensitive-tool identity")
         .to_owned();
+    // The nested call's paused frame names the PUBLIC interrupt id the card
+    // was rewritten to, not the child's local one.
+    assert_llm_node_call_paused(&paused, "call_mcp", "awaiting_approval", "sensitive_tool");
     let graph_interrupt = graph_interrupt.expect("private nested tool interruption");
     let binding = pipeline_tool_event_binding(&graph_interrupt, "elitea-agent", &private_thread)
         .expect("root and nested tool checkpoint binding");
@@ -2774,7 +2790,7 @@ fn assert_nested_sensitive_browser_completion(resumed: &[Value], expected_path: 
 }
 
 #[tokio::test]
-async fn toolkit_node_materializes_read_only_action_but_rejects_remote_effect() {
+async fn toolkit_node_materializes_read_only_and_effectful_actions() {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     let assembler = PipelineNativeAgentAssembler::with_state(
         Arc::clone(&sessions),
@@ -2794,14 +2810,10 @@ async fn toolkit_node_materializes_read_only_action_but_rejects_remote_effect() 
 
     let effect =
         toolkit_pipeline_request("release_repository", &["create_branch"], "create_branch");
-    let result = assembler.assemble(authorized(&effect)).await;
-    let Err(error) = result else {
-        panic!("effectful direct Toolkit node was assembled");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
-    );
+    assembler
+        .assemble(authorized(&effect))
+        .await
+        .expect("effectful direct Toolkit assembly");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3478,6 +3490,12 @@ async fn pipeline_instruction_pause_proof(instructions: bool) {
     assert_eq!(pending["available_actions"], json!(["answer"]));
     assert_eq!(pending["tool_call_id"], "call_ask_user");
     assert_eq!(pending["questions"][0]["id"], "q1");
+    assert_llm_node_call_paused(
+        &paused,
+        "call_ask_user",
+        "awaiting_input",
+        ASK_USER_GUARDRAIL_TYPE,
+    );
     let interrupt_id = pending["interrupt_id"]
         .as_str()
         .expect("ask_user interrupt identity")
@@ -3869,6 +3887,63 @@ async fn run_llm_node_block(action: &str, comment: Option<&str>, expected_reason
     assert_llm_blocked_continuation(&captured, expected_reason);
 }
 
+/// A pipeline LLM node's tool call that pauses ends with `agent_tool_paused`
+/// BEFORE its interrupt card (client contract 1.2), exactly like a direct
+/// agent's (`pause_frames_tests.rs`): the call already sent
+/// `agent_tool_start`, so without the paused frame a client keeps it spinning
+/// and elitea-main stores its trace row with no finish reason.
+fn assert_llm_node_call_paused(
+    events: &[Value],
+    call_id: &str,
+    finish_reason: &str,
+    guardrail_type: &str,
+) {
+    let order: Vec<&str> = events
+        .iter()
+        .map(|event| event["type"].as_str().unwrap_or_default())
+        .collect();
+    let start = order
+        .iter()
+        .position(|t| *t == "agent_tool_start")
+        .expect("LLM-node tool start");
+    let paused = order
+        .iter()
+        .position(|t| *t == "agent_tool_paused")
+        .unwrap_or_else(|| {
+            panic!("a paused LLM-node call must end with agent_tool_paused, got {order:?}")
+        });
+    let interrupt = order
+        .iter()
+        .position(|t| *t == "agent_hitl_interrupt")
+        .expect("LLM-node interrupt card");
+    assert!(
+        start < paused && paused < interrupt,
+        "frame order {order:?}"
+    );
+    assert!(
+        !order.contains(&"agent_tool_error"),
+        "a pause is not a failure: {order:?}"
+    );
+    let interrupt_id = events[interrupt]["response_metadata"]["hitl_interrupt"]["interrupt_id"]
+        .as_str()
+        .expect("singular interrupt identity");
+    let metadata = &events[paused]["response_metadata"];
+    assert_eq!(metadata["tool_run_id"], call_id);
+    assert_eq!(metadata["finish_reason"], finish_reason);
+    assert_eq!(metadata["error"], Value::Null);
+    assert_eq!(
+        metadata["pause"],
+        json!({"interrupt_id": interrupt_id, "guardrail_type": guardrail_type})
+    );
+    let stored = events[paused..]
+        .iter()
+        .filter(|event| event["type"] == "partial_message")
+        .find_map(|event| event["response_metadata"]["tool_calls"].get(call_id))
+        .expect("a partial_message storing the paused call");
+    assert_eq!(stored["finish_reason"], finish_reason, "{stored}");
+    assert_eq!(stored["pause"]["interrupt_id"], interrupt_id);
+}
+
 fn assert_llm_node_pause_progress(pause_events: &[Value]) -> Vec<Value> {
     let interrupts = pause_events
         .iter()
@@ -3876,6 +3951,12 @@ fn assert_llm_node_pause_progress(pause_events: &[Value]) -> Vec<Value> {
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(interrupts.len(), 1);
+    assert_llm_node_call_paused(
+        pause_events,
+        "call_mcp",
+        "awaiting_approval",
+        "sensitive_tool",
+    );
     let model_start = pause_events
         .iter()
         .find(|event| event["type"] == "agent_llm_start")
@@ -4064,10 +4145,12 @@ async fn mcp_node_discovers_and_executes_one_read_without_a_model_turn() {
         .into_iter()
         .map(|event| current(&event)["content"].clone())
         .collect::<Vec<_>>();
+    // A dict result is shown as fenced pretty JSON, not compact text.
     assert!(
         browser_content
             .iter()
-            .any(|content| content == "{\"release\":\"1.2\",\"risk\":\"low\"}"),
+            .any(|content| content
+                == "```json\n{\n  \"release\": \"1.2\",\n  \"risk\": \"low\"\n}\n```"),
         "unexpected MCP completion: {browser_content:?}"
     );
     let checkpoint = checkpointer
@@ -4089,7 +4172,7 @@ async fn mcp_node_discovers_and_executes_one_read_without_a_model_turn() {
 }
 
 #[tokio::test]
-async fn mcp_node_rejects_server_declared_effect_before_tool_execution() {
+async fn mcp_node_assembles_server_declared_effect_without_executing_it() {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let connector = Arc::new(PipelineMcpConnector {
@@ -4105,14 +4188,10 @@ async fn mcp_node_rejects_server_declared_effect_before_tool_execution() {
         &["lookup_release"],
         "lookup_release",
     );
-    let result = assembler.assemble(authorized(&request)).await;
-    let Err(error) = result else {
-        panic!("effectful direct MCP node was assembled");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
-    );
+    assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("effectful direct MCP assembly");
     assert_eq!(tool_calls.load(Ordering::Acquire), 0);
 }
 
@@ -4189,7 +4268,7 @@ async fn pipeline_new_turn_executes_nodes_instead_of_reusing_completed_output() 
     let mut request = pipeline_request();
     request.payload.application["version_details"]["instructions"] = json!(STATE_MODIFIER_PIPELINE);
     let private_thread = private_pipeline_session_id(&request);
-    for (execution, input) in [("execution/first", "FIRST"), ("execution/second", "SECOND")] {
+    for (execution, input) in [("execution-first", "FIRST"), ("execution-second", "SECOND")] {
         request.payload.user_input = super::request::UserInput::Text(input.to_owned());
         let invocation = assembler
             .assemble(authorized_execution(&request, execution))
@@ -4571,7 +4650,7 @@ async fn ordinary_message_after_a_printer_pause_resumes_the_paused_run() {
 
     let typed = printer_pipeline_request("done", false);
     let mut invocation = assembler
-        .assemble(authorized_execution(&typed, "execution/typed"))
+        .assemble(authorized_execution(&typed, "execution-typed"))
         .await
         .expect("ordinary message resumes the Printer pause");
     invocation
@@ -4620,7 +4699,7 @@ async fn ordinary_message_after_a_printer_pause_resumes_the_paused_run() {
     // in production) runs from the entry point and pauses at the Printer again.
     let again = printer_pipeline_request("again", false);
     let invocation = assembler
-        .assemble(authorized_execution(&again, "execution/again"))
+        .assemble(authorized_execution(&again, "execution-again"))
         .await
         .expect("fresh assembly after completion");
     let (mut run, _, _) = invocation.start().expect("fresh start");
@@ -4827,4 +4906,153 @@ async fn direct_mcp_setup_failure_preserves_configuration_category_without_model
     );
     assert!(!error.retryable());
     assert_eq!(connections.load(Ordering::Acquire), 0);
+}
+
+const LIMIT_SENTINEL: &str = "SENTINELPRIVATEPAYLOAD";
+
+fn pipeline_profile_refusal(instructions: &str) -> super::runtime::NativeAgentAssemblyError {
+    let mut request = pipeline_request();
+    request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(Value::as_object_mut)
+        .expect("application version fixture")
+        .insert("instructions".to_owned(), json!(instructions));
+    match PipelineExecutionProfile::validate(&request, false) {
+        Ok(_) => panic!("the pipeline was admitted"),
+        Err(error) => error,
+    }
+}
+
+/// A stored pipeline whose YAML aliases expand past the budget (post-merge
+/// browser pass, pipeline 164: a six-level `&a [l×8]` … `&f` chain used as a
+/// state value) is refused fast at the start path's profile stage with the
+/// typed expansion limit, so the person sees the agent-settings limit message
+/// instead of "The execution input is invalid.". Driven through the same
+/// `admit_pipeline_with_policy` entry the lifecycle calls.
+#[test]
+fn an_alias_expansion_bomb_is_refused_at_start_admission_with_the_named_limit() {
+    let mut chain = String::from("defs:\n");
+    let mut item = "l".to_owned();
+    for level in 0..6 {
+        let name = format!("x{level}");
+        std::fmt::Write::write_fmt(
+            &mut chain,
+            format_args!("  {name}: &{name} [{}]\n", [item.as_str(); 8].join(", ")),
+        )
+        .expect("write to string");
+        item = format!("*{name}");
+    }
+    let instructions = format!(
+        "{chain}state:\n  big:\n    type: list\n    value: {item}\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    transition: END\n"
+    );
+    let mut request = pipeline_request();
+    request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(Value::as_object_mut)
+        .expect("application version fixture")
+        .insert("instructions".to_owned(), json!(instructions));
+    let started = std::time::Instant::now();
+    let error = admission_error(authorized(&request).admit_pipeline());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "the refusal must stay fast, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        error.code(),
+        NativeAgentAssemblyErrorCode::AgentSettingsLimit
+    );
+    assert_eq!(
+        error.cause().map(|cause| (cause.code(), cause.detail())),
+        Some((
+            "graph.pipeline.yaml_expansion_exceeded",
+            Some("yaml_expansion")
+        ))
+    );
+    assert!(!error.retryable());
+    let (_, message, retryable) = crate::protocol::output::runtime_error_policy(
+        crate::protocol::output::RuntimeFailureKind::ExecutionInputFieldLimit(
+            crate::protocol::InputLimitField::AgentSettings,
+        ),
+    );
+    assert!(message.contains("agent instructions or settings exceed a platform input limit"));
+    assert!(!retryable);
+}
+
+/// Bound refusals name the limit in the Worker's log and map to the registered
+/// agent-settings message instead of the generic resource or input texts.
+#[test]
+fn pipeline_size_and_count_refusals_map_to_the_agent_settings_limit_without_content() {
+    let small =
+        "entry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    transition: END\n";
+    let oversized_document = format!("{small}# {LIMIT_SENTINEL}{}\n", "p".repeat(512 * 1024 + 1));
+    let mut too_many_nodes = String::from("entry_point: n0\nnodes:\n");
+    for n in 0..129 {
+        std::fmt::Write::write_fmt(
+            &mut too_many_nodes,
+            format_args!(
+                "  - id: n{n}\n    type: state_modifier\n    template: {LIMIT_SENTINEL}\n    transition: END\n"
+            ),
+        )
+        .expect("write to string");
+    }
+    let oversized_node = format!(
+        "entry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: {}\n    transition: END\n",
+        LIMIT_SENTINEL.repeat(70 * 1024 / LIMIT_SENTINEL.len() + 1)
+    );
+    for (name, instructions, cause) in [
+        (
+            "profile bound",
+            oversized_document,
+            Some(("graph.pipeline.yaml_bytes_exceeded", "yaml_bytes")),
+        ),
+        (
+            "node count",
+            too_many_nodes,
+            Some(("graph.pipeline.node_count_exceeded", "node_count")),
+        ),
+        (
+            "node bound",
+            oversized_node,
+            Some((
+                "graph.pipeline.node_limit_exceeded",
+                "nodes[].state_modifier",
+            )),
+        ),
+    ] {
+        let error = pipeline_profile_refusal(&instructions);
+        assert_eq!(
+            error.code(),
+            NativeAgentAssemblyErrorCode::AgentSettingsLimit,
+            "{name}"
+        );
+        assert!(!error.retryable(), "{name}");
+        assert_eq!(
+            error.cause().map(|cause| (cause.code(), cause.detail())),
+            cause.map(|(code, detail)| (code, Some(detail))),
+            "{name}"
+        );
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains(LIMIT_SENTINEL), "{name}: {rendered}");
+        }
+    }
+}
+
+/// A value that cannot be an identifier has no registered readable message, so
+/// the wire code stays generic while the Worker's own log carries the field.
+#[test]
+fn pipeline_identifier_refusals_stay_invalid_input_with_a_field_cause() {
+    let error = pipeline_profile_refusal(
+        "entry_point: 9007199254740993\nnodes:\n  - id: a\n    type: state_modifier\n    transition: END\n",
+    );
+    assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+    assert!(!error.retryable());
+    let cause = error.cause().expect("identifier refusal carries a cause");
+    assert_eq!(cause.code(), "graph.pipeline.invalid_identifier");
+    assert_eq!(cause.detail(), Some("entry_point"));
+    assert!(!format!("{error:?} {error} {cause:?}").contains("9007199254740993"));
 }

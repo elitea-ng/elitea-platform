@@ -136,18 +136,21 @@ func TestRunnersAreTheSharedOnesPlusTheApplicationsOwn(t *testing.T) {
 	if runner, err := deepwiki.Runner("fixture", settings, 0); err != nil || runner.Name() != "fixture" {
 		t.Fatalf("deepwiki/fixture: %v %v", err, runner)
 	}
-	// The sidecar runner without a socket to reach: a host that came up
-	// looking healthy here would answer /health UP and fail every call.
-	if _, err := deepwiki.Runner("legacy", settings, 0); !errors.Is(err, spi.ErrConfig) {
-		t.Fatalf("deepwiki/legacy with no socket: %v", err)
-	}
 	withSocket := settings
 	withSocket.EngineSocket = "/run/deepwiki/engine.sock"
-	if runner, err := deepwiki.Runner("legacy", withSocket, 0); err != nil || runner.Name() != "legacy" {
-		t.Fatalf("deepwiki/legacy: %v %v", err, runner)
+	// The Python engine runner is retired: refused even with a socket, with
+	// the upgrade pointer, and not offered.
+	if _, err := deepwiki.Runner("legacy", withSocket, 0); !errors.Is(err, spi.ErrConfig) ||
+		!strings.Contains(err.Error(), "docs/UPGRADING.md") {
+		t.Fatalf("deepwiki/legacy was not refused as retired: %v", err)
 	}
-	// The Rust engine (ADR-0026) speaks the same socket protocol: the same
-	// refusal without a socket, and its own name in /health with one.
+	for _, offered := range deepwiki.RunnerNames() {
+		if offered == "legacy" {
+			t.Fatal("deepwiki still offers the retired legacy runner")
+		}
+	}
+	// The engine sidecar runner without a socket to reach: a host that came
+	// up looking healthy here would answer /health UP and fail every call.
 	if _, err := deepwiki.Runner("native", settings, 0); !errors.Is(err, spi.ErrConfig) {
 		t.Fatalf("deepwiki/native with no socket: %v", err)
 	}

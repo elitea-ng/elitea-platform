@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
 # DWIKI-014 — the REAL DeepWiki engine through the product (Playwright
 # project `deepwiki-real-engine`) against the standalone stack, with the
-# deterministic LLM stub in the mock's place. Two engines:
-#
-#   DEEPWIKI_REAL_ENGINE=legacy (default) — the Python `-engine` image as the
-#     Go host's sidecar (deploy/docker-compose.deepwiki-real-engine.yml), a
-#     git daemon serving the seeded repository `acme/e2e-generated`.
-#   DEEPWIKI_REAL_ENGINE=native — the Rust-native engine (ADR-0026;
-#     deploy/docker-compose.deepwiki-native.yml plus
-#     deploy/docker-compose.deepwiki-native-real-engine.yml). The native
-#     clone speaks HTTPS only, so the repository under analysis is a real
-#     public one on github.com: kharkevich-engineering-lab/floe (its owner
-#     agreed to this use). Needs internet access.
+# deterministic LLM stub in the mock's place. The engine is the Rust-native
+# one (ADR-0026; deploy/docker-compose.deepwiki-native-real-engine.yml over
+# the standalone stack, which runs the native sidecar already). Its clone
+# speaks HTTPS only, so the repository under analysis is a real public one
+# on github.com: kharkevich-engineering-lab/floe (its owner agreed to this
+# use). Needs internet access.
 #
 #   apps/elitea-web/scripts/deepwiki-real-engine.sh            # up + seed + run
 #   apps/elitea-web/scripts/deepwiki-real-engine.sh --keep     # leave the stack up
-#   DEEPWIKI_REAL_ENGINE=native apps/elitea-web/scripts/deepwiki-real-engine.sh
 #
 # THE NATIVE PIN. The product clones a branch or a tag head (depth 1), never
 # a commit, so the pin is CHECKED, not requested: before anything is built,
@@ -26,17 +20,15 @@
 # DEEPWIKI_NATIVE_COMMIT= (empty, or `none`) to analyse whatever the head is; the
 # journey still requires the wiki to name the head resolved here.
 #
-# The engine image is built here once, when DEEPWIKI_ENGINE_IMAGE is not
-# present locally, and never by compose — both overlays reset the service's
-# `build:` so the stack's own `compose build` leaves it alone. Legacy:
-# services/elitea-deepwiki/Containerfile with EXTRAS="[engine,storage-postgres]"
-# (~2 GB: torch, faiss, tree-sitter). Native:
-# services/elitea-deepwiki-engine/Containerfile. Rebuild after an engine
-# change with
+# The engine image is built here once, from
+# services/elitea-deepwiki-engine/Containerfile, when DEEPWIKI_ENGINE_IMAGE
+# is not present locally, and never by compose — the overlay resets the
+# services' `build:` so the stack's own `compose build` leaves them alone.
+# Rebuild after an engine change with
 #   DEEPWIKI_ENGINE_REBUILD=1 apps/elitea-web/scripts/deepwiki-real-engine.sh
 #
 # CI: .github/workflows/deepwiki-real-engine.yml, manual + weekly (Sundays
-# 04:23 UTC, both engines) — never on pull_request; the fixture-engine job in
+# 04:23 UTC) — never on pull_request; the fixture-engine job in
 # ci-web-e2e.yml is the per-change gate.
 #
 # Everything else is chat-stream-e2e.sh (stack, certificates, seeds). Its own
@@ -66,75 +58,65 @@ case "${COMPOSE_BIN:-}" in
   *) CONTAINER_BIN="${CONTAINER_BIN:-$(command -v podman || command -v docker)}" ;;
 esac
 
-ENGINE="${DEEPWIKI_REAL_ENGINE:-legacy}"
-case "$ENGINE" in
-  legacy)
-    export DEEPWIKI_ENGINE_IMAGE="${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/eliteaai/elitea-deepwiki:local-engine}"
-    ENGINE_CONTAINERFILE="${REPO_ROOT}/services/elitea-deepwiki/Containerfile"
-    ENGINE_BUILD_ARGS=(--build-arg 'EXTRAS=[engine,storage-postgres]')
-    ENGINE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.deepwiki-real-engine.yml"
-    ;;
-  native)
-    export DEEPWIKI_ENGINE_IMAGE="${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/eliteaai/elitea-deepwiki-engine-native:local}"
-    ENGINE_CONTAINERFILE="${REPO_ROOT}/services/elitea-deepwiki-engine/Containerfile"
-    ENGINE_BUILD_ARGS=()
-    ENGINE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.deepwiki-native.yml ${REPO_ROOT}/deploy/docker-compose.deepwiki-native-real-engine.yml"
-    NATIVE_OWNER_REPO="${DEEPWIKI_NATIVE_REPOSITORY:-kharkevich-engineering-lab/floe}"
-    NATIVE_URL="https://github.com/${NATIVE_OWNER_REPO}"
-    NATIVE_REF="${DEEPWIKI_NATIVE_REF:-main}"
-    # `-` and not `:-`: an EMPTY value is the stated "no pin" choice.
-    # `none` says the same (a workflow input cannot be dispatched empty).
-    NATIVE_COMMIT="${DEEPWIKI_NATIVE_COMMIT-89c2197fa88a910c9b8344ae3c4dd06618ed28ae}"
-    [ "$NATIVE_COMMIT" = "none" ] && NATIVE_COMMIT=""
-    echo "→ Resolving ${NATIVE_URL} ${NATIVE_REF}…"
-    # Branch first, then the tag of that name: the order the engine's own
-    # ls-remote uses. `^{}` peels an annotated tag to its commit.
-    REMOTE_REFS="$(git ls-remote "$NATIVE_URL" "refs/heads/${NATIVE_REF}" "refs/tags/${NATIVE_REF}" "refs/tags/${NATIVE_REF}^{}")"
-    HEAD_SHA="$(printf '%s\n' "$REMOTE_REFS" | awk -v r="refs/heads/${NATIVE_REF}" '$2 == r { print $1 }')"
-    if [ -z "$HEAD_SHA" ]; then
-      HEAD_SHA="$(printf '%s\n' "$REMOTE_REFS" | awk -v r="refs/tags/${NATIVE_REF}^{}" '$2 == r { print $1 }')"
-    fi
-    if [ -z "$HEAD_SHA" ]; then
-      HEAD_SHA="$(printf '%s\n' "$REMOTE_REFS" | awk -v r="refs/tags/${NATIVE_REF}" '$2 == r { print $1 }')"
-    fi
-    if [ -z "$HEAD_SHA" ]; then
-      echo "ERROR: ${NATIVE_URL} has no branch or tag '${NATIVE_REF}'." >&2
-      exit 1
-    fi
-    if [ -n "$NATIVE_COMMIT" ] && [ "$HEAD_SHA" != "$NATIVE_COMMIT" ]; then
-      echo "ERROR: ${NATIVE_URL} ${NATIVE_REF} is at ${HEAD_SHA}, not the pinned ${NATIVE_COMMIT}." >&2
-      echo "       The product clones a branch or tag head, never a commit, so the pin" >&2
-      echo "       can only be checked. Re-run with DEEPWIKI_NATIVE_REF set to a tag at" >&2
-      echo "       the pin, move the pin (DEEPWIKI_NATIVE_COMMIT, and the workflow's" >&2
-      echo "       default), or set DEEPWIKI_NATIVE_COMMIT= to analyse the head." >&2
-      exit 1
-    fi
-    echo "   ${NATIVE_REF} is at ${HEAD_SHA}${NATIVE_COMMIT:+ (the pin)}."
-    # What the journey drives and asserts (forwarded into the Playwright
-    # container by name, see chat-stream-e2e.sh).
-    export E2E_REAL_ENGINE_KIND=native
-    export E2E_REAL_ENGINE_REPOSITORY="$NATIVE_OWNER_REPO"
-    export E2E_REAL_ENGINE_BRANCH="$NATIVE_REF"
-    export E2E_REAL_ENGINE_COMMIT="$HEAD_SHA"
-    # The anonymous repository toolkit `seed-deepwiki-public` writes: the
-    # seed's 9010 carries a literal token GitHub refuses with 401.
-    export E2E_REAL_ENGINE_CODE_TOOLKIT=9011
-    export CHAT_STREAM_EXTRA_SEEDS="seed-deepwiki-public ${CHAT_STREAM_EXTRA_SEEDS:-}"
-    ;;
+# The legacy (Python) engine is retired; refuse a caller that still asks for it.
+case "${DEEPWIKI_REAL_ENGINE:-native}" in
+  native) ;;
   *)
-    echo "ERROR: DEEPWIKI_REAL_ENGINE must be legacy or native (got '${ENGINE}')." >&2
+    echo "ERROR: DEEPWIKI_REAL_ENGINE must be native (got '${DEEPWIKI_REAL_ENGINE}'); the Python engine is retired." >&2
     exit 1
     ;;
 esac
+export DEEPWIKI_ENGINE_IMAGE="${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/eliteaai/elitea-deepwiki-engine-native:local}"
+ENGINE_CONTAINERFILE="${REPO_ROOT}/services/elitea-deepwiki-engine/Containerfile"
+ENGINE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.deepwiki-native-real-engine.yml"
+NATIVE_OWNER_REPO="${DEEPWIKI_NATIVE_REPOSITORY:-kharkevich-engineering-lab/floe}"
+NATIVE_URL="https://github.com/${NATIVE_OWNER_REPO}"
+NATIVE_REF="${DEEPWIKI_NATIVE_REF:-main}"
+# `-` and not `:-`: an EMPTY value is the stated "no pin" choice.
+# `none` says the same (a workflow input cannot be dispatched empty).
+NATIVE_COMMIT="${DEEPWIKI_NATIVE_COMMIT-89c2197fa88a910c9b8344ae3c4dd06618ed28ae}"
+[ "$NATIVE_COMMIT" = "none" ] && NATIVE_COMMIT=""
+echo "→ Resolving ${NATIVE_URL} ${NATIVE_REF}…"
+# Branch first, then the tag of that name: the order the engine's own
+# ls-remote uses. `^{}` peels an annotated tag to its commit.
+REMOTE_REFS="$(git ls-remote "$NATIVE_URL" "refs/heads/${NATIVE_REF}" "refs/tags/${NATIVE_REF}" "refs/tags/${NATIVE_REF}^{}")"
+HEAD_SHA="$(printf '%s\n' "$REMOTE_REFS" | awk -v r="refs/heads/${NATIVE_REF}" '$2 == r { print $1 }')"
+if [ -z "$HEAD_SHA" ]; then
+  HEAD_SHA="$(printf '%s\n' "$REMOTE_REFS" | awk -v r="refs/tags/${NATIVE_REF}^{}" '$2 == r { print $1 }')"
+fi
+if [ -z "$HEAD_SHA" ]; then
+  HEAD_SHA="$(printf '%s\n' "$REMOTE_REFS" | awk -v r="refs/tags/${NATIVE_REF}" '$2 == r { print $1 }')"
+fi
+if [ -z "$HEAD_SHA" ]; then
+  echo "ERROR: ${NATIVE_URL} has no branch or tag '${NATIVE_REF}'." >&2
+  exit 1
+fi
+if [ -n "$NATIVE_COMMIT" ] && [ "$HEAD_SHA" != "$NATIVE_COMMIT" ]; then
+  echo "ERROR: ${NATIVE_URL} ${NATIVE_REF} is at ${HEAD_SHA}, not the pinned ${NATIVE_COMMIT}." >&2
+  echo "       The product clones a branch or tag head, never a commit, so the pin" >&2
+  echo "       can only be checked. Re-run with DEEPWIKI_NATIVE_REF set to a tag at" >&2
+  echo "       the pin, move the pin (DEEPWIKI_NATIVE_COMMIT, and the workflow's" >&2
+  echo "       default), or set DEEPWIKI_NATIVE_COMMIT= to analyse the head." >&2
+  exit 1
+fi
+echo "   ${NATIVE_REF} is at ${HEAD_SHA}${NATIVE_COMMIT:+ (the pin)}."
+# What the journey drives and asserts (forwarded into the Playwright
+# container by name, see chat-stream-e2e.sh).
+export E2E_REAL_ENGINE_REPOSITORY="$NATIVE_OWNER_REPO"
+export E2E_REAL_ENGINE_BRANCH="$NATIVE_REF"
+export E2E_REAL_ENGINE_COMMIT="$HEAD_SHA"
+# The anonymous repository toolkit `seed-deepwiki-public` writes: the
+# seed's 9010 carries a literal token GitHub refuses with 401.
+export E2E_REAL_ENGINE_CODE_TOOLKIT=9011
+export CHAT_STREAM_EXTRA_SEEDS="seed-deepwiki-public ${CHAT_STREAM_EXTRA_SEEDS:-}"
 
 # `image inspect`, not podman's `image exists`: `docker image exists` is not a
 # docker subcommand, so under docker the probe always failed and the image was
 # rebuilt from scratch every run — including in CI, where the workflow has
 # already baked the tag. `image inspect` is present in both runtimes.
 if [ -n "${DEEPWIKI_ENGINE_REBUILD:-}" ] || ! "$CONTAINER_BIN" image inspect "$DEEPWIKI_ENGINE_IMAGE" >/dev/null 2>&1; then
-  echo "→ Building the ${ENGINE} engine image ${DEEPWIKI_ENGINE_IMAGE} (once; minutes)…"
-  "$CONTAINER_BIN" build -f "$ENGINE_CONTAINERFILE" \
-    "${ENGINE_BUILD_ARGS[@]+"${ENGINE_BUILD_ARGS[@]}"}" -t "$DEEPWIKI_ENGINE_IMAGE" "$REPO_ROOT"
+  echo "→ Building the native engine image ${DEEPWIKI_ENGINE_IMAGE} (once; minutes)…"
+  "$CONTAINER_BIN" build -f "$ENGINE_CONTAINERFILE" -t "$DEEPWIKI_ENGINE_IMAGE" "$REPO_ROOT"
 fi
 export STANDALONE_OVERLAY="${ENGINE_OVERLAY} ${STANDALONE_OVERLAY:-}"
 exec "$(dirname "$0")/chat-stream-e2e.sh" "$@"

@@ -179,9 +179,59 @@ func TestConversationDeltaLegacyResponseIsUnchanged(t *testing.T) {
 	}
 	var rows []map[string]json.RawMessage
 	_ = json.Unmarshal(keys["rows"], &rows)
-	if len(rows) != 1 || len(rows[0]) != 7 || rows[0]["sync_at"] != nil {
+	// Eight keys: the seven of the legacy row and `is_pinned` (client
+	// contract 1.4), which is additive.
+	if len(rows) != 1 || len(rows[0]) != 8 || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" {
 		t.Fatalf("legacy row shape changed: %s", body)
 	}
+}
+
+// TestConversationListCarriesTheProjectPin pins client contract 1.4's
+// `is_pinned` on the list row, in the legacy page and the delta alike: true
+// exactly when the project holds a conversation pin for the row, never for a
+// pin of another entity type or another project with the same id, and never
+// with the pinner's identity.
+func TestConversationListCarriesTheProjectPin(t *testing.T) {
+	pool := newChangesPool(t)
+	pinned := seedChat(t, pool, "pinned", true, 7, 7)
+	samePinOtherType := seedChat(t, pool, "a prompt pin with my id", true, 7, 7)
+	samePinOtherProject := seedChat(t, pool, "pinned in project 2", true, 7, 7)
+	plain := seedChat(t, pool, "plain", true, 7, 7)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO centry.social_pins (entity, user_id, project_id, entity_id) VALUES
+		('conversation', 8, 1, $1), ('prompt', 7, 1, $2), ('conversation', 7, 2, $3)`,
+		pinned, samePinOtherType, samePinOtherProject); err != nil {
+		t.Fatal(err)
+	}
+	want := map[int]bool{pinned: true, samePinOtherType: false, samePinOtherProject: false, plain: false}
+	check := func(label string, rows []map[string]any) {
+		t.Helper()
+		if len(rows) != len(want) {
+			t.Fatalf("%s: %d rows, want %d", label, len(rows), len(want))
+		}
+		for _, row := range rows {
+			id := int(row["id"].(float64))
+			flag, ok := row["is_pinned"].(bool)
+			if !ok || flag != want[id] {
+				t.Errorf("%s: conversation %d is_pinned = %#v, want %v", label, id, row["is_pinned"], want[id])
+			}
+			for key := range row {
+				if key == "pinned_by" || key == "pin_user_id" || key == "user_id" {
+					t.Errorf("%s: row carries the pinner (%s)", label, key)
+				}
+			}
+		}
+	}
+	code, body := listRaw(t, pool, url.Values{"limit": {"100"}}, "7")
+	if code != http.StatusOK {
+		t.Fatalf("legacy list answered %d: %s", code, body)
+	}
+	var legacy changesPage
+	if err := json.Unmarshal(body, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	check("legacy", legacy.Rows)
+	check("delta", listChanges(t, pool, "", "7", nil).Rows)
 }
 
 func TestConversationDeltaVisibilityParityAndPaging(t *testing.T) {

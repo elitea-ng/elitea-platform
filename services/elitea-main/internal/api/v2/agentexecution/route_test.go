@@ -13,6 +13,7 @@ import (
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
 type currentStartUseCaseStub struct {
@@ -605,6 +606,46 @@ func TestCurrentApplicationStartRouteFallsBackBeforeUseCaseForUnsupportedTurn(t 
 	if response.Code != http.StatusUnprocessableEntity || useCase.calls != 0 ||
 		!strings.Contains(response.Body.String(), "unsupported_agent_execution") {
 		t.Fatalf("status=%d calls=%d body=%s", response.Code, useCase.calls, response.Body.String())
+	}
+}
+
+// A pipeline over the shared size bounds answers a 422 that names the limit and
+// the remedy, not the generic "requires the current execution path" text.
+func TestCurrentApplicationStartRouteNamesThePipelineLimitItRefused(t *testing.T) {
+	for name, tc := range map[string]struct {
+		limit error
+		code  string
+		text  string
+	}{
+		"bytes": {pipelinelimits.ErrInstructionsTooLarge, "PIPELINE_INSTRUCTIONS_TOO_LARGE", "512 KiB"},
+		"nodes": {pipelinelimits.ErrTooManyNodes, "PIPELINE_TOO_MANY_NODES", "128 nodes"},
+		"node type": {
+			pipelinelimits.CheckStart("nodes:\n  - id: split\n    type: split_out\n", nil),
+			pipelinelimits.CodeNodeTypeNotAvailable, `Node "split" uses the "split_out" node type, which is not available on this deployment.`,
+		},
+		"toolkit": {
+			pipelinelimits.CheckStart("nodes:\n  - id: fetch\n    type: toolkit\n    toolkit_name: jira\n", nil),
+			pipelinelimits.CodeToolkitNotAttached, `Attach "jira" under Tools → Toolkit`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// The shape the use case returns: the unsupported sentinel plus the limit.
+			useCase := &currentStartUseCaseStub{err: errors.Join(agentexecutionapp.ErrUnsupportedCurrentAgentStart, tc.limit)}
+			route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+			response := httptest.NewRecorder()
+			route.ServeHTTP(response, currentStartRequest(validCurrentStartBody()))
+			if response.Code != http.StatusUnprocessableEntity || useCase.calls != 1 {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, useCase.calls, response.Body.String())
+			}
+			var body struct {
+				Error   string `json:"error"`
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil ||
+				body.Error != tc.code || !strings.Contains(body.Message, tc.text) {
+				t.Fatalf("body=%+v error=%v", body, err)
+			}
+		})
 	}
 }
 

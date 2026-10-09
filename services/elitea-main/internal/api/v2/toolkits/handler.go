@@ -3,11 +3,14 @@ package toolkits
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -39,6 +42,9 @@ type Repository interface {
 
 	// CRUD for toolkit instances (/tools/ and /tool/ paths)
 	ListToolkits(ctx context.Context, projectID string, page, pageSize int) ([]map[string]any, int, error)
+	// ListToolkitInstances is ListToolkits narrowed by filter; total is the
+	// filtered total. ListToolkits is the empty-filter call.
+	ListToolkitInstances(ctx context.Context, projectID string, filter InstanceListFilter, page, pageSize int) ([]map[string]any, int, error)
 	CreateToolkit(ctx context.Context, projectID string, body map[string]any) (map[string]any, error)
 	GetToolkit(ctx context.Context, projectID, toolkitID string) (map[string]any, error)
 	UpdateToolkit(ctx context.Context, projectID, toolkitID string, body map[string]any) (map[string]any, error)
@@ -471,7 +477,7 @@ var toolkitTypeSchemas = map[string]map[string]any{
 			//
 			//   - the native worker refuses one outright — parse_source returns
 			//     UnsupportedSource for a string starting http:// or https://
-			//     (services/elitea-worker-rust/src/toolkits/families/openapi/spec.rs);
+			//     (libs/rust/agent-runtime/src/toolkits/families/openapi/spec.rs);
 			//   - the SDK worker does not fetch either: _parse_openapi_spec
 			//     (elitea_sdk/tools/openapi/api_wrapper.py:513) only runs
 			//     json.loads then yaml.safe_load, and a bare URL parses to a
@@ -1120,22 +1126,79 @@ func (h *Handler) IndexMetaGet(w http.ResponseWriter, r *http.Request) {
 // extension maps rather than a loader list — so the guess was not even a
 // subset a client could safely narrow to.
 
-// List returns all toolkit instances for a project.
+// Paging and filter bounds of the toolkit-instance list.
+const (
+	defaultInstanceListLimit = 20
+	maxInstanceListLimit     = 100
+	// maxInstanceQueryRunes matches the width of elitea_tools.name (VARCHAR(128)).
+	maxInstanceQueryRunes = 128
+)
+
+// InstanceListFilter narrows the toolkit-instance list. The zero value selects
+// every row, application links included, which is what the raw callers need.
+//
+// MCP set (true or false) is the picker's typed listing: it also drops the
+// `application` rows (agent-as-tool links), like the legacy toolkits_listing
+// does. Callers that need those rows leave MCP nil.
+type InstanceListFilter struct {
+	// MCP keeps (true) or drops (false) MCP toolkits; nil applies no MCP filter.
+	MCP *bool
+	// Query is a case-insensitive literal substring of name or description.
+	Query string
+}
+
+// parseInstanceListFilter reads the optional `mcp` and `query` parameters. The
+// error text is safe to return to the caller.
+func parseInstanceListFilter(values url.Values) (InstanceListFilter, error) {
+	var filter InstanceListFilter
+	if values.Has("mcp") {
+		switch values.Get("mcp") {
+		case "true":
+			filter.MCP = boolPtr(true)
+		case "false":
+			filter.MCP = boolPtr(false)
+		default:
+			return filter, errors.New("mcp must be true or false")
+		}
+	}
+	query := strings.TrimSpace(values.Get("query"))
+	// A NUL byte or invalid UTF-8 makes PostgreSQL refuse the parameter.
+	if !utf8.ValidString(query) || strings.ContainsRune(query, 0) {
+		return filter, errors.New("query is not valid text")
+	}
+	if utf8.RuneCountInString(query) > maxInstanceQueryRunes {
+		return filter, fmt.Errorf("query must be at most %d characters", maxInstanceQueryRunes)
+	}
+	filter.Query = query
+	return filter, nil
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+// List returns the toolkit instances of a project. Optional `mcp` and `query`
+// parameters filter on the server (see InstanceListFilter), so the picker's
+// MCP and toolkit sections each page their own rows.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 
 	// UI sends limit/offset
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	if limit < 1 || limit > 100 {
-		limit = 20
+	if limit < 1 || limit > maxInstanceListLimit {
+		limit = defaultInstanceListLimit
 	}
 	if offset < 0 {
 		offset = 0
 	}
 	page := (offset / limit) + 1
 
-	items, total, err := h.repo.ListToolkits(r.Context(), projectID, page, limit)
+	filter, err := parseInstanceListFilter(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	items, total, err := h.repo.ListToolkitInstances(r.Context(), projectID, filter, page, limit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list toolkits"})
 		return
@@ -1633,25 +1696,73 @@ func (r *pgRepo) ForkToolkit(ctx context.Context, projectID string, body map[str
 }
 
 func (r *pgRepo) ListToolkits(ctx context.Context, projectID string, page, pageSize int) ([]map[string]any, int, error) {
+	return r.ListToolkitInstances(ctx, projectID, InstanceListFilter{}, page, pageSize)
+}
+
+// mcpToolkitPredicate is the server form of the web `isMcpToolkit` rule
+// (apps/elitea-web/src/entities/toolkit/model/selectors.ts): type 'mcp', a
+// 'mcp_*' type, or meta.mcp boolean true. Keep the two in step. COALESCE keeps
+// a NULL meta (or one without the key) false, so NOT(...) still keeps the row.
+// It holds a literal %, so never pass it through fmt.Sprintf as the format.
+const mcpToolkitPredicate = `(type = 'mcp' OR type LIKE 'mcp\_%' ESCAPE '\' ` +
+	`OR COALESCE(meta->'mcp' = 'true'::jsonb, false))`
+
+// likeLiteral escapes LIKE wildcards so user text matches literally.
+var likeLiteral = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// instanceWhere builds the WHERE clause (with its leading space) and its
+// arguments for filter. Values only ever travel as parameters. The first
+// parameter number is 1; the caller appends LIMIT/OFFSET after len(args).
+func instanceWhere(filter InstanceListFilter) (string, []any) {
+	var conds []string
+	var args []any
+	if filter.MCP != nil {
+		// The typed listing never shows agent-as-tool links, like the legacy
+		// toolkits_listing. Without an mcp filter the raw listing is unchanged.
+		conds = append(conds, `type <> 'application'`)
+		if *filter.MCP {
+			conds = append(conds, mcpToolkitPredicate)
+		} else {
+			conds = append(conds, `NOT `+mcpToolkitPredicate)
+		}
+	}
+	if filter.Query != "" {
+		args = append(args, "%"+likeLiteral.Replace(filter.Query)+"%")
+		n := strconv.Itoa(len(args))
+		conds = append(conds, `(name ILIKE $`+n+` ESCAPE '\' OR COALESCE(description, '') ILIKE $`+n+` ESCAPE '\')`)
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+func (r *pgRepo) ListToolkitInstances(ctx context.Context, projectID string, filter InstanceListFilter, page, pageSize int) ([]map[string]any, int, error) {
 	s, err := tenantschema.Quote(projectID)
 	if err != nil {
 		return nil, 0, err
 	}
 	offset := (page - 1) * pageSize
+	where, args := instanceWhere(filter)
 
+	// The COUNT carries the same WHERE as the page, so total is the filtered total.
 	var total int
-	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM %s.elitea_tools`, s)
-	if err := r.pool.QueryRow(ctx, countQ).Scan(&total); err != nil {
+	countQ := `SELECT COUNT(*) FROM ` + s + `.elitea_tools` + where
+	if err := r.pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	q := fmt.Sprintf(`
+	// id breaks name ties, so offset paging neither skips nor repeats a row.
+	limitN := strconv.Itoa(len(args) + 1)
+	offsetN := strconv.Itoa(len(args) + 2)
+	q := `
 		SELECT id, type, name, COALESCE(description,''),
 		       COALESCE(settings::text,'{}'), COALESCE(meta::text,'{}'),
 		       created_at, author_id
-		FROM %s.elitea_tools
-		ORDER BY name LIMIT $1 OFFSET $2`, s)
-	rows, err := r.pool.Query(ctx, q, pageSize, offset)
+		FROM ` + s + `.elitea_tools` + where + `
+		ORDER BY name, id LIMIT $` + limitN + ` OFFSET $` + offsetN
+	args = append(args, pageSize, offset)
+	rows, err := r.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
 	}

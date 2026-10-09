@@ -48,6 +48,10 @@ type App struct {
 	// Runners are this application's own runners, beyond the shared ones
 	// (unavailable, echo) every application offers.
 	Runners map[string]RunnerFactory
+	// Retired names runners this application no longer serves, each with
+	// the message that says what replaces it. The host refuses to start on
+	// one, so an old setting fails loudly instead of reading as unknown.
+	Retired map[string]string
 }
 
 // sharedRunners are offered by every application: the default that refuses
@@ -77,28 +81,22 @@ var registry = []App{
 			"fixture": func(settings spi.Settings, step time.Duration) (spi.Runner, error) {
 				return deepwikirun.NewFixtureRunner(settings, step), nil
 			},
-			// The analysis engine, reached as a sidecar over a local socket
-			// (ADR-0023 H2): the engine's dependency closure stays in Python;
-			// composition, upload and the SPI are this host's. A host asked
-			// for the engine with no socket to reach it must not come up
-			// looking healthy.
-			"legacy": func(settings spi.Settings, _ time.Duration) (spi.Runner, error) {
-				if settings.EngineSocket == "" {
-					return nil, fmt.Errorf("%w: %sRUNNER=legacy needs %sENGINE_SOCKET, the engine sidecar's Unix socket",
-						spi.ErrConfig, settings.Prefix, settings.Prefix)
-				}
-				return deepwikirun.NewEngineRunner(settings), nil
-			},
-			// The Rust-native engine (ADR-0026): the same sidecar protocol
-			// on the same socket, so the only difference to this host is the
-			// runner name GET /health reports. The same refusal applies.
+			// The analysis engine (ADR-0026, the Rust sidecar), reached over
+			// a local socket (ADR-0023 H2); composition, upload and the SPI
+			// are this host's. A host asked for the engine with no socket to
+			// reach it must not come up looking healthy.
 			"native": func(settings spi.Settings, _ time.Duration) (spi.Runner, error) {
 				if settings.EngineSocket == "" {
 					return nil, fmt.Errorf("%w: %sRUNNER=native needs %sENGINE_SOCKET, the engine sidecar's Unix socket",
 						spi.ErrConfig, settings.Prefix, settings.Prefix)
 				}
-				return deepwikirun.NewNamedEngineRunner(settings, "native"), nil
+				return deepwikirun.NewEngineRunner(settings), nil
 			},
+		},
+		Retired: map[string]string{
+			// The Python engine sidecar. The Helm chart refuses the same
+			// value with the same pointer.
+			"legacy": "named the Python engine sidecar, which is removed (ADR-0026); set native to run the native engine sidecar, or fixture for canned results. See docs/UPGRADING.md",
 		},
 	},
 	{
@@ -184,6 +182,9 @@ func (a App) RunnerNames() []string {
 // actually serves. A runner another application offers is refused here for
 // the same reason an unknown name is: this one does not serve it.
 func (a App) Runner(name string, settings spi.Settings, step time.Duration) (spi.Runner, error) {
+	if why, ok := a.Retired[name]; ok {
+		return nil, fmt.Errorf("%w: %sRUNNER=%q %s", spi.ErrConfig, a.EnvPrefix, name, why)
+	}
 	if factory, ok := a.Runners[name]; ok {
 		return factory(settings, step)
 	}

@@ -51,6 +51,15 @@ export interface AnswerCanvasSelection {
    * gets the heuristic's guess.
    */
   readonly kind?: 'code' | 'document' | undefined;
+  /**
+   * Open the canvas in the editor as soon as it exists. "Open as document"
+   * sets it: the action's name is a promise to OPEN something, and without
+   * this the click only rewrote the answer into a block titled after an
+   * editing mode the reader was never put in, with no editor and no way out.
+   * The selection-drag "Create canvas" leaves it unset — that gesture carves
+   * a block and the reader opens it when they choose.
+   */
+  readonly openAfterCreate?: boolean | undefined;
 }
 
 export interface AnswerContentProps {

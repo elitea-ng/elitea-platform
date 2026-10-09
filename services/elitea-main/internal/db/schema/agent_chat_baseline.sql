@@ -129,6 +129,24 @@ CREATE TABLE chat_messages_attachment (
     content json
 );
 
+-- Canvas payload tables (tenant migration 0129), projected because the turn
+-- resolvers read a canvas's NEWEST version into the chat history the model is
+-- shown (agent_chat.sql). Same columns as 0129; the authors table is omitted
+-- because no query here reads it.
+CREATE TABLE chat_messages_canvas (
+    name text NOT NULL,
+    canvas_type varchar NOT NULL,
+    id integer PRIMARY KEY REFERENCES chat_message_items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE chat_canvas_versions (
+    id serial PRIMARY KEY,
+    code_language varchar(32),
+    canvas_content text NOT NULL,
+    canvas_item_id integer NOT NULL REFERENCES chat_messages_canvas(id) ON DELETE CASCADE,
+    created_at timestamp NOT NULL DEFAULT now()
+);
+
 -- Current application/tool ownership projection used only to keep admission
 -- queries type-checked. The tenant schema lifecycle continues to own this
 -- already-existing table; this compiler input is not a migration.

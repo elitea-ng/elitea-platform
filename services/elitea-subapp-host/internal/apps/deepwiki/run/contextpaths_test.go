@@ -237,3 +237,36 @@ func TestNoTransportIsRefusedRatherThanAnsweredWithoutContext(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// A FOLDER wiki's pages are read under the id its generation filed them
+// under, `artifact--{bucket}--{prefix}--{branch}`, derived from the folder
+// the toolkit names, exactly as a git wiki's are.
+func TestAFolderSelectionReadsTheGenerationsWiki(t *testing.T) {
+	const wikiID = "artifact--docs--handbook--main"
+	manifest, _ := json.Marshal(map[string]any{"wiki_id": wikiID, "pages": []string{"wiki_pages/overview/intro.md"}})
+	bucket := &recordingBucket{objects: map[string][]byte{
+		run.ManifestKey(wikiID, "v1"):            manifest,
+		wikiID + "/wiki_pages/overview/intro.md": []byte("# Intro\n\nThe handbook.\n"),
+	}}
+	transport := func(map[string]any) (run.ArtifactClient, error) { return bucket, nil }
+	params := run.Params{
+		"question":     "What is it?",
+		"llm_settings": map[string]any{"api_base": "https://elitea.example/llm/v1", "api_key": "k"},
+		"code_toolkit": map[string]any{
+			"artifact_configuration": map[string]any{"bucket": "docs", "prefix": "handbook"},
+			"active_branch":          "main",
+		},
+		run.ContextPathsParam:   []any{"wiki_pages/overview/intro.md"},
+		run.ContextVersionParam: "v1",
+	}
+	resolved, err := run.ApplyContextPaths(context.Background(), "ask", params, transport)
+	if err != nil {
+		t.Fatalf("%v (reads %v)", err, bucket.reads)
+	}
+	if question, _ := resolved["question"].(string); !strings.Contains(question, "The handbook.") {
+		t.Fatalf("the page was not prepended: %q", question)
+	}
+	if bucket.reads[0] != run.ManifestKey(wikiID, "v1") {
+		t.Fatalf("reads %v", bucket.reads)
+	}
+}

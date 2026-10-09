@@ -6,6 +6,7 @@
 //! its environment.
 
 use crate::ingest::IngestSettings;
+use crate::ingest::artifact::ArtifactCaps;
 use crate::ingest::egress::EgressPolicy;
 use crate::ingest::limits::IngestLimits;
 use crate::llm::embeddings::{DEFAULT_BATCH_SIZE, DEFAULT_CONCURRENCY, MIN_SPLIT_TOKENS};
@@ -111,7 +112,7 @@ pub const MAX_WORKER_THREADS: u64 = 256;
 /// The address space each worker thread is sized at: the largest parser
 /// stack (the Python parser's 256 MiB), which every thread of a parser
 /// pool reserves.
-pub const WORKER_THREAD_RESERVE_BYTES: u64 = crate::parsers::limits::LARGEST_PARSER_STACK as u64;
+pub const WORKER_THREAD_RESERVE_BYTES: u64 = crate::parsers::LARGEST_PARSER_STACK as u64;
 
 /// The address space a worker needs besides its parser stacks (1 GiB):
 /// the heap, the malloc arenas, the runtime's own threads.
@@ -197,14 +198,26 @@ pub struct Settings {
     pub query_pool_size: u32,
 }
 
+/// The callback hop's own trust setting (see [`ModelEnvSettings::tls_ca_file`]).
+pub const CALLBACK_CA_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_CA_FILE";
+/// The listener's CA, which the callback hop trusted before the split.
+pub const TLS_CA_SETTING: &str = "ELITEA_DEEPWIKI_TLS_CA_FILE";
+
 /// What the environment decides about model calls; the invocation's
 /// `llm_settings` decide the rest (`llm::settings`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelEnvSettings {
-    /// `ELITEA_DEEPWIKI_TLS_CA_FILE`: a PEM bundle trusted in addition to
-    /// the platform roots, for a gateway behind a private CA. The Go host
-    /// reads the same variable for its callback hop.
+    /// A PEM bundle trusted in addition to the platform roots on the
+    /// callback hop (the model gateway and the artifact API behind
+    /// `llm_settings.api_base`): `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` — the
+    /// runtime CA when that hop is TLS through platform-edge (ADR-0027) —
+    /// else `ELITEA_DEEPWIKI_TLS_CA_FILE`, what it read before the two were
+    /// separated. The Go host reads the same pair in the same order
+    /// (`spi.Settings.CallbackCA`).
     pub tls_ca_file: Option<PathBuf>,
+    /// Which of the two variables `tls_ca_file` came from, so an unreadable
+    /// bundle names the setting to fix.
+    pub tls_ca_setting: &'static str,
     /// `WIKI_EMBED_BATCH_SIZE` (unprefixed: the Python indexer's name):
     /// inputs per embedding request, default 64.
     pub embed_batch_size: usize,
@@ -248,7 +261,14 @@ fn model_settings(
             ))
         })?;
     Ok(ModelEnvSettings {
-        tls_ca_file: raw("TLS_CA_FILE").map(PathBuf::from),
+        tls_ca_file: raw("CALLBACK_CA_FILE")
+            .or_else(|| raw("TLS_CA_FILE"))
+            .map(PathBuf::from),
+        tls_ca_setting: if raw("CALLBACK_CA_FILE").is_some() {
+            CALLBACK_CA_SETTING
+        } else {
+            TLS_CA_SETTING
+        },
         embed_batch_size: batch,
         embed_concurrency: usize::try_from(concurrency)
             .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
@@ -444,22 +464,51 @@ fn check_worker_fits(worker: &WorkerSettings) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// The ingest settings under this engine's names: every limit, timeout and
+/// allowlist refusal names the `ELITEA_DEEPWIKI_*` variable to change, and
+/// the clone identifies itself as this engine.
+pub static INGEST_NAMES: crate::ingest::names::SettingNames = crate::ingest::names::SettingNames {
+    max_clone_bytes: "ELITEA_DEEPWIKI_MAX_CLONE_BYTES",
+    max_file_count: "ELITEA_DEEPWIKI_MAX_FILE_COUNT",
+    max_file_bytes: "ELITEA_DEEPWIKI_MAX_FILE_BYTES",
+    max_parsed_bytes: "ELITEA_DEEPWIKI_MAX_PARSED_BYTES",
+    clone_timeout_seconds: "ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS",
+    artifact_max_files: "ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES",
+    artifact_max_bytes: "ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES",
+    git_allowlist: "ELITEA_DEEPWIKI_GIT_ALLOWLIST",
+    user_agent: concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")),
+};
+
 fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettings, ConfigError> {
     let defaults = IngestLimits::default();
     Ok(IngestSettings {
         // Fail-closed when unset: the policy is empty and refuses every
         // clone (security/egress.py, spi.ParseEgressPolicy).
-        git_allowlist: EgressPolicy::parse(raw("GIT_ALLOWLIST").as_deref()),
+        git_allowlist: EgressPolicy::parse(raw("GIT_ALLOWLIST").as_deref()).named(&INGEST_NAMES),
         limits: IngestLimits {
             max_clone_bytes: positive_count(raw, "MAX_CLONE_BYTES", defaults.max_clone_bytes)?,
             max_file_count: positive_count(raw, "MAX_FILE_COUNT", defaults.max_file_count)?,
             max_file_bytes: positive_count(raw, "MAX_FILE_BYTES", defaults.max_file_bytes)?,
             max_parsed_bytes: positive_count(raw, "MAX_PARSED_BYTES", defaults.max_parsed_bytes)?,
             clone_timeout: positive_seconds(raw, "CLONE_TIMEOUT_SECONDS", defaults.clone_timeout)?,
+            names: &INGEST_NAMES,
         },
         scratch_path: PathBuf::from(
             raw("SCRATCH_PATH").unwrap_or_else(|| DEFAULT_SCRATCH_PATH.to_owned()),
         ),
+        // Python's artifact_source caps, under Python's names.
+        artifact: ArtifactCaps {
+            max_files: positive_count(
+                raw,
+                "ARTIFACT_MAX_FILES",
+                ArtifactCaps::default().max_files,
+            )?,
+            max_bytes: positive_count(
+                raw,
+                "ARTIFACT_MAX_BYTES",
+                ArtifactCaps::default().max_bytes,
+            )?,
+        },
     })
 }
 
@@ -495,7 +544,7 @@ impl Settings {
             Some("native") => RunnerKind::Native,
             Some("legacy") => {
                 return Err(ConfigError(format!(
-                    "{ENV_PREFIX}RUNNER=legacy names the Python engine, which this binary is not; run the elitea-deepwiki -engine image for it"
+                    "{ENV_PREFIX}RUNNER=legacy named the Python engine, which is retired; use native (see docs/UPGRADING.md)"
                 )));
             }
             Some(other) => {
@@ -635,9 +684,16 @@ mod tests {
         assert_eq!(
             parsed,
             Ok(IngestSettings {
-                git_allowlist: EgressPolicy::parse(None),
-                limits: IngestLimits::default(),
+                git_allowlist: EgressPolicy::parse(None).named(&INGEST_NAMES),
+                limits: IngestLimits {
+                    names: &INGEST_NAMES,
+                    ..IngestLimits::default()
+                },
                 scratch_path: PathBuf::from(DEFAULT_SCRATCH_PATH),
+                artifact: ArtifactCaps {
+                    max_files: 5000,
+                    max_bytes: 512 * 1024 * 1024,
+                },
             })
         );
         let parsed = settings(&[
@@ -648,21 +704,60 @@ mod tests {
             ("ELITEA_DEEPWIKI_MAX_PARSED_BYTES", "4096"),
             ("ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS", "2.5"),
             ("ELITEA_DEEPWIKI_SCRATCH_PATH", "/scratch"),
+            ("ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES", "12"),
+            ("ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES", "4096"),
         ])
         .map(|s| s.ingest);
         assert_eq!(
             parsed,
             Ok(IngestSettings {
-                git_allowlist: EgressPolicy::parse(Some("github.com *.github.com")),
+                git_allowlist: EgressPolicy::parse(Some("github.com *.github.com"))
+                    .named(&INGEST_NAMES),
                 limits: IngestLimits {
                     max_clone_bytes: 1_048_576,
                     max_file_count: 10,
                     max_file_bytes: 2048,
                     max_parsed_bytes: 4096,
                     clone_timeout: Duration::from_millis(2500),
+                    names: &INGEST_NAMES,
                 },
                 scratch_path: PathBuf::from("/scratch"),
+                artifact: ArtifactCaps {
+                    max_files: 12,
+                    max_bytes: 4096,
+                },
             })
+        );
+    }
+
+    /// The shared ingest crate names whatever setting it is handed; this
+    /// engine's refusals must name ITS variables, as the Python engine's did.
+    #[test]
+    fn ingest_refusals_name_this_engines_settings() {
+        let Ok(parsed) = settings(&[]) else {
+            panic!("the defaults load");
+        };
+        let ingest = parsed.ingest;
+        let refused = ingest
+            .git_allowlist
+            .check("github.com", "clone destination");
+        assert!(
+            refused.is_err_and(|e| e.message.contains("Set ELITEA_DEEPWIKI_GIT_ALLOWLIST to")),
+            "the allowlist refusal names the variable"
+        );
+        let too_big = ingest.limits.clone_bytes_error("o/r", u64::MAX);
+        assert!(
+            too_big
+                .message
+                .contains("over ELITEA_DEEPWIKI_MAX_CLONE_BYTES="),
+            "{too_big}"
+        );
+        assert!(
+            ingest
+                .limits
+                .names
+                .user_agent
+                .starts_with("elitea-deepwiki-engine/")
         );
     }
 
@@ -674,6 +769,8 @@ mod tests {
             "MAX_FILE_BYTES",
             "MAX_PARSED_BYTES",
             "CLONE_TIMEOUT_SECONDS",
+            "ARTIFACT_MAX_FILES",
+            "ARTIFACT_MAX_BYTES",
         ] {
             for bad in ["0", "-1", "x", "1e400"] {
                 let key = format!("ELITEA_DEEPWIKI_{name}");
@@ -971,6 +1068,7 @@ mod tests {
             defaults,
             Ok(ModelEnvSettings {
                 tls_ca_file: None,
+                tls_ca_setting: TLS_CA_SETTING,
                 embed_batch_size: DEFAULT_BATCH_SIZE,
                 embed_concurrency: DEFAULT_CONCURRENCY,
                 embed_ctx_tokens: EMBEDDING_CTX_LENGTH,
@@ -989,11 +1087,23 @@ mod tests {
             set,
             Ok(ModelEnvSettings {
                 tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
+                tls_ca_setting: TLS_CA_SETTING,
                 embed_batch_size: 16,
                 embed_concurrency: 2,
                 embed_ctx_tokens: 4096,
                 stream_total: Duration::from_hours(3),
             })
+        );
+        // The callback hop's own CA wins over the listener's, and a CA-file
+        // error then names the variable that was actually set.
+        let split = settings(&[
+            ("ELITEA_DEEPWIKI_TLS_CA_FILE", "/provider-ca.pem"),
+            ("ELITEA_DEEPWIKI_CALLBACK_CA_FILE", "/runtime-ca.pem"),
+        ])
+        .map(|s| (s.model.tls_ca_file, s.model.tls_ca_setting));
+        assert_eq!(
+            split,
+            Ok((Some(PathBuf::from("/runtime-ca.pem")), CALLBACK_CA_SETTING))
         );
         assert!(settings(&[("WIKI_EMBED_BATCH_SIZE", "0")]).is_err());
         for bad in ["0", "255", "-1", "8k"] {
@@ -1011,5 +1121,60 @@ mod tests {
             Ok(256)
         );
         assert!(settings(&[("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "0")]).is_err());
+    }
+}
+
+// The model client is a shared crate (libs/rust/model-client, ADR-0027) and
+// knows nothing of this engine's environment; these map it onto the client.
+impl From<&ModelEnvSettings> for crate::llm::TransportSettings {
+    fn from(settings: &ModelEnvSettings) -> Self {
+        Self {
+            ca_file: settings.tls_ca_file.clone(),
+            ca_file_setting: settings.tls_ca_setting,
+            user_agent: concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")),
+            timeouts: crate::llm::Timeouts {
+                stream_total: settings.stream_total,
+                ..crate::llm::Timeouts::default()
+            },
+            ..Self::default()
+        }
+    }
+}
+
+impl From<&ModelEnvSettings> for crate::llm::EmbeddingOptions {
+    fn from(settings: &ModelEnvSettings) -> Self {
+        Self {
+            batch_size: settings.embed_batch_size,
+            concurrency: settings.embed_concurrency,
+            ctx_length: settings.embed_ctx_tokens,
+            ctx_setting: "ELITEA_DEEPWIKI_EMBED_CTX_TOKENS",
+        }
+    }
+}
+
+#[cfg(test)]
+mod model_env_tests {
+    use super::*;
+    use crate::llm::EmbeddingOptions;
+
+    #[test]
+    fn the_embedding_window_comes_from_the_environment() {
+        let settings = ModelEnvSettings {
+            tls_ca_file: None,
+            tls_ca_setting: TLS_CA_SETTING,
+            embed_batch_size: 16,
+            embed_concurrency: 3,
+            embed_ctx_tokens: 4096,
+            stream_total: std::time::Duration::from_mins(1),
+        };
+        assert_eq!(
+            EmbeddingOptions::from(&settings),
+            EmbeddingOptions {
+                batch_size: 16,
+                concurrency: 3,
+                ctx_length: 4096,
+                ctx_setting: "ELITEA_DEEPWIKI_EMBED_CTX_TOKENS",
+            }
+        );
     }
 }

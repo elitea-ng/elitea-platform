@@ -18,8 +18,8 @@
 //! in the prefix. Python escaped only `%`, so `_` in a directory name
 //! matched any character.
 
-use crate::storage::Result;
 use crate::storage::search::{self, Hit, Hybrid, IndexReader, READ_SNAPSHOT, Scores};
+use crate::storage::{Result, WikiKey};
 use serde_json::{Map, Value, json};
 use sqlx::Row;
 use sqlx::postgres::{PgConnection, PgPool, PgRow};
@@ -178,17 +178,19 @@ pub(crate) const NODE_SELECT: &str = "SELECT node_id, rel_path, file_name, langu
      is_architectural, is_doc, is_test, chunk_type, macro_cluster, micro_cluster \
      FROM wiki_nodes";
 
-/// `PostgresUnifiedDB`: one wiki's read surface.
+/// `PostgresUnifiedDB`: one wiki's read surface, within one project. Every
+/// statement filters by the [`WikiKey`]'s `(project_id, wiki_id)`.
 #[derive(Debug, Clone)]
 pub struct UnifiedDb {
     reader: IndexReader,
 }
 
 impl UnifiedDb {
-    /// The reader of `wiki_id`.
-    pub fn new(pool: PgPool, wiki_id: impl Into<String>) -> Self {
+    /// The reader of one project's wiki.
+    #[must_use]
+    pub fn new(pool: PgPool, key: WikiKey) -> Self {
         Self {
-            reader: IndexReader::new(pool, wiki_id),
+            reader: IndexReader::new(pool, key),
         }
     }
 
@@ -198,8 +200,8 @@ impl UnifiedDb {
         &self.reader
     }
 
-    fn wiki(&self) -> &str {
-        self.reader.wiki_id()
+    fn key(&self) -> &WikiKey {
+        self.reader.key()
     }
 
     async fn snapshot(&self) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
@@ -214,9 +216,11 @@ impl UnifiedDb {
     /// [`crate::storage::StorageError::Database`].
     pub async fn vec_available(&self) -> Result<bool> {
         Ok(sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM wiki_node_embeddings WHERE wiki_id = $1)",
+            "SELECT EXISTS (SELECT 1 FROM wiki_node_embeddings \
+             WHERE wiki_id = $1 AND project_id = $2)",
         )
-        .bind(self.wiki())
+        .bind(self.key().wiki_id())
+        .bind(self.key().project_id())
         .fetch_one(self.reader.pool())
         .await?)
     }
@@ -235,16 +239,16 @@ impl UnifiedDb {
         params: &Hybrid,
     ) -> Result<Vec<HybridRow>> {
         let mut tx = self.snapshot().await?;
-        let wiki = self.wiki();
-        let mut hits = search::search_hybrid(&mut tx, wiki, query, embedding, params).await?;
+        let key = self.key();
+        let mut hits = search::search_hybrid(&mut tx, key, query, embedding, params).await?;
         let filtered = scope.path_prefix.as_deref().is_some_and(|p| !p.is_empty())
             || scope.cluster_id.is_some();
         if filtered {
-            hits = filter(&mut tx, wiki, hits, scope).await?;
+            hits = filter(&mut tx, key, hits, scope).await?;
             hits.truncate(params.limit);
         }
         let ids: Vec<&str> = hits.iter().map(|hit| hit.node_id.as_str()).collect();
-        let mut nodes = nodes_by_id(&mut tx, wiki, &ids).await?;
+        let mut nodes = nodes_by_id(&mut tx, key, &ids).await?;
         tx.commit().await?;
         Ok(hits
             .into_iter()
@@ -264,10 +268,11 @@ impl UnifiedDb {
     /// [`crate::storage::StorageError::Database`].
     pub async fn get_node(&self, node_id: &str) -> Result<Option<NodeRecord>> {
         let row = sqlx::query(&format!(
-            "{NODE_SELECT} WHERE wiki_id = $1 AND node_id = $2"
+            "{NODE_SELECT} WHERE wiki_id = $1 AND node_id = $2 AND project_id = $3"
         ))
-        .bind(self.wiki())
+        .bind(self.key().wiki_id())
         .bind(node_id)
+        .bind(self.key().project_id())
         .fetch_optional(self.reader.pool())
         .await?;
         row.as_ref().map(NodeRecord::from_row).transpose()
@@ -283,7 +288,7 @@ impl UnifiedDb {
             return Ok(Vec::new());
         }
         let mut connection = self.reader.pool().acquire().await?;
-        Ok(nodes_by_id(&mut connection, self.wiki(), node_ids)
+        Ok(nodes_by_id(&mut connection, self.key(), node_ids)
             .await?
             .into_values()
             .collect())
@@ -303,20 +308,23 @@ impl UnifiedDb {
         let rows = if rel_types.is_empty() {
             sqlx::query(
                 "SELECT source_id, target_id, rel_type, edge_class, weight, metadata \
-                 FROM wiki_edges WHERE wiki_id = $1 AND source_id = $2",
+                 FROM wiki_edges WHERE wiki_id = $1 AND source_id = $2 AND project_id = $3",
             )
-            .bind(self.wiki())
+            .bind(self.key().wiki_id())
             .bind(node_id)
+            .bind(self.key().project_id())
             .fetch_all(self.reader.pool())
             .await?
         } else {
             sqlx::query(
                 "SELECT source_id, target_id, rel_type, edge_class, weight, metadata \
-                 FROM wiki_edges WHERE wiki_id = $1 AND source_id = $2 AND rel_type = ANY($3)",
+                 FROM wiki_edges WHERE wiki_id = $1 AND source_id = $2 AND rel_type = ANY($3) \
+                 AND project_id = $4",
             )
-            .bind(self.wiki())
+            .bind(self.key().wiki_id())
             .bind(node_id)
             .bind(rel_types)
+            .bind(self.key().project_id())
             .fetch_all(self.reader.pool())
             .await?
         };
@@ -331,10 +339,11 @@ impl UnifiedDb {
     pub async fn get_edges_to(&self, node_id: &str) -> Result<Vec<EdgeRecord>> {
         let rows = sqlx::query(
             "SELECT source_id, target_id, rel_type, edge_class, weight, metadata \
-             FROM wiki_edges WHERE wiki_id = $1 AND target_id = $2",
+             FROM wiki_edges WHERE wiki_id = $1 AND target_id = $2 AND project_id = $3",
         )
-        .bind(self.wiki())
+        .bind(self.key().wiki_id())
         .bind(node_id)
+        .bind(self.key().project_id())
         .fetch_all(self.reader.pool())
         .await?;
         rows.iter().map(EdgeRecord::from_row).collect()
@@ -347,10 +356,12 @@ impl UnifiedDb {
     /// [`crate::storage::StorageError::Database`].
     pub async fn get_embedding(&self, node_id: &str) -> Result<Option<Vec<f32>>> {
         let vector: Option<pgvector::Vector> = sqlx::query_scalar(
-            "SELECT embedding FROM wiki_node_embeddings WHERE wiki_id = $1 AND node_id = $2",
+            "SELECT embedding FROM wiki_node_embeddings \
+             WHERE wiki_id = $1 AND node_id = $2 AND project_id = $3",
         )
-        .bind(self.wiki())
+        .bind(self.key().wiki_id())
         .bind(node_id)
+        .bind(self.key().project_id())
         .fetch_optional(self.reader.pool())
         .await?;
         Ok(vector.map(Vec::from))
@@ -362,12 +373,13 @@ impl UnifiedDb {
     ///
     /// [`crate::storage::StorageError::Database`].
     pub async fn node_count(&self) -> Result<i64> {
-        Ok(
-            sqlx::query_scalar("SELECT count(*) FROM wiki_nodes WHERE wiki_id = $1")
-                .bind(self.wiki())
-                .fetch_one(self.reader.pool())
-                .await?,
+        Ok(sqlx::query_scalar(
+            "SELECT count(*) FROM wiki_nodes WHERE wiki_id = $1 AND project_id = $2",
         )
+        .bind(self.key().wiki_id())
+        .bind(self.key().project_id())
+        .fetch_one(self.reader.pool())
+        .await?)
     }
 
     /// Edge count.
@@ -376,12 +388,13 @@ impl UnifiedDb {
     ///
     /// [`crate::storage::StorageError::Database`].
     pub async fn edge_count(&self) -> Result<i64> {
-        Ok(
-            sqlx::query_scalar("SELECT count(*) FROM wiki_edges WHERE wiki_id = $1")
-                .bind(self.wiki())
-                .fetch_one(self.reader.pool())
-                .await?,
+        Ok(sqlx::query_scalar(
+            "SELECT count(*) FROM wiki_edges WHERE wiki_id = $1 AND project_id = $2",
         )
+        .bind(self.key().wiki_id())
+        .bind(self.key().project_id())
+        .fetch_one(self.reader.pool())
+        .await?)
     }
 
     /// Wiki-level metadata off the `wikis` row (`get_meta`): one of
@@ -407,9 +420,10 @@ impl UnifiedDb {
         }
         let row = sqlx::query(
             "SELECT wiki_id, repo, branch, commit_hash, wiki_version_id, analysis_key, \
-                 canonical_repo_identifier FROM wikis WHERE wiki_id = $1",
+                 canonical_repo_identifier FROM wikis WHERE wiki_id = $1 AND project_id = $2",
         )
-        .bind(self.wiki())
+        .bind(self.key().wiki_id())
+        .bind(self.key().project_id())
         .fetch_optional(self.reader.pool())
         .await?;
         match row {
@@ -421,17 +435,18 @@ impl UnifiedDb {
 
 pub(crate) async fn nodes_by_id(
     connection: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     node_ids: &[&str],
 ) -> Result<std::collections::HashMap<String, NodeRecord>> {
     if node_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
     let rows = sqlx::query(&format!(
-        "{NODE_SELECT} WHERE wiki_id = $1 AND node_id = ANY($2)"
+        "{NODE_SELECT} WHERE wiki_id = $1 AND node_id = ANY($2) AND project_id = $3"
     ))
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(node_ids)
+    .bind(key.project_id())
     .fetch_all(&mut *connection)
     .await?;
     let mut nodes = std::collections::HashMap::with_capacity(rows.len());
@@ -457,7 +472,7 @@ fn like_literal(value: &str) -> String {
 /// `_filter`: keep the hits under `path_prefix` and in `cluster_id`.
 async fn filter(
     connection: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     hits: Vec<Hit>,
     scope: &Scope,
 ) -> Result<Vec<Hit>> {
@@ -476,12 +491,14 @@ async fn filter(
         "SELECT node_id FROM wiki_nodes \
          WHERE wiki_id = $1 AND node_id = ANY($2) \
            AND ($3::text IS NULL OR rel_path LIKE $3) \
-           AND ($4::integer IS NULL OR macro_cluster = $4)",
+           AND ($4::integer IS NULL OR macro_cluster = $4) \
+           AND project_id = $5",
     )
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(&ids)
     .bind(pattern)
     .bind(scope.cluster_id)
+    .bind(key.project_id())
     .fetch_all(&mut *connection)
     .await?;
     let allowed: std::collections::HashSet<String> = allowed.into_iter().collect();

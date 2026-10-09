@@ -1,0 +1,42 @@
+[package]
+name = "elitea-code-parsers"
+description = "tree-sitter language parsers producing symbols and relationships: the Python engines' parsers transcribed, plus Kotlin and Swift visitors that keep the Inventory regex parsers' output model."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The grammars keep EXACT pins, unlike the rest of libs/rust: a parser's
+# output — node kinds, fields, and so every golden file — is a function of
+# the grammar revision, so every consumer must parse with the same one.
+[dependencies]
+elitea-engine-core = { path = "../engine-core" }
+indexmap = "2.14.2"
+rayon = "1.12.0"
+regex = "1.13.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+tree-sitter = "=0.27.0"
+# The C# grammar `tree_sitter_language_pack` 1.16.1 builds (its
+# language_definitions.json: master at this rev, 4 commits after v0.23.5 with
+# C# 14 support; ABI 15, 8495 parse states, 26 fields, 545 node kinds). The
+# 0.23.5 crate has 8053 states and 533 kinds, and no later crate exists.
+tree-sitter-c-sharp = { git = "https://github.com/tree-sitter/tree-sitter-c-sharp", rev = "9150f7d56bb47f1a809fa23623f1ba1413e93fa9" }
+# The C++ grammar `tree_sitter_language_pack` 1.16.1 builds (its
+# language_definitions.json: master at this rev, 40 commits after v0.23.4;
+# ABI 15, 11734 parse states, 53 fields, 575 node kinds). The 0.23.4 crate
+# has ABI 14, 8637 states, 50 fields and 543 kinds, and no later crate exists.
+tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "8b5b49eb196bec7040441bee33b2c9a4838d6967" }
+tree-sitter-go = "=0.25.0"
+tree-sitter-java = "=0.23.5"
+tree-sitter-javascript = "=0.25.0"
+# Kotlin and Swift: tree-sitter visitors that keep the output model of the
+# Inventory engine's former regex parsers (src/kotlin, src/swift).
+tree-sitter-kotlin-ng = "=1.1.0"
+tree-sitter-python = "=0.25.0"
+tree-sitter-rust = "=0.24.2"
+tree-sitter-swift = "=0.7.4"
+tree-sitter-typescript = "=0.23.2"
+
+[lints]
+workspace = true

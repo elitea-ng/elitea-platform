@@ -43,6 +43,43 @@ func TestUnsupportedToolkitTypeErrorKeepsTheOperatorFormAndTheSentence(t *testin
 	}
 }
 
+// toolVerdict serves the type but not every tool of it.
+type toolVerdict struct {
+	stubVerdict
+	served string
+}
+
+func (v toolVerdict) SupportsTool(toolkitType, toolName string) (bool, string) {
+	if toolName == v.served {
+		return true, ""
+	}
+	return false, "no " + toolName + " in " + toolkitType
+}
+
+// A partial native family (ADR-0027) refuses an unserved TOOL of a type it
+// runs, before any write, with the capability's sentence.
+func TestRunToolRefusesAToolThePartialFamilyDoesNotServe(t *testing.T) {
+	request := validRequest()
+	admissions := &stubAdmissions{run: testAdmitted()}
+	service := newTestService(t, &stubResolver{inputs: testInputs()},
+		toolVerdict{stubVerdict: stubVerdict{supported: true}, served: "something_else"},
+		admissions, &stubDispatcher{}, &stubSettlements{}, time.Second)
+	_, err := service.RunTool(context.Background(), request)
+	var refusal *UnsupportedToolkitTypeError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("expected *UnsupportedToolkitTypeError, got %T %v", err, err)
+	}
+	if want := "no " + request.ToolName + " in " + testInputs().ToolkitType; refusal.Reason != want {
+		t.Fatalf("reason = %q, want %q", refusal.Reason, want)
+	}
+	served := newTestService(t, &stubResolver{inputs: testInputs()},
+		toolVerdict{stubVerdict: stubVerdict{supported: true}, served: request.ToolName},
+		&stubAdmissions{run: testAdmitted()}, &stubDispatcher{}, &stubSettlements{}, time.Second)
+	if _, err := served.RunTool(context.Background(), request); errors.As(err, &refusal) {
+		t.Fatalf("a served tool was refused: %v", err)
+	}
+}
+
 // The refusal RunTool returns carries the capability reason untouched, so a
 // user-facing surface can show it as the sentence it already is.
 func TestRunToolRefusalCarriesTheCapabilityReasonAsASentence(t *testing.T) {

@@ -376,8 +376,17 @@ transition: END
     };
     let short_branch = &parallel_definition.branches()[0];
     let child_input_digest = [0x42_u8; 32];
+    let origin = first
+        .child_origin(&parallel_activation)
+        .expect("read the parallel child origin");
     let first_child = first
-        .for_branch(&parallel_activation, short_branch, 0, &child_input_digest)
+        .for_branch(
+            &parallel_activation,
+            short_branch,
+            0,
+            &child_input_digest,
+            &origin,
+        )
         .await
         .expect("activate first parallel child checkpoint");
     let child_runs = Arc::new(AtomicUsize::new(0));
@@ -401,7 +410,13 @@ transition: END
         .expect("run first parallel child");
 
     let recreated_child = first
-        .for_branch(&parallel_activation, short_branch, 0, &child_input_digest)
+        .for_branch(
+            &parallel_activation,
+            short_branch,
+            0,
+            &child_input_digest,
+            &origin,
+        )
         .await
         .expect("recreate parallel child checkpoint");
     assert_eq!(recreated_child.thread_id, first_child.thread_id);
@@ -434,12 +449,24 @@ transition: END
         ..parallel_activation.clone()
     };
     let later_child = first
-        .for_branch(&later_activation, short_branch, 0, &child_input_digest)
+        .for_branch(
+            &later_activation,
+            short_branch,
+            0,
+            &child_input_digest,
+            &origin,
+        )
         .await
         .expect("activate later loop child checkpoint");
     assert_ne!(later_child.thread_id, first_child.thread_id);
     let changed_input_child = first
-        .for_branch(&parallel_activation, short_branch, 0, &[0x43_u8; 32])
+        .for_branch(
+            &parallel_activation,
+            short_branch,
+            0,
+            &[0x43_u8; 32],
+            &origin,
+        )
         .await
         .expect("activate changed-input child checkpoint");
     assert_ne!(changed_input_child.thread_id, first_child.thread_id);
@@ -2473,4 +2500,7 @@ async fn postgres_recursive_application_threads_preserve_takeover_and_completed_
     assert!(family.load("thread-1/delegate/inner").await.is_err());
 }
 
+mod direct_tool_journal;
+mod fanout_lineage;
 mod graph_receipts;
+mod run_root_fencing;

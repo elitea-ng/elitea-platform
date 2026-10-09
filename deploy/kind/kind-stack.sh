@@ -3,9 +3,10 @@
 # repository's Helm chart the way it ships to production (ADR-0023):
 #
 #   * the provider pod is TWO containers — the Go sub-application host
-#     (ghcr.io/elitea-ng/elitea-subapp-host) with ELITEA_DEEPWIKI_RUNNER=legacy,
-#     and the Python engine sidecar (ghcr.io/elitea-ng/elitea-deepwiki) reached
-#     over a Unix socket the two share;
+#     (ghcr.io/elitea-ng/elitea-subapp-host) with ELITEA_DEEPWIKI_RUNNER=native,
+#     and the Rust-native engine sidecar
+#     (ghcr.io/elitea-ng/elitea-deepwiki-engine-native) reached over a Unix
+#     socket the two share;
 #   * the facade -> provider hop is mutually authenticated, with both
 #     certificates issued by cert-manager from one internal CA ClusterIssuer,
 #     exactly as templates/deepwiki/certificates.yaml asks for;
@@ -28,20 +29,14 @@ CLUSTER="${KIND_CLUSTER:-elitea-kind}"
 NS="${KIND_NAMESPACE:-elitea}"
 RELEASE="${KIND_RELEASE:-elitea}"
 TAG="${KIND_IMAGE_TAG:-kind}"
-ENGINE_TAG="${TAG}-engine"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.19.2}"
 
 HOST_IMAGE="ghcr.io/elitea-ng/elitea-subapp-host:${TAG}"
 MAIN_IMAGE="ghcr.io/elitea-ng/elitea-main:${TAG}"
-ENGINE_IMAGE="ghcr.io/elitea-ng/elitea-deepwiki:${ENGINE_TAG}"
-
-# The engine sidecar's build extras. `storage-postgres` is what the migration
-# Job needs — it opens ELITEA_DEEPWIKI_DATABASE_URL, and psycopg lives behind
-# that extra. The `engine` extra (torch, transformers, faiss-cpu, the
-# tree-sitter grammars — multi-GB) is DELIBERATELY not built here: the sidecar
-# runs deepwiki.engine.runner=fixture, which is the runner the compose stacks
-# also pair with the plain image. See README.md, "Known limits".
-DEEPWIKI_ENGINE_EXTRAS="${DEEPWIKI_ENGINE_EXTRAS:-[storage-postgres]}"
+# The native engine: the sidecar (deepwiki.engine.runner=fixture, so no LLM
+# and no git host) and the migration Job (`migrate`), one image for both.
+# A cold build compiles ~420 crates. See README.md, "Known limits".
+ENGINE_IMAGE="ghcr.io/elitea-ng/elitea-deepwiki-engine-native:${TAG}"
 
 # The seeded credential. The row is written by seed.sql; the bearer is minted
 # from it below.
@@ -113,9 +108,8 @@ build_images() {
   if have_image "$ENGINE_IMAGE"; then
     note "$ENGINE_IMAGE present"
   else
-    note "building $ENGINE_IMAGE (EXTRAS=${DEEPWIKI_ENGINE_EXTRAS})"
-    "$ENGINE" build -f "${REPO_ROOT}/services/elitea-deepwiki/Containerfile" \
-      --build-arg "EXTRAS=${DEEPWIKI_ENGINE_EXTRAS}" \
+    note "building $ENGINE_IMAGE"
+    "$ENGINE" build -f "${REPO_ROOT}/services/elitea-deepwiki-engine/Containerfile" \
       -t "$ENGINE_IMAGE" "$REPO_ROOT"
   fi
 }
@@ -273,7 +267,7 @@ install_infra() {
 install_chart() {
   say "Installing the chart (elitea-main + the DeepWiki provider)"
   # The migration Jobs are pre-install hooks: elitea-main's own -all-tenants
-  # run, and the provider's `python -m elitea_deepwiki.storage`. --wait covers
+  # run, and the provider's `elitea-deepwiki-engine migrate`. --wait covers
   # both, and the hooks' own timeout is the one that matters for a cold start.
   helm --kube-context "kind-${CLUSTER}" upgrade --install "$RELEASE" "${REPO_ROOT}/deploy/helm/elitea" \
     --namespace "$NS" \
@@ -380,8 +374,8 @@ cmd_verify() {
       -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
   engine_runner="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
       -o jsonpath='{.items[0].spec.containers[1].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
-  if [ "$host_runner" != "legacy" ] || [ "$engine_runner" != "fixture" ]; then
-    fail "runners are host=${host_runner} engine=${engine_runner}; expected legacy/fixture"
+  if [ "$host_runner" != "native" ] || [ "$engine_runner" != "fixture" ]; then
+    fail "runners are host=${host_runner} engine=${engine_runner}; expected native/fixture"
   else
     pass "runners: host=${host_runner} (reaches the sidecar over the socket), engine=${engine_runner}"
   fi

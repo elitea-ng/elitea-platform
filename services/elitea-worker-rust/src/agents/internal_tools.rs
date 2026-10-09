@@ -14,11 +14,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
-use crate::transport::platform_client::PlatformClient;
-use crate::transport::runtime_context::{
-    ProjectContextWriteRequest, RuntimeContextError, SkillWriteRequest,
-};
+use elitea_agent_runtime::host::{HostError, HostErrorCode, PlatformWriter};
+
+use crate::transport::runtime_context::{ProjectContextWriteRequest, SkillWriteRequest};
 
 pub(crate) const ASK_USER_TOOL_NAME: &str = "ask_user";
 /// The two chat-authored builder modules (#940 A8).
@@ -275,34 +273,28 @@ impl InternalToolCatalog {
     }
 }
 
-/// The live claim the two builder tools write under, shared for the duration of
-/// one run.
+/// The platform writer the two builder tools write through, shared for the
+/// duration of one run — the same one the `artifact` family holds
+/// (`ArtifactToolAuthority`).
 ///
-/// `ClaimBoundRuntimeContextAuthority` is deliberately neither cloneable nor
-/// formattable (`protocol::control`), and this type does NOT weaken either
-/// property: it shares the single minted authority behind an `Arc` rather than
-/// duplicating it, exactly as `ClaimScopedEliteaContext` is already shared for
-/// the whole run by the model facade. What it does change is LIFETIME — the
-/// authority now outlives assembly and lives as long as the run does — and that
-/// is load-bearing rather than incidental: a tool the model calls mid-run has no
-/// other way to hold the claim it must write under, and minting a second one
-/// would be a second authorization this worker is not permitted to perform.
+/// In the cloud worker it is a `ClaimPlatformWriter`: the live claim's
+/// `ClaimBoundRuntimeContextAuthority`, deliberately neither cloneable nor
+/// formattable (`protocol::control`), shared behind an `Arc` rather than
+/// duplicated. What sharing it changes is LIFETIME — the authority outlives
+/// assembly and lives as long as the run does — and that is load-bearing: a
+/// tool the model calls mid-run has no other way to hold the claim it must
+/// write under, and minting a second one would be a second authorization this
+/// worker is not permitted to perform. Going through the trait gives the
+/// builder writes the one error mapping the artifact family already uses.
 #[derive(Clone)]
 pub(crate) struct BuilderToolAuthority {
-    platform: Arc<PlatformClient>,
-    authority: Arc<ClaimBoundRuntimeContextAuthority>,
+    writer: Arc<dyn PlatformWriter>,
 }
 
 impl BuilderToolAuthority {
     #[must_use]
-    pub(crate) const fn new(
-        platform: Arc<PlatformClient>,
-        authority: Arc<ClaimBoundRuntimeContextAuthority>,
-    ) -> Self {
-        Self {
-            platform,
-            authority,
-        }
+    pub(crate) fn new(writer: Arc<dyn PlatformWriter>) -> Self {
+        Self { writer }
     }
 }
 
@@ -314,12 +306,12 @@ impl BuilderToolAuthority {
 /// the platform could not be reached right now, and a refused claim says stop
 /// asking. Returning an error instead would discard the conversation that
 /// composed the document, which is the expensive half of this feature.
-fn builder_failure_text(subject: &str, error: &RuntimeContextError) -> String {
-    match error {
-        RuntimeContextError::Rejected(_) | RuntimeContextError::ResourceExhausted(_) => format!(
+fn builder_failure_text(subject: &str, error: &HostError) -> String {
+    match error.code() {
+        HostErrorCode::InvalidInput | HostErrorCode::ResourceExhausted => format!(
             "The {subject} was not saved: the content is empty or larger than this platform              accepts. Shorten it and try once more."
         ),
-        RuntimeContextError::AuthorizationFailed(_) | RuntimeContextError::NotFound(_) => format!(
+        HostErrorCode::AuthorizationFailed | HostErrorCode::NotFound => format!(
             "The {subject} was not saved: this conversation is not authorized to write it.              Do not retry; tell the user."
         ),
         _ => format!(
@@ -405,12 +397,7 @@ impl Tool for SkillsBuilderTool {
             description: builder_optional_string(&arguments, "description"),
             instructions,
         };
-        match self
-            .authority
-            .platform
-            .write_skill(&self.authority.authority, &request)
-            .await
-        {
+        match self.authority.writer.write_skill(&request).await {
             Ok(outcome) => {
                 let verb = if outcome.created {
                     "Created"
@@ -426,7 +413,7 @@ impl Tool for SkillsBuilderTool {
                 tracing::warn!(
                     event = "agent_internal_tool_failed",
                     internal_tool = SKILLS_BUILDER_TOOL_NAME,
-                    reason_code = error.code(),
+                    reason_code = error.reason_code(),
                     "the skills builder could not write the skill"
                 );
                 Ok(Value::String(builder_failure_text("skill", &error)))
@@ -488,12 +475,7 @@ impl Tool for ProjectContextBuilderTool {
             .and_then(|object| object.get("enabled"))
             .and_then(Value::as_bool);
         let request = ProjectContextWriteRequest { content, enabled };
-        match self
-            .authority
-            .platform
-            .write_project_context(&self.authority.authority, &request)
-            .await
-        {
+        match self.authority.writer.write_project_context(&request).await {
             Ok(outcome) => {
                 let verb = if outcome.created {
                     "Created"
@@ -513,7 +495,7 @@ impl Tool for ProjectContextBuilderTool {
                 tracing::warn!(
                     event = "agent_internal_tool_failed",
                     internal_tool = PROJECT_CONTEXT_BUILDER_TOOL_NAME,
-                    reason_code = error.code(),
+                    reason_code = error.reason_code(),
                     "the project context builder could not write the context"
                 );
                 Ok(Value::String(builder_failure_text(
@@ -905,6 +887,9 @@ mod tests {
 
     use adk_rust::tool::SimpleToolContext;
 
+    use crate::transport::platform_writer::host_error;
+    use crate::transport::runtime_context::RuntimeContextError;
+
     #[test]
     fn normalizes_and_formats_structured_answer_in_question_order() {
         let request = AskUserRequest::from_arguments(&json!({
@@ -1209,19 +1194,21 @@ mod tests {
     fn builder_failures_tell_the_model_what_to_do_next() {
         let rejected = builder_failure_text(
             "skill",
-            &RuntimeContextError::Rejected("the builder document cannot be stored as written"),
+            &host_error(&RuntimeContextError::Rejected(
+                "the builder document cannot be stored as written",
+            )),
         );
         assert!(rejected.contains("Shorten it"), "{rejected}");
 
         let refused = builder_failure_text(
             "project context",
-            &RuntimeContextError::AuthorizationFailed("refused"),
+            &host_error(&RuntimeContextError::AuthorizationFailed("refused")),
         );
         assert!(refused.contains("Do not retry"), "{refused}");
 
         let unavailable = builder_failure_text(
             "skill",
-            &RuntimeContextError::DependencyUnavailable("unreachable"),
+            &host_error(&RuntimeContextError::DependencyUnavailable("unreachable")),
         );
         assert!(
             unavailable.contains("could not be reached"),
@@ -1232,5 +1219,180 @@ mod tests {
         // same instruction.
         assert_ne!(rejected, refused);
         assert_ne!(refused, unavailable);
+    }
+
+    const REJECTED_TEXT: &str = "The skill was not saved: the content is empty or larger than this platform              accepts. Shorten it and try once more.";
+    const REFUSED_TEXT: &str = "The skill was not saved: this conversation is not authorized to write it.              Do not retry; tell the user.";
+    const UNAVAILABLE_TEXT: &str = "The skill was not saved: the platform could not be reached.              Tell the user it was not saved.";
+
+    /// A `PlatformWriter` that records the builder writes and answers with a
+    /// fixed outcome or failure, so the tools are driven through the trait.
+    struct FakeWriter {
+        failure: Option<HostError>,
+        skills: std::sync::Mutex<Vec<SkillWriteRequest>>,
+        contexts: std::sync::Mutex<Vec<ProjectContextWriteRequest>>,
+    }
+
+    impl FakeWriter {
+        fn new(failure: Option<HostError>) -> Arc<Self> {
+            Arc::new(Self {
+                failure,
+                skills: std::sync::Mutex::default(),
+                contexts: std::sync::Mutex::default(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl PlatformWriter for FakeWriter {
+        async fn list_artifacts(
+            &self,
+            _: &elitea_agent_runtime::platform::ArtifactListRequest,
+        ) -> Result<elitea_agent_runtime::platform::ArtifactListOutcome, HostError> {
+            unreachable!("builder tools never list artifacts")
+        }
+        async fn read_artifact(
+            &self,
+            _: &elitea_agent_runtime::platform::ArtifactReadRequest,
+        ) -> Result<elitea_agent_runtime::platform::ArtifactReadOutcome, HostError> {
+            unreachable!("builder tools never read artifacts")
+        }
+        async fn write_artifact(
+            &self,
+            _: &elitea_agent_runtime::platform::ArtifactWriteRequest,
+        ) -> Result<elitea_agent_runtime::platform::ArtifactWriteOutcome, HostError> {
+            unreachable!("builder tools never write artifacts")
+        }
+        async fn delete_artifact(
+            &self,
+            _: &elitea_agent_runtime::platform::ArtifactDeleteRequest,
+        ) -> Result<elitea_agent_runtime::platform::ArtifactDeleteOutcome, HostError> {
+            unreachable!("builder tools never delete artifacts")
+        }
+        async fn write_skill(
+            &self,
+            request: &SkillWriteRequest,
+        ) -> Result<elitea_agent_runtime::platform::SkillWriteOutcome, HostError> {
+            self.skills.lock().unwrap().push(request.clone());
+            match self.failure {
+                Some(error) => Err(error),
+                None => Ok(elitea_agent_runtime::platform::SkillWriteOutcome {
+                    skill_id: "41".to_owned(),
+                    name: request.name.clone(),
+                    created: true,
+                }),
+            }
+        }
+        async fn write_project_context(
+            &self,
+            request: &ProjectContextWriteRequest,
+        ) -> Result<elitea_agent_runtime::platform::ProjectContextWriteOutcome, HostError> {
+            self.contexts.lock().unwrap().push(request.clone());
+            match self.failure {
+                Some(error) => Err(error),
+                None => Ok(elitea_agent_runtime::platform::ProjectContextWriteOutcome {
+                    content_bytes: 5,
+                    enabled: false,
+                    created: false,
+                }),
+            }
+        }
+    }
+
+    async fn run_builder(tool: &dyn Tool, arguments: Value) -> Value {
+        let context: Arc<dyn ToolContext> = Arc::new(SimpleToolContext::new("builder_test"));
+        tool.execute(context, arguments)
+            .await
+            .expect("a builder answers with a result")
+    }
+
+    /// The builder tools write through the run's `PlatformWriter`, and the
+    /// model reads the same sentences it read before they did.
+    #[tokio::test]
+    async fn builder_tools_write_through_the_platform_writer_with_unchanged_texts() {
+        let writer = FakeWriter::new(None);
+        let authority = BuilderToolAuthority::new(writer.clone());
+        let skill = SkillsBuilderTool {
+            authority: authority.clone(),
+        };
+        assert_eq!(
+            run_builder(
+                &skill,
+                json!({"name": " Review ", "instructions": "Check it.", "description": "d"})
+            )
+            .await,
+            Value::String(
+                "Created Skill: [Review](/app/skills/41). Tell the user by that name and link."
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            writer.skills.lock().unwrap().as_slice(),
+            [SkillWriteRequest {
+                name: "Review".to_owned(),
+                description: "d".to_owned(),
+                instructions: "Check it.".to_owned(),
+            }]
+        );
+        let context = ProjectContextBuilderTool { authority };
+        assert_eq!(
+            run_builder(&context, json!({"content": "Notes"})).await,
+            Value::String(
+                "Updated Project Context: [this project's context](/app/settings/project-context)                      — saved but currently switched off. Tell the user by that name and link."
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            writer.contexts.lock().unwrap().as_slice(),
+            [ProjectContextWriteRequest {
+                content: "Notes".to_owned(),
+                enabled: None,
+            }]
+        );
+
+        let refused = FakeWriter::new(Some(host_error(&RuntimeContextError::NotFound("gone"))));
+        let skill = SkillsBuilderTool {
+            authority: BuilderToolAuthority::new(refused.clone()),
+        };
+        assert_eq!(
+            run_builder(
+                &skill,
+                json!({"name": "Review", "instructions": "Check it."})
+            )
+            .await,
+            Value::String(REFUSED_TEXT.to_owned())
+        );
+        let context = ProjectContextBuilderTool {
+            authority: BuilderToolAuthority::new(refused),
+        };
+        assert_eq!(
+            run_builder(&context, json!({"content": "Notes"})).await,
+            Value::String(REFUSED_TEXT.replace("skill", "project context"))
+        );
+    }
+
+    /// Every runtime-context failure keeps the exact sentence the model read
+    /// before builder writes went through `PlatformWriter`.
+    #[test]
+    fn builder_failure_texts_are_pinned_for_every_failure() {
+        let cases = [
+            (RuntimeContextError::Rejected("r"), REJECTED_TEXT),
+            (RuntimeContextError::ResourceExhausted("r"), REJECTED_TEXT),
+            (RuntimeContextError::AuthorizationFailed("r"), REFUSED_TEXT),
+            (RuntimeContextError::NotFound("r"), REFUSED_TEXT),
+            (
+                RuntimeContextError::InvalidConfiguration("r"),
+                UNAVAILABLE_TEXT,
+            ),
+            (RuntimeContextError::InvalidResponse("r"), UNAVAILABLE_TEXT),
+            (
+                RuntimeContextError::DependencyUnavailable("r"),
+                UNAVAILABLE_TEXT,
+            ),
+            (RuntimeContextError::Timeout("r"), UNAVAILABLE_TEXT),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(builder_failure_text("skill", &host_error(&error)), expected);
+        }
     }
 }

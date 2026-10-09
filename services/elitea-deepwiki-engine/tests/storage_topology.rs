@@ -46,7 +46,10 @@ async fn the_build_space_answers_phase_2() {
         return;
     };
     let space = BuildSpace::new(pool.clone(), "topology-test");
-    let mut build = space.begin("acme--notes--main").await.unwrap();
+    let mut build = space
+        .begin(&storage_common::key("acme--notes--main"))
+        .await
+        .unwrap();
     let corpus = storage_common::corpus();
     let vectors: Vec<(String, Vec<f64>)> = corpus
         .iter()
@@ -211,7 +214,10 @@ async fn replaced_edges_are_collapsed_and_clusters_written() {
         return;
     };
     let space = BuildSpace::new(pool.clone(), "topology-test");
-    let mut build = space.begin("acme--notes--main").await.unwrap();
+    let mut build = space
+        .begin(&storage_common::key("acme--notes--main"))
+        .await
+        .unwrap();
     build.stage_nodes(storage_common::corpus()).await.unwrap();
     let build_id = build.build_id().to_owned();
     let store = PgTopologyStore::new(build, Handle::current(), StopSignal::default());
@@ -328,7 +334,10 @@ async fn the_in_process_dense_search_is_the_sql_search() {
     let dimensions = setting("DEEPWIKI_DENSE_DIMENSIONS", 64);
     let probes = setting("DEEPWIKI_DENSE_PROBES", 60);
     let space = BuildSpace::new(pool.clone(), "topology-dense");
-    let mut build = space.begin("acme--dense--main").await.unwrap();
+    let mut build = space
+        .begin(&storage_common::key("acme--dense--main"))
+        .await
+        .unwrap();
     let mut random = Lcg(42);
     let mut rows = Vec::with_capacity(nodes);
     let mut vectors: Vec<(String, Vec<f64>)> = Vec::with_capacity(nodes);
