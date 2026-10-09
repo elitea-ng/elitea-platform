@@ -60,8 +60,8 @@ None of the other modules in `go.work` requires any of the three modules. The ch
 
 Both CEL call sites build a plain environment of typed variables, compile, and require a `bool` output type:
 
-- elitea-main: `internal/api/gateway/routing_cel.go:28-40` (`newRoutingCELEnv`) and `:145-165` (`CompileRoutingCEL`),
-  which governance rule writes use (`governance.go:208`, `:402`);
+- elitea-main: `internal/api/gateway/routing_cel.go:29-41` (`newRoutingCELEnv`) and `:156-179` (`CompileRoutingCEL`),
+  which governance rule writes use (`governance.go:215`, `:433`);
 - elitea-llm-gateway: `internal/policy/routing.go:32-42` (`celEnv`) and `:93-113` (`CompileCEL`). Its
   `Route` (`:201`) evaluates programs against a custom `Activation`.
 
@@ -137,7 +137,7 @@ This is an open item, not a pass.
 | elitea-llm-gateway | 33,477,842 B | 33,546,082 B (+68,240 B, cel-go) |
 
 - CEL compile happens once per rule write (main) or rule load (gateway), and the environment is built once
-  (`routing_cel.go:50-55`). The new parser node counter is O(nodes) bookkeeping on that path only. The per-request
+  (`routing_cel.go:51-56`). The new parser node counter is O(nodes) bookkeeping on that path only. The per-request
   `Program.Eval` path changes only where the upstream commits above say.
 - Each guard test runs two `go list -deps` calls, one per architecture. Measured warm: 2.3 s (elitea-main), 0.2 s
   (elitea-scheduler) and 0.7 s (elitea-llm-gateway).
@@ -155,9 +155,9 @@ typed compile error and is never accepted silently.
   nodes that macro expansion produces.
 - Evaluation errors stay contained. The gateway skips an erroring rule and reports it through `onError`
   (`routing.go:197-213`); `TestErroringRuleIsSkippedNotMatched` proves it.
-- Pre-existing gap, not changed here: the governance handlers in `internal/api/gateway/governance.go:204,219` decode
-  request bodies without an `http.MaxBytesReader` bound. The routes require the platform `administration` permission.
-  This is recorded as a follow-up.
+- Main bounds rule text before it reaches the parser. #1147 caps a routing-rule predicate at 8 KiB
+  (`routing_cel.go:141`) and a governance request body at 256 KiB (`governance.go:30`, `:228`). The upstream node
+  cap is the second bound behind them.
 
 ## Security
 
@@ -219,7 +219,7 @@ No (component × phase) guarantee changes: the change alters no durable path.
 
 | Component × phase | Class | Basis |
 | --- | --- | --- |
-| Main × admission (governance rule write: CEL validation) | unchanged | Validation is a pure function called before the write (`governance.go:208`, `:402`); `TestCompileRoutingCEL` |
+| Main × admission (governance rule write: CEL validation) | unchanged | Validation is a pure function called before the write (`governance.go:215`, `:433`); `TestCompileRoutingCEL` |
 | LLM gateway × model call, before first token (routing decision) | unchanged | Erroring rule skipped, never matched (`routing.go:197-213`); `TestErroringRuleIsSkippedNotMatched` |
 | Scheduler × all phases | unchanged | Indirect `klauspost/compress` bump only; `compress/flate` is linked, `s2` is not |
 | Worker, Sandbox supervisor, NATS, PostgreSQL, Web | not touched | — |
@@ -241,6 +241,4 @@ container, set up with CI's database names (`ci-go.yml:346-366`). No UI or datab
 1. Move elitea-main and elitea-scheduler to Go 1.26. This covers `go.mod`, `go.work`, the Containerfile builders, and
    the CI `go-version` pins, which need user approval. Then take `golang.org/x/crypto` ≥ v0.56.0 and drop the `ssh`
    entry from both guard tests.
-2. Bound the governance request bodies (`internal/api/gateway/governance.go:204,219`) with `http.MaxBytesReader`, like
-   the neighbouring handlers.
-3. Keep `x/crypto/openpgp` banned permanently (GO-2026-5932 has no fix).
+2. Keep `x/crypto/openpgp` banned permanently (GO-2026-5932 has no fix).
