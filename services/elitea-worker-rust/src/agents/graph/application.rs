@@ -841,7 +841,7 @@ impl ApplicationNode {
         }
         if let Some(events) = events {
             events
-                .send_application_end_scoped(display_name, call_id, parent_scope)
+                .send_application_end_scoped(display_name, call_id, &response, parent_scope)
                 .await
                 .map_err(|_| node_failure(self.name()))?;
         }

@@ -255,7 +255,15 @@ tasks:
       - task: helm:compiled-snapshots
       - task: helm:code-consumers
       - task: helm:main-master-key
+      - task: helm:worker-node-recovery
       - task: helm:gateway-master-key
+
+  helm:worker-node-recovery:
+    desc: Check that worker.runtime.agentNodeRecovery is written for the Rust worker only when true, never for the Python worker, and that a non-boolean recovery switch is refused
+    cmds:
+      # G-WORKER-01 (services/elitea-worker-rust/docs/recovery-guarantees.md).
+      # Needs python3 with PyYAML.
+      - bash deploy/helm/tests/render-worker-node-recovery.sh
 
   helm:main-master-key:
     desc: Check that elitea-main is handed SECRETS_MASTER_KEY from a Secret, and that the chart refuses a values set without one

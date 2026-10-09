@@ -1510,8 +1510,19 @@ main:
     # bitbucket, jira, confluence) may reach, for the one authenticated metadata
     # GET that check makes. The base URL is tenant-authored (#13), so it is
     # checked before the dial, with the same matching rules the two facades
-    # above use: hostnames, case-insensitive, `*.` for DIRECT subdomains only,
-    # a bare `*` to disable the control out loud.
+    # above use: hostnames, case-insensitive, `*.` for DIRECT subdomains only.
+    # A bare `*` is NOT accepted here; it is dropped, and a list of only `*`
+    # refuses every host.
+    #
+    # Every dial then goes through Main's egress guard: the address is
+    # classified at dial time, no proxy is used, redirects are not followed.
+    # Loopback and private-network addresses (RFC 1918, ULA, CGNAT,
+    # benchmarking) are refused unless a CIDR block, IP literal or `localhost`
+    # entry in THIS list names them, each entry for its own range; link-local,
+    # cloud-metadata, multicast and reserved addresses are always refused. A
+    # self-hosted GitLab, Jira or Confluence on a private address needs its
+    # name AND its range, e.g. "gitlab.corp.example, 10.20.0.0/16". Name hosts
+    # without a port; a range or IP entry may pin one ("10.20.0.5:8443").
     #
     # UNSET IS NOT FAIL-CLOSED HERE, and that is the difference from the two
     # allowlists above. A clone reaches a URL somebody typed into a request; this
@@ -1539,7 +1550,8 @@ main:
     # (cloud metadata), multicast and reserved addresses, and never uses a
     # proxy (internal/infra/egress). Same grammar and split as
     # ELITEA_WEBHOOK_EGRESS_ALLOWLIST: an entry that names a private range or
-    # host (for example `10.0.0.0/8`) lets tenants reach private MCP servers;
+    # IP (for example `10.0.0.0/8`) lets tenants reach private MCP servers in
+    # that range only;
     # link-local, multicast, reserved and cloud-metadata addresses stay
     # refused whatever this says. Unset refuses
     # every private destination. The OAuth and DCR proxies are governed by
@@ -1548,8 +1560,10 @@ main:
     # UPGRADE NOTE (applies to all three Main egress allowlists): CGNAT
     # 100.64.0.0/10 (for example Tailscale) and 198.18.0.0/15 used to count as
     # public and are now private. A target in those ranges needs its block
-    # named here, and Main restarted. Naming any private block permits every
-    # private class for that path, so name it only where needed. See
+    # named here, and Main restarted. Each entry permits only its own range
+    # (a CIDR its block, an IP that address, `localhost` loopback, on the
+    # entry's port when it pins one); naming CGNAT does not open loopback or
+    # RFC 1918, and a host name entry permits no private address. See
     # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
     # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
@@ -3700,6 +3714,16 @@ worker:
     # Rust-only. Durable node attempt journal: an interrupted effectful node stops
     # for recovery instead of repeating its effect. Effectful pipeline direct tool
     # nodes require it; Code nodes use it when present.
+    # Turning it on ALSO turns on model-step resume for agent turns: under a
+    # node-recovery claim elitea-main grants model checkpoint inspection
+    # (services/elitea-main/internal/infra/db/repos/node_recovery_claim.go), whatever
+    # agentModelCheckpointRecovery says. So it stays off here, as recovery as a
+    # whole does, until the pod-replacement proofs pass (recovery-guarantees.md,
+    # ruling D1 and gaps G-WORKER-02/03/13/14). Compose turns it on
+    # (deploy/runtime/worker-runtime.rust.json); a Kubernetes install that wants
+    # parity sets it to true, and needs no extra material: the journal lives in
+    # the AgentState database behind agent-checkpoint-connection.
+    # A boolean only; true with the Python worker fails the render.
     agentNodeRecovery: false
     # Rust-only deployment-selected Code backends. These are never YAML node inputs.
     # Entries use SandboxRuntimeConfig fields: language, target, audience,

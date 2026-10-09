@@ -46,15 +46,27 @@
 // # Egress
 //
 // The base URL is tenant-authored (#13), so it is checked against an allowlist
-// BEFORE the dial, with the same matching rules the DeepWiki and Inventory
-// facades use (internal/providerhost/material.GitEgressPolicy — hostnames,
-// case-insensitive, `*.` for direct subdomains only, a bare `*` to disable the
-// control out loud). ELITEA_TOOLKIT_CHECK_ALLOWLIST replaces the default list;
-// unset, the default is the five vendors' PUBLIC API hosts, so a SaaS
-// deployment works out of the box and a self-hosted GitLab or Jira has to be
-// named. An empty allowlist here does NOT mean "refuse everything" the way
-// DeepWiki's does, because unlike a clone this call reaches a host the platform
-// itself already ships as a toolkit default.
+// BEFORE the dial, with the same host-name matching rules the DeepWiki and
+// Inventory facades use (internal/providerhost/material.GitEgressPolicy —
+// hostnames, case-insensitive, `*.` for direct subdomains only).
+// ELITEA_TOOLKIT_CHECK_ALLOWLIST replaces the default list; unset, the default
+// is the vendors' PUBLIC API hosts, so a SaaS deployment works out of the box
+// and a self-hosted GitLab or Jira has to be named. An empty allowlist here
+// does NOT mean "refuse everything" the way DeepWiki's does, because unlike a
+// clone this call reaches a host the platform itself already ships as a
+// toolkit default.
+//
+// The host-name check is the outer bound. Every dial then goes through the
+// egress guard (internal/infra/egress): the host is resolved and classified at
+// dial time, the checked IP literal is dialled, no proxy is used, response
+// headers are capped and the body is never read, and a redirect is never
+// followed. A loopback or private-network address is refused unless a CIDR
+// block, IP literal or `localhost` entry of the same variable names it, each
+// entry for its own range; link-local, metadata, multicast and reserved
+// addresses are refused whatever it says. A self-hosted provider on a private
+// address therefore needs its name AND its range, for example
+// `gitlab.corp.example, 10.20.0.0/16`. A bare `*` is not accepted: it is
+// dropped, so a list holding only `*` refuses every host.
 package configurations
 
 import (
@@ -65,6 +77,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -73,6 +86,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
@@ -512,8 +527,9 @@ func setBasicAuth(header http.Header, user, secret string) {
 // httpToolkitConnectionChecker is the production checker: an allowlist, a
 // bounded client, and one request.
 type httpToolkitConnectionChecker struct {
-	client *http.Client
-	policy material.GitEgressPolicy
+	client  *http.Client
+	policy  material.GitEgressPolicy
+	private *egresslib.Allowlist
 }
 
 // NewToolkitConnectionCheckerFromEnv builds the checker every deployment gets.
@@ -527,15 +543,20 @@ func NewToolkitConnectionCheckerFromEnv() ToolkitConnectionChecker {
 	if raw == "" {
 		raw = defaultToolkitCheckAllowlist
 	}
-	return NewToolkitConnectionChecker(material.ParseGitEgress(raw, ToolkitCheckAllowlistEnv), nil)
+	return NewToolkitConnectionChecker(raw)
 }
 
-// NewToolkitConnectionChecker builds a checker over an explicit policy and an
-// optional transport (tests supply the httptest server's).
-func NewToolkitConnectionChecker(policy material.GitEgressPolicy, transport http.RoundTripper) ToolkitConnectionChecker {
+// NewToolkitConnectionChecker builds a checker over the allowlist text (the
+// grammar in the package doc). Every probe dials through an egress guard built
+// from the same text; opts reach that guard (tests inject a resolver).
+func NewToolkitConnectionChecker(allowlist string, opts ...egress.Option) ToolkitConnectionChecker {
+	policy, private := parseToolkitCheckAllowlist(allowlist)
 	return &httpToolkitConnectionChecker{
 		client: &http.Client{
-			Transport: transport,
+			// The guard's transport: dial-time classification of the checked
+			// IP, no proxy, capped response headers. The probe reads only the
+			// status line and closes the body unread.
+			Transport: egress.New(private, opts...).RoundTripper(),
 			Timeout:   toolkitCheckTimeout,
 			// A credential check follows no redirects. A provider that answers
 			// 30x to an authenticated identity read is answering something this
@@ -543,8 +564,40 @@ func NewToolkitConnectionChecker(policy material.GitEgressPolicy, transport http
 			// Authorization header at a host the allowlist never saw.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		policy: policy,
+		policy:  policy,
+		private: private,
 	}
+}
+
+// parseToolkitCheckAllowlist reads one operator list twice. Every entry except
+// `*` is a host-name entry of the outer bound; the entries egresslib also
+// parses are handed to the egress guard, where a CIDR block, an IP literal or
+// `localhost` permits its own private range and a name permits none. `*` is
+// dropped rather than honoured: with the dial-time guard it could only lift
+// the host-name bound, and nothing needs that.
+func parseToolkitCheckAllowlist(raw string) (material.GitEgressPolicy, *egresslib.Allowlist) {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+	entries := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if entry := strings.ToLower(strings.TrimSpace(field)); entry != "" && entry != "*" {
+			entries = append(entries, entry)
+		}
+	}
+	private, _ := egresslib.ParsePartial(entries)
+	return material.ParseGitEgress(strings.Join(entries, ","), ToolkitCheckAllowlistEnv), private
+}
+
+// allowsHost is the outer bound: a named host, or an IP-literal host inside a
+// CIDR block or equal to an IP entry of the same list.
+func (c *httpToolkitConnectionChecker) allowsHost(target *url.URL) bool {
+	if c.policy.Allow(target.Hostname()) == nil {
+		return true
+	}
+	// Allows admits everything on an empty list, so it is only asked when the
+	// list names something.
+	return net.ParseIP(target.Hostname()) != nil && c.private.Configured() && c.private.Allows(target.String())
 }
 
 // CheckToolkit performs the probe. It never returns an error: every failure is
@@ -569,7 +622,7 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 			Message: "This credential does not name an endpoint to check.",
 		}
 	}
-	if err := c.policy.Allow(target.Hostname()); err != nil {
+	if !c.allowsHost(target) {
 		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressMessage}
 	}
 
@@ -596,6 +649,11 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 	}
 
 	response, err := c.client.Do(request)
+	if errors.Is(err, egress.ErrDestinationRefused) {
+		// The name resolved to an address the guard refuses: the same
+		// configuration answer as a host off the list, with no address in it.
+		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressMessage}
+	}
 	if err != nil {
 		// The cause is deliberately dropped rather than logged with the
 		// request: a transport error's text carries the full URL, which is

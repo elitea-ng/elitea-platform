@@ -1085,6 +1085,131 @@ async fn child_input_type_failure_keeps_public_reason_through_event_stream() {
     );
 }
 
+/// A parent that maps no child variable: it reads only the child's result.
+const SAVED_CHILD_PARENT_PIPELINE: &str = r"
+state:
+  answer: str
+entry_point: delegate
+nodes:
+  - id: delegate
+    type: agent
+    tool: Research Agent
+    input_mapping:
+      task: {type: fixed, value: Report}
+    output: [answer]
+    transition: END
+";
+
+/// Run a parent whose only node calls `child_yaml` as the saved child
+/// "Research Agent"; return the child's card responses and the chat answer.
+async fn run_parent_with_saved_child(
+    session: &str,
+    child_yaml: &str,
+) -> (Vec<Value>, Option<String>) {
+    use super::node_events::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let (sender, receiver) = pipeline_node_event_channel();
+    let child = PipelineDefinition::from_yaml(child_yaml).unwrap();
+    let resolver = Arc::new(FixtureApplicationResolver {
+        alias: "Research Agent".into(),
+        participant: ResolvedApplicationParticipant::Pipeline {
+            static_pauses: super::static_pause::StaticPauseCatalog::default(),
+            variable_types: child.declared_variable_types(),
+            graph: Arc::new(
+                child
+                    .compile_subgraph_with_runtime(
+                        checkpointer.clone(),
+                        &PipelineNodeRuntimes::default(),
+                    )
+                    .unwrap(),
+            ),
+            events: Some(sender.clone()),
+            display_name: "Research Agent".into(),
+        },
+    });
+    let graph = PipelineDefinition::from_yaml(SAVED_CHILD_PARENT_PIPELINE)
+        .unwrap()
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(None, None, Some(resolver)).with_events(sender),
+        )
+        .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea".into(),
+            user_id: "user-1".into(),
+            session_id: Some(session.into()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let agent =
+        PipelineNodeEventStreamingAgent::new(Arc::new(EliteaGraphAgent::new(graph)), receiver);
+    let runner = Runner::builder()
+        .app_name("elitea")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    let mut running = NativeAgentInvocation::new(
+        runner,
+        UserId::new("user-1").unwrap(),
+        SessionId::new(session).unwrap(),
+        Content::new("user").with_text("run"),
+    )
+    .start()
+    .unwrap();
+    let mut cards = Vec::new();
+    let mut answer = None;
+    while let Some(event) = running.next_event().await.unwrap() {
+        for part in event
+            .content()
+            .map(|content| content.parts.clone())
+            .unwrap_or_default()
+        {
+            match part {
+                Part::FunctionResponse {
+                    function_response, ..
+                } if function_response.name == "Research Agent" => {
+                    cards.push(function_response.response);
+                }
+                Part::Text { text } => answer = Some(text),
+                _ => {}
+            }
+        }
+    }
+    (cards, answer)
+}
+
+/// The saved child's card closes with the result the parent received: its
+/// text as is, and a list as the same fenced JSON the chat answer shows.
+#[tokio::test]
+async fn saved_child_card_shows_the_childs_result() {
+    let list_child = r#"
+state:
+  records: {type: list, value: []}
+entry_point: shape
+nodes:
+  - id: shape
+    type: state_modifier
+    template: '[{"id":"A","qty":2}]'
+    output: [records]
+    transition: END
+"#;
+    let list_text = "```json\n[\n  {\n    \"id\": \"A\",\n    \"qty\": 2\n  }\n]\n```";
+    for (session, child_yaml, expected) in [
+        ("card-list", list_child, list_text),
+        ("card-text", CHILD_VARIABLE_PIPELINE, "7||0|True"),
+    ] {
+        let (cards, answer) = run_parent_with_saved_child(session, child_yaml).await;
+        assert_eq!(cards, vec![json!({"response": expected})], "{session}");
+        assert_eq!(answer.as_deref(), Some(expected), "{session}");
+    }
+}
+
 #[test]
 fn child_variable_mappings_reject_control_fields_and_bind_configuration() {
     let original = ApplicationNodeDefinition::from_yaml(AGENT_NODE).unwrap();
@@ -1753,4 +1878,29 @@ async fn owned_wrapper_channel_crash_after_completion_reemits_original_terminal_
         serde_json::to_value(terminals[0].content()).unwrap(),
         serde_json::to_value(terminal.content()).unwrap()
     );
+}
+
+/// A child result far above one 40 KiB event value still reaches the card
+/// event whole; the public projection chunks it like any large tool result.
+#[tokio::test]
+async fn a_large_saved_child_result_reaches_its_card_whole() {
+    let big = "row-big45;".repeat(6000);
+    let child = format!(
+        r#"
+state:
+  input: str
+  big: {{type: str, value: "{big}"}}
+entry_point: pick
+nodes:
+  - id: pick
+    type: router
+    condition: "END"
+    routes: [END]
+    default_output: END
+    input: [input]
+"#
+    );
+    let (cards, answer) = run_parent_with_saved_child("card-large", &child).await;
+    assert_eq!(cards, vec![json!({"response": big})]);
+    assert_eq!(answer.as_deref(), Some(big.as_str()));
 }
