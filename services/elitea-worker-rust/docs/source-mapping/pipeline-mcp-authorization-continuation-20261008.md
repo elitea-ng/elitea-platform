@@ -72,6 +72,7 @@ Totals (`cargo test --offline --locked --all-targets --all-features`, 2026-10-09
 - before merging `main`: 2,119 passed, 0 failed, 63 ignored;
 - after merging `main`: 1,662 passed, 0 failed, 63 ignored. The difference is #1163/#1165, which moved toolkit and
   ADK-patch tests into the shared runtime crate.
+- after merging `main` again on 2026-10-09 (with #1144, #1146 and #1170): 1,681 passed, 0 failed, 63 ignored.
 
 The ignored tests are the existing `#[ignore]` Docker/Kubernetes and live-service tests; none were added. `cargo fmt --all -- --check` and
 `cargo clippy --locked --all-targets --all-features -- -D warnings` pass.
@@ -117,6 +118,9 @@ so a pending decision of another node or action still blocks the resume.
 [pipeline-size-bounds-http-snapshot-20261008.md](pipeline-size-bounds-http-snapshot-20261008.md)): RUSTSEC-2026-0258
 (`h2` 0.4.15), RUSTSEC-2023-0071 (`rsa` 0.9.10) and the yanked `chacha20` 0.10.1. No new findings. Main and Web are
 unchanged, so `govulncheck` and `npm audit` are not affected by this change.
+
+Re-run on 2026-10-09 after merging `main` with #1144: only RUSTSEC-2023-0071 (`rsa`, no fixed release) remains.
+This change adds no new findings.
 
 ## Browser evidence
 
@@ -192,7 +196,8 @@ malformed-input PostgreSQL row now cites the foreign-card and disagreement tests
    `mcp_authorization_stopped(refresh_failed)`).
 2. **Admin Configuration "Add toolkit" is a no-op** (`apps/elitea-web/src/pages/admin/ConfigurationToolMapEditor.tsx`):
    the appended `{toolkit: '', tools: []}` row is dropped by `fromConfigToolMapRows`, so Sensitive Action Tools and
-   Blocked Tools cannot be added from the page. Separate Web defect.
+   Blocked Tools cannot be added from the page. Separate Web defect. **Closed:** fixed on `main` by #1170
+   (2026-10-09), merged into this branch.
 3. **Nested pipelines.** A direct MCP node inside a nested pipeline (`nested_checkpoints`) uses the same code path,
    including the leaf-checkpoint approval allowance, but has no test.
 4. The legacy token/decline-only shape (`hitl_resume=false`) remains accepted for compatibility; Main does not send
