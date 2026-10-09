@@ -1,5 +1,5 @@
 /**
- * The live transcript of one turn: streamed text, tool rows (local or remote,
+ * The live transcript of one turn: streamed text (Markdown, as in chat), tool rows (local or remote,
  * with a collapsible result), the status line and the cancel button.
  */
 import { useState } from 'react';
@@ -20,6 +20,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
+import { Markdown } from '@/shared/ui/Markdown';
 
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
 
@@ -169,9 +170,10 @@ export function TurnTranscript({ view, busy, onCancel }: TurnTranscriptProps): R
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {view.items.map((item) =>
         item.type === 'text' ? (
-          <Typography key={item.key} variant="bodyMedium" sx={(theme: Theme) => ({ whiteSpace: 'pre-wrap', lineHeight: 1.6, color: theme.vars.palette.text.primary })}>
+          // The chat's own renderer; raw HTML from the model is dropped, not rendered.
+          <Markdown key={item.key} renderHtml={false} data-testid="turn-text">
             {item.text}
-          </Typography>
+          </Markdown>
         ) : (
           <ToolRow key={item.key} item={item} />
         ),
