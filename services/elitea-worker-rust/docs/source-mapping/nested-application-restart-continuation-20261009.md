@@ -71,7 +71,7 @@ The real-PostgreSQL proof was written first and failed on `main` in phase `answe
 
 | Test | Proves |
 |---|---|
-| `pipeline_restart_pg_tests.rs:150` `postgres_two_nested_agent_pauses_resume_across_process_replacement` (child `:229`) | Three separate OS processes of the test binary, one per turn, against one isolated database. Each phase goes through the production `PipelineNativeAgentAssembler::postgres` and `activate_pipeline_postgres`, as a new execution with its own claim on the same session, as the browser does. `start`: node `override_call`'s child pauses (1 model call). `answer_first`: in a new process, card 1 is answered, node 1 completes, node `defaults_call`'s child pauses with a different card (exactly 2 model calls; node 1 is not re-run). `answer_second`: in a new process, card 2 is answered and the pipeline completes (exactly 1 model call). A checkpoint holds both child answers, and the persisted session holds four distinct child invocation ids: the original and resumed child of each node. |
+| `pipeline_restart_pg_tests.rs:150` `postgres_two_nested_agent_pauses_resume_across_process_replacement` (child `:229`) | Three separate OS processes of the test binary, one per turn, against one isolated database. Each phase goes through the production `PipelineNativeAgentAssembler::postgres` and `activate_pipeline_postgres`, as a new execution with its own claim on the same session, as the browser does. `start`: node `override_call`'s child pauses (1 model call). `answer_first`: in a new process, card 1 is answered, node 1 completes, node `defaults_call`'s child pauses with a different card (exactly 2 model calls; node 1 is not re-run). `answer_second`: in a new process, card 2 is answered and the pipeline completes (exactly 1 model call). A checkpoint holds both child answers, and the conversation session holds four distinct child invocation ids: the original and resumed child of each node. Each phase process is bounded at two minutes and killed on expiry, so a stuck turn fails the proof instead of hanging CI. |
 | `application_tools.rs:5689` `a_child_invocation_id_under_two_parent_calls_fails_closed_with_its_reason` | Distinct child ids each keep their own route. A history with one id under two persisted parent calls (as an older Worker wrote it) fails closed as `InvalidConfiguration` with cause `nested_application.ambiguous_child_invocation`. |
 
 Counts (local, `--offline --locked`, `ELITEA_TEST_DATABASE_URL` on the loopback PG 18.2 of this branch's own
@@ -175,6 +175,16 @@ variable parent 20260930" (version 145, project 2 "Private") with nested applica
 through the database. Chats were started from the pipeline's **Chat** button in the UI. The test fixtures are
 in-process: the scripted model gateway and runtime-context RPC fixtures of `pipeline_tests.rs` over a real
 PostgreSQL database.
+
+## Review
+
+`code-review` (high) on #1199 gave five findings:
+- The phase processes had no deadline. **Fixed**: 2-minute bound with kill.
+- The distinct-id assertion read model-scope sessions too. **Fixed**: it reads only the conversation session.
+- `Uuid::new_v4()` panics if the OS random source fails. **Kept**: ADK's runner already makes the same call for
+  every root invocation, so this adds no new failure class.
+- `LLM_INVOCATION_SEQUENCE` and the branch ordinal are per-process counters. **Not changed here**: see follow-up 3
+  and the branch note under Changed paths.
 
 ## Follow-ups
 

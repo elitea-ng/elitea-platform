@@ -27,6 +27,8 @@ const DATABASE_ENV: &str = "ELITEA_NESTED_RESTART_PG_DATABASE";
 const PHASE_ENV: &str = "ELITEA_NESTED_RESTART_PG_PHASE";
 const PENDING_ENV: &str = "ELITEA_NESTED_RESTART_PG_PENDING";
 const PENDING_MARKER: &str = "NESTED_RESTART_PENDING=";
+/// One turn takes about a second here; the bound only turns a hang into a failure.
+const PHASE_DEADLINE: std::time::Duration = std::time::Duration::from_mins(2);
 const GENERATION: u64 = 3;
 const CHECKPOINT_MIGRATION: &str =
     include_str!("../../../elitea-main/migrations/agentstate/0001_agent_graph_checkpoints.sql");
@@ -163,13 +165,13 @@ async fn postgres_two_nested_agent_pauses_resume_across_process_replacement() {
     let mut pending = String::new();
     let mut cards = Vec::new();
     for phase in ["start", "answer_first", "answer_second"] {
-        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
             .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
             .env(DATABASE_ENV, &db.database_name)
             .env(PHASE_ENV, phase)
-            .env(PENDING_ENV, &pending)
-            .output()
-            .expect("spawn child test process");
+            .env(PENDING_ENV, &pending);
+        let output = run_phase(phase, command);
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success(),
@@ -198,11 +200,37 @@ async fn postgres_two_nested_agent_pauses_resume_across_process_replacement() {
     db.pool.close().await;
 }
 
+/// Runs one phase process under a deadline, so a stuck turn fails the proof instead of hanging it.
+fn run_phase(phase: &str, mut command: std::process::Command) -> std::process::Output {
+    let child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn child test process");
+    let pid = rustix::process::Pid::from_raw(
+        i32::try_from(child.id()).expect("child process id fits a pid"),
+    )
+    .expect("child process id is a pid");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    // The waiter drains both pipes, so a chatty child cannot block on a full pipe.
+    std::thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    let Ok(output) = receiver.recv_timeout(PHASE_DEADLINE) else {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        panic!("{phase} process did not finish within {PHASE_DEADLINE:?}");
+    };
+    output.expect("wait for child test process")
+}
+
 /// The child activations that wrote to the persisted session need distinct invocation ids:
 /// the original node-1 child, the resumed node-1 child, node-2's child and its resumed child.
 async fn assert_distinct_child_invocations(pool: &sqlx::PgPool) {
+    // Only the conversation session: the resume reconstruction reads the child history there, not
+    // in the children's own model-scope sessions.
     let payloads = sqlx::query_scalar::<_, String>(
-        "SELECT event_payload FROM elitea_runtime.agent_session_events ORDER BY event_ordinal",
+        "SELECT event_payload FROM elitea_runtime.agent_session_events \
+         WHERE session_id NOT LIKE 'elitea-model-%' ORDER BY event_ordinal",
     )
     .fetch_all(pool)
     .await
