@@ -462,6 +462,49 @@ async fn sign_out_revokes_on_the_server_then_forgets_everything() {
     assert!(!h.service.state().unwrap().signed_in);
 }
 
+/// The deployment answers refreshes slowly, so a sign-out can land mid-refresh.
+fn slow_refresh_deployment(challenge: Arc<std::sync::Mutex<String>>) -> Box<Handler> {
+    let inner = pkce_checking_deployment(challenge, Arc::default());
+    Box::new(move |req, form| {
+        if form.get("grant_type").is_some_and(|g| g == "refresh_token") {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        inner(req, form)
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sign_out_during_a_refresh_is_not_undone_by_the_refresh() {
+    let challenge = Arc::new(std::sync::Mutex::new(String::new()));
+    let server = deployment(slow_refresh_deployment(challenge.clone())).await;
+    let issuer = server.origin.clone();
+    let h = Arc::new(harness(move |q, url| {
+        *challenge.lock().unwrap() = q["code_challenge"].clone();
+        approve_with(issuer.clone())(q, url)
+    }));
+    h.service.connect(&server.origin).await.unwrap();
+    h.service.sign_in().await.unwrap();
+
+    let refreshing = {
+        let h = h.clone();
+        tokio::spawn(async move { h.service.refresh().await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    h.service.sign_out().await.unwrap();
+    let _ = refreshing.await.unwrap();
+
+    assert!(h.keychain.raw().is_none(), "the refresh resurrected the session");
+    assert!(h.service.access_token().await.unwrap().is_none());
+    // The sign-out waited for the rotation and revoked the LIVE token.
+    let revoked: Vec<String> = server
+        .seen()
+        .iter()
+        .filter(|r| r.path == "/api/v2/auth/native/revoke")
+        .map(|r| r.form()["token"].clone())
+        .collect();
+    assert_eq!(revoked, ["refresh-2"]);
+}
+
 #[tokio::test]
 async fn a_session_for_another_deployment_does_not_count_as_signed_in() {
     let (h, _server) = signed_in(Arc::default()).await;

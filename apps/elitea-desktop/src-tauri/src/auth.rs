@@ -95,7 +95,10 @@ pub struct AuthService {
     /// consumed the old refresh token, so THIS is the only live one: it is
     /// kept in memory and written again before the next use.
     unsaved: Mutex<Option<StoredSession>>,
-    /// Serialises refreshes: refresh tokens rotate, so two at once would burn the family.
+    /// Serialises everything that writes or forgets the session: refreshes
+    /// (refresh tokens rotate, so two at once would burn the family), the
+    /// sign-in's adopt, sign-out and wipe. Without it an in-flight refresh
+    /// could adopt its rotated token AFTER a sign-out and resurrect the session.
     refresh_gate: Mutex<()>,
     sign_in_deadline: Duration,
 }
@@ -239,7 +242,9 @@ impl AuthService {
             .await;
         match outcome {
             TokenOutcome::Ok(tokens) => {
+                let gate = self.refresh_gate.lock().await;
                 self.adopt(&origin_text, &client_id, tokens, None).await?;
+                drop(gate);
                 self.state()
             }
             other => Err(map_exchange_failure(&other, &client_id)),
@@ -362,7 +367,7 @@ impl AuthService {
             TokenOutcome::DeviceRevoked
             | TokenOutcome::InvalidGrant
             | TokenOutcome::InvalidClient => {
-                self.wipe().await?;
+                self.wipe_locked().await?;
                 Ok(RefreshResult::Ended)
             }
             TokenOutcome::UpgradeRequired => Ok(RefreshResult::UpgradeRequired),
@@ -397,6 +402,9 @@ impl AuthService {
 
     /// Revoke the device session on the server (best effort), then forget it.
     pub async fn sign_out(&self) -> Result<(), HostError> {
+        // Held across the revoke too: a refresh finishing meanwhile would
+        // otherwise rotate the token being revoked and store the new one.
+        let _gate = self.refresh_gate.lock().await;
         if let Some(session) = self.current_session().await?
             && let Ok(origin) = Url::parse(&session.origin)
             && let Ok(document) = discovery::fetch_discovery(self.tokens.http(), &origin).await
@@ -410,12 +418,18 @@ impl AuthService {
                 )
                 .await;
         }
-        self.wipe().await
+        self.wipe_locked().await
     }
 
     /// Forget the session and everything derived from it, without a server call.
     /// The connected deployment is kept so the person only has to sign in again.
     pub async fn wipe(&self) -> Result<(), HostError> {
+        let _gate = self.refresh_gate.lock().await;
+        self.wipe_locked().await
+    }
+
+    /// [`Self::wipe`] for a caller that already holds `refresh_gate`.
+    async fn wipe_locked(&self) -> Result<(), HostError> {
         *self.cached.lock().await = None;
         *self.unsaved.lock().await = None;
         self.store.clear()?;
