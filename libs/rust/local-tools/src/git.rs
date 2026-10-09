@@ -23,8 +23,10 @@
 //!    process): `.git` must be a plain directory (not a symlink, not a
 //!    `gitdir:` file) at the work tree's top, with no `commondir`, no
 //!    `modules/`, no alternates, and a local config (and `config.worktree`)
-//!    that this module parses itself (reading config runs no code) and that
-//!    holds none of the dangerous key families ([`dangerous_key`]).
+//!    that this module parses itself and git's own reader lists (reading
+//!    config runs no code; includes are not followed): both must agree on
+//!    the sections and neither may see a dangerous key family
+//!    ([`dangerous_key`]).
 //!    Attributes ([`Repo::check_attributes`], before every call that reads
 //!    the work tree): when the person's global config defines filter, diff
 //!    or merge drivers with commands, no path may select one. A refusal is
@@ -49,8 +51,8 @@ use std::ffi::OsStr;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::error::{ErrorCode, ToolError, ToolResult};
@@ -131,6 +133,27 @@ fn unsafe_repo(message: impl Into<String>) -> ToolError {
     ToolError::new(ErrorCode::UnsafeRepository, message)
 }
 
+/// Refuse `.git/<name>` when one of its entries is dangerous.
+fn refuse_dangerous(name: &str, entries: &[ConfigEntry]) -> ToolResult<()> {
+    for entry in entries {
+        if let Some(reason) = dangerous_key(&entry.key, entry.value.as_deref()) {
+            return Err(unsafe_repo(format!(
+                "the repository's .git/{name} sets `{}` ({reason}), which would run code in the host's git",
+                entry.key
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The sections (with subsections) that `entries` set variables in.
+fn config_sections(entries: &[ConfigEntry]) -> BTreeSet<&str> {
+    entries
+        .iter()
+        .filter_map(|entry| entry.key.rsplit_once('.').map(|(section, _)| section))
+        .collect()
+}
+
 /// One `key = value` of a git config file; keys lowercased except the
 /// subsection, as git compares them.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,132 +162,233 @@ pub struct ConfigEntry {
     pub value: Option<String>,
 }
 
-/// Parse a git config file (the syntax of `git-config(1)`), without
-/// following includes. Anything this parser does not understand is an
-/// error: an unsafe repository, not a guess.
+/// Characters of a config file as git's reader sees them: `\r\n` is a
+/// newline, and the end of the file reads as a final newline.
+struct ConfigReader<'a> {
+    chars: std::iter::Peekable<std::str::Chars<'a>>,
+    line: usize,
+    eof: bool,
+}
+
+impl ConfigReader<'_> {
+    fn next(&mut self) -> char {
+        match self.chars.next() {
+            None => {
+                self.eof = true;
+                '\n'
+            }
+            Some('\r') if self.chars.peek() == Some(&'\n') => {
+                self.chars.next();
+                self.line += 1;
+                '\n'
+            }
+            Some('\n') => {
+                self.line += 1;
+                '\n'
+            }
+            Some(c) => c,
+        }
+    }
+
+    fn error(&self, what: &str) -> String {
+        format!("line {}: {what}", self.line + 1)
+    }
+}
+
+fn is_key_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-'
+}
+
+/// Parse a git config file exactly as git's own reader does
+/// (`config.c`'s `git_parse_source`), without following includes:
+///
+/// * a comment (`#` or `;` where a line or a value may hold one, outside
+///   quotes) runs to the end of the line, and a backslash in it continues
+///   nothing;
+/// * a backslash-newline continues a line only inside a value;
+/// * values: quotes toggle, `\t` `\n` `\b` `\"` `\\` are the only escapes,
+///   leading and trailing unquoted whitespace is dropped;
+/// * headers: `[section]`, `[section.sub]` (lowercased) or
+///   `[section "sub"]` (case kept, `\x` is `x`), and a variable may follow
+///   on the same line.
+///
+/// Anything git would refuse is an error here too: an unsafe repository,
+/// not a guess.
 ///
 /// # Errors
 ///
-/// A line that is not a section header, a variable or a comment.
+/// What git reports as a bad config line.
 pub fn parse_config(text: &str) -> Result<Vec<ConfigEntry>, String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut reader = ConfigReader {
+        chars: text.chars().peekable(),
+        line: 0,
+        eof: false,
+    };
     let mut entries = Vec::new();
     let mut section: Option<String> = None;
-    let mut lines = text.lines().enumerate();
-    while let Some((number, raw)) = lines.next() {
-        let mut line = raw.to_owned();
-        // A trailing backslash continues a value on the next line.
-        while line.ends_with('\\') && !line.ends_with("\\\\") {
-            line.pop();
-            match lines.next() {
-                Some((_, next)) => line.push_str(next),
-                None => break,
+    let mut comment = false;
+    loop {
+        let c = reader.next();
+        if c == '\n' {
+            if reader.eof {
+                return Ok(entries);
             }
-        }
-        let mut rest = line.trim_start();
-        if rest.starts_with('[') {
-            let close =
-                header_end(rest).ok_or_else(|| format!("line {}: bad section", number + 1))?;
-            section = Some(
-                parse_header(&rest[1..close])
-                    .ok_or_else(|| format!("line {}: bad section", number + 1))?,
-            );
-            rest = rest[close + 1..].trim_start();
-        }
-        if rest.is_empty() || rest.starts_with('#') || rest.starts_with(';') {
+            comment = false;
             continue;
         }
-        let Some(current) = &section else {
-            return Err(format!("line {}: a variable outside a section", number + 1));
-        };
-        let name_end = rest
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-            .unwrap_or(rest.len());
-        let name = &rest[..name_end];
-        if name.is_empty() || !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
-            return Err(format!("line {}: not a variable", number + 1));
+        if comment || c.is_ascii_whitespace() {
+            continue;
         }
-        let after = rest[name_end..].trim_start();
-        let value = if after.is_empty() || after.starts_with('#') || after.starts_with(';') {
+        if c == '#' || c == ';' {
+            comment = true;
+            continue;
+        }
+        if c == '[' {
+            section = Some(parse_section(&mut reader)?);
+            continue;
+        }
+        if !c.is_ascii_alphabetic() {
+            return Err(reader.error("not a section, a variable or a comment"));
+        }
+        let Some(current) = &section else {
+            return Err(reader.error("a variable outside a section"));
+        };
+        let mut name = String::from(c.to_ascii_lowercase());
+        let mut c = reader.next();
+        while !reader.eof && is_key_char(c) {
+            name.push(c.to_ascii_lowercase());
+            c = reader.next();
+        }
+        while c == ' ' || c == '\t' {
+            c = reader.next();
+        }
+        let value = if c == '\n' {
             None
-        } else if let Some(value) = after.strip_prefix('=') {
-            Some(parse_value(value))
+        } else if c == '=' {
+            Some(parse_config_value(&mut reader)?)
         } else {
-            return Err(format!("line {}: not a variable", number + 1));
+            return Err(reader.error("not a variable"));
         };
         entries.push(ConfigEntry {
-            key: format!("{current}.{}", name.to_ascii_lowercase()),
+            key: format!("{current}.{name}"),
             value,
         });
-    }
-    Ok(entries)
-}
-
-/// The index of the `]` closing a section header (quotes respected).
-fn header_end(text: &str) -> Option<usize> {
-    let mut quoted = false;
-    let mut escaped = false;
-    for (index, c) in text.char_indices() {
-        match c {
-            _ if escaped => escaped = false,
-            '\\' if quoted => escaped = true,
-            '"' => quoted = !quoted,
-            ']' if !quoted => return Some(index),
-            _ => {}
+        if reader.eof {
+            return Ok(entries);
         }
     }
-    None
 }
 
-/// `section "sub"`, `section.sub` or `section`, as `section.sub`.
-fn parse_header(inner: &str) -> Option<String> {
-    let inner = inner.trim();
-    if let Some((name, sub)) = inner.split_once(|c: char| c.is_whitespace()) {
-        let sub = sub.trim().strip_prefix('"')?.strip_suffix('"')?;
-        let mut unescaped = String::new();
-        let mut chars = sub.chars();
-        while let Some(c) = chars.next() {
-            unescaped.push(if c == '\\' { chars.next()? } else { c });
+/// A section header after its `[`: `section`, `section.sub` or
+/// `section "sub"`, as `section.sub`.
+fn parse_section(reader: &mut ConfigReader<'_>) -> Result<String, String> {
+    let mut name = String::new();
+    loop {
+        let c = reader.next();
+        if reader.eof {
+            return Err(reader.error("an unterminated section"));
         }
-        let name = valid_section(name)?;
-        return Some(format!("{name}.{unescaped}"));
-    }
-    match inner.split_once('.') {
-        Some((name, sub)) => Some(format!(
-            "{}.{}",
-            valid_section(name)?,
-            sub.to_ascii_lowercase()
-        )),
-        None => valid_section(inner),
+        if c == ']' {
+            return if name.is_empty() {
+                Err(reader.error("an empty section"))
+            } else {
+                Ok(name)
+            };
+        }
+        if c.is_ascii_whitespace() {
+            if c == '\n' || name.is_empty() || name.contains('.') {
+                return Err(reader.error("a bad section"));
+            }
+            let mut c = c;
+            while c.is_ascii_whitespace() {
+                if c == '\n' {
+                    return Err(reader.error("a bad section"));
+                }
+                c = reader.next();
+            }
+            if c != '"' {
+                return Err(reader.error("a bad section"));
+            }
+            name.push('.');
+            loop {
+                let mut c = reader.next();
+                if c == '\n' {
+                    return Err(reader.error("an unterminated subsection"));
+                }
+                if c == '"' {
+                    break;
+                }
+                if c == '\\' {
+                    c = reader.next();
+                    if c == '\n' {
+                        return Err(reader.error("an unterminated subsection"));
+                    }
+                }
+                name.push(c);
+            }
+            return if reader.next() == ']' {
+                Ok(name)
+            } else {
+                Err(reader.error("a bad section"))
+            };
+        }
+        if !is_key_char(c) && c != '.' {
+            return Err(reader.error("a bad section"));
+        }
+        name.push(c.to_ascii_lowercase());
     }
 }
 
-fn valid_section(name: &str) -> Option<String> {
-    (!name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.'))
-    .then(|| name.to_ascii_lowercase())
-}
-
-/// A value: quotes removed, escapes resolved, an unquoted comment cut.
-fn parse_value(text: &str) -> String {
+/// A value after its `=`, to the end of its (possibly continued) line.
+fn parse_config_value(reader: &mut ConfigReader<'_>) -> Result<String, String> {
     let mut out = String::new();
     let mut quoted = false;
-    let mut chars = text.trim().chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => quoted = !quoted,
-            '\\' => match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some(other) => out.push(other),
-                None => {}
-            },
-            '#' | ';' if !quoted => break,
-            _ => out.push(c),
+    let mut comment = false;
+    let mut spaces = 0usize;
+    loop {
+        let mut c = reader.next();
+        if c == '\n' {
+            if quoted {
+                return Err(reader.error("an unterminated quote"));
+            }
+            return Ok(out);
         }
+        if comment {
+            continue;
+        }
+        if c.is_ascii_whitespace() && !quoted {
+            if !out.is_empty() {
+                spaces += 1;
+            }
+            continue;
+        }
+        if !quoted && (c == '#' || c == ';') {
+            comment = true;
+            continue;
+        }
+        for _ in 0..spaces {
+            out.push(' ');
+        }
+        spaces = 0;
+        if c == '\\' {
+            c = match reader.next() {
+                '\n' => continue,
+                't' => '\t',
+                'b' => '\u{8}',
+                'n' => '\n',
+                c @ ('"' | '\\') => c,
+                _ => return Err(reader.error("a bad escape")),
+            };
+            out.push(c);
+            continue;
+        }
+        if c == '"' {
+            quoted = !quoted;
+            continue;
+        }
+        out.push(c);
     }
-    out.trim_end().to_owned()
 }
 
 fn is_false(value: Option<&str>) -> bool {
@@ -365,6 +489,9 @@ pub struct Repo {
     sandbox: SandboxConfig,
     /// Tests: a global config file instead of the person's.
     global_config: Option<PathBuf>,
+    /// Config texts (`(file name, text)`) git's own reader already agreed
+    /// on, so an unchanged config is not listed again on every call.
+    verified: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl Repo {
@@ -387,6 +514,7 @@ impl Repo {
             git_dir: top.join(".git"),
             sandbox: sandbox.clone(),
             global_config: None,
+            verified: Arc::default(),
         };
         repo.check()?;
         Ok(Some(repo))
@@ -449,23 +577,83 @@ impl Repo {
             ));
         }
         for name in ["config", "config.worktree"] {
-            for entry in self.read_config(name)? {
-                if let Some(reason) = dangerous_key(&entry.key, entry.value.as_deref()) {
-                    return Err(unsafe_repo(format!(
-                        "the repository's .git/{name} sets `{}` ({reason}), which would run code in the host's git",
-                        entry.key
-                    )));
-                }
+            let Some(text) = self.read_config(name)? else {
+                continue;
+            };
+            let ours = parse_config(&text).map_err(|reason| {
+                unsafe_repo(format!(".git/{name} cannot be parsed safely: {reason}"))
+            })?;
+            refuse_dangerous(name, &ours)?;
+            if self.verified_config(name, &text) {
+                continue;
+            }
+            // A second opinion from git's own reader (reading config runs
+            // no code; includes are not followed): what one parser misreads
+            // the other is unlikely to misread the same way.
+            let theirs = self.git_config_listing(&text).map_err(|error| {
+                unsafe_repo(format!(
+                    "git cannot read .git/{name} safely: {}",
+                    error.message()
+                ))
+            })?;
+            refuse_dangerous(name, &theirs)?;
+            if config_sections(&ours) != config_sections(&theirs) {
+                return Err(unsafe_repo(format!(
+                    ".git/{name} reads differently to git and to this check"
+                )));
+            }
+            if let Ok(mut verified) = self.verified.lock() {
+                verified.retain(|(file, _)| file != name);
+                verified.push((name.to_owned(), text));
             }
         }
         Ok(())
     }
 
-    fn read_config(&self, name: &str) -> ToolResult<Vec<ConfigEntry>> {
+    /// Whether git already agreed on exactly this text of `name`.
+    fn verified_config(&self, name: &str, text: &str) -> bool {
+        self.verified.lock().is_ok_and(|verified| {
+            verified
+                .iter()
+                .any(|(file, seen)| file == name && seen == text)
+        })
+    }
+
+    /// `git config --list` over `text` (fed on stdin, so git reads the
+    /// bytes this module parsed), without includes.
+    fn git_config_listing(&self, text: &str) -> ToolResult<Vec<ConfigEntry>> {
+        let listing = self
+            .git(&self.top)
+            .literal(false)
+            .stdin(text.as_bytes())
+            .spawn(&[
+                "config",
+                "--file",
+                "-",
+                "--no-includes",
+                "--list",
+                "--null",
+                "--show-scope",
+            ])?;
+        let mut fields = listing.split(|byte| *byte == 0);
+        let mut out = Vec::new();
+        while let (Some(_scope), Some(item)) = (fields.next(), fields.next()) {
+            let item = String::from_utf8_lossy(item);
+            let (key, value) = match item.split_once('\n') {
+                Some((key, value)) => (key.to_owned(), Some(value.to_owned())),
+                None => (item.into_owned(), None),
+            };
+            out.push(ConfigEntry { key, value });
+        }
+        Ok(out)
+    }
+
+    /// The text of `.git/<name>`; `None` when there is none.
+    fn read_config(&self, name: &str) -> ToolResult<Option<String>> {
         let path = self.git_dir.join(name);
         let meta = match std::fs::symlink_metadata(&path) {
             Ok(meta) => meta,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(unsafe_repo(format!("cannot read .git/{name}"))),
         };
         if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {
@@ -475,10 +663,9 @@ impl Repo {
         }
         let text =
             std::fs::read(&path).map_err(|_| unsafe_repo(format!("cannot read .git/{name}")))?;
-        let text = String::from_utf8(text)
-            .map_err(|_| unsafe_repo(format!(".git/{name} is not UTF-8")))?;
-        parse_config(&text)
-            .map_err(|reason| unsafe_repo(format!(".git/{name} cannot be parsed safely: {reason}")))
+        String::from_utf8(text)
+            .map(Some)
+            .map_err(|_| unsafe_repo(format!(".git/{name} is not UTF-8")))
     }
 
     /// Drivers with commands in the person's global config:
@@ -965,6 +1152,80 @@ mod tests {
         ] {
             assert!(parse_config(bad).is_err(), "{bad:?}");
         }
+    }
+
+    /// A backslash ends nothing inside a comment: the line after it is a
+    /// header git reads, not part of the comment.
+    #[test]
+    fn config_comments_never_continue_and_values_follow_git() {
+        let entries = parse_config(
+            "[core]\n\t# x \\\n[filter \"evil\"]\n\tclean = touch m\n\tv = \"a # b\" ; c \\\n\tw = 1\\\n2  x \n",
+        )
+        .expect("parse");
+        let pairs: Vec<(&str, Option<&str>)> = entries
+            .iter()
+            .map(|entry| (entry.key.as_str(), entry.value.as_deref()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("filter.evil.clean", Some("touch m")),
+                ("filter.evil.v", Some("a # b")),
+                ("filter.evil.w", Some("12  x")),
+            ]
+        );
+        for bad in [
+            "[core]\n\tbare # c\n",
+            "[core]\n\tv = \"open\n",
+            "[core]\n\tv = \\q\n",
+            "[c \"sub\n\"]\n",
+        ] {
+            assert!(parse_config(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    /// The comment-continuation exploit: a filter section hidden from a
+    /// parser that folds `\` inside comments. Both parsers see it; the
+    /// repository is refused and the filter never runs.
+    #[test]
+    fn a_filter_hidden_behind_a_comment_backslash_is_refused() {
+        let (_dir, base, repo) = repo();
+        let marker = base.join("payload-ran");
+        let config = repo.git_dir().join("config");
+        let text = std::fs::read_to_string(&config).expect("config");
+        std::fs::write(
+            &config,
+            format!(
+                "{text}[core]\n\t# x \\\n[filter \"evil\"]\n\tclean = touch {} && cat\n",
+                marker.display()
+            ),
+        )
+        .expect("config");
+        std::fs::write(repo.top().join(".gitattributes"), "* filter=evil\n").expect("attrs");
+        std::fs::write(repo.top().join("a.txt"), "x").expect("file");
+        let error = repo.check().expect_err("refused");
+        assert_eq!(error.code(), ErrorCode::UnsafeRepository);
+        assert!(
+            error.message().contains("filter.evil.clean"),
+            "{}",
+            error.message()
+        );
+        assert!(repo.git(repo.top()).worktree().run(&["add", "-A"]).is_err());
+        assert!(
+            Repo::discover(repo.top(), &SandboxConfig::default()).is_err(),
+            "discovery refuses it too"
+        );
+        assert!(!marker.exists(), "the payload ran");
+    }
+
+    /// git's own reader is asked as well: a config git cannot read is
+    /// refused even when this module's parser has no objection.
+    #[test]
+    fn config_git_cannot_read_is_refused() {
+        let (_dir, _base, repo) = repo();
+        assert!(repo.check().is_ok());
+        assert!(repo.git_config_listing("[core]\n\tbare = false\n").is_ok());
+        assert!(repo.git_config_listing("[core\n").is_err());
     }
 
     #[test]
