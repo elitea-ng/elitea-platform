@@ -29,7 +29,7 @@ under test (`elitea-main.masterKeyRef`, `templates/main/_helpers.tpl:1276-1295`;
 
 | Path | Change |
 | --- | --- |
-| `deploy/helm/tests/render-main-master-key.sh` | Every render declares `networkPolicies.main.noExternalIngress=true`, the same posture the other 18 shell render tests use. `refuses` now fails a refusal that came from a network-policy guard instead of the master-key guard. The "no source" refusal matches the guard's own phrase (`has no SECRETS_MASTER_KEY source`), not a bare variable name. |
+| `deploy/helm/tests/render-main-master-key.sh` | Every render declares `networkPolicies.main.noExternalIngress=true`. Of the other 18 shell render tests, 16 use the same flag, and `render-edge-healthz.sh` and `render-platform-edge-identity.sh` list `ingressFrom` instead. `refuses` now fails a refusal that came from a network-policy guard instead of the master-key guard. The "no source" and "no Secret name" refusals match their own guard's phrase (`has no SECRETS_MASTER_KEY source`, `needs both secretName and key`). The old patterns also matched the other guard's message. |
 | `Taskfile.yml` | New `helm:main-master-key` task, run by `helm:lint` next to `helm:capabilities`, `helm:llmpath`, `helm:edge-healthz`, `helm:bf02b` and `helm:compiled-snapshots`. `.github/workflows` is unchanged. |
 
 `noExternalIngress=true` touches only the NetworkPolicy on elitea-main, never
@@ -55,7 +55,7 @@ Skips:
 
 ### Mutation proof that the assertions still bite
 
-Each mutation was applied to a copy of the chart and the fixed script was run against it:
+Each mutation was applied to a scratch copy of `deploy/helm/{elitea,tests}`: to the chart templates (`main/_helpers.tpl`, plus `main/deployment.yaml` for the overwrite row) or, in the last row, to the script. The fixed script was then run against the copy:
 
 | Mutation | Caught by |
 | --- | --- |
@@ -65,9 +65,10 @@ Each mutation was applied to a copy of the chart and the fixed script was run ag
 | `main.env.SECRETS_MASTER_KEY` guard removed | "the chart rendered a plaintext SECRETS_MASTER_KEY" |
 | empty `secretName` accepted | "the chart rendered a master key reference with no Secret name" |
 | gateway reference overwrites an explicit `main.secrets` entry | "an explicit main.secrets.SECRETS_MASTER_KEY did not win" (+ the empty-name refusal) |
+| empty `secretName` falls through to the no-source guard (`if and $ref $ref.secretName`) | "message does not name 'needs both secretName and key'". The old `main\.secrets\.SECRETS_MASTER_KEY` pattern passed this one, which is why it was tightened |
 | script without `noExternalIngress=true` | reproduces the original 4 failures |
 
-In the last mutation, the three refusals still pass, because helm reaches the
+In the script mutation, the three refusals still pass, because helm reaches the
 master-key guard before `guards.yaml`. The new network-policy branch in
 `refuses` keeps a later template-order change from turning those refusals into
 false passes.
@@ -102,4 +103,6 @@ None. Every case is a `helm template` of the in-repo chart with `--set` override
 
 - `.github/workflows/helm-lint.yml` still does not run `render-main-master-key.sh`, `render-network-policies.sh`, `render-platform-edge-identity.sh` or `render-sandbox-images.sh`. Adding them needs a workflow change, which is out of scope here.
 - `Taskfile.yml` `helm:lint` runs only 6 of the 20 render tests, so `task helm:lint` is not a full local equivalent of the CI job.
+- The render scripts each hard-code their posture flags. A shared render-only posture under `deploy/helm/tests/` would make the next chart-wide guard a one-place change.
+- `scripts/lib/assertion-floor.sh` (used by `render-bf0-2b.sh`) could give this script a derived floor on the number of checks that ran.
 - This defect came from two PRs that were each green alone. Re-running every render test after merging `main` would catch the next one.

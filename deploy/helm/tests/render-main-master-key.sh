@@ -116,7 +116,7 @@ fi
 # 4. Refusals.
 refuses "a plaintext SECRETS_MASTER_KEY in main.env" 'main\.env\.SECRETS_MASTER_KEY' \
   --set-string main.env.SECRETS_MASTER_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-refuses "a master key reference with no Secret name" 'main\.secrets\.SECRETS_MASTER_KEY' \
+refuses "a master key reference with no Secret name" 'needs both secretName and key' \
   --set main.secrets.SECRETS_MASTER_KEY.secretName= --set main.secrets.SECRETS_MASTER_KEY.key=k
 refuses "no master key source at all" 'has no SECRETS_MASTER_KEY source' \
   --set llmGateway.secrets.SECRETS_MASTER_KEY=null
