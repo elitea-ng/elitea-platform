@@ -16,10 +16,16 @@
 //! Protection, on Unix: the directory is `0700`; the file is created `0600`
 //! from the start (a temp file opened with that mode, never a chmod after a
 //! write), filled, fsynced and renamed over the old one in the same
-//! directory, then the directory is fsynced. A file that is a symlink, is not
-//! a regular file, belongs to another user, or is readable or writable by
-//! group or others is REFUSED (an error, and a warning in the log): it is not
-//! ours to trust or to overwrite. Its contents are never logged.
+//! directory, then the directory is fsynced.
+//!
+//! A file we own that only group or others can READ (a backup restore that
+//! lost the mode) is narrowed to `0600` and read, with a warning: nobody else
+//! could have written it. A file that is a symlink, is not a regular file,
+//! belongs to another user, or is WRITABLE by group or others is never read
+//! (an error, and a warning in the log): its contents may not be ours. It
+//! must not wedge sign-in either, so a save or clear UNLINKS that entry (the
+//! link itself, never its target) and writes a fresh file, with a warning.
+//! Its contents are never logged.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -72,35 +78,32 @@ impl CredentialsFile {
         }
     }
 
-    fn read(&self) -> Result<Slots, HostError> {
+    fn read(&self) -> Result<Slots, ReadError> {
         let path = self.path();
         let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Slots::new()),
-            Err(e) => return Err(io_error("could not inspect the credentials file", &e)),
+            Err(e) => {
+                return Err(ReadError::Io(io_error(
+                    "could not inspect the credentials file",
+                    &e,
+                )));
+            }
         };
         if meta.file_type().is_symlink() {
-            return Err(refuse(&path, "is a symbolic link"));
+            return Err(ReadError::Untrusted(refuse(&path, "is a symbolic link")));
         }
         if !meta.is_file() {
-            return Err(refuse(&path, "is not a regular file"));
+            return Err(ReadError::Untrusted(refuse(&path, "is not a regular file")));
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            if meta.uid() != rustix::process::geteuid().as_raw() {
-                return Err(refuse(&path, "belongs to another user"));
-            }
-            if meta.mode() & 0o077 != 0 {
-                return Err(refuse(&path, "is readable or writable by other users"));
-            }
-        }
-        let raw = open_no_follow(&path)
-            .and_then(|mut file| {
-                let mut text = String::new();
-                std::io::Read::read_to_string(&mut file, &mut text).map(|_| text)
-            })
-            .map_err(|e| io_error("could not read the credentials file", &e))?;
+        let mut file = open_no_follow(&path)
+            .map_err(|e| ReadError::Io(io_error("could not read the credentials file", &e)))?;
+        // Checked again on the open descriptor, so a swap between the
+        // `symlink_metadata` above and the open cannot slip a file past.
+        trust_open_file(&path, &file)?;
+        let mut raw = String::new();
+        std::io::Read::read_to_string(&mut file, &mut raw)
+            .map_err(|e| ReadError::Io(io_error("could not read the credentials file", &e)))?;
         // A damaged file must not wedge sign-in: it reads as signed out (and
         // is replaced on the next sign-in).
         Ok(serde_json::from_str(&raw).unwrap_or_else(|_| {
@@ -139,14 +142,29 @@ impl CredentialsFile {
 
     /// Run `change` on the slots; when it reports a change, write the result
     /// through. The cache is only updated once the write succeeded.
-    fn update<T>(&self, change: impl FnOnce(&mut Slots) -> (T, bool)) -> Result<T, HostError> {
+    ///
+    /// `replace_untrusted`: a save or clear starts over from an empty file when
+    /// the current one cannot be trusted (see the module docs), so sign-in
+    /// recovers; a load keeps refusing it.
+    fn update<T>(
+        &self,
+        replace_untrusted: bool,
+        change: impl FnOnce(&mut Slots) -> (T, bool),
+    ) -> Result<T, HostError> {
         let mut cache = self
             .cache
             .lock()
             .map_err(|_| HostError::Internal("credentials lock poisoned".into()))?;
         let mut slots = match cache.as_ref() {
             Some(slots) => slots.clone(),
-            None => self.read()?,
+            None => match self.read() {
+                Ok(slots) => slots,
+                Err(ReadError::Untrusted(_)) if replace_untrusted => {
+                    self.unlink_untrusted()?;
+                    Slots::new()
+                }
+                Err(ReadError::Untrusted(e) | ReadError::Io(e)) => return Err(e),
+            },
         };
         let (value, changed) = change(&mut slots);
         if changed {
@@ -155,6 +173,72 @@ impl CredentialsFile {
         *cache = Some(slots);
         Ok(value)
     }
+
+    /// Remove the entry at the file's path without reading or following it
+    /// (`remove_file` unlinks a symlink itself, never its target).
+    fn unlink_untrusted(&self) -> Result<(), HostError> {
+        let path = self.path();
+        log::warn!(
+            "replacing the untrusted credentials file {} with a fresh one",
+            path.display()
+        );
+        match fs::remove_file(&path) {
+            Ok(()) => sync_dir(&self.dir),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io_error(
+                "could not remove the untrusted credentials file",
+                &e,
+            )),
+        }
+    }
+}
+
+/// Why the file could not be read: `Untrusted` is a file whose contents may
+/// not be ours (a save or clear replaces it), `Io` anything else.
+enum ReadError {
+    Untrusted(HostError),
+    Io(HostError),
+}
+
+/// The ownership and mode rules (module docs) on an open descriptor: a file
+/// another user owns, or one group or others can write, is untrusted; one
+/// they can only read is narrowed to `0600` (a backup restore loses modes).
+fn trust_open_file(path: &Path, file: &fs::File) -> Result<(), ReadError> {
+    let meta = file
+        .metadata()
+        .map_err(|e| ReadError::Io(io_error("could not inspect the credentials file", &e)))?;
+    if !meta.is_file() {
+        return Err(ReadError::Untrusted(refuse(path, "is not a regular file")));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        if meta.uid() != rustix::process::geteuid().as_raw() {
+            return Err(ReadError::Untrusted(refuse(
+                path,
+                "belongs to another user",
+            )));
+        }
+        if meta.mode() & 0o022 != 0 {
+            return Err(ReadError::Untrusted(refuse(
+                path,
+                "is writable by other users",
+            )));
+        }
+        if meta.mode() & 0o077 != 0 {
+            log::warn!(
+                "the credentials file {} was readable by other users; restricting it to 0600",
+                path.display()
+            );
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|e| {
+                    ReadError::Io(io_error("could not restrict the credentials file", &e))
+                })?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
@@ -233,11 +317,11 @@ pub struct FileSlot {
 impl SecretStore for FileSlot {
     fn load(&self) -> Result<Option<String>, HostError> {
         self.file
-            .update(|slots| (slots.get(self.name).cloned(), false))
+            .update(false, |slots| (slots.get(self.name).cloned(), false))
     }
 
     fn save(&self, secret: &str) -> Result<(), HostError> {
-        self.file.update(|slots| {
+        self.file.update(true, |slots| {
             let changed = slots.get(self.name).map(String::as_str) != Some(secret);
             slots.insert(self.name.to_owned(), secret.to_owned());
             ((), changed)
@@ -246,7 +330,7 @@ impl SecretStore for FileSlot {
 
     fn clear(&self) -> Result<(), HostError> {
         self.file
-            .update(|slots| ((), slots.remove(self.name).is_some()))
+            .update(true, |slots| ((), slots.remove(self.name).is_some()))
     }
 }
 
@@ -362,13 +446,76 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_file_others_can_read_is_refused() {
+    fn a_file_others_can_only_read_is_narrowed_and_read() {
         use std::os::unix::fs::PermissionsExt as _;
         let (_root, file) = file();
         file.slot("device-session").save("s").unwrap();
+        // A backup restore that lost the mode.
         fs::set_permissions(file.path(), fs::Permissions::from_mode(0o644)).unwrap();
         let launch = CredentialsFile::new(file.dir.clone());
+        assert_eq!(
+            launch.slot("device-session").load().unwrap().as_deref(),
+            Some("s")
+        );
+        let mode = fs::metadata(file.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // And it keeps working: sign-in is not wedged.
+        launch.slot("device-session").save("s2").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_others_can_write_is_never_read_but_sign_in_replaces_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_root, file) = file();
+        file.slot("device-session").save("planted?").unwrap();
+        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o666)).unwrap();
+        let launch = CredentialsFile::new(file.dir.clone());
         let err = launch.slot("device-session").load().unwrap_err();
-        assert!(err.to_string().contains("other users"), "{err}");
+        assert!(err.to_string().contains("writable by other users"), "{err}");
+        // Sign-in recovers: the save starts from an empty file.
+        launch.slot("device-session").save("fresh").unwrap();
+        let mode = fs::metadata(file.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let next = CredentialsFile::new(file.dir.clone());
+        assert_eq!(
+            next.slot("device-session").load().unwrap().as_deref(),
+            Some("fresh")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_clear_removes_an_untrusted_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_root, file) = file();
+        file.slot("device-session").save("s").unwrap();
+        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o620)).unwrap();
+        let launch = CredentialsFile::new(file.dir.clone());
+        launch.slot("device-session").clear().unwrap();
+        assert!(!file.path().exists());
+        assert_eq!(launch.slot("device-session").load().unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_save_replaces_a_symlink_without_touching_its_target() {
+        let (root, file) = file();
+        fs::create_dir_all(&file.dir).unwrap();
+        let target = root.path().join("elsewhere.json");
+        fs::write(&target, r#"{"device-session":"planted"}"#).unwrap();
+        std::os::unix::fs::symlink(&target, file.path()).unwrap();
+        file.slot("device-session").save("mine").unwrap();
+        let meta = fs::symlink_metadata(file.path()).unwrap();
+        assert!(meta.is_file(), "the link was replaced by a regular file");
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            r#"{"device-session":"planted"}"#
+        );
+        let next = CredentialsFile::new(file.dir.clone());
+        assert_eq!(
+            next.slot("device-session").load().unwrap().as_deref(),
+            Some("mine")
+        );
     }
 }

@@ -144,9 +144,12 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   `%APPDATA%\ai.elitea.desktop\` (Windows). On Unix the directory is `0700`
   and the file is created `0600` from the start, written to a temp file in the
   same directory, fsynced and renamed into place (no partially written or
-  briefly world-readable file). A file that is a symlink, not a regular file,
-  owned by another user, or group/world-accessible is refused and logged,
-  never followed or overwritten. Sign-out and wipe delete it once no pending
+  briefly world-readable file). A file of yours that group or others can only
+  read (a backup restore that lost the mode) is narrowed to `0600` with a
+  warning. A file that is a symlink, not a regular file, owned by another
+  user, or group/world-writable is never read or followed (logged); the next
+  sign-in or sign-out unlinks that entry (never its target) and writes a fresh
+  file, so it cannot wedge sign-in. Sign-out and wipe delete it once no pending
   revoke is left. The trade-off, honestly: it is protected by file
   permissions and disk encryption (FileVault, BitLocker, LUKS), not by
   per-application keychain ACLs, so any process running as you can read it —
