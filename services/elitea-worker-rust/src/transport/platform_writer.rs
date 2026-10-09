@@ -137,6 +137,7 @@ mod tests {
     use elitea_agent_runtime::host::HostErrorCode;
 
     use super::{RuntimeContextError, host_error};
+    use crate::transport::runtime_context::RuntimeContextTransportError;
 
     #[test]
     fn runtime_context_failures_keep_their_class_and_reason_code() {
@@ -170,6 +171,21 @@ mod tests {
                 RuntimeContextError::Timeout("slow"),
                 HostErrorCode::DependencyUnavailable,
                 "runtime_context.timeout",
+            ),
+            (
+                RuntimeContextError::Transport(RuntimeContextTransportError::Unavailable),
+                HostErrorCode::DependencyUnavailable,
+                "runtime_context.dependency_unavailable",
+            ),
+            (
+                RuntimeContextError::DependencyUnavailable("down"),
+                HostErrorCode::DependencyUnavailable,
+                "runtime_context.dependency_unavailable",
+            ),
+            (
+                RuntimeContextError::InvalidConfiguration("bad origin"),
+                HostErrorCode::InvalidConfiguration,
+                "runtime_context.invalid_configuration",
             ),
         ];
         for (error, code, reason) in cases {

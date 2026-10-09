@@ -84,7 +84,12 @@ impl HostErrorCode {
 
 /// A host failure: a stable code and a static, data-free message. No host
 /// puts response bodies, tokens or user content in here.
-#[derive(Clone, Copy, Eq, PartialEq)]
+///
+/// Deliberately not `PartialEq`: the log-only reason
+/// ([`HostError::with_reason`]) must not decide equality, and nothing compares
+/// whole errors. Compare [`HostError::code`] (what the runtime branches on)
+/// and, in tests, [`HostError::reason_code`].
+#[derive(Clone, Copy)]
 pub struct HostError {
     code: HostErrorCode,
     message: &'static str,
@@ -502,7 +507,10 @@ pub struct CodeJob {
 
 /// What became of a [`CodeJob`]. Output is untrusted: the graph applies its
 /// typed state projection to it. Mirrors `sandbox::client::SandboxOutcome`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// `Debug` is written by hand: a completed job's output is the user's code's
+/// output (it may hold private data), so it prints only its byte length.
+#[derive(Clone, Eq, PartialEq)]
 pub enum CodeOutcome {
     Pending,
     Completed(Vec<u8>),
@@ -517,13 +525,36 @@ pub enum CodeOutcome {
     },
 }
 
+impl fmt::Debug for CodeOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => formatter.write_str("Pending"),
+            Self::Completed(output) => formatter
+                .debug_struct("Completed")
+                .field("bytes", &output.len())
+                .finish(),
+            Self::Failed { code } => formatter
+                .debug_struct("Failed")
+                .field("code", code)
+                .finish(),
+            Self::Cancelled => formatter.write_str("Cancelled"),
+            Self::Uncertain { code } => formatter
+                .debug_struct("Uncertain")
+                .field("code", code)
+                .finish(),
+        }
+    }
+}
+
 /// How code nodes run code.
 ///
 /// Replaces `sandbox::client::SandboxClient` (`submit`,
 /// `submit_with_dependencies`, `cancel`, each authorised by main through
 /// `ControlGrpcClient::authorize_sandbox_job` for the claim) as the
 /// `graph::code*` nodes use it. No moved module calls it yet: the code nodes
-/// and the cloud adapter move together in stage 6 of `EXTRACTION.md`.
+/// and the cloud adapter move together in stage 6 of `EXTRACTION.md`, and
+/// only then does [`Host`] carry one (until there is a reader, a host would
+/// have to stub it).
 /// Desktop: the local sandbox of ADR-0029 decision 4.
 #[async_trait]
 pub trait CodeSandbox: Send + Sync {
@@ -633,14 +664,16 @@ pub struct Host {
     pub memory: Arc<dyn MemoryStore>,
     pub approvals: Arc<dyn ApprovalChannel>,
     pub platform: Arc<dyn PlatformWriter>,
-    pub code: Arc<dyn CodeSandbox>,
+    // `code: Arc<dyn CodeSandbox>` joins in stage 6, with its first reader.
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::{ExecutionEnd, ExecutionGuard, HostError, HostErrorCode, LocalExecutionGuard};
+    use super::{
+        CodeOutcome, ExecutionEnd, ExecutionGuard, HostError, HostErrorCode, LocalExecutionGuard,
+    };
 
     #[tokio::test]
     async fn a_local_guard_ends_only_when_stopped() {
@@ -671,5 +704,23 @@ mod tests {
             HostErrorCode::ExecutionEnded.as_str(),
             "runtime_host.execution_ended"
         );
+    }
+
+    /// A completed job's output is the user's code's output: `Debug` shows
+    /// its length, never its bytes.
+    #[test]
+    fn code_outcomes_debug_without_output() {
+        let completed = CodeOutcome::Completed(b"secret-token".to_vec());
+        assert_eq!(format!("{completed:?}"), "Completed { bytes: 12 }");
+        assert_eq!(
+            format!(
+                "{:?}",
+                CodeOutcome::Failed {
+                    code: "sandbox.timeout".into()
+                }
+            ),
+            "Failed { code: \"sandbox.timeout\" }"
+        );
+        assert_eq!(format!("{:?}", CodeOutcome::Pending), "Pending");
     }
 }
