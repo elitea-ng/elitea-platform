@@ -135,6 +135,15 @@ describe('createHostTransport', () => {
     expect(b.calls.wipe).toHaveBeenCalledTimes(1);
   });
 
+  it('a refresh_failed end goes through the host sign-out (revoke), never a bare wipe', async () => {
+    const b = bridge();
+    const { transport, onSignedOut } = make(b);
+    transport.signOut('refresh_failed');
+    await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledWith('refresh_failed'));
+    expect(b.calls.signOut).toHaveBeenCalledTimes(1);
+    expect(b.calls.wipe).not.toHaveBeenCalled();
+  });
+
   it('logout revokes through the host, clears local data, then reports', async () => {
     const b = bridge();
     const order: string[] = [];

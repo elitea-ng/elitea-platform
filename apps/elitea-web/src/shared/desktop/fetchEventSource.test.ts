@@ -166,6 +166,17 @@ describe('FetchEventSource', () => {
     expect(transport.signOut).toHaveBeenCalledWith('refresh_failed');
   });
 
+  it('a 401 after a SUCCESSFUL refresh fails permanently without signing out', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response('', { status: 401 })));
+    const { deps, transport } = setup(fetchMock);
+    const es = new FetchEventSource('https://h.example/s', deps);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transport.refresh).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(es.readyState).toBe(FetchEventSource.CLOSED);
+    expect(transport.signOut).not.toHaveBeenCalled();
+  });
+
   it('a 401 whose refresh is merely unavailable retries later instead of signing out', async () => {
     const s = stream();
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('', { status: 401 })).mockResolvedValueOnce(s.response);

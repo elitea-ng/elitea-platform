@@ -18,8 +18,9 @@
  *  - `open` fires when the response headers arrive.
  *
  * Differences by design: a 401 is answered by one token refresh and an
- * immediate retry (the transport owns single-flight); a second 401 signs the
- * session out and fails permanently. Redirects are not followed (the host's
+ * immediate retry (the transport owns single-flight); a second 401 fails the
+ * connection permanently WITHOUT signing out (the refresh just proved the
+ * session alive). Only a refresh that reports `ended` signs out. Redirects are not followed (the host's
  * fetch is given `maxRedirections: 0`; see `entries/desktop/launchApp.tsx`) so
  * a bearer token cannot be forwarded to a host the user did not choose, and a
  * URL off the deployment origin never gets the token at all.
@@ -107,7 +108,7 @@ export class FetchEventSource implements EventSourceLike {
 
     if (response.status === 401) {
       void response.body?.cancel();
-      if (refreshed) return this.sessionEnded();
+      if (refreshed) return 'failed';
       const outcome = await transport.refresh(token);
       if (outcome === 'refreshed') return this.connect(true);
       // Not renewable right now: the connection drops and retries like any other.

@@ -93,13 +93,15 @@ export function createHostTransport(options: HostTransportOptions): NativeTransp
     if (signedOut) return;
     signedOut = true;
     cached = undefined;
-    // The session is already dead server-side (device revoked, or a refresh
-    // token that no longer works), so there is nothing to revoke: the host
-    // forgets it and wipes the keychain, the policy file and (authoritatively)
-    // the webview's browsing data. The page's own sweep runs first.
+    // `device_revoked`: the server already ended the session, so there is
+    // nothing to revoke; the host forgets it and wipes. Any other end goes
+    // through the host's sign-out, which revokes whatever session it still
+    // holds (none, when the refresh token was refused) before the same wipe:
+    // a session that may still be live is never dropped without a revoke.
+    // The page's own sweep runs first; the host clears browsing data last.
     void clearLocalData()
       .catch(() => undefined)
-      .then(() => bridge.wipe())
+      .then(() => (reason === 'device_revoked' ? bridge.wipe() : bridge.signOut()))
       .catch(() => undefined)
       .finally(() => onSignedOut(reason));
   };
