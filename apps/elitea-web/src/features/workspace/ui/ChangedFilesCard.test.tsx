@@ -10,12 +10,15 @@ import { ChangedFilesCard } from './ChangedFilesCard';
 
 const DIFF = ['--- a/src/a.ts', '+++ b/src/a.ts', '@@ -1 +1 @@', '-old', '+new'].join('\n');
 
-function setup(files = [
-  { path: 'src/a.ts', status: 'modified' as const, added: 1, removed: 1, diff: DIFF },
-  { path: 'src/b.ts', status: 'added' as const, added: 4, removed: 0, diff: '' },
-]) {
+function setup(
+  files = [
+    { path: 'src/a.ts', status: 'modified' as const, added: 1, removed: 1, diff: DIFF },
+    { path: 'src/b.ts', status: 'added' as const, added: 4, removed: 0, diff: '' },
+  ],
+  { latest = true }: { latest?: boolean } = {},
+) {
   const ipc = createFakeWorkspaceIpc();
-  ipc.setChanges('t1', { files });
+  ipc.setChanges('t1', { files, latest });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = renderWithTheme(
     <QueryClientProvider client={client}>
@@ -96,6 +99,36 @@ describe('ChangedFilesCard', () => {
     await user.click(screen.getByRole('button', { name: 'Revert src/b.ts' }));
     // The host's own words (they name the reason), not the generic failure.
     expect(await screen.findByText('This turn ran without a checkpoint (too many files), so its changes cannot be undone here.')).toBeInTheDocument();
+  });
+
+  it('an older turn offers to restore the folder, lists what the host says would be lost, and asks with the confirmation', async () => {
+    const { ipc, user } = setup([{ path: 'src/a.ts', status: 'modified', added: 1, removed: 1, diff: DIFF }], { latest: false });
+    ipc.setPreview('t1', { restored: ['src/a.ts'], deleted: ['src/later.ts', 'notes-by-me.md'] });
+    await screen.findAllByTestId('changed-file');
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo turn' })).toBeNull());
+
+    await user.click(await screen.findByRole('button', { name: 'Restore folder to before this turn' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restore the folder to before this turn?' });
+    const listed = await within(dialog).findByTestId('restore-folder-preview');
+    expect(within(listed).getByText('src/a.ts')).toBeInTheDocument();
+    expect(within(listed).getByText('src/later.ts (deleted)')).toBeInTheDocument();
+    expect(within(listed).getByText('notes-by-me.md (deleted)')).toBeInTheDocument();
+    expect(within(dialog).getByText('…and any edits you made since are lost.')).toBeInTheDocument();
+    expect(ipc.calls.restores).toEqual([]);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Restore folder' }));
+    await waitFor(() => expect(ipc.calls.restores).toEqual([{ turnId: 't1', confirmOlder: true }]));
+    // Undone now: nothing more to undo or revert.
+    expect(await screen.findByText('Undone')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Revert|Undo turn|Restore folder/ })).toBeNull());
+  });
+
+  it('says why one file of an older turn was not reverted', async () => {
+    const { ipc, user } = setup([{ path: 'src/a.ts', status: 'modified', added: 1, removed: 1, diff: DIFF }], { latest: false });
+    ipc.failNext('restore', 'file_changed_since', 'host words');
+    await user.click(await screen.findByRole('button', { name: 'Revert src/a.ts' }));
+    expect(await screen.findByText('This file changed after this turn (a later turn or your own edit), so it was not reverted.')).toBeInTheDocument();
+    expect(ipc.calls.restores).toEqual([{ turnId: 't1', path: 'src/a.ts' }]);
   });
 
   it('shows a recorded turn read-only, without asking the host or offering undo', async () => {

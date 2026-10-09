@@ -24,8 +24,10 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong.';
 }
 
+type Launch = typeof launchApp;
+
 /** Mounts the real app into its own container; the shell's screens stay out of its tree. */
-function AppHost({ bridge, state }: { bridge: HostBridge; state: HostState }) {
+function AppHost({ bridge, state, launch }: { bridge: HostBridge; state: HostState; launch: Launch }) {
   const ref = useRef<HTMLDivElement>(null);
   const [problem, setProblem] = useState<string | undefined>();
   useEffect(() => {
@@ -35,7 +37,7 @@ function AppHost({ bridge, state }: { bridge: HostBridge; state: HostState }) {
     // already dropped the session. A reload is the thorough reset — it clears
     // every in-memory store and lands on the connect screen.
     const reboot = (): void => window.location.reload();
-    const launched = launchApp({
+    const launched = launch({
       bridge,
       state,
       container,
@@ -46,7 +48,7 @@ function AppHost({ bridge, state }: { bridge: HostBridge; state: HostState }) {
     return () => {
       void launched.then((root) => root.unmount()).catch(() => undefined);
     };
-  }, [bridge, state]);
+  }, [bridge, state, launch]);
   return (
     <>
       {problem !== undefined && <Alert severity="warning">{problem}</Alert>}
@@ -63,6 +65,8 @@ export interface DesktopShellProps {
   appIpc?: AppIpc | undefined;
   /** The host ended the session on this computer while the app ran (`signed_out`); default: reload to the connect screen. */
   onSignedOut?: (() => void) | undefined;
+  /** Starts the signed-in app (tests pass a stand-in). */
+  launch?: Launch | undefined;
 }
 
 /**
@@ -156,11 +160,11 @@ function useHostSignOut(appIpc: AppIpc | undefined, active: boolean, onSignedOut
 
 const reloadPage = (): void => window.location.reload();
 
-export function DesktopShell({ bridge, doctor, appIpc, onSignedOut = reloadPage }: DesktopShellProps) {
+export function DesktopShell({ bridge, doctor, appIpc, onSignedOut = reloadPage, launch = launchApp }: DesktopShellProps) {
   const diagnostics = useDiagnostics(doctor, appIpc);
   const [signedIn, setSignedIn] = useState(false);
   useHostSignOut(appIpc, signedIn, onSignedOut);
-  const shell = <ShellScreens bridge={bridge} onDiagnose={diagnostics.show} onAppShown={setSignedIn} />;
+  const shell = <ShellScreens bridge={bridge} onDiagnose={diagnostics.show} onAppShown={setSignedIn} launch={launch} />;
   return (
     <>
       {shell}
@@ -186,9 +190,10 @@ interface ShellScreensProps {
   onDiagnose: (() => void) | undefined;
   /** Whether the signed-in app is the screen now. */
   onAppShown: (shown: boolean) => void;
+  launch: Launch;
 }
 
-function ShellScreens({ bridge, onDiagnose, onAppShown }: ShellScreensProps) {
+function ShellScreens({ bridge, onDiagnose, onAppShown, launch }: ShellScreensProps) {
   const [phase, setPhase] = useState<Phase>(bridge === undefined ? { kind: 'no-host' } : { kind: 'loading' });
   const appShown = phase.kind === 'app';
   useEffect(() => onAppShown(appShown), [appShown, onAppShown]);
@@ -216,7 +221,7 @@ function ShellScreens({ bridge, onDiagnose, onAppShown }: ShellScreensProps) {
   if (phase.kind === 'loading') {
     return <Centered><CircularProgress aria-label="Starting" /></Centered>;
   }
-  if (phase.kind === 'app') return <AppHost bridge={bridge} state={phase.state} />;
+  if (phase.kind === 'app') return <AppHost bridge={bridge} state={phase.state} launch={launch} />;
 
   const connect = (): void => {
     bridge.connect(url.trim()).then(

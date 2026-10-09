@@ -25,6 +25,7 @@ fn main() {
             "thread_history",
             "thread_history_delete",
             "checkpoint_restore",
+            "checkpoint_preview",
             "reveal_path",
             "open_path",
             "app_platform",

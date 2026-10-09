@@ -74,8 +74,9 @@ inside the folder.
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
-| `turn_changes` | `{turn_id}` | `{files: FileChange[]}` |
-| `checkpoint_restore` | `{turn_id, path?: string}` | `{restored: string[]}` |
+| `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
+| `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
+| `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
 
 `agent_turn_start` resolves the agent version, checks it, and starts the
 local turn on the platform before it resolves; the run then continues in
@@ -158,16 +159,43 @@ type FileChange = {
 first changed them. A file only a shell command changed is not listed (D0),
 but `checkpoint_restore` undoes it with the rest of the turn.
 
-`checkpoint_restore` without `path` puts the whole workspace back to the
-turn's checkpoint (taken before its first change); with `path` only that
-file. It answers the files written back or deleted, and `[]` for a turn
-that changed nothing. It rejects (`workspace_busy`) while a turn runs in
-the workspace, and with `no_checkpoint` for a turn that changed files
-without a checkpoint (a folder too large to checkpoint: the turn ran, but
-cannot be undone here).
+**Undo is for the newest turn.** `turn_changes`' `latest` is `true` for the
+newest turn of its workspace that changed files and was not undone; `undone`
+for a turn whose changes were undone (by its own undo, or by restoring the
+folder to before an earlier turn). A turn's checkpoint is the whole folder
+before its first change, so:
 
-The host keeps the last 20 turns of each workspace for `turn_changes` and
-`checkpoint_restore`; an older turn rejects with `turn_expired`, an id it
+- **The newest turn** (`latest`): `checkpoint_restore` without `path` undoes
+  it (the UI's "Undo turn"); with `path` it reverts that one file.
+- **An older turn**: `checkpoint_restore` without `path` is refused with
+  `undo_not_latest` — putting the folder back to that checkpoint also
+  reverts every later turn and the person's own edits since. The UI offers
+  "Restore folder to before this turn" instead: it asks the host for
+  `checkpoint_preview` (what would be written back and deleted now, later
+  turns' files and the person's edits included; nothing is changed), lists
+  it in its confirmation, and only then calls `checkpoint_restore` with
+  `confirm_older: true`. That turn and every later turn of the workspace are
+  then `undone`.
+- **One file of an older turn** (`path`): reverted only while the file still
+  holds exactly what that turn left in it (a hash taken when the turn
+  ended); a later turn's change or the person's edit refuses it with
+  `file_changed_since`.
+
+Restores and `turn_changes` go through the workspace's **current** session
+(after a policy change, the rebuilt one, under the policy of now:
+`local_work_disabled` refuses a restore). Checkpoints belong to the
+workspace, not the session, so the current session reaches an older turn's
+checkpoint — unless the folder's checkpoint store is another kind now (it
+became, or stopped being, a git work tree): `session_replaced`.
+
+A restore answers the files written back or deleted, and `[]` for a turn
+that changed nothing. It rejects (`workspace_busy`) while a turn runs in
+the workspace, `already_undone` for an undone turn, and `no_checkpoint` for
+a turn that changed files without a checkpoint (a folder too large to
+checkpoint: the turn ran, but cannot be undone here).
+
+The host keeps the last 20 turns of each workspace for `turn_changes`,
+`checkpoint_preview` and `checkpoint_restore`; an older turn rejects with `turn_expired`, an id it
 never ran with `turn_unknown`.
 
 ## Thread history (`src/history.rs`)

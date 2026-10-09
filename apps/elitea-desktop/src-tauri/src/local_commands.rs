@@ -23,7 +23,9 @@ use crate::d0::api::{ApiError, Bearer, Credentials};
 use crate::d0::approvals::UiDecision;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
-use crate::d0::turn::{AgentHost, PolicySource, TurnError, TurnRequest, TurnStarted, TurnStatus};
+use crate::d0::turn::{
+    AgentHost, PolicySource, RestorePreview, TurnError, TurnRequest, TurnStarted, TurnStatus,
+};
 use crate::error::HostError;
 use crate::history::StoredTurn;
 use crate::settings::SettingsFiles;
@@ -587,6 +589,12 @@ pub async fn thread_history_delete(
 #[derive(Serialize)]
 pub struct TurnChanges {
     files: Vec<FileChange>,
+    /// The newest turn of its workspace whose changes stand: "Undo" is
+    /// offered for it; an older one offers "Restore folder to before this
+    /// turn" (`checkpoint_preview`, then `confirm_older`).
+    latest: bool,
+    /// Its changes were undone (no undo is offered).
+    undone: bool,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -594,8 +602,11 @@ pub fn turn_changes(
     state: State<'_, LocalState>,
     turn_id: String,
 ) -> Result<TurnChanges, IpcError> {
+    let offer = state.agents.undo_offer(&turn_id)?;
     Ok(TurnChanges {
         files: state.agents.changes(&turn_id)?,
+        latest: offer.latest,
+        undone: offer.undone,
     })
 }
 
@@ -604,15 +615,37 @@ pub struct Restored {
     restored: Vec<String>,
 }
 
+/// Undo a turn, one file of it, or (`confirm_older`) restore the folder
+/// to before an older turn. Writes files: off the main thread.
 #[tauri::command(rename_all = "snake_case")]
-pub fn checkpoint_restore(
+pub async fn checkpoint_restore(
     state: State<'_, LocalState>,
     turn_id: String,
     path: Option<String>,
+    confirm_older: Option<bool>,
 ) -> Result<Restored, IpcError> {
-    Ok(Restored {
-        restored: state.agents.restore(&turn_id, path.as_deref())?,
+    let agents = state.agents.clone();
+    let restored = tokio::task::spawn_blocking(move || {
+        agents.restore(&turn_id, path.as_deref(), confirm_older.unwrap_or(false))
     })
+    .await
+    .map_err(|e| IpcError::new("internal", e.to_string()))??;
+    Ok(Restored { restored })
+}
+
+/// What restoring the folder to before a turn would write back and
+/// delete now (later turns' changes and the person's own edits included).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn checkpoint_preview(
+    state: State<'_, LocalState>,
+    turn_id: String,
+) -> Result<RestorePreview, IpcError> {
+    let agents = state.agents.clone();
+    Ok(
+        tokio::task::spawn_blocking(move || agents.restore_preview(&turn_id))
+            .await
+            .map_err(|e| IpcError::new("internal", e.to_string()))??,
+    )
 }
 
 #[cfg(test)]

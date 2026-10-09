@@ -546,7 +546,7 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
     assert_eq!(changes[0].status, "added");
     assert_eq!((changes[0].added, changes[0].removed), (1, 0));
     assert!(changes[0].diff.contains("+hello"));
-    let restored = h.host.restore(&started.turn_id, None).unwrap();
+    let restored = h.host.restore(&started.turn_id, None, false).unwrap();
     assert_eq!(restored, ["notes.txt"]);
     assert!(!h.folder.path().join("notes.txt").exists());
     assert!(h.host.changes("unknown").is_err());
@@ -703,7 +703,7 @@ async fn a_policy_change_does_not_let_an_undo_or_a_turn_past_a_running_turn() {
 
     // The busy flag is the workspace's, not the old session's: undoing
     // the first turn, or a third turn after one more policy change, waits.
-    let undo = h.host.restore(&first.turn_id, None).unwrap_err();
+    let undo = h.host.restore(&first.turn_id, None, false).unwrap_err();
     assert_eq!(undo.code, "workspace_busy");
     assert!(
         notes.exists(),
@@ -716,7 +716,10 @@ async fn a_policy_change_does_not_let_an_undo_or_a_turn_past_a_running_turn() {
     h.host.cancel(&second.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
     until_done_of(&h.emitter, &second.turn_id).await;
-    assert_eq!(h.host.restore(&first.turn_id, None).unwrap(), ["notes.txt"]);
+    assert_eq!(
+        h.host.restore(&first.turn_id, None, false).unwrap(),
+        ["notes.txt"]
+    );
     assert!(!notes.exists());
 }
 
@@ -746,7 +749,7 @@ async fn only_the_last_turns_of_a_workspace_are_kept() {
     // The oldest is forgotten, with a code that says why.
     assert_eq!(h.host.changes(&ids[0]).unwrap_err().code, "turn_expired");
     assert_eq!(
-        h.host.restore(&ids[0], None).unwrap_err().code,
+        h.host.restore(&ids[0], None, false).unwrap_err().code,
         "turn_expired"
     );
     assert_eq!(h.host.cancel(&ids[0]).unwrap_err().code, "turn_expired");
@@ -1472,5 +1475,136 @@ async fn the_doctor_removes_a_vanished_workspace_the_way_the_app_does() {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+/// The platform of [`platform`], with a model that writes `turn<n>.txt` in
+/// the n-th turn (counting from 0), then answers.
+async fn writing_platform() -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            return if n.is_multiple_of(2) {
+                tool_call(
+                    &format!("call-{n}"),
+                    "write_file",
+                    &json!({"path": format!("turn{}.txt", n / 2), "content": format!("turn {}\n", n / 2)}),
+                )
+            } else {
+                sse(&[
+                    json!({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}),
+                ])
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn files_in(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn undo_is_for_the_newest_turn_and_an_older_one_restores_the_folder_only_when_asked() {
+    let h = harness(writing_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h.emitter, &first.turn_id).await;
+    let second = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h.emitter, &second.turn_id).await;
+    let folder = h.folder.path();
+    assert_eq!(files_in(folder), ["turn0.txt", "turn1.txt"]);
+    assert!(!h.host.undo_offer(&first.turn_id).unwrap().latest);
+    assert!(h.host.undo_offer(&second.turn_id).unwrap().latest);
+
+    // "Undo" of an older turn is refused: it would revert the later turn.
+    let refused = h.host.restore(&first.turn_id, None, false).unwrap_err();
+    assert_eq!(refused.code, "undo_not_latest");
+    assert_eq!(files_in(folder), ["turn0.txt", "turn1.txt"]);
+
+    // The person edits the folder; the dry run names everything a restore
+    // to before the first turn would revert, their edit included.
+    std::fs::write(folder.join("mine.txt"), "my notes\n").unwrap();
+    let preview = h.host.restore_preview(&first.turn_id).unwrap();
+    assert_eq!(preview.deleted, ["mine.txt", "turn0.txt", "turn1.txt"]);
+    assert!(preview.restored.is_empty());
+    assert_eq!(files_in(folder), ["mine.txt", "turn0.txt", "turn1.txt"]);
+
+    // One file of the older turn: only while it holds what that turn left.
+    std::fs::write(folder.join("turn0.txt"), "edited by hand\n").unwrap();
+    let changed = h
+        .host
+        .restore(&first.turn_id, Some("turn0.txt"), false)
+        .unwrap_err();
+    assert_eq!(changed.code, "file_changed_since");
+    assert_eq!(
+        std::fs::read_to_string(folder.join("turn0.txt")).unwrap(),
+        "edited by hand\n"
+    );
+    std::fs::write(folder.join("turn0.txt"), "turn 0\n").unwrap();
+    assert_eq!(
+        h.host
+            .restore(&first.turn_id, Some("turn0.txt"), false)
+            .unwrap(),
+        ["turn0.txt"]
+    );
+    assert_eq!(files_in(folder), ["mine.txt", "turn1.txt"]);
+
+    // Confirmed: the folder goes back to before the first turn, and both
+    // turns count as undone.
+    h.host.restore(&first.turn_id, None, true).unwrap();
+    assert!(files_in(folder).is_empty(), "{:?}", files_in(folder));
+    for turn in [&first.turn_id, &second.turn_id] {
+        assert!(h.host.undo_offer(turn).unwrap().undone);
+        assert_eq!(
+            h.host.restore(turn, None, false).unwrap_err().code,
+            "already_undone"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_restore_runs_on_the_current_session_and_refuses_a_checkpoint_it_cannot_reach() {
+    let h = harness(writing_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h.emitter, &first.turn_id).await;
+    // The folder becomes a git work tree, and the policy changes, so the
+    // workspace's session is replaced: its checkpoints are git ones now,
+    // the turn's is a copy the current session cannot reach.
+    let status = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(h.folder.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    h.policy.set(Some(
+        json!({"allowed": true, "shell": false, "max_sandbox_mode": "workspace-write"}),
+    ));
+    let refused = h.host.restore(&first.turn_id, None, false).unwrap_err();
+    assert_eq!(refused.code, "session_replaced", "{}", refused.message);
+    assert_eq!(
+        h.host.restore_preview(&first.turn_id).unwrap_err().code,
+        "session_replaced"
+    );
+    assert!(
+        h.folder.path().join("turn0.txt").exists(),
+        "nothing restored"
+    );
+    // Local work turned off: no restore writes behind the policy either.
+    h.policy.set(Some(json!({"allowed": false})));
+    assert_eq!(
+        h.host
+            .restore(&first.turn_id, None, false)
+            .unwrap_err()
+            .code,
+        "local_work_disabled"
     );
 }

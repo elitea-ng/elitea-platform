@@ -259,13 +259,22 @@ enum RunState {
 /// A turn, kept after it ends for `turn_changes` and `checkpoint_restore`.
 struct TurnEntry {
     workspace_id: String,
+    /// The session the turn ran on. Reviews and restores use the
+    /// workspace's CURRENT session (a policy change replaces it); this one
+    /// only answers `turn_changes` when there is no current one.
     workspace: Arc<WorkspaceSession>,
+    /// The kind of checkpoint store (`git` / `copy`) the turn's checkpoint
+    /// is in: the current session must have the same to reach it.
+    checkpoint_kind: &'static str,
     recorder: Arc<Recorder>,
     stop: LocalStop,
     checkpoint: Mutex<TurnCheckpoint>,
     state: Mutex<RunState>,
     /// The `done` event's payload, once sent (`agent_turn_status`).
     done: Mutex<Option<Value>>,
+    /// Its changes were undone: by its own undo, or by restoring the
+    /// folder to before an earlier turn.
+    undone: std::sync::atomic::AtomicBool,
 }
 
 impl TurnEntry {
@@ -283,6 +292,51 @@ impl TurnEntry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+
+    fn checkpoint(&self) -> TurnCheckpoint {
+        self.checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The turn changed files (whether or not it could checkpoint them).
+    fn changed_files(&self) -> bool {
+        self.checkpoint() != TurnCheckpoint::None
+    }
+
+    fn is_undone(&self) -> bool {
+        self.undone.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn refuse_if_undone(&self) -> Result<(), TurnError> {
+        if self.is_undone() {
+            return Err(TurnError::new(
+                "already_undone",
+                "This turn's changes were already undone.",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// What restoring the folder to before a turn would do now
+/// (`checkpoint_preview`).
+#[derive(Clone, Debug, Default, serde::Serialize, PartialEq, Eq)]
+pub struct RestorePreview {
+    /// Files that would be written back to how they were before the turn.
+    pub restored: Vec<String>,
+    /// Files that would be deleted (they did not exist before the turn).
+    pub deleted: Vec<String>,
+}
+
+/// How `turn_changes` offers to undo a turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UndoOffer {
+    /// The newest turn of its workspace whose changes stand: "Undo" is
+    /// for this one only.
+    pub latest: bool,
+    pub undone: bool,
 }
 
 /// How many turns of one workspace stay reviewable (`turn_changes`) and
@@ -328,6 +382,33 @@ impl TurnTable {
         }
         while self.expired.len() > EXPIRED_REMEMBERED {
             self.expired.pop_front();
+        }
+    }
+
+    /// The newest turn of `workspace_id` that changed files and was not
+    /// undone: the one "Undo" is offered for.
+    fn latest_undoable(&self, workspace_id: &str) -> Option<&str> {
+        self.order.iter().rev().map(String::as_str).find(|id| {
+            self.entries.get(*id).is_some_and(|entry| {
+                entry.workspace_id == workspace_id && entry.changed_files() && !entry.is_undone()
+            })
+        })
+    }
+
+    /// The folder went back to before `turn_id`: it and every later turn
+    /// of its workspace are undone.
+    fn mark_undone_from(&self, workspace_id: &str, turn_id: &str) {
+        let mut reached = false;
+        for id in &self.order {
+            reached |= id == turn_id;
+            if let Some(entry) = self.entries.get(id)
+                && reached
+                && entry.workspace_id == workspace_id
+            {
+                entry
+                    .undone
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
         }
     }
 
@@ -752,11 +833,13 @@ impl AgentHost {
                 let entry = Arc::new(TurnEntry {
                     workspace_id: request.workspace_id.clone(),
                     workspace: prepared.workspace.clone(),
+                    checkpoint_kind: prepared.workspace.session.checkpoints().kind(),
                     recorder: Arc::new(Recorder::default()),
                     stop,
                     checkpoint: Mutex::new(TurnCheckpoint::None),
                     state: Mutex::new(RunState::Running),
                     done: Mutex::new(None),
+                    undone: std::sync::atomic::AtomicBool::new(false),
                 });
                 if let Ok(mut turns) = self.turns.lock() {
                     turns.insert(turn_id.clone(), entry.clone());
@@ -930,6 +1013,9 @@ impl AgentHost {
             .checkpoint
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = TurnCheckpoint::of(&session);
+        // What the turn left in each file it changed: the per-file revert
+        // of this turn, once it is not the newest, checks against it.
+        recorder.seal(session.workspace());
         workspace.prompt.bind(None);
         self.broker.forget_turn(events.turn_id());
         let conversation_id = request.conversation_id.clone();
@@ -1417,16 +1503,119 @@ impl AgentHost {
     /// An unknown turn.
     pub fn changes(&self, turn_id: &str) -> Result<Vec<FileChange>, TurnError> {
         let entry = self.entry(turn_id)?;
-        Ok(entry.recorder.changes(entry.workspace.session.workspace()))
+        // Seen through the workspace's current session (its policy now).
+        let current = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&entry.workspace_id)
+            .cloned()
+            .unwrap_or_else(|| entry.workspace.clone());
+        Ok(entry.recorder.changes(current.session.workspace()))
     }
 
-    /// `checkpoint_restore`: the whole turn, or one file of it.
+    /// How `turn_changes` offers to undo the turn: whole-turn "Undo" for
+    /// the newest turn of its workspace whose changes stand, "Restore the
+    /// folder to before this turn" (confirmed) for an older one.
     ///
     /// # Errors
     ///
-    /// An unknown or running turn, a turn that changed files without a
-    /// checkpoint (`no_checkpoint`), or a failed restore.
-    pub fn restore(&self, turn_id: &str, path: Option<&str>) -> Result<Vec<String>, TurnError> {
+    /// `turn_unknown` / `turn_expired`.
+    pub fn undo_offer(&self, turn_id: &str) -> Result<UndoOffer, TurnError> {
+        let entry = self.entry(turn_id)?;
+        let turns = self
+            .turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(UndoOffer {
+            latest: turns.latest_undoable(&entry.workspace_id) == Some(turn_id),
+            undone: entry.is_undone(),
+        })
+    }
+
+    /// The workspace's current session, (re)opened under the policy of
+    /// now, for a restore of `entry`. The caller holds the workspace's
+    /// claim. Checkpoints are the workspace's (its id is the session id),
+    /// so the current session reaches the turn's checkpoint — unless its
+    /// store is another kind now (the folder became, or stopped being, a
+    /// git work tree): `session_replaced`.
+    fn live_session(&self, entry: &TurnEntry) -> Result<Arc<WorkspaceSession>, TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(&entry.workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        let live = self.session(&entry.workspace_id, PathBuf::from(&workspace.path), &policy)?;
+        if live.session.checkpoints().kind() != entry.checkpoint_kind {
+            return Err(TurnError::new(
+                "session_replaced",
+                "This folder's checkpoints are kept another way now (it became, or stopped \
+                 being, a git repository), so this turn's checkpoint cannot be reached and \
+                 its changes cannot be undone here.",
+            ));
+        }
+        Ok(live)
+    }
+
+    fn is_latest(&self, entry: &TurnEntry, turn_id: &str) -> bool {
+        self.turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest_undoable(&entry.workspace_id)
+            == Some(turn_id)
+    }
+
+    /// `checkpoint_preview`: what restoring the folder to before the turn
+    /// would write back and delete now — later turns' changes and the
+    /// person's own edits included. Changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::restore`] without a path.
+    pub fn restore_preview(&self, turn_id: &str) -> Result<RestorePreview, TurnError> {
+        let entry = self.entry(turn_id)?;
+        let _claim = WorkspaceClaim::take(
+            &self.busy,
+            &entry.workspace_id,
+            "Wait for the running turn to end.",
+        )?;
+        let Some(seq) = entry.checkpoint().restorable()? else {
+            return Ok(RestorePreview::default());
+        };
+        entry.refuse_if_undone()?;
+        let live = self.live_session(&entry)?;
+        let report = live
+            .session
+            .preview_checkpoint(seq)
+            .map_err(|e| TurnError::new("restore_failed", e.message().to_owned()))?;
+        Ok(RestorePreview {
+            restored: report.restored,
+            deleted: report.deleted,
+        })
+    }
+
+    /// `checkpoint_restore`: undo the newest turn of a workspace (whole or
+    /// one file), restore the folder to before an older turn (only with
+    /// `confirm_older`: later turns and the person's own edits since are
+    /// reverted too, see [`Self::restore_preview`]), or revert one file of
+    /// an older turn (only while the file still holds what that turn left
+    /// in it). Always through the workspace's current session.
+    ///
+    /// # Errors
+    ///
+    /// An unknown or running turn, `no_checkpoint` (it changed files
+    /// without one), `already_undone`, `undo_not_latest` (an older turn's
+    /// whole restore without `confirm_older`), `file_changed_since` (an
+    /// older turn's file changed since), `session_replaced`,
+    /// `local_work_disabled`, or a failed restore.
+    pub fn restore(
+        &self,
+        turn_id: &str,
+        path: Option<&str>,
+        confirm_older: bool,
+    ) -> Result<Vec<String>, TurnError> {
         let entry = self.entry(turn_id)?;
         // The same per-workspace claim a turn takes: no turn starts while
         // the restore writes, and none may be running when it begins.
@@ -1435,20 +1624,44 @@ impl AgentHost {
             &entry.workspace_id,
             "Wait for the running turn to end before undoing.",
         )?;
-        let checkpoint = entry
-            .checkpoint
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .restorable()?;
-        let Some(seq) = checkpoint else {
+        let Some(seq) = entry.checkpoint().restorable()? else {
             return Ok(Vec::new());
         };
-        let session = &entry.workspace.session;
+        entry.refuse_if_undone()?;
+        let latest = self.is_latest(&entry, turn_id);
+        if path.is_none() && !latest && !confirm_older {
+            return Err(TurnError::new(
+                "undo_not_latest",
+                "Only the newest turn of a folder can be undone. Restoring the folder to before \
+                 this turn also reverts the turns after it and your own edits since; ask for \
+                 that explicitly.",
+            ));
+        }
+        let live = self.live_session(&entry)?;
+        let session = &live.session;
+        if let Some(path) = path
+            && !latest
+            && !entry
+                .recorder
+                .unchanged_since_turn(session.workspace(), path)
+        {
+            return Err(TurnError::new(
+                "file_changed_since",
+                "This file changed after this turn (a later turn or your own edit), so reverting \
+                 it to before this turn would lose that change.",
+            ));
+        }
         let report = match path {
             Some(path) => session.restore_file(seq, path),
             None => session.restore_checkpoint(seq),
         }
         .map_err(|e| TurnError::new("restore_failed", e.message().to_owned()))?;
+        if path.is_none() {
+            self.turns
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .mark_undone_from(&entry.workspace_id, turn_id);
+        }
         let mut restored = report.restored;
         restored.extend(report.deleted);
         Ok(restored)

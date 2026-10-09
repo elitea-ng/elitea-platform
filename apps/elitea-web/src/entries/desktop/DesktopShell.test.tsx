@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createFakeAppIpc } from '@/shared/desktop/appEvents.fake';
@@ -10,8 +11,8 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { DesktopShell } from './DesktopShell';
 
-// The signed-in app itself is not under test here: a stand-in mounts nothing.
-vi.mock('./launchApp', () => ({ launchApp: vi.fn(() => Promise.resolve({ unmount: vi.fn() })) }));
+/** The signed-in app itself is not under test here: a stand-in mounts nothing. */
+const noApp = () => Promise.resolve(createRoot(document.createElement('div')));
 
 const STATE: HostState = {
   configured: true,
@@ -171,10 +172,10 @@ describe('DesktopShell diagnostics', () => {
 
   it('a session the host ended on this computer resets the signed-in app', async () => {
     const { bridge } = hostBridge();
-    vi.mocked(bridge.state).mockResolvedValue({ ...STATE, signedIn: true });
+    bridge.state = vi.fn<HostBridge['state']>().mockResolvedValue({ ...STATE, signedIn: true });
     const appIpc = createFakeAppIpc();
     const onSignedOut = vi.fn();
-    renderWithTheme(<DesktopShell bridge={bridge} appIpc={appIpc} onSignedOut={onSignedOut} />);
+    renderWithTheme(<DesktopShell bridge={bridge} appIpc={appIpc} onSignedOut={onSignedOut} launch={noApp} />);
     await waitFor(() => expect(appIpc.subscriberCount()).toBe(1));
     act(() => appIpc.emit({ id: 'run_diagnostics' }));
     expect(onSignedOut).not.toHaveBeenCalled();

@@ -32,6 +32,8 @@ describe('createWorkspaceIpc', () => {
     await ipc.turnChanges('t1');
     await ipc.restore('t1');
     await ipc.restore('t1', 'a/b.txt');
+    await ipc.restore('t1', undefined, { confirmOlder: true });
+    await ipc.restorePreview('t1');
 
     expect(invoke.mock.calls).toEqual([
       ['workspace_open'],
@@ -50,6 +52,8 @@ describe('createWorkspaceIpc', () => {
       ['turn_changes', { turn_id: 't1' }],
       ['checkpoint_restore', { turn_id: 't1' }],
       ['checkpoint_restore', { turn_id: 't1', path: 'a/b.txt' }],
+      ['checkpoint_restore', { turn_id: 't1', confirm_older: true }],
+      ['checkpoint_preview', { turn_id: 't1' }],
     ]);
   });
 
@@ -141,6 +145,9 @@ describe('createFakeWorkspaceIpc', () => {
 
     ipc.failNext('restore', 'workspace_busy', 'busy');
     await expect(ipc.restore('t')).rejects.toMatchObject({ code: 'workspace_busy' });
+    // Undone by the first restore: the host refuses it again; a fresh one goes through.
+    await expect(ipc.restore('t')).rejects.toMatchObject({ code: 'already_undone' });
+    ipc.setChanges('t', { files: [{ path: 'f', status: 'added', added: 1, removed: 0, diff: '' }] });
     expect(await ipc.restore('t')).toEqual({ restored: ['f'] });
   });
 

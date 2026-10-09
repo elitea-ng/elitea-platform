@@ -547,6 +547,16 @@ impl LocalSession {
         Ok(report)
     }
 
+    /// What [`Self::restore_checkpoint`] would write back and delete now,
+    /// without changing anything.
+    ///
+    /// # Errors
+    ///
+    /// See [`Checkpoints::preview`].
+    pub fn preview_checkpoint(&self, seq: u64) -> ToolResult<RestoreReport> {
+        self.checkpoints.preview(seq)
+    }
+
     /// Undo one file back to checkpoint `seq`.
     ///
     /// # Errors

@@ -22,6 +22,14 @@ export function describeWorkspaceError(error: unknown): string {
       return t('workspace.error.notSignedIn', 'Sign in again to run agents on this computer.');
     case 'turn_expired':
       return t('workspace.error.turnExpired', 'This turn is too old to review or undo: only the most recent turns of a folder are kept.');
+    case 'undo_not_latest':
+      return t('workspace.error.undoNotLatest', 'Only the newest turn of a folder can be undone. To go back further, restore the folder to before this turn.');
+    case 'file_changed_since':
+      return t('workspace.error.fileChangedSince', 'This file changed after this turn (a later turn or your own edit), so it was not reverted.');
+    case 'session_replaced':
+      return t('workspace.error.sessionReplaced', 'This folder’s checkpoints are kept another way now (it became, or stopped being, a git repository), so this turn cannot be undone here.');
+    case 'already_undone':
+      return t('workspace.error.alreadyUndone', 'This turn’s changes were already undone.');
     default:
       return message === '' ? t('workspace.failed', 'That did not work. Try again.') : message;
   }

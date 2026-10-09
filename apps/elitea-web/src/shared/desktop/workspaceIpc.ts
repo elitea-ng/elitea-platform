@@ -55,6 +55,23 @@ export interface ChangedFile {
 
 export interface TurnChanges {
   files: ChangedFile[];
+  /** The newest turn of its folder whose changes stand: "Undo turn" is for it only; an older turn offers "Restore folder to before this turn". */
+  latest: boolean;
+  /** Its changes were undone (its own undo, or the folder restored to before an earlier turn): nothing to undo. */
+  undone: boolean;
+}
+
+/** `checkpoint_preview`: what restoring the folder to before a turn would do now (later turns and the person's own edits included). */
+export interface RestorePreview {
+  /** Written back to how they were before the turn. */
+  restored: string[];
+  /** Deleted: they did not exist before the turn. */
+  deleted: string[];
+}
+
+interface RestoreOptions {
+  /** Restore the folder to before an OLDER turn (the person confirmed the preview); without it the host refuses with `undo_not_latest`. */
+  confirmOlder?: boolean;
 }
 
 export type TurnPhase = 'resolving' | 'starting' | 'running' | 'committing' | 'done' | 'cancelled' | 'error';
@@ -161,8 +178,10 @@ export interface WorkspaceIpc {
   turnStatus(turnId: string): Promise<TurnStatus>;
   respondApproval(requestId: string, decision: ApprovalDecision): Promise<void>;
   turnChanges(turnId: string): Promise<TurnChanges>;
-  /** Restore the whole turn, or one file when `path` is given. */
-  restore(turnId: string, path?: string): Promise<{ restored: string[] }>;
+  /** Undo the newest turn (or one file of a turn), or with `confirmOlder` restore the folder to before an older turn. */
+  restore(turnId: string, path?: string, options?: RestoreOptions): Promise<{ restored: string[] }>;
+  /** What restoring the folder to before the turn would write back and delete now; changes nothing. */
+  restorePreview(turnId: string): Promise<RestorePreview>;
   /** The turns this machine recorded in a thread, oldest first; `[]` when it recorded none. */
   threadHistory(workspaceId: string, conversationId: string): Promise<StoredTurn[]>;
   /** Forget a thread's recorded turns (the conversation itself stays); resolves with how many. */
@@ -200,8 +219,13 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),
     respondApproval: (requestId, decision) => invoke<void>('approval_respond', { request_id: requestId, decision }),
     turnChanges: (turnId) => invoke<TurnChanges>('turn_changes', { turn_id: turnId }),
-    restore: (turnId, path) =>
-      invoke<{ restored: string[] }>('checkpoint_restore', path === undefined ? { turn_id: turnId } : { turn_id: turnId, path }),
+    restore: (turnId, path, options) =>
+      invoke<{ restored: string[] }>('checkpoint_restore', {
+        turn_id: turnId,
+        ...(path === undefined ? {} : { path }),
+        ...(options?.confirmOlder === true ? { confirm_older: true } : {}),
+      }),
+    restorePreview: (turnId) => invoke<RestorePreview>('checkpoint_preview', { turn_id: turnId }),
     threadHistory: async (workspaceId, conversationId) =>
       (await invoke<{ turns: StoredTurn[] }>('thread_history', { workspace_id: workspaceId, conversation_id: conversationId })).turns,
     deleteThreadHistory: async (workspaceId, conversationId) =>

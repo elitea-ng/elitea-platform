@@ -18,6 +18,16 @@ use similar::{ChangeTag, TextDiff};
 /// Largest file a before-image keeps; larger files are reported changed
 /// without a diff.
 const MAX_IMAGE_BYTES: u64 = 2 * 1024 * 1024;
+/// Largest file whose state at the turn's end is hashed (for the per-file
+/// revert of an older turn); a larger one cannot be checked, so is refused.
+const MAX_HASHED_BYTES: u64 = 64 * 1024 * 1024;
+
+/// What a file held when the turn ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PostState {
+    Absent,
+    Content([u8; 32]),
+}
 /// The commit's bounds (`LocalTurnWorkReport`).
 const MAX_COMMANDS: usize = 500;
 const MAX_PATHS: usize = 2000;
@@ -44,6 +54,9 @@ struct State {
     before: BTreeMap<String, Option<Vec<u8>>>,
     /// `(from, to)` of renames a patch made.
     renames: Vec<(String, String)>,
+    /// What each changed file held when the turn ended ([`Recorder::seal`]);
+    /// a file that could not be read then is missing.
+    after: BTreeMap<String, PostState>,
 }
 
 #[derive(Default)]
@@ -206,6 +219,35 @@ impl Recorder {
         .unwrap_or_else(|| json!({}))
     }
 
+    /// At the turn's end: what each file its file tools changed holds now,
+    /// kept as a hash (the per-file revert of an older turn checks it).
+    pub fn seal(&self, workspace: &Workspace) {
+        let Some(paths) = self.with(|state| state.before.keys().cloned().collect::<Vec<_>>())
+        else {
+            return;
+        };
+        let after: BTreeMap<String, PostState> = paths
+            .into_iter()
+            .filter_map(|path| post_state(workspace, &path).map(|state| (path, state)))
+            .collect();
+        self.with(|state| state.after = after);
+    }
+
+    /// Whether `path` (workspace-relative, as `turn_changes` lists it)
+    /// still holds what this turn left in it. `false` when the turn did
+    /// not record the file, or it cannot be read now or could not then.
+    #[must_use]
+    pub fn unchanged_since_turn(&self, workspace: &Workspace, path: &str) -> bool {
+        let Ok(resolved) = workspace.resolve(path, Intent::Read) else {
+            return false;
+        };
+        let key = resolved.display_string();
+        let Some(Some(then)) = self.with(|state| state.after.get(&key).cloned()) else {
+            return false;
+        };
+        post_state(workspace, &key).is_some_and(|now| now == then)
+    }
+
     /// The files the turn's file tools changed, against their before-images.
     #[must_use]
     pub fn changes(&self, workspace: &Workspace) -> Vec<FileChange> {
@@ -254,6 +296,20 @@ fn read_image(
             .ok()
             .map(|file| file.bytes),
         _ => None,
+    }
+}
+
+/// What `path` holds now; `None` when it cannot be told (unreadable, too
+/// large to hash, outside the workspace's view).
+fn post_state(workspace: &Workspace, path: &str) -> Option<PostState> {
+    let resolved = workspace.resolve(path, Intent::Read).ok()?;
+    match workspace.stat(&resolved) {
+        Ok(None) => Some(PostState::Absent),
+        Ok(Some(_)) => workspace
+            .read(&resolved, MAX_HASHED_BYTES)
+            .ok()
+            .map(|file| PostState::Content(file.stamp.sha256)),
+        Err(_) => None,
     }
 }
 
@@ -352,6 +408,28 @@ mod tests {
         assert_eq!(by_path["gone.txt"].status, "deleted");
         let report = recorder.work_report("workspace-write");
         assert_eq!(report["paths_touched"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn a_file_is_unchanged_since_the_turn_only_while_it_holds_the_turns_result() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "before\n").unwrap();
+        let workspace = Workspace::open(dir.path(), &[]).unwrap();
+        let recorder = Recorder::default();
+        recorder.before_change(&workspace, &["a.txt".into(), "made.txt".into()]);
+        std::fs::write(dir.path().join("a.txt"), "the turn's\n").unwrap();
+        std::fs::write(dir.path().join("made.txt"), "new\n").unwrap();
+        recorder.seal(&workspace);
+        assert!(recorder.unchanged_since_turn(&workspace, "a.txt"));
+        assert!(recorder.unchanged_since_turn(&workspace, "./made.txt"));
+        // Edited since (by the person or a later turn): no longer.
+        std::fs::write(dir.path().join("a.txt"), "edited later\n").unwrap();
+        assert!(!recorder.unchanged_since_turn(&workspace, "a.txt"));
+        std::fs::remove_file(dir.path().join("made.txt")).unwrap();
+        assert!(!recorder.unchanged_since_turn(&workspace, "made.txt"));
+        // A file the turn did not change cannot be vouched for.
+        std::fs::write(dir.path().join("other.txt"), "x").unwrap();
+        assert!(!recorder.unchanged_since_turn(&workspace, "other.txt"));
     }
 
     #[test]

@@ -2,6 +2,14 @@
  * What the turn changed on disk, after `done`: per-file status and +/- counts,
  * an expandable diff, "Undo turn" (confirmed) and a per-file "Revert".
  *
+ * "Undo turn" is for the newest turn of the folder only (the host's
+ * `latest`). An older turn offers "Restore folder to before this turn": its
+ * confirmation lists what the host's dry run (`checkpoint_preview`) says
+ * would be reverted or deleted — later turns' files included — and any
+ * edits made since, and only then asks with `confirmOlder`. A per-file
+ * revert of an older turn is refused by the host when the file changed
+ * since (`file_changed_since`).
+ *
  * With `files`, a turn the host no longer keeps (an earlier visit, a
  * restart): its changes as recorded when it ended, read-only — no undo.
  *
@@ -10,7 +18,7 @@
  */
 import { useState, type ReactNode } from 'react';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -32,8 +40,8 @@ import { DiffView } from '@/shared/ui/DiffView';
 import { describeWorkspaceError } from '../model/describeWorkspaceError';
 import { parseUnifiedDiff } from '../model/unifiedDiff';
 
-/** The host's codes that say why (busy, expired, no checkpoint) are described; anything else gets the generic `fallback`. */
-const ACTIONABLE = new Set(['workspace_busy', 'turn_expired', 'no_checkpoint']);
+/** The host's codes that say why (busy, expired, no checkpoint, not the newest, …) are described; anything else gets the generic `fallback`. */
+const ACTIONABLE = new Set(['workspace_busy', 'turn_expired', 'no_checkpoint', 'undo_not_latest', 'file_changed_since', 'session_replaced', 'already_undone']);
 
 function failureText(error: unknown, fallback: string): string {
   return ACTIONABLE.has(toWorkspaceIpcError(error).code) ? describeWorkspaceError(error) : fallback;
@@ -52,7 +60,9 @@ export interface ChangedFilesCardProps {
   files?: readonly ChangedFile[] | undefined;
 }
 
-const changesKey = (turnId: string) => ['workspace', 'turn-changes', turnId] as const;
+const CHANGES_KEY = ['workspace', 'turn-changes'] as const;
+const changesKey = (turnId: string) => [...CHANGES_KEY, turnId] as const;
+const previewKey = (turnId: string) => ['workspace', 'restore-preview', turnId] as const;
 
 function statusLabel(status: ChangedFile['status']): string {
   switch (status) {
@@ -163,24 +173,37 @@ interface ChangesSource {
   isError: boolean;
   error: unknown;
   files: readonly ChangedFile[];
+  /** The newest turn of its folder whose changes stand ("Undo turn"); an older one restores the folder instead. */
+  latest: boolean;
+  undone: boolean;
 }
 
 /** The host's live `turn_changes`, or the recorded list as it is. */
 function useChanges(ipc: WorkspaceIpc, turnId: string, recorded: readonly ChangedFile[] | undefined): ChangesSource {
   const live = useQuery({ queryKey: changesKey(turnId), queryFn: () => ipc.turnChanges(turnId), enabled: recorded === undefined });
-  if (recorded !== undefined) return { isPending: false, isError: false, error: null, files: recorded };
-  return { isPending: live.isPending, isError: live.isError, error: live.error, files: live.data?.files ?? [] };
+  if (recorded !== undefined) return { isPending: false, isError: false, error: null, files: recorded, latest: false, undone: false };
+  return {
+    isPending: live.isPending,
+    isError: live.isError,
+    error: live.error,
+    files: live.data?.files ?? [],
+    latest: live.data?.latest ?? true,
+    undone: live.data?.undone ?? false,
+  };
 }
 
 interface SummaryProps {
   files: readonly ChangedFile[];
   stacked: boolean;
-  /** `undefined`: read-only, no "Undo turn". */
+  /** `undefined`: read-only or undone, no undo button. */
   onUndo: (() => void) | undefined;
+  /** An older turn: "Restore folder to before this turn" instead of "Undo turn". */
+  older: boolean;
   undoDisabled: boolean;
+  undone: boolean;
 }
 
-function Summary({ files, stacked, onUndo, undoDisabled }: SummaryProps): React.JSX.Element {
+function Summary({ files, stacked, onUndo, older, undoDisabled, undone }: SummaryProps): React.JSX.Element {
   const added = files.reduce((sum, file) => sum + file.added, 0);
   const removed = files.reduce((sum, file) => sum + file.removed, 0);
   return (
@@ -189,13 +212,102 @@ function Summary({ files, stacked, onUndo, undoDisabled }: SummaryProps): React.
       <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
         {t('workspace.changes.summary', '{{files}} files, +{{added}} -{{removed}}', { files: files.length, added, removed })}
       </Typography>
+      {undone && <Chip size="small" label={t('workspace.changes.undone', 'Undone')} />}
       {onUndo !== undefined && (
         <Button size="small" color="warning" variant="outlined" sx={{ marginLeft: 'auto' }} disabled={undoDisabled} onClick={onUndo}>
-          {t('workspace.changes.undo', 'Undo turn')}
+          {older ? t('workspace.changes.restoreFolder', 'Restore folder to before this turn') : t('workspace.changes.undo', 'Undo turn')}
         </Button>
       )}
     </Box>
   );
+}
+
+/** The older turn's confirmation: what the host's dry run says a restore would revert or delete. */
+function RestoreFolderPreview({ ipc, turnId }: { ipc: WorkspaceIpc; turnId: string }): React.JSX.Element {
+  const preview = useQuery({ queryKey: previewKey(turnId), queryFn: () => ipc.restorePreview(turnId), gcTime: 0, staleTime: 0 });
+  if (preview.isPending) return <DialogContentText>{t('workspace.changes.restoreFolderLoading', 'Working out what would change…')}</DialogContentText>;
+  if (preview.isError) return <Alert severity="error">{failureText(preview.error, t('workspace.changes.restoreFolderUnknown', 'What would change could not be worked out.'))}</Alert>;
+  const { restored, deleted } = preview.data;
+  return (
+    <>
+      <DialogContentText>
+        {t('workspace.changes.restoreFolderBody', 'The folder goes back to how it was before this turn. That reverts the turns after it too:')}
+      </DialogContentText>
+      {restored.length + deleted.length === 0 ? (
+        <DialogContentText>{t('workspace.changes.restoreFolderNothing', 'No file would change.')}</DialogContentText>
+      ) : (
+        <Box component="ul" data-testid="restore-folder-preview" sx={{ marginY: 1, paddingLeft: 3, maxHeight: 240, overflowY: 'auto' }}>
+          {restored.map((path) => (
+            <Typography component="li" variant="bodySmall" key={`r-${path}`} sx={{ wordBreak: 'break-all' }}>
+              {path}
+            </Typography>
+          ))}
+          {deleted.map((path) => (
+            <Typography component="li" variant="bodySmall" key={`d-${path}`} sx={{ wordBreak: 'break-all' }}>
+              {t('workspace.changes.restoreFolderDeleted', '{{path}} (deleted)', { path })}
+            </Typography>
+          ))}
+        </Box>
+      )}
+      <DialogContentText>{t('workspace.changes.restoreFolderEdits', '…and any edits you made since are lost.')}</DialogContentText>
+    </>
+  );
+}
+
+/** Why the changes could not be read, or what the last restore did. */
+function CardAlerts({ changes, restore }: { changes: ChangesSource; restore: UseMutationResult<{ restored: string[] }, Error, RestoreRequest> }): React.JSX.Element {
+  return (
+    <>
+      {changes.isError && <Alert severity="error">{failureText(changes.error, t('workspace.changes.loadFailed', 'The changes could not be read.'))}</Alert>}
+      {restore.isError && <Alert severity="error">{failureText(restore.error, t('workspace.changes.restoreFailed', 'The files could not be restored.'))}</Alert>}
+      {restore.isSuccess && (
+        <Alert severity="success">
+          {t('workspace.changes.restored', 'Restored {{n}} files.', { n: restore.data.restored.length })}
+        </Alert>
+      )}
+    </>
+  );
+}
+
+interface UndoDialogProps {
+  open: boolean;
+  /** An older turn: the folder goes back to before it (with the host's dry run listed). */
+  older: boolean;
+  ipc: WorkspaceIpc;
+  turnId: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+/** "Undo this turn?" for the newest turn, "Restore the folder to before this turn?" for an older one. */
+function UndoDialog({ open, older, ipc, turnId, onClose, onConfirm }: UndoDialogProps): React.JSX.Element {
+  return (
+    <Dialog open={open} onClose={onClose} aria-labelledby="undo-turn-title">
+      <DialogTitle id="undo-turn-title">
+        {older ? t('workspace.changes.restoreFolderTitle', 'Restore the folder to before this turn?') : t('workspace.changes.undoTitle', 'Undo this turn?')}
+      </DialogTitle>
+      <DialogContent>
+        {older ? (
+          open && <RestoreFolderPreview ipc={ipc} turnId={turnId} />
+        ) : (
+          <DialogContentText>
+            {t('workspace.changes.undoBody', 'Every file the agent changed in this turn goes back to how it was before. Later edits to those files are lost.')}
+          </DialogContentText>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>{t('workspace.changes.undoCancel', 'Keep changes')}</Button>
+        <Button color="warning" variant="contained" onClick={onConfirm}>
+          {older ? t('workspace.changes.restoreFolderConfirm', 'Restore folder') : t('workspace.changes.undoConfirm', 'Undo turn')}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+interface RestoreRequest {
+  path?: string;
+  confirmOlder?: boolean;
 }
 
 export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileActions, files: recorded }: ChangedFilesCardProps): React.JSX.Element | null {
@@ -205,13 +317,16 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileAc
   const [confirmingUndo, setConfirmingUndo] = useConfirmation(undoRequest);
   const changes = useChanges(ipc, turnId, recorded);
   const restore = useMutation({
-    mutationFn: (path: string | undefined) => ipc.restore(turnId, path),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: changesKey(turnId) }),
+    mutationFn: ({ path, confirmOlder }: RestoreRequest) => ipc.restore(turnId, path, confirmOlder === true ? { confirmOlder } : undefined),
+    // Every turn's offer may change (newest, undone): all of them are read again.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: CHANGES_KEY }),
   });
 
   if (changes.isPending) return null;
-  const { files } = changes;
+  const { files, undone } = changes;
   if (!changes.isError && files.length === 0 && !restore.isSuccess) return null;
+  const older = !changes.latest;
+  const canRestore = !readOnly && !undone;
 
   return (
     <Box
@@ -223,16 +338,12 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileAc
       <Summary
         files={files}
         stacked={stacked}
-        onUndo={readOnly ? undefined : () => setConfirmingUndo(true)}
+        onUndo={canRestore ? () => setConfirmingUndo(true) : undefined}
+        older={older}
         undoDisabled={restore.isPending || files.length === 0}
+        undone={undone}
       />
-      {changes.isError && <Alert severity="error">{failureText(changes.error, t('workspace.changes.loadFailed', 'The changes could not be read.'))}</Alert>}
-      {restore.isError && <Alert severity="error">{failureText(restore.error, t('workspace.changes.restoreFailed', 'The files could not be restored.'))}</Alert>}
-      {restore.isSuccess && (
-        <Alert severity="success">
-          {t('workspace.changes.restored', 'Restored {{n}} files.', { n: restore.data.restored.length })}
-        </Alert>
-      )}
+      <CardAlerts changes={changes} restore={restore} />
       <Box component="ul" sx={{ margin: 0, padding: 0 }}>
         {files.map((file) => (
           <FileRow
@@ -241,33 +352,21 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileAc
             busy={restore.isPending}
             stacked={stacked}
             fileActions={fileActions}
-            onRevert={readOnly ? undefined : () => restore.mutate(file.path)}
+            onRevert={canRestore ? () => restore.mutate({ path: file.path }) : undefined}
           />
         ))}
       </Box>
-      <Dialog open={confirmingUndo && !readOnly} onClose={() => setConfirmingUndo(false)} aria-labelledby="undo-turn-title">
-        <DialogTitle id="undo-turn-title">{t('workspace.changes.undoTitle', 'Undo this turn?')}</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            {t('workspace.changes.undoBody', 'Every file the agent changed in this turn goes back to how it was before. Later edits to those files are lost.')}
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setConfirmingUndo(false)}>
-            {t('workspace.changes.undoCancel', 'Keep changes')}
-          </Button>
-          <Button
-            color="warning"
-            variant="contained"
-            onClick={() => {
-              setConfirmingUndo(false);
-              restore.mutate(undefined);
-            }}
-          >
-            {t('workspace.changes.undoConfirm', 'Undo turn')}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <UndoDialog
+        open={confirmingUndo && canRestore}
+        older={older}
+        ipc={ipc}
+        turnId={turnId}
+        onClose={() => setConfirmingUndo(false)}
+        onConfirm={() => {
+          setConfirmingUndo(false);
+          restore.mutate(older ? { confirmOlder: true } : {});
+        }}
+      />
     </Box>
   );
 }

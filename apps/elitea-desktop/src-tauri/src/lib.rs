@@ -225,6 +225,7 @@ pub fn run() {
             local_commands::thread_history,
             local_commands::thread_history_delete,
             local_commands::checkpoint_restore,
+            local_commands::checkpoint_preview,
             local_commands::reveal_path,
             local_commands::open_path,
             platform::app_platform,

@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AgentEventHandler,
   ApprovalDecision,
+  RestorePreview,
   StoredTurn,
   TurnChanges,
   TurnStartRequest,
@@ -28,6 +29,7 @@ type FailableCommand =
   | 'respondApproval'
   | 'turnChanges'
   | 'restore'
+  | 'restorePreview'
   | 'threadHistory'
   | 'deleteThreadHistory';
 
@@ -38,10 +40,13 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     started: TurnStartRequest[];
     cancelled: string[];
     approvals: { requestId: string; decision: ApprovalDecision }[];
-    restores: { turnId: string; path?: string }[];
+    restores: { turnId: string; path?: string; confirmOlder?: boolean }[];
     fileQueries: { workspaceId: string; query: string; limit?: number }[];
   };
-  setChanges(turnId: string, changes: TurnChanges): void;
+  /** What `turn_changes` answers; `latest` defaults to true, `undone` to false. */
+  setChanges(turnId: string, changes: Pick<TurnChanges, 'files'> & Partial<TurnChanges>): void;
+  /** What `checkpoint_preview` answers (default: every changed file restored). */
+  setPreview(turnId: string, preview: RestorePreview): void;
   /** What `thread_history` answers for one thread (default: nothing recorded). */
   setHistory(workspaceId: string, conversationId: string, turns: StoredTurn[]): void;
   /** What `agent_turn_status` answers for `turnId` (default: running). */
@@ -59,10 +64,21 @@ export interface FakeOptions {
   files?: WorkspaceFile[];
 }
 
+/** What the host refuses a restore with, given the turn's offer. */
+function refusal(current: TurnChanges | undefined, path: string | undefined, confirmOlder: boolean): Promise<never> | undefined {
+  if (current?.undone === true) return Promise.reject(new WorkspaceIpcError('already_undone', 'This turn’s changes were already undone.'));
+  // "Undo" is for the newest turn; an older one needs the confirmation.
+  if (path === undefined && current?.latest === false && !confirmOlder) {
+    return Promise.reject(new WorkspaceIpcError('undo_not_latest', 'Only the newest turn of a folder can be undone.'));
+  }
+  return undefined;
+}
+
 export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspaceIpc {
   let workspaces = [...(options.workspaces ?? [])];
   const handlers = new Set<AgentEventHandler>();
   const changes = new Map<string, TurnChanges>();
+  const previews = new Map<string, RestorePreview>();
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
@@ -134,14 +150,22 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     turnChanges(turnId) {
       const failed = failure('turnChanges');
       if (failed !== undefined) return failed;
-      return Promise.resolve(changes.get(turnId) ?? { files: [] });
+      return Promise.resolve(changes.get(turnId) ?? { files: [], latest: true, undone: false });
     },
-    restore(turnId, path) {
-      calls.restores.push(path === undefined ? { turnId } : { turnId, path });
-      const failed = failure('restore');
+    restore(turnId, path, options) {
+      const confirmOlder = options?.confirmOlder === true;
+      calls.restores.push({ turnId, ...(path === undefined ? {} : { path }), ...(confirmOlder ? { confirmOlder } : {}) });
+      const refused = failure('restore') ?? refusal(changes.get(turnId), path, confirmOlder);
+      if (refused !== undefined) return refused;
+      const current = changes.get(turnId);
+      if (path === undefined && current !== undefined) changes.set(turnId, { ...current, latest: false, undone: true });
+      return Promise.resolve({ restored: path === undefined ? (current?.files ?? []).map((f) => f.path) : [path] });
+    },
+    restorePreview(turnId) {
+      const failed = failure('restorePreview');
       if (failed !== undefined) return failed;
       const files = changes.get(turnId)?.files ?? [];
-      return Promise.resolve({ restored: path === undefined ? files.map((f) => f.path) : [path] });
+      return Promise.resolve(previews.get(turnId) ?? { restored: files.map((f) => f.path), deleted: [] });
     },
     threadHistory(workspaceId, conversationId) {
       const failed = failure('threadHistory');
@@ -167,7 +191,10 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       Array.from(handlers).forEach((handler) => handler(event));
     },
     setChanges(turnId, value) {
-      changes.set(turnId, value);
+      changes.set(turnId, { latest: true, undone: false, ...value });
+    },
+    setPreview(turnId, preview) {
+      previews.set(turnId, preview);
     },
     setHistory(workspaceId, conversationId, turns) {
       history.set(historyKey(workspaceId, conversationId), turns);

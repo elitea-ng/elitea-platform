@@ -25,6 +25,7 @@
     "allow-thread-history",
     "allow-thread-history-delete",
     "allow-checkpoint-restore",
+    "allow-checkpoint-preview",
     "allow-reveal-path",
     "allow-open-path",
     "allow-app-platform",
