@@ -90,10 +90,11 @@ describe('ChangedFilesCard', () => {
 
   it('says why a turn that ran without a checkpoint cannot be undone', async () => {
     const { ipc, user } = setup();
-    ipc.failNext('restore', 'no_checkpoint', 'This turn ran without a checkpoint (too many files).');
+    ipc.failNext('restore', 'no_checkpoint', 'This turn ran without a checkpoint (too many files), so its changes cannot be undone here.');
     await screen.findAllByTestId('changed-file');
 
     await user.click(screen.getByRole('button', { name: 'Revert src/b.ts' }));
-    expect(await screen.findByText('This turn cannot be undone: the folder was too large to checkpoint.')).toBeInTheDocument();
+    // The host's own words (they name the reason), not the generic failure.
+    expect(await screen.findByText('This turn ran without a checkpoint (too many files), so its changes cannot be undone here.')).toBeInTheDocument();
   });
 });

@@ -119,9 +119,9 @@ describe('useWorkspaceTurn', () => {
     const { result } = renderHook(() => useWorkspaceTurn(ipc));
     await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
     await act(() => result.current.start(REQUEST));
-    ipc.failNext('cancelTurn', 'turn_not_cancellable', 'The agent has already finished this turn.');
+    ipc.failNext('cancelTurn', 'turn_not_cancellable', 'The agent has already finished this turn; it can no longer be stopped.');
     await act(() => result.current.cancel());
-    expect(result.current.startError).toBe('The agent already finished this turn, so it cannot be stopped.');
+    expect(result.current.startError).toBe('The agent has already finished this turn; it can no longer be stopped.');
   });
 
   it('re-syncs with the host when the window comes back, and takes a missed done from it', async () => {

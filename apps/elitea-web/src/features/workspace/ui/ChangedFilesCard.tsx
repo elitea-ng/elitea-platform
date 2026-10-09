@@ -29,7 +29,7 @@ import { DiffView } from '@/shared/ui/DiffView';
 import { describeWorkspaceError } from '../model/describeWorkspaceError';
 import { parseUnifiedDiff } from '../model/unifiedDiff';
 
-/** The host's codes a person can act on get their own words; anything else the generic `fallback`. */
+/** The host's codes that say why (busy, expired, no checkpoint) are described; anything else gets the generic `fallback`. */
 const ACTIONABLE = new Set(['workspace_busy', 'turn_expired', 'no_checkpoint']);
 
 function failureText(error: unknown, fallback: string): string {
