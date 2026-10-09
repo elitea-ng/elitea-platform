@@ -6,7 +6,7 @@
 //! challenge and a `state`; the deployment redirects to
 //! `http://127.0.0.1:<ephemeral port>/callback`, a one-shot listener in this
 //! process; the code is exchanged with the verifier. The refresh token goes to
-//! the OS keychain; the webview only ever receives a short-lived access token.
+//! the owner-only credentials file (`credentials_file.rs`); the webview only ever receives a short-lived access token.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -88,7 +88,7 @@ struct Cached {
 
 pub struct AuthService {
     store: Arc<dyn SecretStore>,
-    /// Sign-outs whose server revoke failed, retried at launch (own keychain item).
+    /// Sign-outs whose server revoke failed, retried at launch (own slot of the credentials file).
     pending_revokes: Arc<dyn SecretStore>,
     pending_gate: Mutex<()>,
     files: SettingsFiles,
@@ -97,7 +97,7 @@ pub struct AuthService {
     build_client_id: Option<&'static str>,
     runtime_client_id: Option<String>,
     cached: Mutex<Option<Cached>>,
-    /// A rotated session the keychain refused to take. The server already
+    /// A rotated session the credentials file refused to take. The server already
     /// consumed the old refresh token, so THIS is the only live one: it is
     /// kept in memory and written again before the next use.
     unsaved: Mutex<Option<StoredSession>>,
@@ -294,7 +294,7 @@ impl AuthService {
                 self.next_epoch();
                 drop(gate);
                 if let Err(error) = adopted {
-                    // The keychain refused the new session, so nothing here can
+                    // The credentials file refused the new session, so nothing here can
                     // use or revoke it later: end it on the server now (best
                     // effort) rather than leave a live device session behind.
                     self.tokens
@@ -347,7 +347,7 @@ impl AuthService {
             if previous.is_none() {
                 return Err(error);
             }
-            // A rotation succeeded but the keychain write failed: the old
+            // A rotation succeeded but the credentials file write failed: the old
             // token is spent. Keep the new one in memory and write it later.
             *self.unsaved.lock().await = Some(session);
         } else {
@@ -466,8 +466,8 @@ impl AuthService {
             .await
     }
 
-    /// The live session: an in-memory rotation the keychain has not taken yet
-    /// (written again here), else the keychain's.
+    /// The live session: an in-memory rotation the credentials file has not taken yet
+    /// (written again here), else the credentials file's.
     async fn current_session(&self) -> Result<Option<StoredSession>, HostError> {
         let mut unsaved = self.unsaved.lock().await;
         if let Some(session) = unsaved.clone() {
@@ -484,7 +484,7 @@ impl AuthService {
 
     /// Revoke the device session on the server, then forget it. A revoke that
     /// does not get through (offline, deployment down) is remembered in its
-    /// own keychain item and retried at the next launch
+    /// own credentials slot and retried at the next launch
     /// ([`Self::retry_pending_revokes`]); the local session is forgotten
     /// either way. Returns whether the server confirmed the revoke.
     pub async fn sign_out(&self) -> Result<bool, HostError> {

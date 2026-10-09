@@ -2,7 +2,7 @@
  * The desktop `NativeTransport`: bearer auth from the Tauri host, fetch-based
  * SSE, and the host's network layer (ADR-0029 decision 9).
  *
- * Token handling. The host holds the refresh token in the OS keychain and
+ * Token handling. The host holds the refresh token (its owner-only credentials file) and
  * hands the webview an access token that lives 15 minutes. This module caches
  * it in memory only (never web storage — the logout sweep cannot reach what is
  * not there) and renews it a little early. Refresh tokens ROTATE, so

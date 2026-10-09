@@ -2,13 +2,14 @@
 //!
 //! A Tauri 2 shell around the elitea-web `desktop` build, which it loads from
 //! its BUNDLED assets. This crate owns what a webview must not: the OS
-//! keychain, the loopback sign-in listener, the token endpoint. Remote
+//! stored sign-in (an owner-only credentials file), the loopback sign-in listener, the token endpoint. Remote
 //! content is never loaded into the privileged webview (see `window.rs`).
 
 mod app_events;
 mod attention;
 mod auth;
 mod commands;
+mod credentials_file;
 mod d0;
 mod discovery;
 mod error;
@@ -39,20 +40,19 @@ use tauri_plugin_opener::OpenerExt as _;
 use crate::attention::Attention;
 use crate::auth::{AuthConfig, AuthService, BrowserOpener};
 use crate::commands::AppState;
+use crate::credentials_file::CredentialsFile;
 use crate::d0::remote_tools::RetryPolicy;
 use crate::d0::turn::{AgentHost, HostDeps};
 use crate::error::HostError;
 use crate::local_commands::{AuthCredentials, LocalState, MainWindowEvents, StoredPolicy};
 use crate::settings::SettingsFiles;
-use crate::store::KeyringStore;
 use crate::tokens::TokenEndpoint;
 use crate::workspaces::WorkspaceStore;
 
-/// Keychain item identity. The service matches the bundle identifier.
-const KEYCHAIN_SERVICE: &str = "ai.elitea.desktop";
-const KEYCHAIN_ACCOUNT: &str = "device-session";
+/// The credentials file's slots (src/credentials_file.rs).
+const SESSION_SLOT: &str = "device-session";
 /// Sign-outs whose server revoke did not get through, retried at launch.
-const KEYCHAIN_PENDING_REVOKE_ACCOUNT: &str = "pending-revoke";
+const PENDING_REVOKE_SLOT: &str = "pending-revoke";
 
 /// Baked in at build time when a deployment's own build registers a different
 /// client id (`ELITEA_DESKTOP_CLIENT_ID=... tauri build`); see the README.
@@ -75,7 +75,7 @@ impl BrowserOpener for SystemBrowser {
 pub fn run() {
     // Logging first, so every later plugin and the setup below can report.
     let builder = tauri::Builder::default().plugin(logging::plugin());
-    // First, so a second launch exits before it can touch the keychain: two
+    // First, so a second launch exits before it can touch the credentials file: two
     // processes would race the rotating refresh token.
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     let builder = builder
@@ -108,12 +108,11 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
             let tokens = TokenEndpoint::new(env!("CARGO_PKG_VERSION"))?;
+            // Read once, on first use, then served from memory.
+            let credentials = CredentialsFile::new(config_dir.clone());
             let auth = AuthService::new(AuthConfig {
-                store: Arc::new(KeyringStore::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?),
-                pending_revokes: Arc::new(KeyringStore::new(
-                    KEYCHAIN_SERVICE,
-                    KEYCHAIN_PENDING_REVOKE_ACCOUNT,
-                )?),
+                store: Arc::new(credentials.slot(SESSION_SLOT)),
+                pending_revokes: Arc::new(credentials.slot(PENDING_REVOKE_SLOT)),
                 files: SettingsFiles::new(config_dir.clone()),
                 tokens,
                 opener: Arc::new(SystemBrowser(app.handle().clone())),

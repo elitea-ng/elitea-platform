@@ -38,7 +38,7 @@ impl std::fmt::Debug for Bearer {
     }
 }
 
-/// Where the D0 host gets its access token (the keychain-backed session).
+/// Where the D0 host gets its access token (the stored device session).
 #[async_trait]
 pub trait Credentials: Send + Sync {
     /// The current token; `Err` when not connected or signed out.

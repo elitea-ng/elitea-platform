@@ -1,5 +1,5 @@
 //! The sign-in flow end to end against an in-process deployment: real loopback
-//! listener, real PKCE, real HTTP, an in-memory keychain and a fake browser.
+//! listener, real PKCE, real HTTP, an in-memory credentials store and a fake browser.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -91,7 +91,7 @@ fn temp_dir() -> PathBuf {
 
 struct Harness {
     service: AuthService,
-    keychain: Arc<MemoryStore>,
+    credentials: Arc<MemoryStore>,
     pending: Arc<MemoryStore>,
     browser: Arc<FakeBrowser>,
     dir: PathBuf,
@@ -106,7 +106,7 @@ impl Drop for Harness {
 fn harness(
     respond: impl Fn(&HashMap<String, String>, &str) -> Option<String> + Send + Sync + 'static,
 ) -> Harness {
-    let keychain = Arc::new(MemoryStore::default());
+    let credentials = Arc::new(MemoryStore::default());
     let pending = Arc::new(MemoryStore::default());
     let browser = Arc::new(FakeBrowser {
         respond: Box::new(respond),
@@ -114,7 +114,7 @@ fn harness(
     });
     let dir = temp_dir();
     let service = AuthService::new(AuthConfig {
-        store: keychain.clone(),
+        store: credentials.clone(),
         pending_revokes: pending.clone(),
         files: SettingsFiles::new(dir.clone()),
         tokens: TokenEndpoint::new("0.1.0").unwrap(),
@@ -125,7 +125,7 @@ fn harness(
     .with_deadline(Duration::from_secs(10));
     Harness {
         service,
-        keychain,
+        credentials,
         pending,
         browser,
         dir,
@@ -199,7 +199,7 @@ async fn connect_refuses_a_remote_http_address_before_any_request() {
 }
 
 #[tokio::test]
-async fn full_sign_in_uses_pkce_state_and_the_loopback_redirect_and_stores_the_refresh_token_in_the_keychain()
+async fn full_sign_in_uses_pkce_state_and_the_loopback_redirect_and_stores_the_refresh_token_in_the_credentials_file()
  {
     let challenge = Arc::new(std::sync::Mutex::new(String::new()));
     let server = deployment(pkce_checking_deployment(challenge.clone(), Arc::default())).await;
@@ -225,8 +225,8 @@ async fn full_sign_in_uses_pkce_state_and_the_loopback_redirect_and_stores_the_r
     // A new session is a new identity for work pinned to the old one.
     assert!(h.service.session_epoch() > before);
     assert_eq!(state.policy.unwrap()["idle_lock_seconds"], 300);
-    // The refresh token is in the keychain item, and the webview is handed only the access token.
-    let stored = h.keychain.raw().unwrap();
+    // The refresh token is in the credentials file item, and the webview is handed only the access token.
+    let stored = h.credentials.raw().unwrap();
     assert!(stored.contains("refresh-1"));
     let token = h.service.access_token().await.unwrap().unwrap();
     assert_eq!(token.token, "access-for-refresh-1-padding");
@@ -257,7 +257,7 @@ async fn a_callback_with_the_wrong_state_is_ignored_and_stores_nothing() {
     let mut h =
         harness(move |_, _| Some(format!("code=the-code&state=attacker-chosen&iss={issuer}")));
     h.service = AuthService::new(AuthConfig {
-        store: h.keychain.clone(),
+        store: h.credentials.clone(),
         pending_revokes: h.pending.clone(),
         files: SettingsFiles::new(h.dir.clone()),
         tokens: TokenEndpoint::new("0.1.0").unwrap(),
@@ -270,7 +270,7 @@ async fn a_callback_with_the_wrong_state_is_ignored_and_stores_nothing() {
     // The foreign callback no longer aborts the attempt: it just times out.
     let err = h.service.sign_in().await.unwrap_err();
     assert!(matches!(err, HostError::SignInAborted), "{err:?}");
-    assert!(h.keychain.raw().is_none());
+    assert!(h.credentials.raw().is_none());
     assert!(!h.service.state().unwrap().signed_in);
     assert!(
         server.seen().iter().all(|r| !r.path.ends_with("/token")),
@@ -302,7 +302,7 @@ async fn a_callback_from_another_issuer_is_rejected() {
         h.service.sign_in().await.unwrap_err(),
         HostError::SignInRejected
     ));
-    assert!(h.keychain.raw().is_none());
+    assert!(h.credentials.raw().is_none());
 }
 
 #[tokio::test]
@@ -327,7 +327,7 @@ async fn closing_the_browser_without_finishing_times_out() {
     let server = deployment(Box::new(|_, _| None)).await;
     let mut h = harness(|_, _| None);
     h.service = AuthService::new(AuthConfig {
-        store: h.keychain.clone(),
+        store: h.credentials.clone(),
         pending_revokes: h.pending.clone(),
         files: SettingsFiles::new(h.dir.clone()),
         tokens: TokenEndpoint::new("0.1.0").unwrap(),
@@ -356,7 +356,7 @@ async fn an_unregistered_client_id_is_named_in_the_error() {
     h.service.connect(&server.origin).await.unwrap();
     let err = h.service.sign_in().await.unwrap_err();
     assert!(err.to_string().contains("\"desktop\""), "{err}");
-    assert!(h.keychain.raw().is_none());
+    assert!(h.credentials.raw().is_none());
 }
 
 async fn signed_in(refreshes: Arc<AtomicUsize>) -> (Harness, MockServer) {
@@ -376,7 +376,7 @@ async fn signed_in(refreshes: Arc<AtomicUsize>) -> (Harness, MockServer) {
 async fn refresh_rotates_the_refresh_token_and_replaces_the_access_token() {
     let (h, server) = signed_in(Arc::default()).await;
     assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
-    assert!(h.keychain.raw().unwrap().contains("refresh-2"));
+    assert!(h.credentials.raw().unwrap().contains("refresh-2"));
     assert_eq!(
         h.service.access_token().await.unwrap().unwrap().token,
         "access-for-refresh-2-padding"
@@ -418,13 +418,13 @@ async fn concurrent_refreshes_collapse_into_one_exchange() {
 async fn a_revoked_device_wipes_the_session_and_the_policy() {
     let (h, _server) = signed_in(Arc::default()).await;
     // Plant the token the deployment treats as revoked.
-    let mut session = load_session(h.keychain.as_ref()).unwrap().unwrap();
+    let mut session = load_session(h.credentials.as_ref()).unwrap().unwrap();
     session.refresh_token = "stale".into();
-    save_session(h.keychain.as_ref(), &session).unwrap();
+    save_session(h.credentials.as_ref(), &session).unwrap();
 
     assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Ended);
 
-    assert!(h.keychain.raw().is_none());
+    assert!(h.credentials.raw().is_none());
     let state = h.service.state().unwrap();
     assert!(!state.signed_in && state.policy.is_none());
     assert!(
@@ -438,9 +438,9 @@ async fn a_revoked_device_wipes_the_session_and_the_policy() {
 async fn a_deployment_that_is_down_keeps_the_session() {
     let (h, _server) = signed_in(Arc::default()).await;
     // Point the stored session at a port nothing listens on.
-    let mut session = load_session(h.keychain.as_ref()).unwrap().unwrap();
+    let mut session = load_session(h.credentials.as_ref()).unwrap().unwrap();
     session.origin = "http://127.0.0.1:9".into();
-    save_session(h.keychain.as_ref(), &session).unwrap();
+    save_session(h.credentials.as_ref(), &session).unwrap();
     let mut settings = SettingsFiles::new(h.dir.clone()).settings().unwrap();
     settings.origin = Some("http://127.0.0.1:9".into());
     SettingsFiles::new(h.dir.clone())
@@ -452,7 +452,7 @@ async fn a_deployment_that_is_down_keeps_the_session() {
         RefreshResult::Unavailable
     );
     assert!(
-        h.keychain.raw().unwrap().contains("refresh-1"),
+        h.credentials.raw().unwrap().contains("refresh-1"),
         "an offline refresh must not lose the token"
     );
 }
@@ -469,7 +469,7 @@ async fn sign_out_revokes_on_the_server_then_forgets_everything() {
     );
     h.service.sign_out().await.unwrap();
     assert!(h.service.session_epoch() > epoch);
-    assert!(h.keychain.raw().is_none());
+    assert!(h.credentials.raw().is_none());
     let revoke = server
         .seen()
         .into_iter()
@@ -512,7 +512,7 @@ async fn a_sign_out_during_a_refresh_is_not_undone_by_the_refresh() {
     let _ = refreshing.await.unwrap();
 
     assert!(
-        h.keychain.raw().is_none(),
+        h.credentials.raw().is_none(),
         "the refresh resurrected the session"
     );
     assert!(h.service.access_token().await.unwrap().is_none());
@@ -533,7 +533,7 @@ async fn a_session_for_another_deployment_does_not_count_as_signed_in() {
     h.service.connect(&other.origin).await.unwrap();
     // Choosing another deployment ended the old session.
     assert!(!h.service.state().unwrap().signed_in);
-    assert!(h.keychain.raw().is_none());
+    assert!(h.credentials.raw().is_none());
 }
 
 /// A deployment whose token endpoint loses the first `lost` answers (the
@@ -572,7 +572,7 @@ async fn lossy_deployment(lost: usize) -> MockServer {
 
 fn seed(h: &Harness, origin: &str, refresh: &str) {
     save_session(
-        h.keychain.as_ref(),
+        h.credentials.as_ref(),
         &StoredSession {
             origin: origin.into(),
             client_id: "desktop".into(),
@@ -608,7 +608,7 @@ async fn a_lost_refresh_answer_is_retried_at_once_with_the_same_refresh_token() 
     let posts = token_posts(&server);
     assert_eq!(posts.len(), 2, "one lost, one immediate retry");
     assert!(posts.iter().all(|f| f["refresh_token"] == "old-refresh"));
-    assert!(h.keychain.raw().unwrap().contains("rotated-1"));
+    assert!(h.credentials.raw().unwrap().contains("rotated-1"));
 }
 
 #[tokio::test]
@@ -621,21 +621,21 @@ async fn two_lost_answers_keep_the_old_token_for_a_later_attempt() {
         h.service.refresh().await.unwrap(),
         RefreshResult::Unavailable
     );
-    assert!(h.keychain.raw().unwrap().contains("old-refresh"));
+    assert!(h.credentials.raw().unwrap().contains("old-refresh"));
 }
 
 #[tokio::test]
-async fn a_keychain_write_failure_after_rotation_never_reuses_the_spent_token() {
+async fn a_credentials_write_failure_after_rotation_never_reuses_the_spent_token() {
     let refreshes = Arc::new(AtomicUsize::new(0));
     let (h, server) = signed_in(refreshes).await;
-    h.keychain
+    h.credentials
         .fail_saves
         .store(true, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
-    // The keychain still holds the spent token; memory holds the live one.
-    assert!(h.keychain.raw().unwrap().contains("refresh-1"));
+    // The credentials file still holds the spent token; memory holds the live one.
+    assert!(h.credentials.raw().unwrap().contains("refresh-1"));
 
-    h.keychain
+    h.credentials
         .fail_saves
         .store(false, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
@@ -646,7 +646,7 @@ async fn a_keychain_write_failure_after_rotation_never_reuses_the_spent_token() 
         .map(|f| f["refresh_token"].clone())
         .collect();
     assert_eq!(refresh_tokens, ["refresh-1", "refresh-2"]);
-    assert!(h.keychain.raw().unwrap().contains("refresh-3"));
+    assert!(h.credentials.raw().unwrap().contains("refresh-3"));
 }
 
 #[tokio::test]
@@ -662,7 +662,7 @@ async fn a_426_from_the_token_endpoint_is_reported_as_upgrade_required() {
         h.service.refresh().await.unwrap(),
         RefreshResult::UpgradeRequired
     );
-    assert!(h.keychain.raw().is_some(), "the session is kept");
+    assert!(h.credentials.raw().is_some(), "the session is kept");
 }
 
 #[tokio::test]
@@ -680,13 +680,13 @@ async fn a_policy_file_that_cannot_be_written_does_not_fail_sign_in_or_refresh()
 
     let state = h.service.sign_in().await.unwrap();
     assert!(state.signed_in);
-    assert!(h.keychain.raw().unwrap().contains("refresh-1"));
+    assert!(h.credentials.raw().unwrap().contains("refresh-1"));
     assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
-    assert!(h.keychain.raw().unwrap().contains("refresh-2"));
+    assert!(h.credentials.raw().unwrap().contains("refresh-2"));
 }
 
 #[tokio::test]
-async fn a_keychain_failure_after_the_code_exchange_revokes_the_new_session() {
+async fn a_credentials_failure_after_the_code_exchange_revokes_the_new_session() {
     let challenge = Arc::new(std::sync::Mutex::new(String::new()));
     let server = deployment(pkce_checking_deployment(challenge.clone(), Arc::default())).await;
     let issuer = server.origin.clone();
@@ -695,11 +695,11 @@ async fn a_keychain_failure_after_the_code_exchange_revokes_the_new_session() {
         approve_with(issuer.clone())(q, url)
     });
     h.service.connect(&server.origin).await.unwrap();
-    h.keychain.fail_saves.store(true, Ordering::SeqCst);
+    h.credentials.fail_saves.store(true, Ordering::SeqCst);
 
     let err = h.service.sign_in().await.unwrap_err();
 
-    assert!(matches!(err, HostError::Keychain(_)), "{err:?}");
+    assert!(matches!(err, HostError::Credentials(_)), "{err:?}");
     let revoke = server
         .seen()
         .into_iter()
@@ -710,7 +710,7 @@ async fn a_keychain_failure_after_the_code_exchange_revokes_the_new_session() {
 }
 
 #[tokio::test]
-async fn a_failed_revoke_is_kept_in_the_keychain_and_retried_at_the_next_launch() {
+async fn a_failed_revoke_is_kept_in_the_credentials_file_and_retried_at_the_next_launch() {
     let revoke_ok = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let challenge = Arc::new(std::sync::Mutex::new(String::new()));
     let inner = pkce_checking_deployment(challenge.clone(), Arc::default());
@@ -731,8 +731,8 @@ async fn a_failed_revoke_is_kept_in_the_keychain_and_retried_at_the_next_launch(
     h.service.sign_in().await.unwrap();
 
     assert!(!h.service.sign_out().await.unwrap(), "the revoke failed");
-    // Signed out locally all the same; the token waits in its own keychain item.
-    assert!(h.keychain.raw().is_none());
+    // Signed out locally all the same; the token waits in its own credentials file item.
+    assert!(h.credentials.raw().is_none());
     assert!(!h.service.state().unwrap().signed_in);
     assert!(h.pending.raw().unwrap().contains("refresh-1"));
     assert!(
@@ -803,14 +803,14 @@ async fn the_launch_retry_does_not_hold_the_pending_list_across_the_network() {
 async fn sign_out_falls_back_to_the_stored_revocation_endpoint_when_discovery_fails() {
     let (h, server) = signed_in(Arc::default()).await;
     // Discovery now fails (the origin moved away), the stored endpoint still answers.
-    let mut session = load_session(h.keychain.as_ref()).unwrap().unwrap();
+    let mut session = load_session(h.credentials.as_ref()).unwrap().unwrap();
     assert!(
         session
             .revocation_endpoint
             .ends_with("/api/v2/auth/native/revoke")
     );
     session.origin = "http://127.0.0.1:9".into();
-    save_session(h.keychain.as_ref(), &session).unwrap();
+    save_session(h.credentials.as_ref(), &session).unwrap();
 
     assert!(h.service.sign_out().await.unwrap());
     assert!(
@@ -841,7 +841,7 @@ async fn a_cancelled_sign_in_stops_waiting_and_stores_nothing() {
         matches!(result, Err(HostError::SignInAborted)),
         "{result:?}"
     );
-    assert!(h.keychain.raw().is_none());
+    assert!(h.credentials.raw().is_none());
     // Cancelling with nothing waiting is harmless.
     h.service.cancel_sign_in();
 }

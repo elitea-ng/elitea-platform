@@ -169,3 +169,15 @@ fn folders_are_an_alternate_document_type() {
     assert!(plist.contains("<string>public.folder</string>"));
     assert!(plist.contains("<key>LSHandlerRank</key>\n      <string>Alternate</string>"));
 }
+
+/// The session lives in the owner-only credentials file, never the OS
+/// keychain: an ad-hoc-signed build prompted for the login password on
+/// every keychain read. Nothing may bring a keychain crate back.
+#[test]
+fn no_keychain_crate_is_linked() {
+    let manifest =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
+    assert!(!manifest.contains("keyring"));
+    let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.lock")).unwrap();
+    assert!(!lock.contains("name = \"keyring\""));
+}

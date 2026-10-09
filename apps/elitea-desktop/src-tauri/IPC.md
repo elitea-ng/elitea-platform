@@ -34,7 +34,7 @@ The web client (`shared/desktop/workspaceIpc.ts`) turns it into a
 | `host_sign_in_cancel` | — | `null` (the waiting `host_sign_in` rejects with "sign-in was cancelled or timed out") |
 | `host_access_token` | — | `{token, expiresIn}` or `null` |
 | `host_refresh` | — | `"refreshed" \| "ended" \| "unavailable" \| "upgrade_required"` |
-| `host_sign_out` | — | `boolean`: `true` when the server confirmed the revoke; `false` means it is kept (keychain) and retried at the next launch |
+| `host_sign_out` | — | `boolean`: `true` when the server confirmed the revoke; `false` means it is kept (credentials file) and retried at the next launch |
 | `host_wipe` | — | `null` |
 
 ## Workspaces (`src/local_commands.rs`, `src/workspaces.rs`)

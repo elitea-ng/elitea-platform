@@ -8,7 +8,7 @@ shell. The local agent runtime, local tools and sandbox come in later phases.
 apps/elitea-web  --vite build --mode desktop-->  apps/elitea-web/dist-desktop
                                                         |  bundled as assets
 apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
-        |   keychain (refresh token)        |
+        |   credentials.json (refresh token)|
         |   loopback sign-in listener       +-- HTTP plugin --> your deployment
         +-- system browser (RFC 8252)
 ```
@@ -22,15 +22,16 @@ apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
 - **Sign in**: authorization code + PKCE S256 in the **system browser**, with a
   one-shot loopback redirect `http://127.0.0.1:<ephemeral port>/callback`. The
   `state` and the RFC 9207 `iss` are checked before the code is exchanged.
-- **Tokens**: the refresh token lives in the OS keychain only (service
-  `ai.elitea.desktop`). The webview is handed a 15-minute access token over IPC
+- **Tokens**: the refresh token lives in one owner-only file only,
+  `credentials.json` in the app config directory (see "Security model"),
+  read once per launch and then kept in memory. The webview is handed a 15-minute access token over IPC
   and holds it in memory; it never reaches web storage. Refresh rotates the
   token; a lost response is retried with the old token (the server re-delivers
   within its grace window). `device_revoked` wipes local state. Sign-out
   revokes the device session server-side (falling back to the revocation
   endpoint stored with the token when discovery is unreachable); a revoke that
-  does not get through is kept in a second keychain item (`pending-revoke`)
-  and retried at the next launch, while the local session is forgotten at once.
+  does not get through is kept in a second slot of the same file
+  (`pending-revoke`) and retried at the next launch, while the local session is forgotten at once.
 - **Client policy**: stored verbatim (`client-policy.json` in the app config
   directory) from every token response. Enforcing `local_work` comes with the
   local runtime.
@@ -135,6 +136,25 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
 `ELITEA_DESKTOP_CLIENT_ID` at build time.
 
 ## Security model
+
+- **The stored sign-in is a file, not the OS keychain** — the same model as
+  `~/.aws/credentials` or the Claude desktop app. `credentials.json` sits in
+  the app config directory: `~/Library/Application Support/ai.elitea.desktop/`
+  (macOS), `$XDG_CONFIG_HOME/ai.elitea.desktop/` (Linux),
+  `%APPDATA%\ai.elitea.desktop\` (Windows). On Unix the directory is `0700`
+  and the file is created `0600` from the start, written to a temp file in the
+  same directory, fsynced and renamed into place (no partially written or
+  briefly world-readable file). A file that is a symlink, not a regular file,
+  owned by another user, or group/world-accessible is refused and logged,
+  never followed or overwritten. Sign-out and wipe delete it once no pending
+  revoke is left. The trade-off, honestly: it is protected by file
+  permissions and disk encryption (FileVault, BitLocker, LUKS), not by
+  per-application keychain ACLs, so any process running as you can read it —
+  as it can read your AWS or SSH credentials. In exchange an unsigned or
+  ad-hoc-signed build (every dev build) no longer asks for the login password
+  on every keychain read. The keychain item older builds wrote is never read
+  (reading it is what prompted); sign in once more after upgrading, and delete
+  the stale `ai.elitea.desktop` item in Keychain Access if you like.
 
 - The window loads **only bundled assets**. `on_navigation` refuses every other
   origin, so remote content never sits next to the IPC commands.

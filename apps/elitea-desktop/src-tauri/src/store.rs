@@ -1,10 +1,11 @@
-//! Where secrets live: the OS keychain, behind a trait so the rest of the host
-//! (and its tests) never touch a real keychain.
+//! The device session's shape, and the slot it is kept in, behind a trait so
+//! the rest of the host (and its tests) never touch the real file.
 //!
-//! One keychain item holds the whole device session as JSON. The refresh token
-//! is stored here and nowhere else: not in a file, not in the webview's
-//! storage, not in an environment variable. The webview is only ever handed
-//! the short-lived access token.
+//! One slot of the owner-only credentials file (`credentials_file.rs`) holds
+//! the whole device session as JSON. The refresh token is stored there and
+//! nowhere else: not in the webview's storage, not in an environment
+//! variable, not in the settings files. The webview is only ever handed the
+//! short-lived access token.
 
 use std::fmt;
 
@@ -39,8 +40,8 @@ impl fmt::Debug for StoredSession {
 }
 
 /// A signed-out session whose server-side revoke did not get through. Kept in
-/// its OWN keychain item (the refresh token is a secret, so never a file)
-/// and retried at the next launch.
+/// its OWN slot of the credentials file (the refresh token is a secret, so
+/// never the settings files) and retried at the next launch.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingRevoke {
     pub origin: String,
@@ -83,7 +84,7 @@ pub fn load_pending(store: &dyn SecretStore) -> Result<Vec<PendingRevoke>, HostE
         .unwrap_or_default())
 }
 
-/// Replace the waiting revokes; an empty list removes the keychain item.
+/// Replace the waiting revokes; an empty list removes the slot.
 pub fn save_pending(store: &dyn SecretStore, pending: &[PendingRevoke]) -> Result<(), HostError> {
     if pending.is_empty() {
         return store.clear();
@@ -120,43 +121,7 @@ pub fn save_session(store: &dyn SecretStore, session: &StoredSession) -> Result<
     store.save(&raw)
 }
 
-/// The OS keychain (macOS Keychain, Windows Credential Manager, Secret Service).
-pub struct KeyringStore {
-    entry: keyring::Entry,
-}
-
-impl KeyringStore {
-    pub fn new(service: &str, account: &str) -> Result<Self, HostError> {
-        let entry = keyring::Entry::new(service, account)
-            .map_err(|e| HostError::Keychain(e.to_string()))?;
-        Ok(Self { entry })
-    }
-}
-
-impl SecretStore for KeyringStore {
-    fn load(&self) -> Result<Option<String>, HostError> {
-        match self.entry.get_password() {
-            Ok(secret) => Ok(Some(secret)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(HostError::Keychain(e.to_string())),
-        }
-    }
-
-    fn save(&self, secret: &str) -> Result<(), HostError> {
-        self.entry
-            .set_password(secret)
-            .map_err(|e| HostError::Keychain(e.to_string()))
-    }
-
-    fn clear(&self) -> Result<(), HostError> {
-        match self.entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(HostError::Keychain(e.to_string())),
-        }
-    }
-}
-
-/// In-memory stand-in for the keychain, for tests.
+/// In-memory stand-in for the credentials file, for tests.
 #[cfg(test)]
 #[derive(Default)]
 pub struct MemoryStore {
@@ -179,7 +144,7 @@ impl SecretStore for MemoryStore {
 
     fn save(&self, secret: &str) -> Result<(), HostError> {
         if self.fail_saves.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(HostError::Keychain("locked".into()));
+            return Err(HostError::Credentials("locked".into()));
         }
         *self.slot.lock().expect("lock") = Some(secret.to_owned());
         Ok(())

@@ -5,7 +5,7 @@
  * into the bundled webview, rather than the `@tauri-apps/api` package: the
  * surface is seven commands, and one fewer dependency keeps the default web
  * build's lockfile and audit surface unchanged. The host exposes only
- * SHORT-LIVED ACCESS TOKENS; the refresh token never leaves the OS keychain.
+ * SHORT-LIVED ACCESS TOKENS; the refresh token never leaves the host.
  */
 
 /** What the host knows about this install. Mirrors `HostState` in `src-tauri/src/commands.rs`. */

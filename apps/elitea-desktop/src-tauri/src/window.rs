@@ -3,7 +3,7 @@
 //! The webview holds IPC capabilities (capabilities/default.json), so it must
 //! only ever show our own bundled assets. Tauri grants IPC by origin, and a
 //! navigation to a remote page would put a page we did not ship next to the
-//! keychain-backed commands. `on_navigation` refuses every such navigation
+//! credential-backed commands. `on_navigation` refuses every such navigation
 //! before it happens; the deployment is reached through the HTTP plugin from
 //! bundled code, never by navigating to it.
 

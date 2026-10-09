@@ -166,7 +166,7 @@ describe('createHostTransport', () => {
 
   it('logout still returns to the sign-in screen when the host call fails', async () => {
     const b = bridge();
-    b.calls.signOut.mockRejectedValue('keychain locked');
+    b.calls.signOut.mockRejectedValue('credentials file locked');
     const { transport, onSignedOut } = make(b);
     await transport.logout?.();
     expect(onSignedOut).toHaveBeenCalledWith('logout');

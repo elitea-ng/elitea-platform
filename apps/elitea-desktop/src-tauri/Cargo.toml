@@ -61,14 +61,10 @@ tauri-plugin-single-instance = "2"
 # Window size, position and maximized state across launches (src/window.rs).
 tauri-plugin-window-state = "2"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3.6", features = ["apple-native"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3.6", features = ["windows-native"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3.6", features = ["sync-secret-service"] }
+# The credentials file's owner check (geteuid) and O_NOFOLLOW, without
+# `unsafe` (src/credentials_file.rs). Already in the tree through tauri.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs", "process"] }
 
 [dev-dependencies]
 tempfile = "3"
