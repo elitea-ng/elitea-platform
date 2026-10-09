@@ -1258,6 +1258,12 @@ fn admission_error(
     }
 }
 
+fn assert_direct_tool_node_message(error: &super::runtime::NativeAgentAssemblyError) {
+    let message = error.to_string();
+    assert!(message.contains("direct tool node"), "{message}");
+    assert!(!message.contains("LLM node"), "{message}");
+}
+
 fn timestamp(second: u32) -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, second)
         .single()
@@ -1467,6 +1473,9 @@ fn llm_tool_scope_is_exact_sensitive_tools_bind_and_blocked_authority_fails_clos
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        let message = error.to_string();
+        assert!(message.contains("LLM node"), "{message}");
+        assert!(!message.contains("direct tool node"), "{message}");
     }
 
     let sensitive = runtime_tool_policy(&json!({
@@ -1497,6 +1506,7 @@ fn toolkit_node_scope_is_exact_and_sensitive_read_is_bound_for_graph_confirmatio
     ] {
         let error = admission_error(authorized(&invalid).admit_pipeline_with_policy(&empty_policy));
         assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+        assert_direct_tool_node_message(&error);
     }
 
     for policy in [
@@ -1512,6 +1522,7 @@ fn toolkit_node_scope_is_exact_and_sensitive_read_is_bound_for_graph_confirmatio
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        assert_direct_tool_node_message(&error);
     }
     let sensitive = runtime_tool_policy(&json!({
         "toolkit_security": {"sensitive_tools": {"gitlab_org": ["get_issues"]}}
@@ -1543,6 +1554,7 @@ fn mcp_node_scope_is_exact_and_sensitive_read_uses_the_graph_confirmation() {
     ] {
         let error = admission_error(authorized(&invalid).admit_pipeline_with_policy(&empty_policy));
         assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+        assert_direct_tool_node_message(&error);
     }
 
     for policy in [
@@ -1558,6 +1570,7 @@ fn mcp_node_scope_is_exact_and_sensitive_read_uses_the_graph_confirmation() {
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        assert_direct_tool_node_message(&error);
     }
     let sensitive = runtime_tool_policy(&json!({
         "toolkit_security": {"sensitive_tools": {"mcp": ["lookup_release"]}}
@@ -2777,7 +2790,7 @@ fn assert_nested_sensitive_browser_completion(resumed: &[Value], expected_path: 
 }
 
 #[tokio::test]
-async fn toolkit_node_materializes_read_only_action_but_rejects_remote_effect() {
+async fn toolkit_node_materializes_read_only_and_effectful_actions() {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     let assembler = PipelineNativeAgentAssembler::with_state(
         Arc::clone(&sessions),
@@ -2797,14 +2810,10 @@ async fn toolkit_node_materializes_read_only_action_but_rejects_remote_effect() 
 
     let effect =
         toolkit_pipeline_request("release_repository", &["create_branch"], "create_branch");
-    let result = assembler.assemble(authorized(&effect)).await;
-    let Err(error) = result else {
-        panic!("effectful direct Toolkit node was assembled");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
-    );
+    assembler
+        .assemble(authorized(&effect))
+        .await
+        .expect("effectful direct Toolkit assembly");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -4163,7 +4172,7 @@ async fn mcp_node_discovers_and_executes_one_read_without_a_model_turn() {
 }
 
 #[tokio::test]
-async fn mcp_node_rejects_server_declared_effect_before_tool_execution() {
+async fn mcp_node_assembles_server_declared_effect_without_executing_it() {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let connector = Arc::new(PipelineMcpConnector {
@@ -4179,14 +4188,10 @@ async fn mcp_node_rejects_server_declared_effect_before_tool_execution() {
         &["lookup_release"],
         "lookup_release",
     );
-    let result = assembler.assemble(authorized(&request)).await;
-    let Err(error) = result else {
-        panic!("effectful direct MCP node was assembled");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
-    );
+    assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("effectful direct MCP assembly");
     assert_eq!(tool_calls.load(Ordering::Acquire), 0);
 }
 

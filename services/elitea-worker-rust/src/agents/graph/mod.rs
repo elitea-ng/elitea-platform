@@ -67,6 +67,11 @@ pub(crate) use map_reduce::{
     FrozenMapItem, MapActivation, MapChildCheckpoint, MapChildCheckpointerFactory,
     MapExecutionIdentity, MapWorkerKind,
 };
+#[cfg(test)]
+pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
+    Gate, journaled_node, node_activation, pause_data, recovery_card, state as direct_tool_state,
+    with_decision,
+};
 mod parallel;
 #[cfg(test)]
 mod parallel_tests;

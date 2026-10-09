@@ -62,6 +62,11 @@ services:
       ELITEA_RUST_TRACE: "info"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
+      # Same deployment as ./runtime/worker-runtime.json plus the Rust-only
+      # `agent_node_recovery` journal, which effectful pipeline direct tool nodes
+      # require. The Python worker forbids unknown keys, so the shared file stays
+      # without it. Keep the two files identical apart from that key.
+      - ./runtime/worker-runtime.rust.json:/run/elitea/runtime.json:ro
       - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
       - standalone_mcp_mock_trust:/run/elitea-mcp-trust:ro
     depends_on:

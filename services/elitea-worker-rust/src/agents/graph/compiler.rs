@@ -1399,10 +1399,12 @@ impl PipelineDefinition {
                 };
                 let transition = node.transition().map(ToOwned::to_owned);
                 let node_id = node.id().to_owned();
-                let mut next = builder.node(
-                    DirectToolNode::new(node.clone(), self.state.clone(), resolver)
-                        .with_events(runtimes.events.clone()),
-                );
+                let mut direct = DirectToolNode::new(node.clone(), self.state.clone(), resolver)
+                    .with_events(runtimes.events.clone());
+                if let Some(authority) = runtimes.node_recovery.clone() {
+                    direct = direct.with_node_recovery(authority);
+                }
+                let mut next = builder.node(direct);
                 if let Some(transition) = transition {
                     let target = if transition == "END" {
                         END
@@ -2021,6 +2023,11 @@ pub(super) fn select_pipeline_result(
     state: &State,
     policy: &PipelineResultPolicy,
 ) -> Option<String> {
+    // A blocked or skipped tool stops the pipeline: its message is the answer, not
+    // whatever a trace or the defaults of outputs that no node wrote would render.
+    if let Some(blocked) = select_last_state_value(state, &["_pipeline_blocked".to_owned()]) {
+        return Some(blocked.into_bounded_text());
+    }
     // A trace proves which node wrote last; when it renders blank, no static
     // value may stand in for that node's answer.
     if let Some(trace) = ResultTrace::from_state(state) {

@@ -49,6 +49,7 @@ Detailed ledgers:
 - [Dependency advisories 2026-10-08](dependency-advisories-20261008.md) raises the Go standard-library floor to go1.25.13/go1.26.6, updates h2 and chacha20, and proves the MySQL TLS guard that keeps the rsa (RUSTSEC-2023-0071) path unreachable.
 
 - [Recovery guarantees inventory](recovery-guarantees-inventory-20261008.md) records the platform recovery matrix baseline, evidence ruling and ranked gap backlog.
+- [Effectful direct tool nodes](direct-tool-effects-20261008.md) runs effectful toolkit/MCP direct nodes behind the fenced node-recovery journal: never dispatched twice, block/skip stop the pipeline.
 
 - [Sandbox phase deadlines](sandbox-phase-deadlines-20261002.md) separates durable readiness and execution clocks and records rolling compatibility and Docker/Kubernetes browser acceptance.
 

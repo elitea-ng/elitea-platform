@@ -1152,4 +1152,4 @@ pub(crate) fn recovery_error(code: &'static str) -> GraphError {
 
 #[cfg(test)]
 #[path = "node_recovery_runtime_tests.rs"]
-mod tests;
+pub(in crate::agents::graph) mod tests;

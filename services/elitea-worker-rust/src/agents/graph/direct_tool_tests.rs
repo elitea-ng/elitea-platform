@@ -17,6 +17,7 @@ use super::direct_tool::{
     DirectToolNodeDefinition, DirectToolNodeKind, DirectToolSelection, PipelineDirectToolResolver,
     ResolvedDirectTool,
 };
+use super::node_recovery_runtime::tests::direct_tool_tests::scoped;
 use super::{EliteaGraphAgent, compiler::PipelineDefinition};
 use crate::agents::events::{pipeline_mcp_auth_event_binding, pipeline_tool_event_binding};
 use crate::agents::graph::resume::{
@@ -252,10 +253,21 @@ fn sensitive_fixture_runtime_for(
     Arc<dyn PipelineDirectToolResolver>,
     Arc<Mutex<InvocationCapture>>,
 ) {
+    sensitive_runtime(response, toolkit_type, true)
+}
+
+fn sensitive_runtime(
+    response: Value,
+    toolkit_type: &str,
+    read_only: bool,
+) -> (
+    Arc<dyn PipelineDirectToolResolver>,
+    Arc<Mutex<InvocationCapture>>,
+) {
     let capture = Arc::new(Mutex::new(InvocationCapture::default()));
     let tool: Arc<dyn Tool> = Arc::new(FixtureTool {
         name: "search_records".to_owned(),
-        read_only: true,
+        read_only,
         response,
         capture: Arc::clone(&capture),
     });
@@ -628,7 +640,7 @@ async fn effect_or_wrong_structured_shape_fails_without_checkpoint_corruption() 
         .expect("unsafe direct tool must fail")
         .to_string();
     assert!(effect_error.contains("tool_binding"));
-    assert!(effect_error.contains("does not permit direct pipeline execution"));
+    assert!(effect_error.contains("requires its current fenced node writer"));
     assert_eq!(effect_capture.lock().expect("capture lock").calls, 0);
 
     let (wrong_resolver, _) = fixture_runtime(json!({"report": []}), true);
@@ -1676,4 +1688,172 @@ async fn explicit_empty_direct_tool_mapping_sends_no_arguments() {
         assert_eq!(capture.calls, 1);
         assert_eq!(capture.arguments, json!({}));
     }
+}
+
+/// An effectful tool that always asks for delegated authorization and counts its calls.
+struct EffectfulAuthorizationTool(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait]
+impl Tool for EffectfulAuthorizationTool {
+    fn name(&self) -> &'static str {
+        "search_records"
+    }
+
+    fn description(&self) -> &'static str {
+        "effectful authorization fixture"
+    }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(delegated_authorization_error_fixture("mcp"))
+    }
+}
+
+/// `lookup` is followed by a second node on the same tool: any call it makes is counted.
+fn effectful_two_node_yaml(node_type: &str) -> String {
+    format!(
+        "{}  - id: after\n    type: {node_type}\n    toolkit_name: Customer Support\n    tool: search_records\n    output: [report2]\n    structured_output: true\n    transition: END\n",
+        sensitive_pipeline_definition_yaml()
+            .replace("type: toolkit", &format!("type: {node_type}"))
+            .replace("  messages: list\n", "  messages: list\n  report2: dict\n")
+            .replace("    transition: END\n", "    transition: after\n"),
+    )
+}
+
+async fn assert_whole_pipeline_stopped(
+    checkpointer: &MemoryCheckpointer,
+    thread: &str,
+    message: &str,
+) {
+    let checkpoint = checkpointer
+        .load(thread)
+        .await
+        .expect("load terminal checkpoint")
+        .expect("terminal checkpoint");
+    assert!(checkpoint.pending_nodes.is_empty());
+    assert!(
+        checkpoint
+            .state
+            .get("_pipeline_blocked")
+            .and_then(Value::as_str)
+            .is_some_and(|blocked| blocked.contains(message))
+    );
+    for key in ["report", "report2"] {
+        let value = checkpoint.state.get(key);
+        assert!(
+            value.is_none_or(|value| value.is_null() || value == &json!({})),
+            "{key} must not hold tool data"
+        );
+    }
+}
+
+#[tokio::test]
+async fn blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_recovery() {
+    const ROOT: &str = "pipeline-root";
+    const THREAD: &str = "effectful-blocked-thread";
+    let definition =
+        PipelineDefinition::from_yaml(&effectful_two_node_yaml("toolkit")).expect("pipeline");
+    let (resolver, capture) = sensitive_runtime(
+        json!({"report": {"unexpected": true}}),
+        "customer_support",
+        false,
+    );
+    let runtimes = PipelineNodeRuntimes::new(None, Some(resolver), None)
+        .with_node_recovery_authority(scoped());
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let sessions = sensitive_pipeline_session(THREAD).await;
+    let first = definition
+        .compile_with_runtime(ROOT, checkpointer.clone(), None, &runtimes)
+        .expect("first graph");
+    let events = run_direct_graph(first, sessions.clone(), THREAD, "lookup").await;
+    let binding = pipeline_tool_event_binding(&events[0], ROOT, THREAD)
+        .expect("checkpoint-bound Toolkit interrupt");
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: THREAD.to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("persisted session");
+    let resume = PipelineContinuationDecision::from_payload(&tool_resume_payload(
+        binding.interrupt_id(),
+        binding.tool_call_id(),
+        "reject",
+        "",
+        THREAD,
+    ))
+    .expect("reject decision")
+    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .await
+    .expect("checkpoint-bound reject")
+    .into_parts()
+    .0;
+    let resumed = definition
+        .compile_with_runtime(ROOT, checkpointer.clone(), Some(resume), &runtimes)
+        .expect("resumed graph");
+    run_direct_graph(resumed, sessions, THREAD, "continue").await;
+    assert_eq!(capture.lock().expect("capture lock").calls, 0);
+    assert_whole_pipeline_stopped(&checkpointer, THREAD, "was **blocked** by user").await;
+}
+
+#[tokio::test]
+async fn skipped_effectful_authorization_stops_the_whole_pipeline_under_node_recovery() {
+    const ROOT: &str = "pipeline-root";
+    const THREAD: &str = "effectful-skip-thread";
+    let definition =
+        PipelineDefinition::from_yaml(&effectful_two_node_yaml("mcp")).expect("pipeline");
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(FixtureResolver {
+        alias: "Customer Support".to_owned(),
+        tool: Arc::new(EffectfulAuthorizationTool(Arc::clone(&calls))),
+        sensitive: None,
+    });
+    let runtimes = PipelineNodeRuntimes::new(None, Some(resolver), None)
+        .with_node_recovery_authority(scoped());
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let sessions = sensitive_pipeline_session(THREAD).await;
+    let first = definition
+        .compile_with_runtime(ROOT, checkpointer.clone(), None, &runtimes)
+        .expect("first graph");
+    let events = run_direct_graph(first, sessions.clone(), THREAD, "lookup").await;
+    let binding = pipeline_mcp_auth_event_binding(&events[0], ROOT, THREAD)
+        .expect("checkpoint-bound delegated authorization");
+    // The challenge itself is the one call: it is refused before any effect.
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: THREAD.to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("persisted session");
+    let resume = PipelineMcpAuthorizationContinuation::from_payload(&mcp_resume_payload(
+        binding.server_url(),
+        "skip",
+        THREAD,
+    ))
+    .expect("skip continuation")
+    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .await
+    .expect("checkpoint-bound skip");
+    let resumed = definition
+        .compile_with_runtime(ROOT, checkpointer.clone(), Some(resume), &runtimes)
+        .expect("resumed graph");
+    run_direct_graph(resumed, sessions, THREAD, "continue").await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_whole_pipeline_stopped(&checkpointer, THREAD, "was skipped").await;
 }

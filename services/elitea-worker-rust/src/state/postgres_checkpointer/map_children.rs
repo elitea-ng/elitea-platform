@@ -100,9 +100,10 @@ impl PostgresCheckpointer {
         self.check_map_item(activation, item, worker)?;
         let thread_id = map_child_thread_id(self, activation, item, worker, origin)?;
         let authority = self.scope.authority.for_thread(thread_id)?;
-        Self::activate(
+        Self::activate_under_root(
             self.pool.clone(),
             authority,
+            &self.run_root_thread_id,
             self.limits,
             Arc::clone(&self.state_writer_lease),
         )
