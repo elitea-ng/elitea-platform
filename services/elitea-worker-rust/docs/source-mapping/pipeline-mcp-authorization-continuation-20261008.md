@@ -68,8 +68,12 @@ with `StaleDecision`; the frontier change fixed it.
 Also new: `main_wire_mcp_authorization_refuses_action_and_credential_disagreement` (Skip with a token, Authorize
 with a decline, and a `hitl_action` that disagrees with the decision are all `InvalidInput`).
 
-Totals (`cargo test --locked --all-targets --all-features`, 2026-10-09): 2,119 passed, 0 failed, 63 ignored (the
-existing `#[ignore]` Docker/Kubernetes and live-service tests; none added). `cargo fmt --all -- --check` and
+Totals (`cargo test --offline --locked --all-targets --all-features`, 2026-10-09):
+- before merging `main`: 2,119 passed, 0 failed, 63 ignored;
+- after merging `main`: 1,662 passed, 0 failed, 63 ignored. The difference is #1163/#1165, which moved toolkit and
+  ADK-patch tests into the shared runtime crate.
+
+The ignored tests are the existing `#[ignore]` Docker/Kubernetes and live-service tests; none were added. `cargo fmt --all -- --check` and
 `cargo clippy --locked --all-targets --all-features -- -D warnings` pass.
 
 ## Performance
@@ -128,6 +132,16 @@ signed in through the local OIDC mock as `e2e-chat@autotest.local` (project 9010
 | `elitea-main:mcpauth-20261008` | `sha256:100805eac6bb…` |
 | `elitea-web:mcpauth-20261008` | `sha256:3070a44ee41d…` |
 
+**Binary identity check.** Worker images built before #1160 can share the BuildKit `/cargo-target` cache across
+worktrees and ship another branch's binary. The evidence image's `/usr/local/bin/elitea-worker-rust` was extracted
+(`docker create` + `docker cp`) and checked with `strings`:
+- symbols that exist only on this branch are present: `validate_direct_tool_authorization_frontier`,
+  `PipelineMcpAuthorizationCard`, `RawPipelineMcpAuthorizationDecision`, `is_single_mcp_authorization_decision`,
+  `pipeline_continuation_start`;
+- `sensitive_tool_resume_entry`, added by the later review commit, is absent.
+
+So the binary is this branch at `87b7c1ef`.
+
 **Fixtures (UI unless stated).**
 - MCP toolkit 1 `mcpauthpipe`: created in the MCPs form; `url: https://mcp-mock:8443/mcp-auth` and
   `selected_tools: [echo, reverse]` entered in the Raw JSON view (Main's tool discovery is refused by its
@@ -166,6 +180,9 @@ Worker log over the whole session: 0 `native agent assembly failed` lines. The o
 - **Browser revision.** The browser rows ran on `87b7c1ef`. The review commit after it changes no behaviour
   exercised there; its new behaviour is unit-proven. It was not re-run in the browser because the shared Docker host
   was saturated (follow-up 8).
+
+**Platform matrix.** `docs/recovery-guarantees.md` gained a `Worker x P08` row for this decision path, and its
+malformed-input PostgreSQL row now cites the foreign-card and disagreement tests.
 
 ## Follow-ups
 
