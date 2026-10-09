@@ -72,7 +72,7 @@ async fn pulls_stay_in_lockstep_with_the_caller() {
     let mut stream = DrivenEventStream::new(Box::pin(async_stream::stream! {
         for index in 0..3 {
             counter.fetch_add(1, Ordering::SeqCst);
-            yield Ok(Event::with_id(&format!("item-{index}"), "invocation"));
+            yield Ok(Event::with_id(format!("item-{index}"), "invocation"));
         }
     }));
     for index in 0..3 {
@@ -88,6 +88,27 @@ async fn pulls_stay_in_lockstep_with_the_caller() {
         );
     }
     assert!(stream.next().await.is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ready_items_are_returned_inline_without_yielding_to_siblings() {
+    let sibling_ran = Arc::new(AtomicBool::new(false));
+    let marker = sibling_ran.clone();
+    let sibling = tokio::spawn(async move { marker.store(true, Ordering::SeqCst) });
+    let mut stream = DrivenEventStream::new(Box::pin(async_stream::stream! {
+        for index in 0..3 {
+            yield Ok(Event::with_id(format!("ready-{index}"), "invocation"));
+        }
+    }));
+    for _ in 0..3 {
+        stream.next().await.expect("item").expect("ok");
+    }
+    assert!(stream.next().await.is_none());
+    assert!(
+        !sibling_ran.load(Ordering::SeqCst),
+        "ready items must not yield to the scheduler"
+    );
+    sibling.await.expect("sibling");
 }
 
 #[tokio::test]
@@ -113,10 +134,11 @@ async fn dropping_the_stream_stops_an_in_flight_pull() {
 
 #[tokio::test]
 async fn a_panicking_pull_fails_closed_with_a_typed_error() {
+    // Panics after a pending point, i.e. on the owned task. A panic during the
+    // inline poll propagates to the caller exactly as direct polling does.
     let mut stream = DrivenEventStream::new(Box::pin(async_stream::stream! {
-        if std::hint::black_box(true) {
-            panic!("inner stream defect");
-        }
+        tokio::task::yield_now().await;
+        assert!(!std::hint::black_box(true), "inner stream defect");
         yield Ok(Event::with_id("never", "invocation"));
     }));
     let error = stream

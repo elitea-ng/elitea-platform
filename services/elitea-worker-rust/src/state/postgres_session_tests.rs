@@ -959,7 +959,7 @@ async fn session_timeouts_are_bounded_at_activation() {
     // At the limits validation passes and the lazy pool is reached instead.
     for (writer_lock, idle) in [
         (Duration::from_millis(1), Duration::from_millis(1)),
-        (Duration::from_secs(60), Duration::from_secs(300)),
+        (Duration::from_mins(1), Duration::from_mins(5)),
     ] {
         let reached = PostgresSessionService::activate(
             pool.clone(),

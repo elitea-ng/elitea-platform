@@ -42,11 +42,11 @@ const MAX_IDENTITY_BYTES: usize = 256;
 /// Holders keep these locks for single statements, so a longer wait means a
 /// stalled holder; the waiter fails with a retryable typed error instead.
 const WRITER_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_WRITER_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
-/// PostgreSQL ends a session transaction left idle this long while holding
+const MAX_WRITER_LOCK_TIMEOUT: Duration = Duration::from_mins(1);
+/// `PostgreSQL` ends a session transaction left idle this long while holding
 /// writer locks, so a stalled holder cannot block takeover indefinitely.
 const IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_mins(5);
 const MIN_SESSION_TIMEOUT: Duration = Duration::from_millis(1);
 pub(super) const APPLICATION_CAPABILITY_ID: &str = "agent.execute.application.v1";
 const ADHOC_CAPABILITY_ID: &str = "agent.execute.adhoc.v1";

@@ -8,10 +8,12 @@
 //! Runner persists it under that same lock, and the suspended stream is never
 //! polled again to release it (2026-10-09 "answer card 1" self-deadlock).
 //!
-//! Each pull of a [`DrivenEventStream`] runs on its own owned task, so a lost
-//! select arm never parks the inner stream. Pulls stay in lockstep: the next
-//! item is only requested when the caller asks for it, which keeps the inner
-//! stream's ordering and effect timing identical to direct polling.
+//! A [`DrivenEventStream`] polls the inner stream inline once; an item that is
+//! not ready yet is finished on an owned task, so a lost select arm never parks
+//! the inner stream. Pulls stay in lockstep: the next item is only requested
+//! when the caller asks for it, which keeps the inner stream's ordering and
+//! effect timing identical to direct polling. A ready item costs no task, and
+//! work that never waits keeps its inline scheduling.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -96,11 +98,22 @@ impl DrivenEventStream {
     /// The next inner item, or `None` once the inner stream has ended.
     ///
     /// Cancellation-safe: a dropped call keeps its pull running, and the next
-    /// call returns that pull's item. A panicked pull ends the stream with a
-    /// typed error.
+    /// call returns that pull's item. A panicked task pull ends the stream with
+    /// a typed error.
     pub(crate) async fn next(&mut self) -> Option<adk_rust::Result<Event>> {
         if self.pull.is_none() {
             let mut stream = self.idle.take()?;
+            // One inline poll; it completes within this call, so it is never
+            // abandoned. A pending pull is handed to its task before this
+            // call can return Pending, so nothing is left un-driven.
+            let ready =
+                std::future::poll_fn(|context| Poll::Ready(stream.poll_next_unpin(context))).await;
+            if let Poll::Ready(item) = ready {
+                if item.is_some() {
+                    self.idle = Some(stream);
+                }
+                return item;
+            }
             self.pull = Some(DrivenTask::spawn(async move {
                 let item = stream.next().await;
                 (stream, item)
