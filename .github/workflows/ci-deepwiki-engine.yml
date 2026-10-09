@@ -130,6 +130,12 @@ jobs:
           cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql
           cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order
 
+      # Every run above enables `toolkit-sql`; the desktop host links the
+      # runtime without it, so lint that feature set on its own.
+      - name: Agent runtime — desktop feature set (no toolkit-sql)
+        working-directory: libs/rust
+        run: cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
