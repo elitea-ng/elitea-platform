@@ -185,6 +185,21 @@ real backend with no response mocks, NATS, PG18, and the offline mock LLM gatewa
 Execution ids are `5c253352…` (`left`), `5e93e770…` (`plain`) and `ae606de1…` (`right`). The answers persist in
 `p_1.chat_message_trace_step` (message groups 2, 4 and 6).
 
+**Re-run on the merged tree (2026-10-09).** The branch was merged with `main`, including the shared build-cache fix
+from PR #1160, at `18a2b849`. Worker, Main and Web were rebuilt from that head, one or two images at a time, and the
+same stack and fixtures were reused.
+- Images:
+  - Worker `sha256:b0acbdab15ae…`;
+  - Main `sha256:5d1fc27d6d6a…`;
+  - Web `sha256:d4664e1e6088…`.
+- The binary guard was repeated. The Worker binary (SHA-256 `857881bc0ba28eee…`) contains
+  `compiler::exclusive_transitions` (5 matches) and the new `elitea_agent_runtime` crate's symbols.
+- In chat 1, `plain`, `left` and `right` answered `PLAIN via ONCE`, `LEFT via ONCE` and `RIGHT via ONCE`. The
+  answers are message groups 8, 10 and 12, execution ids `88a46ecc…`, `767a46fe…` and `86dab414…`.
+- All six turns were identical after reload.
+- The full Worker suite on the merged tree (`--offline`, PG18): 1,680 passed, 0 failed, 63 ignored. The count is
+  lower because `main` moved tests into `elitea-agent-runtime`.
+
 A negative control on a `main` Worker image was not run in the browser. The red tests above are the before-fix
 evidence.
 
