@@ -19,4 +19,6 @@ pub mod error;
 pub mod ledger;
 pub mod patch;
 pub mod policy;
+pub mod sandbox;
+pub mod shell;
 pub mod workspace;
