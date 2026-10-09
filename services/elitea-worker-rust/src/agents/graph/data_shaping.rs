@@ -947,6 +947,13 @@ impl Budget {
     }
 }
 
+/// The serialized JSON length of `value`, or `None` once it passes `cap` bytes.
+pub(super) fn json_len_within(value: &Value, cap: usize) -> Option<usize> {
+    let mut writer = CappedWriter { remaining: cap };
+    serde_json::to_writer(&mut writer, value).ok()?;
+    Some(cap - writer.remaining)
+}
+
 struct CappedWriter {
     remaining: usize,
 }

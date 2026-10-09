@@ -20,9 +20,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 const APP: &str = "elitea";
-const ROOT: &str = "root-agent";
+pub(super) const ROOT: &str = "root-agent";
 const USER: &str = "user-1";
-const THREAD: &str = "thread-1";
+pub(super) const THREAD: &str = "thread-1";
 const SINGLE: &str = r#"
 state:
   count: {type: int, value: 0}
@@ -874,7 +874,7 @@ async fn run_nested(
     events
 }
 
-async fn fixture() -> (Arc<MemoryCheckpointer>, Arc<InMemorySessionService>) {
+pub(super) async fn fixture() -> (Arc<MemoryCheckpointer>, Arc<InMemorySessionService>) {
     let sessions = Arc::new(InMemorySessionService::new());
     sessions
         .create(CreateRequest {
@@ -899,7 +899,7 @@ async fn get_session(sessions: &InMemorySessionService) -> Box<dyn adk_rust::ses
         .await
         .unwrap()
 }
-async fn continuation(
+pub(super) async fn continuation(
     definition: &PipelineDefinition,
     checkpointer: &dyn Checkpointer,
     sessions: &InMemorySessionService,
@@ -919,7 +919,7 @@ async fn continuation(
         .await
         .unwrap()
 }
-async fn run(
+pub(super) async fn run(
     definition: &PipelineDefinition,
     checkpointer: Arc<dyn Checkpointer>,
     sessions: Arc<InMemorySessionService>,
