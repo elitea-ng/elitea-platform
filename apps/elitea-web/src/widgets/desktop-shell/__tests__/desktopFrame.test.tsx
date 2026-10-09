@@ -199,6 +199,13 @@ describe('DesktopFrame commands', () => {
     await waitFor(() => expect(screen.queryByTestId('desktop-sidebar')).toBeNull());
   });
 
+  it('opens a folder the host was handed before the page listened (a dock drop at launch)', async () => {
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    appIpc.queueBeforeReady({ id: 'workspace_opened', args: { workspace_id: 'w2' } });
+    const { router } = mount({ appIpc });
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w2'));
+  });
+
   it('draws a drag region clear of the traffic lights on macOS, and none with normal chrome', async () => {
     mount({ appIpc: createFakeAppIpc(MACOS_PLATFORM) });
     const sidebar = await screen.findByTestId('desktop-sidebar');

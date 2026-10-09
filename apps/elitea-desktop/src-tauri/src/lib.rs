@@ -96,6 +96,17 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(menu::Zoom::default())
         .manage(app_events::PendingOpens::default())
+        .manage(app_events::CommandQueue::default())
+        // A (re)loading page is not listening to app://command yet: hold
+        // commands until it calls `app_ready`.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && payload.event() == tauri::webview::PageLoadEvent::Started
+                && let Some(queue) = webview.try_state::<app_events::CommandQueue>()
+            {
+                queue.not_ready();
+            }
+        })
         .menu(menu::build)
         .on_menu_event(|app, event| menu::on_event(app, &event))
         .setup(|app| {
@@ -196,6 +207,7 @@ pub fn run() {
             local_commands::reveal_path,
             local_commands::open_path,
             platform::app_platform,
+            app_events::app_ready,
         ])
         .build(tauri::generate_context!());
     let app = match built {

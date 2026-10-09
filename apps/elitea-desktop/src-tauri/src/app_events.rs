@@ -4,13 +4,18 @@
 //!
 //! Every one of them goes through [`WorkspaceStore::add`], the same call
 //! `workspace_open` makes, then tells the UI `workspace_opened`.
+//!
+//! Nothing is lost before the page listens: until the page says it is
+//! subscribed (`app_ready`), commands wait in [`CommandQueue`] and
+//! `app_ready` hands them over. A page (re)load starts waiting again.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter as _, Manager as _};
+use tauri::{AppHandle, Emitter as _, Manager as _, State};
 
 use crate::local_commands::{LocalState, pick_folder};
 use crate::workspaces::WorkspaceStore;
@@ -26,10 +31,73 @@ pub struct AppCommand {
     pub args: Option<Value>,
 }
 
+/// The most commands kept while the page is not listening; the oldest go.
+pub const MAX_QUEUED_COMMANDS: usize = 64;
+
+#[derive(Default)]
+struct QueueState {
+    /// The page subscribed to `app://command` and said so (`app_ready`).
+    ready: bool,
+    queued: VecDeque<AppCommand>,
+}
+
+/// Commands sent while the page is not listening yet (start-up, a reload).
+#[derive(Default)]
+pub struct CommandQueue(Mutex<QueueState>);
+
+impl CommandQueue {
+    fn state(&self) -> std::sync::MutexGuard<'_, QueueState> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The command back when the page listens (send it now); otherwise kept.
+    pub fn offer(&self, command: AppCommand) -> Option<AppCommand> {
+        let mut state = self.state();
+        if state.ready {
+            return Some(command);
+        }
+        if state.queued.len() == MAX_QUEUED_COMMANDS {
+            state.queued.pop_front();
+        }
+        state.queued.push_back(command);
+        None
+    }
+
+    /// The page listens now: what waited, oldest first.
+    pub fn ready(&self) -> Vec<AppCommand> {
+        let mut state = self.state();
+        state.ready = true;
+        state.queued.drain(..).collect()
+    }
+
+    /// A page (re)load: hold commands until the new page says it listens.
+    pub fn not_ready(&self) {
+        self.state().ready = false;
+    }
+}
+
 pub fn emit(app: &AppHandle, id: &'static str, args: Option<Value>) {
-    if let Err(error) = app.emit_to("main", APP_COMMAND_EVENT, AppCommand { id, args }) {
+    let command = AppCommand { id, args };
+    let command = match app.try_state::<CommandQueue>() {
+        Some(queue) => match queue.offer(command) {
+            Some(command) => command,
+            None => return,
+        },
+        None => command,
+    };
+    if let Err(error) = app.emit_to("main", APP_COMMAND_EVENT, command) {
         log::warn!("could not deliver an app command: {error}");
     }
+}
+
+/// The page subscribed to `app://command`: the commands sent before it
+/// did, oldest first; later ones arrive as events.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri's `State` extractor
+pub fn app_ready(queue: State<'_, CommandQueue>) -> Vec<AppCommand> {
+    queue.ready()
 }
 
 /// Bring the main window forward (it may be hidden or minimised).
@@ -47,7 +115,7 @@ pub fn show_main(app: &AppHandle) {
 pub struct PendingOpens(Mutex<Vec<PathBuf>>);
 
 /// Open what arrived during start-up; called once the state exists. The
-/// UI may not listen yet: the workspace is in `workspace_list` either way.
+/// UI may not listen yet: its `workspace_opened` waits for `app_ready`.
 pub fn drain_pending(app: &AppHandle) {
     let paths = app
         .try_state::<PendingOpens>()
@@ -190,6 +258,38 @@ mod tests {
             serde_json::to_value(opened).unwrap(),
             json!({"id": "workspace_opened", "args": {"workspace_id": "abc"}})
         );
+    }
+
+    #[test]
+    fn commands_wait_until_the_page_listens_and_again_after_a_reload() {
+        let queue = CommandQueue::default();
+        let opened = |id: &str| AppCommand {
+            id: "workspace_opened",
+            args: Some(json!({ "workspace_id": id })),
+        };
+        // Start-up: a dock drop is opened before the page subscribed.
+        assert_eq!(queue.offer(opened("a")), None);
+        assert_eq!(queue.offer(opened("b")), None);
+        assert_eq!(queue.ready(), [opened("a"), opened("b")]);
+        // Listening: sent at once, nothing kept.
+        assert_eq!(queue.offer(opened("c")), Some(opened("c")));
+        assert!(queue.ready().is_empty());
+        // A reload: kept again until the new page is ready.
+        queue.not_ready();
+        assert_eq!(queue.offer(opened("d")), None);
+        assert_eq!(queue.ready(), [opened("d")]);
+    }
+
+    #[test]
+    fn the_queue_keeps_the_newest_commands() {
+        let queue = CommandQueue::default();
+        for _ in 0..MAX_QUEUED_COMMANDS + 5 {
+            queue.offer(AppCommand {
+                id: "back",
+                args: None,
+            });
+        }
+        assert_eq!(queue.ready().len(), MAX_QUEUED_COMMANDS);
     }
 
     #[test]

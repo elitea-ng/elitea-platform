@@ -43,6 +43,12 @@ export interface AppIpc {
   /** Subscribe to `app://command`; resolves once live, with its unsubscribe. */
   onCommand(handler: AppCommandHandler): Promise<() => void>;
   /**
+   * `app_ready`: tell the host this page listens to `app://command` (call it
+   * once `onCommand` is live). Resolves with the commands sent before that
+   * (a folder dropped on the dock icon at launch), oldest first.
+   */
+  ready(): Promise<AppCommand[]>;
+  /**
    * The native window's appearance (and so its sidebar material): `null`
    * follows the OS. Tauri's own `plugin:window|set_theme`, granted alone
    * (`core:window:allow-set-theme`).
@@ -67,6 +73,7 @@ export function createAppIpc(hostInvoke: HostInvoke, listen: ListenFn): AppIpc {
     revealPath: (workspaceId, path) => invoke<void>('reveal_path', { workspace_id: workspaceId, path }),
     openPath: (workspaceId, path) => invoke<void>('open_path', { workspace_id: workspaceId, path }),
     onCommand: (handler) => listen(APP_COMMAND_CHANNEL, (payload) => handler(payload as AppCommand)),
+    ready: () => invoke<AppCommand[]>('app_ready'),
     setWindowTheme: (theme) => invoke<void>('plugin:window|set_theme', { label: 'main', value: theme }),
   };
 }

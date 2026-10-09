@@ -9,6 +9,8 @@ import { WorkspaceIpcError } from './workspaceIpc';
 
 export interface FakeAppIpc extends AppIpc {
   emit(command: AppCommand): void;
+  /** A command the host sent before the page called `ready` (start-up): `ready` hands it over. */
+  queueBeforeReady(command: AppCommand): void;
   readonly calls: {
     revealed: { workspaceId: string; path: string }[];
     opened: { workspaceId: string; path: string }[];
@@ -23,6 +25,7 @@ export const MACOS_PLATFORM: AppPlatform = { os: 'macos', titlebar_overlay: true
 
 export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): FakeAppIpc {
   const handlers = new Set<AppCommandHandler>();
+  const queued: AppCommand[] = [];
   const calls: FakeAppIpc['calls'] = { revealed: [], opened: [], themes: [] };
   const failures = new Map<'revealPath' | 'openPath', WorkspaceIpcError>();
   const settle = (command: 'revealPath' | 'openPath'): Promise<void> => {
@@ -55,6 +58,10 @@ export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): Fake
     emit(command) {
       Array.from(handlers).forEach((handler) => handler(command));
     },
+    queueBeforeReady(command) {
+      queued.push(command);
+    },
+    ready: () => Promise.resolve(queued.splice(0)),
     failNext(command, code, message) {
       failures.set(command, new WorkspaceIpcError(code, message));
     },

@@ -10,7 +10,7 @@
  */
 import { useEffect } from 'react';
 
-import { BROWSER_PLATFORM, type AppIpc } from '@/shared/desktop/appEvents';
+import { BROWSER_PLATFORM, type AppCommand, type AppIpc } from '@/shared/desktop/appEvents';
 
 import { actionForAppCommand, actionForShortcut, type ShellAction } from '../lib/shellActions';
 import { useDesktopLayout } from './desktopLayout.store';
@@ -53,18 +53,24 @@ export function useHostIntegration(run: (action: ShellAction) => void, appIpc: A
     if (appIpc === undefined) return undefined;
     let off: (() => void) | undefined;
     let disposed = false;
+    const handle = (command: AppCommand): void => {
+      const action = actionForAppCommand(command);
+      if (action !== undefined) run(action);
+    };
     appIpc
-      .onCommand((command) => {
-        const action = actionForAppCommand(command);
-        if (action !== undefined) run(action);
+      .onCommand(handle)
+      .then((unsubscribe) => {
+        if (disposed) {
+          unsubscribe();
+          return undefined;
+        }
+        off = unsubscribe;
+        // Live now: the host hands over what it sent before (a dock drop at launch).
+        return appIpc.ready().then((pending) => {
+          if (!disposed) pending.forEach(handle);
+        });
       })
-      .then(
-        (unsubscribe) => {
-          if (disposed) unsubscribe();
-          else off = unsubscribe;
-        },
-        () => undefined,
-      );
+      .catch(() => undefined);
     return () => {
       disposed = true;
       off?.();

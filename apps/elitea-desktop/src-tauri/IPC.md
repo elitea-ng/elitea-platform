@@ -212,6 +212,7 @@ the same account sees it again, and another account does not);
 | `app_platform` | — | `AppPlatform` (below). Never rejects. |
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
+| `app_ready` | — | `AppCommand[]` — the page now listens to `app://command` (call it once the listener is live); the commands the host sent before that, oldest first. Never rejects. |
 
 ```ts
 type AppPlatform = {
@@ -268,9 +269,11 @@ type AppCommand = { id: string; args?: object };
 in the host (the same picker and `WorkspaceStore::add` as `workspace_open`)
 and then sends `workspace_opened`; there is no `open_folder` command id for
 the UI to handle. Cancelling the picker sends nothing. Menu-forwarded ids
-also bring the window forward first. Events are not replayed: a folder
-dropped on the dock icon while the app starts is opened before the UI
-listens — it is in `workspace_list` either way. In the desktop build the
+also bring the window forward first. Nothing is lost before the page
+listens: until it calls `app_ready`, commands wait in the host (the newest
+64), and `app_ready` returns them — a folder dropped on the dock icon while
+the app starts is selected once the UI is up. A page (re)load holds commands
+again until the new page calls `app_ready`. In the desktop build the
 UI should not also bind these shortcuts in the page: the menu accelerator
 fires the command, and a page keydown handler for the same keys could run
 the action twice.
