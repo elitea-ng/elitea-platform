@@ -71,6 +71,26 @@ pub async fn load_existing(pool: &PgPool, key: GraphKey) -> Result<Graph, Engine
     }
 }
 
+/// How an `import_graph` failure reaches the caller. A document the
+/// import cannot read and a refusal (an ingestion holds the lease, or the
+/// graph has native ingestion state and `replace_ingestion_state` is
+/// false) are the caller's to correct, so they are `ValueError`s; only a
+/// store failure is a `RuntimeError`.
+fn import_error(error: crate::transfer::TransferError) -> EngineError {
+    use crate::transfer::TransferError;
+    match error {
+        TransferError::Document(_) | TransferError::Refused(_) => invalid(error.to_string()),
+        other => EngineError::new(ErrorType::Runtime, other.to_string()),
+    }
+}
+
+/// `run_ingestion`'s `full_rebuild`, read leniently: a full rebuild builds
+/// the new graph and swaps it in, so turning it on by a `1` or `"yes"` is
+/// safe, and reading those as off would silently run incrementally.
+fn full_rebuild(params: &Map<String, Value>) -> bool {
+    crate::retrieval::lenient_flag(params.get("full_rebuild"))
+}
+
 fn text_param<'a>(params: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
         .find_map(|key| params.get(*key).and_then(Value::as_str))
@@ -229,7 +249,7 @@ impl NativeRunner {
         params: &Map<String, Value>,
         context: &Context,
     ) -> Result<Value, EngineError> {
-        use crate::transfer::{self, TransferError};
+        use crate::transfer;
         let Some(text) = params.get("graph_document").and_then(Value::as_str) else {
             return Err(invalid(
                 "import_graph needs the graph document the host reads from the toolkit's bucket; run the tool through the platform",
@@ -241,10 +261,7 @@ impl NativeRunner {
         let replace = crate::retrieval::flag(params.get("replace_ingestion_state"));
         let report = transfer::import_graph(&self.pool, key, text, replace)
             .await
-            .map_err(|error| match error {
-                TransferError::Document(_) => invalid(error.to_string()),
-                other => EngineError::new(ErrorType::Runtime, other.to_string()),
-            })?;
+            .map_err(import_error)?;
         if json_format(params) {
             return Ok(crate::retrieval::answer(elitea_engine_core::pyjson::dumps(
                 &json!({
@@ -286,6 +303,11 @@ impl NativeRunner {
                 }
                 other => EngineError::new(ErrorType::Runtime, other.to_string()),
             })?;
+        if let Some(refusal) =
+            transfer::export_size_refusal(&report.document, crate::MAX_EXPORT_DOCUMENT_BYTES)
+        {
+            return Err(invalid(refusal));
+        }
         let (summary, text) = transfer::export_summary(
             &transfer::export_bucket(params),
             report.entities,
@@ -560,7 +582,6 @@ impl NativeRunner {
             self.transport.http_client().clone(),
             &settings,
             key.project_id,
-            model_name,
         );
         let embed = self.ranker(&view, &settings, key, &stop);
         let model = self.chat_model(&settings, &stop);
@@ -673,7 +694,7 @@ impl NativeRunner {
         let options = RunOptions {
             model: Some(ModelOptions::new(model)),
             embeddings,
-            full_rebuild: crate::retrieval::flag(params.get("full_rebuild")),
+            full_rebuild: full_rebuild(params),
         };
         let outcome = ingest::run(
             &self.pool,
@@ -785,12 +806,14 @@ impl NativeRunner {
 /// {platform}/api/v2/elitea_core/test_tool/prompt_lib/{project}/{toolkit}`
 /// with the invocation's bearer. The platform reloads the toolkit's own
 /// settings and credentials and applies the user's permissions; the engine
-/// sends only the tool and its arguments.
+/// sends only the tool and its arguments. Exactly `request_id`,
+/// `tool_name`, `tool_params` and `toolkit_config.toolkit_id`: the
+/// platform's investigate grant (`material.SourceToolGate`) admits that
+/// shape and nothing more, so no model choice (`llm_model`) rides on it.
 fn source_caller(
     client: reqwest::Client,
     settings: &ModelSettings,
     project_id: i64,
-    model: String,
 ) -> crate::investigate::SourceCall {
     let platform = settings
         .api_base
@@ -804,14 +827,13 @@ fn source_caller(
             let url = format!(
                 "{platform}/api/v2/elitea_core/test_tool/prompt_lib/{project_id}/{toolkit_id}"
             );
-            let (client, bearer, model) = (client.clone(), bearer.clone(), model.clone());
+            let (client, bearer) = (client.clone(), bearer.clone());
             Box::pin(async move {
                 let body = json!({
                     "request_id": format!("investigate-{toolkit_id}-{tool}"),
                     "tool_name": tool,
                     "tool_params": arguments,
                     "toolkit_config": {"toolkit_id": toolkit_id},
-                    "llm_model": model,
                 });
                 let response = client
                     .post(&url)
@@ -1067,6 +1089,72 @@ fn status_text(summary: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_rebuild_is_lenient_and_replace_ingestion_state_is_strict() {
+        for on in [
+            json!(true),
+            json!(1),
+            json!(2.5),
+            json!("true"),
+            json!(" TRUE "),
+            json!("1"),
+            json!("yes"),
+            json!("On"),
+        ] {
+            let params = json!({ "full_rebuild": on });
+            let params = params.as_object().cloned().unwrap_or_default();
+            assert!(full_rebuild(&params), "{params:?}");
+        }
+        for off in [
+            json!(false),
+            json!(0),
+            json!(0.0),
+            json!("false"),
+            json!("0"),
+            json!("no"),
+            json!("off"),
+            json!(""),
+            json!(null),
+            json!([]),
+            json!({}),
+        ] {
+            let params = json!({"full_rebuild": off});
+            let params = params.as_object().cloned().unwrap_or_default();
+            assert!(!full_rebuild(&params), "{params:?}");
+        }
+        assert!(!full_rebuild(&Map::new()));
+        // The destructive flag stays strict: 1 and "yes" do not delete state.
+        for value in [json!(1), json!("1"), json!("yes"), json!("on")] {
+            assert!(!crate::retrieval::flag(Some(&value)), "{value}");
+        }
+    }
+
+    #[test]
+    fn import_refusals_are_the_callers_to_correct() {
+        use crate::transfer::TransferError;
+        for (error, wanted) in [
+            (TransferError::Document("bad".into()), ErrorType::Value),
+            (
+                TransferError::Refused("an ingestion of this Inventory toolkit is running".into()),
+                ErrorType::Value,
+            ),
+            (
+                TransferError::Refused("already has native ingestion state".into()),
+                ErrorType::Value,
+            ),
+            (
+                TransferError::NotFound {
+                    project_id: 1,
+                    application_id: 2,
+                },
+                ErrorType::Runtime,
+            ),
+        ] {
+            let mapped = import_error(error);
+            assert_eq!(mapped.error_type, wanted, "{}", mapped.message);
+        }
+    }
 
     /// The tools `run` answers itself, before the read dispatch.
     const RUN_TOOLS: [&str; 8] = [

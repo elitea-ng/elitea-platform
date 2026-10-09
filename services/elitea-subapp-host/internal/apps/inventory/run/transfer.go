@@ -27,10 +27,10 @@ package run
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
@@ -138,12 +138,46 @@ func (r *Runner) ResolveGraphDocument(ctx context.Context, params Params, tc *sp
 			"%s in bucket %s is over %d MiB; import it with the engine's import-graph command",
 			name, bucket, MaxGraphImportBytes>>20)
 	}
-	if encoded, err := json.Marshal(string(data)); err != nil || len(encoded) > maxGraphImportEncoded {
+	if jsonStringLen(data) > maxGraphImportEncoded {
 		return "", spi.Failf(spi.KindValue,
 			"%s in bucket %s is too large to send to the engine; import it with the engine's import-graph command",
 			name, bucket)
 	}
 	return string(data), nil
+}
+
+// jsonStringLen is len(json.Marshal(string(data))), counted without
+// building either copy: encoding/json's string escaping, HTML escaping
+// included. A quote, a backslash and \b \f \n \r \t take two bytes; any
+// other control character, '<', '>', '&', U+2028, U+2029 and each byte of
+// invalid UTF-8 (written as \ufffd) take six; everything else is itself.
+func jsonStringLen(data []byte) int {
+	n := 2
+	for i := 0; i < len(data); {
+		if b := data[i]; b < utf8.RuneSelf {
+			switch {
+			case b == '"' || b == '\\' || b == '\b' || b == '\f' || b == '\n' || b == '\r' || b == '\t':
+				n += 2
+			case b < 0x20 || b == '<' || b == '>' || b == '&':
+				n += 6
+			default:
+				n++
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRune(data[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			n += 6
+		case r == '\u2028' || r == '\u2029':
+			n += 6
+		default:
+			n += size
+		}
+		i += size
+	}
+	return n
 }
 
 // ExportClient is the bucket transport an export_graph call needs, or the

@@ -135,7 +135,10 @@ func (s *Server) mtlsGate(next http.Handler) http.Handler {
 // back only what a valid signature vouches for. With a secret configured
 // and mTLS required, a request off the probes with no valid signature is
 // refused; without mTLS the headers are merely dropped, so a dev stack
-// still serves.
+// still serves. A dropped identity is EMPTY, never the body's: a runner
+// whose tools address tenant data must refuse a call with no verified
+// project (inventory's run.Runner.RequireVerifiedProject) rather than read
+// the project from the body the caller writes.
 func (s *Server) identityGate(next http.Handler) http.Handler {
 	secret := []byte(s.settings.IdentitySecret)
 	required := s.settings.MTLSRequired()

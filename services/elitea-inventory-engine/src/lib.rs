@@ -66,3 +66,15 @@ pub fn build_runner(settings: &Settings) -> Result<Runner, ConfigError> {
 /// `MaxGraphImportBytes`; JSON-escaped once more in the body, which the host
 /// bounds at 88 MiB). The socket is the host's alone.
 pub const MAX_INVOKE_BYTES: usize = 96 << 20;
+
+/// The largest `export_graph` document the tool returns, measured as it
+/// travels: JSON-escaped (`ensure_ascii`) in the result line of the
+/// sidecar stream. The host reads that stream one line at a time and caps a
+/// line at 64 MiB (`engine.MaxStreamLineBytes` in
+/// `services/elitea-subapp-host/internal/engine/engine.go`, which mirrors
+/// this value as `engine.MaxExportDocumentBytes` and pins the headroom in a
+/// drift test). The 4 MiB left over carries the line's envelope and the
+/// export summary. A larger graph is refused before it is sent, with a
+/// pointer to the engine's `export-graph` command, rather than failing in
+/// the host as an unreadable line.
+pub const MAX_EXPORT_DOCUMENT_BYTES: usize = 60 << 20;

@@ -425,19 +425,10 @@ pub enum SmartStep {
 /// # Errors
 ///
 /// `threshold` or `batch_size` is not an integer (Python's `int()`
-/// errors), or `batch_size` is below 1.
+/// errors), or `batch_size` is below 1 when some type qualifies.
 pub fn smart_plan(graph: &Graph, params: &Map<String, Value>) -> Result<SmartStep, EngineError> {
     let threshold = py_int_param(params.get("threshold").unwrap_or(&json!(1000)))?;
     let batch_size = py_int_param(params.get("batch_size").unwrap_or(&json!(100)))?;
-    let batch_size = usize::try_from(batch_size)
-        .ok()
-        .filter(|size| *size >= 1)
-        .ok_or_else(|| {
-            EngineError::new(
-                ErrorType::Value,
-                format!("batch_size must be a positive integer, got {batch_size}"),
-            )
-        })?;
     let dry_run = super::flag(params.get("dry_run"));
     let canonical = &tables().canonical_types;
     let types = graph_entity_types(graph);
@@ -464,6 +455,17 @@ pub fn smart_plan(graph: &Graph, params: &Map<String, Value>) -> Result<SmartSte
         }
         return Ok(SmartStep::Answer(message));
     }
+    // Only now: with nothing to map, Python answered "No types to
+    // normalize" whatever batch_size held (it is used only to batch).
+    let batch_size = usize::try_from(batch_size)
+        .ok()
+        .filter(|size| *size >= 1)
+        .ok_or_else(|| {
+            EngineError::new(
+                ErrorType::Value,
+                format!("batch_size must be a positive integer, got {batch_size}"),
+            )
+        })?;
     Ok(SmartStep::Map(SmartPlan {
         batch_size,
         dry_run,

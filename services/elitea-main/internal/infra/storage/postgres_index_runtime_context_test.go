@@ -40,6 +40,10 @@ func TestPostgresRuntimeContextRequiresExactActiveClaimSessionAndFence(t *testin
 			"a.execution_id IS NOT NULL",
 			// A toolkit tool run redeems its user's client token too (test_tool).
 			"WHEN j.capability_id = 'toolkit.call_tool.v1' THEN 'user'",
+			// ...and only for a job in the interactive shape: a user id as
+			// actor, repeated as principal (no detail row exists to join).
+			"AND j.actor_id ~ '^[1-9][0-9]{0,18}$'",
+			"AND j.principal_ref = j.actor_id",
 		} {
 			require.Contains(t, query, predicate)
 		}
@@ -161,6 +165,7 @@ func TestPostgresRuntimeContextAuthorizationIntegration(t *testing.T) {
     generation BIGINT NOT NULL,
     resource_project_id INTEGER NOT NULL,
     actor_id TEXT NOT NULL,
+    principal_ref TEXT NOT NULL DEFAULT '',
     desired_state TEXT NOT NULL,
     capability_id TEXT NOT NULL,
     PRIMARY KEY (execution_id, generation)
@@ -247,8 +252,43 @@ VALUES ('claim-1', 'execution-1', 1, 'session-1', $1, 'producer-1', $2, clock_ti
 VALUES ('claim-agent', 'execution-agent', 1, 'session-1', $1, 'producer-1', $2, clock_timestamp() + interval '1 minute')`, identity.String(), fence); err != nil {
 		t.Fatal(err)
 	}
+	// Tool runs: one in the shape toolkitcalltool.Service writes (actor and
+	// principal the requesting user's id), and three that are not a user's
+	// run — a system actor, a principal that is not the actor, a zero id.
+	for _, job := range []struct{ id, actor, principal string }{
+		{"execution-tool", "17", "17"},
+		{"execution-tool-system", "system", "system"},
+		{"execution-tool-mismatch", "17", "18"},
+		{"execution-tool-zero", "0", "0"},
+	} {
+		if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.execution_jobs
+    (execution_id, generation, resource_project_id, actor_id, principal_ref, desired_state, capability_id)
+VALUES ($1, 1, 42, $2, $3, 'RUNNING', 'toolkit.call_tool.v1')`, job.id, job.actor, job.principal); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.execution_claims
+    (claim_id, execution_id, generation, workload_session_id, workload_identity, producer_id, fence_token, lease_expires_at)
+VALUES ($1, $1, 1, 'session-1', $2, 'producer-1', $3, clock_timestamp() + interval '1 minute')`, job.id, identity.String(), fence); err != nil {
+			t.Fatal(err)
+		}
+	}
 	repository, err := NewPostgresContentRepository(pool)
 	require.NoError(t, err)
+	toolClaim := func(id string) ContentClaim {
+		return ContentClaim{PeerCertificate: certificateWithURI(identity), ExecutionID: id, Generation: 1, ClaimID: id, FenceToken: fence}
+	}
+	toolAuthorization, err := repository.AuthorizeRuntimeContext(ctx, toolClaim("execution-tool"))
+	require.NoError(t, err)
+	require.EqualValues(t, 42, toolAuthorization.ResourceProjectID)
+	require.Equal(t, "17", toolAuthorization.ActorID)
+	require.Equal(t, runtimeContextInitiatorUser, toolAuthorization.Initiator)
+	for _, id := range []string{"execution-tool-system", "execution-tool-mismatch", "execution-tool-zero"} {
+		_, err := repository.AuthorizeRuntimeContext(ctx, toolClaim(id))
+		require.ErrorIs(t, err, ErrContentUnauthorized, "%s is not a user's tool run", id)
+	}
+	_, err = repository.AuthorizeAgentRuntimeContext(ctx, toolClaim("execution-tool"))
+	require.ErrorIs(t, err, ErrContentUnauthorized, "a tool run is not an agent turn")
+
 	claim := ContentClaim{
 		PeerCertificate: certificateWithURI(identity),
 		ExecutionID:     "execution-1",

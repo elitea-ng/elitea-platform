@@ -255,3 +255,85 @@ async fn what_cannot_be_imported_is_refused_and_nothing_is_written() {
     .expect("count");
     assert_eq!(left, 0);
 }
+
+/// `export-graph` only reads: it never migrates the database it reads, and
+/// a missing or older schema is a clear refusal. `import-graph` migrates.
+#[tokio::test]
+async fn export_does_not_migrate_and_refuses_a_missing_or_old_schema() {
+    let Some(pool) = common::database("transfer_schema").await else {
+        return;
+    };
+    let export = || {
+        engine(
+            "transfer_schema",
+            &["export-graph", "--project-id", "3", "--application-id", "1"],
+            None,
+        )
+    };
+    let ledger = store::LEDGER.table;
+    let present = |pool: sqlx::PgPool| async move {
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
+            .bind(ledger)
+            .fetch_one(&pool)
+            .await
+            .expect("to_regclass")
+    };
+
+    // A schema one migration behind: refused, and the ledger is untouched.
+    let latest: String = sqlx::query_scalar(&format!(
+        "DELETE FROM {ledger} WHERE version = (SELECT max(version) FROM {ledger}) RETURNING version"
+    ))
+    .fetch_one(&pool)
+    .await
+    .expect("forget the latest migration");
+    let behind = export();
+    assert!(!behind.status.success());
+    assert!(
+        stderr(&behind).contains("schema is behind") && stderr(&behind).contains(&latest),
+        "{}",
+        stderr(&behind)
+    );
+    let count: i64 =
+        sqlx::query_scalar(&format!("SELECT count(*) FROM {ledger} WHERE version = $1"))
+            .bind(&latest)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(count, 0, "export-graph applied a migration");
+
+    // No schema at all: refused, and nothing is created.
+    sqlx::raw_sql("DROP SCHEMA inventory_graph CASCADE")
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+    let missing = export();
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("not set up") && stderr(&missing).contains("does not migrate"),
+        "{}",
+        stderr(&missing)
+    );
+    assert!(
+        !present(pool.clone()).await,
+        "export-graph created the schema"
+    );
+
+    // import-graph still migrates, and the export then serves.
+    let imported = engine(
+        "transfer_schema",
+        &[
+            "import-graph",
+            "--project-id",
+            "3",
+            "--application-id",
+            "1",
+            "-",
+        ],
+        Some(PYTHON_DOCUMENTS[0].1),
+    );
+    assert!(imported.status.success(), "{}", stderr(&imported));
+    assert!(present(pool.clone()).await, "import-graph migrates");
+    assert_eq!(store::schema_gap(&pool).await.expect("gap"), None);
+    let served = export();
+    assert!(served.status.success(), "{}", stderr(&served));
+}

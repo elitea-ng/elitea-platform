@@ -256,28 +256,10 @@ func sourceToolAdmitted(
 	if err != nil || len(raw) > sourceToolBodyLimit {
 		return false
 	}
-	// The fields test_tool decodes (toolkitrun.Body), decoded the same way —
-	// encoding/json, so the same case folding and the same last-key-wins — so
-	// the name checked here is the name that runs.
-	var body struct {
-		ToolName                  string          `json:"tool_name"`
-		LLMSettings               json.RawMessage `json:"llm_settings"`
-		MCPAuthorizationReference string          `json:"mcp_authorization_reference"`
-		LLMConfiguration          json.RawMessage `json:"llm_configuration"`
-		MCPTokens                 json.RawMessage `json:"mcp_tokens"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if decoder.Decode(&body) != nil {
+	name, ok := engineSourceToolName(raw)
+	if !ok {
 		return false
 	}
-	// What the engine sends and nothing more: no caller-supplied model
-	// settings or MCP authorization ride on a borrowed permission.
-	if !absent(body.LLMSettings) || !absent(body.LLMConfiguration) || !absent(body.MCPTokens) ||
-		body.MCPAuthorizationReference != "" {
-		return false
-	}
-	name := strings.TrimSpace(body.ToolName)
 	if name == "" || !readOnly(name) {
 		return false
 	}
@@ -293,8 +275,50 @@ func sourceToolAdmitted(
 	return admitted
 }
 
-func absent(raw json.RawMessage) bool {
-	return len(bytes.TrimSpace(raw)) == 0 || IsNull(raw)
+// engineSourceKeys are the top-level keys the Inventory engine sends to
+// test_tool (services/elitea-inventory-engine/src/native.rs source_caller):
+// an ALLOW-list, not a deny-list of toolkitrun.Body's fields. Any other
+// key — llm_model, llm_settings, llm_configuration, mcp_tokens,
+// mcp_authorization_reference, a field toolkitrun.Body gains later, or a
+// case variant encoding/json would fold onto one of them — carries a choice
+// (a model, a credential, an authorization) that must not ride on a
+// borrowed permission, so the grant does not apply.
+var engineSourceKeys = map[string]bool{
+	"request_id": true, "tool_name": true, "tool_params": true, "toolkit_config": true,
+}
+
+// engineSourceToolName is the trimmed tool name of a body in exactly the
+// engine's shape, or false: top-level keys within engineSourceKeys, matched
+// exactly (no case folding), and toolkit_config, when present, an object
+// holding at most toolkit_id. test_tool decodes the same bytes with
+// encoding/json (last key wins, as here), so the name checked is the name
+// that runs.
+func engineSourceToolName(raw []byte) (string, bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return "", false
+	}
+	for key := range fields {
+		if !engineSourceKeys[key] {
+			return "", false
+		}
+	}
+	if config, present := fields["toolkit_config"]; present && !IsNull(config) {
+		var inner map[string]json.RawMessage
+		if json.Unmarshal(config, &inner) != nil || inner == nil {
+			return "", false
+		}
+		for key := range inner {
+			if key != "toolkit_id" {
+				return "", false
+			}
+		}
+	}
+	var name string
+	if json.Unmarshal(fields["tool_name"], &name) != nil {
+		return "", false
+	}
+	return strings.TrimSpace(name), true
 }
 
 // The Inventory engine's read-only rule for a source tool (Python

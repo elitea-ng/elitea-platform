@@ -221,6 +221,39 @@ pub fn export_summary(
     (document, text)
 }
 
+/// The length of `text` as the sidecar sends it: a JSON string written by
+/// `elitea_engine_core::pyjson` with `ensure_ascii` (quotes included).
+/// Counted without building the escaped copy, which for a large graph is
+/// several times the document.
+#[must_use]
+pub fn escaped_len(text: &str) -> usize {
+    2 + text
+        .chars()
+        .map(|character| match character {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{08}' | '\u{0c}' => 2,
+            ' '..='~' => 1,
+            _ => 6 * character.len_utf16(),
+        })
+        .sum::<usize>()
+}
+
+/// The refusal for an export document over `bound` bytes once escaped
+/// (`crate::MAX_EXPORT_DOCUMENT_BYTES` for the tool), or `None`.
+///
+/// The text avoids the words "artifact" and "download": the host's frozen
+/// classifier reads them as an artifact failure, and this is a size limit.
+#[must_use]
+pub fn export_size_refusal(document: &str, bound: usize) -> Option<String> {
+    let size = escaped_len(document);
+    (size > bound).then(|| {
+        format!(
+            "the stored graph is {} MiB once encoded, over the {} MiB the export_graph tool can return; export it with the engine's export-graph command",
+            size.div_ceil(1 << 20),
+            bound >> 20
+        )
+    })
+}
+
 /// [`export_graph`] with the counts the `export_graph` tool reports.
 ///
 /// # Errors
@@ -249,6 +282,38 @@ pub async fn export_report(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn escaped_len_matches_what_the_sidecar_writes() {
+        for text in [
+            "",
+            "plain ascii graph",
+            "quote \" backslash \\ slash /",
+            "\n\r\t\u{08}\u{0c}\u{0}\u{1}\u{1f}\u{7f}",
+            "é ü \u{2028} \u{2029} \u{feff} 中文",
+            "😀 \u{10ffff} <>&",
+        ] {
+            assert_eq!(
+                escaped_len(text),
+                elitea_engine_core::pyjson::dumps(&Value::String(text.to_owned())).len(),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_export_over_the_bound_is_refused_before_it_is_sent() {
+        assert_eq!(export_size_refusal("ab", 5), None);
+        // Five bytes once quoted: exactly the bound is admitted.
+        assert_eq!(export_size_refusal("abc", 5), None);
+        let refusal = export_size_refusal("abcd", 5).unwrap_or_default();
+        assert!(refusal.contains("export-graph command"), "{refusal}");
+        assert!(!refusal.contains("artifact"), "{refusal}");
+        // Escaping, not the raw length, is what counts: 3 quotes are 8 bytes.
+        assert!(export_size_refusal("\"\"\"", 7).is_some());
+        // The tool's bound leaves room under the host's 64 MiB line cap.
+        const { assert!(crate::MAX_EXPORT_DOCUMENT_BYTES + (1 << 20) <= 64 << 20) };
+    }
 
     #[test]
     fn an_export_answers_a_summary_and_never_the_document() {

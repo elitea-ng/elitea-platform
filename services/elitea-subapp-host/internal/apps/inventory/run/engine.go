@@ -78,5 +78,8 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 		RunnerName: "sidecar",
 		Tools:      tools,
 		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
+		// The native engine keys every graph by the project: only the
+		// verified identity may name it (see Runner.RequireVerifiedProject).
+		RequireVerifiedProject: true,
 	}
 }

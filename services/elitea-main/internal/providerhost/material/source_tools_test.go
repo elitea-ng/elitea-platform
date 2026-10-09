@@ -67,8 +67,10 @@ func gate(grants material.SourceToolGrants, holds ...string) http.Handler {
 	return router
 }
 
+// engineBody is exactly what the Inventory engine sends (native.rs
+// source_caller): the gate allow-lists this shape.
 const engineBody = `{"request_id":"investigate-101-get_issue","tool_name":"get_issue",` +
-	`"tool_params":{"issue_number":7},"toolkit_config":{"toolkit_id":"101"},"llm_model":"gpt-x"}`
+	`"tool_params":{"issue_number":7},"toolkit_config":{"toolkit_id":"101"}}`
 
 func callbackUser() auth.User {
 	bound := int64(42)
@@ -125,11 +127,23 @@ func TestEverythingElseTakesThePatchGate(t *testing.T) {
 	write := strings.Replace(engineBody, `"get_issue"`, `"create_issue"`, 1)
 	branchy := strings.Replace(engineBody, `"get_issue"`, `"list_branches_in_repo"`, 1)
 	padded := strings.Replace(engineBody, `"get_issue"`, `"  delete_file  "`, 1)
-	withSettings := strings.Replace(engineBody, `"llm_model"`, `"llm_settings":{"api_key":"x"},"llm_model"`, 1)
-	withMCP := strings.Replace(engineBody, `"llm_model"`, `"mcp_authorization_reference":"r","llm_model"`, 1)
+	// add puts one more top-level key into the engine's body.
+	add := func(field string) string {
+		return strings.Replace(engineBody, `"request_id"`, field+`,"request_id"`, 1)
+	}
+	withSettings := add(`"llm_settings":{"api_key":"x"}`)
+	withMCP := add(`"mcp_authorization_reference":"r"`)
+	withModel := add(`"llm_model":"gpt-x"`)
+	withFoldedModel := add(`"LLM_Model":"gpt-x"`)
+	withConfiguration := add(`"llm_configuration":{"x":1}`)
+	withTokens := add(`"mcp_tokens":{"x":"y"}`)
+	withUnknown := add(`"future_field":1`)
+	configExtra := strings.Replace(engineBody, `{"toolkit_id":"101"}`, `{"toolkit_id":"101","settings":{"token":"x"}}`, 1)
+	configNotObject := strings.Replace(engineBody, `{"toolkit_id":"101"}`, `"101"`, 1)
 	// encoding/json matches keys case-insensitively and the last one wins:
 	// the name checked must be the name test_tool would run.
-	shadowed := strings.Replace(engineBody, `"llm_model"`, `"Tool_Name":"update_issue","llm_model"`, 1)
+	shadowed := add(`"Tool_Name":"update_issue"`)
+	shadowedAfter := strings.Replace(engineBody, `}}`, `},"Tool_Name":"update_issue"}`, 1)
 	callback := callbackUser()
 
 	cases := map[string]struct {
@@ -149,6 +163,16 @@ func TestEverythingElseTakesThePatchGate(t *testing.T) {
 		"caller-supplied llm_settings":       {&callback, "/test_tool/prompt_lib/42/101", withSettings},
 		"an MCP authorization reference":     {&callback, "/test_tool/prompt_lib/42/101", withMCP},
 		"a case-folded duplicate tool name":  {&callback, "/test_tool/prompt_lib/42/101", shadowed},
+		"a case-folded tool name last":       {&callback, "/test_tool/prompt_lib/42/101", shadowedAfter},
+		"a caller-chosen llm_model":          {&callback, "/test_tool/prompt_lib/42/101", withModel},
+		"a case-folded llm_model":            {&callback, "/test_tool/prompt_lib/42/101", withFoldedModel},
+		"an inline llm_configuration":        {&callback, "/test_tool/prompt_lib/42/101", withConfiguration},
+		"inline mcp_tokens":                  {&callback, "/test_tool/prompt_lib/42/101", withTokens},
+		"a key the engine never sends":       {&callback, "/test_tool/prompt_lib/42/101", withUnknown},
+		"toolkit_config beyond toolkit_id":   {&callback, "/test_tool/prompt_lib/42/101", configExtra},
+		"toolkit_config that is no object":   {&callback, "/test_tool/prompt_lib/42/101", configNotObject},
+		"a body that is an array":            {&callback, "/test_tool/prompt_lib/42/101", `[]`},
+		"a body with no tool_name":           {&callback, "/test_tool/prompt_lib/42/101", `{"request_id":"x"}`},
 		"a body that is not JSON":            {&callback, "/test_tool/prompt_lib/42/101", `{"tool_name":`},
 		"no principal":                       {nil, "/test_tool/prompt_lib/42/101", engineBody},
 	}

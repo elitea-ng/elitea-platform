@@ -201,6 +201,41 @@ pub async fn migrate(pool: &PgPool) -> Result<Vec<String>> {
     Ok(elitea_pg_migrate::apply(pool, &LEDGER, &embedded()?).await?)
 }
 
+/// Why the store's schema cannot serve a read-only command, or `None`
+/// when every embedded migration is applied. Reads the ledger only: a
+/// read-only command (`export-graph`) must not migrate the database it
+/// reads, so it checks instead.
+///
+/// # Errors
+///
+/// [`StoreError::Database`] when the ledger cannot be read.
+pub async fn schema_gap(pool: &PgPool) -> Result<Option<String>> {
+    let present: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(LEDGER.table)
+        .fetch_one(pool)
+        .await?;
+    if !present {
+        return Ok(Some(format!(
+            "the Inventory graph store is not set up in this database ({} is missing)",
+            LEDGER.table
+        )));
+    }
+    let applied: Vec<String> = sqlx::query_scalar(&format!("SELECT version FROM {}", LEDGER.table))
+        .fetch_all(pool)
+        .await?;
+    let missing: Vec<String> = embedded()?
+        .into_iter()
+        .filter(|migration| !applied.contains(&migration.version))
+        .map(|migration| format!("{}_{}", migration.version, migration.name))
+        .collect();
+    Ok((!missing.is_empty()).then(|| {
+        format!(
+            "the Inventory graph store's schema is behind this engine (not applied: {})",
+            missing.join(", ")
+        )
+    }))
+}
+
 fn ordinal(index: usize) -> Result<i32> {
     i32::try_from(index)
         .map_err(|_| StoreError::Unstorable("a graph holds at most 2^31 rows".to_owned()))

@@ -131,6 +131,46 @@ func TestTheVerifiedProjectAddressesTheGraph(t *testing.T) {
 	}
 }
 
+// TestARunnerOverTheStoreRefusesACallWithNoVerifiedProject: the identity
+// gate drops an unsigned or badly signed identity on a hop without mTLS, so
+// an empty identity reaches the runner. A runner over the shared graph store
+// must then refuse, never fall back to the body's project_id (which would
+// select any tenant's graph). The fixture runner reads no tenant data.
+func TestARunnerOverTheStoreRefusesACallWithNoVerifiedProject(t *testing.T) {
+	h := newHarness(t, map[string]run.Tool{"search_graph": answer(map[string]any{"success": true, "result": "ok"})})
+	h.runner.RequireVerifiedProject = true
+	request := map[string]any{"project_id": 8, "configuration": map[string]any{"application_id": 70, "project_id": 8},
+		"parameters": map[string]any{"query": "x", "project_id": 8}}
+	for _, identity := range []spi.Identity{{}, {UserID: "42"}} {
+		h.identity, h.lastArgs = identity, nil
+		body, err := h.invoke("inventory", "inventory", "search_graph", request)
+		if err == nil {
+			t.Fatalf("identity %+v: a call with no verified project was served: %v", identity, body)
+		}
+		if h.lastArgs != nil {
+			t.Fatalf("identity %+v: the engine was called with %v", identity, h.lastArgs)
+		}
+		if !strings.Contains(fmt.Sprint(body), "signed identity") {
+			t.Errorf("identity %+v: the refusal does not say why: %v", identity, body)
+		}
+	}
+	h.identity = spi.Identity{ProjectID: "7"}
+	if _, err := h.invoke("inventory", "inventory", "search_graph", request); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.lastArgs["project_id"]; got != "7" {
+		t.Errorf("project_id = %v, want the verified 7", got)
+	}
+
+	settings := spi.Settings{Prefix: "ELITEA_INVENTORY_", EngineSocket: "/run/inventory/engine.sock"}
+	if !run.NewEngineRunner(settings).RequireVerifiedProject {
+		t.Error("the engine sidecar runner serves a call with no verified project")
+	}
+	if run.NewFixtureRunner(settings, 0).RequireVerifiedProject {
+		t.Error("the fixture runner, which reads no tenant data, needs a verified project")
+	}
+}
+
 func newHarness(t *testing.T, tools map[string]run.Tool) *harness {
 	t.Helper()
 	uploads := &fakeArtifacts{fail: map[string]error{}, objects: map[string][]byte{"graphs/graph.json": []byte(seededGraph)}}

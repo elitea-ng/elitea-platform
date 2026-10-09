@@ -171,6 +171,18 @@ fn parameters_are_read_as_python_read_them() {
         plan(json!({"batch_size": 0}))
             .is_err_and(|e| e.message.contains("batch_size must be a positive integer"))
     );
+    // Nothing qualifies: the "No types to normalize" answer comes first,
+    // whatever batch_size holds (Python used it only to batch).
+    for batch_size in [json!(0), json!(-3)] {
+        let Ok(SmartStep::Answer(text)) = plan(json!({
+            "threshold": 1, "batch_size": batch_size, "output_format": "text",
+        })) else {
+            panic!("answered before batch_size is checked");
+        };
+        assert!(text.starts_with("No types to normalize"), "{text}");
+    }
+    // A batch_size that is not an integer still fails first, as int() did.
+    assert!(plan(json!({"threshold": 1, "batch_size": "x"})).is_err());
     assert!(plan(json!({"threshold": "x"})).is_err());
     let Ok(SmartStep::Map(dry)) = plan(json!({"dry_run": true})) else {
         panic!("a plan");

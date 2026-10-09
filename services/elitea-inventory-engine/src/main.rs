@@ -280,9 +280,28 @@ async fn transfer(arguments: GraphArguments) -> ExitCode {
 
 async fn run_transfer(pool: &sqlx::PgPool, arguments: &GraphArguments) -> ExitCode {
     let key = arguments.key;
-    if let Err(error) = store::migrate(pool).await {
-        eprintln!("migration failed: {error}");
-        return ExitCode::FAILURE;
+    // An import writes, so it brings the schema up to date first. An export
+    // only reads: it must not change the database it reads, so it checks
+    // the migration ledger and refuses a missing or older schema.
+    if arguments.import {
+        if let Err(error) = store::migrate(pool).await {
+            eprintln!("migration failed: {error}");
+            return ExitCode::FAILURE;
+        }
+    } else {
+        match store::schema_gap(pool).await {
+            Ok(None) => {}
+            Ok(Some(gap)) => {
+                eprintln!(
+                    "{gap}; export-graph does not migrate. Start the engine (or run import-graph) against this database to apply its migrations, then export again"
+                );
+                return ExitCode::FAILURE;
+            }
+            Err(error) => {
+                eprintln!("cannot read the migration ledger: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
     }
     if arguments.import {
         let text = match &arguments.file {
