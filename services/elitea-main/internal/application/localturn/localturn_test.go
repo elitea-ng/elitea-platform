@@ -66,6 +66,30 @@ func TestValidCommitRules(t *testing.T) {
 	}
 }
 
+// A retry that sends an absent list where the first attempt sent an empty one
+// (or the reverse) is the same body, not an ErrAlreadyCommitted conflict.
+func TestCommitDigestTreatsAbsentAndEmptyAsTheSame(t *testing.T) {
+	absent := CommitRequest{ExecutionID: "x", UserMessage: "q", AssistantMessage: "a"}
+	empty := CommitRequest{ExecutionID: "x", UserMessage: "q", AssistantMessage: "a",
+		ToolCalls: json.RawMessage(` {} `), ThinkingSteps: []json.RawMessage{}, HITLExchanges: []HITLExchange{},
+		Report: LocalWorkReport{Commands: []CommandRecord{}, Paths: []string{}}}
+	null := CommitRequest{ExecutionID: "x", UserMessage: "q", AssistantMessage: "a", ToolCalls: json.RawMessage(`null`)}
+	da, err := commitDigest(absent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	de, _ := commitDigest(empty)
+	dn, _ := commitDigest(null)
+	if da != de || da != dn {
+		t.Fatal("absent, empty and null parts must digest the same")
+	}
+	withPath := empty
+	withPath.Report.Paths = []string{"a"}
+	if dp, _ := commitDigest(withPath); dp == da {
+		t.Fatal("the digest must still see content")
+	}
+}
+
 func TestCommitDigestIgnoresWhitespaceOnly(t *testing.T) {
 	a := CommitRequest{ExecutionID: "x", ToolCalls: json.RawMessage(`{"r": {"a": 1}}`)}
 	b := CommitRequest{ExecutionID: "x", ToolCalls: json.RawMessage("{\"r\":{\"a\":1}}\n")}
