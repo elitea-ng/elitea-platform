@@ -15,7 +15,7 @@ use super::approvals::UiDecision;
 use super::definition::RemoteToolSpec;
 use super::events::{AgentEvent, VecEmitter};
 use super::remote_tools::{self, RemoteContext, RetryPolicy};
-use super::turn::{AgentHost, HostDeps, PolicySource, TurnRequest};
+use super::turn::{AgentHost, HostDeps, PolicySource, TURNS_KEPT_PER_WORKSPACE, TurnRequest};
 use crate::testutil::{MockServer, Req, Res, serve};
 use crate::workspaces::WorkspaceStore;
 
@@ -668,6 +668,42 @@ async fn a_policy_change_does_not_let_an_undo_or_a_turn_past_a_running_turn() {
     until_done_of(&h.emitter, &second.turn_id).await;
     assert_eq!(h.host.restore(&first.turn_id, None).unwrap(), ["notes.txt"]);
     assert!(!notes.exists());
+}
+
+/// The platform of [`platform`], with a model that answers at once.
+async fn answering_platform() -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return sse(&[
+                json!({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}),
+            ]);
+        }
+        inner(req)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn only_the_last_turns_of_a_workspace_are_kept() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let mut ids = Vec::new();
+    for _ in 0..=TURNS_KEPT_PER_WORKSPACE {
+        let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+        until_done_of(&h.emitter, &started.turn_id).await;
+        ids.push(started.turn_id);
+    }
+    // The oldest is forgotten, with a code that says why.
+    assert_eq!(h.host.changes(&ids[0]).unwrap_err().code, "turn_expired");
+    assert_eq!(
+        h.host.restore(&ids[0], None).unwrap_err().code,
+        "turn_expired"
+    );
+    assert!(!h.host.cancel(&ids[0]));
+    for kept in &ids[1..] {
+        assert!(h.host.changes(kept).is_ok());
+    }
+    assert_eq!(h.host.changes("nope").unwrap_err().code, "turn_unknown");
 }
 
 #[tokio::test]

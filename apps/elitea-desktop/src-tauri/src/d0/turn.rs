@@ -19,7 +19,7 @@
 //! extraction stage 7 can replace this module with the runtime's own
 //! assembly without touching the hosts' adapters.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -184,6 +184,71 @@ struct TurnEntry {
     checkpoint: Mutex<Option<u64>>,
 }
 
+/// How many turns of one workspace stay reviewable (`turn_changes`) and
+/// undoable (`checkpoint_restore`); older ones are forgotten, with their
+/// recorded before-images.
+pub const TURNS_KEPT_PER_WORKSPACE: usize = 20;
+/// How many forgotten turn ids are remembered, to answer `turn_expired`
+/// rather than `turn_unknown` for them.
+const EXPIRED_REMEMBERED: usize = 1024;
+
+/// The turns the host keeps, newest last, at most
+/// [`TURNS_KEPT_PER_WORKSPACE`] per workspace.
+#[derive(Default)]
+struct TurnTable {
+    entries: HashMap<String, Arc<TurnEntry>>,
+    order: VecDeque<String>,
+    expired: VecDeque<String>,
+}
+
+impl TurnTable {
+    /// Keep a new turn; forget its workspace's oldest beyond the bound. The
+    /// new turn holds the workspace's claim, so the ones forgotten have
+    /// ended.
+    fn insert(&mut self, turn_id: String, entry: Arc<TurnEntry>) {
+        let workspace_id = entry.workspace_id.clone();
+        self.entries.insert(turn_id.clone(), entry);
+        self.order.push_back(turn_id);
+        let of_workspace: Vec<String> = self
+            .order
+            .iter()
+            .filter(|id| {
+                self.entries
+                    .get(*id)
+                    .is_some_and(|e| e.workspace_id == workspace_id)
+            })
+            .cloned()
+            .collect();
+        let excess = of_workspace.len().saturating_sub(TURNS_KEPT_PER_WORKSPACE);
+        for old in of_workspace.into_iter().take(excess) {
+            self.entries.remove(&old);
+            self.order.retain(|id| *id != old);
+            self.expired.push_back(old);
+        }
+        while self.expired.len() > EXPIRED_REMEMBERED {
+            self.expired.pop_front();
+        }
+    }
+
+    fn get(&self, turn_id: &str) -> Result<Arc<TurnEntry>, TurnError> {
+        if let Some(entry) = self.entries.get(turn_id) {
+            return Ok(entry.clone());
+        }
+        if self.expired.iter().any(|id| id == turn_id) {
+            return Err(TurnError::new(
+                "turn_expired",
+                format!(
+                    "Only the last {TURNS_KEPT_PER_WORKSPACE} turns of a workspace can be reviewed or undone."
+                ),
+            ));
+        }
+        Err(TurnError::new(
+            "turn_unknown",
+            "That turn is not known to this app.",
+        ))
+    }
+}
+
 /// The D0 agent host: workspaces' sessions, running and finished turns.
 pub struct AgentHost {
     deps: HostDeps,
@@ -191,7 +256,7 @@ pub struct AgentHost {
     broker: Arc<ApprovalBroker>,
     sessions: Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     busy: BusySet,
-    turns: Mutex<HashMap<String, Arc<TurnEntry>>>,
+    turns: Mutex<TurnTable>,
 }
 
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
@@ -237,7 +302,7 @@ impl AgentHost {
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
-            turns: Mutex::new(HashMap::new()),
+            turns: Mutex::new(TurnTable::default()),
         })
     }
 
@@ -717,7 +782,7 @@ impl AgentHost {
             .turns
             .lock()
             .ok()
-            .and_then(|turns| turns.get(turn_id).cloned());
+            .and_then(|turns| turns.get(turn_id).ok());
         entry.is_some_and(|entry| {
             entry.stop.stop();
             self.broker.forget_turn(turn_id);
@@ -733,9 +798,8 @@ impl AgentHost {
     fn entry(&self, turn_id: &str) -> Result<Arc<TurnEntry>, TurnError> {
         self.turns
             .lock()
-            .ok()
-            .and_then(|turns| turns.get(turn_id).cloned())
-            .ok_or_else(|| TurnError::new("turn_unknown", "That turn is not known to this app."))
+            .map_err(|_| TurnError::new("internal", "turn table poisoned"))?
+            .get(turn_id)
     }
 
     /// `turn_changes`.
