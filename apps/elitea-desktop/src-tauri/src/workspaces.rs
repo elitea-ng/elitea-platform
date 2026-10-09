@@ -24,7 +24,8 @@ pub struct Workspace {
     pub path: String,
     pub name: String,
     pub project_id: Option<i64>,
-    /// Computed when listed: the folder is inside a git work tree.
+    /// Computed when listed for the UI (`list`, `add`, `bind_project`): the
+    /// folder is inside a git work tree. `get` leaves it `false`.
     #[serde(default)]
     pub is_git: bool,
 }
@@ -38,7 +39,16 @@ fn io(error: &std::io::Error) -> HostError {
     HostError::Storage(error.to_string())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many folders `in_git_tree` probed on this thread (tests only).
+    static GIT_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Stats `.git` in the folder and every ancestor: only for what the UI shows.
 fn in_git_tree(path: &Path) -> bool {
+    #[cfg(test)]
+    GIT_PROBES.with(|probes| probes.set(probes.get() + 1));
     path.ancestors().any(|dir| dir.join(".git").exists())
 }
 
@@ -89,29 +99,30 @@ impl WorkspaceStore {
         work()
     }
 
-    /// Every workspace, with `is_git` computed now.
+    /// Every workspace, with `is_git` computed now (outside the store's lock).
     ///
     /// # Errors
     ///
     /// The file cannot be read.
     pub fn list(&self) -> Result<Vec<Workspace>, HostError> {
-        self.with(|| {
-            Ok(self
-                .read()?
-                .into_iter()
-                .map(|mut workspace| {
-                    workspace.is_git = in_git_tree(Path::new(&workspace.path));
-                    workspace
-                })
-                .collect())
-        })
+        let all = self.with(|| self.read())?;
+        Ok(all
+            .into_iter()
+            .map(|mut workspace| {
+                workspace.is_git = in_git_tree(Path::new(&workspace.path));
+                workspace
+            })
+            .collect())
     }
 
+    /// One workspace, read for the host's own use: `is_git` is NOT computed
+    /// (it is `false`), so a lookup never stats the file system.
+    ///
     /// # Errors
     ///
     /// The file cannot be read.
     pub fn get(&self, id: &str) -> Result<Option<Workspace>, HostError> {
-        Ok(self.list()?.into_iter().find(|w| w.id == id))
+        self.with(|| Ok(self.read()?.into_iter().find(|w| w.id == id)))
     }
 
     /// Add a folder (or return the workspace it already is).
@@ -225,6 +236,24 @@ mod tests {
         assert!(folder.path().exists(), "the folder itself is never touched");
         assert!(store.add(&folder.path().join("missing")).is_err());
         assert!(store.bind_project("nope", 1).is_err());
+    }
+
+    #[test]
+    fn get_does_not_probe_for_git() {
+        let app = tempfile::tempdir().unwrap();
+        let store = WorkspaceStore::new(app.path().to_owned());
+        let folders: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+        let ids: Vec<String> = folders
+            .iter()
+            .map(|f| store.add(f.path()).unwrap().id)
+            .collect();
+        let probes = || GIT_PROBES.with(std::cell::Cell::get);
+        let before = probes();
+        let found = store.get(&ids[1]).unwrap().unwrap();
+        assert_eq!(found.id, ids[1]);
+        assert_eq!(probes(), before, "a lookup stats no .git anywhere");
+        assert_eq!(store.list().unwrap().len(), 3);
+        assert_eq!(probes(), before + 3, "the list shown to the UI does");
     }
 
     #[test]
