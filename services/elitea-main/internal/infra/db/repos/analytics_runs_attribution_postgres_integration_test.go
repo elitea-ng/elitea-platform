@@ -254,7 +254,7 @@ func TestExecutionAttributionVerifierAcceptsOnlyTheCallersLiveRun(t *testing.T) 
 		{"an unparseable project", "x", "8", "exec-live", false},
 	}
 	for _, tc := range cases {
-		got, err := verifier.VerifyExecution(ctx, tc.project, tc.user, tc.execution)
+		got, err := verifier.VerifyExecution(ctx, tc.project, tc.user, "", "", tc.execution)
 		require.NoError(t, err, tc.name)
 		require.Equal(t, tc.want, got, tc.name)
 	}

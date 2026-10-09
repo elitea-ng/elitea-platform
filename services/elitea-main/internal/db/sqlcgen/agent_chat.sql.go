@@ -997,6 +997,15 @@ WITH resolved AS MATERIALIZED (
             - 'hitl_interrupts'
             - 'hitl_interrupt'
             - 'invoked_skills'
+            -- Desktop local-turn markers (ADR-0029 decision 5c): a cloud
+            -- regeneration re-runs the answer in the cloud, so it is no longer
+            -- the desktop's, its local work report or its recall stamp.
+            -- memories_used is re-stamped by the new admission.
+            - 'executed_by'
+            - 'local_execution_id'
+            - 'local_work'
+            - 'hitl_exchanges'
+            - 'memories_used'
         ) || jsonb_build_object(
             'execution_generation', $10::text
         ),
