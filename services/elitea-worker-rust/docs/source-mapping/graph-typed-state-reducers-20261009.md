@@ -263,6 +263,7 @@ No cell of `docs/recovery-guarantees.md` changes, and no L is introduced.
 |---|---|---|
 | Worker (rehearsal) | `elitea-worker-rust:p5-reducers-rehearsal` `sha256:24e07de3bed5…b40f` | built from `01a8ba043` (branch head); contains #1160. The binary contains `graph.state.reducer_overflow`, `typed state value exceeds its byte bound` and `a typed state update reached the channel unchecked` (from `agent-runtime`), plus `elitea.graph.pipeline.state-reducers.v1` and `typed state reducers are not supported in a nested pipeline` (Worker). The production-only text "typed state reducers are not available in this deployment" is compiled out, which proves a rehearsal build. None of these strings exist on `main`. |
 | Web (rehearsal) | `elitea-web:p5-reducers-rehearsal` `sha256:c105ef8c1ac7…287f` | built from `2379a745f`; Web content is identical at head. The bundle contains `graph-admission-notice` (`EditPipeline-*.js`) and the notice text (`livePipelineGraphAdmission-*.js`). |
+| Worker (production-default, case 4) | `elitea-worker-rust:p5-reducers-default` `sha256:8e9517f9fd52…7aa6` | built from `01a8ba043` without features; contains #1160 and the production-only refusal text |
 | Main, gateway, scheduler, subapp-host | `main-c0f2e5f9b-verify` | merged `main`; since then Main changed only `toolkitcatalogue/capability.go` (#1188) and the gateway only its master-key/CEL bound (#1190); neither touches pipeline state |
 
 **Cases.** No response was mocked, and no case calls a model.
@@ -272,11 +273,17 @@ No cell of `docs/recovery-guarantees.md` changes, and no L is introduced.
 | 1. Router loop with `append` + `sum_int` in a persistent chat (brief 1) | pipeline 166 (`p_2` version 192), chat 880; executions `7c1b1985…`, `e8945fef…` (regenerate), `9dd854aa…` (second turn) | The answer reads `3 results: result 1, result 2, result 3`; after reload it is the same single answer. Regeneration and a second turn each answer the same 3 results, not 6. Their terminal checkpoints hold exactly `["result 1","result 2","result 3"]` and `count` 3. |
 | 2. YAML editor notice, save and reload (brief 2) | pipeline 166 | After Save the editor shows an outlined warning, `state.count: the "sum_int" reducer can be changed in YAML only for now. The visual editor keeps it as written.` (and the same for `state.findings` / `append`). Save stays enabled. After a reload the re-dumped Yaml tab still contains `reducer: sum_int` and `reducer: append`, and the stored instructions contain both keys. |
 | 3. `sum_int` overflow (brief 3) | pipeline 167, chat 881, execution `b627ef16…` (`FAILED`) | The chat shows "The runtime operation failed." with *Details for support* (`INTERNAL`, message id `5e111cbc-…`); the same after reload. Checkpoints: ordinal 1 `count …806`, 2 `…807` (= `i64::MAX`), 3 `i64::MAX` with `tick` pending; nothing after the refused update. The generic text is expected until the Wave 2 failure catalogue. |
-| 4. Existing pipelines on a production-default build (brief 4) | PENDING | PENDING |
+| 4. Existing pipelines on a production-default build (brief 4) | Worker swapped to `elitea-worker-rust:p5-reducers-default` `sha256:8e9517f9fd52…7aa6` (no rehearsal feature; built from `01a8ba043`; its binary contains the production-only "typed state reducers are not available in this deployment" and the shared reducer strings). Existing record from the dump: pipeline 153 "PR1140 numeric node id" (version 179, overwrite-only), chat 882, execution `bd0c87f6…` (`SUCCEEDED`). Negative control: pipeline 166 in chat 880, execution `2d1d833e…` (`FAILED`). | The existing pipeline answers `numeric-id-ok`; after reload the same single answer. The reducer pipeline is refused at start: the chat shows "Configuration type is not supported." (the existing generic `unsupported_capability` text; naming the cause is follow-up F2), and the Worker log has `native_agent.unsupported_capability`. One INFO-level `session.invalid_scope` on `get` belongs to the succeeded execution: the normal probe before a new chat's session is created. |
+
+**Head vs. images.** Branch head `8e843f0f2` differs from the image source `01a8ba043` only by the source mapping, the
+parity test and the compile-time limit assertions. There is no runtime change.
 
 **Fixtures.**
 - Pipelines 166 and 167 were created in the browser through the create page's YAML editor. Their chats and runs were
   started from the editor's Chat button.
+- Pipeline 153 is an existing record of the restored dump. Its chat 882 was started from its editor.
+- A misplaced click opened the dump's chat 867 once. Nothing was sent: 0 executions and 0 messages in that window,
+  checked in the database.
 - The database reads above are read-only `SELECT`s for evidence.
 
 ## 9. Reviews
