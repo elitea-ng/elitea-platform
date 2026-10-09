@@ -10,7 +10,7 @@ import { useEffect } from 'react';
 
 import { hostLog } from '@/shared/desktop/diagnostics';
 
-export function describeRouterState(state: {
+function describeRouterState(state: {
   status: string;
   location: { pathname: string };
   matches: readonly { routeId: string; status: string }[];

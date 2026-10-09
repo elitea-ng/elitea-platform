@@ -5,7 +5,7 @@
  */
 import { createFileRoute, redirect } from '@tanstack/react-router';
 
-import { readLastLocation } from '@/features/workspace';
+import { lastLocation } from '@/features/workspace';
 
 import { decideIndexRoute } from '../-guards/indexRoute';
 import { RoutePending } from '../-ui/RouteStatus';
@@ -17,7 +17,7 @@ export const Route = createFileRoute('/_shell/')({
     // thread the person was last in, else the start screen. A literal MODE
     // test, so the web build keeps only the line below it.
     if (import.meta.env.MODE === 'desktop' && decision.kind === 'redirect' && decision.to === '/chat') {
-      const last = readLastLocation();
+      const last = lastLocation.read();
       // oxlint-disable-next-line typescript/only-throw-error -- TanStack Router's beforeLoad redirect contract.
       if (last === null) throw redirect({ to: '/workspaces' });
       // oxlint-disable-next-line typescript/only-throw-error -- TanStack Router's beforeLoad redirect contract.

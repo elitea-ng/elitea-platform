@@ -23,6 +23,9 @@ const ORIGIN = 'https://elitea.example.com';
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg"/>';
 const WOFF2 = new Uint8Array([0x77, 0x4f, 0x46, 0x32, 1, 2, 3]);
 
+/** The branded pack's own font stack — pack data under test, not a UI font choice. */
+const ACME_FONT_STACK = '"Acme Sans", Arial, sans-serif';
+
 /** A branded pack as pack.json serves it: every reference absolute. */
 function servedPack(overrides: Partial<BrandPack['assets']> = {}): BrandPack {
   return {
@@ -38,7 +41,7 @@ function servedPack(overrides: Partial<BrandPack['assets']> = {}): BrandPack {
     },
     typography: {
       ...DEFAULT_BRAND_PACK.typography,
-      fontFamily: '"Acme Sans", Arial, sans-serif',
+      fontFamily: ACME_FONT_STACK,
       fontFaces: [{ family: 'Acme Sans', url: `${ORIGIN}/api/v2/branding/assets/font/cc.woff2`, weight: '400' }],
     },
   };

@@ -7,7 +7,7 @@ import { useCallback } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { describeWorkspaceError, readLastLocation, useWorkspaceIpc } from '@/features/workspace';
+import { describeWorkspaceError, lastLocation, useWorkspaceIpc } from '@/features/workspace';
 import { t } from '@/shared/i18n';
 
 import type { ShellAction } from '../lib/shellActions';
@@ -52,7 +52,7 @@ export function useShellActions(): (action: ShellAction) => void {
         settings: () => void navigate({ to: '/settings' }),
         go: (a) => void navigate({ to: a.to }),
         folders: () => {
-          const last = readLastLocation();
+          const last = lastLocation.read();
           if (last === null) void navigate({ to: '/workspaces' });
           else openWorkspace(last.workspaceId, last.conversationId);
         },
@@ -62,7 +62,7 @@ export function useShellActions(): (action: ShellAction) => void {
             layout.session.newThread();
             return;
           }
-          const last = readLastLocation();
+          const last = lastLocation.read();
           if (last !== null) openWorkspace(last.workspaceId);
           else void navigate({ to: '/workspaces' });
         },

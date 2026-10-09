@@ -46,7 +46,7 @@ export const FORBIDDEN_MARKDOWN_HTML_TAGS = [
  *
  * `on*` handlers are removed by DOMPurify itself; the contract test proves it.
  */
-export const FORBIDDEN_MARKDOWN_HTML_ATTRS = [
+const FORBIDDEN_MARKDOWN_HTML_ATTRS = [
   'style',
   'class',
   'id',

@@ -14,7 +14,7 @@ function validate(raw: unknown): boolean {
   return raw;
 }
 
-export function readEliteaOpen(): boolean {
+function readEliteaOpen(): boolean {
   try {
     return createStorage('local').getJSON(KEY, validate) ?? true;
   } catch {

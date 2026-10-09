@@ -129,7 +129,7 @@ export function installDiagnostics(logger: HostLogger, target: Window = window):
 }
 
 /** A request slower than this is logged even when it succeeds. */
-export const SLOW_REQUEST_MS = 2000;
+const SLOW_REQUEST_MS = 2000;
 
 /**
  * Wrap the native fetch so a failed or slow request is logged at debug:

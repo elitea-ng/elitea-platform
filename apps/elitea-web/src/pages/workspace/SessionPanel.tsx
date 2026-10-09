@@ -23,13 +23,7 @@ import type { ApprovalDecision, ApprovalRequestPayload, WorkspaceIpc } from '@/s
 import { t } from '@/shared/i18n';
 import { CHANGES_WIDTH, TitleBarSpacer, useDesktopLayout } from '@/widgets/desktop-shell';
 
-import type { ChangeSet } from './useThreadSession';
-
-export interface DecidedApproval {
-  requestId: string;
-  title: string;
-  decision: ApprovalDecision;
-}
+import type { ChangeSet, DecidedApproval } from './sessionTypes';
 
 export interface SessionPanelProps {
   ipc: WorkspaceIpc;

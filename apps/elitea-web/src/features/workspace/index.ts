@@ -7,6 +7,7 @@
  */
 import { matchingCommands, workspaceCommands } from './model/composerCommands';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
+import { readLastLocation, writeLastLocation } from './model/threads';
 
 export { ApprovalDialog } from './ui/ApprovalDialog';
 export { ChangedFilesCard } from './ui/ChangedFilesCard';
@@ -17,14 +18,8 @@ export { WorkspaceIpcProvider, useWorkspaceIpc } from './model/ipcContext';
 export { useWorkspaceTurn } from './model/useWorkspaceTurn';
 export { replayView } from './model/turnReducer';
 export { describeWorkspaceError } from './model/describeWorkspaceError';
-export {
-  readLastLocation,
-  readThreads,
-  recordThread,
-  threadsQueryKey,
-  writeLastLocation,
-} from './model/threads';
-export type { LastLocation, WorkspaceThread } from './model/threads';
+export { readThreads, recordThread, threadsQueryKey } from './model/threads';
+export type { WorkspaceThread } from './model/threads';
 export type { WorkspaceTurn } from './model/useWorkspaceTurn';
 export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
@@ -32,3 +27,6 @@ export type { WorkspaceCommandId } from './model/composerCommands';
 
 /** The composer's text rules ("@"/"/" tokens, referenced paths) and its local "/" commands, as one bundle. */
 export const composer = { activeToken, mentionText, referencedPaths, matchingCommands, workspaceCommands };
+
+/** The folder and thread the person was last in (desktop home), read and written as one pair. */
+export const lastLocation = { read: readLastLocation, write: writeLastLocation };

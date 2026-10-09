@@ -11,19 +11,19 @@ import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 
 import {
+  lastLocation,
   readThreads,
   recordThread,
   threadsQueryKey,
   useWorkspaceTurn,
-  writeLastLocation,
   type WorkspaceCommandId,
   type WorkspaceTurn,
 } from '@/features/workspace';
-import type { ApprovalDecision, ChangedFile, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { ApprovalDecision, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { useSelectedProject } from '@/widgets/app-shell';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
-import type { DecidedApproval } from './SessionPanel';
+import type { ChangeSet, DecidedApproval } from './sessionTypes';
 import { useAgentSelection, type AgentSelection } from './useAgentSelection';
 import { useBindableProjects } from './useBindableProjects';
 import { useSendPrompt, type SendPrompt } from './useSendPrompt';
@@ -79,15 +79,6 @@ function useShellRegistration(workspaceId: string, newThread: () => void, run: (
     });
     return () => useDesktopLayout.getState().setSession(null);
   }, [workspaceId]);
-}
-
-/** One turn's changes in the panel: live (the host still keeps it: diff from disk, undo) or as recorded when it ended (`files`). */
-export interface ChangeSet {
-  turnId: string;
-  /** The prompt that started the turn. */
-  label: string;
-  /** Set for a turn the host no longer keeps: shown as recorded, without undo. */
-  files?: ChangedFile[];
 }
 
 /** Every turn of the thread that changed files, newest first. */
@@ -186,7 +177,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   useShellRegistration(workspace.id, newThread, run);
 
   // Where to come back to after a restart.
-  useEffect(() => writeLastLocation({ workspaceId: workspace.id, conversationId }), [workspace.id, conversationId]);
+  useEffect(() => lastLocation.write({ workspaceId: workspace.id, conversationId }), [workspace.id, conversationId]);
 
   // Re-binding re-keys the session (see `Session`): the new project's agents, a fresh turn.
   const rebind = useMutation({

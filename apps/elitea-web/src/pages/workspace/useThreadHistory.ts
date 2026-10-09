@@ -18,7 +18,7 @@ import { unwrapList } from '@/shared/api/unwrap';
 import type { StoredTurn, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 
 /** The newest server messages a reopened thread shows (the rest are a click away, in chat). */
-export const SERVER_MESSAGES = 100;
+const SERVER_MESSAGES = 100;
 
 export interface ServerMessage {
   id: string;
