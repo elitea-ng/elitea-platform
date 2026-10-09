@@ -1,6 +1,7 @@
 //! `git_commit`: `.git` is read-only for sandboxed commands, so the agent
-//! commits through the host's hardened git. The commit is always asked,
-//! never remembered, runs no hooks, is not signed, carries the person's
+//! commits through the host's hardened git. The commit is allowed by
+//! default (a workspace rule may ask; the fixture's does), never
+//! remembered, runs no hooks, is not signed, carries the person's
 //! global identity (not the repository's), and an unsafe repository is
 //! refused.
 
@@ -11,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError};
 use elitea_local_tools::approvals::{
-    APPROVE_ALWAYS, ChoiceStore, MemoryChoices, RememberedChoice, ToolKind, WorkspaceSettings,
+    APPROVE_ALWAYS, ChoiceStore, MemoryChoices, RememberedChoice, ToolKind, Verdict, WorkspaceRule,
+    WorkspaceSettings,
 };
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::session::{LocalSession, SessionConfig};
@@ -72,7 +74,24 @@ struct Fixture {
     choices: Arc<MemoryChoices>,
 }
 
+/// A session whose workspace rules ask before every commit.
 fn fixture(action: &'static str, prepare: impl FnOnce(&Path)) -> Fixture {
+    let ask_commits = WorkspaceSettings {
+        rules: vec![WorkspaceRule {
+            tools: vec![ToolKind::GitCommit],
+            command: None,
+            path: None,
+            verdict: Verdict::Ask,
+        }],
+    };
+    fixture_with(action, ask_commits, prepare)
+}
+
+fn fixture_with(
+    action: &'static str,
+    settings: WorkspaceSettings,
+    prepare: impl FnOnce(&Path),
+) -> Fixture {
     let dir = tempfile::tempdir().expect("dir");
     let base = std::fs::canonicalize(dir.path()).expect("canonical");
     let root = base.join("repo");
@@ -121,7 +140,7 @@ fn fixture(action: &'static str, prepare: impl FnOnce(&Path)) -> Fixture {
             path_deny: vec![".env".to_owned()],
             ..LocalWorkPolicy::default()
         },
-        settings: WorkspaceSettings::default(),
+        settings,
         choices: choices.clone(),
         prompt: prompt.clone(),
         data_dir: base.join("data"),
@@ -190,6 +209,17 @@ async fn commits_selected_files_with_the_global_identity_and_no_hooks() {
     );
 }
 
+/// The owner's default: a commit through the host's git is not asked.
+#[tokio::test]
+async fn commits_run_without_a_question_by_default() {
+    let fixture = fixture_with("reject", WorkspaceSettings::default(), |_| {});
+    std::fs::write(fixture.root.join("a.txt"), "changed\n").expect("edit");
+    let result = commit(&fixture, json!({ "message": "quiet", "paths": ["a.txt"] })).await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert!(fixture.prompt.seen.lock().expect("lock").is_empty());
+    assert_eq!(git(&fixture.root, &["log", "-1", "--format=%s"]), "quiet");
+}
+
 #[tokio::test]
 async fn commits_what_is_staged_and_is_refused_when_rejected() {
     let rejected = fixture("reject", |_| {});
@@ -220,6 +250,8 @@ async fn remembered_shell_choices_and_approve_always_never_allow_a_commit() {
             .remember(RememberedChoice {
                 tool: ToolKind::RunCommand,
                 command: Some(command.split(' ').map(str::to_owned).collect()),
+                paths: None,
+                glob: None,
                 sandbox: Some(SandboxMode::FullAccess),
                 network: true,
             })

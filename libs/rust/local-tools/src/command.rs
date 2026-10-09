@@ -21,7 +21,7 @@
 use std::path::{Path, PathBuf};
 
 /// Interpreters whose `-c` argument is itself a command.
-const SHELLS: &[&str] = &[
+pub(crate) const SHELLS: &[&str] = &[
     "sh",
     "bash",
     "zsh",
@@ -93,12 +93,12 @@ impl CommandShape {
     }
 }
 
-fn basename(program: &str) -> &str {
+pub(crate) fn basename(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
 }
 
 /// Whether `text` needs a shell, and if not, its argv.
-fn needs_shell(text: &str) -> Option<&'static str> {
+pub(crate) fn needs_shell(text: &str) -> Option<&'static str> {
     let mut single = false;
     let mut double = false;
     for character in text.chars() {

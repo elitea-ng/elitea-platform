@@ -194,7 +194,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "run_command",
         kind: ToolKind::RunCommand,
-        description: "Run a command in the workspace under the OS sandbox. Plain commands run without a shell; pipes, redirects and && run under /bin/sh and are always confirmed by the person.",
+        description: "Run a command in the workspace under the OS sandbox. Plain commands run without a shell; pipes, redirects and && run under /bin/sh. Routine commands run without a question; destructive ones (recursive deletes, history rewrites, pushes, deploys, privilege), network and full-access are confirmed by the person.",
         parameters: || {
             json!({
                 "type": "object",
@@ -449,17 +449,15 @@ impl LocalSession {
     /// is invalid.
     pub fn open(config: SessionConfig) -> ToolResult<Arc<Self>> {
         let workspace = Workspace::open(&config.root, &config.policy.path_deny)?;
-        let engine = Arc::new(RulesEngine::new(
-            config.policy,
-            &workspace,
-            config.settings,
-            config.choices,
-        )?);
-        let approvals: Arc<dyn ApprovalChannel> =
-            Arc::new(RuleApprovals::new(engine.clone(), config.prompt));
         let mut shell = config.shell.unwrap_or_else(|| {
             ShellConfig::new(config.data_dir.join("tmp").join(&config.session_id))
         });
+        let engine = Arc::new(
+            RulesEngine::new(config.policy, &workspace, config.settings, config.choices)?
+                .with_unenforced_commands(shell.sandbox.allow_unenforced),
+        );
+        let approvals: Arc<dyn ApprovalChannel> =
+            Arc::new(RuleApprovals::new(engine.clone(), config.prompt));
         // Copy checkpoints, remembered choices and the host's state live in
         // the data directory: no command reads them (the session's temporary
         // directory inside it stays usable).
@@ -904,7 +902,8 @@ impl LocalSession {
 
     /// `git_commit`: through the hardened host git (the repository is
     /// checked, hooks and signing are off, the process is sandboxed and
-    /// may write only the git directory's data), always asked.
+    /// may write only the git directory's data). Allowed by default; a
+    /// workspace rule may ask or deny it.
     async fn git_commit(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
         let args: CommitArgs = parse(args)?;
         let message = args.message.trim().to_owned();

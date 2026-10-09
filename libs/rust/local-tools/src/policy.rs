@@ -49,7 +49,8 @@ pub struct LocalWorkPolicy {
     pub network: bool,
     /// When non-empty, the only commands that may run (argv prefixes, see
     /// [`crate::command::CommandPattern`]). A ceiling, not an approval:
-    /// an admissible command is still asked unless another rule allows it.
+    /// an admissible command still goes through the rules below (a
+    /// destructive one is asked, see [`crate::classify`]).
     pub command_allow: Vec<String>,
     /// Commands refused when the model names them (in any segment of a
     /// compound command, and inside `sh -c`, `env`, `sudo` and other

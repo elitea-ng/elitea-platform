@@ -15,6 +15,7 @@ compile_error!("elitea-local-tools supports macOS and Linux; Windows is ADR-0029
 
 pub mod approvals;
 pub mod checkpoint;
+pub mod classify;
 pub mod command;
 pub mod error;
 pub mod files;

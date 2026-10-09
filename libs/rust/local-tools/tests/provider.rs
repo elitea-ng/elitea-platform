@@ -264,7 +264,7 @@ async fn fixture_names(policy: LocalWorkPolicy) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn a_turn_reads_asks_checkpoints_changes_and_can_be_undone() {
+async fn a_turn_reads_checkpoints_changes_and_can_be_undone() {
     let fixture = fixture(open_policy());
     let root = fixture.session.workspace().root().to_path_buf();
     fixture.session.begin_turn("make main print");
@@ -293,7 +293,11 @@ async fn a_turn_reads_asks_checkpoints_changes_and_can_be_undone() {
     )
     .await;
     assert_eq!(edited["status"], "ok", "{edited}");
-    assert_eq!(fixture.person.asked(), 1);
+    assert_eq!(
+        fixture.person.asked(),
+        0,
+        "in-workspace edits are allowed by default; the checkpoint undoes them"
+    );
     assert_eq!(fixture.session.turn_checkpoint(), Some(1));
     let created = call(
         &fixture,
@@ -362,7 +366,21 @@ async fn denials_rejections_and_deferrals_reach_the_model_as_results() {
     .await;
     assert_eq!(ran["status"], "ok", "{ran}");
     assert_eq!(ran["exit_code"], 0);
-    assert_eq!(fixture.person.asked(), 1);
+    assert_eq!(
+        fixture.person.asked(),
+        1,
+        "the fixture allows unenforced sandboxes, so every command is asked"
+    );
+
+    let written = call(
+        &fixture,
+        "write_file",
+        json!({ "path": "x.txt", "content": "x" }),
+    )
+    .await;
+    assert_eq!(written["status"], "ok", "{written}");
+    assert_eq!(fixture.person.asked(), 1, "writes are not asked");
+    let untracked = fixture.session.workspace().root().join("x.txt");
 
     fixture.person.answer(ApprovalOutcome::Decided {
         action: "reject".to_owned(),
@@ -370,22 +388,22 @@ async fn denials_rejections_and_deferrals_reach_the_model_as_results() {
     });
     let rejected = call(
         &fixture,
-        "write_file",
-        json!({ "path": "x.txt", "content": "x" }),
+        "run_command",
+        json!({ "command": "git clean -fdx" }),
     )
     .await;
     assert_eq!(rejected["code"], "local_tools.rejected");
-    assert!(!fixture.session.workspace().root().join("x.txt").exists());
+    assert!(untracked.exists());
 
     fixture.person.answer(ApprovalOutcome::Deferred);
     let pending = call(
         &fixture,
-        "write_file",
-        json!({ "path": "x.txt", "content": "x" }),
+        "run_command",
+        json!({ "command": "git clean -fdx" }),
     )
     .await;
     assert_eq!(pending["code"], "local_tools.approval_pending");
-    assert!(!fixture.session.workspace().root().join("x.txt").exists());
+    assert!(untracked.exists());
 }
 
 #[tokio::test]

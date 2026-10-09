@@ -1,7 +1,7 @@
 //! Approvals see what a write really changes: a path through an
 //! in-workspace symlink is matched (and shown) as its final target, so a
-//! rule that allows `docs/**` does not allow writing `src/main.rs` through
-//! `docs/link.md`.
+//! rule that asks before writing `src/**` is not bypassed through
+//! `docs/link.md`, and one that allows `docs/**` does not vouch for it.
 
 use std::os::unix::fs::symlink;
 use std::sync::{Arc, Mutex};
@@ -31,6 +31,12 @@ impl ApprovalChannel for RejectingPrompt {
     }
 }
 
+const WRITES: [ToolKind; 3] = [
+    ToolKind::WriteFile,
+    ToolKind::EditFile,
+    ToolKind::ApplyPatch,
+];
+
 #[tokio::test]
 async fn writes_through_symlinks_are_approved_as_their_targets() {
     let dir = tempfile::tempdir().expect("dir");
@@ -50,16 +56,20 @@ async fn writes_through_symlinks_are_approved_as_their_targets() {
             ..LocalWorkPolicy::default()
         },
         settings: WorkspaceSettings {
-            rules: vec![WorkspaceRule {
-                tools: vec![
-                    ToolKind::WriteFile,
-                    ToolKind::EditFile,
-                    ToolKind::ApplyPatch,
-                ],
-                command: None,
-                path: Some("docs/**".to_owned()),
-                verdict: Verdict::Allow,
-            }],
+            rules: vec![
+                WorkspaceRule {
+                    tools: WRITES.to_vec(),
+                    command: None,
+                    path: Some("docs/**".to_owned()),
+                    verdict: Verdict::Allow,
+                },
+                WorkspaceRule {
+                    tools: WRITES.to_vec(),
+                    command: None,
+                    path: Some("src/**".to_owned()),
+                    verdict: Verdict::Ask,
+                },
+            ],
         },
         choices: Arc::new(MemoryChoices::default()),
         prompt: prompt.clone(),
@@ -103,7 +113,7 @@ async fn writes_through_symlinks_are_approved_as_their_targets() {
     assert_eq!(
         seen.len(),
         3,
-        "each write was asked, not allowed by docs/**"
+        "each write was asked (src/**), not allowed by docs/**"
     );
     let shown: Vec<String> = seen
         .iter()
@@ -159,7 +169,16 @@ async fn a_patch_target_swapped_during_approval_is_refused() {
             allowed: true,
             ..LocalWorkPolicy::default()
         },
-        settings: WorkspaceSettings::default(),
+        // Patches are asked here, so the person decides while the swap
+        // happens.
+        settings: WorkspaceSettings {
+            rules: vec![WorkspaceRule {
+                tools: vec![ToolKind::ApplyPatch],
+                command: None,
+                path: None,
+                verdict: Verdict::Ask,
+            }],
+        },
         choices: Arc::new(MemoryChoices::default()),
         prompt: Arc::new(SwappingPrompt { root: root.clone() }),
         data_dir: dir.path().join("data"),
