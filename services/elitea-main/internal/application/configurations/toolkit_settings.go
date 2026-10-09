@@ -402,7 +402,7 @@ func (w *currentToolkitSettingsWalker) resolveConfigurationField(
 		//   if let Some(configuration) = settings.get("openapi_configuration") {
 		//       let configuration = configuration.as_object().ok_or_else(invalid_configuration)?;
 		//
-		// (services/elitea-worker-rust/src/toolkits/families/openapi/config.rs,
+		// (libs/rust/agent-runtime/src/toolkits/families/openapi/config.rs,
 		// merged_auth_settings). A null is Some(Value::Null), `as_object` fails,
 		// and the WHOLE turn ends at toolset materialization with
 		// `native_agent.invalid_configuration` — stored as an empty assistant
