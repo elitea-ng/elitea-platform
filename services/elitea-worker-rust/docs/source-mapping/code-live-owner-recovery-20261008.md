@@ -78,10 +78,10 @@ The frozen earlier controller and all accepted historical receipts remain unchan
 ## Limits
 
 This case closes live Worker and Supervisor loss for the original JavaScript Code job.
-Preparation failure outcomes and replacement debug reconciliation remain open.
+Preparation failure outcomes and replacement debug reconciliation are closed on the merged head; see "Deployed preparation and NATS crash matrix".
 Later [chat852](code-compiled-publication-main-recovery-20261008.md) closes Main compilation publication loss for the original successful compiler receipt.
-Queued/in-flight NATS loss and current Kubernetes acceptance remain open.
-The separate live canvas image later passes build and strict scan. Its deployed browser acceptance remains open.
+Queued and in-flight NATS loss is closed on the merged head (same section). Current Kubernetes acceptance remains open; it is tracked as group 3.
+The separate live canvas image later passes build and strict scan. Its deployed browser acceptance is closed: "Run is stopped" after Stop, see "Deployed crash matrix".
 Stored cleanup flags remain false. Independent removal checks supply physical cleanup proof.
 Product and execution-store observations are sequential, not atomic. This case supplies no performance benchmark.
 
@@ -132,6 +132,203 @@ closes the deployed-browser item listed for it.
   not logged. This is pre-existing and tracked separately.
 - Runtimes have no per-deployment label. A future orphan sweeper (G-SUP-03) must scope by owner before it removes
   anything.
+
+## Deployed preparation and NATS crash matrix on the merged branch (2026-10-09)
+
+This closes the two open items of the PR #1084 body: group 1 (finite preparation fault outcomes, original debug-writer
+reconciliation) and group 2 (queued and in-flight NATS recovery with the original broker storage).
+
+The branch head is `e7a291985` (`22f33b8f8`, then `main` merged in again). The runs used the standalone compose stack
+`elitea-code1084` at `http://code1084.localhost:18300`, on its own project, volumes and networks. They ran 19:10-19:50 UTC.
+
+**Stack.**
+- Images, rebuilt at the head and tagged `code1084-e7a291985`: Main `2919f6aea9b6`, Worker `ac43f999bd24`,
+  Supervisor `0d79c411fc66`, Web `6e49b27b1f16`, LLM gateway `e99b09a0b208`. The Code runner is the existing Deno
+  image `76813e683650` (`sha256:76813e683650491a915ab811cdd15cfae3cfccef6a236969a79d29042426c60d`); no new image.
+  Both preparation profiles use that same digest.
+- Binary checks (binaries extracted with `docker create` + `docker cp`): the Worker contains `code_timing` and
+  `pipeline.code_cancelled`, which `main-c0f2e5f9b-verify` does not. Main contains `resumeCurrentAgentStaticTools` and
+  `PIPELINE_YAML_EXPANSION_TOO_LARGE`; neither is in `main-c0f2e5f9b-verify`, and the second is not in the earlier
+  `22f33b8f8` build either, so the Main image is the new head. The Supervisor contains `service_job_owners.rs`. Worker and
+  Main SHA-256 differ from the `22f33b8f8` builds. #1160 (`524165ed09`) is an ancestor of the head.
+- Database: real-model product DB; AgentState migrations through version 13 (including the 0009 preparation receipt and 0010 phase clocks).
+- Code runtimes: `agent_node_recovery: true`; five profiles in the one Supervisor process.
+
+| Profile | Port, audience | Languages | Notes |
+|---|---|---|---|
+| `deno` (existing, owner kept) | 9446, `dns:elitea-sandbox-deno` | python | now `languages: ["python"]`, plus `dependency_content` (execution content download) |
+| `denonative` (new) | 9450, `dns:elitea-sandbox-deno-native` | javascript, typescript | `native_platform` linux/arm64/gnu, `native_workspace_bytes` 512 MiB, memory 1 GiB |
+| `prep` (new) | 9448, `dns:elitea-sandbox-preparation` | python | `purpose: preparation`, 512 MiB, 120 s, policy `python-preparation-v1` |
+| `jsprep` (new) | 9449, `dns:elitea-sandbox-javascript-preparation` | javascript | `purpose: preparation`, native platform, 512 MiB workspace, 1 GiB, 120 s, policy `deno-preparation-v1` |
+| `rust` (existing) | 9447 | rust | unchanged |
+
+**Why five profiles.** `docker-compose.sandbox-preparation.yml` and `sandbox-preparation-deployment.md` describe Python
+preparation only. JavaScript preparation needs the native Deno path: a preparation profile with `native_platform`, and an
+execution profile with the same `native_platform` that does not list `python` (`process.rs` refuses the mix). The leaves
+came from `gen-sandbox-certs.sh --native` under the existing runtime CA. Main's `ELITEA_RUNTIME_SANDBOX_AUDIENCES` lists the
+three new audiences, and its Code-owner recovery config lists the `deno-native` origin. The Worker config adds `preparation`
+to the Python entry and to the JavaScript entry, and moves JavaScript and TypeScript to `deno-native`. The overlay is a local
+file because the Deno and Rust material sit in named volumes (UID 10001, mode 0600); it keeps the same mechanics as the repo
+overlay (aliases, one tmpfs per content client with `noexec,nosuid,nodev`, 256 MiB, supervisor memory raised to 2 GiB).
+A Compose overlay and a deployment page for the JavaScript profiles do not exist in the repo yet.
+
+**Resolver network and egress.**
+- `elitea-python-preparation-resolver-code1084` is a plain bridge (`internal=false`) created for this stack. Only preparer
+  containers join it: the observed preparer has this single network, the execution runtime has `NetworkMode: none` and no
+  network, and the Worker and Supervisor are not attached.
+- On Compose a named network does not restrict destinations. A preparer can reach any internet host and the bridge gateway.
+  The preparers downloaded from `pypi.org`, `files.pythonhosted.org`, `cdn.jsdelivr.net` and `registry.npmjs.org`
+  (approved). Kubernetes is the enforcement point: NetworkPolicy on the preparation namespace with resolver CIDRs and DNS
+  Pods only. The Kubernetes track covers that; nothing here proves it.
+- Downloads were real: the image carries no `python-slugify`, `text-unidecode` or `is-number` (`/opt/elitea-wheels` holds 3
+  unrelated files; `python-packages.json` and `javascript-packages.json` are empty). The preparer's receive counter on eth0
+  rose from about 0.4 KB to 0.43 MB for Python and to about 19 KB for JavaScript. No registry error, timeout or throttle
+  occurred in any run. An uninterrupted Python preparation takes 5-7 s from preparer start to publication, JavaScript about 1 s.
+
+**Fixtures.** Each run uses a fresh saved pipeline (created through the product API) with a nonce comment in the source, so
+every run has its own request digest. Each has one Code node:
+- Python: records `time.time_ns()` first, runs `micropip.install("python-slugify==8.0.4")`, imports `slugify`, then returns
+  `PY_PKG started=<ms> slug=hello-elitea-1084`. The slow variant waits 25 s after the install.
+- JavaScript: `import isNumber from "npm:is-number@7.0.0"`, returns `JS_PKG started=<ms> isNumber=true`; the slow variant waits 25 s.
+- Plain JavaScript (group 2): records its start, waits 0 s or 30 s, returns `JS_PLAIN started=<ms>`.
+- Debug: the Python slow node with `debug: true`.
+All runs are normal saved-pipeline Chat Sends through the API (`conversations`, `participants`, `messages`), not browser
+clicks; Stop is the product `DELETE .../task/prompt_lib/{project}/{response_message_id}` route.
+
+**Fault injection.** SIGKILL (`docker kill -s KILL`) of a service container of this stack, then `docker start` 7-8 s later.
+The trigger is observed, not timed from Send: the preparation cuts fire when the preparer's receive bytes pass 100 KB (Python)
+or 3 KB (JavaScript), i.e. inside the download; the hydration cuts fire when the execution runtime is bound and the job is
+still `reserved` (before dispatch); the execution cuts fire 8 s after `dispatched`. Only `elitea-code1084-*` containers were
+touched. Other Docker-daemon runtimes (`elitea-crash`, `elitea-nestedapp`) were never killed or removed.
+
+**Invariants** (checked by the harness after every run, never by eye). Container checks use only the runtime labels computed
+from this stack's own `sandbox_jobs` rows (`sha256("elitea.sandbox.runtime-job.v1\0" || len(tenant) u64 BE || tenant ||
+project i32 BE || job_key)`, `ledger.rs:46-66`), read from a `docker events` recorder:
+- **One execution, one settlement.** `execution_jobs` and committed `execution_settlements` rows each count 1; at most one
+  terminal replay event.
+- **One preparation per job.** One preparation ledger row and exactly one preparer container create/start for it. A second
+  download would need a second preparer container.
+- **No re-download after the prepared artifact is committed.** In the hydration and execution cuts the preparation job was
+  already `completed`; afterwards the count of preparer containers and preparation rows stays 1.
+- **One sandbox job.** One execution ledger row, one execution container start. Zero for Stop and the F cases.
+- **User Code not re-run.** For the execution cuts the stored start time precedes the kill. For the earlier cuts, user Code can only
+  start after preparation and hydration, and it starts exactly once (one execution container start).
+- **Claims.** Attempts are contiguous, lease epochs increase, and the settlement is bound to the last claim.
+- **Drain.** `command_outbox` row retired or authority granted; no job left `reserved` or `dispatched`; no container left for the
+  execution's jobs after a 60 s grace (8 s used; all removals were visible earlier).
+- **F cases** also check the typed code and readable message, and that no execution job exists.
+- **NATS** (group 2): `/jsz` of stream `ELITEA_RT_V1_AGENT` and durable `elitea-agent-worker-v1` from the `nats-health` container:
+  sequence advance equals the number of runs, and messages, pending and ack_pending are 0 at the end.
+
+### Group 1: preparation
+
+| Fault | Execution | Kill → restart (UTC) | Settlement | Answer (stored) | Class |
+|---|---|---|---|---|---|
+| none, Python package (python-slugify) | `b7a58b7e…` | — | SUCCEEDED at 19:49:08, attempt 1 / epoch 1 | PY_PKG started=19:49:07.687Z slug=hello-elitea-1084 | — |
+| none, JavaScript package (npm is-number) | `efdf7ebb…` | — | SUCCEEDED at 19:11:25, attempt 1 / epoch 1 | JS_PKG started=19:11:25.038Z isNumber=true | — |
+| Worker, Python preparation download | `4143187a…` | 19:41:48 → 19:41:56 | SUCCEEDED at 19:42:50, attempt 2 / epoch 2 | PY_PKG started=19:42:50.043Z slug=hello-elitea-1084 | R |
+| Supervisor, Python preparation download | `108f55f4…` | 19:43:06 → 19:43:13 | SUCCEEDED at 19:44:07, attempt 1 / epoch 1 | PY_PKG started=19:44:06.980Z slug=hello-elitea-1084 | R |
+| Main, Python preparation download | `e299a00a…` | 19:44:22 → 19:44:29 | SUCCEEDED at 19:45:33, attempt 2 / epoch 2 | PY_PKG started=19:45:33.129Z slug=hello-elitea-1084 | R |
+| Worker, JavaScript preparation download | `9d148944…` | 19:45:46 → 19:45:53 | SUCCEEDED at 19:46:49, attempt 2 / epoch 2 | JS_PKG started=19:46:48.626Z isNumber=true | R |
+| Supervisor, JavaScript preparation download | `dcab20f3…` | 19:47:02 → 19:47:09 | SUCCEEDED at 19:48:05, attempt 1 / epoch 1 | JS_PKG started=19:48:04.607Z isNumber=true | R |
+| Worker, hydration (Python) | `4f47b392…` | 19:19:34 → 19:19:41 | SUCCEEDED at 19:20:38, attempt 2 / epoch 2 | PY_PKG started=19:20:37.816Z slug=hello-elitea-1084 | R |
+| Supervisor, hydration (Python) | `afe6e82d…` | 19:20:56 → 19:21:03 | SUCCEEDED at 19:22:00, attempt 1 / epoch 1 | PY_PKG started=19:22:00.144Z slug=hello-elitea-1084 | R |
+| Worker, prepared Python job running | `a2dc226b…` | 19:22:48 → 19:22:55 | SUCCEEDED at 19:23:47, attempt 2 / epoch 2 | PY_PKG started=19:22:42.681Z slug=hello-elitea-1084 | R |
+| Worker, prepared JavaScript job running | `569462d9…` | 19:24:11 → 19:24:18 | SUCCEEDED at 19:25:11, attempt 2 / epoch 2 | JS_PKG started=19:24:03.228Z isNumber=true | R |
+| Stop, Python preparation running | `db68c522…` | Stop at 19:25:25 | CANCELLED at 19:25:28, attempt 1 / epoch 1 | Execution was cancelled. | — |
+| Worker, 3 ms after the debug write committed | `2e8e7785…` | 19:25:40 → 19:25:47 | SUCCEEDED at 19:27:16, attempt 2 / epoch 2 | PY_PKG started=19:26:50.832Z slug=hello-elitea-1084 | R |
+| Worker, debug write stalled in `staging` | `3ccfac0c…` | 19:27:57 → 19:28:04 | SUCCEEDED at 19:29:31, attempt 2 / epoch 2 | PY_PKG started=19:29:05.620Z slug=hello-elitea-1084 | R |
+| none, nonexistent PyPI package | `fb0ec73f…` | — | FAILED at 19:37:21, attempt 1 / epoch 1 | Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying. | F |
+| none, nonexistent npm package | `e2cf1562…` | — | FAILED at 19:37:35, attempt 1 / epoch 1 | Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying. | F |
+| preparer cut from the resolver network | `f6a60f17…` | 19:37:48 → - | FAILED at 19:37:50, attempt 1 / epoch 1 | Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying. | F |
+
+The rows with the fault in the first column are from the final run of each case. Earlier runs of the same case (a first pass
+before the cut was moved inside the download, or with a harness check that was wrong) are not counted; none contradicted these.
+
+**Class justification.**
+- **Preparation cuts (Worker, Supervisor, Main), R.** The Supervisor ledger owns the preparation job and the holding preparer
+  container. The replacement Worker (claim attempt 2 after `LEASE_EXPIRED` for Worker and Main loss) or the same claim
+  (Supervisor loss, attempt 1) reconciles the original job. The preparer is created once, no second preparation row appears,
+  and the bundle is published once. The holding preparer was removed about 60 s after the cut, when the original job completed (`exit=137` is the
+  Supervisor's removal). Recovery time is bound by the 60 s claim or sandbox lease.
+- **Hydration cuts (Worker, Supervisor), R.** The execution runtime was bound and `reserved`, before dispatch.
+  The original runtime is reused and dispatched once. Preparation was already committed, so nothing is downloaded again.
+- **Execution cut (Worker), R.** The Python and JavaScript start times (19:22:42.681Z, 19:24:03.228Z) precede the kills (19:22:48,
+  19:24:11). The original runtime ran to completion (exit 0); the settled answer carries its original start time.
+- **Stop, none (user cancellation).** Stop 2.3 s after the preparer started: CANCELLED at 19:25:28, `sandbox.cancelled` on the
+  preparation job, preparer removed, no execution job, no user Code. The answer is the registered "Execution was cancelled."
+- **Debug, R.** `DEBUG-W` is a race, reported as it happened: the `staging` row became `committed` 34 ms after it was created
+  (19:25:40.153 to .187) and the kill landed 3 ms later, so the write had already finished. It is not a cut in the write. The
+  deterministic case is `DEBUG-STALL`: this stack's object store (`rustfs`) was paused, the Send created the artifact row in
+  `staging` (19:27:55.942), the Worker was killed with the row still `staging` (19:27:57.95), the store was unpaused at 19:28:01,
+  the Worker restarted 19:28:04. The replacement claim reconciled the original reservation: one row for the original visit,
+  `committed` at 19:28:57.554, attempt 1, no second artifact. Code then ran once (19:29:05.6). The run checks the row state and
+  count; it does not read the stored object back.
+- **Finite preparation failures, F.** A nonexistent PyPI package, a nonexistent npm package, and a preparer whose network is
+  removed during the download (`docker network disconnect` of that one preparer, 19:37:48) all end FAILED within 2-4 s of Send. The
+  terminal `execution.failed` event carries code `PIPELINE_CODE_FAILED`, `retryable: false` and the safe message "Code dependency
+  preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying." No
+  execution job exists, so no user Code ran. The generic runtime text is not used. F is right because retrying cannot help: the
+  outcome is a definitive resolver result, not an unknown effect, and nothing is lost.
+
+### Group 2: NATS
+
+| Fault | Execution | Kill → restart (UTC) | Settlement | Answer (stored) | Class |
+|---|---|---|---|---|---|
+| NATS, Worker down, 2 queued commands | `6e99b808…`, `8597e6ed…` | Worker stopped 19:34:46; NATS 19:34:49 → 19:34:55; Worker 19:34:55 | SUCCEEDED at 19:35:00 and 19:35:03, attempt 1 / epoch 1 each | `JS_PLAIN started=19:34:59.500Z`, `JS_PLAIN started=19:35:02.387Z` | R |
+| NATS, running Code job | `b915c849…` | 19:35:23 → 19:35:31 | SUCCEEDED at 19:35:48, attempt 1 / epoch 1 | `JS_PLAIN started=19:35:17.760Z` | R |
+| NATS + Worker, running Code job | `bc816224…` | NATS 19:36:09 / Worker 19:36:09 → 19:36:17 / 19:36:18 | SUCCEEDED at 19:37:06, attempt 2 / epoch 2 | `JS_PLAIN started=19:36:03.721Z` | R |
+
+Stream `ELITEA_RT_V1_AGENT`, consumer `elitea-agent-worker-v1`, read from `/jsz` (sequences are stream sequences):
+
+| Case | Before | At the fault | After NATS restart | End |
+|---|---|---|---|---|
+| Queued | first 35, last 34, 0 messages | last 36, 2 messages, pending 2, ack_pending 0 | identical (same messages and sequences) | first 37, last 36, 0 messages, pending 0, ack_pending 0, delivered 36, redelivered 0 |
+| In flight | last 36, 0 messages | last 37, 1 message, ack_pending 1 | identical | last 37, 0 messages, pending 0, ack_pending 0, redelivered 0 |
+| NATS + Worker | last 37, 0 messages | last 38, 1 message, ack_pending 1 | identical | last 38, 0 messages, pending 0, ack_pending 0, redelivered 0 |
+
+- **Queued.** Both commands were published (outbox `published_at` set, attempts 1) and sat in the stream with the Worker stopped.
+  NATS was killed with SIGKILL, so nothing flushed on shutdown; `sync_interval: always` held. It restarted on the original volume
+  `standalone_nats_data` and `/jsz` showed the same two messages. The Worker started 0.3 s later and each run executed once
+  (one preparer and one execution container each), about 3 s apart in order. The sequence advanced by exactly 2: no duplicate publish.
+  Every JavaScript job runs a preparation (the native path), so each run shows one preparation row even without imports.
+- **In flight.** The job was `dispatched` and the user Code had started (19:35:17.760) when NATS was killed. The Worker kept its
+  claim (attempt 1) and the original runtime finished at 19:35:47, after NATS was back. The message stayed unacknowledged across
+  the restart, was acknowledged after settlement, and the stream drained.
+- **NATS + Worker.** The Worker's claim expired (`LEASE_EXPIRED`), the replacement claimed attempt 2 / epoch 2 and collected the
+  original runtime's result; user Code started once (19:36:03.7, before both kills). The unacknowledged message was acknowledged
+  after settlement and the stream drained.
+- Redelivery counts are 0 in all three cases: `num_redelivered` did not rise, so recovery did not depend on redelivering a
+  message after the ack wait.
+- **Class R** for all three: the command is durable in JetStream and in `command_outbox`, the work is owned by the PostgreSQL claim
+  and the Supervisor ledger, and a NATS loss delays acknowledgement but does not re-run anything.
+
+**Observations, not defects of this branch.**
+- Every recovery waited for a 60 s lease (claim lease for Worker and Main loss, sandbox lease for Supervisor loss), as in the
+  earlier matrix. A Supervisor cut during preparation did not trigger a Worker takeover (attempt 1).
+- The `FAILED` settlement row has an empty `error_code`; the typed code is in the projected `execution.failed` event. The
+  support reference is not in the event payload or the replay row; this run checked the safe message and the response message id
+  only, and the planning session's browser spot check should confirm the reference renders live and after reload.
+- The join between `sandbox_dispatches` and `sandbox_jobs` on `(tenant_id, project_id, request_digest)` is not unique per
+  execution: two executions with identical Code source share the digest and each other's jobs. Harness queries must
+  either use unique sources (as here) or bound `j.created_at >= d.created_at`. DESIGN.md I2/I6 should record this.
+- The Docker host dropped to 23 GiB free during the session (other sessions' builds included); nothing here builds any more.
+
+**Reproduction.** The scenario harness (private, not shipping) is `h.py`, `scen.py` and `nats.py` in the session scratchpad;
+per-run results (JSON, with the invariant rows and container event times) are in `runs/<scenario>/`.
+
+**Limits.** This closes the preparation fault outcomes and the original debug-writer reconciliation for the Docker backend, and the
+queued, in-flight and combined NATS cases with the original broker storage. It does not cover: Kubernetes preparation and its
+NetworkPolicy enforcement; a Main loss during hydration or execution of a prepared job; TypeScript or Rust preparation; the
+debug object read-back; a registry outage longer than the preparation deadline; or a live-browser check. Runs use the Chat
+Send API, not browser clicks.
+
+**Planning-session browser spot check** (stack `code1084` at `e7a291985`, 2026-10-09):
+- Pipeline 167 (`micropip.install("python-slugify==8.0.4")`) answered live with `PY_PKG … slug=hello-elitea-1084`.
+- Pipeline 207, created in the UI, installs `elitea-nonexistent-package-1084==9.9.9`. It showed *"Code dependency
+  preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying."*
+  Its support details give `PIPELINE_CODE_FAILED` and Message ID `0d57d804-…`, with a copy button.
+- After reload, Run history keeps the run as `FAILED · 4s · TERMINAL`.
 
 ## Performance (PERF-1084)
 
