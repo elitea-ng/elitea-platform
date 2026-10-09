@@ -1459,21 +1459,32 @@ main:
     # call. EMPTY IS FAIL-CLOSED: every private, loopback and link-local
     # address is refused, before the request and again at dial time. Name a
     # private identity provider here (egresslib grammar: hosts, `*.` wildcards,
-    # CIDR blocks). Link-local and multicast stay refused whatever it says.
-    # The two proxies use THIS list, not ELITEA_MCP_EGRESS_ALLOWLIST below.
+    # CIDR blocks; CGNAT 100.64.0.0/10 and 198.18.0.0/15 count as private).
+    # Link-local, multicast, reserved and cloud-metadata addresses stay
+    # refused whatever it says. No proxy is used. The two proxies use THIS list, not ELITEA_MCP_EGRESS_ALLOWLIST below.
     ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: ""
 
     # --- Outbound MCP requests made by Main (Load Tools, metadata reads) ---
     #
     # Main dials a tenant-chosen MCP URL, and the issuer URLs that server's
     # metadata names, with its own network identity. Every dial resolves the
-    # host and refuses loopback, private-network, link-local (cloud metadata)
-    # and multicast addresses. Same grammar and split as
+    # host and refuses loopback, private-network (including CGNAT), link-local
+    # (cloud metadata), multicast and reserved addresses, and never uses a
+    # proxy (internal/infra/egress). Same grammar and split as
     # ELITEA_WEBHOOK_EGRESS_ALLOWLIST: an entry that names a private range or
     # host (for example `10.0.0.0/8`) lets tenants reach private MCP servers;
-    # link-local and multicast stay refused whatever this says. Unset refuses
+    # link-local, multicast, reserved and cloud-metadata addresses stay
+    # refused whatever this says. Unset refuses
     # every private destination. The OAuth and DCR proxies are governed by
     # ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST above.
+    #
+    # UPGRADE NOTE (applies to all three Main egress allowlists): CGNAT
+    # 100.64.0.0/10 (for example Tailscale) and 198.18.0.0/15 used to count as
+    # public and are now private. A target in those ranges needs its block
+    # named here, and Main restarted. Naming any private block permits every
+    # private class for that path, so name it only where needed. See
+    # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
+    # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
     # The origin the Inventory provider calls back to for artifacts and models.
     # EMPTY DISABLES SOURCE EXPANSION rather than failing the boot: the eight
@@ -3630,6 +3641,10 @@ worker:
     spoolSizeLimit: 2Gi
     # Rust-only. Enable checkpoint recovery after verifying the deployment contract.
     agentModelCheckpointRecovery: false
+    # Rust-only. Durable node attempt journal: an interrupted effectful node stops
+    # for recovery instead of repeating its effect. Effectful pipeline direct tool
+    # nodes require it; Code nodes use it when present.
+    agentNodeRecovery: false
     # Rust-only deployment-selected Code backends. These are never YAML node inputs.
     # Entries use SandboxRuntimeConfig fields: language, target, audience,
     # image_digest, policy_revision, and timeout_seconds.

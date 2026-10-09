@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 import Typography from '@mui/material/Typography';
 
+import { applicationServerErrorMessage } from '@/features/agents';
 import { t } from '@/shared/i18n';
 
 export interface EditPipelineAlertsProps {
@@ -60,7 +61,8 @@ export function EditPipelineAlerts({ isError, admissionRefused, saveError }: Edi
           role="alert"
           variant="bodyMedium"
         >
-          {t('pages.pipelines.editPipeline.saveError', 'Failed to save your changes.')}
+          {/* The server's own readable refusal (e.g. the pipeline size or node limit), else the generic text. */}
+          {applicationServerErrorMessage(saveError, t('pages.pipelines.editPipeline.saveError', 'Failed to save your changes.'))}
         </Typography>
       )}
     </>

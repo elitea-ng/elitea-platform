@@ -15,6 +15,7 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/google/uuid"
 )
 
@@ -259,6 +260,9 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		(len(target.InternalTools) != 0 && !validJSONArray(target.InternalTools)) {
 		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
 	}
+	if err = currentPipelineStartBound(target.VersionDetails); err != nil {
+		return CurrentApplicationStartOutcome{}, unsupportedStartBecause("pipeline exceeds a size bound", err)
+	}
 	if err = service.captureApplicationSource(ctx, request.ProjectID, request.ActorUserID, &target); err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
@@ -412,6 +416,11 @@ func currentApplicationInput(
 	versionDetails = appendCurrentApplicationProjectContext(versionDetails, projectContextText)
 	versionDetails, err = freezeCurrentHTTPActionRequests(target.ApplicationID, target.ApplicationVersionID, versionDetails)
 	if err != nil {
+		// A pipeline over the shared size bounds keeps the unsupported-start
+		// identity and also carries the typed limit, so the route can name it.
+		if errors.Is(err, pipelinelimits.ErrInstructionsTooLarge) || errors.Is(err, pipelinelimits.ErrTooManyNodes) {
+			return nil, unsupportedStartBecause("pipeline exceeds a size bound", err)
+		}
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
 	applicationFields := map[string]any{
@@ -705,6 +714,33 @@ func validCurrentAgentInput(value string, allowEmpty bool) bool {
 func validCurrentAgentText(value string, limit int) bool {
 	return value != "" && len(value) <= limit && utf8.ValidString(value) &&
 		!strings.ContainsRune(value, '\x00')
+}
+
+// currentPipelineStartBound names the shared pipeline size bound before any
+// start work. The root-source capture that runs next has its own, larger bound
+// (executionchildscope.MaxDefinitionBytes) and refuses with the generic
+// unsupported-start text, so an over-size pipeline must be refused here to be
+// told which limit it exceeds. Only the byte length is tested: the node count
+// cannot fail the capture, and the HTTP freeze pre-scan already names it, so a
+// second YAML parse per start would buy nothing.
+func currentPipelineStartBound(versionDetails json.RawMessage) error {
+	var version struct {
+		AgentType    string          `json:"agent_type"`
+		Instructions json.RawMessage `json:"instructions"`
+	}
+	if json.Unmarshal(versionDetails, &version) != nil || version.AgentType != "pipeline" {
+		return nil
+	}
+	// A decoded string is never longer than its quoted JSON form, so only an
+	// over-bound raw value is unquoted to learn its exact length.
+	if len(version.Instructions) <= pipelinelimits.MaxInstructionsBytes {
+		return nil
+	}
+	var instructions string
+	if json.Unmarshal(version.Instructions, &instructions) == nil && len(instructions) > pipelinelimits.MaxInstructionsBytes {
+		return pipelinelimits.ErrInstructionsTooLarge
+	}
+	return nil
 }
 
 func validJSONObject(value []byte) bool {

@@ -26,6 +26,9 @@ mod code_runtime;
 pub(crate) mod code_trace;
 mod code_workspace;
 pub(crate) use code_remote::CodeRuntimeFactory;
+mod aggregate;
+#[cfg(test)]
+mod aggregate_tests;
 mod code_state;
 #[cfg(test)]
 mod code_state_tests;
@@ -33,11 +36,21 @@ mod code_state_tests;
 mod code_tests;
 pub(crate) mod compiler;
 #[cfg(test)]
+mod compiler_identifier_tests;
+#[cfg(test)]
+mod compiler_limit_tests;
+#[cfg(test)]
 mod compiler_tests;
+mod data_shaping;
+#[cfg(test)]
+mod data_shaping_tests;
 mod decision;
 mod direct_tool;
 #[cfg(test)]
 mod direct_tool_tests;
+#[cfg(test)]
+mod fan_in_tests;
+pub(crate) mod fanout_control;
 use elitea_agent_runtime::graph::hitl;
 #[cfg(test)]
 mod hitl_tests;
@@ -62,9 +75,17 @@ pub(crate) use map_reduce::{
     FrozenMapItem, MapActivation, MapChildCheckpoint, MapChildCheckpointerFactory,
     MapExecutionIdentity, MapWorkerKind,
 };
+#[cfg(test)]
+pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
+    Gate, journaled_node, node_activation, pause_data, recovery_card, state as direct_tool_state,
+    with_decision,
+};
 mod parallel;
 #[cfg(test)]
 mod parallel_tests;
+mod pipeline_result;
+#[cfg(test)]
+mod pipeline_result_graph_tests;
 use elitea_agent_runtime::graph::printer;
 #[cfg(test)]
 mod printer_tests;
@@ -72,6 +93,18 @@ pub(crate) mod resume;
 use elitea_agent_runtime::graph::router;
 #[cfg(test)]
 mod routing_tests;
+#[cfg(feature = "graph-shaping-bench")]
+#[doc(hidden)]
+pub mod shaping_bench;
+#[cfg(test)]
+mod shaping_compiler_tests;
+#[cfg(test)]
+mod shaping_pg_tests;
+#[cfg(test)]
+mod shaping_property_tests;
+mod split_out;
+#[cfg(test)]
+mod split_out_tests;
 use elitea_agent_runtime::graph::state_modifier;
 pub(crate) mod static_pause;
 #[cfg(test)]
@@ -109,9 +142,17 @@ pub use yaml::{
     ParallelNodeDefinition, ParallelWaitPolicy,
 };
 
+#[cfg(test)]
+pub(crate) use parallel::{
+    AdkParallelBranchRuntime, DurableParallelNode, PARALLEL_INTERRUPT_SCHEMA,
+    PARALLEL_RESUME_STATE_KEY, ParallelBranchGraphFactory, ParallelBranchPause,
+    ParallelBranchRuntime, ParallelBranchTerminal, ParallelDecision,
+    ParallelOccurrenceCheckpointer, ParallelPauseCard, PreparedParallelActivation,
+};
 pub(crate) use parallel::{
     ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
+    ParallelChildOrigin,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 

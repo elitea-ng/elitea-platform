@@ -4901,5 +4901,10 @@
   "workspace.error.localWorkDisabled": "Local work is turned off by your organisation’s policy.",
   "workspace.error.notSignedIn": "Sign in again to run agents on this computer.",
   "workspace.error.turnExpired": "This turn is too old to review or undo: only the most recent turns of a folder are kept.",
-  "workspace.error.versionMismatch": "The selected conversation runs another version of this agent. Start a new conversation, or pick that version."
+  "workspace.error.versionMismatch": "The selected conversation runs another version of this agent. Start a new conversation, or pick that version.",
+  "pipelines.graphExtensions.aggregateEmptyHelp": "Empty input gives one row (count 0, lists [], sum 0, others null) without Group by, and no rows with Group by.",
+  "pipelines.graphExtensions.aggregateFlatDescription": "Group list rows and calculate explicit results. Each result row holds the group fields and the operation results side by side.",
+  "pipelines.graphExtensions.regroup": "Regroup",
+  "pipelines.graphExtensions.regroupHelp": "Parent rebuilds each split parent row from the split_out envelopes.",
+  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item."
 }

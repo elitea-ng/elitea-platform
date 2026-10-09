@@ -140,7 +140,7 @@ func savedCodeReservedStateKey(key string) bool {
 		return true
 	}
 	switch key {
-	case "__elitea_hitl_resume_v1", "__elitea_tool_resume_v1", "__elitea_llm_tool_resume_v1", "__elitea_parallel_resume_v1", "__elitea_parallel_agent_inputs_v1", "__elitea_pipeline_node_event_scope_v1", "__elitea_pipeline_terminal_json_producers_v1", "__elitea_application_task_v1", "__elitea_application_messages_v1", "__elitea_application_result_v1", "__elitea_subgraph_result_v1", "__elitea_subgraph_entry_v1", "output", "result", "router_output", "elitea_response", "printer_output", "state_types", "context_info", "hitl_decisions", "hitl_interrupt", "parallel_tasks", "_pipeline_blocked", "session_id", "thread_id", "execution_finished", "chat_history":
+	case "__elitea_hitl_resume_v1", "__elitea_tool_resume_v1", "__elitea_llm_tool_resume_v1", "__elitea_parallel_resume_v1", "__elitea_parallel_agent_inputs_v1", "__elitea_pipeline_node_event_scope_v1", "__elitea_pipeline_terminal_json_producers_v1", "__elitea_pipeline_result_trace_v1", "__elitea_application_task_v1", "__elitea_application_messages_v1", "__elitea_application_result_v1", "__elitea_subgraph_result_v1", "__elitea_subgraph_entry_v1", "output", "result", "router_output", "elitea_response", "printer_output", "state_types", "context_info", "hitl_decisions", "hitl_interrupt", "parallel_tasks", "_pipeline_blocked", "session_id", "thread_id", "execution_finished", "chat_history":
 		return true
 	default:
 		return false

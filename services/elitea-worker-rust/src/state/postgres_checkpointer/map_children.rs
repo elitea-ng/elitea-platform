@@ -31,19 +31,32 @@ impl MapChildCheckpointerFactory for PostgresCheckpointer {
             })?,
         })
     }
+    fn item_thread_id(
+        &self,
+        activation: &MapActivation,
+        item: &FrozenMapItem,
+        worker: &str,
+        origin: &MapExecutionIdentity,
+    ) -> Result<String, GraphError> {
+        self.check_map_item(activation, item, worker)?;
+        map_child_thread_id(self, activation, item, worker, origin)
+    }
     async fn for_item(
         &self,
         activation: &MapActivation,
         item: &FrozenMapItem,
         worker: &str,
         kind: MapWorkerKind,
+        origin: &MapExecutionIdentity,
     ) -> Result<MapChildCheckpoint, GraphError> {
         if kind != MapWorkerKind::StateModifier {
             return Err(GraphError::CheckpointError(
                 "checkpoint.invalid_scope: the original application family is not bound".to_owned(),
             ));
         }
-        let child = self.activate_map_item(activation, item, worker).await?;
+        let child = self
+            .activate_map_item(activation, item, worker, origin)
+            .await?;
         let thread_id = child.scope.authority.thread_id.clone();
         Ok(MapChildCheckpoint {
             admitted_threads: BTreeSet::from([thread_id.clone()]),
@@ -54,12 +67,12 @@ impl MapChildCheckpointerFactory for PostgresCheckpointer {
 }
 
 impl PostgresCheckpointer {
-    pub(super) async fn activate_map_item(
+    fn check_map_item(
         &self,
         activation: &MapActivation,
         item: &FrozenMapItem,
         worker: &str,
-    ) -> Result<Self, GraphError> {
+    ) -> Result<(), GraphError> {
         if activation.root_thread_id != self.scope.authority.thread_id
             || item.index >= 64
             || item.input_digest == [0; 32]
@@ -74,11 +87,23 @@ impl PostgresCheckpointer {
         {
             return Err(GraphError::CheckpointError("checkpoint.invalid_scope: the Map item does not belong to this original writer family".to_owned()));
         }
-        let thread_id = map_child_thread_id(self, activation, item, worker)?;
+        Ok(())
+    }
+
+    pub(super) async fn activate_map_item(
+        &self,
+        activation: &MapActivation,
+        item: &FrozenMapItem,
+        worker: &str,
+        origin: &MapExecutionIdentity,
+    ) -> Result<Self, GraphError> {
+        self.check_map_item(activation, item, worker)?;
+        let thread_id = map_child_thread_id(self, activation, item, worker, origin)?;
         let authority = self.scope.authority.for_thread(thread_id)?;
-        Self::activate(
+        Self::activate_under_root(
             self.pool.clone(),
             authority,
+            &self.run_root_thread_id,
             self.limits,
             Arc::clone(&self.state_writer_lease),
         )
@@ -92,7 +117,13 @@ fn map_child_thread_id(
     activation: &MapActivation,
     item: &FrozenMapItem,
     worker: &str,
+    origin: &MapExecutionIdentity,
 ) -> Result<String, GraphError> {
+    let generation = i64::try_from(origin.generation).map_err(|_| {
+        GraphError::CheckpointError(
+            "checkpoint.invalid_scope: the Map origin generation is invalid".to_owned(),
+        )
+    })?;
     let ordinal = u64::try_from(item.index).map_err(|_| {
         GraphError::CheckpointError(
             "checkpoint.invalid_scope: the Map item ordinal is invalid".to_owned(),
@@ -107,8 +138,8 @@ fn map_child_thread_id(
         &authority.projection_project_id.to_be_bytes(),
         authority.capability_id.as_bytes(),
         authority.definition_digest.as_slice(),
-        authority.execution_id.as_bytes(),
-        &authority.generation.to_be_bytes(),
+        origin.execution_id.as_bytes(),
+        &generation.to_be_bytes(),
         activation.root_thread_id.as_bytes(),
         activation.node_id.as_bytes(),
         &activation.step.to_be_bytes(),

@@ -126,15 +126,35 @@ fn retain_atomic_receipts(
 
 #[async_trait]
 impl ParallelChildCheckpointerFactory for PipelineGraphReceiptAuthority {
+    fn child_origin(
+        &self,
+        activation: &ParallelActivation,
+    ) -> Result<crate::agents::graph::ParallelChildOrigin, GraphError> {
+        self.inner.child_origin(activation)
+    }
+
+    fn branch_thread_id(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &crate::agents::graph::ParallelChildOrigin,
+    ) -> Result<String, GraphError> {
+        self.inner
+            .branch_thread_id(activation, branch, ordinal, input_digest, origin)
+    }
+
     async fn for_branch(
         &self,
         activation: &ParallelActivation,
         branch: &ParallelBranchDefinition,
         ordinal: usize,
         input_digest: &[u8; 32],
+        origin: &crate::agents::graph::ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
         self.inner
-            .for_branch(activation, branch, ordinal, input_digest)
+            .for_branch(activation, branch, ordinal, input_digest, origin)
             .await
     }
 }

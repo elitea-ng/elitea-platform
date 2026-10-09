@@ -211,6 +211,7 @@ export { ApplicationEditorNotes } from './ui/ApplicationEditorNotes';
  * restricts crossing INTO a different slice).
  */
 export { applicationWriteHooks } from './model/applicationWriteHooks';
+export { applicationServerErrorMessage } from './lib/errorMessage';
 export { applicationValidationHooks } from './model/applicationValidationHooks';
 export { useApplicationChatSwitchVersion } from './model/useApplicationChatSwitchVersion';
 export { useCreateConfiguration } from './model/useCreateConfiguration';

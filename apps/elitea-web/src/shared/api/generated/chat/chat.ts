@@ -75,6 +75,10 @@ import type {
   CreateSupportConversationBody,
   CreatedConversation,
   ErrorResponse,
+  ExecutionInterruptDecisionRequest,
+  ExecutionInterruptDecisionResult,
+  ExecutionInterruptError,
+  ExecutionInterruptList,
   ExportConversationParams,
   GetConversationParams,
   GetMessageTraceParams,
@@ -6256,6 +6260,571 @@ export function useCancelChatExecution<
   const queryOptions = getCancelChatExecutionQueryOptions(
     projectId,
     responseMessageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listExecutionInterruptsResponse200 = {
+  data: ExecutionInterruptList;
+  status: 200;
+};
+
+export type listExecutionInterruptsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listExecutionInterruptsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listExecutionInterruptsResponse404 = {
+  data: ExecutionInterruptError;
+  status: 404;
+};
+
+export type listExecutionInterruptsResponseSuccess =
+  listExecutionInterruptsResponse200 & {
+    headers: Headers;
+  };
+export type listExecutionInterruptsResponseError = (
+  | listExecutionInterruptsResponse401
+  | listExecutionInterruptsResponse403
+  | listExecutionInterruptsResponse404
+) & {
+  headers: Headers;
+};
+
+export type listExecutionInterruptsResponse =
+  listExecutionInterruptsResponseSuccess | listExecutionInterruptsResponseError;
+
+export const getListExecutionInterruptsUrl = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/interrupts`;
+};
+
+/**
+ * Wave 1 per-interrupt HITL API. Registered only when
+ * `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
+ * agent execution dispatch); otherwise the path answers 404.
+ *
+ * Lists the PENDING and DECIDED (not yet consumed) interrupt cards of
+ * one response, at most 16. `decision_revision` is the response-level
+ * counter that advances with every recorded decision.
+ *
+ * Permission `models.applications.task.get`. Ownership and project
+ * membership are rechecked inside the read transaction, so a stale
+ * permission snapshot cannot disclose another user's cards; a response
+ * that is not the caller's, or does not exist, answers 404.
+ * @summary List the open human-in-the-loop interrupts of a running answer
+ */
+export const listExecutionInterrupts = async (
+  projectId: string,
+  responseMessageId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listExecutionInterruptsResponse> => {
+  return eliteaFetch<listExecutionInterruptsResponse>(
+    getListExecutionInterruptsUrl(projectId, responseMessageId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListExecutionInterruptsQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return [
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/interrupts`,
+  ] as const;
+};
+
+export const getListExecutionInterruptsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListExecutionInterruptsQueryKey(projectId, responseMessageId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listExecutionInterrupts>>
+  > = ({ signal }) =>
+    listExecutionInterrupts(projectId, responseMessageId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listExecutionInterrupts>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListExecutionInterruptsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listExecutionInterrupts>>
+>;
+export type ListExecutionInterruptsQueryError =
+  N401Response | N403Response | ExecutionInterruptError;
+
+export function useListExecutionInterrupts<
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExecutionInterrupts>>,
+          TError,
+          Awaited<ReturnType<typeof listExecutionInterrupts>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExecutionInterrupts<
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExecutionInterrupts>>,
+          TError,
+          Awaited<ReturnType<typeof listExecutionInterrupts>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExecutionInterrupts<
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the open human-in-the-loop interrupts of a running answer
+ */
+
+export function useListExecutionInterrupts<
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListExecutionInterruptsQueryOptions(
+    projectId,
+    responseMessageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type decideExecutionInterruptResponse200 = {
+  data: ExecutionInterruptDecisionResult;
+  status: 200;
+};
+
+export type decideExecutionInterruptResponse400 = {
+  data: ExecutionInterruptError;
+  status: 400;
+};
+
+export type decideExecutionInterruptResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type decideExecutionInterruptResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type decideExecutionInterruptResponse404 = {
+  data: ExecutionInterruptError;
+  status: 404;
+};
+
+export type decideExecutionInterruptResponse409 = {
+  data: ExecutionInterruptError;
+  status: 409;
+};
+
+export type decideExecutionInterruptResponseSuccess =
+  decideExecutionInterruptResponse200 & {
+    headers: Headers;
+  };
+export type decideExecutionInterruptResponseError = (
+  | decideExecutionInterruptResponse400
+  | decideExecutionInterruptResponse401
+  | decideExecutionInterruptResponse403
+  | decideExecutionInterruptResponse404
+  | decideExecutionInterruptResponse409
+) & {
+  headers: Headers;
+};
+
+export type decideExecutionInterruptResponse =
+  | decideExecutionInterruptResponseSuccess
+  | decideExecutionInterruptResponseError;
+
+export const getDecideExecutionInterruptUrl = (
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/interrupts/${interruptKey}/decision`;
+};
+
+/**
+ * Wave 1 per-interrupt HITL API. Registered only when
+ * `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
+ * agent execution dispatch); otherwise the path answers 404.
+ *
+ * Records one decision for one interrupt, idempotent on `request_id`:
+ * the same id with the same bytes answers 200 with `replay: true`. Any
+ * other conflict, including a stale `expected_revision` or an interrupt
+ * that was already answered, is 409 `agent_interrupt_already_resolved`.
+ * A decision whose action or value does not fit the card answers 400
+ * `agent_interrupt_invalid_decision`. The canonical body is at most
+ * 8192 bytes and carries no secrets; delegated auth passes a
+ * token-store reference in `credential_ref`.
+ *
+ * Permission `models.chat.messages.create`. Ownership and project
+ * membership are rechecked inside the write transaction.
+ * @summary Record the decision for one interrupt
+ */
+export const decideExecutionInterrupt = async (
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<decideExecutionInterruptResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<decideExecutionInterruptResponse>(
+    getDecideExecutionInterruptUrl(projectId, responseMessageId, interruptKey),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(executionInterruptDecisionRequest),
+    },
+  );
+};
+
+export const getDecideExecutionInterruptQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest?: ExecutionInterruptDecisionRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/interrupts/${interruptKey}/decision`,
+    executionInterruptDecisionRequest,
+  ] as const;
+};
+
+export const getDecideExecutionInterruptQueryOptions = <
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDecideExecutionInterruptQueryKey(
+      projectId,
+      responseMessageId,
+      interruptKey,
+      executionInterruptDecisionRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof decideExecutionInterrupt>>
+  > = ({ signal }) =>
+    decideExecutionInterrupt(
+      projectId,
+      responseMessageId,
+      interruptKey,
+      executionInterruptDecisionRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined &&
+      interruptKey !== null &&
+      interruptKey !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DecideExecutionInterruptQueryResult = NonNullable<
+  Awaited<ReturnType<typeof decideExecutionInterrupt>>
+>;
+export type DecideExecutionInterruptQueryError =
+  ExecutionInterruptError | N401Response | N403Response;
+
+export function useDecideExecutionInterrupt<
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+          TError,
+          Awaited<ReturnType<typeof decideExecutionInterrupt>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDecideExecutionInterrupt<
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+          TError,
+          Awaited<ReturnType<typeof decideExecutionInterrupt>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDecideExecutionInterrupt<
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Record the decision for one interrupt
+ */
+
+export function useDecideExecutionInterrupt<
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDecideExecutionInterruptQueryOptions(
+    projectId,
+    responseMessageId,
+    interruptKey,
+    executionInterruptDecisionRequest,
     options,
   );
 

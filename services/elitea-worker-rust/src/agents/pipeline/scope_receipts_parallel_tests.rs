@@ -119,12 +119,31 @@ impl ParallelCheckpointAppender for AtomicMemory {
 
 #[async_trait]
 impl ParallelChildCheckpointerFactory for AtomicMemory {
+    fn child_origin(
+        &self,
+        _: &ParallelActivation,
+    ) -> Result<crate::agents::graph::ParallelChildOrigin, GraphError> {
+        Ok(test_origin())
+    }
+
+    fn branch_thread_id(
+        &self,
+        _: &ParallelActivation,
+        _: &ParallelBranchDefinition,
+        _: usize,
+        _: &[u8; 32],
+        _: &crate::agents::graph::ParallelChildOrigin,
+    ) -> Result<String, GraphError> {
+        Err(receipt_error())
+    }
+
     async fn for_branch(
         &self,
         _: &ParallelActivation,
         _: &ParallelBranchDefinition,
         _: usize,
         _: &[u8; 32],
+        _: &crate::agents::graph::ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
         self.child_calls.fetch_add(1, Ordering::SeqCst);
         Err(receipt_error())
@@ -132,6 +151,13 @@ impl ParallelChildCheckpointerFactory for AtomicMemory {
 }
 
 impl ParallelCheckpointAuthority for AtomicMemory {}
+
+fn test_origin() -> crate::agents::graph::ParallelChildOrigin {
+    crate::agents::graph::ParallelChildOrigin {
+        execution_id: "test-execution".to_owned(),
+        generation: 1,
+    }
+}
 
 fn definition() -> PipelineDefinition {
     PipelineDefinition::from_yaml(
@@ -373,7 +399,13 @@ async fn ordinary_save_and_child_factory_keep_the_same_underlying_authority() {
     };
     assert!(
         wrapped
-            .for_branch(&activation, &definition.branches()[0], 0, &[9; 32])
+            .for_branch(
+                &activation,
+                &definition.branches()[0],
+                0,
+                &[9; 32],
+                &test_origin(),
+            )
             .await
             .is_err()
     );

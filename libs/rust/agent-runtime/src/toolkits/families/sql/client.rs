@@ -27,6 +27,12 @@ const MAX_METADATA_BYTES: usize = 256;
 const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
 const MAX_MYSQL_SESSION_MODE_BYTES: usize = 8 * 1_024;
 
+/// The `MySQL` session must be TLS with verified identity before authentication.
+/// This also keeps the non-TLS RSA password-encryption path of `sqlx-mysql`
+/// (`rsa`, RUSTSEC-2023-0071, no fixed release) unreachable: a non-TLS server
+/// is refused before any authentication byte is sent.
+const MYSQL_TLS_MODE: MySqlSslMode = MySqlSslMode::VerifyIdentity;
+
 const POSTGRES_SCHEMA_SQL: &str = r"
 SELECT cls.relname AS table_name,
        attr.attname AS column_name,
@@ -235,7 +241,7 @@ impl SqlClient {
             .username(self.config.username())
             .password(self.config.password())
             .database(self.config.database())
-            .ssl_mode(MySqlSslMode::VerifyIdentity)
+            .ssl_mode(MYSQL_TLS_MODE)
             .statement_cache_capacity(0)
             .charset("utf8mb4")
             .timezone(Some("+00:00".to_owned()))

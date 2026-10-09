@@ -9,6 +9,7 @@ worker:
   implementation: rust
   runtime:
     agentModelCheckpointRecovery: true
+    agentNodeRecovery: true
     sandboxRuntimes:
       - language: python
         target: sandbox-python:9446
@@ -42,6 +43,7 @@ assert config['sandbox_runtimes']==values['sandboxRuntimes']
 assert config['sandbox_runtimes'][0]['preparation']==values['sandboxRuntimes'][0]['preparation']
 assert 'preparation' not in config['sandbox_runtimes'][1]
 assert config['agent_model_checkpoint_recovery'] is True
+assert config['agent_node_recovery'] is True
 assert config['consumer_id'].endswith('__ELITEA_POD_NAME__')
 PY
 if helm template test deploy/helm/elitea "${args[@]}" --set worker.implementation=python > "$work/error" 2>&1; then

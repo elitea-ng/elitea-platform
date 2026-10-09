@@ -1,4 +1,4 @@
-package webhook
+package egress
 
 // Unit coverage for DestinationGuard: the table-driven validator (Validate,
 // used by Create/Update) and the dial-time pinning path (dialContext, used by
@@ -19,7 +19,7 @@ import (
 
 func addr(ip string) net.IPAddr { return net.IPAddr{IP: net.ParseIP(ip)} }
 
-func guardWithHosts(t *testing.T, allowPrivate bool, hosts map[string]string) *DestinationGuard {
+func guardWithHosts(t *testing.T, allowPrivate bool, hosts map[string]string) *Guard {
 	t.Helper()
 	ips := make(map[string][]net.IPAddr, len(hosts))
 	for host, ip := range hosts {
@@ -33,7 +33,7 @@ func guardWithHosts(t *testing.T, allowPrivate bool, hosts map[string]string) *D
 		}
 		allowlist = list
 	}
-	return NewDestinationGuardWithResolver(allowlist, fakeIPResolver{ips: ips})
+	return NewWithResolver(allowlist, fakeIPResolver{ips: ips})
 }
 
 func TestDestinationGuardValidateTable(t *testing.T) {
@@ -130,10 +130,23 @@ func TestDestinationGuardTransportRefusesAtDialTime(t *testing.T) {
 }
 
 func TestDestinationGuardNilAllowlistRefusesPrivateByDefault(t *testing.T) {
-	g := NewDestinationGuardWithResolver(nil, fakeIPResolver{ips: map[string][]net.IPAddr{
+	g := NewWithResolver(nil, fakeIPResolver{ips: map[string][]net.IPAddr{
 		"internal.example": {addr("10.1.2.3")},
 	}})
 	if err := g.Validate(context.Background(), "http://internal.example/hook"); err == nil {
 		t.Fatal("Validate accepted a private destination with no allowlist configured")
 	}
+}
+
+// fakeIPResolver is a deterministic, network-free stand-in for
+// net.DefaultResolver, so no case depends on the runner's real DNS.
+type fakeIPResolver struct {
+	ips map[string][]net.IPAddr
+}
+
+func (f fakeIPResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	if addrs, ok := f.ips[host]; ok {
+		return addrs, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 }

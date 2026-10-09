@@ -516,6 +516,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var agentStart *agentexecutionapp.CurrentApplicationStartService
 	var nodeRecovery *recoveryapp.Service
 	var nodeRecoveryStore *repos.NodeRecoveryRepository
+	var executionInterrupts *repos.ExecutionInterruptRepository
 	recoveryOwners := &repos.RecoveryEffectOwners{HTTP: repos.NewHTTPActionRecoveryProofProvider()}
 	var originalCodeIntents *repos.CodeIntentRepository
 	codeSources, codeDefinitions, err := configureCodeSourceCapture(config, dependencies)
@@ -612,6 +613,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		nodeRecovery, recoveryErr = recoveryapp.New(nodeRecoveryStore)
 		if recoveryErr != nil {
 			return nil, recoveryErr
+		}
+		if config.ExecutionInterruptsAPIEnabled {
+			executionInterrupts, recoveryErr = repos.NewExecutionInterruptRepository(dependencies.AdmissionPool)
+			if recoveryErr != nil {
+				return nil, fmt.Errorf("construct execution interrupt repository: %w", recoveryErr)
+			}
 		}
 		agentCancellation, cancelErr := repos.NewCurrentAgentCancelRepository(dependencies.AdmissionPool)
 		if cancelErr != nil {
@@ -2008,6 +2015,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if nodeRecovery != nil {
 		publicRoutes.NodeRecovery = nodeRecovery
+	}
+	if executionInterrupts != nil {
+		publicRoutes.ExecutionInterrupts = executionInterrupts
 	}
 	if agentCancel != nil {
 		publicRoutes.AgentCancel = agentCancel

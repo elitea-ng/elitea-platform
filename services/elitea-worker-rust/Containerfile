@@ -98,6 +98,9 @@ WORKDIR /src/services/elitea-worker-rust
 FROM builder-base AS builder
 # Optional build-only concurrency bound for shared development hosts.
 ARG CARGO_BUILD_JOBS
+# Optional rehearsal-only Cargo features, for example graph-extensions-rehearsal.
+# Production images leave it empty.
+ARG WORKER_REHEARSAL_FEATURES=""
 
 # The dependency build lives in the THREE CACHE MOUNTS below, not in a layer,
 # and that is deliberate: a cargo-chef style `target/` inside the image would
@@ -127,7 +130,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target,sharing=locked \
     find /src -type f -exec touch {} + && \
-    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
+    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release \
+      ${WORKER_REHEARSAL_FEATURES:+--features "$WORKER_REHEARSAL_FEATURES"} && \
     cp /cargo-target/release/elitea-worker-rust /usr/local/bin/elitea-worker-rust
 
 # Check audit metadata, diagnostics, CA roots, and the complete runtime library closure.

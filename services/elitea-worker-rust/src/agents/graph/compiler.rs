@@ -9,15 +9,16 @@
 #[path = "node_recovery_definition.rs"]
 mod recovery_definition;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
 use super::code::CodeNodeDefinition;
 use super::code_runtime::{CodeNode, CodeSandboxRuntime};
 use adk_rust::graph::{
-    Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphAgent, GraphAgentBuilder,
-    GraphError, Node, NodeContext, NodeOutput, Reducer, START, State, StateGraph, StateSchema,
+    Channel, Checkpoint, Checkpointer, CompiledGraph, END, Edge, EdgeTarget, GraphAgent,
+    GraphAgentBuilder, GraphError, Node, NodeContext, NodeOutput, Reducer, START, State,
+    StateGraph, StateSchema,
 };
 use adk_rust::{Event, InvocationContext, Part};
 use async_trait::async_trait;
@@ -27,30 +28,42 @@ use serde::de::{Deserializer, SeqAccess, Visitor};
 use serde_json::json;
 use thiserror::Error;
 
+use super::aggregate::{AggregateNode, AggregateNodeDefinition};
 use super::application::{
     APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
-    ApplicationNode, ApplicationNodeDefinition, PipelineApplicationResolver,
-    PipelineApplicationSelection,
+    ApplicationConfigurationError, ApplicationNode, ApplicationNodeDefinition,
+    PipelineApplicationResolver, PipelineApplicationSelection,
 };
-use super::decision::{DecisionNode, DecisionNodeDefinition};
+use super::decision::{DecisionConfigurationError, DecisionNode, DecisionNodeDefinition};
 use super::direct_tool::{
-    DIRECT_TOOL_RESUME_STATE_KEY, DirectToolInputMapping, DirectToolNode, DirectToolNodeDefinition,
-    DirectToolSelection, PipelineDirectToolResolver,
+    DIRECT_TOOL_RESUME_STATE_KEY, DirectToolConfigurationError, DirectToolInputMapping,
+    DirectToolNode, DirectToolNodeDefinition, DirectToolSelection, PipelineDirectToolResolver,
 };
-use super::hitl::{HITL_RESUME_STATE_KEY, HitlNode, HitlNodeDefinition};
+use super::hitl::{HITL_RESUME_STATE_KEY, HitlConfigurationError, HitlNode, HitlNodeDefinition};
 use super::llm::{
-    LLM_TOOL_RESUME_STATE_KEY, LlmNode, LlmNodeDefinition, LlmToolkitSelection,
-    PipelineLlmAgentFactory,
+    LLM_TOOL_RESUME_STATE_KEY, LlmConfigurationError, LlmNode, LlmNodeDefinition,
+    LlmToolkitSelection, PipelineLlmAgentFactory,
 };
 use super::node_events::{PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender};
+use super::pipeline_result::{
+    PIPELINE_RESULT_TRACE_STATE_KEY, RenderedResult, ResultTrace, ResultTraceNode,
+    ResultTraceOutputs, render_state_value, render_traced_keys,
+};
 use super::printer::{
-    PrinterInputMapping, PrinterNode, PrinterNodeDefinition, PrinterPauseCatalog, PrinterResetNode,
+    PrinterConfigurationError, PrinterInputMapping, PrinterNode, PrinterNodeDefinition,
+    PrinterPauseCatalog, PrinterResetNode,
 };
 use super::resume::PipelineResume;
-use super::router::{RouterNode, RouterNodeDefinition};
-use super::state_modifier::{StateModifierNode, StateModifierNodeDefinition};
+use super::router::{RouterConfigurationError, RouterNode, RouterNodeDefinition};
+use super::split_out::{SplitOutNode, SplitOutNodeDefinition};
+use super::state_modifier::{
+    StateModifierConfigurationError, StateModifierNode, StateModifierNodeDefinition,
+};
 use super::static_pause::{StaticPauseCatalog, StaticResumeCheckpointer};
-use super::yaml::{MAX_NODE_ID_BYTES, ParallelNodeDefinition, valid_graph_id, valid_output_key};
+use super::yaml::{
+    MAX_NODE_ID_BYTES, ParallelConfigurationError, ParallelNodeDefinition, valid_graph_id,
+    valid_output_key,
+};
 
 #[path = "map_compiler.rs"]
 mod map_compiler;
@@ -69,7 +82,6 @@ const MAX_PIPELINE_NODES: usize = 128;
 const MAX_PIPELINE_STATE_KEYS: usize = 256;
 const MAX_STATIC_INTERRUPTS: usize = 128;
 const PIPELINE_RECURSION_LIMIT: usize = 100;
-const MAX_PIPELINE_RESULT_BYTES: usize = 512 * 1024;
 const SUBGRAPH_RESULT_NODE: &str = "__elitea_subgraph_result_v1";
 const SUBGRAPH_ENTRY_NODE: &str = "__elitea_subgraph_entry_v1";
 const PIPELINE_DIGEST_DOMAIN: &[u8] = b"elitea.graph.pipeline.config.v1\0";
@@ -115,6 +127,7 @@ const INTERNAL_RESULT_KEYS: &[&str] = &[
     LLM_TOOL_RESUME_STATE_KEY,
     super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY,
     super::static_pause::STATIC_TEXT_RESUME_STATE_KEY,
+    PIPELINE_RESULT_TRACE_STATE_KEY,
 ];
 
 #[derive(Clone, Deserialize)]
@@ -403,7 +416,17 @@ impl PipelineNodeRuntimes {
     }
 }
 
-enum PipelineGraphBuilder {
+/// The single registration point of every bound pipeline node.
+///
+/// `result_trace` maps each top-level node ID to its declared result outputs.
+/// It is built once from the definition. A node found there is wrapped with
+/// [`ResultTraceNode`]; runtime-owned helper nodes are bound unchanged.
+struct PipelineGraphBuilder {
+    target: PipelineGraphTarget,
+    result_trace: BTreeMap<String, ResultTraceOutputs>,
+}
+
+enum PipelineGraphTarget {
     Agent(Box<GraphAgentBuilder>),
     Subgraph {
         graph: StateGraph,
@@ -412,42 +435,78 @@ enum PipelineGraphBuilder {
 }
 
 impl PipelineGraphBuilder {
-    fn node<N>(self, node: N) -> Self
+    fn node<N>(mut self, node: N) -> Self
     where
         N: Node + 'static,
     {
-        match self {
-            Self::Agent(builder) => Self::Agent(Box::new((*builder).node(node))),
-            Self::Subgraph { graph, terminal } => Self::Subgraph {
+        match self.result_trace.remove(node.name()) {
+            Some(outputs) => self.bind(ResultTraceNode::new(node, outputs)),
+            None => self.bind(node),
+        }
+    }
+
+    fn bind<N>(self, node: N) -> Self
+    where
+        N: Node + 'static,
+    {
+        let target = match self.target {
+            PipelineGraphTarget::Agent(builder) => {
+                PipelineGraphTarget::Agent(Box::new((*builder).node(node)))
+            }
+            PipelineGraphTarget::Subgraph { graph, terminal } => PipelineGraphTarget::Subgraph {
                 graph: graph.add_node(TerminalRedirectNode::new(node, terminal)),
                 terminal,
             },
+        };
+        Self {
+            target,
+            result_trace: self.result_trace,
         }
     }
 
     fn edge(self, source: &str, target: &str) -> Self {
-        match self {
-            Self::Agent(builder) => Self::Agent(Box::new((*builder).edge(source, target))),
-            Self::Subgraph { graph, terminal } => Self::Subgraph {
+        let target = match self.target {
+            PipelineGraphTarget::Agent(builder) => {
+                PipelineGraphTarget::Agent(Box::new((*builder).edge(source, target)))
+            }
+            PipelineGraphTarget::Subgraph { graph, terminal } => PipelineGraphTarget::Subgraph {
                 graph: graph.add_edge(source, terminal_target(target, terminal)),
                 terminal,
             },
+        };
+        Self {
+            target,
+            result_trace: self.result_trace,
+        }
+    }
+
+    /// Every traced node must have been bound under its own ID; an unclaimed
+    /// entry would silently drop that node's result.
+    fn ensure_result_trace_bound(&self) -> Result<(), PipelineConfigurationError> {
+        if self.result_trace.is_empty() {
+            Ok(())
+        } else {
+            Err(PipelineConfigurationError::Invalid(
+                "a pipeline node was not bound to its result trace",
+            ))
         }
     }
 
     fn into_agent(self) -> Result<GraphAgentBuilder, PipelineConfigurationError> {
-        match self {
-            Self::Agent(builder) => Ok(*builder),
-            Self::Subgraph { .. } => Err(PipelineConfigurationError::Invalid(
+        self.ensure_result_trace_bound()?;
+        match self.target {
+            PipelineGraphTarget::Agent(builder) => Ok(*builder),
+            PipelineGraphTarget::Subgraph { .. } => Err(PipelineConfigurationError::Invalid(
                 "an internal pipeline graph builder changed kind",
             )),
         }
     }
 
     fn into_subgraph(self) -> Result<StateGraph, PipelineConfigurationError> {
-        match self {
-            Self::Subgraph { graph, .. } => Ok(graph),
-            Self::Agent(_) => Err(PipelineConfigurationError::Invalid(
+        self.ensure_result_trace_bound()?;
+        match self.target {
+            PipelineGraphTarget::Subgraph { graph, .. } => Ok(graph),
+            PipelineGraphTarget::Agent(_) => Err(PipelineConfigurationError::Invalid(
                 "an internal pipeline graph builder changed kind",
             )),
         }
@@ -499,6 +558,65 @@ fn terminal_target<'a>(target: &'a str, terminal: &'a str) -> &'a str {
     if target == END { terminal } else { target }
 }
 
+/// Adds the optional single transition edge; an absent transition adds none.
+fn bind_transition(
+    builder: PipelineGraphBuilder,
+    node_id: &str,
+    transition: Option<&str>,
+) -> PipelineGraphBuilder {
+    match transition {
+        Some("END") => builder.edge(node_id, END),
+        Some(target) => builder.edge(node_id, target),
+        None => builder,
+    }
+}
+
+/// Keep transitions that meet at one node exclusive.
+///
+/// A stored pipeline runs one node at a time and a node has at most one
+/// transition, so of several transitions into one node only the one on the
+/// taken branch arrives. `StateGraph::compile` turns a node reached by two or
+/// more direct edges into a wait-for-all join that would wait for the branches
+/// not taken and end the run without it. Each such transition becomes a
+/// single-route conditional edge, which ADK never joins. Parallel and Map nodes
+/// join their own branches inside one node and are unaffected.
+fn exclusive_transitions(mut graph: StateGraph) -> StateGraph {
+    let mut arrivals = HashMap::<String, usize>::new();
+    for edge in &graph.edges {
+        match edge {
+            Edge::Direct {
+                target: EdgeTarget::Node(target),
+                ..
+            } => *arrivals.entry(target.clone()).or_default() += 1,
+            Edge::Entry { targets } => {
+                for target in targets {
+                    *arrivals.entry(target.clone()).or_default() += 1;
+                }
+            }
+            Edge::Direct { .. } | Edge::Conditional { .. } => {}
+        }
+    }
+    for edge in &mut graph.edges {
+        if let Edge::Direct {
+            source,
+            target: EdgeTarget::Node(target),
+        } = edge
+            && arrivals
+                .get(target.as_str())
+                .is_some_and(|count| *count > 1)
+        {
+            let target = std::mem::take(target);
+            let route = target.clone();
+            *edge = Edge::Conditional {
+                source: std::mem::take(source),
+                router: Arc::new(move |_: &State| route.clone()),
+                targets: HashMap::from([(target.clone(), EdgeTarget::Node(target))]),
+            };
+        }
+    }
+    graph
+}
+
 #[derive(Clone)]
 enum PipelineNodeDefinition {
     Code(CodeNodeDefinition),
@@ -512,6 +630,8 @@ enum PipelineNodeDefinition {
     Printer(PrinterNodeDefinition),
     Router(RouterNodeDefinition),
     StateModifier(StateModifierNodeDefinition),
+    SplitOut(SplitOutNodeDefinition),
+    Aggregate(AggregateNodeDefinition),
 }
 
 impl PipelineNodeDefinition {
@@ -528,6 +648,8 @@ impl PipelineNodeDefinition {
             Self::Printer(node) => node.id(),
             Self::Router(node) => node.id(),
             Self::StateModifier(node) => node.id(),
+            Self::SplitOut(node) => node.id(),
+            Self::Aggregate(node) => node.id(),
         }
     }
 
@@ -542,6 +664,8 @@ impl PipelineNodeDefinition {
             Self::Llm(node) => node.input_keys(),
             Self::Router(node) => node.input_keys(),
             Self::StateModifier(node) => node.input_keys(),
+            Self::SplitOut(node) => node.input_keys(),
+            Self::Aggregate(node) => node.input_keys(),
         }
     }
 
@@ -555,6 +679,8 @@ impl PipelineNodeDefinition {
             Self::Decision(_) | Self::Hitl(_) | Self::Printer(_) | Self::Router(_) => &[],
             Self::Llm(node) => node.output_keys(),
             Self::StateModifier(node) => node.output_keys(),
+            Self::SplitOut(node) => node.output_keys(),
+            Self::Aggregate(node) => node.output_keys(),
         }
     }
 
@@ -569,7 +695,9 @@ impl PipelineNodeDefinition {
             | Self::Hitl(_)
             | Self::Llm(_)
             | Self::Printer(_)
-            | Self::Router(_) => &[],
+            | Self::Router(_)
+            | Self::SplitOut(_)
+            | Self::Aggregate(_) => &[],
             Self::StateModifier(node) => node.variables_to_clean(),
         }
     }
@@ -586,7 +714,9 @@ impl PipelineNodeDefinition {
             | Self::Llm(_)
             | Self::Printer(_)
             | Self::Router(_)
-            | Self::StateModifier(_) => None,
+            | Self::StateModifier(_)
+            | Self::SplitOut(_)
+            | Self::Aggregate(_) => None,
         }
     }
 
@@ -603,6 +733,8 @@ impl PipelineNodeDefinition {
             Self::Printer(node) => [node.transition()].into_iter().collect(),
             Self::Router(node) => node.route_targets().collect(),
             Self::StateModifier(node) => node.transition().into_iter().collect(),
+            Self::SplitOut(node) => node.transition().into_iter().collect(),
+            Self::Aggregate(node) => node.transition().into_iter().collect(),
         }
     }
 
@@ -619,6 +751,8 @@ impl PipelineNodeDefinition {
             Self::Printer(node) => node.config_digest(),
             Self::Router(node) => node.config_digest(),
             Self::StateModifier(node) => node.config_digest(),
+            Self::SplitOut(node) => node.config_digest(),
+            Self::Aggregate(node) => node.config_digest(),
         }
     }
 }
@@ -646,18 +780,37 @@ impl PipelineDefinition {
 
     /// Parse and validate a complete frozen pipeline YAML document.
     pub(crate) fn from_yaml(yaml: &str) -> Result<Self, PipelineConfigurationError> {
-        if yaml.is_empty() || yaml.len() > MAX_PIPELINE_YAML_BYTES {
-            return Err(PipelineConfigurationError::ResourceExhausted);
+        if yaml.is_empty() {
+            return Err(PipelineConfigurationError::Invalid(
+                "the pipeline YAML is empty",
+            ));
+        }
+        if yaml.len() > MAX_PIPELINE_YAML_BYTES {
+            return Err(PipelineConfigurationError::LimitExceeded(
+                PipelineLimit::YamlBytes,
+            ));
         }
         let mut document = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml)
             .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
-        let normalized_identifier_count = normalize_legacy_graph_identifiers(&mut document);
+        // The typed parse below also bounds the node list, but it can only report
+        // a generic parse failure. Count on the document so the limit is named.
+        if document
+            .get("nodes")
+            .and_then(serde_yaml_ng::Value::as_sequence)
+            .is_some_and(|nodes| nodes.len() > MAX_PIPELINE_NODES)
+        {
+            return Err(PipelineConfigurationError::LimitExceeded(
+                PipelineLimit::NodeCount,
+            ));
+        }
+        let normalized = normalize_graph_identifiers(&mut document)?;
         let raw = serde_yaml_ng::from_value::<RawPipelineDefinition>(document)
             .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
-        if normalized_identifier_count > 0 {
+        if normalized.legacy > 0 || normalized.numeric > 0 {
             tracing::warn!(
                 event = "pipeline_legacy_identifier_normalized",
-                normalized_identifier_count,
+                normalized_identifier_count = normalized.legacy,
+                numeric_identifier_count = normalized.numeric,
                 "normalized legacy pipeline graph identifiers for runtime compatibility"
             );
         }
@@ -673,7 +826,12 @@ impl PipelineDefinition {
     }
 
     fn from_raw(mut raw: RawPipelineDefinition) -> Result<Self, PipelineConfigurationError> {
-        if raw.nodes.is_empty() || raw.nodes.len() > MAX_PIPELINE_NODES {
+        if raw.nodes.len() > MAX_PIPELINE_NODES {
+            return Err(PipelineConfigurationError::LimitExceeded(
+                PipelineLimit::NodeCount,
+            ));
+        }
+        if raw.nodes.is_empty() {
             return Err(PipelineConfigurationError::Invalid(
                 "the pipeline must contain between 1 and 128 nodes",
             ));
@@ -774,6 +932,8 @@ impl PipelineDefinition {
                         PipelineNodeDefinition::Llm(_)
                             | PipelineNodeDefinition::Code(_)
                             | PipelineNodeDefinition::StateModifier(_)
+                            | PipelineNodeDefinition::SplitOut(_)
+                            | PipelineNodeDefinition::Aggregate(_)
                             | PipelineNodeDefinition::Decision(_)
                             | PipelineNodeDefinition::Router(_)
                             | PipelineNodeDefinition::Parallel(_)
@@ -899,7 +1059,9 @@ impl PipelineDefinition {
                 | PipelineNodeDefinition::Printer(_)
                 | PipelineNodeDefinition::Router(_)
                 | PipelineNodeDefinition::Code(_)
-                | PipelineNodeDefinition::StateModifier(_) => {}
+                | PipelineNodeDefinition::StateModifier(_)
+                | PipelineNodeDefinition::SplitOut(_)
+                | PipelineNodeDefinition::Aggregate(_) => {}
             }
         }
     }
@@ -917,7 +1079,9 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
             | PipelineNodeDefinition::Code(_)
-            | PipelineNodeDefinition::StateModifier(_) => &[],
+            | PipelineNodeDefinition::StateModifier(_)
+            | PipelineNodeDefinition::SplitOut(_)
+            | PipelineNodeDefinition::Aggregate(_) => &[],
         })
     }
 
@@ -934,7 +1098,9 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
             | PipelineNodeDefinition::Code(_)
-            | PipelineNodeDefinition::StateModifier(_) => None,
+            | PipelineNodeDefinition::StateModifier(_)
+            | PipelineNodeDefinition::SplitOut(_)
+            | PipelineNodeDefinition::Aggregate(_) => None,
         })
     }
 
@@ -980,7 +1146,9 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
             | PipelineNodeDefinition::Code(_)
-            | PipelineNodeDefinition::StateModifier(_) => None,
+            | PipelineNodeDefinition::StateModifier(_)
+            | PipelineNodeDefinition::SplitOut(_)
+            | PipelineNodeDefinition::Aggregate(_) => None,
         })
     }
 
@@ -1099,25 +1267,28 @@ impl PipelineDefinition {
                 })
             });
         let node_checkpointer = Arc::clone(&checkpointer);
-        let mut builder = PipelineGraphBuilder::Agent(Box::new(
-            GraphAgent::builder(agent_name)
-                .description("Elitea stored pipeline")
-                .state_schema(state_schema.clone())
-                .edge(START, &self.entry_point)
-                .checkpointer_arc(checkpointer)
-                .recursion_limit(PIPELINE_RECURSION_LIMIT)
-                .max_concurrency(1)
-                .output_mapper(move |state| {
-                    let mut event = pipeline_completion_event_from_state(state, &result_policy);
-                    if reuses_result {
-                        event.provider_metadata.insert(
-                            super::agent::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
-                            "v1".to_owned(),
-                        );
-                    }
-                    vec![event]
-                }),
-        ));
+        let mut builder = PipelineGraphBuilder {
+            result_trace: self.result_trace_outputs(),
+            target: PipelineGraphTarget::Agent(Box::new(
+                GraphAgent::builder(agent_name)
+                    .description("Elitea stored pipeline")
+                    .state_schema(state_schema.clone())
+                    .edge(START, &self.entry_point)
+                    .checkpointer_arc(checkpointer)
+                    .recursion_limit(PIPELINE_RECURSION_LIMIT)
+                    .max_concurrency(1)
+                    .output_mapper(move |state| {
+                        let mut event = pipeline_completion_event_from_state(state, &result_policy);
+                        if reuses_result {
+                            event.provider_metadata.insert(
+                                super::agent::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
+                                "v1".to_owned(),
+                            );
+                        }
+                        vec![event]
+                    }),
+            )),
+        };
         for node in self.nodes.iter().filter(|node| {
             !self.parallel_owned_nodes.contains(node.id())
                 && !self.map_owned_nodes.contains(node.id())
@@ -1187,9 +1358,12 @@ impl PipelineDefinition {
             .add_node(PipelineSubgraphEntryNode)
             .add_edge(START, SUBGRAPH_ENTRY_NODE)
             .add_edge(SUBGRAPH_ENTRY_NODE, &self.entry_point);
-        let mut builder = PipelineGraphBuilder::Subgraph {
-            graph,
-            terminal: SUBGRAPH_RESULT_NODE,
+        let mut builder = PipelineGraphBuilder {
+            target: PipelineGraphTarget::Subgraph {
+                graph,
+                terminal: SUBGRAPH_RESULT_NODE,
+            },
+            result_trace: self.result_trace_outputs(),
         };
         for node in self.nodes.iter().filter(|node| {
             !self.parallel_owned_nodes.contains(node.id())
@@ -1209,14 +1383,13 @@ impl PipelineDefinition {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let mut graph = builder
-            .into_subgraph()?
-            .add_edge(SUBGRAPH_RESULT_NODE, END)
-            .compile()
-            .map_err(PipelineConfigurationError::Graph)?
-            .with_checkpointer_arc(checkpointer)
-            .with_recursion_limit(PIPELINE_RECURSION_LIMIT)
-            .with_max_concurrency(1);
+        let mut graph =
+            exclusive_transitions(builder.into_subgraph()?.add_edge(SUBGRAPH_RESULT_NODE, END))
+                .compile()
+                .map_err(PipelineConfigurationError::Graph)?
+                .with_checkpointer_arc(checkpointer)
+                .with_recursion_limit(PIPELINE_RECURSION_LIMIT)
+                .with_max_concurrency(1);
         let before_interrupts: Vec<&str> =
             self.interrupt_before.iter().map(String::as_str).collect();
         if !before_interrupts.is_empty() {
@@ -1257,6 +1430,7 @@ impl PipelineDefinition {
             super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY.to_owned(),
             super::static_pause::STATIC_TEXT_RESUME_STATE_KEY.to_owned(),
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
+            PIPELINE_RESULT_TRACE_STATE_KEY.to_owned(),
         ]);
         if self.has_parallel_nodes() {
             channels.insert(super::parallel::PARALLEL_RESUME_STATE_KEY.to_owned());
@@ -1312,10 +1486,12 @@ impl PipelineDefinition {
                 };
                 let transition = node.transition().map(ToOwned::to_owned);
                 let node_id = node.id().to_owned();
-                let mut next = builder.node(
-                    DirectToolNode::new(node.clone(), self.state.clone(), resolver)
-                        .with_events(runtimes.events.clone()),
-                );
+                let mut direct = DirectToolNode::new(node.clone(), self.state.clone(), resolver)
+                    .with_events(runtimes.events.clone());
+                if let Some(authority) = runtimes.node_recovery.clone() {
+                    direct = direct.with_node_recovery(authority);
+                }
+                let mut next = builder.node(direct);
                 if let Some(transition) = transition {
                     let target = if transition == "END" {
                         END
@@ -1366,18 +1542,16 @@ impl PipelineDefinition {
             }
             PipelineNodeDefinition::Router(node) => builder.node(RouterNode::new(node.clone())),
             PipelineNodeDefinition::StateModifier(node) => {
-                let transition = node.transition().map(ToOwned::to_owned);
-                let node_id = node.id().to_owned();
-                let mut next = builder.node(StateModifierNode::new(node.clone()));
-                if let Some(transition) = transition {
-                    let target = if transition == "END" {
-                        END
-                    } else {
-                        transition.as_str()
-                    };
-                    next = next.edge(&node_id, target);
-                }
-                next
+                let next = builder.node(StateModifierNode::new(node.clone()));
+                bind_transition(next, node.id(), node.transition())
+            }
+            PipelineNodeDefinition::SplitOut(node) => {
+                let next = builder.node(SplitOutNode::new(node.clone()));
+                bind_transition(next, node.id(), node.transition())
+            }
+            PipelineNodeDefinition::Aggregate(node) => {
+                let next = builder.node(AggregateNode::new(node.clone()));
+                bind_transition(next, node.id(), node.transition())
             }
         })
     }
@@ -1538,6 +1712,24 @@ impl PipelineDefinition {
         serde_json::Value::Object(types)
     }
 
+    /// Declared result outputs of every top-level node, by node ID.
+    ///
+    /// Parallel- and Map-owned children run inside their parent node, so
+    /// only the parent's own output is traced.
+    fn result_trace_outputs(&self) -> BTreeMap<String, ResultTraceOutputs> {
+        self.nodes
+            .iter()
+            .filter(|node| {
+                !self.parallel_owned_nodes.contains(node.id())
+                    && !self.map_owned_nodes.contains(node.id())
+            })
+            .filter_map(|node| {
+                ResultTraceOutputs::from_declared(node.output_keys())
+                    .map(|outputs| (node.id().to_owned(), outputs))
+            })
+            .collect()
+    }
+
     /// Collect result candidates separately from graph control flow.
     ///
     /// `END` is only the ADK graph sink. The candidate belongs to the
@@ -1557,6 +1749,8 @@ impl PipelineDefinition {
                 PipelineNodeDefinition::StateModifier(node) => {
                     (node.transition(), node.output_keys())
                 }
+                PipelineNodeDefinition::SplitOut(node) => (node.transition(), node.output_keys()),
+                PipelineNodeDefinition::Aggregate(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::Decision(_)
                 | PipelineNodeDefinition::Hitl(_)
                 | PipelineNodeDefinition::Printer(_)
@@ -1585,106 +1779,270 @@ impl PipelineDefinition {
     }
 }
 
-/// Normalize only graph identifiers that the current Python compiler rewrites.
+/// Largest integer magnitude a `JavaScript` number holds exactly (`2^53 - 1`).
 ///
-/// Older `EliteaUI` versions persisted labels such as `Agent 1` directly as node
-/// identifiers. The Python runtime passes every identifier and target through
-/// `clean_string`, so those documents execute as `Agent1`. New UI versions
-/// author strict identifiers, but they intentionally do not rewrite stored
-/// documents on load. This compatibility pass is therefore runtime-local. It
-/// preserves already-valid Rust identifiers, applies the Python transformation
-/// only to legacy values, and leaves malformed or oversized values for the
-/// normal validators to reject. Duplicate normalized node IDs are rejected by
-/// `parse_pipeline_nodes`.
-fn normalize_legacy_graph_identifiers(document: &mut serde_yaml_ng::Value) -> usize {
+/// The Web pipeline editor reads the same YAML with a `JavaScript` library, so an
+/// integer identifier is canonical only inside this range. Beyond it the two
+/// runtimes would print different decimal strings for one document.
+const MAX_SAFE_INTEGER_IDENTIFIER: i64 = (1 << 53) - 1;
+
+/// How many identifiers each compatibility rewrite changed in one document.
+#[derive(Default)]
+struct IdentifierNormalization {
+    legacy: usize,
+    numeric: usize,
+}
+
+/// Normalize graph identifiers before the strict typed parse.
+///
+/// Two compatibility rewrites run here, and both only produce strings:
+///
+/// * Older `EliteaUI` versions persisted labels such as `Agent 1` directly as
+///   node identifiers. The Python runtime passes every identifier and target
+///   through `clean_string`, so those documents execute as `Agent1`. New UI
+///   versions author strict identifiers, but they intentionally do not rewrite
+///   stored documents on load. The pass preserves already-valid identifiers,
+///   applies the Python transformation only to legacy values, and leaves
+///   malformed or oversized values for the normal validators to reject.
+/// * The editor and hand-written YAML may leave a numeric id unquoted
+///   (`id: 1`). An integer inside the `JavaScript` safe range becomes its
+///   canonical decimal string, so `id: 1` and `id: "1"` are one pipeline with one
+///   digest. Python crashes on such a document (`clean_string` is `re.sub` on an
+///   int), so no behaviour is inherited here.
+///
+/// `null` is left alone in every position: the typed parse decides, exactly as
+/// it did before, so an optional `transition: ~` stays absent and a required
+/// null stays refused. Any other non-string value (a float, boolean, sequence,
+/// mapping or tag) was already refused by the typed parse as a generic malformed
+/// document; it now gets a typed refusal naming only the field. Duplicate
+/// normalized node IDs are rejected by `parse_pipeline_nodes`.
+fn normalize_graph_identifiers(
+    document: &mut serde_yaml_ng::Value,
+) -> Result<IdentifierNormalization, PipelineConfigurationError> {
+    let mut counts = IdentifierNormalization::default();
     let Some(root) = document.as_mapping_mut() else {
-        return 0;
+        return Ok(counts);
     };
-    let mut count = 0;
-    normalize_mapping_graph_identifier(root, "entry_point", &mut count);
-    normalize_mapping_graph_identifier_sequence(root, "interrupt_before", &mut count);
-    normalize_mapping_graph_identifier_sequence(root, "interrupt_after", &mut count);
+    normalize_mapping_graph_identifier(
+        root,
+        "entry_point",
+        PipelineIdentifierField::EntryPoint,
+        &mut counts,
+    )?;
+    normalize_mapping_graph_identifier_sequence(
+        root,
+        "interrupt_before",
+        PipelineIdentifierField::InterruptBefore,
+        &mut counts,
+    )?;
+    normalize_mapping_graph_identifier_sequence(
+        root,
+        "interrupt_after",
+        PipelineIdentifierField::InterruptAfter,
+        &mut counts,
+    )?;
 
     let Some(serde_yaml_ng::Value::Sequence(nodes)) = root.get_mut("nodes") else {
-        return count;
+        return Ok(counts);
     };
     for node in nodes {
         let Some(node) = node.as_mapping_mut() else {
             continue;
         };
-        normalize_mapping_graph_identifier(node, "id", &mut count);
-        normalize_mapping_graph_identifier(node, "transition", &mut count);
-        normalize_mapping_graph_identifier(node, "default_output", &mut count);
-        let node_type = node
-            .get("type")
-            .and_then(serde_yaml_ng::Value::as_str)
-            .map(str::to_owned);
-        match node_type.as_deref() {
-            Some("decision") => {
-                normalize_mapping_graph_identifier_sequence(node, "nodes", &mut count);
-            }
-            Some("router") => {
-                normalize_mapping_graph_identifier_sequence(node, "routes", &mut count);
-            }
-            Some("hitl") => {
-                if let Some(serde_yaml_ng::Value::Mapping(routes)) = node.get_mut("routes") {
-                    for target in routes.values_mut() {
-                        normalize_graph_identifier(target, &mut count);
-                    }
-                }
-            }
-            // Retain the identifier boundary for the separately gated parallel
-            // node so its later compiler integration cannot regress legacy
-            // branch labels.
-            Some("map") => {
-                normalize_mapping_graph_identifier(node, "worker", &mut count);
-            }
-            Some("parallel") => {
-                if let Some(serde_yaml_ng::Value::Sequence(branches)) = node.get_mut("branches") {
-                    for branch in branches {
-                        let Some(branch) = branch.as_mapping_mut() else {
-                            continue;
-                        };
-                        normalize_mapping_graph_identifier(branch, "id", &mut count);
-                        normalize_mapping_graph_identifier(branch, "node", &mut count);
-                    }
-                }
-            }
-            _ => {}
-        }
+        normalize_mapping_graph_identifier(
+            node,
+            "id",
+            PipelineIdentifierField::NodeId,
+            &mut counts,
+        )?;
+        normalize_mapping_graph_identifier(
+            node,
+            "transition",
+            PipelineIdentifierField::Transition,
+            &mut counts,
+        )?;
+        normalize_mapping_graph_identifier(
+            node,
+            "default_output",
+            PipelineIdentifierField::DefaultOutput,
+            &mut counts,
+        )?;
+        normalize_recovery_route(node, &mut counts)?;
+        normalize_family_identifiers(node, &mut counts)?;
     }
-    count
+    Ok(counts)
+}
+
+/// Identifier positions owned by one node family.
+fn normalize_family_identifiers(
+    node: &mut serde_yaml_ng::Mapping,
+    counts: &mut IdentifierNormalization,
+) -> Result<(), PipelineConfigurationError> {
+    let node_type = node
+        .get("type")
+        .and_then(serde_yaml_ng::Value::as_str)
+        .map(str::to_owned);
+    match node_type.as_deref() {
+        Some("decision") => {
+            normalize_mapping_graph_identifier_sequence(
+                node,
+                "nodes",
+                PipelineIdentifierField::DecisionNodes,
+                counts,
+            )?;
+        }
+        Some("router") => {
+            normalize_mapping_graph_identifier_sequence(
+                node,
+                "routes",
+                PipelineIdentifierField::RouterRoutes,
+                counts,
+            )?;
+        }
+        Some("hitl") => {
+            if let Some(serde_yaml_ng::Value::Mapping(routes)) = node.get_mut("routes") {
+                for target in routes.values_mut() {
+                    normalize_graph_identifier(
+                        target,
+                        PipelineIdentifierField::HitlRoutes,
+                        true,
+                        counts,
+                    )?;
+                }
+            }
+        }
+        // Retain the identifier boundary for the separately gated parallel
+        // node so its later compiler integration cannot regress legacy
+        // branch labels.
+        Some("map") => {
+            normalize_mapping_graph_identifier(
+                node,
+                "worker",
+                PipelineIdentifierField::MapWorker,
+                counts,
+            )?;
+        }
+        Some("parallel") => {
+            if let Some(serde_yaml_ng::Value::Sequence(branches)) = node.get_mut("branches") {
+                for branch in branches {
+                    let Some(branch) = branch.as_mapping_mut() else {
+                        continue;
+                    };
+                    normalize_mapping_graph_identifier(
+                        branch,
+                        "id",
+                        PipelineIdentifierField::ParallelBranchId,
+                        counts,
+                    )?;
+                    normalize_mapping_graph_identifier(
+                        branch,
+                        "node",
+                        PipelineIdentifierField::ParallelBranchNode,
+                        counts,
+                    )?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The failure route of a node recovery policy names another node.
+///
+/// Recovery has no Python ancestor, so no stored document carries a legacy
+/// label there: only the integer rewrite applies.
+fn normalize_recovery_route(
+    node: &mut serde_yaml_ng::Mapping,
+    counts: &mut IdentifierNormalization,
+) -> Result<(), PipelineConfigurationError> {
+    let Some(serde_yaml_ng::Value::Mapping(recovery)) = node.get_mut("recovery") else {
+        return Ok(());
+    };
+    let Some(serde_yaml_ng::Value::Mapping(on_failure)) = recovery.get_mut("on_failure") else {
+        return Ok(());
+    };
+    if let Some(route) = on_failure.get_mut("route") {
+        normalize_graph_identifier(route, PipelineIdentifierField::RecoveryRoute, false, counts)?;
+    }
+    Ok(())
 }
 
 fn normalize_mapping_graph_identifier(
     mapping: &mut serde_yaml_ng::Mapping,
-    field: &str,
-    count: &mut usize,
-) {
-    if let Some(value) = mapping.get_mut(field) {
-        normalize_graph_identifier(value, count);
+    key: &str,
+    field: PipelineIdentifierField,
+    counts: &mut IdentifierNormalization,
+) -> Result<(), PipelineConfigurationError> {
+    if let Some(value) = mapping.get_mut(key) {
+        normalize_graph_identifier(value, field, true, counts)?;
     }
+    Ok(())
 }
 
 fn normalize_mapping_graph_identifier_sequence(
     mapping: &mut serde_yaml_ng::Mapping,
-    field: &str,
-    count: &mut usize,
-) {
-    let Some(serde_yaml_ng::Value::Sequence(values)) = mapping.get_mut(field) else {
-        return;
+    key: &str,
+    field: PipelineIdentifierField,
+    counts: &mut IdentifierNormalization,
+) -> Result<(), PipelineConfigurationError> {
+    let Some(serde_yaml_ng::Value::Sequence(values)) = mapping.get_mut(key) else {
+        return Ok(());
     };
     for value in values {
-        normalize_graph_identifier(value, count);
+        normalize_graph_identifier(value, field, true, counts)?;
+    }
+    Ok(())
+}
+
+fn normalize_graph_identifier(
+    value: &mut serde_yaml_ng::Value,
+    field: PipelineIdentifierField,
+    rewrite_legacy_labels: bool,
+    counts: &mut IdentifierNormalization,
+) -> Result<(), PipelineConfigurationError> {
+    match value {
+        serde_yaml_ng::Value::String(identifier) => {
+            if rewrite_legacy_labels && normalize_legacy_label(identifier) {
+                counts.legacy += 1;
+            }
+            Ok(())
+        }
+        serde_yaml_ng::Value::Null => Ok(()),
+        serde_yaml_ng::Value::Number(number) => {
+            let canonical = safe_integer_identifier(number)
+                .ok_or(PipelineConfigurationError::InvalidIdentifier(field))?;
+            *value = serde_yaml_ng::Value::String(canonical);
+            counts.numeric += 1;
+            Ok(())
+        }
+        serde_yaml_ng::Value::Bool(_)
+        | serde_yaml_ng::Value::Sequence(_)
+        | serde_yaml_ng::Value::Mapping(_)
+        | serde_yaml_ng::Value::Tagged(_) => {
+            Err(PipelineConfigurationError::InvalidIdentifier(field))
+        }
     }
 }
 
-fn normalize_graph_identifier(value: &mut serde_yaml_ng::Value, count: &mut usize) {
-    let serde_yaml_ng::Value::String(identifier) = value else {
-        return;
+/// Canonical decimal string of an integer inside the `JavaScript` safe range.
+///
+/// Floats (including `1.0`, `.inf` and `.nan`) and integers beyond `2^53 - 1`
+/// return `None`.
+fn safe_integer_identifier(number: &serde_yaml_ng::Number) -> Option<String> {
+    let value = match number.as_i64() {
+        Some(value) => value,
+        None => i64::try_from(number.as_u64()?).ok()?,
     };
+    (-MAX_SAFE_INTEGER_IDENTIFIER..=MAX_SAFE_INTEGER_IDENTIFIER)
+        .contains(&value)
+        .then(|| value.to_string())
+}
+
+/// Rewrite one legacy UI label in place; `true` when it changed.
+fn normalize_legacy_label(identifier: &mut String) -> bool {
     if valid_graph_id(identifier) || identifier.is_empty() || identifier.len() > MAX_NODE_ID_BYTES {
-        return;
+        return false;
     }
     let normalized = identifier
         .bytes()
@@ -1692,10 +2050,10 @@ fn normalize_graph_identifier(value: &mut serde_yaml_ng::Value, count: &mut usiz
         .map(|byte| if byte == b'.' { '_' } else { byte as char })
         .collect::<String>();
     if normalized.is_empty() || normalized.len() > MAX_NODE_ID_BYTES {
-        return;
+        return false;
     }
     *identifier = normalized;
-    *count += 1;
+    true
 }
 
 #[derive(Clone)]
@@ -1741,25 +2099,54 @@ fn pipeline_completion_event_from_state(state: &State, policy: &PipelineResultPo
     pipeline_completed_event()
 }
 
+/// Select the chat text of a finished pipeline turn.
+///
+/// The runtime trace names the node that wrote last. Its declared outputs
+/// win, then its assistant message; a blank traced answer selects nothing.
+/// Only without a trace does the static chain apply: terminal outputs, the
+/// last assistant message, declared state.
+/// The text is bounded; an oversized value is truncated, never dropped.
 pub(super) fn select_pipeline_result(
     state: &State,
     policy: &PipelineResultPolicy,
 ) -> Option<String> {
+    // A blocked or skipped tool stops the pipeline: its message is the answer, not
+    // whatever a trace or the defaults of outputs that no node wrote would render.
+    if let Some(blocked) = select_last_state_value(state, &["_pipeline_blocked".to_owned()]) {
+        return Some(blocked.into_bounded_text());
+    }
+    // A trace proves which node wrote last; when it renders blank, no static
+    // value may stand in for that node's answer.
+    if let Some(trace) = ResultTrace::from_state(state) {
+        return render_traced_keys(state, trace.keys())
+            .or_else(|| {
+                (trace.messages() && trace.keys().is_empty())
+                    .then(|| select_last_assistant_message(state.get("messages")))
+                    .flatten()
+            })
+            .map(RenderedResult::into_bounded_text);
+    }
     select_last_state_value(state, &policy.terminal_data_keys)
         .or_else(|| select_last_assistant_message(state.get("messages")))
         .or_else(|| select_last_state_value(state, &policy.fallback_data_keys))
-        .filter(|content| content.len() <= MAX_PIPELINE_RESULT_BYTES)
+        .map(RenderedResult::into_bounded_text)
 }
 
-fn select_last_state_value(state: &State, keys: &[String]) -> Option<String> {
+/// The static fallback has no proof that a node ran, so an empty collection
+/// is an untouched default rather than an answer.
+fn select_last_state_value(state: &State, keys: &[String]) -> Option<RenderedResult> {
     keys.iter()
         .rev()
         .filter_map(|key| state.get(key))
-        .filter_map(normalize_pipeline_value)
-        .find(|content| !content.trim().is_empty())
+        .filter(|value| {
+            !value.as_array().is_some_and(Vec::is_empty)
+                && !value.as_object().is_some_and(serde_json::Map::is_empty)
+        })
+        .filter_map(render_state_value)
+        .find(|content| !content.is_blank())
 }
 
-fn select_last_assistant_message(messages: Option<&serde_json::Value>) -> Option<String> {
+fn select_last_assistant_message(messages: Option<&serde_json::Value>) -> Option<RenderedResult> {
     messages?
         .as_array()?
         .iter()
@@ -1771,11 +2158,13 @@ fn select_last_assistant_message(messages: Option<&serde_json::Value>) -> Option
             )
         })
         .filter_map(|message| message.get("content"))
-        .filter_map(normalize_pipeline_value)
+        .filter_map(assistant_message_text)
         .find(|content| !content.trim().is_empty())
+        .map(RenderedResult::Text)
 }
 
-fn normalize_pipeline_value(value: &serde_json::Value) -> Option<String> {
+/// Text of one assistant message content value: text blocks are joined.
+fn assistant_message_text(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::Null => None,
         serde_json::Value::String(value) => Some(value.clone()),
@@ -1856,7 +2245,7 @@ fn runtime_channel_default(channel: &str) -> serde_json::Value {
     }
 }
 
-fn internal_result_key(key: &str) -> bool {
+pub(super) fn internal_result_key(key: &str) -> bool {
     INTERNAL_RESULT_KEYS.contains(&key)
 }
 
@@ -1955,6 +2344,7 @@ fn parse_pipeline_nodes(
     for node in &nodes {
         if !map_owned.contains(node.id()) {
             validate_node_state(node, state)?;
+            validate_shaping_channels(node, state)?;
         }
     }
     Ok((nodes, node_ids))
@@ -1962,6 +2352,27 @@ fn parse_pipeline_nodes(
 
 fn parse_pipeline_node(
     raw_node: &serde_yaml_ng::Value,
+) -> Result<PipelineNodeDefinition, PipelineConfigurationError> {
+    parse_pipeline_node_admitting(raw_node, SHAPING_INTEGRATION_READY)
+}
+
+/// Production admission of data shaping nodes waits for deployed acceptance.
+/// Only rehearsal builds (`graph-extensions-rehearsal`) admit them.
+const SHAPING_INTEGRATION_READY: bool = cfg!(feature = "graph-extensions-rehearsal");
+
+#[cfg(test)]
+pub(super) fn shaping_node_admission(
+    raw_node: &serde_yaml_ng::Value,
+    shaping_admitted: bool,
+) -> Result<(), &'static str> {
+    parse_pipeline_node_admitting(raw_node, shaping_admitted)
+        .map(|_| ())
+        .map_err(|error| error.code())
+}
+
+fn parse_pipeline_node_admitting(
+    raw_node: &serde_yaml_ng::Value,
+    shaping_admitted: bool,
 ) -> Result<PipelineNodeDefinition, PipelineConfigurationError> {
     let node_type = yaml_string_field(raw_node, "type")?;
     let encoded = serde_yaml_ng::to_string(raw_node)
@@ -1972,40 +2383,92 @@ fn parse_pipeline_node(
             .map_err(PipelineConfigurationError::Invalid),
         "decision" => DecisionNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Decision)
-            .map_err(|_| PipelineConfigurationError::Invalid("a Decision node is invalid")),
+            .map_err(|error| match error {
+                DecisionConfigurationError::ResourceExhausted => {
+                    node_limit(PipelineNodeLimit::Decision)
+                }
+                _ => PipelineConfigurationError::Invalid("a Decision node is invalid"),
+            }),
         "map" => MapNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Map)
             .map_err(|_| PipelineConfigurationError::Invalid("a Map node is invalid")),
         "parallel" => ParallelNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Parallel)
-            .map_err(|_| PipelineConfigurationError::Invalid("a fixed Parallel node is invalid")),
+            .map_err(|error| match error {
+                ParallelConfigurationError::ResourceExhausted => {
+                    node_limit(PipelineNodeLimit::Parallel)
+                }
+                _ => PipelineConfigurationError::Invalid("a fixed Parallel node is invalid"),
+            }),
         "agent" => ApplicationNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Application)
-            .map_err(|_| PipelineConfigurationError::Invalid("an Agent node is invalid")),
+            .map_err(|error| match error {
+                ApplicationConfigurationError::ResourceExhausted => {
+                    node_limit(PipelineNodeLimit::Agent)
+                }
+                _ => PipelineConfigurationError::Invalid("an Agent node is invalid"),
+            }),
         "toolkit" | "mcp" => DirectToolNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::DirectTool)
-            .map_err(|_| PipelineConfigurationError::Invalid("a direct-tool node is invalid")),
+            .map_err(|error| match error {
+                DirectToolConfigurationError::ResourceExhausted => {
+                    node_limit(PipelineNodeLimit::DirectTool)
+                }
+                _ => PipelineConfigurationError::Invalid("a direct-tool node is invalid"),
+            }),
         "hitl" => HitlNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Hitl)
-            .map_err(|_| PipelineConfigurationError::Invalid("a HITL node is invalid")),
+            .map_err(|error| match error {
+                HitlConfigurationError::ResourceExhausted => node_limit(PipelineNodeLimit::Hitl),
+                _ => PipelineConfigurationError::Invalid("a HITL node is invalid"),
+            }),
         "llm" => LlmNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Llm)
-            .map_err(|_| PipelineConfigurationError::Invalid("an LLM node is invalid")),
+            .map_err(|error| match error {
+                LlmConfigurationError::ResourceExhausted => node_limit(PipelineNodeLimit::Llm),
+                _ => PipelineConfigurationError::Invalid("an LLM node is invalid"),
+            }),
         "printer" => PrinterNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Printer)
-            .map_err(|_| PipelineConfigurationError::Invalid("a Printer node is invalid")),
+            .map_err(|error| match error {
+                PrinterConfigurationError::ResourceExhausted => {
+                    node_limit(PipelineNodeLimit::Printer)
+                }
+                _ => PipelineConfigurationError::Invalid("a Printer node is invalid"),
+            }),
         "router" => RouterNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Router)
-            .map_err(|_| PipelineConfigurationError::Invalid("a Router node is invalid")),
+            .map_err(|error| match error {
+                RouterConfigurationError::ResourceExhausted => {
+                    node_limit(PipelineNodeLimit::Router)
+                }
+                _ => PipelineConfigurationError::Invalid("a Router node is invalid"),
+            }),
         "state_modifier" => StateModifierNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::StateModifier)
-            .map_err(|_| PipelineConfigurationError::Invalid("a state modifier node is invalid")),
+            .map_err(|error| match error {
+                StateModifierConfigurationError::ResourceExhausted => {
+                    node_limit(PipelineNodeLimit::StateModifier)
+                }
+                _ => PipelineConfigurationError::Invalid("a state modifier node is invalid"),
+            }),
+        "split_out" if shaping_admitted => SplitOutNodeDefinition::from_yaml(&encoded)
+            .map(PipelineNodeDefinition::SplitOut)
+            .map_err(|_| PipelineConfigurationError::Invalid("a SplitOut node is invalid")),
+        "aggregate" if shaping_admitted => AggregateNodeDefinition::from_yaml(&encoded)
+            .map(PipelineNodeDefinition::Aggregate)
+            .map_err(|_| PipelineConfigurationError::Invalid("an Aggregate node is invalid")),
         _ => Err(PipelineConfigurationError::Unsupported(
             "the pipeline contains a node type that is not enabled",
         )),
     }
 }
 
+const fn node_limit(family: PipelineNodeLimit) -> PipelineConfigurationError {
+    PipelineConfigurationError::LimitExceeded(PipelineLimit::Node(family))
+}
+
+#[allow(clippy::too_many_lines)] // One exhaustive arm per node family keeps each rule visible.
 fn validate_node_state(
     node: &PipelineNodeDefinition,
     state: &BTreeMap<String, String>,
@@ -2098,7 +2561,9 @@ fn validate_node_state(
         | PipelineNodeDefinition::Hitl(_)
         | PipelineNodeDefinition::Router(_)
         | PipelineNodeDefinition::Code(_)
-        | PipelineNodeDefinition::StateModifier(_) => {}
+        | PipelineNodeDefinition::StateModifier(_)
+        | PipelineNodeDefinition::SplitOut(_)
+        | PipelineNodeDefinition::Aggregate(_) => {}
     }
     if node
         .edit_state_key()
@@ -2106,6 +2571,45 @@ fn validate_node_state(
     {
         return Err(PipelineConfigurationError::Invalid(
             "the HITL edit key is not declared in pipeline state",
+        ));
+    }
+    Ok(())
+}
+
+/// Shaping nodes read one user source and overwrite one distinct user list.
+fn validate_shaping_channels(
+    node: &PipelineNodeDefinition,
+    state: &BTreeMap<String, String>,
+) -> Result<(), PipelineConfigurationError> {
+    let source_kind = match node {
+        PipelineNodeDefinition::SplitOut(node) => node.source_state_type(),
+        PipelineNodeDefinition::Aggregate(_) => "list",
+        PipelineNodeDefinition::Code(_)
+        | PipelineNodeDefinition::Application(_)
+        | PipelineNodeDefinition::Parallel(_)
+        | PipelineNodeDefinition::Map(_)
+        | PipelineNodeDefinition::Decision(_)
+        | PipelineNodeDefinition::DirectTool(_)
+        | PipelineNodeDefinition::Hitl(_)
+        | PipelineNodeDefinition::Llm(_)
+        | PipelineNodeDefinition::Printer(_)
+        | PipelineNodeDefinition::Router(_)
+        | PipelineNodeDefinition::StateModifier(_) => return Ok(()),
+    };
+    let user_key = |key: &str| !builtin_state_key(key) && !reserved_user_state_key(key);
+    let ([source], [output]) = (node.input_keys(), node.output_keys()) else {
+        return Err(PipelineConfigurationError::Invalid(
+            "a data shaping node needs one source and one output",
+        ));
+    };
+    if source == output
+        || !user_key(source)
+        || !user_key(output)
+        || state.get(source).map(String::as_str) != Some(source_kind)
+        || state.get(output).map(String::as_str) != Some("list")
+    {
+        return Err(PipelineConfigurationError::Invalid(
+            "a data shaping node needs a typed user source and a distinct user list output",
         ));
     }
     Ok(())
@@ -2220,6 +2724,7 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
         || key == super::parallel::PARALLEL_RESUME_STATE_KEY
         || key == super::application::PARALLEL_AGENT_INPUTS_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
+        || key == PIPELINE_RESULT_TRACE_STATE_KEY
         || matches!(
             key,
             APPLICATION_TASK_STATE_KEY
@@ -2313,6 +2818,8 @@ fn definition_digest(
             PipelineNodeDefinition::Printer(_) => b"printer".as_slice(),
             PipelineNodeDefinition::Router(_) => b"router".as_slice(),
             PipelineNodeDefinition::StateModifier(_) => b"state_modifier".as_slice(),
+            PipelineNodeDefinition::SplitOut(_) => b"split_out".as_slice(),
+            PipelineNodeDefinition::Aggregate(_) => b"aggregate".as_slice(),
         };
         digest_field(&mut context, kind);
         digest_field(&mut context, &node.config_digest());
@@ -2328,11 +2835,110 @@ fn digest_field(context: &mut digest::Context, value: &[u8]) {
     context.update(value);
 }
 
+/// The bound a stored pipeline exceeded. Names the limit, never a value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PipelineLimit {
+    /// The whole YAML document is larger than [`MAX_PIPELINE_YAML_BYTES`].
+    YamlBytes,
+    /// More than the maximum number of nodes.
+    NodeCount,
+    /// One node of the named family exceeds its own size or entry-count bound.
+    Node(PipelineNodeLimit),
+}
+
+/// Node family whose per-node bound was exceeded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PipelineNodeLimit {
+    Agent,
+    Decision,
+    DirectTool,
+    Hitl,
+    Llm,
+    Parallel,
+    Printer,
+    Router,
+    StateModifier,
+}
+
+impl PipelineLimit {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::YamlBytes => "yaml_bytes",
+            Self::NodeCount => "node_count",
+            Self::Node(PipelineNodeLimit::Agent) => "nodes[].agent",
+            Self::Node(PipelineNodeLimit::Decision) => "nodes[].decision",
+            Self::Node(PipelineNodeLimit::DirectTool) => "nodes[].direct_tool",
+            Self::Node(PipelineNodeLimit::Hitl) => "nodes[].hitl",
+            Self::Node(PipelineNodeLimit::Llm) => "nodes[].llm",
+            Self::Node(PipelineNodeLimit::Parallel) => "nodes[].parallel",
+            Self::Node(PipelineNodeLimit::Printer) => "nodes[].printer",
+            Self::Node(PipelineNodeLimit::Router) => "nodes[].router",
+            Self::Node(PipelineNodeLimit::StateModifier) => "nodes[].state_modifier",
+        }
+    }
+}
+
+/// Graph-identifier position that held a value that cannot be an identifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PipelineIdentifierField {
+    EntryPoint,
+    InterruptBefore,
+    InterruptAfter,
+    NodeId,
+    Transition,
+    DefaultOutput,
+    DecisionNodes,
+    RouterRoutes,
+    HitlRoutes,
+    MapWorker,
+    ParallelBranchId,
+    ParallelBranchNode,
+    RecoveryRoute,
+}
+
+impl PipelineIdentifierField {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::EntryPoint => "entry_point",
+            Self::InterruptBefore => "interrupt_before[]",
+            Self::InterruptAfter => "interrupt_after[]",
+            Self::NodeId => "nodes[].id",
+            Self::Transition => "nodes[].transition",
+            Self::DefaultOutput => "nodes[].default_output",
+            Self::DecisionNodes => "nodes[].nodes[]",
+            Self::RouterRoutes => "nodes[].routes[]",
+            Self::HitlRoutes => "nodes[].routes.*",
+            Self::MapWorker => "nodes[].worker",
+            Self::ParallelBranchId => "nodes[].branches[].id",
+            Self::ParallelBranchNode => "nodes[].branches[].node",
+            Self::RecoveryRoute => "nodes[].recovery.on_failure.route",
+        }
+    }
+}
+
+impl fmt::Display for PipelineLimit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str((*self).as_str())
+    }
+}
+
+impl fmt::Display for PipelineIdentifierField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str((*self).as_str())
+    }
+}
+
 /// Stable, data-free stored-pipeline admission failure.
 #[derive(Debug, Error)]
 pub(crate) enum PipelineConfigurationError {
     #[error("the stored pipeline exceeds its resource bound")]
     ResourceExhausted,
+    #[error("the stored pipeline exceeds a platform limit: {0}")]
+    LimitExceeded(PipelineLimit),
+    #[error("the stored pipeline has an invalid graph identifier in {0}")]
+    InvalidIdentifier(PipelineIdentifierField),
     #[error("the stored pipeline YAML is malformed")]
     MalformedYaml {
         #[source]
@@ -2351,10 +2957,53 @@ impl PipelineConfigurationError {
     pub(crate) const fn code(&self) -> &'static str {
         match self {
             Self::ResourceExhausted => "graph.pipeline.configuration_resource_exhausted",
+            Self::LimitExceeded(PipelineLimit::YamlBytes) => "graph.pipeline.yaml_bytes_exceeded",
+            Self::LimitExceeded(PipelineLimit::NodeCount) => "graph.pipeline.node_count_exceeded",
+            Self::LimitExceeded(PipelineLimit::Node(_)) => "graph.pipeline.node_limit_exceeded",
+            Self::InvalidIdentifier(_) => "graph.pipeline.invalid_identifier",
             Self::MalformedYaml { .. } => "graph.pipeline.malformed_yaml",
             Self::Invalid(_) => "graph.pipeline.invalid_configuration",
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
             Self::Graph(_) => "graph.pipeline.compile_failed",
         }
+    }
+
+    /// The limit or field this refusal names, for data-free diagnostics.
+    #[must_use]
+    pub(crate) const fn cause_detail(&self) -> Option<&'static str> {
+        match self {
+            Self::LimitExceeded(limit) => Some(limit.as_str()),
+            Self::InvalidIdentifier(field) => Some(field.as_str()),
+            Self::ResourceExhausted
+            | Self::MalformedYaml { .. }
+            | Self::Invalid(_)
+            | Self::Unsupported(_)
+            | Self::Graph(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod result_trace_binding_tests {
+    use super::{PipelineGraphBuilder, PipelineGraphTarget, ResultTraceOutputs, StateGraph};
+    use adk_rust::graph::StateSchema;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn an_unclaimed_result_trace_entry_refuses_the_graph() {
+        let builder = PipelineGraphBuilder {
+            target: PipelineGraphTarget::Subgraph {
+                graph: StateGraph::new(StateSchema::new()),
+                terminal: super::SUBGRAPH_RESULT_NODE,
+            },
+            result_trace: BTreeMap::from([(
+                "renamed".to_owned(),
+                ResultTraceOutputs::new(vec!["answer".to_owned()], false),
+            )]),
+        };
+        let Err(error) = builder.into_subgraph() else {
+            panic!("an unclaimed trace entry must refuse the graph");
+        };
+        assert_eq!(error.code(), "graph.pipeline.invalid_configuration");
     }
 }

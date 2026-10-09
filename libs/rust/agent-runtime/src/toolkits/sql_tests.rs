@@ -7,9 +7,14 @@ use adk_core::{ReadonlyContext, ToolContext, Toolset};
 use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
+use sqlx::ConnectOptions;
+use sqlx::mysql::{MySqlConnectOptions, MySqlSslMode};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::time::timeout;
 
 use super::families::sql::client::{
-    SqlApi, SqlClientError, SqlClientErrorCode, test_connection_profile,
+    SqlApi, SqlClient, SqlClientError, SqlClientErrorCode, test_connection_profile,
     test_map_project_read_error, test_schema_projection, test_schema_queries,
     test_validate_mysql_session_mode,
 };
@@ -686,4 +691,170 @@ async fn every_tool_keeps_the_sdk_contract() {
     let readonly: Arc<dyn ReadonlyContext> = context();
     let tools = toolset.tools(readonly).await.expect("sql tools");
     super::sdk_conformance::assert_sdk_conformance("sql", &tools);
+}
+
+const FAKE_SERVER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `MySQL` `HandshakeV10` for `caching_sha2_password` without `CLIENT_SSL`.
+fn no_tls_handshake_packet() -> Vec<u8> {
+    // LONG_PASSWORD | FOUND_ROWS | LONG_FLAG | CONNECT_WITH_DB | PROTOCOL_41 |
+    // TRANSACTIONS | SECURE_CONNECTION | MULTI_STATEMENTS | MULTI_RESULTS |
+    // PLUGIN_AUTH | PLUGIN_AUTH_LENENC_CLIENT_DATA | DEPRECATE_EOF.
+    const CAPABILITIES_LOW: u16 = 0xA20F;
+    const CAPABILITIES_HIGH: u16 = 0x012B;
+    let mut payload = vec![0x0a];
+    payload.extend_from_slice(b"8.0.36\0");
+    payload.extend_from_slice(&7_u32.to_le_bytes());
+    payload.extend_from_slice(b"abcdefgh");
+    payload.push(0);
+    payload.extend_from_slice(&CAPABILITIES_LOW.to_le_bytes());
+    payload.push(255);
+    payload.extend_from_slice(&2_u16.to_le_bytes());
+    payload.extend_from_slice(&CAPABILITIES_HIGH.to_le_bytes());
+    payload.push(21);
+    payload.extend_from_slice(&[0; 10]);
+    payload.extend_from_slice(b"ijklmnopqrst\0");
+    payload.extend_from_slice(b"caching_sha2_password\0");
+    framed_packet(0, &payload)
+}
+
+fn framed_packet(sequence: u8, payload: &[u8]) -> Vec<u8> {
+    let length = u32::try_from(payload.len()).expect("small fixture packet");
+    let mut packet = length.to_le_bytes()[..3].to_vec();
+    packet.push(sequence);
+    packet.extend_from_slice(payload);
+    packet
+}
+
+async fn read_client_packet(stream: &mut TcpStream) -> Vec<u8> {
+    let mut header = [0_u8; 4];
+    stream
+        .read_exact(&mut header)
+        .await
+        .expect("client packet header");
+    let length =
+        usize::from(header[0]) | usize::from(header[1]) << 8 | usize::from(header[2]) << 16;
+    let mut payload = vec![0_u8; length];
+    stream
+        .read_exact(&mut payload)
+        .await
+        .expect("client packet payload");
+    payload
+}
+
+async fn fake_mysql_listener() -> (TcpListener, u16) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake MySQL listener");
+    let port = listener.local_addr().expect("fake MySQL address").port();
+    (listener, port)
+}
+
+fn mysql_config_for_port(port: u16) -> SqlToolkitConfig {
+    let mut settings = settings(Some("mysql"), Some(json!([])));
+    settings.insert(
+        "sql_configuration".to_owned(),
+        json!({
+            "host": "127.0.0.1",
+            "port": port,
+            "username": "application_user",
+            "password": PASSWORD
+        }),
+    );
+    SqlToolkitConfig::parse(&settings).expect("fake MySQL SQL configuration")
+}
+
+/// Serves the no-TLS handshake, then records what the client sends next (empty on EOF).
+async fn serve_and_record(listener: TcpListener) -> Vec<u8> {
+    let (mut stream, _) = timeout(FAKE_SERVER_TIMEOUT, listener.accept())
+        .await
+        .expect("client connects in time")
+        .expect("accept client");
+    stream
+        .write_all(&no_tls_handshake_packet())
+        .await
+        .expect("write handshake");
+    // The first read yields either the client's first bytes or EOF; returning
+    // right away closes the socket so a connecting client cannot hang us.
+    let mut buffer = [0_u8; 4096];
+    let count = timeout(FAKE_SERVER_TIMEOUT, stream.read(&mut buffer))
+        .await
+        .expect("client sends or closes in time")
+        .expect("read from client");
+    buffer[..count].to_vec()
+}
+
+fn assert_refused_without_leaking(error: &SqlClientError) {
+    assert_eq!(error.code(), SqlClientErrorCode::InvalidConfiguration);
+    assert!(!format!("{error}").contains(PASSWORD));
+    assert!(!format!("{error:?}").contains(PASSWORD));
+}
+
+#[tokio::test]
+async fn mysql_non_tls_control_reaches_the_rsa_public_key_request() {
+    let (listener, port) = fake_mysql_listener().await;
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept client");
+        stream
+            .write_all(&no_tls_handshake_packet())
+            .await
+            .expect("write handshake");
+        let response = read_client_packet(&mut stream).await;
+        assert!(!response.is_empty(), "client sent a HandshakeResponse");
+        // AuthMoreData: perform full authentication.
+        stream
+            .write_all(&framed_packet(2, &[0x01, 0x04]))
+            .await
+            .expect("write auth-more-data");
+        read_client_packet(&mut stream).await
+    });
+
+    let options = MySqlConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port)
+        .username("application_user")
+        .password(PASSWORD)
+        .database("application_db")
+        .ssl_mode(MySqlSslMode::Disabled);
+    // The server drops the connection after the key request, so connect fails.
+    let connect = timeout(FAKE_SERVER_TIMEOUT, options.connect())
+        .await
+        .expect("control connect finishes in time");
+    assert!(connect.is_err());
+    let public_key_request = timeout(FAKE_SERVER_TIMEOUT, server)
+        .await
+        .expect("fake server finishes in time")
+        .expect("fake server task");
+    assert_eq!(public_key_request, [0x02]);
+}
+
+#[tokio::test]
+async fn mysql_without_tls_is_refused_before_any_authentication_byte() {
+    let (listener, port) = fake_mysql_listener().await;
+    let server = tokio::spawn(serve_and_record(listener));
+    let client = SqlClient::new(mysql_config_for_port(port));
+    let outcome = timeout(FAKE_SERVER_TIMEOUT, client.list_tables_and_columns())
+        .await
+        .expect("client call finishes in time");
+    let received = timeout(FAKE_SERVER_TIMEOUT, server)
+        .await
+        .expect("fake server finishes in time")
+        .expect("fake server task");
+    assert!(received.is_empty(), "client sent {} bytes", received.len());
+    let error = outcome.expect_err("a non-TLS MySQL server is refused");
+    assert_refused_without_leaking(&error);
+
+    let (listener, port) = fake_mysql_listener().await;
+    let server = tokio::spawn(serve_and_record(listener));
+    let client = SqlClient::new(mysql_config_for_port(port));
+    let outcome = timeout(FAKE_SERVER_TIMEOUT, client.execute_sql("SELECT 1"))
+        .await
+        .expect("client call finishes in time");
+    let received = timeout(FAKE_SERVER_TIMEOUT, server)
+        .await
+        .expect("fake server finishes in time")
+        .expect("fake server task");
+    assert!(received.is_empty(), "client sent {} bytes", received.len());
+    let error = outcome.expect_err("a non-TLS MySQL server is refused");
+    assert_refused_without_leaking(&error);
 }

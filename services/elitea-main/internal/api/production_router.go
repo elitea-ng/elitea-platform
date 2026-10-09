@@ -232,6 +232,10 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 		r.Method(http.MethodGet, agentexecutionapi.CurrentNodeRecoveryPath, cfg.CurrentNodeRecovery)
 		r.Method(http.MethodPost, agentexecutionapi.CurrentNodeRecoveryActionPath, cfg.CurrentNodeRecovery)
 	}
+	if cfg.CurrentExecutionInterrupts != nil {
+		r.Method(http.MethodGet, agentexecutionapi.CurrentExecutionInterruptsPath, cfg.CurrentExecutionInterrupts)
+		r.Method(http.MethodPost, agentexecutionapi.CurrentExecutionInterruptDecisionPath, cfg.CurrentExecutionInterrupts)
+	}
 	if cfg.CurrentAgentCancel != nil {
 		r.Method(http.MethodDelete, agentexecutionapi.CurrentAgentCancelPath, cfg.CurrentAgentCancel)
 	}

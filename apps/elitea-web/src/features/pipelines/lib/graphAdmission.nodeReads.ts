@@ -9,6 +9,8 @@
  * budget only — nothing here decides anything, it only reports what a node
  * says.
  */
+import { unsupportedIdentifierText } from '@/shared/lib/pipelineNodeIdentifiers';
+
 import { RuntimeContractConstants } from './flow-editor/constants';
 import type { YamlPipelineNode } from './flow-editor/helpers/pipelineFlow.types';
 import type { AdmissionNode } from './graphAdmission.types';
@@ -93,8 +95,8 @@ export interface RouteTargetRef {
 /** Every present route/transition target on `node`, with the YAML field it came from. */
 export function routeTargetsOf(node: AdmissionNode): readonly RouteTargetRef[] {
   const raw = node.raw;
-  if (node.type === 'decision') return listTargets('nodes', raw.nodes).concat(optionalTarget('default_output', raw.default_output));
-  if (node.type === 'router') return listTargets('routes', raw.routes).concat(optionalTarget('default_output', raw.default_output));
+  if (node.type === 'decision') return routeListTargets('nodes', raw.nodes).concat(optionalTarget('default_output', raw.default_output));
+  if (node.type === 'router') return routeListTargets('routes', raw.routes).concat(optionalTarget('default_output', raw.default_output));
   if (node.type === 'hitl') return hitlTargets(raw);
   return optionalTarget('transition', raw.transition);
 }
@@ -103,13 +105,30 @@ function listTargets(field: string, value: unknown): readonly RouteTargetRef[] {
   return toStringList(value).map((target, index) => ({ field: `${field}[${String(index)}]`, target }));
 }
 
+/**
+ * A target that is present but not a string (a fraction, boolean, object, or an
+ * integer too large to be a safe one) is NOT dropped: it is carried as text
+ * that can never pass the id grammar, so the route-target rule refuses it by
+ * name instead of the editor quietly ignoring a field the compiler would
+ * refuse. Integer ids that are safe have already been normalized to strings.
+ */
+const targetOf = (value: unknown): string => (typeof value === 'string' ? value : unsupportedIdentifierText(value));
+
+/** Node-id lists (`nodes`, `routes`): null entries stay ignored, as before; any other non-string is reported. */
+function routeListTargets(field: string, value: unknown): readonly RouteTargetRef[] {
+  if (!Array.isArray(value)) return [];
+  const entries: readonly unknown[] = value;
+  return entries.flatMap((entry, index) => (entry === null || entry === undefined ? [] : [{ field: `${field}[${String(index)}]`, target: targetOf(entry) }]));
+}
+
 function optionalTarget(field: string, value: unknown): readonly RouteTargetRef[] {
-  return typeof value === 'string' ? [{ field, target: value }] : [];
+  return value === null || value === undefined ? [] : [{ field, target: targetOf(value) }];
 }
 
 /** `hitl.rs:77-85` — three optional named routes; a PRESENT one is validated even when empty (`hitl.rs:96-100`). */
 function hitlTargets(raw: YamlPipelineNode): readonly RouteTargetRef[] {
-  const routes = namedRoutes(raw);
+  const declared: unknown = raw.routes;
+  const routes = declared !== null && typeof declared === 'object' && !Array.isArray(declared) ? (declared as Readonly<Record<string, unknown>>) : {};
   return (['approve', 'reject', 'edit'] as const).flatMap((action) => optionalTarget(`routes.${action}`, routes[action]));
 }
 
