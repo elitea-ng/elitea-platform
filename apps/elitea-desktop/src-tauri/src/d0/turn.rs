@@ -53,7 +53,7 @@ use super::model::GatewayTransport;
 use super::recorder::{FileChange, Recorder};
 use super::remote_tools::{RemoteContext, RemoteToolProvider, RetryPolicy};
 use super::tools::{ObservedToolset, ToolObserver};
-use crate::workspaces::WorkspaceStore;
+use crate::workspaces::{Workspace, WorkspaceStore};
 
 const APP_NAME: &str = "elitea-desktop";
 const AGENT_NAME: &str = "elitea_agent";
@@ -414,6 +414,66 @@ impl AgentHost {
         Ok(entry)
     }
 
+    /// The request's workspace, bound to the request's project. A turn runs
+    /// only in a bound workspace (`workspace_unbound`): the UI binds a
+    /// folder before it offers a session, and the binding is what keeps a
+    /// folder's turns in one project.
+    fn bound_workspace(&self, request: &TurnRequest) -> Result<Workspace, TurnError> {
+        let workspace = self
+            .deps
+            .workspaces
+            .get(&request.workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        match workspace.project_id {
+            None => Err(TurnError::new(
+                "workspace_unbound",
+                "Bind a project to this workspace first.",
+            )),
+            Some(bound) if bound != request.project_id => Err(TurnError::new(
+                "workspace_project_mismatch",
+                "This workspace is bound to another project.",
+            )),
+            Some(_) => Ok(workspace),
+        }
+    }
+
+    /// `workspace_bind_project`, under the workspace's claim: refused
+    /// (`workspace_busy`) while a turn or an undo runs in it, so a running
+    /// turn never sees its workspace move to another project.
+    ///
+    /// # Errors
+    ///
+    /// `workspace_busy`, `workspace_unknown`, or the list cannot be written.
+    pub fn bind_project(
+        &self,
+        workspace_id: &str,
+        project_id: i64,
+    ) -> Result<Workspace, TurnError> {
+        let _claim = WorkspaceClaim::take(
+            &self.busy,
+            workspace_id,
+            "Wait for the running turn to end before changing this workspace's project.",
+        )?;
+        let storage = |e: crate::error::HostError| TurnError::new("storage", e.to_string());
+        if self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(storage)?
+            .is_none()
+        {
+            return Err(TurnError::new(
+                "workspace_unknown",
+                "That workspace is not open.",
+            ));
+        }
+        self.deps
+            .workspaces
+            .bind_project(workspace_id, project_id)
+            .map_err(storage)
+    }
+
     /// `agent_turn_start`: resolve, check, start; the run continues in the
     /// background. Every refusal is also an `error` event of the turn.
     ///
@@ -463,21 +523,7 @@ impl AgentHost {
         if request.prompt.trim().is_empty() {
             return Err(TurnError::new("invalid_request", "The message is empty."));
         }
-        let workspace = self
-            .deps
-            .workspaces
-            .get(&request.workspace_id)
-            .map_err(|e| TurnError::new("storage", e.to_string()))?
-            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
-        if workspace
-            .project_id
-            .is_some_and(|bound| bound != request.project_id)
-        {
-            return Err(TurnError::new(
-                "workspace_project_mismatch",
-                "This workspace is bound to another project.",
-            ));
-        }
+        let workspace = self.bound_workspace(request)?;
         let policy = self.policy()?;
         let resolved = self
             .api

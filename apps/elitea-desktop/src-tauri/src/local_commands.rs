@@ -159,13 +159,14 @@ pub fn workspace_remove(state: State<'_, LocalState>, id: String) -> Result<(), 
     Ok(state.agents.remove_workspace(&id)?)
 }
 
+/// Refused (`workspace_busy`) while a turn runs in the workspace.
 #[tauri::command(rename_all = "snake_case")]
 pub fn workspace_bind_project(
     state: State<'_, LocalState>,
     id: String,
     project_id: i64,
 ) -> Result<Workspace, IpcError> {
-    Ok(state.workspaces.bind_project(&id, project_id)?)
+    Ok(state.agents.bind_project(&id, project_id)?)
 }
 
 #[allow(clippy::too_many_arguments)] // the IPC contract's argument list

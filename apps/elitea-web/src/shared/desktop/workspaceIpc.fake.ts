@@ -15,7 +15,7 @@ import type {
 } from './workspaceIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
-type FailableCommand = 'remove' | 'startTurn' | 'cancelTurn' | 'respondApproval' | 'turnChanges' | 'restore';
+type FailableCommand = 'remove' | 'bindProject' | 'startTurn' | 'cancelTurn' | 'respondApproval' | 'turnChanges' | 'restore';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
   /** Deliver an event to every subscriber. */
@@ -69,6 +69,8 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       return Promise.resolve();
     },
     bindProject(id, projectId) {
+      const failed = failure('bindProject');
+      if (failed !== undefined) return failed;
       workspaces = workspaces.map((w) => (w.id === id ? { ...w, project_id: projectId } : w));
       return Promise.resolve();
     },

@@ -48,6 +48,8 @@ export default function WorkspacesPage(): React.JSX.Element {
   }
 
   const failed = list.isError || open.isError || remove.isError || bind.isError;
+  // A folder with a running turn can be neither removed nor re-bound (the host answers workspace_busy).
+  const busyError = [remove.error, bind.error].find((error) => error !== null && toWorkspaceIpcError(error).code === 'workspace_busy');
 
   return (
     <Box data-testid="workspaces-page" sx={{ p: '1.5rem', display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -61,9 +63,7 @@ export default function WorkspacesPage(): React.JSX.Element {
       </Box>
       {failed && (
         <Alert severity="error">
-          {remove.isError && toWorkspaceIpcError(remove.error).code === 'workspace_busy'
-            ? describeWorkspaceError(remove.error)
-            : t('workspace.failed', 'That did not work. Try again.')}
+          {busyError === undefined ? t('workspace.failed', 'That did not work. Try again.') : describeWorkspaceError(busyError)}
         </Alert>
       )}
       {list.isPending && <CircularProgress aria-label={t('workspace.loading', 'Loading workspaces')} />}

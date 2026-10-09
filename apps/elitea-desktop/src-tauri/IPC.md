@@ -44,7 +44,7 @@ type Workspace = {
   id: string;               // 32 hex characters
   path: string;             // canonical absolute path
   name: string;             // the folder's name
-  project_id: number | null; // the project local turns run in
+  project_id: number | null; // the project local turns run in; a turn needs one
   is_git: boolean;          // inside a git work tree (computed when listed)
 };
 ```
@@ -54,7 +54,7 @@ type Workspace = {
 | `workspace_open` | — | `Workspace \| null` — the native folder dialog; `null` when cancelled. Opening a folder that is already a workspace returns that workspace. |
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints) and its turns; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
-| `workspace_bind_project` | `{id, project_id}` | `Workspace` |
+| `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
@@ -82,7 +82,8 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `pipeline_unsupported`, `nested_agents_unsupported`,
 `platform_mcp_unsupported`, `unknown_tool_kind`, `toolkit_ref_missing`,
 `model_unresolved`, `agent_not_in_conversation`, `agent_version_mismatch`,
-`workspace_unknown`, `workspace_project_mismatch`, `workspace_busy`,
+`workspace_unknown`, `workspace_unbound` (no project bound yet),
+`workspace_project_mismatch`, `workspace_busy`,
 `invalid_request`, and the platform's own codes (`local_turn_conflict`,
 `not_found`, …).
 

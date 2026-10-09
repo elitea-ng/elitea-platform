@@ -109,6 +109,19 @@ describe('WorkspacesPage', () => {
     await waitFor(() => expect(within(screen.getByTestId('workspace-row')).getByRole('button', { name: 'Open' })).toBeEnabled());
   });
 
+  it('says why the project of a folder with a running turn cannot change', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
+    ipc.failNext('bindProject', 'workspace_busy', 'Wait for the running turn to end.');
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces');
+
+    const row = await screen.findByTestId('workspace-row');
+    await user.click(within(row).getByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: 'Marketing' }));
+    expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
+    expect((await ipc.list())[0]?.project_id).toBeNull();
+  });
+
   it('removes a folder', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
     const user = userEvent.setup();

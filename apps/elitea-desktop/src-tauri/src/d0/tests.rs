@@ -206,7 +206,7 @@ struct Harness {
     workspace_id: String,
     folder: tempfile::TempDir,
     policy: Arc<Policy>,
-    _app: tempfile::TempDir,
+    app: tempfile::TempDir,
 }
 
 /// A host on the mock platform; approvals answered `decision` by the UI.
@@ -215,6 +215,8 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
     let folder = tempfile::tempdir().unwrap();
     let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
     let workspace_id = workspaces.add(folder.path()).unwrap().id;
+    // The UI binds a folder before it offers a session.
+    workspaces.bind_project(&workspace_id, 1).unwrap();
     let emitter = Arc::new(VecEmitter::default());
     let policy = Arc::new(Policy(std::sync::Mutex::new(policy)));
     let host = Arc::new(
@@ -258,7 +260,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         workspace_id,
         folder,
         policy,
-        _app: app,
+        app,
     }
 }
 
@@ -857,4 +859,47 @@ fn serde_json_preserve_order_is_off() {
 fn turn_errors_keep_their_codes() {
     let error: super::turn::TurnError = ApiError::local("network", "down").into();
     assert_eq!(error.code, "network");
+}
+
+#[tokio::test]
+async fn an_unbound_workspace_runs_no_turn() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let unbound = tempfile::tempdir().unwrap();
+    let store = WorkspaceStore::new(h.app.path().to_owned());
+    let id = store.add(unbound.path()).unwrap().id;
+    let error = h.host.start(request(&id)).await.unwrap_err();
+    assert_eq!(error.code, "workspace_unbound");
+    assert!(h.server.seen().is_empty(), "refused before any request");
+    // Bound to another project: refused too.
+    h.host.bind_project(&id, 2).unwrap();
+    let error = h.host.start(request(&id)).await.unwrap_err();
+    assert_eq!(error.code, "workspace_project_mismatch");
+    assert_eq!(
+        h.host.bind_project("nope", 1).unwrap_err().code,
+        "workspace_unknown"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_running_turn_keeps_its_workspace_on_its_project() {
+    let slow = Arc::new(AtomicBool::new(true));
+    let h = harness(
+        stalling_platform(slow.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let running = h.host.start(request(&h.workspace_id)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let refused = h.host.bind_project(&h.workspace_id, 2).unwrap_err();
+    assert_eq!(refused.code, "workspace_busy");
+
+    h.host.cancel(&running.turn_id);
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h.emitter, &running.turn_id).await;
+    assert_eq!(
+        h.host.bind_project(&h.workspace_id, 2).unwrap().project_id,
+        Some(2)
+    );
 }
