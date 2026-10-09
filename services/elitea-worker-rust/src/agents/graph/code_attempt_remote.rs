@@ -5,6 +5,7 @@ use super::{
     validate_invocation,
 };
 use crate::agents::graph::code_runtime::{CodeAttemptFailure, CodeAttemptPhase};
+use crate::agents::graph::code_timing;
 use crate::agents::graph::code_trace::{CodePhase, observe_typed};
 use crate::agents::graph::node_recovery::{NodeFailureClass, ReplaySafety};
 use crate::agents::graph::node_recovery_runtime::NodeAttemptAuthority;
@@ -319,6 +320,7 @@ impl RemoteCodeRuntime {
                             authority.recovering_started(),
                         ),
                     };
+                    let mut idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
                     loop {
                         let step = match content.step_code_platform(
                             &self.authority,
@@ -335,19 +337,21 @@ impl RemoteCodeRuntime {
                         };
                         use crate::transport::input_content::code_platform_content::CodePlatformStep;
                         match step {
-                            CodePlatformStep::Idle => {},
+                            CodePlatformStep::Idle => idle = code_timing::next_idle_interval(idle),
                             CodePlatformStep::Committed { call_effect }
                             | CodePlatformStep::Unknown { call_effect } => {
+                                idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
                                 // Retain the exact call for recovery. An unknown
                                 // result never grants another effect dispatch.
                                 platform_call_effect = Some(call_effect);
                             }
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        tokio::time::sleep(idle).await;
                     }
                 };
                 let submission = async {
                     let mut dispatch_possible = authority.recovering_started();
+                    let mut backoff = code_timing::PendingBackoff::new();
                     loop {
                         let descriptor = selected
                             .as_ref()
@@ -474,7 +478,7 @@ impl RemoteCodeRuntime {
                         }
                         // This is transport reconciliation for the exact attempt identity.
                         tokio::time::sleep_until(
-                            (tokio::time::Instant::now() + std::time::Duration::from_secs(1))
+                            (tokio::time::Instant::now() + backoff.next(code_timing::jitter_sample()))
                                 .min(deadline),
                         )
                         .await;

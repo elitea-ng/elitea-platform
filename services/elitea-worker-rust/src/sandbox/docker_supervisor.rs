@@ -29,7 +29,8 @@ use tokio::sync::Semaphore;
 
 use super::ledger::{JobLease, JobLedger, JobRecord, JobScope, LedgerError, Phase};
 
-const LEASE_SECONDS: i32 = 60;
+pub(crate) const LEASE_SECONDS: i32 = 60;
+pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const MAX_JOB_AGE_SECONDS: i64 = 3660;
 const READINESS_SECONDS: i64 = 60;
 // Largest admitted preparation timeout (3600) plus worker recovery allowance (90).
@@ -528,7 +529,7 @@ impl DockerSupervisor {
             }
         };
         tokio::pin!(observe);
-        let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         heartbeat.tick().await;
         loop {

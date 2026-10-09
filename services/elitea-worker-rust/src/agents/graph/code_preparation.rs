@@ -1,4 +1,5 @@
 //! Keep the Code frontier pending until frozen dependencies are published and terminal.
+use crate::agents::graph::code_timing;
 use super::{CodeRuntimeProfile, RemoteCodeRuntime, failed, observation_deadline, uncertain};
 use crate::{
     agents::graph::{
@@ -344,7 +345,7 @@ impl RemoteCodeRuntime {
                     }
                     if wait {
                         tokio::time::sleep_until(
-                            (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline),
+                            (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
                         )
                         .await;
                     }
@@ -426,7 +427,7 @@ impl RemoteCodeRuntime {
                 return Err(uncertain());
             }
             tokio::time::sleep_until(
-                (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline),
+                (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
             )
             .await;
         }
