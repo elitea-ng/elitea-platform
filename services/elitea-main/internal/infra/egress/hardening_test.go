@@ -22,7 +22,9 @@ import (
 func privateAllowlist(t *testing.T, entries ...string) *egresslib.Allowlist {
 	t.Helper()
 	if len(entries) == 0 {
-		entries = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+		// One entry per liftable class: an entry permits only its own range.
+		entries = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128",
+			"fc00::/7", "100.64.0.0/10", "198.18.0.0/15", "fec0::/10"}
 	}
 	list, err := egresslib.Parse(entries)
 	if err != nil {
@@ -44,7 +46,7 @@ func singleHostGuard(t *testing.T, allowlist *egresslib.Allowlist, host, ip stri
 func TestGuardAddressClasses(t *testing.T) {
 	const (
 		public    = "public"
-		liftable  = "liftable" // refused unless the allowlist declares private egress
+		liftable  = "liftable" // refused unless an allowlist entry names its range
 		alwaysOff = "always"   // refused whatever the allowlist says
 	)
 	cases := []struct {
@@ -146,7 +148,7 @@ func TestGuardAllowlistNamingANewPrivateClassDeclaresPrivateEgress(t *testing.T)
 		allowed bool
 	}{
 		{"CGNAT CIDR entry", []string{"100.64.0.0/10"}, "100.64.1.5", true},
-		{"CGNAT IP entry with port", []string{"100.64.1.5:8080"}, "100.64.1.5", true},
+		{"CGNAT IP entry", []string{"100.64.1.5"}, "100.64.1.5", true},
 		{"benchmarking CIDR entry", []string{"198.18.0.0/15"}, "198.18.0.9", true},
 		{"public-only allowlist", []string{"api.example.com"}, "100.64.1.5", false},
 		{"entry naming the metadata address", []string{"100.100.100.200"}, "100.100.100.200", false},
@@ -387,7 +389,7 @@ func TestGuardFilterBudget(t *testing.T) {
 		ips[i] = net.IPv4(93, 184, 216, byte(i+1))
 	}
 	g := New(privateAllowlist(t))
-	if allocs := testing.AllocsPerRun(100, func() { _ = g.permittedIPs(ips) }); allocs > 1 {
+	if allocs := testing.AllocsPerRun(100, func() { _ = g.permittedIPs(ips, "443") }); allocs > 1 {
 		t.Fatalf("permittedIPs allocates %.0f times for %d answers, want at most 1", allocs, MaxResolvedAddresses)
 	}
 }
@@ -400,7 +402,7 @@ func BenchmarkGuardPermittedIPs(b *testing.B) {
 	g := New(nil)
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = g.permittedIPs(ips)
+		_ = g.permittedIPs(ips, "443")
 	}
 }
 
