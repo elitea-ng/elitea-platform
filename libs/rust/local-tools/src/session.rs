@@ -535,7 +535,9 @@ impl LocalSession {
     ///
     /// See [`Checkpoints::restore`].
     pub fn restore_checkpoint(&self, seq: u64) -> ToolResult<RestoreReport> {
-        let report = self.checkpoints.restore(seq)?;
+        let report = self.checkpoints.restore(seq);
+        self.shell.sandbox.masks.invalidate();
+        let report = report?;
         self.ledger.clear();
         Ok(report)
     }
@@ -547,7 +549,9 @@ impl LocalSession {
     /// See [`Checkpoints::restore_file`].
     pub fn restore_file(&self, seq: u64, path: &str) -> ToolResult<RestoreReport> {
         let path = self.workspace.resolve(path, Intent::Read)?;
-        let report = self.checkpoints.restore_file(seq, &path)?;
+        let report = self.checkpoints.restore_file(seq, &path);
+        self.shell.sandbox.masks.invalidate();
+        let report = report?;
         self.ledger.forget(&path);
         Ok(report)
     }
@@ -584,7 +588,15 @@ impl LocalSession {
 
     /// Run one tool call; the JSON result the model sees.
     pub async fn call(self: &Arc<Self>, tool: &str, call_id: &str, args: Value) -> Value {
-        match self.dispatch(tool, call_id, args).await {
+        let result = self.dispatch(tool, call_id, args).await;
+        if !TOOLS
+            .iter()
+            .any(|spec| spec.name == tool && spec.kind.is_read_only())
+        {
+            // A change: what the sandbox masks may differ now.
+            self.shell.sandbox.masks.invalidate();
+        }
+        match result {
             Ok(mut value) => {
                 if let Value::Object(map) = &mut value {
                     map.insert("status".to_owned(), Value::String("ok".to_owned()));

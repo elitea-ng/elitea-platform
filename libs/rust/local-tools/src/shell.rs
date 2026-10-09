@@ -325,6 +325,10 @@ pub async fn run(
     if let Some(group) = group {
         let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
     }
+    if spec.mode != SandboxMode::ReadOnly {
+        // It may have created a `.git` or a denied file.
+        config.sandbox.masks.invalidate();
+    }
     let (out, err) = match tokio::time::timeout(DRAIN_AFTER_KILL, readers).await {
         Ok(Ok(captured)) => captured,
         _ => (

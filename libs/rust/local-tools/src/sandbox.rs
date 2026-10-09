@@ -3,7 +3,7 @@
 //! | OS | Mechanism | Reported enforcement |
 //! |---|---|---|
 //! | macOS | Seatbelt: `/usr/bin/sandbox-exec -p <profile>` with a profile generated per command ([`seatbelt`]) | `full`: writes confined, `.git` read-only, credentials and `path_deny` unreadable, network denied (loopback included) |
-//! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked | `full` |
+//! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked; the walk is cached per session until a write | `full`; `partial` past 20 000 directories, where commands that may write are **refused** unless the host sets [`SandboxConfig::allow_partial`] |
 //! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/`, has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`] |
 //! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
 //!
@@ -164,14 +164,19 @@ pub struct SandboxConfig {
     /// Run commands even when the requested confinement cannot be enforced
     /// at all. Off: such commands are refused.
     pub allow_unenforced: bool,
-    /// Linux without a usable bubblewrap: run under the Landlock helper,
-    /// whose enforcement is only partial (see the module table). Off: such
-    /// commands are refused.
+    /// Linux: run under partial enforcement, where full is not possible:
+    /// without a usable bubblewrap, under the Landlock helper (see the
+    /// module table); with bubblewrap, in a workspace too large to walk
+    /// for every `.git` and `path_deny` match (a command that may write is
+    /// otherwise refused). Off: such commands are refused.
     pub allow_partial: bool,
     /// Linux: the `bwrap` executable. `None`: `/usr/bin/bwrap`,
     /// `/usr/local/bin/bwrap` or `/bin/bwrap`, if one works on this kernel
     /// (unprivileged user namespaces). Never looked up on `PATH`.
     pub bubblewrap: Option<PathBuf>,
+    /// The session's cache of what bubblewrap masks (see
+    /// [`bubblewrap::MaskCache`]); clones share it.
+    pub masks: bubblewrap::MaskCache,
 }
 
 /// A command ready to spawn: the program, its arguments, and what the
@@ -260,11 +265,12 @@ fn platform_prepare(
     config: &SandboxConfig,
 ) -> ToolResult<Option<Prepared>> {
     if let Some(bwrap) = bubblewrap::usable(config) {
-        let masks = bubblewrap::Masks::discover(request);
+        let masks = config.masks.discover(request);
+        let enforcement = bubblewrap::enforcement(request, &masks, config)?;
         return Ok(Some(Prepared {
             program: bwrap,
             args: bubblewrap::args(request, &masks, argv),
-            enforcement: Enforcement::Full,
+            enforcement,
         }));
     }
     let Some(helper) = &config.linux_helper else {
@@ -721,14 +727,143 @@ pub mod seatbelt {
 /// `usable` runs anything (Linux).
 pub mod bubblewrap {
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
-    use super::SandboxRequest;
+    use super::{Enforcement, SandboxConfig, SandboxRequest};
+    use crate::error::{ErrorCode, ToolError, ToolResult};
     use crate::policy::SandboxMode;
     use crate::workspace::{deny_globset, is_protected_name, nfc};
 
     /// Directories visited looking for `.git` entries and `path_deny`
-    /// matches; past it the walk stops (what it found is still masked).
-    const MAX_WALK_DIRS: usize = 20_000;
+    /// matches; past it the walk stops, and the masks are incomplete
+    /// ([`Masks::truncated`]).
+    pub const MAX_WALK_DIRS: usize = 20_000;
+
+    /// How long cached masks are trusted without a write in between:
+    /// bounds what the person changes outside the session (a new `.env`
+    /// from their editor) going unmasked.
+    pub const MASK_CACHE_TTL: Duration = Duration::from_secs(5);
+
+    /// Whether `masks` give `request` full enforcement.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::SandboxUnavailable`] when the walk stopped at its cap
+    /// (some `.git` or `path_deny` match may be unmasked), the command may
+    /// write, and the host did not allow partial enforcement.
+    pub fn enforcement(
+        request: &SandboxRequest,
+        masks: &Masks,
+        config: &SandboxConfig,
+    ) -> ToolResult<Enforcement> {
+        if !masks.truncated {
+            return Ok(Enforcement::Full);
+        }
+        if request.mode != SandboxMode::ReadOnly && !config.allow_partial {
+            return Err(ToolError::new(
+                ErrorCode::SandboxUnavailable,
+                format!(
+                    "the workspace has more than {MAX_WALK_DIRS} directories, too many to find every \
+                     .git and path_deny match to protect; run read-only, open a smaller folder, \
+                     or allow partial enforcement"
+                ),
+            ));
+        }
+        Ok(Enforcement::Partial)
+    }
+
+    /// One session's last walk, reused until a write (the session calls
+    /// [`MaskCache::invalidate`] after every change and command that may
+    /// write), [`MASK_CACHE_TTL`], or a different request.
+    #[derive(Clone, Default)]
+    pub struct MaskCache(Arc<Mutex<CacheState>>);
+
+    #[derive(Default)]
+    struct CacheState {
+        generation: u64,
+        walks: usize,
+        entry: Option<CacheEntry>,
+    }
+
+    struct CacheEntry {
+        key: (Vec<PathBuf>, Option<PathBuf>, Vec<String>, Vec<PathBuf>),
+        generation: u64,
+        at: Instant,
+        masks: Masks,
+    }
+
+    impl std::fmt::Debug for MaskCache {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("MaskCache")
+        }
+    }
+
+    /// Settings compare equal whatever their caches hold.
+    impl PartialEq for MaskCache {
+        fn eq(&self, _other: &Self) -> bool {
+            true
+        }
+    }
+
+    impl Eq for MaskCache {}
+
+    impl MaskCache {
+        /// Something in the workspace may have changed: walk again.
+        pub fn invalidate(&self) {
+            if let Ok(mut state) = self.0.lock() {
+                state.generation += 1;
+            }
+        }
+
+        /// How many walks ran (tests).
+        #[must_use]
+        pub fn walks(&self) -> usize {
+            self.0.lock().map_or(0, |state| state.walks)
+        }
+
+        /// [`Masks::discover`], from the cache when nothing changed.
+        #[must_use]
+        pub fn discover(&self, request: &SandboxRequest) -> Masks {
+            self.discover_with_limit(request, MAX_WALK_DIRS)
+        }
+
+        /// [`Self::discover`] with a smaller walk cap (tests).
+        #[doc(hidden)]
+        #[must_use]
+        pub fn discover_with_limit(&self, request: &SandboxRequest, limit: usize) -> Masks {
+            if request.git_roots.is_empty() && request.deny_root.is_none() {
+                // Nothing to walk (host git): cheap, and kept out of the
+                // cache so it does not evict the workspace's walk.
+                return Masks::discover_with_limit(request, limit);
+            }
+            let key = (
+                request.git_roots.clone(),
+                request.deny_root.clone(),
+                request.deny_globs.clone(),
+                request.deny_paths.clone(),
+            );
+            let Ok(mut state) = self.0.lock() else {
+                return Masks::discover_with_limit(request, limit);
+            };
+            if let Some(entry) = &state.entry
+                && entry.key == key
+                && entry.generation == state.generation
+                && entry.at.elapsed() < MASK_CACHE_TTL
+            {
+                return entry.masks.clone();
+            }
+            let masks = Masks::discover_with_limit(request, limit);
+            state.walks += 1;
+            state.entry = Some(CacheEntry {
+                key,
+                generation: state.generation,
+                at: Instant::now(),
+                masks: masks.clone(),
+            });
+            masks
+        }
+    }
 
     /// Pathname sockets a command could talk to without the network:
     /// the session bus, agents, Docker.
@@ -748,12 +883,20 @@ pub mod bubblewrap {
         pub hide_dirs: Vec<PathBuf>,
         /// Existing files to hide behind `/dev/null`.
         pub hide_files: Vec<PathBuf>,
+        /// The walk stopped at its cap: matches past it are not masked.
+        pub truncated: bool,
     }
 
     impl Masks {
         /// Walk the request's roots for what it denies or protects.
         #[must_use]
         pub fn discover(request: &SandboxRequest) -> Self {
+            Self::discover_with_limit(request, MAX_WALK_DIRS)
+        }
+
+        /// [`Self::discover`] visiting at most `limit` directories.
+        #[must_use]
+        pub fn discover_with_limit(request: &SandboxRequest, limit: usize) -> Self {
             let mut masks = Self::default();
             for path in &request.deny_paths {
                 let text = path.display().to_string();
@@ -783,12 +926,13 @@ pub mod bubblewrap {
                 roots.push(root);
             }
             let mut visited = 0usize;
-            for root in roots {
+            'roots: for root in roots {
                 let mut pending = vec![root.clone()];
                 while let Some(dir) = pending.pop() {
                     visited += 1;
-                    if visited > MAX_WALK_DIRS {
-                        break;
+                    if visited > limit {
+                        masks.truncated = true;
+                        break 'roots;
                     }
                     for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
                         let path = entry.path();
@@ -1335,6 +1479,87 @@ mod tests {
                 .any(|pair| pair[0] == "--ro-bind" && pair[1] == text),
             "never a plain --ro-bind of a path that may be missing"
         );
+    }
+
+    /// A walk that stops at its cap is incomplete: a command that may
+    /// write is refused unless the host allows partial enforcement, and
+    /// reads report `partial`.
+    #[test]
+    fn a_walk_past_its_cap_fails_closed() {
+        let dir = tempfile::tempdir().expect("dir");
+        let ws = std::fs::canonicalize(dir.path()).expect("canonical");
+        for index in 0..8 {
+            std::fs::create_dir_all(ws.join(format!("d{index}/e"))).expect("dirs");
+        }
+        let request = SandboxRequest {
+            writable_roots: vec![ws.clone()],
+            git_roots: vec![ws.clone()],
+            deny_root: Some(ws.clone()),
+            ..SandboxRequest::new(SandboxMode::WorkspaceWrite, false)
+        };
+        let complete = super::bubblewrap::Masks::discover(&request);
+        assert!(!complete.truncated);
+        let config = SandboxConfig::default();
+        assert_eq!(
+            super::bubblewrap::enforcement(&request, &complete, &config).expect("full"),
+            Enforcement::Full
+        );
+        let capped = super::bubblewrap::Masks::discover_with_limit(&request, 3);
+        assert!(capped.truncated, "the cap was hit");
+        assert_eq!(
+            super::bubblewrap::enforcement(&request, &capped, &config)
+                .expect_err("refused")
+                .code(),
+            ErrorCode::SandboxUnavailable
+        );
+        let opted_in = SandboxConfig {
+            allow_partial: true,
+            ..SandboxConfig::default()
+        };
+        assert_eq!(
+            super::bubblewrap::enforcement(&request, &capped, &opted_in).expect("partial"),
+            Enforcement::Partial
+        );
+        let read_only = SandboxRequest {
+            mode: SandboxMode::ReadOnly,
+            ..request
+        };
+        assert_eq!(
+            super::bubblewrap::enforcement(&read_only, &capped, &config).expect("partial"),
+            Enforcement::Partial
+        );
+    }
+
+    /// The walk is cached per session until a write invalidates it.
+    #[test]
+    fn mask_walks_are_cached_until_invalidated() {
+        let dir = tempfile::tempdir().expect("dir");
+        let ws = std::fs::canonicalize(dir.path()).expect("canonical");
+        std::fs::create_dir_all(ws.join("src")).expect("src");
+        let request = SandboxRequest {
+            git_roots: vec![ws.clone()],
+            deny_globs: vec![".env".to_owned()],
+            deny_root: Some(ws.clone()),
+            ..SandboxRequest::new(SandboxMode::WorkspaceWrite, false)
+        };
+        let config = SandboxConfig::default();
+        let shared = config.clone();
+        assert!(config.masks.discover(&request).hide_files.is_empty());
+        assert!(shared.masks.discover(&request).hide_files.is_empty());
+        assert_eq!(config.masks.walks(), 1, "clones share one cache");
+        std::fs::write(ws.join("src/.env"), "x").expect("env");
+        config.masks.invalidate();
+        assert_eq!(
+            config.masks.discover(&request).hide_files,
+            vec![ws.join("src/.env")]
+        );
+        assert_eq!(config.masks.walks(), 2);
+        let other = SandboxRequest {
+            deny_globs: Vec::new(),
+            ..request
+        };
+        assert!(config.masks.discover(&other).hide_files.is_empty());
+        assert_eq!(config.masks.walks(), 3, "a different request walks");
     }
 
     /// H3: Landlock alone is partial and is refused unless the host opts in.
