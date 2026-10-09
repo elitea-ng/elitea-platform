@@ -244,6 +244,33 @@ describe('WorkspaceSessionPage', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
   });
 
+  it('retries a refused start in the conversation it already created, not a new one', async () => {
+    serveProject();
+    let created = 0;
+    server.use(
+      http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => {
+        created += 1;
+        return HttpResponse.json({ id: 77, name: 'fix the build' });
+      }),
+    );
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    ipc.failNext('startTurn', 'workspace_busy', 'A turn is already running in this workspace.');
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces/w1');
+
+    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
+    await user.click(await screen.findByRole('option', { name: 'Coder' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await user.type(screen.getByLabelText('What should the agent do?'), 'fix the build');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
+    expect(ipc.calls.started.map((r) => r.conversation_id)).toEqual(['77', '77']);
+    expect(created).toBe(1);
+  });
+
   it('cancels the running turn from the transcript', async () => {
     serveProject();
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
