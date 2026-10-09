@@ -40,11 +40,7 @@ import {
   toConfigListRows,
   type ConfigListItemType,
 } from './ConfigurationListEditor';
-import {
-  ConfigurationToolMapEditor,
-  fromConfigToolMapRows,
-  toConfigToolMapRows,
-} from './ConfigurationToolMapEditor';
+import { ConfigurationToolMapEditor, useConfigToolMapRows } from './ConfigurationToolMapEditor';
 import { ProjectListEditor } from './ProjectListEditor';
 import { useConfigSuggestions, type AdminConfigField } from './api/adminConfigurationApi';
 import { isFieldVisible, listItemTypeFor, widgetFor, type ConfigWidget } from './configurationFields';
@@ -138,18 +134,21 @@ function LinksField({ field, value, disabled, onChange }: FieldProps) {
  */
 function ToolMapField({ field, value, disabled, onChange }: FieldProps) {
   const toolkitOptions = useConfigSuggestions(field.enum_source_keys);
+  // Rows are editor state, not a projection of `value` — a blank row added by
+  // "Add toolkit" has no key in the map. See `useConfigToolMapRows`.
+  const [rows, setRows] = useConfigToolMapRows(value, (next) => {
+    onChange(field.key, next);
+  });
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
       <FieldHeading field={field} />
       <ConfigurationToolMapEditor
         label={fieldLabel(field)}
-        rows={toConfigToolMapRows(value)}
+        rows={rows}
         disabled={disabled}
         toolkitOptions={toolkitOptions}
         toolSource={field.enum_source_values}
-        onChange={(next) => {
-          onChange(field.key, fromConfigToolMapRows(next));
-        }}
+        onChange={setRows}
       />
     </Box>
   );
