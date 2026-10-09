@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-sign-out"
+description = "Enables the host_sign_out command without any pre-configured scope."
+commands.allow = ["host_sign_out"]
+
+[[permission]]
+identifier = "deny-host-sign-out"
+description = "Denies the host_sign_out command without any pre-configured scope."
+commands.deny = ["host_sign_out"]

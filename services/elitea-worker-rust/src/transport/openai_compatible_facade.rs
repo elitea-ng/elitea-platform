@@ -23,6 +23,16 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
+use elitea_llm_wire::headers::{BEARER_PREFIX, EXECUTION_HEADER, PROJECT_HEADER};
+use elitea_llm_wire::openai::{
+    ChunkError, Delta as OpenAiDelta, FinishReason as OpenAiFinish, StrictChunk, Usage,
+    parse_strict_chunk,
+};
+use elitea_llm_wire::refusal::{BudgetScope, Detail, MessageShapes, Refusal};
+use elitea_llm_wire::sse::{SseDialect, SseError, SseLimits, SseOptions, SseSplitter};
+use elitea_llm_wire::tool_calls::{
+    ToolCallAssembler, ToolCallError, ToolCallLimits, ToolCallProfile,
+};
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Version};
 use http_body_util::{BodyExt as _, Full};
@@ -37,10 +47,9 @@ use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 
-const MODEL_ROUTE: &str = "/llm/v1/chat/completions";
+const MODEL_ROUTE: &str = elitea_llm_wire::route::CHAT_COMPLETIONS_ROUTE;
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const MAX_MODEL_NAME_BYTES: usize = 256;
-pub(super) const MAX_EXECUTION_ID_BYTES: usize = 256;
 const MAX_INSTRUCTION_BYTES: usize = crate::agents::request::MAX_AGENT_INSTRUCTION_BYTES;
 const MAX_REQUEST_BYTES: usize = 8 * 1_024 * 1_024;
 const MAX_SSE_EVENT_BYTES: usize = 256 * 1_024;
@@ -56,11 +65,20 @@ const MAX_TOOL_NAME_BYTES: usize = 256;
 const MAX_TOOL_CALL_ID_BYTES: usize = 512;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_TOOL_DECLARATIONS: usize = 1_024;
+/// The strict tool-call assembly's bounds (`elitea_llm_wire::tool_calls`).
+const TOOL_CALL_LIMITS: ToolCallLimits = ToolCallLimits {
+    max_calls: MAX_TOOL_CALLS_PER_TURN,
+    max_argument_bytes: MAX_TOOL_ARGUMENT_BYTES,
+    max_name_bytes: MAX_TOOL_NAME_BYTES,
+    max_id_bytes: MAX_TOOL_CALL_ID_BYTES,
+};
+/// Usage counts are ADK `i32`s; a larger count is invalid telemetry.
+const MAX_USAGE_COUNT: u64 = i32::MAX.unsigned_abs() as u64;
 const MAX_TIMEOUT: Duration = Duration::from_mins(5);
 // Main treats this as the project that owns the invocation and pays for it.
 // It is deliberately NOT the frozen model owner: Bifrost resolves a shared
 // public model inside the caller project's signed scope.
-const PROJECT_SELECTOR: HeaderName = HeaderName::from_static("x-project-id");
+const PROJECT_SELECTOR: HeaderName = HeaderName::from_static(PROJECT_HEADER);
 // Tags this call with the execution it was made from so the gateway's
 // request log can attribute cost per execution (issue 875). Must match the
 // Python worker's `_EXECUTION_ID_HEADER` in
@@ -69,7 +87,7 @@ const PROJECT_SELECTOR: HeaderName = HeaderName::from_static("x-project-id");
 // `internal/requestlog/middleware.go` (canonical form `X-Elitea-Execution-Id`
 // — HTTP header lookup is case-insensitive, so the lowercase static name
 // here is equivalent).
-const EXECUTION_ID_HEADER: HeaderName = HeaderName::from_static("x-elitea-execution-id");
+const EXECUTION_ID_HEADER: HeaderName = HeaderName::from_static(EXECUTION_HEADER);
 
 /// Immutable deployment policy for the shared platform model channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -291,11 +309,14 @@ impl ModelGatewayClient {
         validate_invocation(&invocation)?;
         let token = context.model_facade_token();
         let billing_project_id = context.resource_project_id();
+        // The caller contract's execution-id rule, which the /llm edge applies
+        // by DROPPING any other id (the call would lose its attribution):
+        // refused here so a runtime that mints one is visible (#1156).
         let execution_id = context.execution_id().to_owned();
         if model_owner_project_id == 0
             || billing_project_id == 0
             || token.is_empty()
-            || !bounded_header_text(&execution_id, MAX_EXECUTION_ID_BYTES)
+            || !valid_execution_id(&execution_id)
         {
             return Err(ModelFacadeError::InvalidInvocation);
         }
@@ -1174,8 +1195,8 @@ fn build_http_request(
         EXECUTION_ID_HEADER,
         HeaderValue::from_str(execution_id).map_err(|_| invalid_llm_request())?,
     );
-    let mut bearer = Zeroizing::new(String::with_capacity(7 + token.len()));
-    bearer.push_str("Bearer ");
+    let mut bearer = Zeroizing::new(String::with_capacity(BEARER_PREFIX.len() + token.len()));
+    bearer.push_str(BEARER_PREFIX);
     bearer.push_str(token);
     let mut authorization =
         HeaderValue::from_str(bearer.as_str()).map_err(|_| invalid_llm_request())?;
@@ -1193,16 +1214,7 @@ const MAX_REJECTION_DETAIL_CHARS: usize = 240;
 /// True for the client-error statuses that `validate_response_head` reports as
 /// the generic `model_gateway.rejected` (400, 404, 413, 422 ...).
 pub(super) fn is_generic_rejection(status: StatusCode) -> bool {
-    status.is_client_error()
-        && !matches!(
-            status,
-            StatusCode::UNAUTHORIZED
-                | StatusCode::FORBIDDEN
-                | StatusCode::REQUEST_TIMEOUT
-                | StatusCode::TOO_MANY_REQUESTS
-                | StatusCode::PAYMENT_REQUIRED
-                | StatusCode::CONFLICT
-        )
+    elitea_llm_wire::refusal::is_generic_rejection(status.as_u16())
 }
 
 /// Demo issue 1: a provider rejection (for example vLLM's
@@ -1235,21 +1247,16 @@ pub(super) async fn rejection_with_detail(
     )
 }
 
-/// The bounded operator copy of `error.message` (or a bare string `error`).
+/// The bounded operator copy of `error.message` (or a bare string `error`):
+/// one line, control characters as spaces, trimmed.
 pub(super) fn rejection_detail(body: &[u8]) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let error = value.get("error")?;
-    let message = error
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| error.as_str())?;
-    let detail: String = message
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .take(MAX_REJECTION_DETAIL_CHARS)
-        .collect();
-    let detail = detail.trim().to_owned();
-    (!detail.is_empty()).then_some(detail)
+    elitea_llm_wire::refusal::rejection_detail(
+        body,
+        MessageShapes::ErrorOnly,
+        Detail::SingleLine {
+            max_chars: MAX_REJECTION_DETAIL_CHARS,
+        },
+    )
 }
 
 /// Classify a 402 budget refusal by the scope the gateway names (#6732).
@@ -1274,47 +1281,21 @@ pub(super) async fn budget_refusal(response: Response<Body>, read_timeout: Durat
 }
 
 pub(super) fn budget_refusal_error(body: &[u8]) -> AdkError {
-    match budget_refusal_scope(body) {
-        Some(BudgetRefusalScope::Member) => model_error(
-            ErrorCategory::InvalidInput,
-            "model_gateway.member_budget_exhausted",
-            "the member model budget is exhausted",
-        ),
-        Some(BudgetRefusalScope::Project) => model_error(
-            ErrorCategory::InvalidInput,
-            "model_gateway.project_budget_exhausted",
-            "the project model budget is exhausted",
-        ),
-        None => model_error(
-            ErrorCategory::InvalidInput,
-            "model_gateway.budget_exhausted",
-            "the model budget is exhausted",
-        ),
-    }
+    budget_error(elitea_llm_wire::refusal::budget_scope(body))
 }
 
-enum BudgetRefusalScope {
-    Project,
-    Member,
-}
-
-fn budget_refusal_scope(body: &[u8]) -> Option<BudgetRefusalScope> {
-    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let error = value.get("error")?;
-    if error.get("type")?.as_str()? != "budget_exceeded" {
-        return None;
-    }
-    match (
-        error.get("scope").and_then(serde_json::Value::as_str),
-        error.get("code").and_then(serde_json::Value::as_str),
-    ) {
-        (Some("member"), _) | (None, Some("member_budget_exceeded")) => {
-            Some(BudgetRefusalScope::Member)
-        }
-        (Some("project"), _) => Some(BudgetRefusalScope::Project),
-        // A provider's own quota refusal: no ceiling of this platform refused.
-        _ => None,
-    }
+/// The refusal of the budget `scope` names. A provider's own quota refusal
+/// (no scope) is unscoped: no ceiling of this platform refused.
+fn budget_error(scope: BudgetScope) -> AdkError {
+    model_error(
+        ErrorCategory::InvalidInput,
+        Refusal::BudgetExhausted(scope).code(),
+        match scope {
+            BudgetScope::Member => "the member model budget is exhausted",
+            BudgetScope::Project => "the project model budget is exhausted",
+            BudgetScope::Unscoped => "the model budget is exhausted",
+        },
+    )
 }
 
 pub(super) fn validate_response_head(response: &Response<Body>) -> Result<(), AdkError> {
@@ -1325,64 +1306,37 @@ pub(super) fn validate_response_head(response: &Response<Body>) -> Result<(), Ad
             "the model gateway did not negotiate HTTP/2",
         ));
     }
-    match response.status() {
-        StatusCode::UNAUTHORIZED => {
-            return Err(model_error(
+    if let Some(refusal) = Refusal::from_status(response.status().as_u16()) {
+        let (category, message) = match refusal {
+            Refusal::Unauthorized => (
                 ErrorCategory::Unauthorized,
-                "model_gateway.unauthorized",
                 "the model gateway rejected the execution credential",
-            ));
-        }
-        StatusCode::FORBIDDEN => {
-            return Err(model_error(
+            ),
+            Refusal::Forbidden => (
                 ErrorCategory::Forbidden,
-                "model_gateway.forbidden",
                 "the model gateway rejected the execution project",
-            ));
-        }
-        StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => {
-            return Err(model_error(
-                ErrorCategory::Timeout,
-                "model_gateway.upstream_timeout",
-                "the model gateway timed out",
-            ));
-        }
-        StatusCode::TOO_MANY_REQUESTS => {
-            return Err(model_error(
+            ),
+            Refusal::UpstreamTimeout => (ErrorCategory::Timeout, "the model gateway timed out"),
+            Refusal::RateLimited => (
                 ErrorCategory::RateLimited,
-                "model_gateway.rate_limited",
                 "the model gateway rate limit was reached",
-            ));
-        }
-        StatusCode::PAYMENT_REQUIRED => {
-            return Err(model_error(
-                ErrorCategory::InvalidInput,
-                "model_gateway.budget_exhausted",
-                "the model budget is exhausted",
-            ));
-        }
-        StatusCode::CONFLICT => {
-            return Err(model_error(
+            ),
+            // The head alone names no scope; `budget_refusal` reads the body.
+            Refusal::BudgetExhausted(_) => return Err(budget_error(BudgetScope::Unscoped)),
+            Refusal::Conflict => (
                 ErrorCategory::Unavailable,
-                "model_gateway.conflict",
                 "the model gateway reported a retryable conflict",
-            ));
-        }
-        status if status.is_redirection() || status.is_server_error() => {
-            return Err(model_error(
+            ),
+            Refusal::Unavailable => (
                 ErrorCategory::Unavailable,
-                "model_gateway.unavailable",
                 "the model gateway is unavailable",
-            ));
-        }
-        status if !status.is_success() => {
-            return Err(model_error(
+            ),
+            Refusal::Rejected => (
                 ErrorCategory::InvalidInput,
-                "model_gateway.rejected",
                 "the model gateway rejected the admitted request",
-            ));
-        }
-        _ => {}
+            ),
+        };
+        return Err(model_error(category, refusal.code(), message));
     }
     let media_type = single_header(response.headers(), &CONTENT_TYPE)?;
     if !media_type
@@ -1434,23 +1388,22 @@ fn model_response_stream(
     completion: Arc<Mutex<CompletionState>>,
 ) -> LlmResponseStream {
     Box::pin(try_stream! {
-        let mut parser = SseParser::new(max_event_bytes, max_stream_bytes, max_events);
+        let mut parser = gateway_sse_splitter(max_event_bytes, max_stream_bytes, max_events, true);
         let mut state = OpenAiStreamState::new(allowed_tools);
         let mut saw_done = false;
         loop {
             let chunk = next_response_chunk(&mut response, idle_timeout).await?;
             let input_finished = chunk.is_none();
             if let Some(chunk) = chunk {
-                parser.push(&chunk)?;
+                parser.push(&chunk).map_err(sse_error)?;
             } else {
-                parser.finish_input();
+                parser.finish();
             }
-            while let Some(event) = parser.next_event()? {
-                if event.event_type.is_some() {
-                    Err(invalid_sse())?;
-                }
+            // An OpenAI-compatible stream never names its events: the
+            // splitter refuses one (`reject_event_types`) as `invalid_sse`.
+            while let Some(event) = parser.next_event().map_err(sse_error)? {
                 match parse_sse_event(&event.data)? {
-                    ParsedSseEvent::Delta(delta) => {
+                    StrictChunk::Delta(delta) => {
                         if saw_done || state.is_terminal() {
                             Err(model_error(
                                 ErrorCategory::Unavailable,
@@ -1462,7 +1415,7 @@ fn model_response_stream(
                             yield model_response;
                         }
                     }
-                    ParsedSseEvent::Done => {
+                    StrictChunk::Done => {
                         if saw_done || !state.is_terminal() {
                             Err(model_error(
                                 ErrorCategory::Unavailable,
@@ -1472,8 +1425,8 @@ fn model_response_stream(
                         }
                         saw_done = true;
                     }
-                    ParsedSseEvent::Usage(usage) if !saw_done => state.record_usage(usage),
-                    ParsedSseEvent::Usage(_) => Err(model_error(
+                    StrictChunk::Usage(usage) if !saw_done => state.record_usage(usage),
+                    StrictChunk::Usage(_) => Err(model_error(
                         ErrorCategory::Unavailable,
                         "model_gateway.event_after_completion",
                         "the model gateway emitted an event after completion",
@@ -1589,374 +1542,89 @@ fn model_output_too_large() -> AdkError {
     )
 }
 
-pub(super) struct BoundedSseEvent {
-    pub(super) event_type: Option<Vec<u8>>,
-    pub(super) data: Vec<u8>,
-}
-
-pub(super) struct SseParser {
-    bytes: Vec<u8>,
-    cursor: usize,
-    event_type: Option<Vec<u8>>,
-    data: Vec<u8>,
-    total_bytes: usize,
+/// The worker's strict SSE splitter over the gateway's caps: a line, like an
+/// event, is bounded by `max_event_bytes`.
+pub(super) fn gateway_sse_splitter(
     max_event_bytes: usize,
     max_stream_bytes: usize,
     max_events: usize,
-    emitted_events: usize,
-    input_finished: bool,
-}
-
-impl SseParser {
-    pub(super) fn new(max_event_bytes: usize, max_stream_bytes: usize, max_events: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            cursor: 0,
-            event_type: None,
-            data: Vec::new(),
-            total_bytes: 0,
+    reject_event_types: bool,
+) -> SseSplitter {
+    SseSplitter::new(SseOptions {
+        limits: SseLimits {
+            max_line_bytes: max_event_bytes,
             max_event_bytes,
             max_stream_bytes,
             max_events,
-            emitted_events: 0,
-            input_finished: false,
-        }
-    }
+        },
+        dialect: SseDialect::Strict,
+        reject_event_types,
+    })
+}
 
-    pub(super) fn push(&mut self, chunk: &[u8]) -> Result<(), AdkError> {
-        if self.input_finished {
-            return Err(invalid_sse());
-        }
-        self.total_bytes = self
-            .total_bytes
-            .checked_add(chunk.len())
-            .ok_or_else(stream_too_large)?;
-        if self.total_bytes > self.max_stream_bytes {
-            return Err(stream_too_large());
-        }
-        let buffered = self.bytes.len().saturating_sub(self.cursor);
-        if buffered.saturating_add(chunk.len()) > self.max_stream_bytes {
-            return Err(stream_too_large());
-        }
-        self.compact();
-        self.bytes.extend_from_slice(chunk);
-        Ok(())
-    }
-
-    pub(super) fn finish_input(&mut self) {
-        if self.input_finished {
-            return;
-        }
-        self.input_finished = true;
-        if self.bytes.len() > self.cursor && !self.bytes[self.cursor..].ends_with(b"\n") {
-            self.bytes.push(b'\n');
-        }
-        self.bytes.push(b'\n');
-    }
-
-    pub(super) fn next_event(&mut self) -> Result<Option<BoundedSseEvent>, AdkError> {
-        loop {
-            let Some(relative_end) = self.bytes[self.cursor..]
-                .iter()
-                .position(|byte| *byte == b'\n')
-            else {
-                return Ok(None);
-            };
-            let end = self.cursor + relative_end;
-            let mut line = &self.bytes[self.cursor..end];
-            if line.last() == Some(&b'\r') {
-                line = &line[..line.len() - 1];
-            }
-            if line.len() > self.max_event_bytes {
-                return Err(event_too_large());
-            }
-            self.cursor = end + 1;
-            if line.is_empty() {
-                if self.data.is_empty() {
-                    if self.event_type.is_some() {
-                        return Err(invalid_sse());
-                    }
-                    self.compact();
-                    continue;
-                }
-                if self.data.last() == Some(&b'\n') {
-                    self.data.pop();
-                }
-                let event = std::mem::take(&mut self.data);
-                let event_type = self.event_type.take();
-                self.emitted_events = self
-                    .emitted_events
-                    .checked_add(1)
-                    .ok_or_else(too_many_events)?;
-                if self.emitted_events > self.max_events {
-                    return Err(too_many_events());
-                }
-                self.compact();
-                return Ok(Some(BoundedSseEvent {
-                    event_type,
-                    data: event,
-                }));
-            }
-            if line.starts_with(b":") {
-                continue;
-            }
-            if let Some(value) = line.strip_prefix(b"event:") {
-                if self.event_type.is_some() || !self.data.is_empty() {
-                    return Err(invalid_sse());
-                }
-                let value = value.strip_prefix(b" ").unwrap_or(value);
-                if value.is_empty() || value.len() > self.max_event_bytes {
-                    return Err(invalid_sse());
-                }
-                self.event_type = Some(value.to_vec());
-                continue;
-            }
-            let Some(value) = line.strip_prefix(b"data:") else {
-                return Err(invalid_sse());
-            };
-            let value = value.strip_prefix(b" ").unwrap_or(value);
-            let next_len = self
-                .data
-                .len()
-                .checked_add(value.len() + 1)
-                .and_then(|length| length.checked_add(self.event_type.as_ref().map_or(0, Vec::len)))
-                .ok_or_else(event_too_large)?;
-            if next_len > self.max_event_bytes {
-                return Err(event_too_large());
-            }
-            self.data.extend_from_slice(value);
-            self.data.push(b'\n');
-        }
-    }
-
-    fn compact(&mut self) {
-        if self.cursor == self.bytes.len() {
-            self.bytes.clear();
-            self.cursor = 0;
-        } else if self.cursor >= 64 * 1_024 {
-            self.bytes.drain(..self.cursor);
-            self.cursor = 0;
-        }
+/// The data-free error of a refused stream.
+pub(super) fn sse_error(error: SseError) -> AdkError {
+    match error {
+        SseError::LineTooLong | SseError::EventTooLarge => event_too_large(),
+        SseError::StreamTooLarge => stream_too_large(),
+        SseError::TooManyEvents => too_many_events(),
+        SseError::Malformed | SseError::UnexpectedEventType | SseError::NotUtf8 => invalid_sse(),
     }
 }
 
-enum ParsedSseEvent {
-    Delta(OpenAiDelta),
-    Usage(Option<adk_rust::UsageMetadata>),
-    Done,
-}
-
-struct OpenAiDelta {
-    usage: Option<adk_rust::UsageMetadata>,
-    content: Option<String>,
-    reasoning: Option<String>,
-    tool_calls: Vec<OpenAiToolDelta>,
-    finish: Option<OpenAiFinish>,
-}
-
-struct OpenAiToolDelta {
-    index: usize,
-    id: Option<String>,
-    name: Option<String>,
-    arguments: Option<String>,
-}
-
-#[derive(Clone, Copy)]
-enum OpenAiFinish {
-    Stop,
-    MaxTokens,
-    Safety,
-    ToolCalls,
-    Other,
-}
-
-fn parse_sse_event(bytes: &[u8]) -> Result<ParsedSseEvent, AdkError> {
-    if bytes == b"[DONE]" {
-        return Ok(ParsedSseEvent::Done);
-    }
-    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid_sse())?;
-    let object = value.as_object().ok_or_else(invalid_sse)?;
-    if object.get("error").is_some_and(|error| !error.is_null()) {
-        return Err(model_error(
+fn parse_sse_event(bytes: &[u8]) -> Result<StrictChunk, AdkError> {
+    parse_strict_chunk(bytes, &TOOL_CALL_LIMITS, MAX_USAGE_COUNT).map_err(|error| match error {
+        ChunkError::ProviderError => model_error(
             ErrorCategory::Unavailable,
             "model_gateway.provider_error",
             "the model provider reported an error",
-        ));
-    }
-    let choices = object
-        .get("choices")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(invalid_sse)?;
-    // Usage is optional telemetry. Invalid counters cannot invalidate an answer
-    // or become an authoritative context measurement.
-    let usage = parse_openai_usage(object.get("usage")).ok().flatten();
-    if choices.is_empty() {
-        return if object.get("usage").is_some_and(|usage| !usage.is_null()) {
-            Ok(ParsedSseEvent::Usage(usage))
-        } else {
-            Err(invalid_sse())
-        };
-    }
-    if choices.len() != 1 {
-        return Err(invalid_sse());
-    }
-    let choice = choices[0].as_object().ok_or_else(invalid_sse)?;
-    let delta = choice
-        .get("delta")
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(invalid_sse)?;
-    let content = optional_string(delta.get("content"))?.map(str::to_owned);
-    let reasoning_content = optional_string(delta.get("reasoning_content"))?;
-    let reasoning = optional_string(delta.get("reasoning"))?;
-    // Bifrost emits both spellings from one value, including an empty start delta.
-    // Consume identical aliases once; conflicting values remain ambiguous.
-    if reasoning_content.is_some() && reasoning.is_some() && reasoning_content != reasoning {
-        return Err(invalid_sse());
-    }
-    let reasoning = reasoning_content.or(reasoning).map(str::to_owned);
-    let tool_calls = parse_tool_deltas(delta)?;
-    let finish_reason = optional_string(choice.get("finish_reason"))?;
-    if finish_reason.is_none() && content.is_none() && reasoning.is_none() && tool_calls.is_empty()
-    {
-        return Ok(ParsedSseEvent::Usage(usage));
-    }
-    let finish_reason = finish_reason.map(parse_finish_reason).transpose()?;
-    Ok(ParsedSseEvent::Delta(OpenAiDelta {
-        usage,
-        content,
-        reasoning,
-        tool_calls,
-        finish: finish_reason,
-    }))
+        ),
+        ChunkError::Malformed => invalid_sse(),
+        ChunkError::LegacyFunctionCall => legacy_function_call(),
+        ChunkError::TooManyToolCalls => model_output_too_large(),
+    })
 }
 
 // Compatible usage counters are cumulative per request. Cached and reasoning
-// tokens are breakdowns, not additional prompt or completion tokens.
-fn parse_openai_usage(
-    value: Option<&serde_json::Value>,
-) -> Result<Option<adk_rust::UsageMetadata>, AdkError> {
-    let Some(value) = value.filter(|value| !value.is_null()) else {
-        return Ok(None);
-    };
-    let count = |value: Option<&serde_json::Value>| {
-        value
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| i32::try_from(value).ok())
-            .ok_or_else(invalid_sse)
-    };
-    let prompt = count(value.get("prompt_tokens"))?;
-    let output = count(value.get("completion_tokens"))?;
-    let total = prompt.checked_add(output).ok_or_else(invalid_sse)?;
-    if let Some(reported) = value.get("total_tokens").filter(|value| !value.is_null())
-        && count(Some(reported))? != total
-    {
-        return Err(invalid_sse());
-    }
-    let detail = |parent: &str, key: &str| {
-        value
-            .get(parent)
-            .and_then(|value| value.get(key))
-            .filter(|value| !value.is_null())
-            .map(|value| count(Some(value)))
-            .transpose()
-    };
-    Ok(Some(adk_rust::UsageMetadata {
-        prompt_token_count: prompt,
-        candidates_token_count: output,
-        total_token_count: total,
-        cache_read_input_token_count: detail("prompt_tokens_details", "cached_tokens")?,
-        thinking_token_count: detail("completion_tokens_details", "reasoning_tokens")?,
+// tokens are breakdowns, not additional prompt or completion tokens. The
+// strict reader bounds every count by `MAX_USAGE_COUNT`, and an invalid
+// `usage` reads as none: it is optional telemetry, and cannot invalidate an
+// answer or become an authoritative context measurement.
+fn adk_usage(usage: Usage) -> Option<adk_rust::UsageMetadata> {
+    let count = |value: u64| i32::try_from(value).ok();
+    let breakdown = |value: Option<u64>| value.map_or(Some(None), |value| count(value).map(Some));
+    Some(adk_rust::UsageMetadata {
+        prompt_token_count: count(usage.prompt_tokens)?,
+        candidates_token_count: count(usage.completion_tokens)?,
+        total_token_count: count(usage.total_tokens)?,
+        cache_read_input_token_count: breakdown(usage.cached_tokens)?,
+        thinking_token_count: breakdown(usage.reasoning_tokens)?,
         ..adk_rust::UsageMetadata::default()
-    }))
+    })
 }
 
-fn parse_tool_deltas(
-    delta: &serde_json::Map<String, serde_json::Value>,
-) -> Result<Vec<OpenAiToolDelta>, AdkError> {
-    if delta
-        .get("function_call")
-        .is_some_and(|value| !value.is_null())
-    {
-        return Err(model_error(
-            ErrorCategory::Unsupported,
-            "model_gateway.legacy_function_call",
-            "the model returned an unsupported legacy function call",
-        ));
-    }
-    let Some(value) = delta.get("tool_calls") else {
-        return Ok(Vec::new());
-    };
-    if value.is_null() {
-        return Ok(Vec::new());
-    }
-    let calls = value.as_array().ok_or_else(invalid_sse)?;
-    if calls.len() > MAX_TOOL_CALLS_PER_TURN {
-        return Err(model_output_too_large());
-    }
-    calls
-        .iter()
-        .map(|call| {
-            let call = call.as_object().ok_or_else(invalid_sse)?;
-            let index = call
-                .get("index")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| usize::try_from(value).ok())
-                .filter(|value| *value < MAX_TOOL_CALLS_PER_TURN)
-                .ok_or_else(invalid_sse)?;
-            if call
-                .get("type")
-                .is_some_and(|value| value.as_str() != Some("function"))
-            {
-                return Err(invalid_sse());
-            }
-            let function = call
-                .get("function")
-                .and_then(serde_json::Value::as_object)
-                .ok_or_else(invalid_sse)?;
-            Ok(OpenAiToolDelta {
-                index,
-                id: optional_string(call.get("id"))?.map(str::to_owned),
-                name: optional_string(function.get("name"))?.map(str::to_owned),
-                arguments: optional_string(function.get("arguments"))?.map(str::to_owned),
-            })
-        })
-        .collect()
+fn legacy_function_call() -> AdkError {
+    model_error(
+        ErrorCategory::Unsupported,
+        "model_gateway.legacy_function_call",
+        "the model returned an unsupported legacy function call",
+    )
 }
 
-fn optional_string(value: Option<&serde_json::Value>) -> Result<Option<&str>, AdkError> {
-    match value {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::String(value)) => Ok(Some(value)),
-        Some(_) => Err(invalid_sse()),
+fn tool_call_error(error: &ToolCallError) -> AdkError {
+    match error {
+        ToolCallError::TooManyCalls { .. } | ToolCallError::ArgumentsTooLarge => {
+            model_output_too_large()
+        }
+        ToolCallError::LegacyFunctionCall => legacy_function_call(),
+        _ => invalid_sse(),
     }
-}
-
-fn parse_finish_reason(value: &str) -> Result<OpenAiFinish, AdkError> {
-    match value {
-        "stop" => Ok(OpenAiFinish::Stop),
-        "length" => Ok(OpenAiFinish::MaxTokens),
-        "content_filter" => Ok(OpenAiFinish::Safety),
-        "tool_calls" => Ok(OpenAiFinish::ToolCalls),
-        "function_call" => Err(model_error(
-            ErrorCategory::Unsupported,
-            "model_gateway.legacy_function_call",
-            "the model returned an unsupported legacy function call",
-        )),
-        _ => Ok(OpenAiFinish::Other),
-    }
-}
-
-#[derive(Default)]
-struct OpenAiToolCallBuilder {
-    id: Option<String>,
-    name: String,
-    arguments: String,
 }
 
 struct OpenAiStreamState {
     usage: Option<adk_rust::UsageMetadata>,
     allowed_tools: std::collections::HashSet<String>,
-    tool_calls: Vec<Option<OpenAiToolCallBuilder>>,
+    tool_calls: ToolCallAssembler,
     accumulated_text: String,
     semantic_bytes: usize,
     terminal: Option<LlmResponse>,
@@ -1968,7 +1636,7 @@ impl OpenAiStreamState {
         Self {
             usage: None,
             allowed_tools,
-            tool_calls: Vec::new(),
+            tool_calls: ToolCallAssembler::new(ToolCallProfile::Strict, TOOL_CALL_LIMITS),
             accumulated_text: String::new(),
             semantic_bytes: 0,
             terminal: None,
@@ -1999,7 +1667,9 @@ impl OpenAiStreamState {
             parts.push(Part::Text { text: content });
         }
         for call in delta.tool_calls {
-            self.apply_tool_delta(call)?;
+            self.tool_calls
+                .apply(call)
+                .map_err(|error| tool_call_error(&error))?;
         }
         let Some(finish) = delta.finish else {
             return Ok((!parts.is_empty()).then(|| LlmResponse {
@@ -2015,14 +1685,16 @@ impl OpenAiStreamState {
         let has_tool_calls = matches!(finish, OpenAiFinish::ToolCalls);
         if has_tool_calls {
             parts.extend(self.finish_tool_calls()?);
-        } else if self.tool_calls.iter().any(Option::is_some) {
+        } else if !self.tool_calls.is_empty() {
             return Err(invalid_sse());
         }
         let finish_reason = match finish {
             OpenAiFinish::Stop | OpenAiFinish::ToolCalls => FinishReason::Stop,
-            OpenAiFinish::MaxTokens => FinishReason::MaxTokens,
-            OpenAiFinish::Safety => FinishReason::Safety,
+            OpenAiFinish::Length => FinishReason::MaxTokens,
+            OpenAiFinish::ContentFilter => FinishReason::Safety,
             OpenAiFinish::Other => FinishReason::Other,
+            // The strict reader refuses the chunk before it gets here.
+            OpenAiFinish::FunctionCall => return Err(legacy_function_call()),
         };
         let completed_text = std::mem::take(&mut self.accumulated_text);
         self.completed_text = (!has_tool_calls).then_some(completed_text);
@@ -2041,8 +1713,8 @@ impl OpenAiStreamState {
         Ok(None)
     }
 
-    fn record_usage(&mut self, usage: Option<adk_rust::UsageMetadata>) {
-        if let Some(usage) = usage {
+    fn record_usage(&mut self, usage: Option<Usage>) {
+        if let Some(usage) = usage.and_then(adk_usage) {
             self.usage = Some(usage);
         }
     }
@@ -2058,54 +1730,20 @@ impl OpenAiStreamState {
         Ok(())
     }
 
-    fn apply_tool_delta(&mut self, delta: OpenAiToolDelta) -> Result<(), AdkError> {
-        if delta.index >= MAX_TOOL_CALLS_PER_TURN {
-            return Err(model_output_too_large());
-        }
-        if self.tool_calls.len() <= delta.index {
-            self.tool_calls.resize_with(delta.index + 1, || None);
-        }
-        let builder = self.tool_calls[delta.index].get_or_insert_with(Default::default);
-        if let Some(id) = delta.id {
-            if !valid_tool_call_id(&id)
-                || builder.id.as_ref().is_some_and(|existing| existing != &id)
-            {
-                return Err(invalid_sse());
-            }
-            builder.id = Some(id);
-        }
-        if let Some(name) = delta.name {
-            builder.name.push_str(&name);
-            if !valid_tool_name(&builder.name) {
-                return Err(invalid_sse());
-            }
-        }
-        if let Some(arguments) = delta.arguments {
-            if builder.arguments.len().saturating_add(arguments.len()) > MAX_TOOL_ARGUMENT_BYTES {
-                return Err(model_output_too_large());
-            }
-            builder.arguments.push_str(&arguments);
-        }
-        Ok(())
-    }
-
+    /// The assembled calls, in index order. Each is checked as it comes —
+    /// its id (present, unique), then an admitted tool, then JSON-object
+    /// arguments — so the first failing call decides the error.
     fn finish_tool_calls(&mut self) -> Result<Vec<Part>, AdkError> {
-        if self.tool_calls.is_empty()
-            || self.tool_calls.len() > MAX_TOOL_CALLS_PER_TURN
-            || self.tool_calls.iter().any(Option::is_none)
-        {
-            return Err(invalid_sse());
-        }
-        let mut ids = std::collections::HashSet::with_capacity(self.tool_calls.len());
-        self.tool_calls
-            .iter_mut()
-            .map(|builder| {
-                let builder = builder.take().ok_or_else(invalid_sse)?;
-                let id = builder
-                    .id
-                    .filter(|id| ids.insert(id.clone()))
-                    .ok_or_else(invalid_sse)?;
-                if !self.allowed_tools.contains(&builder.name) {
+        let assembler = std::mem::replace(
+            &mut self.tool_calls,
+            ToolCallAssembler::new(ToolCallProfile::Strict, TOOL_CALL_LIMITS),
+        );
+        assembler
+            .finish()
+            .map_err(|_| invalid_sse())?
+            .map(|call| {
+                let call = call.map_err(|_| invalid_sse())?;
+                if !self.allowed_tools.contains(&call.name) {
                     return Err(model_error(
                         ErrorCategory::Unsupported,
                         super::model_facade::TOOL_NOT_ADMITTED_CODE,
@@ -2113,14 +1751,14 @@ impl OpenAiStreamState {
                     ));
                 }
                 let args: serde_json::Value =
-                    serde_json::from_str(&builder.arguments).map_err(|_| invalid_sse())?;
+                    serde_json::from_str(&call.arguments).map_err(|_| invalid_sse())?;
                 if !args.is_object() {
                     return Err(invalid_sse());
                 }
                 Ok(Part::FunctionCall {
-                    name: builder.name,
+                    name: call.name,
                     args,
-                    id: Some(id),
+                    id: Some(call.id),
                     thought_signature: None,
                 })
             })
@@ -2220,12 +1858,7 @@ fn valid_timeout(value: Duration) -> bool {
     !value.is_zero() && value <= MAX_TIMEOUT && value.subsec_nanos().is_multiple_of(1_000_000)
 }
 
-pub(super) fn bounded_header_text(value: &str, maximum: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= maximum
-        && value.is_ascii()
-        && !value.bytes().any(|byte| byte.is_ascii_control())
-}
+pub(super) use elitea_llm_wire::headers::{bounded_header_text, valid_execution_id};
 
 #[cfg(test)]
 pub(crate) struct CapturedModelRequest {

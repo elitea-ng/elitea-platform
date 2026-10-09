@@ -2,6 +2,9 @@ package platformconfig
 
 import (
 	"context"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -34,7 +37,155 @@ const (
 	KeyNativeNotificationPreview      = "notification_preview"
 	KeyNativeAllowNotificationActions = "allow_notification_actions"
 	KeyNativeAllowSystemSurfaces      = "allow_system_surfaces"
+
+	// Local work on the desktop (ADR-0029 decision 6, client contract 1.5).
+	// The section stores flat keys, because the admin form and the save
+	// validator are flat; the policy delivers them as one `local_work` group.
+	KeyNativeLocalWorkAllowed        = "local_work_allowed"
+	KeyNativeLocalWorkShell          = "local_work_shell"
+	KeyNativeLocalWorkMaxSandboxMode = "local_work_max_sandbox_mode"
+	KeyNativeLocalWorkNetwork        = "local_work_network"
+	KeyNativeLocalWorkCommandAllow   = "local_work_command_allow"
+	KeyNativeLocalWorkCommandDeny    = "local_work_command_deny"
+	KeyNativeLocalWorkPathDeny       = "local_work_path_deny"
+	KeyNativeLocalWorkLocalMCP       = "local_work_local_mcp"
+	KeyNativeLocalWorkLocalIndex     = "local_work_local_index"
+	KeyNativeLocalWorkCloudSync      = "local_work_cloud_sync"
+	KeyNativeLocalWorkMemoryWrite    = "local_work_memory_write"
 )
+
+// The values of KeyNativeLocalWorkMaxSandboxMode, from the most to the least
+// confined. The policy names the WIDEST mode the desktop may use; a workspace
+// or the user can always choose a narrower one.
+const (
+	SandboxModeReadOnly       = "read-only"
+	SandboxModeWorkspaceWrite = "workspace-write"
+	SandboxModeFullAccess     = "full-access"
+)
+
+// SandboxModeValues lists the allowed max_sandbox_mode values, most confined
+// first, in the order the admin form offers them.
+func SandboxModeValues() []string {
+	return []string{SandboxModeReadOnly, SandboxModeWorkspaceWrite, SandboxModeFullAccess}
+}
+
+// ValidSandboxMode reports whether value is an allowed max_sandbox_mode,
+// compared exactly.
+func ValidSandboxMode(value string) bool {
+	for _, allowed := range SandboxModeValues() {
+		if value == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// Bounds of the local_work pattern lists (command_allow, command_deny,
+// path_deny). The save path refuses a list over them; the loader keeps only
+// valid patterns and at most MaxLocalWorkPatterns of them.
+const (
+	MaxLocalWorkPatterns     = 200
+	MaxLocalWorkPatternBytes = 512
+)
+
+// ValidLocalWorkPattern reports whether one command or path pattern may be
+// stored: not blank, at most MaxLocalWorkPatternBytes, valid UTF-8 and free of
+// control characters (a pattern is shown to the user and matched by the
+// desktop; a newline or NUL in it is never intended).
+func ValidLocalWorkPattern(pattern string) bool {
+	if strings.TrimSpace(pattern) == "" || len(pattern) > MaxLocalWorkPatternBytes || !utf8.ValidString(pattern) {
+		return false
+	}
+	for _, r := range pattern {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// LocalWorkPolicy is the `local_work` group of the policy (ADR-0029 decision
+// 6). The desktop enforces it. The server enforces only `allowed`: it refuses
+// a local turn start when it is false. Field order is the JSON key order.
+type LocalWorkPolicy struct {
+	// Allowed: local work (agent turns that run on the user's machine) is
+	// permitted. Off unless an administrator enables it.
+	Allowed bool `json:"allowed"`
+	// Shell: local turns may run shell commands.
+	Shell bool `json:"shell"`
+	// MaxSandboxMode is the widest sandbox mode the desktop may use, one of
+	// SandboxModeValues.
+	MaxSandboxMode string `json:"max_sandbox_mode"`
+	// Network: sandboxed commands may reach the network.
+	Network bool `json:"network"`
+	// CommandAllow and CommandDeny are command patterns the desktop's approval
+	// rules apply before any workspace or user rule. A deny wins.
+	CommandAllow []string `json:"command_allow"`
+	CommandDeny  []string `json:"command_deny"`
+	// PathDeny are path patterns local tools must not read or write.
+	PathDeny []string `json:"path_deny"`
+	// LocalMCP: the user may configure local (stdio) MCP servers.
+	LocalMCP bool `json:"local_mcp"`
+	// LocalIndex: the desktop may build a local index of a workspace.
+	LocalIndex bool `json:"local_index"`
+	// CloudSync: a workspace folder may be synced to an artifact bucket.
+	CloudSync bool `json:"cloud_sync"`
+	// MemoryWrite: local turns may save to cloud memory. Recall stays allowed.
+	MemoryWrite bool `json:"memory_write"`
+}
+
+// DefaultLocalWorkPolicy is the group of a deployment that never saved it:
+// local work is off. The other values apply once an administrator turns it
+// on, and they are the conservative ones: workspace-write sandbox without
+// network, no local MCP servers, no cloud sync.
+func DefaultLocalWorkPolicy() LocalWorkPolicy {
+	return LocalWorkPolicy{
+		Allowed:        false,
+		Shell:          true,
+		MaxSandboxMode: SandboxModeWorkspaceWrite,
+		Network:        false,
+		CommandAllow:   []string{},
+		CommandDeny:    []string{},
+		PathDeny:       []string{},
+		LocalMCP:       false,
+		LocalIndex:     true,
+		CloudSync:      false,
+		MemoryWrite:    true,
+	}
+}
+
+func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
+	policy := DefaultLocalWorkPolicy()
+	policy.Allowed = values.Bool(KeyNativeLocalWorkAllowed, policy.Allowed)
+	policy.Shell = values.Bool(KeyNativeLocalWorkShell, policy.Shell)
+	if mode, ok := values[KeyNativeLocalWorkMaxSandboxMode].(string); ok && ValidSandboxMode(mode) {
+		policy.MaxSandboxMode = mode
+	}
+	policy.Network = values.Bool(KeyNativeLocalWorkNetwork, policy.Network)
+	policy.CommandAllow = localWorkPatterns(values, KeyNativeLocalWorkCommandAllow)
+	policy.CommandDeny = localWorkPatterns(values, KeyNativeLocalWorkCommandDeny)
+	policy.PathDeny = localWorkPatterns(values, KeyNativeLocalWorkPathDeny)
+	policy.LocalMCP = values.Bool(KeyNativeLocalWorkLocalMCP, policy.LocalMCP)
+	policy.LocalIndex = values.Bool(KeyNativeLocalWorkLocalIndex, policy.LocalIndex)
+	policy.CloudSync = values.Bool(KeyNativeLocalWorkCloudSync, policy.CloudSync)
+	policy.MemoryWrite = values.Bool(KeyNativeLocalWorkMemoryWrite, policy.MemoryWrite)
+	return policy
+}
+
+// localWorkPatterns keeps the valid patterns of a stored list, at most
+// MaxLocalWorkPatterns. It never answers nil, so the JSON is always an array.
+func localWorkPatterns(values Values, key string) []string {
+	out := []string{}
+	for _, pattern := range values.Strings(key) {
+		if len(out) == MaxLocalWorkPatterns {
+			break
+		}
+		if ValidLocalWorkPattern(pattern) {
+			out = append(out, pattern)
+		}
+	}
+	return out
+}
 
 // The values of KeyNativeNotificationPreview: what a notification may show on
 // the lock screen and in the notification centre.
@@ -93,6 +244,9 @@ type NativeClientPolicy struct {
 	// AllowSystemSurfaces: widgets, quick actions and other surfaces outside
 	// the app may show titles. Off means they show counts only.
 	AllowSystemSurfaces bool `json:"allow_system_surfaces"`
+
+	// LocalWork is the desktop's local work group (client contract 1.5).
+	LocalWork LocalWorkPolicy `json:"local_work"`
 }
 
 // DefaultNativeClientPolicy is the policy of a deployment that never saved the
@@ -114,6 +268,8 @@ func DefaultNativeClientPolicy() NativeClientPolicy {
 		NotificationPreview:      NotificationPreviewNone,
 		AllowNotificationActions: true,
 		AllowSystemSurfaces:      false,
+
+		LocalWork: DefaultLocalWorkPolicy(),
 	}
 }
 
@@ -170,5 +326,6 @@ func NativeClientPolicyFromValues(values Values) NativeClientPolicy {
 	if preview, ok := values[KeyNativeNotificationPreview].(string); ok && ValidNotificationPreview(preview) {
 		policy.NotificationPreview = preview
 	}
+	policy.LocalWork = localWorkPolicyFromValues(values)
 	return policy
 }

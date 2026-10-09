@@ -363,7 +363,7 @@ impl ClaimScopedEliteaContext {
 
     #[cfg(test)]
     pub(super) fn fixture(project_id: u64, token: &str) -> Self {
-        Self::fixture_with_execution_id(project_id, token, "execution/fixture-one")
+        Self::fixture_with_execution_id(project_id, token, "0123456789abcdef0123456789abcdef")
     }
 
     #[cfg(test)]
@@ -688,136 +688,12 @@ impl RuntimeContextClient {
     }
 }
 
-/// The `skills_builder` request body. Field names are main's
-/// (`RuntimeSkillWriteRequest`), and main decodes with
-/// `DisallowUnknownFields`, so a key added on one side and not the other fails
-/// the write loudly instead of half-applying it.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct SkillWriteRequest {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    pub(crate) instructions: String,
-}
-
-/// The `project_context_builder` request body.
-///
-/// `enabled` is an `Option` and is SKIPPED when absent, not sent as null: main
-/// reads absence as "keep whatever the project already had", and a null would
-/// decode to the same `nil` only by accident of Go's zero values — sending
-/// nothing is the contract both sides can state.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct ProjectContextWriteRequest {
-    pub(crate) content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) enabled: Option<bool>,
-}
-
-/// The four `artifact` request bodies (#906). Field names are main's
-/// (`RuntimeArtifact*Request`), and main decodes with
-/// `DisallowUnknownFields`, so a key added on one side and not the other fails
-/// the call loudly instead of being silently ignored.
-///
-/// Every one of them carries a `bucket`, and none of them carries a project:
-/// the bucket is resolved INSIDE the claim's project, so naming it widens
-/// nothing.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct ArtifactListRequest {
-    pub(crate) bucket: String,
-    pub(crate) prefix: String,
-    pub(crate) recursive: bool,
-    pub(crate) limit: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct ArtifactReadRequest {
-    pub(crate) bucket: String,
-    pub(crate) name: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct ArtifactWriteRequest {
-    pub(crate) bucket: String,
-    pub(crate) name: String,
-    pub(crate) content: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct ArtifactDeleteRequest {
-    pub(crate) bucket: String,
-    pub(crate) name: String,
-}
-
-/// One listed artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ArtifactFile {
-    pub(crate) name: String,
-    pub(crate) byte_length: u64,
-    pub(crate) media_type: String,
-    pub(crate) modified_at: String,
-}
-
-/// One bucket listing, already proven to belong to the claimed execution's own
-/// project.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ArtifactListOutcome {
-    pub(crate) bucket: String,
-    pub(crate) files: Vec<ArtifactFile>,
-    pub(crate) truncated: bool,
-}
-
-/// One artifact read.
-///
-/// `over_limit` is the agent-path cap's refusal and it is NOT an error: the
-/// content is empty, `char_length` and `byte_length` say how big the file
-/// actually is, and `max_chars` says what was allowed. The tool turns the
-/// three into the structured `content_too_large` result the SDK worker
-/// produces for the same file, so a caller can choose a slice that fits.
-///
-/// It is deliberately not `Clone`: the bytes are tenant document content and
-/// belong in exactly one place, the prompt this turn is building.
-pub(crate) struct ArtifactReadOutcome {
-    pub(crate) name: String,
-    pub(crate) media_type: String,
-    pub(crate) byte_length: u64,
-    pub(crate) char_length: u64,
-    pub(crate) total_lines: u64,
-    pub(crate) max_chars: u64,
-    pub(crate) over_limit: bool,
-    pub(crate) content: String,
-}
-
-/// One written artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ArtifactWriteOutcome {
-    pub(crate) bucket: String,
-    pub(crate) name: String,
-    pub(crate) media_type: String,
-    pub(crate) byte_length: u64,
-}
-
-/// One deleted artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ArtifactDeleteOutcome {
-    pub(crate) name: String,
-    pub(crate) deleted: bool,
-}
-
-/// One written skill, already proven by main to belong to the claimed
-/// execution's own project.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SkillWriteOutcome {
-    pub(crate) skill_id: String,
-    pub(crate) name: String,
-    pub(crate) created: bool,
-}
-
-/// One written project context.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProjectContextWriteOutcome {
-    pub(crate) content_bytes: u64,
-    pub(crate) enabled: bool,
-    pub(crate) created: bool,
-}
+pub(crate) use elitea_agent_runtime::platform::{
+    ArtifactDeleteOutcome, ArtifactDeleteRequest, ArtifactFile, ArtifactListOutcome,
+    ArtifactListRequest, ArtifactReadOutcome, ArtifactReadRequest, ArtifactWriteOutcome,
+    ArtifactWriteRequest, ProjectContextWriteOutcome, ProjectContextWriteRequest,
+    SkillWriteOutcome, SkillWriteRequest,
+};
 
 /// One claim-scoped attachment document, already proven to belong to the
 /// claimed execution's own project and conversation by the service that served

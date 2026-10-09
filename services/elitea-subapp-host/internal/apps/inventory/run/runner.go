@@ -126,7 +126,14 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 		return nil, err
 	}
 
-	result, err := tool(ctx, ArgumentsFor(family, call.Tool, params, identity), tc)
+	arguments := ArgumentsFor(family, call.Tool, params, identity)
+	// The verified caller (ADR-0028 D3): the engine filters what a caller may
+	// read by document ACL. Only from the signed identity the gate verified —
+	// never from the request body, which the caller writes.
+	if call.Identity.UserID != "" {
+		arguments["caller_user_id"] = call.Identity.UserID
+	}
+	result, err := tool(ctx, arguments, tc)
 	if err != nil {
 		return nil, err
 	}

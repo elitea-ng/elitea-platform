@@ -117,6 +117,7 @@ updates:
       - /services/elitea-deepwiki-engine
       - /libs/rust
       - /services/elitea-inventory-engine
+      - /apps/elitea-desktop/src-tauri
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:
@@ -184,6 +185,7 @@ updates:
   - package-ecosystem: npm
     directories:
       - /apps/elitea-web
+      - /apps/elitea-desktop
       - /tools/parity-extract
     multi-ecosystem-group: weekly
     patterns: ["*"]

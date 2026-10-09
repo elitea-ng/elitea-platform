@@ -86,7 +86,39 @@ export const guardedLazyRouteComponent = (routesDirectory: string): PluginOption
 });
 
 /**
- * Five build targets (spec §7.4), selected via `vite build --mode <target>`:
+ * The main SPA's plugin chain (route tree + guarded lazy routes + the base
+ * plugins), shared by the default build and the `desktop` build.
+ *
+ * Must run before @vitejs/plugin-react (react()): the router plugin rewrites
+ * route files' exports (autoCodeSplitting) before JSX/compiler transforms see
+ * them. Verified via the installed package's own vite.js plugin ordering
+ * example. `guardedLazyRouteComponent` must run before it.
+ */
+function mainAppPlugins(basePlugins: PluginOption[]): PluginOption[] {
+  return [
+    guardedLazyRouteComponent(resolvePath('./src/routes')),
+    tanstackRouter({
+      target: 'react',
+      autoCodeSplitting: true,
+      routesDirectory: resolvePath('./src/routes'),
+      generatedRouteTree: resolvePath('./src/routeTree.gen.ts'),
+      // Matches `__tests__/` directories AND colocated `*.test.tsx`
+      // files (e.g. `routes/auth-callback.test.tsx`) — both patterns
+      // appear under src/routes/**; without the second alternative the
+      // generator warns "does not export a Route" for every colocated
+      // test file (harmless — they're excluded from the tree either
+      // way — but noisy, and worth silencing at the source).
+      routeFileIgnorePattern: '(__tests__|\\.test\\.tsx?$)',
+      codeSplittingOptions: {
+        splitBehavior: ({ routeId }) => (routeId === '/auth-callback' ? [] : undefined),
+      },
+    }),
+    ...basePlugins,
+  ];
+}
+
+/**
+ * Six build targets (spec §7.4, ADR-0029), selected via `vite build --mode <target>`:
  *
  *  - (default)      main SPA        base './' (contract C4), outDir dist/app
  *  - admin          admin module    base '/admin/app/' so the Go adminui handler's
@@ -96,6 +128,10 @@ export const guardedLazyRouteComponent = (routesDirectory: string): PluginOption
  *                                   one maintenance.html, dist/maintenance
  *  - brand-preview  self-contained  the offline brand previewer (ADR-0024 WP9),
  *                                   one index.html, dist/brand-preview
+ *  - desktop        the Tauri desktop client's bundled UI (ADR-0029 decision 9):
+ *                   the main app behind entries/desktop, base './', dist-desktop
+ *                   (outside dist/ on purpose: the bundle-budget gate reads dist/
+ *                   and must keep seeing exactly the targets `npm run build` makes)
  *  - docs           docs SPA        embedded documentation (product docs, not the
  *                                   admin/app entries above): MDX content compiled
  *                                   to a plain-CSS React SPA, dist/docs. `base`
@@ -195,6 +231,26 @@ export default defineConfig(({ mode }): UserConfig => {
     };
   }
 
+  if (mode === 'desktop') {
+    // ADR-0029 decision 9: the app the Tauri host loads from its BUNDLED assets.
+    // Same route tree, plugins and brand as the default SPA — every cloud screen
+    // is reused — behind a different entry (`entries/desktop`: connect screen,
+    // then the real app) and an absolute-URL/bearer transport that the entry
+    // registers at runtime. Nothing here changes the default build: the desktop
+    // modules are reachable only from that entry, so they are not in dist/app.
+    return {
+      plugins: mainAppPlugins(basePlugins),
+      root: resolvePath('./src/entries/desktop'),
+      base: './',
+      publicDir: resolvePath('./public'),
+      build: {
+        outDir: resolvePath('./dist-desktop'),
+        emptyOutDir: true,
+        sourcemap: false,
+      },
+    };
+  }
+
   if (mode === 'docs') {
     // MDX-authored documentation SPA (PREAMBLE decisions 1/6). `mdx()` must
     // run BEFORE `react()`: it turns `.mdx` files into JSX, which `react()`
@@ -252,30 +308,7 @@ export default defineConfig(({ mode }): UserConfig => {
   }
 
   return {
-    plugins: [
-      // Must run before @vitejs/plugin-react (react()): it rewrites route
-      // files' exports (autoCodeSplitting) before JSX/compiler transforms
-      // see them. Verified via the installed package's own vite.js plugin
-      // ordering example. `guardedLazyRouteComponent` must run before it.
-      guardedLazyRouteComponent(resolvePath('./src/routes')),
-      tanstackRouter({
-        target: 'react',
-        autoCodeSplitting: true,
-        routesDirectory: resolvePath('./src/routes'),
-        generatedRouteTree: resolvePath('./src/routeTree.gen.ts'),
-        // Matches `__tests__/` directories AND colocated `*.test.tsx`
-        // files (e.g. `routes/auth-callback.test.tsx`) — both patterns
-        // appear under src/routes/**; without the second alternative the
-        // generator warns "does not export a Route" for every colocated
-        // test file (harmless — they're excluded from the tree either
-        // way — but noisy, and worth silencing at the source).
-        routeFileIgnorePattern: '(__tests__|\\.test\\.tsx?$)',
-        codeSplittingOptions: {
-          splitBehavior: ({ routeId }) => (routeId === '/auth-callback' ? [] : undefined),
-        },
-      }),
-      ...basePlugins,
-    ],
+    plugins: mainAppPlugins(basePlugins),
     base: './', // contract C4: assets emitted with relative URLs
     build: {
       outDir: resolvePath('./dist/app'),

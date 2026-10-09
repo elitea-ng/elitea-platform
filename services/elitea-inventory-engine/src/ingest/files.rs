@@ -126,6 +126,25 @@ pub enum Skipped {
 }
 
 impl Selection {
+    /// [`Selection::admit`] for a document of media type `mime`: a format
+    /// the SDK loader never listed is admitted when this build extracts it
+    /// (`elitea-doc-extract`: PDF, Office, e-mail with `documents`).
+    ///
+    /// # Errors
+    ///
+    /// Which rule skipped it.
+    pub fn admit_document(&self, path: &str, mime: &str) -> Result<(), Skipped> {
+        match self.admit(path) {
+            Err(Skipped::UnsupportedExtension)
+                if !elitea_content_source::is_text(mime)
+                    && elitea_doc_extract::can_extract(mime) =>
+            {
+                Ok(())
+            }
+            verdict => verdict,
+        }
+    }
+
     /// The loader's verdict on a path, before reading it.
     ///
     /// # Errors
