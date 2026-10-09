@@ -176,7 +176,7 @@ interface ToolkitFormViewProps {
 /** The JSX-only render — every value it reads is already resolved by `useToolkitFormState`/the caller's own prop defaults, so this stays a thin, low-complexity template. */
 function ToolkitFormView({ props, state }: ToolkitFormViewProps): ReactNode {
   const { editToolDetail, onChangeToolDetail, isEditing, isToolDirty, hasNotSavedCredentials, isViewToggleVisible, hideOperationButtons, updateKey, sx, formValues, formInitialValues, onResetForm, isTeamProject, onSave, onSaveSuccess, onSaveError, onConfigurationCreated, projectId } = props;
-  const { isLoading, view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, toolListReadFailed, retryToolListRead, hasErrors, configuration, isCreatingConfiguration, isTestingConnection, onCreateConfiguration, onTestConnection, onRevertCredentials, setShowValidation, editField, setToolErrors, ToolComponent, toolComponentProps } = state;
+  const { isLoading, view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, toolListReadFailed, toolListDiscoveryDisabled, retryToolListRead, hasErrors, configuration, isCreatingConfiguration, isTestingConnection, onCreateConfiguration, onTestConnection, onRevertCredentials, setShowValidation, editField, setToolErrors, ToolComponent, toolComponentProps } = state;
 
   if (isLoading) {
     return (
@@ -195,6 +195,7 @@ function ToolkitFormView({ props, state }: ToolkitFormViewProps): ReactNode {
         <ToolListError
           onRetry={retryToolListRead}
           testId="toolkit-form-tool-list-error"
+          discoveryDisabled={toolListDiscoveryDisabled}
         />
       )}
       {showFormViewToggle && (

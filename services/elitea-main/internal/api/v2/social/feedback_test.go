@@ -15,13 +15,14 @@ import (
 )
 
 type currentFeedbackCreatorStub struct {
-	create func(context.Context, int64, string, int, *string, string) (int64, error)
+	create func(context.Context, int64, int64, string, int, *string, string) (int64, error)
 	calls  int
 }
 
 func (stub *currentFeedbackCreatorStub) CreateCurrentFeedback(
 	ctx context.Context,
 	userID int64,
+	projectID int64,
 	description string,
 	rating int,
 	referrer *string,
@@ -31,7 +32,7 @@ func (stub *currentFeedbackCreatorStub) CreateCurrentFeedback(
 	if stub.create == nil {
 		return 0, nil
 	}
-	return stub.create(ctx, userID, description, rating, referrer, userAgent)
+	return stub.create(ctx, userID, projectID, description, rating, referrer, userAgent)
 }
 
 type currentFeedbackPrincipalValidatorFunc func(context.Context, auth.User) (auth.User, error)
@@ -78,13 +79,14 @@ func TestCurrentFeedbackCreateRoutePreservesContractAndDerivesProtectedFields(t 
 		create: func(
 			_ context.Context,
 			userID int64,
+			projectID int64,
 			description string,
 			rating int,
 			referrer *string,
 			userAgent string,
 		) (int64, error) {
-			if userID != 41 || description != "current feedback" || rating != 5 {
-				t.Fatalf("feedback input user=%d description=%q rating=%d", userID, description, rating)
+			if userID != 41 || projectID != 7 || description != "current feedback" || rating != 5 {
+				t.Fatalf("feedback input user=%d project=%d description=%q rating=%d", userID, projectID, description, rating)
 			}
 			if referrer == nil || *referrer != "https://elitea.example/app/chat" {
 				t.Fatalf("referrer=%v", referrer)
@@ -141,6 +143,7 @@ func TestCurrentFeedbackCreateRouteSupportsCurrentProjectScopedAliases(t *testin
 				create: func(
 					_ context.Context,
 					userID int64,
+					projectID int64,
 					description string,
 					rating int,
 					referrer *string,
@@ -293,6 +296,7 @@ func TestCurrentFeedbackCreateRoutePreservesCurrentJSONMediaTypeRequirement(t *t
 				create: func(
 					context.Context,
 					int64,
+					int64,
 					string,
 					int,
 					*string,
@@ -330,6 +334,7 @@ func TestCurrentFeedbackCreateRouteAllowsBaselineEmptyDescriptionAndHandlesStora
 	creator := &currentFeedbackCreatorStub{
 		create: func(
 			_ context.Context,
+			_ int64,
 			_ int64,
 			description string,
 			rating int,

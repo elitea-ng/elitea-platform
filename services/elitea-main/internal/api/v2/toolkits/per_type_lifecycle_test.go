@@ -137,6 +137,12 @@ func (r *lifecycleRepo) ListToolkits(
 	return rows, len(rows), nil
 }
 
+func (r *lifecycleRepo) ListToolkitInstances(
+	ctx context.Context, projectID string, _ toolkits.InstanceListFilter, page, size int,
+) ([]map[string]any, int, error) {
+	return r.ListToolkits(ctx, projectID, page, size)
+}
+
 func sortedRowIDs(rows map[string]map[string]any) []string {
 	ids := make([]string, 0, len(rows))
 	for id := range rows {

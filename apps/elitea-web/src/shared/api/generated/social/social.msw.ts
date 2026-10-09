@@ -211,29 +211,32 @@ export const getUnpinEntityResponseMock = (
 export const getListFeedbacksResponseMock = (
   overrideResponse: Partial<Extract<FeedbackListResponse, object>> = {},
 ): FeedbackListResponse => ({
-  items: Array.from(
+  total: faker.number.int(),
+  rows: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
   ).map(() => ({
-    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    entity_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    entity_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    rating: faker.number.int(),
-    comment: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    id: faker.number.int(),
+    user_id: faker.number.int(),
+    project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    referrer: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rating: faker.number.int({ min: 0, max: 5 }),
+    user_agent: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
   })),
-  total: faker.number.int(),
   ...overrideResponse,
 });
 
 export const getCreateFeedbackResponseMock = (
   overrideResponse: Partial<Extract<CreateFeedbackResponse, object>> = {},
-): CreateFeedbackResponse => ({
-  ok: faker.datatype.boolean(),
-  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  ...overrideResponse,
-});
+): CreateFeedbackResponse => ({ id: faker.number.int(), ...overrideResponse });
 
 export const getGetCurrentAuthorMockHandler = (
   overrideResponse?:

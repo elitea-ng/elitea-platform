@@ -26,4 +26,15 @@ describe('buildInstanceItems — elitea_issues 5296 label consistency', () => {
     expect(items).toHaveLength(1);
     expect(items[0]?.label).toBe('Jira Cloud');
   });
+
+  it('matches the search against the description too, like the server', () => {
+    const items = buildInstanceItems([toolkit({ name: 'Plain', description: 'Reads the NEEDLE' })], new Set(), false, 'needle', undefined, () => {});
+    expect(items).toHaveLength(1);
+  });
+
+  it('never lists an `application` row (an agent-as-tool link), whichever section asks', () => {
+    const link = toolkit({ id: '9', name: 'Cedar inspection child', type: 'application' });
+    expect(buildInstanceItems([link], new Set(), false, '', undefined, () => {})).toHaveLength(0);
+    expect(buildInstanceItems([link], new Set(), true, '', undefined, () => {})).toHaveLength(0);
+  });
 });

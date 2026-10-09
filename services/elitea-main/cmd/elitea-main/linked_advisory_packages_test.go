@@ -14,12 +14,11 @@ import (
 // path behind it.
 //
 //   - golang.org/x/crypto/openpgp: GO-2026-5932. Unmaintained; no fix will ship.
-//   - golang.org/x/crypto/ssh: GO-2026-6354 and GO-2026-6355. Fixed in x/crypto
-//     v0.56.0, which declares go 1.26.0 while this module builds on Go 1.25.
-//     Drop this entry once the module moves to Go 1.26 and takes that release.
+//
+// golang.org/x/crypto/ssh (GO-2026-6354, GO-2026-6355) left this list when the
+// module moved to Go 1.26 and took x/crypto v0.57.0, which carries the fix.
 var advisoryPackagesWithoutFix = []string{
 	"golang.org/x/crypto/openpgp",
-	"golang.org/x/crypto/ssh",
 }
 
 // TestNoBinaryLinksAdvisoryPackagesWithoutFix lists every non-test dependency of

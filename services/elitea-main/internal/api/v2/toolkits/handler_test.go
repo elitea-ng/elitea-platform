@@ -67,6 +67,15 @@ func (m *mockRepo) ListToolkits(_ context.Context, _ string, _, _ int) ([]map[st
 	return nil, 0, nil
 }
 
+func (m *mockRepo) ListToolkitInstances(
+	_ context.Context, _ string, _ toolkits.InstanceListFilter, _, _ int,
+) ([]map[string]any, int, error) {
+	if m.err != nil {
+		return nil, 0, m.err
+	}
+	return nil, 0, nil
+}
+
 func (m *mockRepo) CreateToolkit(_ context.Context, _ string, body map[string]any) (map[string]any, error) {
 	if m.err != nil {
 		return nil, m.err

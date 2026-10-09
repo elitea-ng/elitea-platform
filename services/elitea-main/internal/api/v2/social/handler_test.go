@@ -161,31 +161,12 @@ func TestUnlike_ReturnsOK(t *testing.T) {
 	}
 }
 
-func TestListFeedbacks_ReturnsEmpty(t *testing.T) {
-	h := newHandler()
-	r := chi.NewRouter()
-	r.Get("/feedbacks/default/{projectID}", h.ListFeedbacks)
-
-	req := httptest.NewRequest(http.MethodGet, "/feedbacks/default/p1", nil)
+// Without a pool the feedback handler answers 503, never an empty 200.
+func TestFeedbackHandlerWithoutPoolIsUnavailable(t *testing.T) {
 	rr := httptest.NewRecorder()
-	r.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-}
-
-func TestCreateFeedback_ReturnsOK(t *testing.T) {
-	h := newHandler()
-	r := chi.NewRouter()
-	r.Post("/feedbacks/default/{projectID}", h.CreateFeedback)
-
-	req := httptest.NewRequest(http.MethodPost, "/feedbacks/default/p1", nil)
-	rr := httptest.NewRecorder()
-	r.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
+	social.NewFeedbackListHandler(nil).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rr.Code)
 	}
 }
 

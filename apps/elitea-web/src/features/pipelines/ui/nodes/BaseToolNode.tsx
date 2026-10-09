@@ -226,6 +226,8 @@ interface ToolFunctionSelectProps {
   readonly disabled: boolean;
   /** The tool catalogue read failed (#440). */
   readonly catalogueReadFailed: boolean;
+  /** The catalogue read failed because this deployment turned tool discovery off (#440). */
+  readonly catalogueDiscoveryDisabled: boolean;
   /** The toolkit type schema read failed (#440) — it supplies the tool list of a statically-declared type. */
   readonly typeSchemasReadFailed: boolean;
   readonly onRetry: () => void;
@@ -243,7 +245,7 @@ interface ToolFunctionSelectProps {
  * options (the toolkit carries its own `selected_tools`, and only the type
  * schemas were lost) keeps the working picker: the list on screen is real.
  */
-function ToolFunctionSelect({ functionOptions, selectedTool, onChangeTool, onClearTool, disabled, catalogueReadFailed, typeSchemasReadFailed, onRetry }: ToolFunctionSelectProps): ReactNode {
+function ToolFunctionSelect({ functionOptions, selectedTool, onChangeTool, onClearTool, disabled, catalogueReadFailed, catalogueDiscoveryDisabled, typeSchemasReadFailed, onRetry }: ToolFunctionSelectProps): ReactNode {
   if (functionOptions.length > 0) {
     return (
       <SingleSelect
@@ -256,7 +258,14 @@ function ToolFunctionSelect({ functionOptions, selectedTool, onChangeTool, onCle
       />
     );
   }
-  if (catalogueReadFailed || typeSchemasReadFailed) return <ToolListError onRetry={onRetry} />;
+  if (catalogueReadFailed || typeSchemasReadFailed) {
+    return (
+      <ToolListError
+        onRetry={onRetry}
+        discoveryDisabled={catalogueDiscoveryDisabled && !typeSchemasReadFailed}
+      />
+    );
+  }
   return null;
 }
 
@@ -276,6 +285,7 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
     selectedToolkit,
     dynamicToolNames,
     dynamicToolsReadFailed,
+    dynamicToolsDiscoveryDisabled,
     retryDynamicToolsRead,
     inputMappings,
     defaultValues,
@@ -355,6 +365,7 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
         onClearTool={onClearTool}
         disabled={Boolean(isRunningPipeline)}
         catalogueReadFailed={dynamicToolsReadFailed}
+        catalogueDiscoveryDisabled={dynamicToolsDiscoveryDisabled}
         typeSchemasReadFailed={typeSchemasReadFailed}
         onRetry={onRetryToolList}
       />

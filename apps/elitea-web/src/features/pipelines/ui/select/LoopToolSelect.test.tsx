@@ -79,6 +79,27 @@ describe('LoopToolSelect', () => {
       expect(queryByLabelText('Tool')).not.toBeInTheDocument();
     });
 
+    it('says tool discovery is turned off, with no retry, when the deployment disabled it', async () => {
+      server.use(
+        http.get(`${BASE}/elitea_core/toolkit_available_tools/prompt_lib/${PROJECT_ID}/tk-1`, () =>
+          HttpResponse.json({ error: 'toolkit discovery unavailable' }, { status: 503 }),
+        ),
+      );
+
+      const { findByTestId, getByText, queryByRole, queryByLabelText } = renderWithRouterAndProject(
+        <LoopToolSelect
+          yamlNode={YAML_NODE}
+          versionTools={[{ ...DYNAMIC_TOOLKIT, id: 'tk-1' }]}
+        />,
+        PROJECT_ID,
+      );
+
+      expect(await findByTestId('loop-tool-list-error')).toBeInTheDocument();
+      expect(getByText('Tool discovery is turned off on this deployment. Ask an administrator to enable it.')).toBeInTheDocument();
+      expect(queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(queryByLabelText('Tool')).not.toBeInTheDocument();
+    });
+
     it('shows no error, and no dropdown, when the read succeeds with no tools', async () => {
       server.use(http.post(DISCOVER, () => HttpResponse.json({ tools: [], total: 0 })));
 

@@ -80,6 +80,9 @@ import { useEdges } from '@xyflow/react';
 
 const isNotApplicationTool = (tool: PipelineToolEntry): boolean => tool.type !== 'application';
 
+/** Discovery turned off is the only reason the list is missing. A failed schema read still needs its retry. */
+const isOnlyDiscoveryDisabled = (discoveryDisabled: boolean, typeSchemasReadFailed: boolean): boolean => discoveryDisabled && !typeSchemasReadFailed;
+
 interface ToolNodeFunctionSelectProps {
   readonly options: readonly { readonly label: string; readonly value: string }[];
   readonly value: string;
@@ -87,6 +90,8 @@ interface ToolNodeFunctionSelectProps {
   readonly disabled: boolean;
   /** A read that feeds this picker failed — the tool catalogue, or the toolkit type schemas (#440). */
   readonly readFailed: boolean;
+  /** `readFailed` is only because this deployment turned tool discovery off: no retry. */
+  readonly discoveryDisabled: boolean;
   readonly onRetry: () => void;
 }
 
@@ -100,12 +105,13 @@ interface ToolNodeFunctionSelectProps {
  * picker, because the list on screen is real. Split out as its own component
  * to keep `ToolNode` under the §3.5 complexity budget.
  */
-function ToolNodeFunctionSelect({ options, value, onChange, disabled, readFailed, onRetry }: ToolNodeFunctionSelectProps): ReactNode {
+function ToolNodeFunctionSelect({ options, value, onChange, disabled, readFailed, discoveryDisabled, onRetry }: ToolNodeFunctionSelectProps): ReactNode {
   if (options.length === 0 && readFailed) {
     return (
       <ToolListError
         onRetry={onRetry}
         testId="tool-node-tool-list-error"
+        discoveryDisabled={discoveryDisabled}
       />
     );
   }
@@ -203,6 +209,7 @@ export const ToolNode = memo(function ToolNode(props: ToolNodeProps): ReactNode 
         onChange={handleSetTool}
         disabled={runningOrDisabled}
         readFailed={dynamicTools.isError || typeSchemasReadFailed}
+        discoveryDisabled={isOnlyDiscoveryDisabled(dynamicTools.isDiscoveryDisabled, typeSchemasReadFailed)}
         onRetry={onRetryToolList}
       />
       <StyledInputEnhancer

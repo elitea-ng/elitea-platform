@@ -345,6 +345,7 @@ export * from "./listConversationsHeaders.zod";
 export * from "./listConversationsParams.zod";
 export * from "./listEvalDatasetsParams.zod";
 export * from "./listEvalRunsParams.zod";
+export * from "./listFeedbacksParams.zod";
 export * from "./listMemoriesHeaders.zod";
 export * from "./listMemoriesParams.zod";
 export * from "./listMessageTracesHeaders.zod";
