@@ -218,18 +218,9 @@ func (s *ProjectVectorStore) ProjectHasVectorStore(ctx context.Context, query pr
 	if err != nil || !present {
 		return false, err
 	}
-	var has bool
-	// The schema name is built from an int64 id, never from caller input.
-	if err := query.QueryRow(ctx, fmt.Sprintf(`
-SELECT EXISTS (
-    SELECT 1 FROM p_%d.configuration
-    WHERE project_id = $1::integer
-      AND elitea_title = $2::text
-      AND type = 'pgvector'
-      AND section = 'vectorstorage'
-      AND source = 'system')`, projectID),
-		projectID, vectorstoreapp.DefaultProjectPgvectorTitle,
-	).Scan(&has); err != nil {
+	has, err := repos.ExistsCurrentProjectPgvectorConfiguration(
+		ctx, query, projectID, vectorstoreapp.DefaultProjectPgvectorTitle)
+	if err != nil {
 		return false, fmt.Errorf("read project vector-store configuration: %w", err)
 	}
 	return has, nil
@@ -241,10 +232,16 @@ SELECT EXISTS (
 //
 // It is idempotent (a missing database or role is a no-op). hadStore is whether
 // the project had a vector store before its removal (recorded in the cleanup
-// journal by the transaction that removed the project row). With hadStore false it returns a skip (database "") without
-// connecting to the PgVector server. With no public elitea-pgvector
-// configuration and hadStore true it is ErrProjectVectorStoreBootstrapMissing,
-// because the database exists and cannot be reached.
+// journal by the transaction that removed the project row).
+//
+// THE DROP IS ATTEMPTED WHATEVER hadStore SAYS, whenever a PgVector bootstrap is
+// configured. hadStore comes from the project's configuration row, and a
+// database can exist without one: a provisioning run that died between creating
+// the database and writing the row, or a row removed by hand. Trusting the probe
+// would leak that database for ever. hadStore decides only what the absence of a
+// bootstrap means: with no bootstrap and hadStore false there is nothing the
+// project could have used (a skip, database ""); with hadStore true the database
+// exists and cannot be reached (ErrProjectVectorStoreBootstrapMissing).
 func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (string, error) {
 	if s == nil {
 		return "", errors.New("project vector store is not configured")
@@ -252,20 +249,15 @@ func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, project
 	if projectID <= 0 {
 		return "", vectorstoreapp.ErrInvalidProjectPgvectorRequest
 	}
-	// A project that never had a vector store has no database to drop. Return
-	// before touching the PgVector server at all: connecting to it (and its admin
-	// credentials) to confirm an absence would make a delete of a project that
-	// never indexed depend on a server it does not use, and fail when that server
-	// is down.
-	if !hadStore {
-		return "", nil
-	}
 	database := pgvector.ProjectDatabaseName(projectID)
 	bootstrap, configured, err := s.resolveBootstrap(ctx)
 	if err != nil {
 		return database, err
 	}
 	if !configured {
+		if !hadStore {
+			return "", nil
+		}
 		return database, ErrProjectVectorStoreBootstrapMissing
 	}
 	databases, err := newCurrentProjectPgvectorDatabaseProvisioner(bootstrap)

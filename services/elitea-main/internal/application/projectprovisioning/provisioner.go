@@ -172,18 +172,23 @@ type ProjectVectorStore interface {
 	// DropProjectVectorStore irreversibly drops the project's PgVector database
 	// and login role (#1211). It is reached only from Deprovision's cleanup
 	// journal, after the project row is gone, never from the create-failure
-	// rollback. It is idempotent. hadStore is what the journal recorded: with
-	// hadStore false it returns "", nil without connecting anywhere; with
-	// hadStore true and no PgVector bootstrap configured the database cannot be
-	// dropped, which is an error. It returns the name of the database it was
+	// rollback. It is idempotent. It attempts the drop whenever a PgVector
+	// bootstrap is configured, whatever hadStore (the probe's answer, recorded in
+	// the journal) says, so a database with no configuration row is caught. Only
+	// the absence of a bootstrap depends on hadStore: false is a skip ("", nil),
+	// true means the database exists and cannot be reached, which is an error.
+	// It returns the name of the database it was
 	// asked to drop (also on failure, so the caller can name the leftover), or
 	// "" when there is nothing to drop.
 	DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (database string, err error)
 }
 
-// Querier is the read half of a pgx connection or transaction.
+// Querier is the read half of a pgx transaction, plus Begin, which on a
+// transaction opens a savepoint. A probe that has to install a tenant
+// search_path uses the savepoint to scope it. pgx.Tx satisfies it.
 type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // ProjectDefaultModelSeeder copies the platform default model into a new

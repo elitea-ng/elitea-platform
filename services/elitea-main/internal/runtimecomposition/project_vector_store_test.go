@@ -303,36 +303,49 @@ func (r projectVectorStoreRowStub) Scan(dest ...any) error {
 	return nil
 }
 
-// A project that never had a vector store has nothing to drop, so the drop
-// returns a skip without so much as reading the bootstrap, let alone connecting
-// to the PgVector server (#1211). The bootstrap here points at a port nothing
-// listens on and the finder would also fail: any attempt to use either fails
-// the case.
-func TestDropProjectVectorStoreSkipsWithoutConnectingWhenTheProjectNeverHadOne(t *testing.T) {
+// The drop reads the bootstrap whatever hadStore says, because a database can
+// exist without its configuration row (#1211). hadStore decides only what the
+// ABSENCE of a bootstrap means: with none configured, no recorded store is a
+// skip ("", nil), a recorded one is ErrProjectVectorStoreBootstrapMissing.
+func TestDropProjectVectorStoreAttemptsWhateverTheProbeSaid(t *testing.T) {
 	t.Parallel()
 
-	finder := &projectVectorStoreFinderStub{
-		found: true,
-		err:   errors.New("the bootstrap must not be read"),
-		data:  map[string]any{"connection_string": "postgres://admin:pw@127.0.0.1:1/postgres?connect_timeout=1"},
-	}
-	store := newProjectVectorStoreForTest(t, finder, &projectVectorStoreUnsecreterStub{}, true)
+	t.Run("a configured bootstrap is used even for an unrecorded store", func(t *testing.T) {
+		t.Parallel()
+		finder := &projectVectorStoreFinderStub{
+			found: true,
+			err:   errors.New("the bootstrap is read"),
+		}
+		store := newProjectVectorStoreForTest(t, finder, &projectVectorStoreUnsecreterStub{}, true)
 
-	database, err := store.DropProjectVectorStore(context.Background(), 7, false)
-	if err != nil || database != "" {
-		t.Fatalf("DropProjectVectorStore(hadStore=false) = (%q, %v), want a skip: (\"\", nil)", database, err)
-	}
-	if finder.calls != 0 {
-		t.Fatalf("the bootstrap was read %d times for a project with no vector store", finder.calls)
-	}
+		database, err := store.DropProjectVectorStore(context.Background(), 7, false)
+		if err == nil || database != "project_7" {
+			t.Fatalf("DropProjectVectorStore(hadStore=false) = (%q, %v), want project_7 and the bootstrap error", database, err)
+		}
+		if finder.calls != 1 {
+			t.Fatalf("the bootstrap was read %d times, want 1", finder.calls)
+		}
+	})
 
-	// The same call for a project that DID have one reaches for the bootstrap, so
-	// the skip above is the hadStore flag and not a store that cannot drop.
-	database, err = store.DropProjectVectorStore(context.Background(), 7, true)
-	if err == nil || database != "project_7" {
-		t.Fatalf("DropProjectVectorStore(hadStore=true) = (%q, %v), want project_7 and the bootstrap error", database, err)
-	}
-	if finder.calls != 1 {
-		t.Fatalf("finder calls = %d, want 1", finder.calls)
-	}
+	t.Run("no bootstrap: a skip when none was recorded", func(t *testing.T) {
+		t.Parallel()
+		finder := &projectVectorStoreFinderStub{found: false}
+		store := newProjectVectorStoreForTest(t, finder, &projectVectorStoreUnsecreterStub{}, true)
+
+		database, err := store.DropProjectVectorStore(context.Background(), 7, false)
+		if err != nil || database != "" {
+			t.Fatalf("DropProjectVectorStore(hadStore=false, no bootstrap) = (%q, %v), want a skip", database, err)
+		}
+	})
+
+	t.Run("no bootstrap: a recorded store is a leak", func(t *testing.T) {
+		t.Parallel()
+		finder := &projectVectorStoreFinderStub{found: false}
+		store := newProjectVectorStoreForTest(t, finder, &projectVectorStoreUnsecreterStub{}, true)
+
+		database, err := store.DropProjectVectorStore(context.Background(), 7, true)
+		if !errors.Is(err, ErrProjectVectorStoreBootstrapMissing) || database != "project_7" {
+			t.Fatalf("DropProjectVectorStore(hadStore=true, no bootstrap) = (%q, %v), want project_7 and ErrProjectVectorStoreBootstrapMissing", database, err)
+		}
+	})
 }
