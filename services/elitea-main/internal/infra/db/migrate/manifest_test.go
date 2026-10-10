@@ -661,7 +661,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// token was minted for (elitea_identity.callback_token_grant: provider,
 	// tool, project, invoking toolkit, source toolkits), read by the
 	// Inventory investigate source-tool gate on test_tool. No permission.
-	require.EqualValues(t, 159, Head(shared))
+	//
+	// 160: shared/0160_index_registry.sql, the index registry of the Rust
+	// indexing runtime (ADR-0031 V1, ADR-0030 decision 2):
+	// elitea_runtime.index_registry (state, history, counts, skips, embedding
+	// stamp, run fence, tombstone) and index_registry_documents (one
+	// document_key/version per indexed document). New tables only, nothing
+	// migrated from index_meta, no permission.
+	require.EqualValues(t, 160, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
