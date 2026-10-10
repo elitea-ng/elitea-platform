@@ -240,6 +240,13 @@ jobs:
       - name: The Inventory component renders, and its guards refuse
         run: bash deploy/helm/tests/render-inventory.sh
 
+      # ADR-0031: elitea-vector and its Qdrant. The identity elitea-main
+      # admits, the shared API-key Secret and the NetworkPolicies are three
+      # templates that must agree, and each disagreement fails closed at run
+      # time with every pod Ready.
+      - name: The elitea-vector component renders, and its guards refuse
+        run: bash deploy/helm/tests/render-vector.sh
+
       - name: The agent worker renders for both implementations
         run: |
           python3 -c 'import yaml' 2>/dev/null \
@@ -562,6 +569,8 @@ jobs:
             -f deploy/helm/elitea/values-standalone.yaml \
             --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' \
             --set-string 'llmGateway.egressPosture=public-unrestricted' \
+            --set vector.enabled=true \
+            --set-string vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
             > /tmp/elitea-main-standalone.yaml
           kubeconform -strict -summary -verbose \
             -kubernetes-version 1.30.0 \

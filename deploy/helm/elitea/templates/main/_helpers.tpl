@@ -1201,6 +1201,12 @@ ELITEA_RUNTIME_CONTENT_ADDRESS: {{ $listeners.contentAddress | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{- if .Values.vector.enabled }}
+{{/* ADR-0031: the client identities admitted to TokenIntrospectionService on
+     the control listener above — elitea-vector's client certificate, whose
+     one DNS SAN is vector.mtls.clientDnsName. */}}
+ELITEA_VECTOR_INTROSPECTION_CLIENTS: {{ include "elitea-vector.clientIdentity" . | quote }}
+{{- end }}
 {{- end -}}
 {{- end }}
 

@@ -110,6 +110,21 @@ through `RUNTIME_WORKER_SESSION_ID`, `RUNTIME_WORKER_PRODUCER_ID`,
 database restored from a backup that predates this row, or a worker brought
 up with `--no-deps` — but a normal `up` no longer needs it.
 
+### elitea-vector and Qdrant (ADR-0031)
+
+The stack runs a single-node Qdrant (`qdrant`, volume `standalone_qdrant_data`)
+and one `elitea-vector`, the only Qdrant client. Neither is published to the
+host. `elitea-vector` serves gRPC over mTLS on `elitea-vector:9470` and plain
+HTTP health on `:9471`. It verifies each caller's project-bound token through
+elitea-main's control listener (`elitea-main:9443`), which admits it as
+`dns:elitea-vector` (`ELITEA_VECTOR_INTROSPECTION_CLIENTS`).
+
+`standalone-stack.sh certs` runs `deploy/scripts/gen-vector-certs.sh` after the
+runtime script. It writes `deploy/certs/vector/`: `vector.{crt,key}` (one DNS
+SAN, `elitea-vector`, server and client use, signed by the runtime CA), a copy
+of `runtime-ca.crt`, and `qdrant-api-key`. It re-issues the certificate when the
+runtime CA rotates, and never rotates the runtime tree itself.
+
 ### DeepWiki and Inventory — canned data, or the real engines
 
 Both sub-applications run their Go host (`elitea-subapp-host`) reaching an

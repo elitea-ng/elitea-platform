@@ -1,0 +1,171 @@
+{{- if .Values.vector.enabled }}
+{{- include "elitea-vector.validateGuards" . -}}
+{{- $external := eq (.Values.vector.qdrant.mode | toString) "external" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "elitea-vector.fullname" . }}
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.vector.autoscaling.enabled }}
+  replicas: {{ .Values.vector.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "elitea-vector.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "elitea-vector.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.vector.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "elitea-vector.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.vector.terminationGracePeriodSeconds }}
+      {{- include "elitea.imagePullSecrets" (dict "local" .Values.vector.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
+      containers:
+        - name: elitea-vector
+          image: "{{ .Values.vector.image.repository }}:{{ .Values.vector.image.tag | default .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.vector.image.pullPolicy }}
+          {{- with .Values.vector.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.vector.service.port }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.vector.healthPort }}
+              protocol: TCP
+          env:
+            {{- range $key, $value := (.Values.vector.env | default dict) }}
+            {{- if not (hasPrefix "ELITEA_VECTOR_" $key) }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            - name: ELITEA_VECTOR_GRPC_ADDR
+              value: {{ printf "0.0.0.0:%v" .Values.vector.service.port | quote }}
+            - name: ELITEA_VECTOR_HEALTH_ADDR
+              value: {{ printf "0.0.0.0:%v" .Values.vector.healthPort | quote }}
+            # The listener: the server certificate, and the runtime CA that
+            # signed every caller (the workers' agent-worker-client, and
+            # elitea-main's administrator identity).
+            - name: ELITEA_VECTOR_TLS_CERT_FILE
+              value: {{ .Values.vector.mtls.mountPath }}/tls.crt
+            - name: ELITEA_VECTOR_TLS_KEY_FILE
+              value: {{ .Values.vector.mtls.mountPath }}/tls.key
+            - name: ELITEA_VECTOR_TLS_CLIENT_CA_FILE
+              value: {{ .Values.vector.mtls.mountPath }}/ca.crt
+            # The client hop to elitea-main: one DNS SAN, admitted there as
+            # {{ include "elitea-vector.clientIdentity" . }}.
+            - name: ELITEA_VECTOR_CLIENT_CERT_FILE
+              value: {{ .Values.vector.mtls.clientMountPath }}/tls.crt
+            - name: ELITEA_VECTOR_CLIENT_KEY_FILE
+              value: {{ .Values.vector.mtls.clientMountPath }}/tls.key
+            - name: ELITEA_VECTOR_ADMIN_IDENTITIES
+              value: {{ join "," (.Values.vector.adminIdentities | default list) | quote }}
+            - name: ELITEA_VECTOR_INTROSPECTION_URL
+              value: {{ include "elitea-vector.introspectionUrl" . | quote }}
+            - name: ELITEA_VECTOR_INTROSPECTION_CA_FILE
+              value: {{ .Values.vector.mtls.clientMountPath }}/ca.crt
+            {{- with .Values.vector.introspection.serverName }}
+            - name: ELITEA_VECTOR_INTROSPECTION_SERVER_NAME
+              value: {{ . | quote }}
+            {{- end }}
+            - name: ELITEA_VECTOR_INTROSPECTION_TIMEOUT_MS
+              value: {{ .Values.vector.introspection.timeoutMs | toString | quote }}
+            - name: ELITEA_VECTOR_QDRANT_URL
+              value: {{ include "elitea-vector.qdrantUrl" . | quote }}
+            - name: ELITEA_VECTOR_QDRANT_API_KEY_FILE
+              value: /etc/elitea-vector/qdrant/api-key
+            - name: ELITEA_VECTOR_COLLECTION_REPLICATION_FACTOR
+              value: {{ .Values.vector.collection.replicationFactor | toString | quote }}
+            - name: ELITEA_VECTOR_COLLECTION_SHARD_NUMBER
+              value: {{ .Values.vector.collection.shardNumber | toString | quote }}
+            {{- if and $external .Values.vector.qdrant.external.caSecretName }}
+            # qdrant-client trusts the native roots only; rustls-native-certs
+            # reads SSL_CERT_FILE, which then is the only trusted root.
+            - name: SSL_CERT_FILE
+              value: /etc/elitea-vector/qdrant-ca/ca.crt
+            {{- end }}
+          # The health listener is plain HTTP, so a kubelet probe can use it;
+          # the gRPC listener requires a client certificate.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - name: server-tls
+              mountPath: {{ .Values.vector.mtls.mountPath }}
+              readOnly: true
+            - name: client-tls
+              mountPath: {{ .Values.vector.mtls.clientMountPath }}
+              readOnly: true
+            - name: qdrant-api-key
+              mountPath: /etc/elitea-vector/qdrant
+              readOnly: true
+            {{- if and $external .Values.vector.qdrant.external.caSecretName }}
+            - name: qdrant-ca
+              mountPath: /etc/elitea-vector/qdrant-ca
+              readOnly: true
+            {{- end }}
+          {{- with .Values.vector.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: server-tls
+          secret:
+            secretName: {{ .Values.vector.mtls.serverSecretName }}
+            defaultMode: 0440
+        - name: client-tls
+          secret:
+            secretName: {{ .Values.vector.mtls.clientSecretName }}
+            defaultMode: 0440
+        - name: qdrant-api-key
+          secret:
+            secretName: {{ .Values.vector.qdrant.apiKeySecret.name }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.vector.qdrant.apiKeySecret.key }}
+                path: api-key
+        {{- if and $external .Values.vector.qdrant.external.caSecretName }}
+        - name: qdrant-ca
+          secret:
+            secretName: {{ .Values.vector.qdrant.external.caSecretName }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
+      {{- with .Values.vector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.vector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.vector.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

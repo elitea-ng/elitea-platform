@@ -1,0 +1,72 @@
+{{- if and .Values.vector.enabled .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+# Ingress to elitea-vector: the agent worker pods (token callers) and
+# elitea-main (the administrator identity) on the gRPC port. The health port
+# admits only networkPolicies.probeFrom.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-vector.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-vector.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: {{ .Values.vector.service.port }}
+          protocol: TCP
+      from:
+        {{- if .Values.worker.enabled }}
+        {{- include "elitea.netpol.workerPeer" . | nindent 8 }}
+        {{- end }}
+        {{- include "elitea.netpol.mainPeer" . | nindent 8 }}
+    {{- with $np.probeFrom }}
+    - ports:
+        - port: {{ $.Values.vector.healthPort }}
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- if eq (.Values.vector.qdrant.mode | toString) "internal" }}
+---
+# Ingress to Qdrant: elitea-vector on gRPC, and the Qdrant pods to each other
+# on the peer port. Nothing else reaches the store, which is the layer that
+# backs the API key.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-vector.qdrantName" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-vector.qdrantLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-vector.qdrantSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 6334
+          protocol: TCP
+      from:
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-vector.selectorLabels" .)) | nindent 8 }}
+    - ports:
+        - port: 6335
+          protocol: TCP
+      from:
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-vector.qdrantSelectorLabels" .)) | nindent 8 }}
+    {{- with $np.probeFrom }}
+    - ports:
+        - port: 6333
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- end }}
+{{- end }}
