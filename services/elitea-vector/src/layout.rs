@@ -201,9 +201,15 @@ pub fn generation(value: &str) -> Result<Option<&str>, Status> {
 /// caller's argument, and without the project a caller in project B that
 /// names project A's namespace would compute A's point ids and overwrite A's
 /// points. With it, ids of two projects never collide.
+///
+/// The source is part of the name for the same reason one level down: a
+/// token is admitted for its own sources only, and without the source a
+/// `deepwiki` writer naming a toolkit index's namespace id would compute that
+/// index's point ids and overwrite its points.
 #[must_use]
 pub fn point_id(
     project_id: i64,
+    source: &str,
     namespace: Uuid,
     generation: Option<&str>,
     document_key: &str,
@@ -211,7 +217,7 @@ pub fn point_id(
 ) -> Uuid {
     let generation = generation.unwrap_or("");
     let name = format!(
-        "{project_id}\u{1f}{}:{generation}{}:{document_key}{}:{chunk_id}",
+        "{project_id}\u{1f}{source}\u{1f}{}:{generation}{}:{document_key}{}:{chunk_id}",
         generation.len(),
         document_key.len(),
         chunk_id.len(),
@@ -262,14 +268,16 @@ mod tests {
     #[test]
     fn point_ids_are_stable_and_project_bound() {
         let namespace = Uuid::from_u128(7);
-        let a = point_id(1, namespace, Some("g"), "doc", "0");
-        assert_eq!(a, point_id(1, namespace, Some("g"), "doc", "0"));
-        assert_ne!(a, point_id(2, namespace, Some("g"), "doc", "0"));
-        assert_ne!(a, point_id(1, namespace, None, "doc", "0"));
+        let t = "toolkit_index";
+        let a = point_id(1, t, namespace, Some("g"), "doc", "0");
+        assert_eq!(a, point_id(1, t, namespace, Some("g"), "doc", "0"));
+        assert_ne!(a, point_id(2, t, namespace, Some("g"), "doc", "0"));
+        assert_ne!(a, point_id(1, "deepwiki", namespace, Some("g"), "doc", "0"));
+        assert_ne!(a, point_id(1, t, namespace, None, "doc", "0"));
         // Length prefixes keep the parts apart.
         assert_ne!(
-            point_id(1, namespace, None, "ab", "c"),
-            point_id(1, namespace, None, "a", "bc")
+            point_id(1, t, namespace, None, "ab", "c"),
+            point_id(1, t, namespace, None, "a", "bc")
         );
     }
 

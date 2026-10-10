@@ -28,9 +28,10 @@ syntax = "proto3";
 // named `emb_<model_slug>_<dimension>`. Points carry the payload keys
 // `project_id`, `source`, `namespace_id`, `generation` (optional),
 // `document_key`, `document_version`, `parent_id`, `chunk_id`, `chunk_type`,
-// `acl`, `text` and `metadata`. A point id is UUIDv5 of
-// (namespace_id, generation, document_key, chunk_id), so writes are
-// idempotent.
+// `acl`, `text` and `metadata`. A point id is UUIDv5, under namespace_id, of
+// (project_id, source, generation, document_key, chunk_id), so writes are
+// idempotent and never overwrite another project's or another source's
+// points.
 
 package elitea.vector.v1;
 

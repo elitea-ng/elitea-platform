@@ -4,8 +4,11 @@
 //!
 //! * **Token.** `authorization: Bearer <token>` metadata. elitea-main
 //!   verifies the token ([`Introspector`]); the answer is cached until the
-//!   token expires, and never longer than the configured maximum. The token's
-//!   project is the request's project.
+//!   token expires, and never longer than the configured maximum (shorter
+//!   still for a worker claim token, whose revocation its expiry does not
+//!   show). The token's project is the request's project, and the token's
+//!   sources are the only sources the request may name
+//!   ([`Caller::require_source`]).
 //! * **Administrator.** No token, and a client certificate whose identity
 //!   ([`crate::identity`]) is in the administrator list (elitea-main). This
 //!   caller names the project in the request.
@@ -41,6 +44,18 @@ pub struct TokenGrant {
     pub kind: pb::TokenKind,
     /// Expiry, in seconds since the Unix epoch.
     pub expires_at_unix: i64,
+    /// The sources the token may read and write; never empty. A worker claim
+    /// token names `ToolkitIndex`; a callback token names the source of the
+    /// provider that minted it.
+    pub sources: Vec<pb::Source>,
+}
+
+impl TokenGrant {
+    /// Whether the token may use `source`.
+    #[must_use]
+    pub fn allows(&self, source: pb::Source) -> bool {
+        source != pb::Source::Unspecified && self.sources.contains(&source)
+    }
 }
 
 /// An admitted caller.
@@ -95,6 +110,40 @@ impl Caller {
                 "this operation requires a project token",
             )),
         }
+    }
+
+    /// Refuses a token caller whose token may not use `source` (the raw wire
+    /// value of a namespace or scope). An administrator may use every
+    /// source. An unset or unknown source is left to the request's own
+    /// validation, which refuses it.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a token not admitted for `source`.
+    pub fn require_source(&self, source: i32) -> Result<(), Status> {
+        let Self::Token(grant) = self else {
+            return Ok(());
+        };
+        match pb::Source::try_from(source) {
+            Ok(pb::Source::Unspecified) | Err(_) => Ok(()),
+            Ok(source) if grant.allows(source) => Ok(()),
+            Ok(_) => Err(Status::permission_denied(
+                "the token may not use this source",
+            )),
+        }
+    }
+
+    /// The sources of `requested` this caller may use: all of them for an
+    /// administrator, the token's own for a token.
+    #[must_use]
+    pub fn permitted_sources(&self, requested: &[pb::Source]) -> Vec<pb::Source> {
+        requested
+            .iter()
+            .copied()
+            .filter(|source| match self {
+                Self::Admin(_) => true,
+                Self::Token(grant) => grant.allows(*source),
+            })
+            .collect()
     }
 
     /// Refuses a token caller: the operation is for administrators.
@@ -188,11 +237,28 @@ pub fn grant_from_response(response: &pb::IntrospectTokenResponse, now: i64) -> 
     {
         return None;
     }
+    // No source, or one this build cannot name, admits nothing: a token is
+    // never widened to "every source" by an answer it cannot read.
+    let mut sources = Vec::with_capacity(response.allowed_sources.len());
+    for raw in &response.allowed_sources {
+        match pb::Source::try_from(*raw) {
+            Ok(pb::Source::Unspecified) | Err(_) => return None,
+            Ok(source) => {
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
+        }
+    }
+    if sources.is_empty() {
+        return None;
+    }
     Some(TokenGrant {
         project_id: response.project_id,
         principal: response.principal.clone(),
         kind,
         expires_at_unix: response.expires_at_unix,
+        sources,
     })
 }
 
@@ -207,6 +273,11 @@ struct CacheEntry {
 pub struct CachePolicy {
     /// The longest an admitted answer is kept, whatever the token's expiry.
     pub max_ttl_seconds: i64,
+    /// The longest an admitted worker claim token is kept. A claim token is
+    /// revoked by its claim settling, being cancelled or being lost, which
+    /// its expiry does not show, so this bounds how long a revoked one still
+    /// works here. It never exceeds `max_ttl_seconds`.
+    pub worker_claim_max_ttl_seconds: i64,
     /// How long a refusal is kept.
     pub negative_ttl_seconds: i64,
     /// The most entries kept; a full cache drops its expired entries, then
@@ -218,6 +289,7 @@ impl Default for CachePolicy {
     fn default() -> Self {
         Self {
             max_ttl_seconds: 300,
+            worker_claim_max_ttl_seconds: 30,
             negative_ttl_seconds: 10,
             max_entries: 10_000,
         }
@@ -257,9 +329,16 @@ impl CachingIntrospector {
 
     fn store(&self, digest: [u8; 32], grant: Option<TokenGrant>, now: i64) {
         let valid_until = match &grant {
-            Some(grant) => grant
-                .expires_at_unix
-                .min(now.saturating_add(self.policy.max_ttl_seconds)),
+            Some(grant) => {
+                let ttl = if grant.kind == pb::TokenKind::WorkerClaim {
+                    self.policy
+                        .worker_claim_max_ttl_seconds
+                        .min(self.policy.max_ttl_seconds)
+                } else {
+                    self.policy.max_ttl_seconds
+                };
+                grant.expires_at_unix.min(now.saturating_add(ttl))
+            }
             None => now.saturating_add(self.policy.negative_ttl_seconds),
         };
         let Ok(mut entries) = self.entries.lock() else {
@@ -393,7 +472,69 @@ mod tests {
             principal: "user:1".to_owned(),
             kind: pb::TokenKind::EngineCallback,
             expires_at_unix,
+            sources: vec![pb::Source::Deepwiki],
         }
+    }
+
+    fn claim_grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
+        TokenGrant {
+            kind: pb::TokenKind::WorkerClaim,
+            sources: vec![pb::Source::ToolkitIndex],
+            ..grant(project_id, expires_at_unix)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_worker_claim_token_is_cached_for_less_time() {
+        let inner = Arc::new(Counting {
+            calls: AtomicUsize::new(0),
+            answer: Some(claim_grant(7, 100_000)),
+        });
+        let now = Arc::new(AtomicI64::new(1_000));
+        let cache = CachingIntrospector::new(inner.clone(), CachePolicy::default(), clock(&now));
+        cache.introspect("t").await.expect("ok");
+        now.store(1_029, Ordering::SeqCst);
+        cache.introspect("t").await.expect("ok");
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+        // Past the worker claim cap (30 s), well inside the general one.
+        now.store(1_030, Ordering::SeqCst);
+        cache.introspect("t").await.expect("ok");
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_token_caller_may_use_only_its_sources() {
+        let worker = Caller::Token(claim_grant(7, i64::MAX));
+        assert!(
+            worker
+                .require_source(pb::Source::ToolkitIndex as i32)
+                .is_ok()
+        );
+        for denied in [pb::Source::Deepwiki, pb::Source::Inventory] {
+            assert_eq!(
+                worker
+                    .require_source(denied as i32)
+                    .expect_err("denied")
+                    .code(),
+                tonic::Code::PermissionDenied
+            );
+        }
+        let callback = Caller::Token(grant(7, i64::MAX));
+        assert!(callback.require_source(pb::Source::Deepwiki as i32).is_ok());
+        assert!(
+            callback
+                .require_source(pb::Source::ToolkitIndex as i32)
+                .is_err()
+        );
+        let admin = Caller::Admin("dns:elitea-main".to_owned());
+        assert!(admin.require_source(pb::Source::Deepwiki as i32).is_ok());
+        let all = [pb::Source::ToolkitIndex, pb::Source::Deepwiki];
+        assert_eq!(
+            worker.permitted_sources(&all),
+            vec![pb::Source::ToolkitIndex]
+        );
+        assert_eq!(callback.permitted_sources(&all), vec![pb::Source::Deepwiki]);
+        assert_eq!(admin.permitted_sources(&all), all.to_vec());
     }
 
     fn clock(now: &Arc<AtomicI64>) -> Clock {
@@ -500,8 +641,12 @@ mod tests {
             principal: "user:1".to_owned(),
             kind: pb::TokenKind::EngineCallback as i32,
             expires_at_unix: 2_000,
+            allowed_sources: vec![pb::Source::Deepwiki as i32],
         };
-        assert!(grant_from_response(&good, 1_000).is_some());
+        assert_eq!(
+            grant_from_response(&good, 1_000).expect("good").sources,
+            vec![pb::Source::Deepwiki]
+        );
         for bad in [
             pb::IntrospectTokenResponse {
                 active: false,
@@ -521,6 +666,20 @@ mod tests {
             },
             pb::IntrospectTokenResponse {
                 principal: String::new(),
+                ..good.clone()
+            },
+            // No source is not every source.
+            pb::IntrospectTokenResponse {
+                allowed_sources: Vec::new(),
+                ..good.clone()
+            },
+            pb::IntrospectTokenResponse {
+                allowed_sources: vec![pb::Source::Unspecified as i32],
+                ..good.clone()
+            },
+            // A source this build cannot name.
+            pb::IntrospectTokenResponse {
+                allowed_sources: vec![pb::Source::Deepwiki as i32, 99],
                 ..good.clone()
             },
         ] {

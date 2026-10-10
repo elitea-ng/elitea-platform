@@ -13,7 +13,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -38,6 +38,8 @@ const TOKEN_A: &str = "token-a";
 const TOKEN_B: &str = "token-b";
 const TOKEN_EXPIRED: &str = "token-expired";
 const TOKEN_SHORT: &str = "token-short";
+/// Project A's `DeepWiki` callback token (source `deepwiki` only).
+const TOKEN_A_WIKI: &str = "token-a-wiki";
 const NAMESPACE_A: &str = "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b";
 const NAMESPACE_B: &str = "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f";
 const DIMENSION: u32 = 4;
@@ -110,12 +112,23 @@ impl Introspector for Tokens {
     }
 }
 
+/// A worker claim token: the toolkit index writer and reader.
 fn grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
     TokenGrant {
         project_id,
         principal: format!("user:{project_id}"),
-        kind: pb::TokenKind::EngineCallback,
+        kind: pb::TokenKind::WorkerClaim,
         expires_at_unix,
+        sources: vec![pb::Source::ToolkitIndex],
+    }
+}
+
+/// A `DeepWiki` engine callback token: the wiki writer and reader.
+fn wiki_grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
+    TokenGrant {
+        kind: pb::TokenKind::EngineCallback,
+        sources: vec![pb::Source::Deepwiki],
+        ..grant(project_id, expires_at_unix)
     }
 }
 
@@ -126,6 +139,7 @@ fn oracle() -> Arc<dyn Introspector> {
         (TOKEN_B.to_owned(), grant(PROJECT_B, now + 3600)),
         (TOKEN_EXPIRED.to_owned(), grant(PROJECT_A, now - 1)),
         (TOKEN_SHORT.to_owned(), grant(PROJECT_A, now + 3)),
+        (TOKEN_A_WIKI.to_owned(), wiki_grant(PROJECT_A, now + 3600)),
     ]));
     Arc::new(CachingIntrospector::new(
         Arc::new(tokens),
@@ -208,10 +222,16 @@ async fn client(
 }
 
 async fn harness() -> Option<Harness> {
+    harness_with(oracle).await
+}
+
+/// `introspector` is built after the serial lock is taken, so expiries it
+/// computes from the clock do not age while the test waits its turn.
+async fn harness_with(introspector: impl FnOnce() -> Arc<dyn Introspector>) -> Option<Harness> {
     let url = qdrant_url()?;
     let serial = SERIAL.lock().await;
     let pki = pki();
-    let address = serve(&url, oracle(), &pki).await;
+    let address = serve(&url, introspector(), &pki).await;
     Some(Harness {
         _serial: serial,
         slug: unique_slug("iso"),
@@ -936,6 +956,327 @@ async fn generations_publish_atomically_and_clean_up_lazily() {
         h.search(TOKEN_A, read("g2"), None).await.expect("g2").len(),
         1
     );
+}
+
+// ── sources ─────────────────────────────────────────────────────────────────
+
+fn wiki_namespace(namespace_id: &str) -> pb::Namespace {
+    pb::Namespace {
+        source: pb::Source::Deepwiki as i32,
+        ..Harness::namespace(namespace_id)
+    }
+}
+
+fn wiki_scope(namespaces: &[&str]) -> pb::Scope {
+    pb::Scope {
+        source: pb::Source::Deepwiki as i32,
+        ..Harness::scope(namespaces)
+    }
+}
+
+impl Harness {
+    /// The points of `project` and `source`, read from Qdrant directly.
+    async fn truth_of(&self, project: i64, source: &str) -> u64 {
+        let filter = qdrant_client::qdrant::Filter::must([
+            qdrant_client::qdrant::Condition::matches("project_id", project.to_string()),
+            qdrant_client::qdrant::Condition::matches("source", source.to_owned()),
+        ]);
+        self.qdrant
+            .count(
+                qdrant_client::qdrant::CountPointsBuilder::new(format!(
+                    "emb_{}_{DIMENSION}",
+                    self.slug
+                ))
+                .filter(filter)
+                .exact(true),
+            )
+            .await
+            .expect("count")
+            .result
+            .map_or(0, |result| result.count)
+    }
+
+    /// Project A's worker writes a toolkit index and A's `DeepWiki` engine
+    /// writes a wiki, under the SAME namespace id.
+    async fn seed_both_sources(&mut self) {
+        let points = || {
+            vec![
+                Self::point("doc-1", "alpha shared secret", [1.0, 0.0, 0.0, 0.0]),
+                Self::point("doc-2", "alpha other words", [0.0, 1.0, 0.0, 0.0]),
+            ]
+        };
+        self.upsert(TOKEN_A, 0, Self::namespace(NAMESPACE_A), points())
+            .await
+            .expect("toolkit index upsert");
+        self.upsert(TOKEN_A_WIKI, 0, wiki_namespace(NAMESPACE_A), points())
+            .await
+            .expect("wiki upsert");
+        assert_eq!(self.truth_of(PROJECT_A, "toolkit_index").await, 2);
+        assert_eq!(self.truth_of(PROJECT_A, "deepwiki").await, 2);
+    }
+
+    /// Every way `token` can name `namespace`'s source is refused with
+    /// `PERMISSION_DENIED`: write, search, hybrid search, count, delete and
+    /// listing that one source.
+    async fn assert_source_refused(
+        &mut self,
+        token: &str,
+        namespace: pb::Namespace,
+        scope: pb::Scope,
+    ) {
+        let mut statuses = vec![
+            (
+                "upsert",
+                self.upsert(
+                    token,
+                    0,
+                    namespace.clone(),
+                    vec![Self::point("doc-1", "overwrite", [0.0, 0.0, 1.0, 0.0])],
+                )
+                .await
+                .expect_err("upsert"),
+            ),
+            (
+                "search",
+                self.search(token, scope.clone(), None)
+                    .await
+                    .expect_err("search"),
+            ),
+        ];
+        statuses.push((
+            "hybrid",
+            self.worker
+                .hybrid_search(with_token(
+                    token,
+                    pb::HybridSearchRequest {
+                        scope: Some(scope.clone()),
+                        space: Some(self.space()),
+                        vector: vec![1.0, 0.0, 0.0, 0.0],
+                        text: "alpha".to_owned(),
+                        limit: 10,
+                        ..pb::HybridSearchRequest::default()
+                    },
+                ))
+                .await
+                .expect_err("hybrid"),
+        ));
+        statuses.push((
+            "count",
+            self.worker
+                .count(with_token(
+                    token,
+                    pb::CountRequest {
+                        scope: Some(scope.clone()),
+                        ..pb::CountRequest::default()
+                    },
+                ))
+                .await
+                .expect_err("count"),
+        ));
+        statuses.push((
+            "delete",
+            self.worker
+                .delete(with_token(
+                    token,
+                    pb::DeleteRequest {
+                        project_id: 0,
+                        space: None,
+                        namespace: Some(namespace.clone()),
+                        selector: Some(pb::delete_request::Selector::WholeNamespace(
+                            pb::WholeNamespace {},
+                        )),
+                    },
+                ))
+                .await
+                .expect_err("delete"),
+        ));
+        statuses.push((
+            "list",
+            self.worker
+                .list_indexes(with_token(
+                    token,
+                    pb::ListIndexesRequest {
+                        project_id: 0,
+                        source: namespace.source,
+                    },
+                ))
+                .await
+                .expect_err("list"),
+        ));
+        for (operation, status) in statuses {
+            assert_eq!(status.code(), Code::PermissionDenied, "{operation}");
+        }
+    }
+
+    /// The sources `token` sees listed in this test's collection.
+    async fn listed_sources(&mut self, token: &str) -> Vec<i32> {
+        let indexes = self
+            .worker
+            .list_indexes(with_token(token, pb::ListIndexesRequest::default()))
+            .await
+            .expect("list")
+            .into_inner()
+            .indexes;
+        let suffix = format!("{}_{DIMENSION}", self.slug);
+        indexes
+            .into_iter()
+            .filter(|index| index.collection.ends_with(&suffix))
+            .map(|index| index.source)
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn a_worker_token_cannot_touch_deepwiki_points() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_both_sources().await;
+
+    // Same project, same namespace id: only the source differs.
+    h.assert_source_refused(
+        TOKEN_A,
+        wiki_namespace(NAMESPACE_A),
+        wiki_scope(&[NAMESPACE_A]),
+    )
+    .await;
+    assert_eq!(h.truth_of(PROJECT_A, "deepwiki").await, 2);
+
+    // Its own source still works, and lists no wiki.
+    let points = h
+        .search(TOKEN_A, Harness::scope(&[NAMESPACE_A]), None)
+        .await
+        .expect("own source");
+    assert_eq!(points.len(), 2);
+    assert!(
+        points
+            .iter()
+            .all(|point| point.source == pb::Source::ToolkitIndex as i32)
+    );
+    assert_eq!(
+        h.listed_sources(TOKEN_A).await,
+        vec![pb::Source::ToolkitIndex as i32]
+    );
+}
+
+#[tokio::test]
+async fn a_callback_token_cannot_touch_toolkit_index_points() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_both_sources().await;
+
+    h.assert_source_refused(
+        TOKEN_A_WIKI,
+        Harness::namespace(NAMESPACE_A),
+        Harness::scope(&[NAMESPACE_A]),
+    )
+    .await;
+    assert_eq!(h.truth_of(PROJECT_A, "toolkit_index").await, 2);
+
+    let points = h
+        .search(TOKEN_A_WIKI, wiki_scope(&[NAMESPACE_A]), None)
+        .await
+        .expect("own source");
+    assert_eq!(points.len(), 2);
+    assert!(
+        points
+            .iter()
+            .all(|point| point.source == pb::Source::Deepwiki as i32)
+    );
+    assert_eq!(
+        h.listed_sources(TOKEN_A_WIKI).await,
+        vec![pb::Source::Deepwiki as i32]
+    );
+}
+
+// ── revocation ──────────────────────────────────────────────────────────────
+
+/// elitea-main's introspection over live claims: a token is active until its
+/// execution settles.
+struct LiveClaims(std::sync::Mutex<HashMap<String, TokenGrant>>);
+
+#[async_trait]
+impl Introspector for LiveClaims {
+    async fn introspect(&self, token: &str) -> Result<Option<TokenGrant>, IntrospectError> {
+        Ok(self.0.lock().expect("claims").get(token).cloned())
+    }
+}
+
+#[tokio::test]
+async fn a_token_for_a_settled_execution_is_refused() {
+    const TOKEN_CLAIM: &str = "token-claim";
+    let _ = require_qdrant!();
+    let start = unix_now();
+    let claims = Arc::new(LiveClaims(std::sync::Mutex::new(HashMap::from([(
+        TOKEN_CLAIM.to_owned(),
+        grant(PROJECT_A, start + 3600),
+    )]))));
+    let now = Arc::new(AtomicI64::new(start));
+    let clock = {
+        let now = Arc::clone(&now);
+        Arc::new(move || now.load(Ordering::SeqCst))
+    };
+    let policy = CachePolicy::default();
+    let introspector = Arc::new(CachingIntrospector::new(
+        Arc::clone(&claims) as Arc<dyn Introspector>,
+        policy,
+        clock,
+    ));
+    let mut h = harness_with(move || introspector as Arc<dyn Introspector>)
+        .await
+        .expect("harness");
+
+    h.upsert(
+        TOKEN_CLAIM,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point(
+            "doc-1",
+            "alpha shared secret",
+            [1.0, 0.0, 0.0, 0.0],
+        )],
+    )
+    .await
+    .expect("live claim writes");
+    assert_eq!(h.truth(PROJECT_A).await, 1);
+
+    // The execution settles: elitea-main now answers the token inactive. The
+    // token is still an hour from its expiry, so only the worker-claim cache
+    // cap stands between the settle and the refusal.
+    claims.0.lock().expect("claims").remove(TOKEN_CLAIM);
+    now.fetch_add(policy.worker_claim_max_ttl_seconds, Ordering::SeqCst);
+
+    let status = h
+        .upsert(
+            TOKEN_CLAIM,
+            0,
+            Harness::namespace(NAMESPACE_A),
+            vec![Harness::point("doc-2", "late write", [0.0, 1.0, 0.0, 0.0])],
+        )
+        .await
+        .expect_err("settled upsert");
+    assert_eq!(status.code(), Code::Unauthenticated);
+    let status = h
+        .search(TOKEN_CLAIM, Harness::scope(&[NAMESPACE_A]), None)
+        .await
+        .expect_err("settled search");
+    assert_eq!(status.code(), Code::Unauthenticated);
+    let status = h
+        .worker
+        .delete(with_token(
+            TOKEN_CLAIM,
+            pb::DeleteRequest {
+                project_id: 0,
+                space: None,
+                namespace: Some(Harness::namespace(NAMESPACE_A)),
+                selector: Some(pb::delete_request::Selector::WholeNamespace(
+                    pb::WholeNamespace {},
+                )),
+            },
+        ))
+        .await
+        .expect_err("settled delete");
+    assert_eq!(status.code(), Code::Unauthenticated);
+    assert_eq!(h.truth(PROJECT_A).await, 1, "nothing written or deleted");
 }
 
 // ── elitea-main unreachable ─────────────────────────────────────────────────

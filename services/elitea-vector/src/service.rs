@@ -4,7 +4,8 @@
 //!
 //! 1. admit the caller ([`Authenticator::authenticate`]);
 //! 2. resolve the project from the caller, never from the request alone
-//!    ([`Caller::project`]);
+//!    ([`Caller::project`]), and refuse a source the caller's token is not
+//!    admitted for ([`Caller::require_source`]);
 //! 3. validate the request's shape (space, dimension, namespace, filter);
 //! 4. send Qdrant a filter whose first `must` condition is that project
 //!    ([`Scope`]).
@@ -91,6 +92,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             .namespace
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
+        caller.require_source(namespace.source)?;
         let target = UpsertTarget {
             project_id,
             source: layout::source_keyword(namespace.source)?,
@@ -148,6 +150,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             .namespace
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
+        caller.require_source(namespace.source)?;
         let source = layout::source_keyword(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
         let scope = Scope::project(project_id)
@@ -316,6 +319,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("scope is required"))?;
         let project_id = caller.project(read.project_id)?;
+        caller.require_source(read.source)?;
         let scope = scope::read_scope(project_id, read, false)?;
         let narrowing = scope::translate(request.filter.as_ref())?;
         let space = request
@@ -348,9 +352,15 @@ impl pb::vector_service_server::VectorService for VectorService {
         let caller = self.auth.authenticate(&request).await?;
         let request = request.into_inner();
         let project_id = caller.project(request.project_id)?;
+        // An unset source lists every served source the caller may use.
         let sources: Vec<&'static str> = if request.source == pb::Source::Unspecified as i32 {
-            vec!["toolkit_index", "deepwiki"]
+            caller
+                .permitted_sources(&[pb::Source::ToolkitIndex, pb::Source::Deepwiki])
+                .into_iter()
+                .map(|source| layout::source_keyword(source as i32))
+                .collect::<Result<_, _>>()?
         } else {
+            caller.require_source(request.source)?;
             vec![layout::source_keyword(request.source)?]
         };
         let mut indexes = Vec::new();
@@ -479,6 +489,7 @@ impl UpsertTarget {
         }
         let id = layout::point_id(
             self.project_id,
+            self.source,
             self.namespace,
             self.generation.as_deref(),
             &point.document_key,
@@ -511,6 +522,7 @@ fn read_parts(
 ) -> Result<(qdrant_client::qdrant::Filter, Space), Status> {
     let read = read.ok_or_else(|| Status::invalid_argument("scope is required"))?;
     let project_id = caller.project(read.project_id)?;
+    caller.require_source(read.source)?;
     let scope = scope::read_scope(project_id, read, true)?;
     let narrowing = scope::translate(filter)?;
     let space = Space::from_proto(space)?;
