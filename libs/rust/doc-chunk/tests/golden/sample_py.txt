@@ -1,4 +1,4 @@
 1 code load [python] 107c 25t | def load(path):
 2 code __init__ [python] 50c 13t | def __init__(self, root):
 3 code save [python] 176c 40t | def save(self, name, value):
-4 code helper [python] 37c 9t | def helper(x):
+4 code helper [python] 51c 12t | @staticmethod

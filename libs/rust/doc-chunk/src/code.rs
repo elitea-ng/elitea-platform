@@ -106,25 +106,62 @@ struct Method {
     text: String,
 }
 
+/// Nodes that belong to the method that follows them: attributes and
+/// decorators written as siblings of the method (Rust `#[…]`, a decorator
+/// run outside a Python `decorated_definition`, annotations and attribute
+/// lists where a grammar makes them siblings). Java, C#, Kotlin and
+/// TypeScript method annotations are children of the method and already in
+/// its text.
+fn is_attribute(kind: &str) -> bool {
+    matches!(
+        kind,
+        "attribute_item"
+            | "inner_attribute_item"
+            | "decorator"
+            | "decorated_definition"
+            | "annotation"
+            | "marker_annotation"
+            | "attribute_list"
+            | "attribute"
+    )
+}
+
+/// The node a method's chunk starts at: its export wrapper (`export
+/// function`, `export default function`) or, in Python, its
+/// `decorated_definition`, so the export keyword and the decorators are part
+/// of the method.
+fn head_of(node: Node<'_>) -> Node<'_> {
+    match node.parent() {
+        Some(parent) if matches!(parent.kind(), "export_statement" | "decorated_definition") => {
+            parent
+        }
+        _ => node,
+    }
+}
+
 fn collect(node: Node<'_>, source: &[u8], kinds: &[&str], python: bool, out: &mut Vec<Method>) {
     if kinds.contains(&node.kind()) {
-        let Ok(body) = node.utf8_text(source) else {
+        let head = head_of(node);
+        let Ok(body) = head.utf8_text(source) else {
             return;
         };
         let mut text = body.to_owned();
         if !python {
-            // The run of comments right above the method.
-            let mut docs = Vec::new();
-            let mut sibling = node.prev_named_sibling();
-            while let Some(previous) = sibling.filter(|s| is_comment(s.kind())) {
-                if let Ok(comment) = previous.utf8_text(source) {
-                    docs.push(comment.trim_end().to_owned());
+            // The run of comments and attributes right above the method (or
+            // above its export wrapper), in any order.
+            let mut above = Vec::new();
+            let mut sibling = head.prev_named_sibling();
+            while let Some(previous) =
+                sibling.filter(|s| is_comment(s.kind()) || is_attribute(s.kind()))
+            {
+                if let Ok(piece) = previous.utf8_text(source) {
+                    above.push(piece.trim_end().to_owned());
                 }
                 sibling = previous.prev_named_sibling();
             }
-            if !docs.is_empty() {
-                docs.reverse();
-                text = format!("{}\n{text}", docs.join("\n").trim());
+            if !above.is_empty() {
+                above.reverse();
+                text = format!("{}\n{text}", above.join("\n").trim());
             }
         }
         out.push(Method {
@@ -277,7 +314,81 @@ mod tests {
         let chunks = code(source, ".py", &defaults()).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(names(&chunks), ["m", "top"]);
         assert!(chunks[0].text.contains("\"\"\"Doc.\"\"\""));
+        assert!(
+            chunks[1].text.starts_with("@cache\ndef top"),
+            "{:?}",
+            chunks[1].text
+        );
         assert_eq!(chunks[0].metadata["language"], "python");
+    }
+
+    #[test]
+    fn exported_functions_start_at_the_export_with_the_doc_comment_above_it() {
+        let source = "/** Greets.\n * @param n name\n */\nexport function greet(n: string): string {\n  return n;\n}\n\n/** The default. */\nexport default function main(): void {\n  greet('a');\n}\n\n// Plain.\nfunction local(): void {}\n";
+        for extension in [".ts", ".js"] {
+            let chunks = code(source, extension, &defaults()).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(names(&chunks), ["greet", "main", "local"], "{extension}");
+            assert!(
+                chunks[0]
+                    .text
+                    .starts_with("/** Greets.\n * @param n name\n */\nexport function greet"),
+                "{:?}",
+                chunks[0].text
+            );
+            assert!(
+                chunks[1]
+                    .text
+                    .starts_with("/** The default. */\nexport default function main"),
+                "{:?}",
+                chunks[1].text
+            );
+            assert!(chunks[2].text.starts_with("// Plain.\nfunction local"));
+        }
+    }
+
+    #[test]
+    fn rust_attributes_travel_with_their_function_and_its_docs() {
+        let source = "/// Adds.\n#[inline]\npub fn add(a: u32, b: u32) -> u32 {\n    a + b\n}\n\n#[test]\nfn adds() {\n    assert_eq!(add(1, 2), 3);\n}\n\n/// Subtracts.\n#[inline]\n#[must_use]\n/// More.\nfn sub() {}\n";
+        let chunks = code(source, ".rs", &defaults()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(names(&chunks), ["add", "adds", "sub"]);
+        assert!(
+            chunks[0]
+                .text
+                .starts_with("/// Adds.\n#[inline]\npub fn add"),
+            "{:?}",
+            chunks[0].text
+        );
+        assert!(
+            chunks[1].text.starts_with("#[test]\nfn adds"),
+            "{:?}",
+            chunks[1].text
+        );
+        assert!(
+            chunks[2]
+                .text
+                .starts_with("/// Subtracts.\n#[inline]\n#[must_use]\n/// More.\nfn sub"),
+            "{:?}",
+            chunks[2].text
+        );
+    }
+
+    #[test]
+    fn java_and_csharp_annotations_stay_with_the_method() {
+        let java = "class A {\n    /** Runs. */\n    @Override\n    public void run() {}\n}\n";
+        let chunks = code(java, ".java", &defaults()).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            chunks[0].text.starts_with("/** Runs. */\n@Override"),
+            "{:?}",
+            chunks[0].text
+        );
+        let csharp = "class A {\n    /// <summary>Runs.</summary>\n    [Obsolete]\n    public void Run() {}\n}\n";
+        let chunks = code(csharp, ".cs", &defaults()).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            chunks[0].text.contains("[Obsolete]"),
+            "{:?}",
+            chunks[0].text
+        );
+        assert!(chunks[0].text.contains("<summary>"), "{:?}", chunks[0].text);
     }
 
     #[test]

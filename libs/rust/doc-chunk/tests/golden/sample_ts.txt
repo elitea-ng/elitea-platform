@@ -1,3 +1,3 @@
-1 code parseLine [typescript] 131c 35t | function parseLine(line: string): [string, strin
+1 code parseLine [typescript] 171c 45t | // Parses a line of "key=value".
 2 code load [typescript] 180c 50t | load(path: string): void {
 3 code get [typescript] 75c 18t | get(key: string): string | undefined {
