@@ -288,9 +288,49 @@ tracked separately: AWS (1), Azure Resource Manager (2), GCP (1), Kubernetes
 (2), Keycloak (1), Elastic (1), PPTX (2), and Yagmail (1). Yagmail, Elastic,
 Keycloak, Azure Resource Manager, GCP and Kubernetes are now implemented
 completely behind capability gates from inline claim-materialized settings. LocalGit
-(13) is intentionally deferred: its local-filesystem/process isolation boundary
-is outside the remote toolkit migration priority. The remaining families still
-require an explicit authority source and admission policy before live porting.
+(13) is blocked in the cloud worker, not merely deferred; see
+[LocalGit is not a worker family](#localgit-is-not-a-worker-family). The
+remaining families still require an explicit authority source and admission
+policy before live porting.
+
+### LocalGit is not a worker family
+
+SDK `tools/localgit/{__init__,local_git,tool}.py` at the pinned revision
+`b5113a1` exposes 13 tools (`create_file`, `read_file`, `update_file`,
+`delete_file`, `checkout_branch`, `checkout_commit`, `get_diff`,
+`update_file_content_by_lines`, `list_files`, `get_files_in_folder`,
+`commit_changes`, `read_multiple_files`, `grep_file`) over a checkout at
+`os.path.join(base_path, repo_path)`, optionally cloned from `repo_url` and
+hard-reset to `commit_sha`. The toolkit is `hidden` in the catalogue and its
+snapshot schema declares no configuration properties. Rust deliberately
+registers no family for it:
+
+- **No path authority exists in the worker.** `base_path`, `repo_path` and
+  `repo_url` are user-authored toolkit settings, so the root itself is chosen
+  by the caller. Every SDK operation joins the model's `file_path` with
+  `os.path.normpath` and no containment check, so `../` and absolute paths
+  escape even that root. Confining to a user-chosen directory on a shared,
+  multi-tenant worker host is no confinement; the worker has no per-claim
+  workspace, and inventing one (a deployment root plus per-execution
+  directories, cleanup and quotas) is a platform decision, not a port.
+- **Clone is unmanaged egress.** `repo_url` makes the worker clone an arbitrary
+  remote over git transports, outside the per-family HTTPS allowlists and
+  bounds every configured family uses. `gix` exists only in `libs/rust/repo-ingest`
+  for the indexing pipeline's own fetches.
+- **The pinned SDK cannot serve a call either.** `LocalGit.validate_toolkit`
+  is a `mode='before'` classmethod that opens the repository into a local
+  variable and never stores it; every tool then dereferences the undeclared
+  `self.repo` and `LocalGitAction._run` returns `Error: Traceback …
+  AttributeError`. The SDK's own unit test injects `repo` by hand ("set
+  externally in production", which nothing does). Tool names are additionally
+  prefixed with `repo_path + "_"`, which no saved agent selection matches.
+
+The meaningful equivalent already exists where a confined workspace exists:
+the desktop host's `libs/rust/local-tools` (ADR-0029) provides
+openat/`O_NOFOLLOW`-confined file, grep, shell and git tools rooted at the
+folder the person opened. A frozen `localgit` reference reaching the cloud
+worker keeps today's behavior: it is skipped as an unsupported family with
+`agent_toolkit_skipped`, and the capability snapshot does not list it.
 
 The SDK also defines `EmbeddingConfiguration`, but it is not one of the 32
 registered configuration families. Rust will model it as a referenced model
@@ -2225,8 +2265,9 @@ Non-overlapping batches are:
 
 1. GitHub completion as the broad reference family, including its gated effects.
 2. Independent simple REST families using the Google Places/Sonar ownership pattern.
-3. Standard GitLab and Bitbucket with separate owners; LocalGit stays
-   intentionally deferred. GitLab Org is already complete behind its gate.
+3. Standard GitLab and Bitbucket with separate owners (both now partial: all
+   non-index tools); LocalGit is blocked in the cloud worker (see above).
+   GitLab Org is already complete behind its gate.
 4. All four ADO toolsets under one owner.
 5. Jira and Confluence after one shared Atlassian normalizer.
 6. qTest, TestRail, Xray and the indexing-backed Zephyr variants as coherent
