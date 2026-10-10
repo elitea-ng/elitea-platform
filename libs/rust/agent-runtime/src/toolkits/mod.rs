@@ -63,6 +63,8 @@ mod azure_tests;
 #[cfg(test)]
 mod bitbucket_tests;
 #[cfg(test)]
+mod confluence_tests;
+#[cfg(test)]
 mod direct_execution_tests;
 #[cfg(test)]
 mod elastic_tests;

@@ -138,7 +138,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `gitlab_org` | shared `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab_org::EliteAGitlabSpaceToolkit` | 17 | Yes | `toolkits/families/gitlab_org/{config,client,edit,diff,tools}.rs` | Capability-disabled complete family: 8 reads, 8 writes and 1 delete; dynamic-project authority, live check, HITL and effect reconciliation remain gates |
 | `qtest` | `configurations/qtest.py::QtestConfiguration` | `tools/qtest::QtestToolkit` | 25 | Yes | `configurations/families/qtest.rs`; `toolkits/families/qtest/` | Planned |
 | `bitbucket` | `configurations/bitbucket.py::BitbucketConfiguration` | `tools/bitbucket::EliteABitbucketToolkit` | 22 | Yes | `toolkits/families/bitbucket/{config,client,tools}.rs`, shared `families/vcs_text.rs` and the `gitlab_org` OLD/NEW editor | Partial capability-disabled family (per-tool capability): all 16 non-index tools (8 reads, 7 writes, 1 delete) over Bitbucket Cloud REST 2.0 or Server REST 1.0 with a sensitive Basic credential, SDK names/schemas/messages and the invocation-local active branch. Several SDK paths that could never succeed are repaired rather than copied (Server PR commits/changes returned a generator repr, Server decline and inline comments raised `TypeError`, Server file listing indexed strings, Cloud PR reads leaked the client's `__dict__`, and an unset `cloud` never detected bitbucket.org). The 6 index tools, SDK 429 retry/backoff, live check, exact-interrupt HITL and effect reconciliation remain gates |
-| `confluence` | `configurations/confluence.py::ConfluenceConfiguration` | `tools/confluence::ConfluenceToolkit` | 25 | Yes | `configurations/families/confluence.rs`; `toolkits/families/confluence/` | Planned; shared Atlassian auth normalizer |
+| `confluence` | `configurations/confluence.py::ConfluenceConfiguration` | `tools/confluence::ConfluenceToolkit` | 16 of 25 | Yes | `toolkits/families/confluence/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): the sixteen REST tools; image-description, attachment and file-upload tools and the six index tools are not served (`supported_tools.confluence`); see [Confluence REST family](#confluence-rest-family) |
 | `jira` | `configurations/jira.py::JiraConfiguration` | `tools/jira::JiraToolkit` | 12 of 23 | Yes | `toolkits/families/jira/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): the twelve REST tools; image-description, attachment-content and artifact-upload tools and the six index tools are not served (`supported_tools.jira`); see [Jira REST family](#jira-rest-family) |
 | `postman` | `configurations/postman.py::PostmanConfiguration` | `tools/postman::PostmanToolkit` | 31 | No | `toolkits/families/postman/` | Capability-disabled complete family: 8 reads, 19 writes, 3 deletes and 1 execute surface; management authority is fixed to the claimed Postman origin, while stored-request execution remains behind a separate sealed dynamic-egress authority |
 | `elastic` | None; cluster origin and optional encoded API key are inline toolkit settings | `tools/elastic::ElasticToolkit` | 1 | No | `toolkits/families/elastic/{config,client,tools}.rs` | Capability-disabled complete read family: one bounded Query DSL search against a fixed verified-TLS cluster; approved DNS/IP egress, authorized materialization and live read/load proof remain gates |
@@ -1817,6 +1817,48 @@ exists but is not linked into the runtime and has no image path),
 artifact bytes; the host's artifact reader returns capped text, not verified
 bytes), and the six index tools. A selection with nothing served left skips
 the toolkit as unsupported; empty selection serves the twelve.
+
+### Confluence REST family
+
+`confluence` serves sixteen of the SDK type's twenty-five tools against the
+same worker-pinned SDK revision and `atlassian-python-api==4.0.7` as Jira. Tool
+names and argument schemas pass the conformance gate with no exemption.
+
+Configuration and URLs. The nested `confluence_configuration` carries
+`base_url`, `hosting`, `username`, `api_key` and `token`; toolkit settings add
+`space`, `api_version` (`Auto`/`1`/`2`), `limit` (per-request page size,
+default 5, at most 100), `max_pages` (default 10, at most 50), `labels`,
+`custom_headers`, `verify_ssl` and `cloud`. Cloud and the version resolve as
+`_hosting_to_cloud`/`_resolve_confluence_api_version` do. As the SDK does, a
+Cloud base URL loses a trailing `/wiki` and page links get `/wiki` exactly once
+(`_build_page_url`), while the REST root is the `atlassian` client's: the base
+plus `/wiki` when the URL names `atlassian.net`/`jira.com` without it.
+Credentials, HTTPS-only, `verify_ssl` and custom-header rules are Jira's.
+`number_of_retries`/`min_retry_seconds`/`max_retry_seconds` are accepted and
+ignored: Rust families make one attempt and report a typed retryable failure.
+
+| SDK tool | Route and behaviour kept | Rust differences |
+| --- | --- | --- |
+| `create_page`, `create_pages` | Duplicate-title check, parent defaulting to the space home page, v1 `POST rest/api/content` (fixed-width metadata, ancestors) or, on v2, space-id lookup and `POST api/v2/pages` reshaped like v1; page label and default labels; the SDK's result sentence | The duplicate check uses the target space (the SDK always checked the toolkit space); a missing space is a sentence, not a provider 400; a label failure is a warning on the created page; batches stop at 50 pages |
+| `delete_page` | By id, or by title in the toolkit space; `DELETE rest/api/content/{id}` | — |
+| `update_page_by_id`, `update_page_by_title`, `update_pages`, `update_labels` | Title-collision check, `history` version + 1, `PUT rest/api/content/{id}?status=current`, the unchanged-content short-circuit, label replacement, default labels, the SDK's result sentence with version and diff link | Without `new_body` the page keeps its STORAGE body; the SDK resent the rendered `view` HTML as storage, which flattens macros, so `update_labels` and title-only updates no longer rewrite content |
+| `get_page_tree` | `child/page` 100 at a time, pre-order, `{id: [title, parent_id]}` | At most 1000 pages and depth 32 |
+| `get_pages_with_label`, `list_pages_with_label` | CQL `type=page AND label="..."` paging with de-duplication up to `max_pages` | The label is CQL-escaped; the list variant uses the search result titles instead of reading every page body |
+| `read_page_by_id` | `expand=body.{format},version`; Markdown via `markdownify` semantics, ADF returned verbatim; `skip_images` strips base64 images; the SDK's not-found sentence | Markdown is produced by `html-to-markdown-rs` (ATX headings, no preprocessing), not byte-identical to `markdownify` |
+| `search_pages`, `search_by_title`, `site_search` | The SDK's CQL with the space unquoted and re-quoted, `ceil(max_pages/limit)` result pages, each match read and rendered; site search's ten previews joined by `---` | `search_pages` escapes the query like the other two; an unreadable page is skipped instead of ending the batch |
+| `get_page_id_by_title` | `rest/api/content?type=...&spaceKey=...&title=...` | — |
+| `execute_generic_confluence` | Path under the client root, params as query for GET and JSON body otherwise, every status returned as `HTTP: {method}{url} -> {status}{reason}{body}`, Markdown for `/rest/api/content/{id}` GETs | The path must stay a plain path under the root; an effect's 5xx is an unknown outcome instead of text |
+
+Results are text; structured values are compact JSON where the SDK printed a
+Python `repr`. Confluence 4xx answers are `Confluence API error: HTTP ...`
+text with the provider's `message`/`errors`; 401, 429, 5xx and transport
+failures are typed, and any failure after an effect was sent is a nonretryable
+unknown outcome.
+
+Not served: `get_page_with_image_descriptions` (a vision-model call per
+image), `get_page_attachments` (the SDK's attachment parser and LLM analysis),
+`add_file_to_page` (artifact bytes), and the six index tools — the same gaps,
+for the same reasons, as Jira's.
 
 ### Postman complete collection-management family
 

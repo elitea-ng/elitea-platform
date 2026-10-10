@@ -22,6 +22,7 @@ use adk_core::Toolset;
 
 use super::DelegatedAuthorizationCatalog;
 use super::families::artifact::ArtifactToolAuthority;
+use super::families::confluence;
 use super::families::jira;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
@@ -181,6 +182,7 @@ async fn materialize(
             | "azure"
             | "azure_search"
             | "bitbucket"
+            | "confluence"
             | "elastic"
             | "gcp"
             | "github"
@@ -318,6 +320,13 @@ fn materialize_a_to_k(
                 invalid_configuration()
             }
         })?,
+        "confluence" => confluence::tools::build_confluence_toolset(
+            name,
+            confluence::config::ConfluenceToolkitConfig::parse(settings)
+                .map_err(|error| confluence_config_materialization_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| confluence_toolset_materialization_error(error.code()))?,
         "elastic" => elastic::tools::build_elastic_toolset(
             name,
             elastic::config::ElasticToolkitConfig::parse(settings)
@@ -552,6 +561,37 @@ const fn aha_toolset_materialization_error(
         | aha::tools::AhaToolsetErrorCode::InvalidDefinition => invalid_configuration(),
         aha::tools::AhaToolsetErrorCode::ResourceExhausted => resource_exhausted(),
         aha::tools::AhaToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+    }
+}
+
+const fn confluence_config_materialization_error(
+    code: confluence::config::ConfluenceConfigErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        confluence::config::ConfluenceConfigErrorCode::InvalidConfiguration => {
+            invalid_configuration()
+        }
+        confluence::config::ConfluenceConfigErrorCode::ResourceExhausted => resource_exhausted(),
+        confluence::config::ConfluenceConfigErrorCode::UnsupportedCapability => {
+            unsupported_toolkit()
+        }
+    }
+}
+
+const fn confluence_toolset_materialization_error(
+    code: confluence::tools::ConfluenceToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        confluence::tools::ConfluenceToolsetErrorCode::InvalidConfiguration
+        | confluence::tools::ConfluenceToolsetErrorCode::Client
+        | confluence::tools::ConfluenceToolsetErrorCode::InvalidDefinition => {
+            invalid_configuration()
+        }
+        confluence::tools::ConfluenceToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        confluence::tools::ConfluenceToolsetErrorCode::UnsupportedCapability
+        | confluence::tools::ConfluenceToolsetErrorCode::UnsupportedSelection => {
+            unsupported_toolkit()
+        }
     }
 }
 

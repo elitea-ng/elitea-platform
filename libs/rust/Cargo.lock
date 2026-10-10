@@ -1496,6 +1496,7 @@ dependencies = [
  "chrono",
  "futures",
  "hmac 0.13.0",
+ "html-to-markdown-rs",
  "http",
  "http-body-util",
  "hyper",

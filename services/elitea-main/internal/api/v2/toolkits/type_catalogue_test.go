@@ -275,7 +275,7 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 			t.Errorf("%s is a native family and is withheld", toolkitType)
 		}
 	}
-	for _, toolkitType := range []string{"confluence", "bitbucket", "testrail"} {
+	for _, toolkitType := range []string{"bitbucket", "testrail", "qtest"} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
 			t.Errorf("%s has no native family and is offered as creatable", toolkitType)

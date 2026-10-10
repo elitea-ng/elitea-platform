@@ -49,6 +49,10 @@ bytes = "1.12.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
 futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 hmac = "0.13.0"
+# The confluence family renders Confluence's page HTML as Markdown, as the
+# SDK's `markdownify` does. Defaults off: no metadata pass, no image codecs.
+# Already locked in this workspace through xberg (doc-extract).
+html-to-markdown-rs = { version = "3.17.2", default-features = false }
 http = "1.5.0"
 http-body-util = "0.1.5"
 hyper = { version = "1.11.1", default-features = false, features = ["client", "http1", "http2"] }
