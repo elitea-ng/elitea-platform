@@ -1281,9 +1281,11 @@ async fn get_ui_report_by_id(client: &CarrierClient, arguments: &Map<String, Val
     Ok(Value::Object(report))
 }
 
-fn html_name_pattern() -> &'static Regex {
-    static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| Regex::new(r"^(.+?\.html)").expect("static HTML file-name pattern"))
+fn html_name_pattern() -> Option<&'static Regex> {
+    static PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| Regex::new(r"^(.+?\.html)").ok())
+        .as_ref()
 }
 
 async fn ui_report_links(
@@ -1314,7 +1316,7 @@ async fn ui_report_links(
         .filter(|name| !name.is_empty())
         .map(|name| {
             html_name_pattern()
-                .captures(name)
+                .and_then(|pattern| pattern.captures(name))
                 .and_then(|captures| captures.get(1))
                 .map_or(name, |matched| matched.as_str())
                 .to_owned()
@@ -2272,11 +2274,11 @@ async fn create_ui_test(client: &CarrierClient, arguments: &Map<String, Value>) 
 // cancel_ui_test
 // ---------------------------------------------------------------------------
 
-fn cancel_pattern() -> &'static Regex {
-    static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| {
-        Regex::new(r"cancel\s+ui\s+test\s+(\d+)").expect("static cancel-command pattern")
-    })
+fn cancel_pattern() -> Option<&'static Regex> {
+    static PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| Regex::new(r"cancel\s+ui\s+test\s+(\d+)").ok())
+        .as_ref()
 }
 
 fn ui_status(report: &Value) -> (Map<String, Value>, String) {
@@ -2295,7 +2297,7 @@ async fn cancel_ui_test(client: &CarrierClient, arguments: &Map<String, Value>) 
     let message = required_text(arguments, "message", MAX_DESCRIPTION_TEXT_BYTES)?;
     let lowered = message.to_lowercase();
     let test_id = cancel_pattern()
-        .captures(&lowered)
+        .and_then(|pattern| pattern.captures(&lowered))
         .and_then(|captures| captures.get(1))
         .map(|matched| matched.as_str().to_owned());
     match test_id {

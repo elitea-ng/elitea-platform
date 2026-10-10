@@ -258,7 +258,7 @@ func TestPythonWorkerCapabilityWithholdsTheTypesItCannotImport(t *testing.T) {
 	}
 }
 
-// The Rust worker materializes twenty-three families and SKIPS everything else
+// The Rust worker materializes forty-two families and SKIPS everything else
 // with a warning, so an unsupported toolkit attaches to an agent and does
 // nothing. Under that worker the catalogue is a different shape.
 func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.T) {
@@ -269,13 +269,15 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 	// `artifact` joined this list with #906: the native family reaches this
 	// platform's own storage under the live execution claim, so the type is
 	// creatable under the rust worker instead of withheld.
-	for _, toolkitType := range []string{"github", "openapi", "sharepoint", "sql", "artifact"} {
+	for _, toolkitType := range []string{
+		"github", "openapi", "sharepoint", "sql", "artifact", "bitbucket", "testrail", "qtest",
+	} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); unavailable {
 			t.Errorf("%s is a native family and is withheld", toolkitType)
 		}
 	}
-	for _, toolkitType := range []string{"bitbucket", "testrail", "qtest"} {
+	for _, toolkitType := range []string{"pptx", "localgit", "delta_lake"} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
 			t.Errorf("%s has no native family and is offered as creatable", toolkitType)

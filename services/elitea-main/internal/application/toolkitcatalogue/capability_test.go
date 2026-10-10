@@ -64,9 +64,9 @@ func TestPythonVerifiedImportKeysMatchTheWorkerLock(t *testing.T) {
 // The Rust list must equal the tool types `materialize.rs` actually dispatches.
 //
 // It reads the DISPATCH, not the directory listing. A family that is complete
-// on disk but reached by no arm (`aha`, today) is skipped at run time like any
-// unsupported type, and a list built from the directory would claim support the
-// runtime does not give.
+// on disk but reached by no arm (as `aha` was before its arm landed) is skipped
+// at run time like any unsupported type, and a list built from the directory
+// would claim support the runtime does not give.
 func TestRustNativeToolTypesMatchTheMaterialiser(t *testing.T) {
 	t.Parallel()
 
@@ -127,9 +127,12 @@ func TestCapabilityVerdicts(t *testing.T) {
 	require.True(t, both.Rust)
 	require.Equal(t, VerdictSupported, both.Verdict)
 
+	// jira was the Python-only example until its partial Rust family landed.
+	// No catalogue type is verified on Python alone any more, so a type both
+	// workers run stands in for the old case: the verdict must stay supported.
 	pythonOnly := source.ToolkitCapability("jira")
 	require.True(t, pythonOnly.Python)
-	require.False(t, pythonOnly.Rust)
+	require.True(t, pythonOnly.Rust)
 	require.Equal(t, VerdictSupported, pythonOnly.Verdict)
 
 	rustOnly := source.ToolkitCapability("slack")
@@ -150,8 +153,9 @@ func TestCapabilityVerdicts(t *testing.T) {
 	require.Contains(t, neither.Reason, "not verified",
 		"an unverified type must not read as a refusal: it may still work")
 
-	// `aha` is built in the Rust tree and reached by no dispatch arm.
-	require.False(t, source.ToolkitCapability("aha").Rust)
+	// `aha` was built in the Rust tree and reached by no dispatch arm; it is
+	// dispatched now (a partial family without attach_file).
+	require.True(t, source.ToolkitCapability("aha").Rust)
 }
 
 func TestCapabilityTypesIsSortedAndDeduplicated(t *testing.T) {

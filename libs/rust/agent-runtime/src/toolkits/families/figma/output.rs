@@ -224,14 +224,16 @@ fn strip(regexp: &fancy_regex::Regex, text: &str) -> Result<String, String> {
 
 /// The SDK's `fix_trailing_commas` after a regexp removed list items.
 fn fix_trailing_commas(text: &str) -> String {
-    static PATTERNS: OnceLock<[Regex; 3]> = OnceLock::new();
-    let [doubled, before_close, after_open] = PATTERNS.get_or_init(|| {
-        [
-            Regex::new(r",\s*,+").expect("static comma pattern"),
-            Regex::new(r",\s*([\]}])").expect("static closing pattern"),
-            Regex::new(r"([\[{])\s*,").expect("static opening pattern"),
-        ]
-    });
+    static PATTERNS: OnceLock<Option<[Regex; 3]>> = OnceLock::new();
+    let Some([doubled, before_close, after_open]) = PATTERNS.get_or_init(|| {
+        Some([
+            Regex::new(r",\s*,+").ok()?,
+            Regex::new(r",\s*([\]}])").ok()?,
+            Regex::new(r"([\[{])\s*,").ok()?,
+        ])
+    }) else {
+        return text.to_owned();
+    };
     let text = doubled.replace_all(text, ",");
     let text = before_close.replace_all(&text, "$1");
     after_open.replace_all(&text, "$1").into_owned()

@@ -183,23 +183,22 @@ async fn materialize(
     }
     if matches!(
         reference.tool_type(),
-        "aha"
-            | "azure"
+        "aha" | "bigquery" | "bitbucket" | "carrier" | "confluence" | "figma" | "gitlab" | "jira"
+    ) {
+        let toolset = materialize_ported_saas(reference.tool_type(), name, settings, policy)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
+    if matches!(
+        reference.tool_type(),
+        "azure"
             | "azure_search"
-            | "bitbucket"
-            | "confluence"
-            | "bigquery"
-            | "carrier"
             | "elastic"
-            | "figma"
             | "gcp"
             | "github"
-            | "gitlab"
             | "gitlab_org"
             | "google_places"
-            | "jira"
-            | "keycloak"
             | "k8s"
+            | "keycloak"
     ) {
         let toolset = materialize_a_to_k(reference.tool_type(), name, settings, policy)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
@@ -366,15 +365,6 @@ fn materialize_a_to_k(
     policy: &Arc<ToolAdmissionPolicy>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
     let toolset = match tool_type {
-        // No runtime host has an artifact-read grant plane, so Aha is built
-        // without one and serves every tool but attach_file.
-        "aha" => aha::tools::build_aha_toolset(
-            name,
-            aha::config::AhaToolkitConfig::parse(settings).map_err(|_| invalid_configuration())?,
-            policy,
-            None,
-        )
-        .map_err(|error| aha_toolset_materialization_error(error.code()))?,
         "azure" => azure::tools::build_azure_toolset(
             name,
             azure::config::AzureToolkitConfig::parse(settings)
@@ -389,40 +379,6 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
-        "bitbucket" => bitbucket::tools::build_bitbucket_toolset(
-            name,
-            bitbucket::config::BitbucketToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
-            policy,
-        )
-        .map_err(|error| {
-            if error.code() == bitbucket::tools::BitbucketToolsetErrorCode::UnsupportedSelection {
-                unsupported_toolkit()
-            } else {
-                invalid_configuration()
-            }
-        })?,
-        "confluence" => confluence::tools::build_confluence_toolset(
-            name,
-            confluence::config::ConfluenceToolkitConfig::parse(settings)
-                .map_err(|error| confluence_config_materialization_error(error.code()))?,
-            policy,
-        )
-        .map_err(|error| confluence_toolset_materialization_error(error.code()))?,
-        "bigquery" => bigquery::tools::build_bigquery_toolset(
-            name,
-            bigquery::config::BigQueryToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
-            policy,
-        )
-        .map_err(|error| bigquery_toolset_materialization_error(error.code()))?,
-        "carrier" => carrier::tools::build_carrier_toolset(
-            name,
-            carrier::config::CarrierToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
-            policy,
-        )
-        .map_err(|error| carrier_toolset_materialization_error(error.code()))?,
         "elastic" => elastic::tools::build_elastic_toolset(
             name,
             elastic::config::ElasticToolkitConfig::parse(settings)
@@ -430,13 +386,6 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
-        "figma" => figma::tools::build_figma_toolset(
-            name,
-            figma::config::FigmaToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
-            policy,
-        )
-        .map_err(|error| figma_toolset_materialization_error(error.code()))?,
         "gcp" => gcp::tools::build_gcp_toolset(
             name,
             gcp::config::GcpToolkitConfig::parse(settings).map_err(|_| invalid_configuration())?,
@@ -450,19 +399,6 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|error| github_toolset_materialization_error(error.code()))?,
-        "gitlab" => gitlab::tools::build_gitlab_toolset(
-            name,
-            gitlab::config::GitLabToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
-            policy,
-        )
-        .map_err(|error| {
-            if error.code() == gitlab::tools::GitLabToolsetErrorCode::UnsupportedSelection {
-                unsupported_toolkit()
-            } else {
-                invalid_configuration()
-            }
-        })?,
         "gitlab_org" => gitlab_org::tools::build_gitlab_org_toolset(
             name,
             gitlab_org::config::GitLabOrgToolkitConfig::parse(settings)
@@ -477,13 +413,6 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
-        "jira" => jira::tools::build_jira_toolset(
-            name,
-            jira::config::JiraToolkitConfig::parse(settings)
-                .map_err(|error| jira_config_materialization_error(error.code()))?,
-            policy,
-        )
-        .map_err(|error| jira_toolset_materialization_error(error.code()))?,
         "keycloak" => keycloak::tools::build_keycloak_toolset(
             name,
             keycloak::config::KeycloakToolkitConfig::parse(settings)
@@ -498,6 +427,94 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
+        _ => return Err(unsupported_toolkit()),
+    };
+    Ok(Arc::new(toolset))
+}
+
+/// The hosted-service families ported from the Python-only set in one batch
+/// (`aha`, `bigquery`, `bitbucket`, `carrier`, `confluence`, `figma`, `gitlab`,
+/// `jira`). They live outside
+/// `materialize_a_to_k` only to keep each dispatch function under clippy's
+/// line limit; the arms stay at the indentation the elitea-main capability
+/// gates read.
+fn materialize_ported_saas(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let toolset = match tool_type {
+        // No runtime host has an artifact-read grant plane, so Aha is built
+        // without one and serves every tool but attach_file.
+        "aha" => aha::tools::build_aha_toolset(
+            name,
+            aha::config::AhaToolkitConfig::parse(settings).map_err(|_| invalid_configuration())?,
+            policy,
+            None,
+        )
+        .map_err(|error| aha_toolset_materialization_error(error.code()))?,
+        "bigquery" => bigquery::tools::build_bigquery_toolset(
+            name,
+            bigquery::config::BigQueryToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| bigquery_toolset_materialization_error(error.code()))?,
+        "bitbucket" => bitbucket::tools::build_bitbucket_toolset(
+            name,
+            bitbucket::config::BitbucketToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| {
+            if error.code() == bitbucket::tools::BitbucketToolsetErrorCode::UnsupportedSelection {
+                unsupported_toolkit()
+            } else {
+                invalid_configuration()
+            }
+        })?,
+        "carrier" => carrier::tools::build_carrier_toolset(
+            name,
+            carrier::config::CarrierToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| carrier_toolset_materialization_error(error.code()))?,
+        "confluence" => confluence::tools::build_confluence_toolset(
+            name,
+            confluence::config::ConfluenceToolkitConfig::parse(settings)
+                .map_err(|error| confluence_config_materialization_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| confluence_toolset_materialization_error(error.code()))?,
+        "figma" => figma::tools::build_figma_toolset(
+            name,
+            figma::config::FigmaToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| figma_toolset_materialization_error(error.code()))?,
+        "gitlab" => gitlab::tools::build_gitlab_toolset(
+            name,
+            gitlab::config::GitLabToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| {
+            if error.code() == gitlab::tools::GitLabToolsetErrorCode::UnsupportedSelection {
+                unsupported_toolkit()
+            } else {
+                invalid_configuration()
+            }
+        })?,
+        "jira" => jira::tools::build_jira_toolset(
+            name,
+            jira::config::JiraToolkitConfig::parse(settings)
+                .map_err(|error| jira_config_materialization_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| jira_toolset_materialization_error(error.code()))?,
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))
