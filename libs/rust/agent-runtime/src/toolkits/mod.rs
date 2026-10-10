@@ -59,6 +59,8 @@ mod ado_boards_tests;
 #[cfg(test)]
 mod ado_plans_tests;
 #[cfg(test)]
+mod ado_repos_tests;
+#[cfg(test)]
 mod ado_test_support;
 #[cfg(test)]
 mod ado_wiki_tests;

@@ -76,13 +76,17 @@ impl AdoClientError {
             .is_some_and(|message| message.contains(needle))
     }
 
-    /// The provider's own text for a refused request (HTTP 400/422), which
-    /// the SDK hands the model for create/update validation failures such as
+    /// The provider's own text for a refused request (HTTP 400/422, or a 409
+    /// such as `TF401179: An active pull request ... already exists`), which
+    /// the SDK hands the model for create/update failures such as
     /// `TF401320: Rule Error for field ...`. Nothing else is ever exposed.
     pub(crate) fn model_visible_message(&self) -> Option<&str> {
-        (self.code == AdoClientErrorCode::InvalidInput)
-            .then_some(self.provider_message.as_deref())
-            .flatten()
+        matches!(
+            self.code,
+            AdoClientErrorCode::InvalidInput | AdoClientErrorCode::Conflict
+        )
+        .then_some(self.provider_message.as_deref())
+        .flatten()
     }
 
     pub(crate) fn into_adk(self) -> AdkError {

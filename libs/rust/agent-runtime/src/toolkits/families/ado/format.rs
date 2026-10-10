@@ -180,3 +180,31 @@ pub(crate) fn python_lines(content: &str) -> Vec<&str> {
     }
     lines
 }
+
+/// `json.dumps(str)`: ASCII-only, as Python's default `ensure_ascii=True`.
+pub(crate) fn python_json_string(value: &str) -> String {
+    let mut output = String::with_capacity(value.len() + 2);
+    output.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            '\u{08}' => output.push_str("\\b"),
+            '\u{0C}' => output.push_str("\\f"),
+            character if character.is_ascii() && !character.is_ascii_control() => {
+                output.push(character);
+            }
+            character => {
+                let mut units = [0u16; 2];
+                for unit in character.encode_utf16(&mut units) {
+                    let _ = write!(output, "\\u{unit:04x}");
+                }
+            }
+        }
+    }
+    output.push('"');
+    output
+}

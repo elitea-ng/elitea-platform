@@ -295,6 +295,7 @@ fn materialize_ado(
     use super::families::ado::config::AdoConfigErrorCode;
     use super::families::ado_boards;
     use super::families::ado_plans;
+    use super::families::ado_repos;
     use super::families::ado_wiki;
     let config_error = |code: AdoConfigErrorCode| match code {
         AdoConfigErrorCode::InvalidConfiguration => invalid_configuration(),
@@ -311,6 +312,13 @@ fn materialize_ado(
         "ado_plans" => ado_plans::tools::build_ado_plans_toolset(
             name,
             ado_plans::config::AdoPlansToolkitConfig::parse(settings)
+                .map_err(|error| config_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| ado_toolset_materialization_error(error.code()))?,
+        "ado_repos" => ado_repos::tools::build_ado_repos_toolset(
+            name,
+            ado_repos::config::AdoReposToolkitConfig::parse(settings)
                 .map_err(|error| config_error(error.code()))?,
             policy,
         )

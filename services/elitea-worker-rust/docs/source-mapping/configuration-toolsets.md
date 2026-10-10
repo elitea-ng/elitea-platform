@@ -130,7 +130,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | --- | --- | --- | ---: | :---: | --- | --- |
 | `artifact` | None; the bucket is an inline toolkit setting and the AUTHORITY is the live execution claim, not a credential | `runtime/tools/artifact::ArtifactWrapper` | 4 of 8 | No | `toolkits/families/artifact/{config,tools}.rs` | The one family whose authority is not in the frozen snapshot (#906): there is no third-party endpoint, only this platform's own storage, reached over main's private claim-bound content listener (`ContentServer.PostArtifact*`). `list_files`, `read_file`, `create_file` and `delete_file` carry the SDK's own names and argument names; the read enforces the SDK's 200,000-character agent-path cap and refuses with the same structured `content_too_large` object. Built only where the claim is in scope: the ordinary agent path and a root pipeline's direct and LLM nodes ([pipeline artifact toolkit nodes](pipeline-artifact-toolkit-nodes-20261009.md)). Saved child pipelines and nested applications still skip it; a direct node there is refused as `unsupported_capability`. `read_multiple_files`, `get_file_metadata`, `append_data`, `create_new_bucket` and the indexing pair remain gates |
 | `github` | `configurations/github.py::GithubConfiguration` | `tools/github::EliteAGitHubToolkit` | 44 | Yes | `toolkits/families/github/{config,client,code_search,commits,projects,pull_requests,workflow_runs,tools}.rs`; common configured-tool materializer | Partial read profile: strict anonymous/PAT/basic/App probe parsing plus twenty identity, branch, file, repository-navigation, issue, pull-request, commit, server-side code-search, workflow-status and Project V2 reads; a mixed explicit SDK selection keeps these reads and omits unsupported operations with one bounded warning; the other 24 tools, workflow-log archives, App installation auth, sensitive effects and indexing remain gates |
-| `ado_repos` | `configurations/ado.py::AdoConfiguration` | `tools/ado/repos::AzureDevOpsReposToolkit` | 22 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_repos/` | Planned as its own complete SDK family; 16 repository operations plus 6 inherited indexing tools |
+| `ado_repos` | `configurations/ado.py::AdoConfiguration` | `tools/ado/repos::AzureDevOpsReposToolkit` | 21 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_repos}/` | Partial native family: all 15 repository operations; the 6 indexing tools stay on the Python worker |
 | `ado_plans` | `configurations/ado.py::AdoConfiguration` | `tools/ado/test_plan::AzureDevOpsPlansToolkit` | 18 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_plans}/` | Partial native family: all 12 test-plan operations; the 6 indexing tools stay on the Python worker |
 | `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 19 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_boards}/` | Partial native family: 11 of 13 work-item operations; `get_image_by_url` (vision LLM), `attach_file_to_work_item` (artifact storage) and the 6 indexing tools stay on the Python worker |
 | `ado_wiki` | `configurations/ado.py::AdoConfiguration` | `tools/ado/wiki::AzureDevOpsWikiToolkit` | 14 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_wiki}/` | Partial native family: all 8 wiki operations (image description in page content omitted); the 6 indexing tools stay on the Python worker |
@@ -2761,6 +2761,58 @@ Proof: `toolkits/ado_wiki_tests.rs` (wiki format and default identifier,
 expanded page and 404 text, raw page content and description suffix, eTag
 `If-Match` write with the version retry, wiki and page creation, page move
 and delete sentences, argument validation, SDK conformance).
+
+### Azure DevOps Repos family
+
+`ado_repos` serves all fifteen non-index tools of
+`tools/ado/repos/repos_wrapper.py` at the pinned SDK revision over the
+`GitClient` v7.0 routes, all under
+`{project}/_apis/git/repositories/{repository_id}` except the project-level
+`git/pullrequests/{id}` read. Settings add the required `repository_id` and
+`base_branch`/`active_branch` (`main` when absent or empty). The toolset owns
+the wrapper's mutable active branch: `set_active_branch`, `list_files`,
+`read_file`, `create_branch`, `create_file` and `update_file` move it exactly
+where the SDK assigns `self.active_branch`.
+
+| Tool | Route | Result |
+| --- | --- | --- |
+| `list_branches_in_repo` / `set_active_branch` | `GET .../stats/branches` | the SDK's "Found N branches" and "Switched to branch" / "does not exist" texts |
+| `list_files` | `GET .../items?scopePath=&recursionLevel=Full&includeContentMetadata=true&versionDescriptor.*` | blob paths |
+| `read_file` | `GET .../items?path=&versionDescriptor.*` with `Accept: text/plain` | text, 1-indexed `offset`/`limit` slices (`apply_line_slice`), and the `guard_text_read` `content_too_large` object relabelled to `offset`/`limit` above 200000 characters |
+| `create_file` / `update_file` / `delete_file` | `GET .../stats/branches?name=` for the head, `POST .../pushes` with an `add`/`edit`/`delete` change | `Created/Updated/Deleted file <path>`; create and update refuse the base branch with the SDK's "protected" text; create probes `GET .../items` first |
+| `create_branch` | `GET .../stats/branches?name=` twice, `POST .../refs` from the active branch head | the SDK's created/exists/spaces texts |
+| `list_open_pull_requests` / `get_pull_request` | `GET .../pullrequests?searchCriteria.status=active` or `GET git/pullrequests/{id}`, then threads and commits per PR | the SDK's Python `str()` list text (open PRs) or the JSON list |
+| `list_pull_request_files` | iterations, last iteration's changes, `GET .../items` at the target and source commits | `json.dumps` text of `[{path, diff}]` with `difflib.unified_diff` output (`diff.rs`) |
+| `get_work_items` | `GET .../pullRequests/{id}/workitems` | the first ten ids |
+| `comment_on_pull_request` | `POST .../pullRequests/{id}/threads` | the SDK's thread texts; inline comments carry `CommentThreadContext` positions |
+| `create_pull_request` | `POST .../pullrequests` | `Successfully created PR with ID <id>`; a 400/409 provider refusal returns the SDK's "Unable to create pull request" text |
+| `get_commits` | `GET .../commits?searchCriteria.*` with `str(datetime.fromisoformat(...))` dates | `[{sha, author, createdAt, message, url}]` |
+
+`update_file` uses the GitLab Org family's OLD/NEW marker engine
+(`gitlab_org::edit::apply_update`, now visible to sibling families) and the
+SDK's texts for unsupported files, missing markers and no-op edits. The diff
+reproduces `SequenceMatcher` exactly, including the autojunk rule for lines
+that make up more than 1% of a 200+ line file, and is checked against
+CPython goldens.
+
+Differences: the SDK validates the repository and both branches over the
+network at construction; here materialization stays network-free. The SDK
+caches file content per toolkit; Rust always reads the provider. `get_commits`
+reports each commit's own date where the SDK repeats the first commit's.
+`create_branch` reports a ref update the provider answers with
+`success: false`; the SDK reports success. Inline comments are all validated
+before the first thread is created. Bounds: `list_files` returns a
+"list a subdirectory" text above 20000 files or one result,
+`list_open_pull_requests` reads at most 100 PRs, `list_pull_request_files`
+diffs at most 100 changes and files up to 1 MiB, and the SDK's
+`ToolException` texts that would carry provider error bodies are stable
+Azure DevOps error codes.
+
+Proof: `toolkits/ado_repos_tests.rs` (configuration, CPython difflib
+goldens, `fromisoformat`/line-slice parity, read slicing and guard, create
+and update pushes, branch flows, open-PR Python text, PR diff JSON text,
+inline and query comments, commit filters, unknown outcome, argument
+validation, SDK conformance).
 
 ## Special runtime toolsets
 

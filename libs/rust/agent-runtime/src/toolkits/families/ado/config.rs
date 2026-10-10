@@ -28,6 +28,11 @@ impl AdoConfigError {
     pub(crate) const fn code(&self) -> AdoConfigErrorCode {
         self.code
     }
+
+    /// A family-level refusal of an otherwise parseable configuration.
+    pub(crate) const fn invalid() -> Self {
+        invalid_configuration()
+    }
 }
 
 impl fmt::Debug for AdoConfigError {

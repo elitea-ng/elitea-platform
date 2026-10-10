@@ -194,7 +194,6 @@ pub(super) fn ok_with_etag(body: &Value, etag: &str) -> Result<AdoHttpResponse, 
     Ok(AdoHttpResponse::fixture(StatusCode::OK, AdoBody::Json(body.clone())).with_etag(etag))
 }
 
-#[allow(dead_code)] // Used by the repos suite.
 pub(super) fn text(body: &str) -> Result<AdoHttpResponse, AdoClientError> {
     Ok(AdoHttpResponse::fixture(
         StatusCode::OK,
