@@ -224,6 +224,17 @@ impl AhaArtifactResolver {
         Ok(Self { claims, source })
     }
 
+    /// The resolver a runtime without an artifact-read grant plane holds: no
+    /// claims, so every path is refused as unauthorized before any source is
+    /// opened. The production toolset also omits `attach_file` (see
+    /// `tools::build_aha_toolset`), so this is a second, fail-closed line.
+    pub(in crate::toolkits) fn unavailable() -> Self {
+        Self {
+            claims: Vec::new(),
+            source: Arc::new(UnavailableSource),
+        }
+    }
+
     pub(super) async fn multipart(
         &self,
         requested_path: &str,
@@ -248,6 +259,20 @@ impl AhaArtifactResolver {
             .mime_str(&claim.media_type)
             .map_err(|_| invalid_input())?;
         Ok(Form::new().part("attachment[data]", part))
+    }
+}
+
+/// The claim source of [`AhaArtifactResolver::unavailable`]: nothing is
+/// granted, so nothing opens.
+struct UnavailableSource;
+
+#[async_trait]
+impl ArtifactClaimSource for UnavailableSource {
+    async fn open(
+        &self,
+        _claim: &AhaArtifactClaim,
+    ) -> Result<GrantedArtifactStream, AhaArtifactError> {
+        Err(authorization())
     }
 }
 

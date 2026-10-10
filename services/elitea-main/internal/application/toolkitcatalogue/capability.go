@@ -117,8 +117,9 @@ var pythonVerifiedImportKeys = []string{
 // materialises natively, spelled as that worker spells them.
 //
 // Transcribed from `src/toolkits/materialize.rs`: the match arms of
-// `materialize_a_to_k` and `materialize_p_to_z`, plus the three types
-// dispatched by direct comparison (`artifact`, `openapi`, `sharepoint`).
+// `materialize_a_to_k`, `materialize_p_to_z`, `materialize_ado`,
+// `materialize_zephyr_rest` and `materialize_test_management`, plus the three
+// types dispatched by direct comparison (`artifact`, `openapi`, `sharepoint`).
 //
 // `artifact` (#906) is the odd one: it materialises only where the live
 // execution claim is in scope (the ordinary agent path and a root pipeline's
@@ -127,24 +128,38 @@ var pythonVerifiedImportKeys = []string{
 // still skips it: a direct node there is refused as unsupported at assembly,
 // and an LLM node there finds the tools unavailable when it runs.
 //
-// `aha` is NOT here although the family is complete in that tree: no dispatch
-// reaches it, so the worker skips an `aha` toolkit like any unsupported type.
-// A list built from the directory listing would have claimed support the
-// runtime does not give — which is the same "wired nowhere" defect this
-// repository keeps finding.
+// Several of these families are partial (no indexing tools, and some tools
+// that need a model or artifact bytes the runtime does not lend). The
+// per-tool split lives in the capability snapshot's `supported_tools`; this
+// list only says the type is dispatched. It is checked against the dispatch,
+// not the directory listing, so a family on disk that no arm reaches would
+// fail TestRustNativeToolTypesMatchTheMaterialiser rather than claim support.
 var rustNativeToolTypes = []string{
+	"ado_boards",
+	"ado_plans",
+	"ado_repos",
+	"ado_wiki",
+	"aha",
 	"artifact",
 	"azure",
 	"azure_search",
+	"bigquery",
+	"bitbucket",
+	"carrier",
+	"confluence",
 	"elastic",
+	"figma",
 	"gcp",
 	"github",
+	"gitlab",
 	"gitlab_org",
 	"google_places",
+	"jira",
 	"k8s",
 	"keycloak",
 	"openapi",
 	"postman",
+	"qtest",
 	"rally",
 	"report_portal",
 	"salesforce",
@@ -153,8 +168,14 @@ var rustNativeToolTypes = []string{
 	"slack",
 	"sonar",
 	"sql",
+	"testio",
+	"testrail",
+	"xray_cloud",
 	"yagmail",
 	"zephyr",
+	"zephyr_enterprise",
+	"zephyr_essential",
+	"zephyr_scale",
 	"zephyr_squad",
 }
 
@@ -184,9 +205,13 @@ type PinnedWorkerCapabilities struct{}
 // ToolkitCapability resolves one catalogue type.
 func (PinnedWorkerCapabilities) ToolkitCapability(toolkitType string) Capability {
 	key := strings.TrimSpace(toolkitType)
-	python := pythonVerifiedTypes()[key]
-	rust := rustNativeTypes()[key]
+	return capabilityVerdict(key, pythonVerifiedTypes()[key], rustNativeTypes()[key])
+}
 
+// capabilityVerdict is the verdict table for one type given what each worker
+// carries. Split out so every row is testable even when the pinned lists hold
+// no type for it (no catalogue type is Python-only today).
+func capabilityVerdict(key string, python, rust bool) Capability {
 	capability := Capability{ToolkitType: key, Python: python, Rust: rust}
 	switch {
 	case python && rust:

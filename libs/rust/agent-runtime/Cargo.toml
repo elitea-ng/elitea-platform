@@ -47,8 +47,19 @@ async-trait = "0.1.92"
 base64 = "0.23.1"
 bytes = "1.12.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
+# The Figma family applies a caller-supplied output `regexp` the way the SDK's
+# Python `re` does, lookaround included (its documented example uses one).
+fancy-regex = "0.18.0"
 futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 hmac = "0.13.0"
+# The confluence family renders Confluence's page HTML as Markdown, as the
+# SDK's `markdownify` does. Defaults off: no metadata pass, no image codecs.
+# Already locked in this workspace through xberg (doc-extract).
+html-to-markdown-rs = { version = "3.17.2", default-features = false }
+# `str.isprintable` for the shared Python `repr` (families/python_repr.rs):
+# CPython escapes a character by its Unicode general category. Already locked
+# in this workspace.
+unicode-general-category = "1.1.0"
 http = "1.5.0"
 http-body-util = "0.1.5"
 hyper = { version = "1.11.1", default-features = false, features = ["client", "http1", "http2"] }

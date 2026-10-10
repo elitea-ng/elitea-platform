@@ -133,16 +133,11 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 	// name: powerpoint is catalogued as "pptx", xray as "xray_cloud", testIO
 	// as "testio" (verified directly against
 	// current_toolkit_catalogue_snapshot.json, not assumed from #865's text).
-	// zephyr_essential is a genuine 18th type in the same boat as #865's
-	// named 17 — present in the catalogue, absent from the Rust worker's
-	// supported_tool_types — that #865 did not name; included here because
-	// this test asserts what the endpoint actually reports, not what the
-	// issue happened to list.
+	// A family leaves this list when the Rust worker starts materializing
+	// it (even partially); the served check below then covers it. Of #865's
+	// named types only pptx is left: it needs a model lent to a toolkit.
 	want := []string{
-		"ado_boards", "ado_plans", "ado_repos", "ado_wiki", "aha", "bitbucket",
-		"confluence", "figma", "gitlab", "jira", "pptx", "qtest",
-		"testio", "testrail", "xray_cloud", "zephyr_enterprise",
-		"zephyr_essential", "zephyr_scale",
+		"pptx",
 	}
 	sort.Strings(want)
 	got := append([]string(nil), body.HiddenToolkitTypes...)
@@ -157,9 +152,17 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 			t.Errorf("hidden_toolkit_types is missing %q", w)
 		}
 	}
-	// One family the Rust worker DOES materialize: it must not appear hidden.
-	if gotSet["sql"] {
-		t.Error(`hidden_toolkit_types contains "sql", which materialize.rs supports`)
+	// Families the Rust worker DOES materialize must not appear hidden. A
+	// partial family (no indexing tools) is supported per tool, not hidden.
+	for _, served := range []string{
+		"sql", "aha", "ado_boards", "ado_plans", "ado_repos", "ado_wiki",
+		"bigquery", "bitbucket", "carrier", "confluence", "figma", "gitlab",
+		"jira", "qtest", "testio", "testrail", "xray_cloud",
+		"zephyr_enterprise", "zephyr_essential", "zephyr_scale",
+	} {
+		if gotSet[served] {
+			t.Errorf("hidden_toolkit_types contains %q, which materialize.rs supports", served)
+		}
 	}
 }
 

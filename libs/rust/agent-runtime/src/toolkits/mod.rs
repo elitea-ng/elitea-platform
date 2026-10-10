@@ -45,6 +45,7 @@ pub mod direct_execution;
 pub mod families;
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod families;
+mod family_error;
 pub(crate) mod invocation;
 pub(crate) mod materialize;
 pub(crate) mod mcp;
@@ -55,15 +56,35 @@ pub mod snapshot;
 pub mod tool_binding;
 
 #[cfg(test)]
+mod ado_boards_tests;
+#[cfg(test)]
+mod ado_plans_tests;
+#[cfg(test)]
+mod ado_repos_tests;
+#[cfg(test)]
+mod ado_test_support;
+#[cfg(test)]
+mod ado_wiki_tests;
+#[cfg(test)]
 mod aha_tests;
 #[cfg(test)]
 mod azure_search_tests;
 #[cfg(test)]
 mod azure_tests;
 #[cfg(test)]
+mod bigquery_tests;
+#[cfg(test)]
+mod bitbucket_tests;
+#[cfg(test)]
+mod carrier_tests;
+#[cfg(test)]
+mod confluence_tests;
+#[cfg(test)]
 mod direct_execution_tests;
 #[cfg(test)]
 mod elastic_tests;
+#[cfg(test)]
+mod figma_tests;
 #[cfg(test)]
 mod gcp_tests;
 #[cfg(test)]
@@ -71,9 +92,13 @@ mod github_tests;
 #[cfg(test)]
 mod gitlab_org_tests;
 #[cfg(test)]
+mod gitlab_tests;
+#[cfg(test)]
 mod google_places_tests;
 #[cfg(test)]
 mod invocation_tests;
+#[cfg(test)]
+mod jira_tests;
 #[cfg(test)]
 mod keycloak_tests;
 #[cfg(test)]
@@ -88,6 +113,8 @@ mod openapi_tests;
 mod policy_tests;
 #[cfg(test)]
 mod postman_tests;
+#[cfg(test)]
+mod qtest_tests;
 #[cfg(test)]
 mod rally_tests;
 #[cfg(test)]
@@ -111,7 +138,21 @@ mod sonar_tests;
 #[cfg(all(test, feature = "toolkit-sql"))]
 mod sql_tests;
 #[cfg(test)]
+mod testio_tests;
+#[cfg(test)]
+mod testrail_tests;
+#[cfg(test)]
+mod xray_cloud_tests;
+#[cfg(test)]
 mod yagmail_tests;
+#[cfg(test)]
+mod zephyr_enterprise_tests;
+#[cfg(test)]
+mod zephyr_essential_tests;
+#[cfg(test)]
+mod zephyr_rest_tests;
+#[cfg(test)]
+mod zephyr_scale_tests;
 #[cfg(test)]
 mod zephyr_squad_tests;
 #[cfg(test)]
@@ -129,9 +170,10 @@ pub use delegated_auth::{
 };
 pub use families::artifact::ArtifactToolAuthority;
 pub use materialize::{
-    ToolsetMaterializationError, ToolsetMaterializationErrorCode,
+    ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,
+    ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,
     materialize_configured_toolsets_with_artifact_authority,
-    materialize_configured_toolsets_with_tokens_and_authorization,
+    materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
 };
 pub use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,

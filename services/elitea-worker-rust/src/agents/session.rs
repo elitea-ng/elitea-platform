@@ -80,6 +80,7 @@ use crate::toolkits::{
     DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
     encode_delegated_authorization_requirement,
 };
+use crate::toolkits::{RefusedToolkit, refused_toolkits_notice_text};
 
 const APP_NAME: &str = "elitea-agent-v1";
 const ROOT_AGENT_NAME: &str = "elitea-agent";
@@ -273,6 +274,9 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// Tools two toolsets both published, and what each is called now (#983).
     /// Named in the session's opening notice beside the two above.
     renamed_tools: Vec<RenamedTool>,
+    /// Configured toolkits left out for a setting this runtime refuses
+    /// (#1207 review round 2), named in the same opening notice.
+    refused_toolkits: Vec<RefusedToolkit>,
     /// The toolkit each bound tool came from, named on its browser frames.
     toolkit_attribution: ToolkitAttributionCatalog,
     application_runtime: ApplicationRuntimeProjection,
@@ -295,6 +299,7 @@ impl OrdinaryRuntimeBindings {
             internal_tools: InternalToolCatalog::empty(),
             skipped_application_children: Vec::new(),
             renamed_tools: Vec::new(),
+            refused_toolkits: Vec::new(),
             toolkit_attribution: ToolkitAttributionCatalog::default(),
             application_runtime,
         }
@@ -326,6 +331,12 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) fn with_renamed_tools(mut self, renamed: Vec<RenamedTool>) -> Self {
         self.renamed_tools = renamed;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_refused_toolkits(mut self, refused: Vec<RefusedToolkit>) -> Self {
+        self.refused_toolkits = refused;
         self
     }
 
@@ -2298,6 +2309,7 @@ fn build_runtime_agent(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
+        refused_toolkits: _,
         toolkit_attribution,
         application_runtime,
         instruction_plan,
@@ -2492,6 +2504,7 @@ async fn prepare_direct_resume(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
+        refused_toolkits: _,
         toolkit_attribution,
         application_runtime,
         instruction_plan,
@@ -2819,6 +2832,7 @@ async fn seed_skipped_internal_tools_notice(
 struct FreshSessionNotices {
     skipped_application_children: Vec<SkippedApplicationChild>,
     renamed_tools: Vec<RenamedTool>,
+    refused_toolkits: Vec<RefusedToolkit>,
 }
 
 impl FreshSessionNotices {
@@ -2826,11 +2840,12 @@ impl FreshSessionNotices {
         Self {
             skipped_application_children: runtime.skipped_application_children.clone(),
             renamed_tools: runtime.renamed_tools.clone(),
+            refused_toolkits: runtime.refused_toolkits.clone(),
         }
     }
 }
 
-/// The three "what this run could not honour" notices, seeded together at the
+/// The four "what this run could not honour" notices, seeded together at the
 /// one point a session is created — see each of them for what it reports and
 /// why. They are one call so the caller keeps saying `if created { seed … }`
 /// once rather than growing a list.
@@ -2847,7 +2862,40 @@ async fn seed_fresh_session_notices(
         &notices.skipped_application_children,
     )
     .await?;
-    seed_renamed_tools_notice(sessions, identity, &notices.renamed_tools).await
+    seed_renamed_tools_notice(sessions, identity, &notices.renamed_tools).await?;
+    seed_refused_toolkits_notice(sessions, identity, &notices.refused_toolkits).await
+}
+
+/// #1207 review round 2: append ONE role-`"tool"` event naming every
+/// configured toolkit this invocation left out because its configuration
+/// asks for a setting the Rust worker refuses (plain HTTP, `verify_ssl=false`,
+/// a reserved custom header), with the reason.
+///
+/// Same place, same shape and the same reasons as the notices above. Before
+/// it, such a toolkit was skipped with one worker log line while the
+/// capability snapshot listed it as supported: the user saw an enabled
+/// toolkit that did nothing, and the model could not say why.
+async fn seed_refused_toolkits_notice(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    refused: &[RefusedToolkit],
+) -> Result<(), NativeAgentAssemblyError> {
+    let Some(notice) = refused_toolkits_notice_text(refused) else {
+        return Ok(());
+    };
+    let mut event = Event::new("elitea-refused-toolkits");
+    "system".clone_into(&mut event.author);
+    event.set_content(Content {
+        role: "tool".to_owned(),
+        parts: vec![adk_rust::Part::Text { text: notice }],
+    });
+    sessions
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event,
+        })
+        .await
+        .map_err(|_| dependency_unavailable())
 }
 
 /// #983: append ONE role-`"tool"` event naming every tool this invocation had

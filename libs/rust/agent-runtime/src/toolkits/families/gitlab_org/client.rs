@@ -16,6 +16,10 @@ use zeroize::Zeroizing;
 use super::config::GitLabOrgToolkitConfig;
 use super::diff::{DiffErrorCode, discussion_position, format_changes};
 use super::edit::{EditErrorCode, apply_update};
+use crate::toolkits::families::python_repr::repr_str;
+use crate::toolkits::families::vcs_text::{
+    LineRange, file_extension, mime_type, python_line_ranges, requested_label, slice_line_range,
+};
 
 const PRIVATE_TOKEN: HeaderName = HeaderName::from_static("private-token");
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -289,10 +293,10 @@ pub(in crate::toolkits) trait GitLabOrgApi: Send + Sync {
 }
 
 pub(in crate::toolkits) struct GitLabOrgHttpResponse {
-    status: StatusCode,
-    body: Option<Value>,
-    json_content_type: bool,
-    next_page: Option<Box<str>>,
+    pub(in crate::toolkits) status: StatusCode,
+    pub(in crate::toolkits) body: Option<Value>,
+    pub(in crate::toolkits) json_content_type: bool,
+    pub(in crate::toolkits) next_page: Option<Box<str>>,
 }
 
 impl GitLabOrgHttpResponse {
@@ -401,23 +405,31 @@ pub(crate) struct GitLabOrgClient {
     active_branch: Mutex<Box<str>>,
 }
 
+/// The production GitLab transport, shared with the single-project `gitlab`
+/// family so both families keep one HTTPS, no-redirect, bounded wire policy.
+pub(in crate::toolkits) fn reqwest_transport()
+-> Result<Arc<dyn GitLabOrgTransport>, GitLabOrgClientError> {
+    let http = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|_| invalid_configuration())?;
+    Ok(Arc::new(ReqwestGitLabOrgTransport { http }))
+}
+
 impl GitLabOrgClient {
     pub(crate) fn new(config: GitLabOrgToolkitConfig) -> Result<Self, GitLabOrgClientError> {
-        let http = reqwest::Client::builder()
-            .https_only(true)
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-            .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|_| invalid_configuration())?;
+        let transport = reqwest_transport()?;
         let active_branch = Mutex::new(config.branch().into());
         Ok(Self {
             config,
-            transport: Arc::new(ReqwestGitLabOrgTransport { http }),
+            transport,
             operation_gate: Mutex::new(()),
             active_branch,
         })
@@ -697,7 +709,7 @@ enum WildcardToken {
     },
 }
 
-fn wildcard_matches(pattern: &str, candidate: &str) -> bool {
+pub(in crate::toolkits) fn wildcard_matches(pattern: &str, candidate: &str) -> bool {
     let pattern = wildcard_tokens(pattern);
     let candidate = candidate.chars().collect::<Vec<_>>();
     let mut previous = vec![false; candidate.len() + 1];
@@ -778,31 +790,14 @@ fn wildcard_tokens(pattern: &str) -> Vec<WildcardToken> {
     tokens
 }
 
-fn python_quote(value: &str) -> String {
-    let mut output = String::with_capacity(value.len() + 2);
-    output.push('\'');
-    for character in value.chars() {
-        match character {
-            '\\' => output.push_str("\\\\"),
-            '\'' => output.push_str("\\'"),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            _ => output.push(character),
-        }
-    }
-    output.push('\'');
-    output
-}
-
-fn python_issue_list(issues: &[(&str, u64)]) -> String {
+pub(in crate::toolkits) fn python_issue_list(issues: &[(&str, u64)]) -> String {
     let mut output = String::from("[");
     for (index, (title, iid)) in issues.iter().enumerate() {
         if index > 0 {
             output.push_str(", ");
         }
         output.push_str("{'title': ");
-        output.push_str(&python_quote(title));
+        output.push_str(&repr_str(title));
         output.push_str(", 'number': ");
         output.push_str(&iid.to_string());
         output.push('}');
@@ -817,7 +812,7 @@ fn python_string_list(values: &[String]) -> String {
         if index > 0 {
             output.push_str(", ");
         }
-        output.push_str(&python_quote(value));
+        output.push_str(&repr_str(value));
     }
     output.push(']');
     output
@@ -862,65 +857,6 @@ fn map_diff_error(error: DiffErrorCode) -> GitLabOrgClientError {
     }
 }
 
-fn python_line_ranges(content: &str) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut start = 0usize;
-    let mut chars = content.char_indices().peekable();
-    while let Some((index, character)) = chars.next() {
-        let end = match character {
-            '\r' => {
-                if chars.peek().is_some_and(|(_, next)| *next == '\n') {
-                    chars
-                        .next()
-                        .map_or(index + 1, |(next, value)| next + value.len_utf8())
-                } else {
-                    index + character.len_utf8()
-                }
-            }
-            '\n' | '\u{000B}' | '\u{000C}' | '\u{001C}' | '\u{001D}' | '\u{001E}' | '\u{0085}'
-            | '\u{2028}' | '\u{2029}' => index + character.len_utf8(),
-            _ => continue,
-        };
-        ranges.push((start, end));
-        start = end;
-    }
-    if start < content.len() {
-        ranges.push((start, content.len()));
-    }
-    ranges
-}
-
-fn slice_requested_lines(
-    content: &str,
-    start: Option<usize>,
-    end: Option<usize>,
-) -> Result<&str, GitLabOrgClientError> {
-    if start.is_none() && end.is_none() {
-        return Ok(content);
-    }
-    let ranges = python_line_ranges(content);
-    if ranges.is_empty() {
-        return Err(invalid_input());
-    }
-    let first = start.unwrap_or(1);
-    let last = end.unwrap_or(ranges.len());
-    if first == 0 || last == 0 || first > last || last > ranges.len() {
-        return Err(invalid_input());
-    }
-    Ok(&content[ranges[first - 1].0..ranges[last - 1].1])
-}
-
-fn requested_range_label(start: Option<usize>, end: Option<usize>) -> String {
-    match (start, end) {
-        (None, None) => "full file".to_owned(),
-        (start, end) => format!(
-            "lines {}..{}",
-            start.map_or_else(|| "1".to_owned(), |value| value.to_string()),
-            end.map_or_else(|| "end".to_owned(), |value| value.to_string())
-        ),
-    }
-}
-
 fn guard_text_read(content: &str, file_path: &str, requested: &str, full_content: &str) -> Value {
     let actual_chars = content.chars().count();
     let serialized_bytes = serde_json::to_vec(&Value::String(content.to_owned()))
@@ -929,16 +865,7 @@ fn guard_text_read(content: &str, file_path: &str, requested: &str, full_content
         return Value::String(content.to_owned());
     }
     let total_lines = python_line_ranges(full_content).len();
-    let extension = file_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(file_path)
-        .rfind('.')
-        .filter(|index| *index > 0)
-        .map_or("", |index| {
-            &file_path[file_path.len() - file_path.rsplit('/').next().unwrap_or(file_path).len()
-                + index..]
-        });
+    let extension = file_extension(file_path);
     let exceeded = match (
         actual_chars > MAX_OUTPUT_CHARS,
         serialized_bytes > MAX_OUTPUT_BYTES,
@@ -996,22 +923,6 @@ fn guard_text_read(content: &str, file_path: &str, requested: &str, full_content
     })
 }
 
-fn mime_type(extension: &str) -> &'static str {
-    match extension.to_ascii_lowercase().as_str() {
-        ".py" => "text/x-python",
-        ".rs" => "text/x-rust",
-        ".js" => "text/javascript",
-        ".ts" => "text/typescript",
-        ".json" => "application/json",
-        ".md" => "text/markdown",
-        ".yaml" | ".yml" => "application/yaml",
-        ".html" => "text/html",
-        ".csv" => "text/csv",
-        ".txt" | ".log" => "text/plain",
-        _ => "application/octet-stream",
-    }
-}
-
 fn bounded_output(value: Value) -> Result<Value, GitLabOrgClientError> {
     if serde_json::to_vec(&value)
         .map_err(|_| invalid_response())?
@@ -1043,7 +954,10 @@ fn parse_next_page(
     Ok(Some(value.into()))
 }
 
-fn validate_effect_status(method: &Method, status: StatusCode) -> Result<(), GitLabOrgClientError> {
+pub(in crate::toolkits) fn validate_effect_status(
+    method: &Method,
+    status: StatusCode,
+) -> Result<(), GitLabOrgClientError> {
     let expected = match *method {
         Method::POST => StatusCode::CREATED,
         Method::DELETE => StatusCode::NO_CONTENT,
@@ -1055,7 +969,10 @@ fn validate_effect_status(method: &Method, status: StatusCode) -> Result<(), Git
     Ok(())
 }
 
-fn map_http_status(status: StatusCode, effect: bool) -> Result<(), GitLabOrgClientError> {
+pub(in crate::toolkits) fn map_http_status(
+    status: StatusCode,
+    effect: bool,
+) -> Result<(), GitLabOrgClientError> {
     if status.is_success() {
         return Ok(());
     }
@@ -1456,8 +1373,12 @@ impl GitLabOrgApi for GitLabOrgClient {
                 let file = self
                     .read_provider_file(repository, file_path, branch)
                     .await?;
-                let slice = slice_requested_lines(&file.content, start_line, end_line)?;
-                let requested = requested_range_label(start_line, end_line);
+                // Strict, unlike the SDK's clamping `apply_line_slice`: a
+                // range outside the file is invalid input here.
+                let slice =
+                    slice_line_range(&file.content, start_line, end_line, LineRange::Refuse)
+                        .ok_or_else(invalid_input)?;
+                let requested = requested_label(start_line, end_line);
                 bounded_output(guard_text_read(slice, file_path, &requested, &file.content))
             }
             GitLabOrgOperation::UpdateFile {

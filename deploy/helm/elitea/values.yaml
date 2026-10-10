@@ -3479,19 +3479,20 @@ worker:
   #   newer native agent runtime (checkpointing, step-limit enforcement) and no
   #   Python interpreter/dependency surface to patch.
   #   LOSES, as of this release:
-  #     - the 17 toolkit types #865 named, PLUS one more found verifying this
-  #       comment directly against the pinned catalogue and Rust snapshot
-  #       (`current_toolkit_catalogue_snapshot.json`,
-  #       `current_rust_worker_toolkit_capability_snapshot.json`) rather than
-  #       trusting the issue's own count — `zephyr_essential` is catalogued
-  #       and absent from the Rust worker's 22 materialized families the same
-  #       way the other 17 are. All 18: ado_boards, ado_plans, ado_repos,
-  #       ado_wiki, aha, bitbucket, confluence, figma, gitlab (plain —
-  #       distinct from the supported `gitlab_org`), jira, powerpoint
-  #       (catalogued as `pptx`), qtest, testIO (catalogued as `testio`),
-  #       testrail, xray (catalogued as `xray_cloud`), zephyr_enterprise,
-  #       zephyr_essential, zephyr_scale. Every tile is still shown, greyed,
-  #       with a reason (#865).
+  #     - whole toolkit types the Rust worker has no family for (checked
+  #       against `current_toolkit_catalogue_snapshot.json` and
+  #       `current_rust_worker_toolkit_capability_snapshot.json`): pptx,
+  #       imagegen and data_analysis (need a model lent to a toolkit),
+  #       memory, vectorstore, sandbox, delta_lake, aws and localgit (each
+  #       blocked on a platform decision recorded in the worker's
+  #       SOURCE_PARITY.md). #865's other 17 types are now Rust families.
+  #     - single tools inside partial Rust families: every indexing tool
+  #       (index_data, search_index, stepback_*), tools that need a vision
+  #       model or LLM (for example confluence get_page_with_image_descriptions,
+  #       figma analyze_file) and tools that upload artifact bytes (for
+  #       example aha attach_file, testrail add_file_to_case). The capability
+  #       snapshot's `supported_tools` lists exactly what is served; the
+  #       remaining tools are shown greyed with a reason (#865).
   #     - six internal chat-agent tools that
   #       `services/elitea-worker-rust/src/agents/internal_tools.rs` recognizes
   #       and then skips rather than runs (#866): image_generation (Image
@@ -3499,17 +3500,20 @@ worker:
   #       Tools), planner (Planner), swarm (Swarm Mode), lazy_tools_mode (Smart
   #       Tools Selection). A run that hits one of these now gets a visible
   #       assistant-facing notice instead of the tool silently doing nothing.
-  #   The Rust worker's own 22 supported toolkit families (azure, azure_search,
-  #   elastic, gcp, github, gitlab_org, google_places, k8s, keycloak, openapi,
-  #   postman, rally, report_portal, salesforce, service_now, sharepoint,
-  #   slack, sonar, sql, yagmail, zephyr, zephyr_squad) and its one internal
-  #   tool (ask_user) work exactly as on Python.
+  #   The Rust worker's other toolkit families (42 dispatched types: the
+  #   original azure, azure_search, elastic, gcp, github, gitlab_org,
+  #   google_places, k8s, keycloak, openapi, postman, rally, report_portal,
+  #   salesforce, service_now, sharepoint, slack, sonar, sql, yagmail, zephyr,
+  #   zephyr_squad, artifact, plus ado_*, aha, bigquery, bitbucket, carrier,
+  #   confluence, figma, gitlab, jira, qtest, testio, testrail, xray_cloud and
+  #   zephyr_enterprise/essential/scale) and its one internal tool
+  #   (ask_user) work as on Python, apart from the per-tool gaps above.
   #
   # Choosing `python` (the default): every toolkit type and internal tool
   # above is available, at the cost of the larger interpreter/dependency
   # image and process footprint the Rust worker was written to avoid.
   #
-  # Porting the missing 17 adapters and six tools to Rust is tracked as a
+  # Porting the remaining types and six tools to Rust is tracked as a
   # multi-sprint programme (umbrella #247); this default is the honest
   # near-term answer, not a statement that the port is done.
   implementation: python

@@ -1494,8 +1494,10 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "fancy-regex 0.18.0",
  "futures",
  "hmac 0.13.0",
+ "html-to-markdown-rs",
  "http",
  "http-body-util",
  "hyper",
@@ -1522,6 +1524,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "unicode-general-category",
  "zeroize",
 ]
 

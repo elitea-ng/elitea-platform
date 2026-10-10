@@ -5,9 +5,12 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent, Tool, ToolContext};
 use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
-use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::vcs_text::{
+    self, MAX_BATCH_FILES, MAX_CONTEXT_LINES, MAX_OUTPUT_CHARS, MAX_PATTERN_BYTES,
+    batch_skip_notice, guard_text_read, measure_result_chars, requested_label, slice_lines,
+};
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -38,13 +41,6 @@ const SEARCH_CODE: &str = "search_code";
 const GET_WORKFLOW_STATUS: &str = "get_workflow_status";
 const LIST_PROJECT_ISSUES: &str = "list_project_issues";
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
-const MAX_OUTPUT_CHARS: usize = 200_000;
-const MAX_BATCH_FILES: usize = 32;
-const MAX_PATTERN_BYTES: usize = 4 * 1_024;
-const MAX_CONTEXT_LINES: usize = 32;
-const MAX_GREP_MATCHES: usize = 2_000;
-const REGEX_SIZE_LIMIT: usize = 2 * 1_024 * 1_024;
-const REGEX_DFA_SIZE_LIMIT: usize = 2 * 1_024 * 1_024;
 
 /// Safe failure returned while constructing the first GitHub tool subset.
 pub(crate) struct GitHubToolsetError {
@@ -916,15 +912,7 @@ impl GitHubReadTool {
             .await
             .map_err(GitHubClientError::into_adk)?;
         let content = slice_lines(&full_content, start_line, end_line);
-        let requested = if start_line.is_some() || end_line.is_some() {
-            format!(
-                "start_line={}, end_line={}",
-                optional_number_label(start_line),
-                optional_number_label(end_line)
-            )
-        } else {
-            "full file read".to_owned()
-        };
+        let requested = requested_label(start_line, end_line);
         Ok(guard_text_read(
             content,
             file_path,
@@ -971,15 +959,7 @@ impl GitHubReadTool {
                 .await
                 .map(|full_content| {
                     let content = slice_lines(&full_content, offset, end_line);
-                    let requested = if offset.is_some() || end_line.is_some() {
-                        format!(
-                            "start_line={}, end_line={}",
-                            optional_number_label(offset),
-                            optional_number_label(end_line)
-                        )
-                    } else {
-                        "full file read".to_owned()
-                    };
+                    let requested = requested_label(offset, end_line);
                     guard_text_read(content, file_path, &requested, &full_content)
                 });
             let (value, measured) = match result {
@@ -1018,19 +998,26 @@ impl GitHubReadTool {
         if context_lines > MAX_CONTEXT_LINES {
             return Err(invalid_arguments());
         }
-        let expression = compile_pattern(pattern, is_regex)?;
+        // The one deliberate difference from `vcs_text`'s SDK behaviour: an
+        // invalid regular expression is refused as invalid arguments here
+        // (the GitHub family's established contract) instead of answering
+        // "no matches".
+        let expression =
+            vcs_text::compile_pattern(pattern, is_regex).ok_or_else(invalid_arguments)?;
         let content = self
             .client
             .read_text_file(file_path, branch, None)
             .await
             .map_err(GitHubClientError::into_adk)?;
-        Ok(Value::String(search_file_content(
+        vcs_text::grep_content(
             &content,
             file_path,
             pattern,
-            &expression,
+            Some(&expression),
             context_lines,
-        )?))
+        )
+        .map(Value::String)
+        .map_err(|vcs_text::OutputExhausted| output_resource_exhausted())
     }
 
     async fn execute_list_files(
@@ -1409,278 +1396,6 @@ fn optional_bool(arguments: &Map<String, Value>, key: &str) -> adk_core::Result<
         None | Some(Value::Null) => Ok(None),
         Some(value) => value.as_bool().map(Some).ok_or_else(invalid_arguments),
     }
-}
-
-fn optional_number_label(value: Option<usize>) -> String {
-    value.map_or_else(|| "None".to_owned(), |value| value.to_string())
-}
-
-fn python_line_ranges(content: &str) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut start = 0_usize;
-    let mut characters = content.char_indices().peekable();
-    while let Some((index, character)) = characters.next() {
-        let end = if character == '\r' {
-            if let Some((next_index, '\n')) = characters.peek().copied() {
-                let _ = characters.next();
-                Some(next_index.saturating_add('\n'.len_utf8()))
-            } else {
-                Some(index.saturating_add(character.len_utf8()))
-            }
-        } else if is_python_line_break(character) {
-            Some(index.saturating_add(character.len_utf8()))
-        } else {
-            None
-        };
-        if let Some(end) = end {
-            ranges.push((start, end));
-            start = end;
-        }
-    }
-    if start < content.len() {
-        ranges.push((start, content.len()));
-    }
-    ranges
-}
-
-fn is_python_line_break(character: char) -> bool {
-    matches!(
-        character,
-        '\n' | '\r'
-            | '\u{000B}'
-            | '\u{000C}'
-            | '\u{001C}'
-            | '\u{001D}'
-            | '\u{001E}'
-            | '\u{0085}'
-            | '\u{2028}'
-            | '\u{2029}'
-    )
-}
-
-fn slice_lines(content: &str, start_line: Option<usize>, end_line: Option<usize>) -> &str {
-    if start_line.is_none() && end_line.is_none() {
-        return content;
-    }
-    let ranges = python_line_ranges(content);
-    let first = start_line.unwrap_or(1).saturating_sub(1);
-    if first >= ranges.len() {
-        return "";
-    }
-    let last_exclusive = end_line.unwrap_or(ranges.len()).min(ranges.len());
-    if first >= last_exclusive {
-        return "";
-    }
-    &content[ranges[first].0..ranges[last_exclusive - 1].1]
-}
-
-fn guard_text_read(content: &str, file_path: &str, requested: &str, full_content: &str) -> Value {
-    let actual_chars = content.chars().count();
-    if actual_chars <= MAX_OUTPUT_CHARS {
-        return Value::String(content.to_owned());
-    }
-    let total_lines = python_line_ranges(full_content).len();
-    let extension = file_extension(file_path);
-    let file_type = mime_type(extension);
-    let (first_class_params, notes, full_read_allowed) = if total_lines <= 1 {
-        (
-            Map::new(),
-            format!(
-                "This file has no usable line breaks ({actual_chars} characters on a single line) and exceeds the {MAX_OUTPUT_CHARS}-character read limit. Line slicing would return the whole file, so a bounded read is not possible — the full read is refused."
-            ),
-            false,
-        )
-    } else {
-        let mut params = Map::new();
-        params.insert(
-            "start_line".to_owned(),
-            Value::String(format!(
-                "integer (1-indexed, inclusive) — first line to read. Valid range 1..{total_lines}. Omit to read from the beginning."
-            )),
-        );
-        params.insert(
-            "end_line".to_owned(),
-            Value::String(format!(
-                "integer (1-indexed, inclusive) — last line to read. Valid range 1..{total_lines}. Omit to read to the end."
-            )),
-        );
-        (
-            params,
-            "Use start_line/end_line together to read a bounded slice of a large file and keep tokens bounded."
-                .to_owned(),
-            full_content.chars().count() <= MAX_OUTPUT_CHARS,
-        )
-    };
-    json!({
-        "__result_status__": "content_too_large",
-        "context": {
-            "actual_chars": actual_chars,
-            "limit_chars": MAX_OUTPUT_CHARS,
-            "requested": requested
-        },
-        "extension": extension,
-        "filename": file_path,
-        "instruction_for_readFile": {
-            "extra_params": {},
-            "first_class_params": first_class_params,
-            "notes": notes
-        },
-        "read_limits": {
-            "full_read_allowed": full_read_allowed,
-            "max_output_chars": MAX_OUTPUT_CHARS
-        },
-        "schema_version": "1.0",
-        "total_lines": total_lines,
-        "type": file_type,
-        "unit": "lines"
-    })
-}
-
-fn file_extension(file_path: &str) -> &str {
-    let filename = file_path.rsplit('/').next().unwrap_or(file_path);
-    filename
-        .rfind('.')
-        .filter(|index| *index > 0)
-        .map_or("", |index| &filename[index..])
-}
-
-fn mime_type(extension: &str) -> &'static str {
-    match extension.to_ascii_lowercase().as_str() {
-        ".py" => "text/x-python",
-        ".rs" => "text/x-rust",
-        ".js" => "text/javascript",
-        ".ts" => "text/typescript",
-        ".json" => "application/json",
-        ".md" => "text/markdown",
-        ".yaml" | ".yml" => "application/yaml",
-        ".html" => "text/html",
-        ".css" => "text/css",
-        ".csv" => "text/csv",
-        ".txt" | ".log" => "text/plain",
-        _ => "application/octet-stream",
-    }
-}
-
-fn measure_result_chars(value: &Value) -> usize {
-    match value {
-        Value::String(value) => value.chars().count(),
-        _ => serde_json::to_string(value).map_or(MAX_OUTPUT_CHARS, |value| value.chars().count()),
-    }
-}
-
-fn batch_skip_notice() -> String {
-    format!(
-        "Skipped: the batch's cumulative {MAX_OUTPUT_CHARS}-character read limit was already reached by earlier files in this call. Read this file individually with read_file."
-    )
-}
-
-fn compile_pattern(pattern: &str, is_regex: bool) -> adk_core::Result<Regex> {
-    let source = if is_regex {
-        pattern.to_owned()
-    } else {
-        regex::escape(pattern)
-    };
-    RegexBuilder::new(&source)
-        .case_insensitive(true)
-        .size_limit(REGEX_SIZE_LIMIT)
-        .dfa_size_limit(REGEX_DFA_SIZE_LIMIT)
-        .build()
-        .map_err(|_| invalid_arguments())
-}
-
-fn search_file_content(
-    content: &str,
-    file_path: &str,
-    pattern: &str,
-    expression: &Regex,
-    context_lines: usize,
-) -> adk_core::Result<String> {
-    let ranges = python_line_ranges(content);
-    let lines = ranges
-        .iter()
-        .map(|(start, end)| content[*start..*end].trim_end_matches(is_python_line_break))
-        .collect::<Vec<_>>();
-    let mut matches = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if expression.is_match(line) {
-            if matches.len() >= MAX_GREP_MATCHES {
-                return Err(output_resource_exhausted());
-            }
-            matches.push(index);
-        }
-    }
-    if matches.is_empty() {
-        return Ok(format!(
-            "No matches found for pattern '{pattern}' in {file_path}"
-        ));
-    }
-    let mut output = format!(
-        "Found {} match(es) for pattern '{pattern}' in {file_path}:\n",
-        matches.len()
-    );
-    let mut output_chars = output.chars().count();
-    if output_chars > MAX_OUTPUT_CHARS {
-        return Err(output_resource_exhausted());
-    }
-    for (match_number, line_index) in matches.into_iter().enumerate() {
-        push_bounded(
-            &mut output,
-            &mut output_chars,
-            &format!(
-                "\n\n--- Match {} at line {} ---",
-                match_number + 1,
-                line_index + 1
-            ),
-        )?;
-        let context_start = line_index.saturating_sub(context_lines);
-        for line in &lines[context_start..line_index] {
-            push_prefixed_line(&mut output, &mut output_chars, "\n  ", line)?;
-        }
-        push_prefixed_line(&mut output, &mut output_chars, "\n> ", lines[line_index])?;
-        let context_end = line_index
-            .saturating_add(context_lines)
-            .saturating_add(1)
-            .min(lines.len());
-        for line in &lines[line_index.saturating_add(1)..context_end] {
-            push_prefixed_line(&mut output, &mut output_chars, "\n  ", line)?;
-        }
-    }
-    Ok(output)
-}
-
-fn push_bounded(
-    output: &mut String,
-    output_chars: &mut usize,
-    value: &str,
-) -> adk_core::Result<()> {
-    let next = output_chars
-        .checked_add(value.chars().count())
-        .ok_or_else(output_resource_exhausted)?;
-    if next > MAX_OUTPUT_CHARS {
-        return Err(output_resource_exhausted());
-    }
-    output.push_str(value);
-    *output_chars = next;
-    Ok(())
-}
-
-fn push_prefixed_line(
-    output: &mut String,
-    output_chars: &mut usize,
-    prefix: &str,
-    line: &str,
-) -> adk_core::Result<()> {
-    let next = output_chars
-        .checked_add(prefix.chars().count())
-        .and_then(|value| value.checked_add(line.chars().count()))
-        .ok_or_else(output_resource_exhausted)?;
-    if next > MAX_OUTPUT_CHARS {
-        return Err(output_resource_exhausted());
-    }
-    output.push_str(prefix);
-    output.push_str(line);
-    *output_chars = next;
-    Ok(())
 }
 
 fn output_resource_exhausted() -> AdkError {

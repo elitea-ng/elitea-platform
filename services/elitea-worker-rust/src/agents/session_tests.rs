@@ -2713,6 +2713,111 @@ async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_application_c
     );
 }
 
+/// #1207 review round 2: a configured toolkit refused for a setting the Rust
+/// worker does not honour is named in the run, with the reason — before, it
+/// was skipped with one log line while the toolkit stayed listed as enabled.
+/// The refusal comes from the real materializer, so the sentence asserted
+/// here is the one a user's agent receives.
+#[tokio::test]
+async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
+    let version = serde_json::json!({"tools": [{
+        "id": 7,
+        "type": "jira",
+        "toolkit_name": "tracker",
+        "settings": {
+            "jira_configuration": {
+                "base_url": "https://jira.example.test",
+                "hosting": "Server",
+                "username": "svc",
+                "api_key": "refused-toolkit-secret"
+            },
+            "verify_ssl": false
+        }
+    }]});
+    let policy = Arc::new(
+        ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new()).expect("policy"),
+    );
+    let snapshot = crate::toolkits::FrozenToolSnapshot::from_version_details(
+        version.as_object().expect("version"),
+    )
+    .expect("snapshot")
+    .apply_policy(policy.as_ref());
+    let materialized = crate::toolkits::materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy,
+        &serde_json::Map::new(),
+        None,
+    )
+    .await
+    .expect("a refused toolkit does not fail the agent");
+    assert!(materialized.toolsets.is_empty());
+
+    let request = ordinary_request(AgentExecutionKind::Adhoc);
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("refused-toolkit profile");
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("refused-toolkit native plan");
+    let user_id = plan.user_id().to_owned();
+    let session_id = plan.session_id().to_owned();
+    let sessions = Arc::new(InMemorySessionService::new());
+    let injected_sessions: Arc<dyn SessionService> = sessions.clone();
+    let runtime = OrdinaryRuntimeBindings::new(
+        Vec::new(),
+        SensitiveToolCatalog::default(),
+        DelegatedAuthorizationCatalog::default(),
+        ApplicationRuntimeProjection::default(),
+    )
+    .with_refused_toolkits(materialized.refused);
+    let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(
+        bound_model("unused — assembly alone is under test"),
+        plan,
+        runtime,
+        NativeToolExecutionMode::Sequential,
+        injected_sessions,
+    )
+    .await
+    .expect("refused-toolkit assembly");
+    drop(assembled);
+
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id,
+            session_id,
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("refused-toolkit session");
+    let notice_texts = session
+        .events()
+        .all()
+        .iter()
+        .filter_map(|event| {
+            let content = event.content()?;
+            if content.role != "tool" {
+                return None;
+            }
+            content.parts.iter().find_map(|part| match part {
+                Part::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notice_texts,
+        [
+            "toolkit 'tracker' (jira) is not enabled on this worker: verify_ssl=false is not \
+             supported by the Rust worker; TLS certificates are always verified"
+        ]
+    );
+    assert!(!notice_texts[0].contains("refused-toolkit-secret"));
+}
+
 /// The companion negative case: an agent whose children are all agents gets no
 /// notice — the fix must add nothing to the common path.
 #[tokio::test]
