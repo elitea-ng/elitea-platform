@@ -26,6 +26,9 @@ const MAX_REGEXP_BYTES: usize = 4 * 1_024;
 const MAX_FIELDS: usize = 256;
 /// fancy-regex's own default, stated so the bound is visible here.
 const REGEXP_BACKTRACK_LIMIT: usize = 1_000_000;
+/// The compiled-size bounds of the linear-time engine a plain pattern runs on.
+const REGEXP_SIZE_LIMIT: usize = 2 * 1_024 * 1_024;
+const REGEXP_DFA_SIZE_LIMIT: usize = 2 * 1_024 * 1_024;
 
 /// The overall budget for one caller-supplied `regexp` pass. The backtrack
 /// limit bounds one match attempt; this bounds the whole pass, which would
@@ -36,7 +39,8 @@ pub(super) struct RegexpBudget {
     pub(super) max_input_bytes: usize,
     /// Matches one pass may remove.
     pub(super) max_matches: usize,
-    /// Wall-clock time one pass may take, checked between matches.
+    /// Wall-clock time one pass may take, checked between steps (see
+    /// [`strip`] for what one step is).
     pub(super) deadline: Duration,
 }
 
@@ -55,7 +59,7 @@ const RENDER_GRACE: Duration = Duration::from_secs(10);
 /// The resolved controls for one call.
 pub(super) struct OutputControls {
     limit: usize,
-    regexp: Option<fancy_regex::Regex>,
+    regexp: Option<UserRegexp>,
     fields_retain: BTreeSet<String>,
     fields_remove: BTreeSet<String>,
     depth_start: i64,
@@ -97,12 +101,7 @@ pub(super) fn controls(
         Some(pattern) if pattern.len() > MAX_REGEXP_BYTES => {
             return Err("the regular expression exceeds the approved length".to_owned());
         }
-        Some(pattern) => Some(
-            fancy_regex::RegexBuilder::new(&pattern)
-                .backtrack_limit(REGEXP_BACKTRACK_LIMIT)
-                .build()
-                .map_err(|error| error.to_string())?,
-        ),
+        Some(pattern) => Some(UserRegexp::new(&pattern)?),
         None => None,
     };
     let fields = |key: &str, default: &[&str]| -> Result<BTreeSet<String>, String> {
@@ -271,11 +270,79 @@ fn reduce(
     }
 }
 
+/// A caller-supplied `regexp`, compiled for a pass whose total work the
+/// deadline bounds (#1207 review round 2).
+///
+/// The SDK applies `re.sub(regexp, "", json.dumps(result))` to the whole
+/// serialized result — one line, no newlines — so a pattern may match across
+/// any part of it and the text cannot be cut into chunks without changing
+/// what matches. What CAN be bounded is one search step:
+///
+/// * A pattern the linear-time `regex` engine accepts (no lookaround, no
+///   backreference) runs there. One search is O(pattern × input), and the
+///   input is capped at [`RegexpBudget::max_input_bytes`]; the deadline is
+///   checked between matches.
+/// * A pattern that needs backtracking (lookaround, backreferences) is run
+///   ANCHORED, one start position at a time: `\G(?:pattern)` tried at each
+///   position, the deadline checked before every attempt. One attempt is
+///   bounded by the backtrack limit ([`REGEXP_BACKTRACK_LIMIT`]); the old
+///   unanchored `find_iter` let a single call walk every remaining start
+///   position of a 16 MiB input — `(?=.*z)` costs O(input) per position —
+///   before the deadline was ever looked at.
+///
+/// Both forms remove exactly the leftmost-first, non-overlapping matches
+/// `find_iter` (and `re.sub`, for a non-empty replacement-free strip) removes.
+/// One known divergence: a `\G` the caller writes inside their own pattern
+/// matches at every position tried, not only at the previous match end.
+pub(super) struct UserRegexp {
+    engine: RegexpEngine,
+}
+
+enum RegexpEngine {
+    Linear(Regex),
+    Anchored(fancy_regex::Regex),
+}
+
+impl UserRegexp {
+    /// Compile `pattern`; the error is the text the SDK wrapper answers.
+    pub(super) fn new(pattern: &str) -> Result<Self, String> {
+        // fancy-regex is the syntax authority (it is what the SDK port has
+        // always compiled): a pattern it refuses is refused here too.
+        fancy_regex::RegexBuilder::new(pattern)
+            .backtrack_limit(REGEXP_BACKTRACK_LIMIT)
+            .build()
+            .map_err(|error| error.to_string())?;
+        if let Ok(linear) = regex::RegexBuilder::new(pattern)
+            .size_limit(REGEXP_SIZE_LIMIT)
+            .dfa_size_limit(REGEXP_DFA_SIZE_LIMIT)
+            .build()
+        {
+            return Ok(Self {
+                engine: RegexpEngine::Linear(linear),
+            });
+        }
+        // The pattern compiled above, so its groups balance and wrapping it
+        // cannot change where it ends — except an `(?x)` comment, which runs
+        // to the end of the line and swallows the closing parenthesis; that
+        // (and nothing else) fails here.
+        let anchored = fancy_regex::RegexBuilder::new(&format!("\\G(?:{pattern})"))
+            .backtrack_limit(REGEXP_BACKTRACK_LIMIT)
+            .build()
+            .map_err(|_| {
+                "the regular expression cannot be applied under the approved time bound".to_owned()
+            })?;
+        Ok(Self {
+            engine: RegexpEngine::Anchored(anchored),
+        })
+    }
+}
+
 /// `re.sub(regexp, "", text)` under `budget`: the text scanned, the number
 /// of matches removed and the wall-clock time are all bounded, and running
 /// over any of them is an error naming the bound (never a partial strip).
+/// See [`UserRegexp`] for why one step between deadline checks is bounded.
 pub(super) fn strip(
-    regexp: &fancy_regex::Regex,
+    regexp: &UserRegexp,
     text: &str,
     budget: RegexpBudget,
 ) -> Result<String, String> {
@@ -286,33 +353,82 @@ pub(super) fn strip(
             budget.max_input_bytes
         ));
     }
-    let started = Instant::now();
-    let mut out = String::with_capacity(text.len());
-    let mut last = 0;
-    let mut removed = 0_usize;
-    for found in regexp.find_iter(text) {
-        let found = found.map_err(|error| error.to_string())?;
-        // An empty match removes nothing; the deadline still bounds them.
-        if !found.as_str().is_empty() {
-            removed += 1;
+    let mut pass = StripPass {
+        text,
+        budget,
+        started: Instant::now(),
+        out: String::with_capacity(text.len()),
+        last: 0,
+        removed: 0,
+    };
+    match &regexp.engine {
+        RegexpEngine::Linear(regexp) => {
+            for found in regexp.find_iter(text) {
+                pass.check_deadline()?;
+                pass.remove(found.start(), found.end())?;
+            }
         }
-        if removed > budget.max_matches {
-            return Err(format!(
-                "the regexp matched more than {} times; make it more specific",
-                budget.max_matches
-            ));
+        RegexpEngine::Anchored(regexp) => {
+            let mut position = 0;
+            while position <= text.len() {
+                pass.check_deadline()?;
+                match regexp
+                    .find_from_pos(text, position)
+                    .map_err(|error| error.to_string())?
+                {
+                    Some(found) if found.end() > found.start() => {
+                        pass.remove(found.start(), found.end())?;
+                        position = found.end();
+                    }
+                    // No match here, or an empty one (it removes nothing):
+                    // the next attempt starts one character later.
+                    _ => match text[position..].chars().next() {
+                        Some(character) => position += character.len_utf8(),
+                        None => break,
+                    },
+                }
+            }
         }
-        if started.elapsed() > budget.deadline {
+    }
+    pass.out.push_str(&text[pass.last..]);
+    Ok(pass.out)
+}
+
+struct StripPass<'a> {
+    text: &'a str,
+    budget: RegexpBudget,
+    started: Instant,
+    out: String,
+    last: usize,
+    removed: usize,
+}
+
+impl StripPass<'_> {
+    fn check_deadline(&self) -> Result<(), String> {
+        if self.started.elapsed() > self.budget.deadline {
             return Err(format!(
                 "the regexp ran longer than the approved {} ms; make it more specific",
-                budget.deadline.as_millis()
+                self.budget.deadline.as_millis()
             ));
         }
-        out.push_str(&text[last..found.start()]);
-        last = found.end();
+        Ok(())
     }
-    out.push_str(&text[last..]);
-    Ok(out)
+
+    fn remove(&mut self, start: usize, end: usize) -> Result<(), String> {
+        // An empty match removes nothing; only removals count.
+        if end > start {
+            self.removed += 1;
+        }
+        if self.removed > self.budget.max_matches {
+            return Err(format!(
+                "the regexp matched more than {} times; make it more specific",
+                self.budget.max_matches
+            ));
+        }
+        self.out.push_str(&self.text[self.last..start]);
+        self.last = end;
+        Ok(())
+    }
 }
 
 /// The SDK's `fix_trailing_commas` after a regexp removed list items.
@@ -423,8 +539,8 @@ fn write_py_string(out: &mut String, text: &str) {
 mod tests {
     use super::*;
 
-    fn pattern(text: &str) -> fancy_regex::Regex {
-        fancy_regex::Regex::new(text).expect("test pattern")
+    fn pattern(text: &str) -> UserRegexp {
+        UserRegexp::new(text).expect("test pattern")
     }
 
     #[test]
@@ -436,6 +552,63 @@ mod tests {
             strip(&pattern("\"a\"(?=,)"), "[\"a\",\"a\"]", budget).as_deref(),
             Ok("[,\"a\"]")
         );
+    }
+
+    #[test]
+    fn backtracking_patterns_strip_like_find_iter() {
+        let budget = RegexpBudget::DEFAULT;
+        assert_eq!(
+            strip(&pattern(r"(\w)\1"), "aabbcdd", budget).as_deref(),
+            Ok("c")
+        );
+        assert_eq!(
+            strip(&pattern("(?<=a)b"), "abcab", budget).as_deref(),
+            Ok("aca")
+        );
+        assert_eq!(
+            strip(&pattern("(?=b)"), "abc", budget).as_deref(),
+            Ok("abc")
+        );
+        assert_eq!(
+            strip(&pattern("(?i)é(?=x)"), "éxÉxé", budget).as_deref(),
+            Ok("xxé")
+        );
+        // The SDK's own documented example (`api_wrapper.py` extra_params).
+        let sdk = pattern(r#"("strokes"|"fills")\s*:\s*("[^"]*"|[^\s,}\[]+)\s*(?=,|\}|\n)"#);
+        assert_eq!(
+            strip(&sdk, r#"{"fills": "red", "id": "1", "strokes": 2}"#, budget).as_deref(),
+            Ok(r#"{, "id": "1", }"#)
+        );
+    }
+
+    /// #1207 review round 2: `(?=a*z)` re-scans the rest of the input at
+    /// every start position and never matches. The unanchored `find_iter`
+    /// ran that whole quadratic walk inside ONE step, before the deadline
+    /// was ever checked; anchored per-position attempts stop at it.
+    #[test]
+    fn a_pathological_lookaround_that_never_matches_stops_at_the_deadline() {
+        let text = "a".repeat(1_024 * 1_024);
+        let budget = RegexpBudget {
+            deadline: Duration::from_millis(50),
+            ..RegexpBudget::DEFAULT
+        };
+        let started = Instant::now();
+        let error = strip(&pattern("(?=a*z)a"), &text, budget).expect_err("deadline");
+        assert!(
+            error.contains("ran longer than the approved 50 ms"),
+            "{error}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the pass ran {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn an_extended_pattern_whose_comment_would_swallow_the_wrapper_is_refused() {
+        assert!(UserRegexp::new("(?x)(?=a) # trailing comment").is_err());
+        assert!(UserRegexp::new("(?x)a # a linear pattern is never wrapped").is_ok());
     }
 
     #[test]
