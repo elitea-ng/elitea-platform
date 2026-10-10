@@ -1,8 +1,8 @@
 //! Certificate rotation without a restart.
 //!
 //! Certificates here are short-lived and re-issued by the deployment
-//! (cert-manager, a sidecar, a mounted secret). Two certificates are
-//! reloaded from their files every [`RELOAD_INTERVAL`]:
+//! (cert-manager, a sidecar, a mounted secret). Three things are reloaded
+//! from their files every [`RELOAD_INTERVAL`]:
 //!
 //! * the **serving** certificate and key of the gRPC listener
 //!   ([`ReloadingCertificate`], a rustls certificate resolver: a new
@@ -11,7 +11,11 @@
 //! * the **client** certificate and key to elitea-main's introspection
 //!   service (a tonic channel pins its identity at build time, so
 //!   [`spawn_channel_reloader`] rebuilds the channel when the files, or the
-//!   CA, change and swaps it into the [`GrpcIntrospector`]).
+//!   CA, change and swaps it into the [`GrpcIntrospector`]);
+//! * the **client CA bundle** of the listener ([`ReloadingClientCa`], a
+//!   rustls client-certificate verifier that delegates to a verifier
+//!   rebuilt from the bundle and swapped atomically: a new handshake is
+//!   checked against the new bundle, open connections are not re-checked).
 //!
 //! A reload that fails (a half-written file, a key that does not match the
 //! certificate) is logged and the previous material keeps serving; the next
@@ -20,9 +24,12 @@
 //! seconds_until_expiry`]), so a rotation that stopped is noticed before the
 //! certificate dies.
 //!
-//! The trust anchors (the client CA of the listener, the CA of elitea-main)
-//! are read at start. elitea-main takes the same stance for its listener: a
-//! CA change is a deliberate overlap-then-cutover, done by restarting.
+//! A CA bundle that cannot be used (unreadable, no certificate, not PEM) is
+//! logged and the previous bundle keeps verifying. The CA of elitea-main (the
+//! trust anchor of the introspection channel) follows its file through the
+//! channel reloader. Rotating a CA is still an overlap: publish a bundle
+//! holding both the old and the new CA, re-issue the certificates, then drop
+//! the old CA.
 
 use std::fmt;
 use std::io;
@@ -35,6 +42,7 @@ use rustls::RootCertStore;
 use rustls::ServerConfig;
 use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
 use sha2::{Digest as _, Sha256};
@@ -196,15 +204,9 @@ impl ResolvesServerCert for ReloadingCertificate {
     }
 }
 
-/// The listener's rustls configuration: mutual TLS against `client_ca_pem`,
-/// serving whatever `certificate` currently holds.
-///
-/// # Errors
-/// [`TlsError`] for a CA bundle with no usable certificate.
-pub fn server_config(
-    certificate: Arc<ReloadingCertificate>,
-    client_ca_pem: &[u8],
-) -> Result<Arc<ServerConfig>, TlsError> {
+/// Builds a client-certificate verifier trusting every certificate in
+/// `client_ca_pem`.
+fn client_verifier(client_ca_pem: &[u8]) -> Result<Arc<dyn ClientCertVerifier>, TlsError> {
     let mut roots = RootCertStore::empty();
     for der in CertificateDer::pem_slice_iter(client_ca_pem) {
         let der = der.map_err(|error| TlsError(format!("client CA PEM: {error}")))?;
@@ -217,14 +219,186 @@ pub fn server_config(
             "the client CA file holds no certificate".to_owned(),
         ));
     }
-    let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+    let verifier: Arc<dyn ClientCertVerifier> = WebPkiClientVerifier::builder(Arc::new(roots))
         .build()
         .map_err(|error| TlsError(format!("client verifier: {error}")))?;
+    Ok(verifier)
+}
+
+struct LoadedCa {
+    verifier: Arc<dyn ClientCertVerifier>,
+    digest: [u8; 32],
+}
+
+/// The listener's client-certificate verifier, following its CA bundle file.
+///
+/// It checks every handshake against the verifier built from the bundle as
+/// last loaded; [`ReloadingClientCa::reload`] builds a new one and swaps it
+/// in atomically. A bundle that fails to load leaves the previous one in
+/// place.
+///
+/// It advertises no accepted-CA hints in the handshake (the current bundle
+/// cannot be borrowed across a swap); a client with one certificate sends it
+/// anyway, which is every client of this service.
+pub struct ReloadingClientCa {
+    file: PathBuf,
+    current: ArcSwap<LoadedCa>,
+}
+
+impl fmt::Debug for ReloadingClientCa {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReloadingClientCa")
+            .field("file", &self.file)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReloadingClientCa {
+    /// Loads the bundle; the process does not start without a usable one.
+    ///
+    /// # Errors
+    /// [`TlsError`] for an unreadable bundle or one with no certificate.
+    pub fn load(file: &Path) -> Result<Arc<Self>, TlsError> {
+        let pem = read(file)?;
+        Ok(Arc::new(Self {
+            file: file.to_owned(),
+            current: ArcSwap::from_pointee(LoadedCa {
+                verifier: client_verifier(&pem)?,
+                digest: digest(&[&pem]),
+            }),
+        }))
+    }
+
+    /// Re-reads the bundle and, when it changed, swaps a verifier built from
+    /// it in atomically. `Ok(true)` when it swapped.
+    ///
+    /// # Errors
+    /// [`TlsError`] when the bundle cannot be read or holds no usable
+    /// certificate; the previous bundle keeps verifying.
+    pub fn reload(&self) -> Result<bool, TlsError> {
+        let pem = read(&self.file)?;
+        let fingerprint = digest(&[&pem]);
+        if fingerprint == self.current.load().digest {
+            return Ok(false);
+        }
+        self.current.store(Arc::new(LoadedCa {
+            verifier: client_verifier(&pem)?,
+            digest: fingerprint,
+        }));
+        Ok(true)
+    }
+
+    /// Reloads every `interval` until the process ends.
+    pub fn spawn_reloader(self: &Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                match this.reload() {
+                    Ok(true) => tracing::info!("client CA bundle reloaded"),
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "client CA bundle reload failed; keeping the previous one");
+                    }
+                }
+            }
+        })
+    }
+}
+
+impl ClientCertVerifier for ReloadingClientCa {
+    fn offer_client_auth(&self) -> bool {
+        self.current.load().verifier.offer_client_auth()
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        self.current.load().verifier.client_auth_mandatory()
+    }
+
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: rustls::pki_types::UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        self.current
+            .load()
+            .verifier
+            .verify_client_cert(end_entity, intermediates, now)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.current
+            .load()
+            .verifier
+            .verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.current
+            .load()
+            .verifier
+            .verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.current.load().verifier.supported_verify_schemes()
+    }
+}
+
+/// The listener's rustls configuration: mutual TLS against `client_ca_pem`,
+/// serving whatever `certificate` currently holds. The CA bundle is fixed;
+/// use [`server_config_with_ca`] for one that follows its file.
+///
+/// # Errors
+/// [`TlsError`] for a CA bundle with no usable certificate.
+pub fn server_config(
+    certificate: Arc<ReloadingCertificate>,
+    client_ca_pem: &[u8],
+) -> Result<Arc<ServerConfig>, TlsError> {
+    Ok(server_config_with_verifier(
+        certificate,
+        client_verifier(client_ca_pem)?,
+    ))
+}
+
+/// [`server_config`] with a client CA bundle that follows its file
+/// ([`ReloadingClientCa`]).
+#[must_use]
+pub fn server_config_with_ca(
+    certificate: Arc<ReloadingCertificate>,
+    client_ca: Arc<ReloadingClientCa>,
+) -> Arc<ServerConfig> {
+    server_config_with_verifier(certificate, client_ca)
+}
+
+fn server_config_with_verifier(
+    certificate: Arc<ReloadingCertificate>,
+    verifier: Arc<dyn ClientCertVerifier>,
+) -> Arc<ServerConfig> {
     let mut config = ServerConfig::builder()
         .with_client_cert_verifier(verifier)
         .with_cert_resolver(certificate);
     config.alpn_protocols = vec![b"h2".to_vec()];
-    Ok(Arc::new(config))
+    Arc::new(config)
 }
 
 /// Accepts TCP connections on `listener` and completes their TLS handshakes
@@ -501,6 +675,136 @@ mod tests {
         assert_eq!(resolver.seconds_until_expiry(not_after - 1800), 1800);
         assert!(resolver.seconds_until_expiry(not_after - 1800) <= MIN_VALIDITY_SECONDS);
         assert!(resolver.seconds_until_expiry(not_after + 10) < 0);
+    }
+
+    /// A CA and a client certificate it signed.
+    struct ClientPki {
+        ca_pem: String,
+        cert: CertificateDer<'static>,
+        key: PrivateKeyDer<'static>,
+    }
+
+    fn client_pki(name: &str) -> ClientPki {
+        let ca_key = KeyPair::generate().expect("ca key");
+        let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, format!("ca-{name}"));
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![
+            rcgen::KeyUsagePurpose::KeyCertSign,
+            rcgen::KeyUsagePurpose::DigitalSignature,
+        ];
+        let ca_pem = ca_params.self_signed(&ca_key).expect("ca").pem();
+        let issuer = rcgen::Issuer::new(ca_params, ca_key);
+        let key = KeyPair::generate().expect("client key");
+        let cert = CertificateParams::new(vec![format!("{name}.client")])
+            .expect("params")
+            .signed_by(&key, &issuer)
+            .expect("client certificate");
+        ClientPki {
+            ca_pem,
+            cert: cert.der().clone(),
+            key: PrivateKeyDer::try_from(key.serialize_der()).expect("key der"),
+        }
+    }
+
+    /// Whether the server accepts a fresh handshake from `client`.
+    async fn handshake_accepted(
+        server: &Arc<ServerConfig>,
+        serving: &Pair,
+        client: &ClientPki,
+    ) -> bool {
+        let (client_io, server_io) = tokio::io::duplex(16 * 1024);
+        let acceptor = TlsAcceptor::from(Arc::clone(server));
+        let accepting = tokio::spawn(async move { acceptor.accept(server_io).await.is_ok() });
+        let mut roots = RootCertStore::empty();
+        for der in CertificateDer::pem_slice_iter(serving.cert.as_bytes()) {
+            roots.add(der.expect("pem")).expect("root");
+        }
+        let config = Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_client_auth_cert(vec![client.cert.clone()], client.key.clone_key())
+                .expect("client auth"),
+        );
+        let connecting = tokio_rustls::TlsConnector::from(config)
+            .connect(ServerName::try_from("localhost").expect("name"), client_io);
+        // TLS 1.3 reports a refused client certificate to the client only on
+        // its first read, so the verdict is the server's.
+        let connected = connecting.await;
+        if let Ok(mut stream) = connected {
+            let mut byte = [0_u8; 1];
+            let _ = stream.read(&mut byte).await;
+        }
+        accepting.await.expect("server task")
+    }
+
+    #[tokio::test]
+    async fn a_rotated_client_ca_admits_new_clients_on_a_new_handshake() {
+        crate::install_crypto_provider();
+        let dir = scratch("ca");
+        let serving = pair("serving");
+        let (cert_file, key_file) = write(&dir, "serving", &serving);
+        let certificate = ReloadingCertificate::load(&cert_file, &key_file).expect("load");
+        let old = client_pki("old");
+        let new = client_pki("new");
+        let ca_file = dir.join("client-ca.crt");
+        std::fs::write(&ca_file, &old.ca_pem).expect("write ca");
+        let ca = ReloadingClientCa::load(&ca_file).expect("load ca");
+        let server = server_config_with_ca(certificate, Arc::clone(&ca));
+
+        assert!(handshake_accepted(&server, &serving, &old).await);
+        assert!(
+            !handshake_accepted(&server, &serving, &new).await,
+            "a client of a CA that is not trusted yet"
+        );
+        assert!(!ca.reload().expect("nothing changed"));
+
+        // A bad bundle keeps the old CA.
+        std::fs::write(&ca_file, "not a certificate").expect("write");
+        assert!(ca.reload().is_err());
+        std::fs::write(&ca_file, "").expect("write");
+        assert!(ca.reload().is_err());
+        assert!(handshake_accepted(&server, &serving, &old).await);
+        assert!(!handshake_accepted(&server, &serving, &new).await);
+
+        // The overlap bundle (old + new) admits both on new handshakes.
+        std::fs::write(&ca_file, format!("{}{}", old.ca_pem, new.ca_pem)).expect("write");
+        assert!(ca.reload().expect("swapped"));
+        assert!(handshake_accepted(&server, &serving, &new).await);
+        assert!(handshake_accepted(&server, &serving, &old).await);
+
+        // The cutover drops the old CA.
+        std::fs::write(&ca_file, &new.ca_pem).expect("write");
+        assert!(ca.reload().expect("swapped"));
+        assert!(handshake_accepted(&server, &serving, &new).await);
+        assert!(!handshake_accepted(&server, &serving, &old).await);
+    }
+
+    #[tokio::test]
+    async fn the_client_ca_reloader_follows_its_file() {
+        crate::install_crypto_provider();
+        let dir = scratch("ca-reloader");
+        let serving = pair("serving");
+        let (cert_file, key_file) = write(&dir, "serving", &serving);
+        let certificate = ReloadingCertificate::load(&cert_file, &key_file).expect("load");
+        let old = client_pki("old");
+        let new = client_pki("new");
+        let ca_file = dir.join("client-ca.crt");
+        std::fs::write(&ca_file, &old.ca_pem).expect("write ca");
+        let ca = ReloadingClientCa::load(&ca_file).expect("load ca");
+        let server = server_config_with_ca(certificate, Arc::clone(&ca));
+        let reloader = ca.spawn_reloader(Duration::from_millis(50));
+        std::fs::write(&ca_file, &new.ca_pem).expect("write ca");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !handshake_accepted(&server, &serving, &new).await {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the rotated CA was never picked up");
+        reloader.abort();
     }
 
     /// Accepts any client certificate: the test reads which one was sent.
