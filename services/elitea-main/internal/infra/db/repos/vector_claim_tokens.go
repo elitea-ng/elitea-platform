@@ -72,7 +72,9 @@ func NewVectorClaimTokens(pool *pgxpool.Pool) *VectorClaimTokens {
 // claim must be live — unreleased, unexpired, and matching the fence's
 // execution, generation, token and workload identity — or Mint returns
 // runtimedomain.ErrStaleFence and records nothing. A repeated mint for the
-// same claim replaces the earlier hash.
+// same claim replaces the earlier hash; a repeat for which the execution no
+// longer qualifies (Minted false) deletes the earlier hash instead, so no
+// earlier token stays active for the claim.
 func (s *VectorClaimTokens) Mint(ctx context.Context, request VectorClaimTokenMint) (VectorClaimTokenMinted, error) {
 	if s == nil || s.pool == nil {
 		return VectorClaimTokenMinted{}, errors.New("mint vector claim token: no database")
@@ -112,18 +114,32 @@ WITH live AS (
       AND j.command_id = $11
       AND c.released_at IS NULL
       AND c.lease_expires_at > clock_timestamp()
-), minted AS (
-    INSERT INTO elitea_runtime.vector_claim_tokens (
-        token_sha256, claim_id, execution_id, generation,
-        resource_project_id, actor_id, allowed_sources, expires_at
-    )
-    SELECT $5, live.claim_id, live.execution_id, live.generation,
-           live.resource_project_id, live.actor_id, $7::text[], live.expires_at
+), qualifying AS (
+    SELECT live.*
     FROM live
     WHERE live.capability_id = ANY ($6::text[])
       AND live.resource_project_id > 0
       AND live.actor_id ~ '^[1-9][0-9]{0,18}$'
       AND live.expires_at > clock_timestamp() + interval '1 second'
+), revoked AS (
+    -- A live claim whose execution no longer qualifies must not keep an
+    -- earlier token: a re-claim of the same claim after the execution
+    -- changed (another capability, a passed deadline) takes the old one away
+    -- in this same statement. The two writes touch disjoint cases: the
+    -- delete runs only when nothing qualifies, the insert only when
+    -- something does.
+    DELETE FROM elitea_runtime.vector_claim_tokens AS stale
+    USING live
+    WHERE stale.claim_id = live.claim_id
+      AND NOT EXISTS (SELECT 1 FROM qualifying)
+), minted AS (
+    INSERT INTO elitea_runtime.vector_claim_tokens (
+        token_sha256, claim_id, execution_id, generation,
+        resource_project_id, actor_id, allowed_sources, expires_at
+    )
+    SELECT $5, qualifying.claim_id, qualifying.execution_id, qualifying.generation,
+           qualifying.resource_project_id, qualifying.actor_id, $7::text[], qualifying.expires_at
+    FROM qualifying
     ON CONFLICT (claim_id) DO UPDATE
     SET token_sha256 = EXCLUDED.token_sha256,
         allowed_sources = EXCLUDED.allowed_sources,

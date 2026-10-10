@@ -193,6 +193,61 @@ func TestPostgresVectorClaimTokenIsNotMintedForOtherExecutions(t *testing.T) {
 	}
 }
 
+// A re-claim of a live claim whose execution no longer qualifies takes the
+// earlier token away in the same statement.
+func TestPostgresVectorClaimTokenIsRevokedWhenTheClaimNoLongerQualifies(t *testing.T) {
+	for name, update := range map[string]string{
+		"another capability": `UPDATE elitea_runtime.execution_jobs SET capability_id = 'toolkit.execute.read.v1' WHERE execution_id = $1`,
+		"a non-user actor":   `UPDATE elitea_runtime.execution_jobs SET actor_id = 'system' WHERE execution_id = $1`,
+		"a passed deadline":  `UPDATE elitea_runtime.command_outbox SET deadline = clock_timestamp() - interval '1 minute' WHERE execution_id = $1`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newVectorClaimFixture(t, "vector-claim-revoked")
+			minted, err := f.mint(t, f.fence, "bearer-old")
+			if err != nil || !minted.Minted || !f.active(t, "bearer-old") {
+				t.Fatalf("first mint %+v, %v", minted, err)
+			}
+			f.exec(t, update, f.fence.ExecutionID)
+			minted, err = f.mint(t, f.fence, "bearer-new")
+			if err != nil || minted.Minted {
+				t.Fatalf("re-claim minted %+v, %v", minted, err)
+			}
+			if f.active(t, "bearer-old") {
+				t.Fatal("the earlier token is still active")
+			}
+			if f.active(t, "bearer-new") {
+				t.Fatal("a non-qualifying mint left an active token")
+			}
+			var rows int
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.vector_claim_tokens`).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows != 0 {
+				t.Fatalf("%d token rows remain", rows)
+			}
+		})
+	}
+}
+
+// A stale fence is not a live claim: its mint touches nothing, including the
+// live claim's token.
+func TestPostgresVectorClaimTokenOfAnotherClaimSurvivesAStaleMint(t *testing.T) {
+	f := newVectorClaimFixture(t, "vector-claim-survives")
+	if _, err := f.mint(t, f.fence, "bearer-live"); err != nil {
+		t.Fatal(err)
+	}
+	stale := f.fence
+	stale.Token[0] ^= 0xff
+	if _, err := f.mint(t, stale, "bearer-stale"); !errors.Is(err, runtimedomain.ErrStaleFence) {
+		t.Fatalf("stale fence: %v", err)
+	}
+	if !f.active(t, "bearer-live") {
+		t.Fatal("a stale mint revoked the live claim's token")
+	}
+}
+
 func TestPostgresVectorClaimTokenDiesWithItsClaim(t *testing.T) {
 	t.Run("settled", func(t *testing.T) {
 		f := newVectorClaimFixture(t, "vector-claim-settled")
