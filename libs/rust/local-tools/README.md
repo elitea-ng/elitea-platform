@@ -15,7 +15,20 @@ destructive.**
 | `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
 | `git_commit` | allowed: denied paths (`path_deny`, credentials, the desktop app's data) are never committed: left out of the given paths, and a commit of what is staged is refused, naming them, while the index holds one |
 | `run_command`, `read-only` or `workspace-write` sandbox, no network, not destructive | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
-| `run_command` that is destructive (below), asks for the network or `full-access`, or may run unconfined (the host allows unenforced sandboxes, or only Landlock is available and the host allows partial enforcement: credentials and the desktop app's data are not hidden there) | asked |
+| `run_command` that is destructive (below), asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; decided per command, from the sandbox chosen for it) | asked |
+
+## The session's deny list
+
+One list per session (`deny::DenyList`), built when it opens: the
+credentials under the home, the host app's directories (those it resolved,
+and the defaults under the identifier it passes), and the session's data
+directory. Each entry is denied as given and as resolved (a symlinked
+`~/.config` included), without regard to case where the file system folds
+it. Every tool reads it: the OS sandbox of each command, the host's git,
+`git_diff` and `git_commit`, and the in-process file tools, walkers and the
+local index (`read_file`, `read_document`, `list_tree`, `search_files`
+refuse or leave out what it covers, as for `path_deny`, wherever the
+workspace sits).
 
 ## What counts as destructive
 

@@ -12,9 +12,10 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::command::{CommandShape, analyse};
+use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::policy::SandboxMode;
-use crate::sandbox::{Enforcement, SandboxConfig, SandboxRequest, credential_paths, prepare};
+use crate::sandbox::{Enforcement, Prepared, SandboxConfig, SandboxRequest, prepare};
 use crate::workspace::{EntryKind, Workspace, WsPath};
 
 /// Variables passed through from the host's environment; everything else
@@ -52,20 +53,27 @@ pub struct ShellConfig {
     /// workspace-write).
     pub temp_dir: PathBuf,
     pub sandbox: SandboxConfig,
-    /// More files or directories commands may not read: the desktop app's
-    /// own config, data, log and cache directories as the host resolved
-    /// them (the authority for those; [`credential_paths`] only covers the
-    /// default layouts), and the session's data directory (the session
-    /// adds it). Canonicalised when they exist. See
-    /// [`SandboxRequest::deny_paths`].
+    /// More files or directories no tool may read: the host app's own
+    /// config, data, log and cache directories as the host resolved them
+    /// (the authority for those), and the session's data directory (the
+    /// session adds it). Both spellings are denied (see
+    /// [`crate::deny`]).
     pub deny_read: Vec<PathBuf>,
-    /// Deny reading [`credential_paths`] under the home directory (on by
+    /// Deny the credentials ([`crate::sandbox::credential_paths`]) and the
+    /// app's identifier directories under the home directory (on by
     /// default).
     pub protect_credentials: bool,
-    /// The home directory whose [`credential_paths`] are denied, also the
-    /// commands' `HOME`. `None`: the host's `HOME`. For tests and hosts
-    /// that run commands under another home.
+    /// The home directory those are looked up under, also the commands'
+    /// `HOME`. `None`: the host's `HOME`. For tests and hosts that run
+    /// commands under another home.
     pub home: Option<PathBuf>,
+    /// The host app's identifier (a bundle id such as `com.example.app`):
+    /// its default directories under the home are denied too
+    /// ([`crate::deny::app_paths`]). The host's resolved directories in
+    /// [`Self::deny_read`] remain the authority.
+    pub app_id: Option<String>,
+    /// The session's deny list, once [`Self::freeze_deny_list`] built it.
+    frozen: Option<Arc<DenyList>>,
     /// Let commands with the network on listen for connections (off by
     /// default).
     pub allow_listen: bool,
@@ -90,6 +98,8 @@ impl ShellConfig {
             deny_read: Vec::new(),
             protect_credentials: true,
             home: None,
+            app_id: None,
+            frozen: None,
             allow_listen: false,
             allow_keychain: false,
             git_global_config: None,
@@ -107,21 +117,30 @@ impl ShellConfig {
         })
     }
 
-    /// Every path denied outright: [`Self::deny_read`] (canonical where it
-    /// exists) and, with `credentials`, [`credential_paths`] under
-    /// [`Self::home_dir`]. What sandboxed commands cannot read, and what
-    /// `git_diff` and `git_commit` keep out.
+    /// The deny list these settings name: the one [`Self::freeze_deny_list`]
+    /// kept, else built now.
     #[must_use]
-    pub fn denied_paths(&self, credentials: bool) -> Vec<PathBuf> {
-        let mut out: Vec<PathBuf> = self
-            .deny_read
-            .iter()
-            .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()))
-            .collect();
-        if credentials && let Some(home) = self.home_dir() {
-            out.extend(credential_paths(&home));
-        }
-        out
+    pub fn deny_list(&self) -> Arc<DenyList> {
+        self.frozen
+            .clone()
+            .unwrap_or_else(|| Arc::new(self.build_deny_list()))
+    }
+
+    /// Build the deny list once and keep it: every later command, the host
+    /// git and the file tools share it. Change the fields before, not after.
+    pub fn freeze_deny_list(&mut self) -> Arc<DenyList> {
+        let list = Arc::new(self.build_deny_list());
+        self.frozen = Some(list.clone());
+        list
+    }
+
+    fn build_deny_list(&self) -> DenyList {
+        DenyList::for_session(
+            self.home_dir().as_deref(),
+            self.app_id.as_deref(),
+            self.protect_credentials,
+            self.deny_read.iter().cloned(),
+        )
     }
 }
 
@@ -288,7 +307,7 @@ pub fn sandbox_request(
     let temp = std::fs::canonicalize(&config.temp_dir).map_err(|error| {
         ToolError::io("cannot resolve the session's temporary directory", &error)
     })?;
-    let deny_paths = config.denied_paths(config.protect_credentials);
+    let deny_paths = config.deny_list().paths().to_vec();
     Ok(SandboxRequest {
         mode,
         network,
@@ -330,6 +349,63 @@ pub async fn run(
     config: &ShellConfig,
     spec: &CommandSpec,
 ) -> ToolResult<CommandOutput> {
+    run_checked(workspace, config, spec, true).await
+}
+
+/// How `spec` would run: the sandbox [`prepare`] chooses for it now. What
+/// the session classifies a command by before asking about it.
+///
+/// # Errors
+///
+/// As [`run`], before anything runs.
+pub fn plan(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+) -> ToolResult<Prepared> {
+    let request = sandbox_request(workspace, config, spec.mode, spec.network)?;
+    let prepared = prepare(&request, &["/usr/bin/true".to_owned()], &config.sandbox)?;
+    Ok(Prepared {
+        // Full access with the network is no sandbox, by request: what
+        // the person allowed for it, not a sandbox falling short.
+        hides_denied: prepared.hides_denied || request.is_unconfined(),
+        ..prepared
+    })
+}
+
+/// The refusal [`run_checked`] makes: the sandbox chosen now does not hide
+/// what `request` denies, and the command was not approved that way.
+fn refuse_unhidden(
+    request: &SandboxRequest,
+    prepared: &Prepared,
+    unhidden_approved: bool,
+) -> ToolResult<()> {
+    if prepared.hides_denied || request.is_unconfined() || unhidden_approved {
+        return Ok(());
+    }
+    Err(ToolError::new(
+        ErrorCode::SandboxUnavailable,
+        format!(
+            "the sandbox can no longer hide what this command may not read ({}); nothing \
+             ran: run it again to be asked",
+            prepared.note.unwrap_or("no sandbox")
+        ),
+    ))
+}
+
+/// [`run`], refusing (nothing runs) when the sandbox chosen now does not
+/// hide what the request denies and `unhidden_approved` is false: the
+/// command was approved as confined, and the sandbox changed since.
+///
+/// # Errors
+///
+/// As [`run`], and [`ErrorCode::SandboxUnavailable`] for that refusal.
+pub async fn run_checked(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+    unhidden_approved: bool,
+) -> ToolResult<CommandOutput> {
     if workspace.stat(&spec.cwd)? != Some(EntryKind::Dir) {
         return Err(ToolError::invalid(format!(
             "`{}` is not a directory in the workspace",
@@ -345,6 +421,7 @@ pub async fn run(
     };
     let request = sandbox_request(workspace, config, spec.mode, spec.network)?;
     let prepared = prepare(&request, &argv, &config.sandbox)?;
+    refuse_unhidden(&request, &prepared, unhidden_approved)?;
     let timeout = spec
         .timeout
         .unwrap_or(config.default_timeout)
@@ -575,6 +652,7 @@ mod tests {
         let workspace = Workspace::open(&base.join("ws"), &[]).expect("workspace");
         let mut config = ShellConfig::new(temp.clone());
         config.home = Some(home.clone());
+        config.app_id = Some("ai.elitea.desktop".to_owned());
         config.deny_read.push(data.clone());
         let request =
             super::sandbox_request(&workspace, &config, SandboxMode::WorkspaceWrite, false)

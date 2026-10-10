@@ -146,6 +146,7 @@ fn fixture_with(
         data_dir: base.join("data"),
         shell: Some(shell),
         deny_read: Vec::new(),
+        app_id: None,
     })
     .expect("session");
     Fixture {

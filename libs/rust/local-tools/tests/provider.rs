@@ -164,6 +164,7 @@ fn fixture(policy: LocalWorkPolicy) -> Fixture {
         data_dir,
         shell: Some(shell),
         deny_read: Vec::new(),
+        app_id: None,
     })
     .expect("session");
     let provider = LocalToolProvider::new(session.clone());
@@ -367,10 +368,14 @@ async fn denials_rejections_and_deferrals_reach_the_model_as_results() {
     .await;
     assert_eq!(ran["status"], "ok", "{ran}");
     assert_eq!(ran["exit_code"], 0);
+    // Confinement is decided per command: where a sandbox hid what the
+    // command may not read (Seatbelt), it ran unasked; where it ran
+    // without one (the fixture allows unenforced sandboxes), it was asked.
+    let expected_asks = usize::from(ran["enforcement"] != "full");
     assert_eq!(
         fixture.person.asked(),
-        1,
-        "the fixture allows unenforced sandboxes, so every command is asked"
+        expected_asks,
+        "asked exactly when the command ran unconfined: {ran}"
     );
 
     let written = call(
@@ -380,7 +385,11 @@ async fn denials_rejections_and_deferrals_reach_the_model_as_results() {
     )
     .await;
     assert_eq!(written["status"], "ok", "{written}");
-    assert_eq!(fixture.person.asked(), 1, "writes are not asked");
+    assert_eq!(
+        fixture.person.asked(),
+        expected_asks,
+        "writes are not asked"
+    );
     let untracked = fixture.session.workspace().root().join("x.txt");
 
     fixture.person.answer(ApprovalOutcome::Decided {

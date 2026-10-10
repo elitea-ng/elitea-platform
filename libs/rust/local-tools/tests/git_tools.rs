@@ -73,6 +73,7 @@ async fn git_diff_leaves_out_path_deny_files() {
         data_dir: dir.path().join("data"),
         shell: None,
         deny_read: Vec::new(),
+        app_id: None,
     })
     .expect("session");
     for args in [

@@ -22,12 +22,13 @@ use crate::approvals::{
     ChoiceStore, PAYLOAD_KEY, RuleApprovals, RulesEngine, ToolCall, ToolKind, WorkspaceSettings,
 };
 use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
+use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::files;
 use crate::git::{Repo, capped, check_revision};
 use crate::ledger::ReadLedger;
 use crate::policy::{LocalWorkPolicy, SandboxMode};
-use crate::sandbox::{SandboxRequest, commands_may_read_denied};
+use crate::sandbox::SandboxRequest;
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
 
@@ -50,12 +51,16 @@ pub struct SessionConfig {
     /// Command settings; `None`: defaults, with the temporary directory
     /// under `data_dir` and no Linux sandbox helper.
     pub shell: Option<ShellConfig>,
-    /// More directories no command may read, whatever `shell` says: the
-    /// desktop app's own config, data, log and cache directories as the
-    /// host resolved them (canonical when they exist). Added to
+    /// More directories no tool may read, whatever `shell` says: the host
+    /// app's own config, data, log and cache directories as the host
+    /// resolved them (the authority for those). Added to
     /// [`ShellConfig::deny_read`]; a writable root inside one (the
     /// session's temporary directory) stays usable.
     pub deny_read: Vec<PathBuf>,
+    /// The host app's identifier (its bundle id): its default directories
+    /// under the home are denied too ([`crate::deny::app_paths`]); sets
+    /// [`ShellConfig::app_id`] when `shell` names none.
+    pub app_id: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -360,13 +365,14 @@ fn diff_exclusions(workspace: &Workspace, denied: &[PathBuf]) -> Vec<String> {
 }
 
 /// The staged paths (`git diff --cached --name-only -z` output, relative
-/// to the repository's top) that `path_deny` or `denied` (the credential
-/// list and the app's own directories) covers.
+/// to the repository's top) that `path_deny` or the session's deny list
+/// covers, compared without regard to case where the file system folds it
+/// (as `diff_exclusions`' `icase` pathspecs do).
 fn denied_staged(
     workspace: &Workspace,
     top: &Path,
     staged: &[u8],
-    denied: &[PathBuf],
+    denied: &DenyList,
 ) -> Vec<String> {
     staged
         .split(|byte| *byte == 0)
@@ -379,14 +385,7 @@ fn denied_staged(
                 .ok()
                 .and_then(|relative| WsPath::from_relative(relative).ok())
                 .is_some_and(|path| workspace.denied_by(&path, Intent::Read).is_some());
-            path_deny
-                || denied.iter().any(|credential| {
-                    let text = credential.to_string_lossy();
-                    match text.strip_suffix('*') {
-                        Some(prefix) => absolute.to_string_lossy().starts_with(prefix),
-                        None => absolute.starts_with(credential),
-                    }
-                })
+            path_deny || denied.covers(&absolute)
         })
         .collect()
 }
@@ -397,7 +396,7 @@ fn staged_denied(
     workspace: &Workspace,
     repo: &Repo,
     selected: &[String],
-    denied: &[PathBuf],
+    denied: &DenyList,
 ) -> ToolResult<Vec<String>> {
     let root = workspace.root();
     let mut words = vec![
@@ -418,7 +417,7 @@ fn staged_denied(
 /// Before committing what is staged: refuse, naming them, when the index
 /// holds denied paths (staged outside the session, say). Nothing is
 /// unstaged: the person decides what to do with their index.
-fn refuse_staged_denied(workspace: &Workspace, repo: &Repo, denied: &[PathBuf]) -> ToolResult<()> {
+fn refuse_staged_denied(workspace: &Workspace, repo: &Repo, denied: &DenyList) -> ToolResult<()> {
     let staged = staged_denied(workspace, repo, &[], denied)?;
     if staged.is_empty() {
         return Ok(());
@@ -439,7 +438,7 @@ fn unstage_denied(
     workspace: &Workspace,
     repo: &Repo,
     selected: &[String],
-    denied_paths: &[PathBuf],
+    denied_paths: &DenyList,
     writes: &[PathBuf],
     protected: &[PathBuf],
 ) -> ToolResult<()> {
@@ -484,24 +483,33 @@ impl LocalSession {
     /// The folder cannot be opened, a rule does not parse, or the session id
     /// is invalid.
     pub fn open(config: SessionConfig) -> ToolResult<Arc<Self>> {
-        let workspace = Workspace::open(&config.root, &config.policy.path_deny)?;
         let mut shell = config.shell.unwrap_or_else(|| {
             ShellConfig::new(config.data_dir.join("tmp").join(&config.session_id))
         });
-        // Commands that may run with credentials and the app's data
-        // readable (no sandbox, or Landlock alone) are unconfined: every
-        // one is asked.
-        let engine = Arc::new(
-            RulesEngine::new(config.policy, &workspace, config.settings, config.choices)?
-                .with_unenforced_commands(commands_may_read_denied(&shell.sandbox)),
-        );
-        let approvals: Arc<dyn ApprovalChannel> =
-            Arc::new(RuleApprovals::new(engine.clone(), config.prompt));
-        // Copy checkpoints, remembered choices and the host's state live in
-        // the data directory: no command reads them (the session's temporary
-        // directory inside it stays usable).
+        // One deny list for the session, built once: the host's own
+        // directories, the app's identifier directories and the
+        // credentials under the home, and the data directory (copy
+        // checkpoints, remembered choices; the session's temporary
+        // directory inside it stays usable). Commands, host git and the
+        // file tools all read it.
         shell.deny_read.extend(config.deny_read);
         shell.deny_read.push(config.data_dir.clone());
+        if shell.app_id.is_none() {
+            shell.app_id = config.app_id;
+        }
+        let deny = shell.freeze_deny_list();
+        let workspace =
+            Workspace::open(&config.root, &config.policy.path_deny)?.with_deny_list(deny);
+        // Whether a command is confined is decided per command, from the
+        // sandbox chosen for it (`run_command`).
+        let engine = Arc::new(RulesEngine::new(
+            config.policy,
+            &workspace,
+            config.settings,
+            config.choices,
+        )?);
+        let approvals: Arc<dyn ApprovalChannel> =
+            Arc::new(RuleApprovals::new(engine.clone(), config.prompt));
         let checkpoints = Checkpoints::open_with(
             &workspace,
             &config.session_id,
@@ -523,6 +531,12 @@ impl LocalSession {
     #[must_use]
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    /// The session's deny list (built once at open).
+    #[must_use]
+    pub fn deny_list(&self) -> Arc<DenyList> {
+        self.shell.deny_list()
     }
 
     /// The sandbox request a command in `mode` would run under: what it
@@ -944,17 +958,6 @@ impl LocalSession {
         };
         let max = self.engine.policy().max_sandbox_mode;
         let mode = args.sandbox.unwrap_or(SandboxMode::WorkspaceWrite.min(max));
-        let call = ToolCall {
-            tool: ToolKind::RunCommand,
-            paths: vec![cwd.display_string()],
-            command: Some(args.command.clone()),
-            sandbox: Some(mode),
-            network: args.network,
-        };
-        self.authorize(call_id, call, "run a command").await?;
-        if mode != SandboxMode::ReadOnly {
-            self.blocking(Self::ensure_checkpoint).await?;
-        }
         let spec = CommandSpec {
             command: args.command,
             cwd,
@@ -962,7 +965,27 @@ impl LocalSession {
             mode,
             network: args.network,
         };
-        let output = shell::run(&self.workspace, &self.shell, &spec).await?;
+        // The sandbox this command gets now decides whether it is
+        // confined: one that cannot hide what it denies (no sandbox,
+        // Landlock alone, a bubblewrap walk cut short) makes it the
+        // person's call, every time. A sandbox that cannot run at all is
+        // refused after the rules, as before.
+        let unconfined = shell::plan(&self.workspace, &self.shell, &spec)
+            .is_ok_and(|prepared| !prepared.hides_denied);
+        let call = ToolCall {
+            tool: ToolKind::RunCommand,
+            paths: vec![spec.cwd.display_string()],
+            command: Some(spec.command.clone()),
+            sandbox: Some(mode),
+            network: args.network,
+            unconfined,
+        };
+        self.authorize(call_id, call, "run a command").await?;
+        if mode != SandboxMode::ReadOnly {
+            self.blocking(Self::ensure_checkpoint).await?;
+        }
+        // Approved as confined and the sandbox changed since: refused.
+        let output = shell::run_checked(&self.workspace, &self.shell, &spec, unconfined).await?;
         serde_json::to_value(output)
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the result"))
     }
@@ -1004,10 +1027,10 @@ impl LocalSession {
             .iter()
             .map(|path| format!(":(literal){}", path.display_string()))
             .collect();
-        let denied = self.shell.denied_paths(true);
+        let denied = self.shell.deny_list();
         let mut pathspecs = selected.clone();
         if !pathspecs.is_empty() {
-            pathspecs.extend(diff_exclusions(&self.workspace, &denied));
+            pathspecs.extend(diff_exclusions(&self.workspace, denied.paths()));
         }
         self.blocking(move |this| {
             let repo = match (this.checkpoints.repo(), this.checkpoints.git_refusal()) {
@@ -1148,7 +1171,7 @@ impl LocalSession {
                 command_line.extend(paths.iter().map(|path| format!(":(literal){path}")));
                 command_line.extend(diff_exclusions(
                     &self.workspace,
-                    &self.shell.denied_paths(true),
+                    self.shell.deny_list().paths(),
                 ));
             }
         }
@@ -1182,7 +1205,8 @@ mod tests {
     use std::path::Path;
 
     use super::denied_staged;
-    use crate::workspace::Workspace;
+    use crate::deny::DenyList;
+    use crate::workspace::{CASE_INSENSITIVE_FS, Workspace};
 
     #[test]
     fn staged_paths_under_path_deny_are_found() {
@@ -1194,8 +1218,27 @@ mod tests {
                 .expect("workspace");
         let staged = b"ws/a.txt\0ws/.env\0ws/deep/.env\0ws/secrets/key\0outside/.env\0";
         assert_eq!(
-            denied_staged(&workspace, Path::new(&top), staged, &[]),
+            denied_staged(&workspace, Path::new(&top), staged, &DenyList::default()),
             ["ws/.env", "ws/deep/.env", "ws/secrets/key"]
         );
+    }
+
+    /// A staged path under the deny list (outside the workspace, in the
+    /// repository) is found under any case where the file system folds
+    /// case, as `diff_exclusions`' `icase` pathspecs match it.
+    #[test]
+    fn staged_paths_under_the_deny_list_match_case_insensitively() {
+        let dir = tempfile::tempdir().expect("dir");
+        let top = std::fs::canonicalize(dir.path()).expect("canonical");
+        std::fs::create_dir(top.join("ws")).expect("ws");
+        let workspace = Workspace::open(&top.join("ws"), &[]).expect("workspace");
+        let denied = DenyList::new([top.join("home/.ssh")]);
+        let staged = b"home/.ssh/id\0home/.SSH/id_ed25519\0home/sshx\0";
+        let found = denied_staged(&workspace, Path::new(&top), staged, &denied);
+        if CASE_INSENSITIVE_FS {
+            assert_eq!(found, ["home/.ssh/id", "home/.SSH/id_ed25519"]);
+        } else {
+            assert_eq!(found, ["home/.ssh/id"]);
+        }
     }
 }

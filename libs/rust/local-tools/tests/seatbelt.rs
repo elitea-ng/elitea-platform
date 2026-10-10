@@ -17,6 +17,9 @@ use elitea_local_tools::sandbox::Enforcement;
 use elitea_local_tools::shell::{CommandOutput, CommandSpec, ShellConfig, run};
 use elitea_local_tools::workspace::{Workspace, WsPath};
 
+/// The desktop app's bundle identifier, as its host passes it.
+const APP_ID: &str = "ai.elitea.desktop";
+
 fn available() -> bool {
     if Path::new("/usr/bin/sandbox-exec").is_file() {
         return true;
@@ -68,6 +71,8 @@ fn fixture_in(
     let mut config = ShellConfig::new(data.join("tmp/session"));
     config.deny_read.push(data);
     config.home = Some(home.clone());
+    // The host names its identifier; the library holds none.
+    config.app_id = Some(APP_ID.to_owned());
     Fixture {
         outside,
         home,

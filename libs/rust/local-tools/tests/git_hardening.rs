@@ -108,6 +108,7 @@ async fn exercise(planted: &Planted) -> (Checkpoints, Value) {
         data_dir: planted.data.clone(),
         shell: None,
         deny_read: Vec::new(),
+        app_id: None,
     })
     .expect("session");
     let mut results = Vec::new();

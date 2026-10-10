@@ -119,16 +119,41 @@ pub fn run() {
         .menu(menu::build)
         .on_menu_event(|app, event| menu::on_event(app, &event))
         .setup(|app| {
+            // Each app directory resolved once. Config and data are
+            // required; logs and cache are optional, but one that cannot be
+            // resolved is said, not dropped silently (it then cannot be
+            // kept out of local commands by its resolved path).
+            let log_dir = optional_app_dir("log", app.path().app_log_dir());
+            let cache_dir = optional_app_dir("cache", app.path().app_cache_dir());
             log::info!(
                 "Elitea {} starting (logs: {})",
                 env!("CARGO_PKG_VERSION"),
-                app.path()
-                    .app_log_dir()
+                log_dir
+                    .as_ref()
                     .map(|d| d.display().to_string())
                     .unwrap_or_default()
             );
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
+            // What no local tool reads (commands, host git, file tools, the
+            // index): every directory the app keeps data in, as resolved
+            // here (XDG overrides and Windows included), and its identifier.
+            let sandbox_deny = d0::turn::app_dirs_for_sandbox([
+                Some(config_dir.clone()),
+                Some(data_dir.clone()),
+                log_dir.clone(),
+                cache_dir,
+            ]);
+            let app_id = sandbox_app_id(app.config());
+            let host_deny = Arc::new(elitea_local_tools::deny::DenyList::for_session(
+                std::env::var_os("HOME")
+                    .filter(|home| !home.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .as_deref(),
+                app_id.as_deref(),
+                true,
+                sandbox_deny.iter().cloned(),
+            ));
             // The one HTTP client (src/net.rs). Its TLS roots load on a
             // background thread, so they never hold the window back.
             let http = net::SharedHttp::new(env!("CARGO_PKG_VERSION"));
@@ -197,11 +222,14 @@ pub fn run() {
             let policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
             // The local workspace indexes (ADR-0029 decision 7), opened on
             // first use; kept across sign-out and wipe (src/index.rs).
-            let index = Arc::new(IndexRegistry::new(
-                workspaces.clone(),
-                policy.clone(),
-                Arc::new(MainWindowIndexEvents(app.handle().clone())),
-            ));
+            let index = Arc::new(
+                IndexRegistry::new(
+                    workspaces.clone(),
+                    policy.clone(),
+                    Arc::new(MainWindowIndexEvents(app.handle().clone())),
+                )
+                .with_deny_list(host_deny),
+            );
             let agents = Arc::new(
                 AgentHost::new(HostDeps {
                     http: http.clone(),
@@ -213,16 +241,11 @@ pub fn run() {
                     retry: RetryPolicy::default(),
                     history: history.clone(),
                     index: Some(index.clone()),
-                    // Every directory the app keeps data in, as resolved
-                    // here (XDG overrides and Windows included): sandboxed
-                    // commands cannot read the stored sign-in, the history,
-                    // other workspaces' checkpoints and indexes, or logs.
-                    sandbox_deny: d0::turn::app_dirs_for_sandbox([
-                        Some(config_dir.clone()),
-                        Some(data_dir.clone()),
-                        app.path().app_log_dir().ok(),
-                        app.path().app_cache_dir().ok(),
-                    ]),
+                    // The stored sign-in, the history, other workspaces'
+                    // checkpoints and indexes, and the logs stay out of
+                    // every local tool's reach.
+                    sandbox_deny,
+                    app_id,
                 })
                 .map_err(|error| error.message)?,
             );
@@ -234,7 +257,7 @@ pub fn run() {
                     }),
                     config_dir,
                     data_dir,
-                    log_dir: app.path().app_log_dir().ok(),
+                    log_dir,
                     credentials: credentials.clone(),
                     workspaces: workspaces.clone(),
                     history: history.clone(),
@@ -333,4 +356,27 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     // Linux and Windows: a drop on the window is the only native open.
     #[cfg(not(target_os = "macos"))]
     let _ = (app, event);
+}
+
+/// An optional app directory, or `None` with a warning saying which one
+/// could not be resolved.
+fn optional_app_dir(
+    which: &str,
+    resolved: tauri::Result<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    resolved
+        .map_err(|error| {
+            log::warn!(
+                "the app {which} directory cannot be resolved ({error}); local tools are kept \
+                 out of it only by its default location"
+            );
+        })
+        .ok()
+}
+
+/// The identifier local tools deny the app's default directories under:
+/// the bundle identifier in the Tauri config (`tauri.conf.json`).
+pub(crate) fn sandbox_app_id(config: &tauri::Config) -> Option<String> {
+    let identifier = config.identifier.trim();
+    (!identifier.is_empty()).then(|| identifier.to_owned())
 }

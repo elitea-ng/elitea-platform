@@ -172,20 +172,24 @@ pub struct HostDeps {
     /// The workspaces' local indexes; `None` offers no index tools.
     pub index: Option<Arc<IndexRegistry>>,
     /// The app's own directories as Tauri resolved them (config, data,
-    /// log, cache; see [`app_dirs_for_sandbox`]): no local command may
-    /// read them, whatever `XDG_*` or the platform puts them at. The
-    /// sandbox's built-in list only covers the default layouts.
+    /// log, cache; see [`app_dirs_for_sandbox`]): no local tool may read
+    /// them, whatever `XDG_*` or the platform puts them at. The authority
+    /// for the app's data; the session's deny list adds their resolved
+    /// spellings.
     pub sandbox_deny: Vec<PathBuf>,
+    /// The app's identifier from its Tauri config: the library derives the
+    /// default directories under it (a fallback to `sandbox_deny`).
+    pub app_id: Option<String>,
 }
 
-/// The app's resolved directories as sandbox deny entries: canonical when
-/// they exist (the sandboxes match resolved paths), as given otherwise,
-/// without duplicates (on macOS config and data are one directory).
+/// The app's resolved directories as deny entries, as given (the deny list
+/// keeps this spelling and adds the resolved one, lazily: a directory
+/// created after launch is still covered), without duplicates (on macOS
+/// config and data are one directory).
 #[must_use]
 pub fn app_dirs_for_sandbox(dirs: impl IntoIterator<Item = Option<PathBuf>>) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for dir in dirs.into_iter().flatten() {
-        let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
         if !out.contains(&dir) {
             out.push(dir);
         }
@@ -663,6 +667,7 @@ impl AgentHost {
             data_dir,
             shell: None,
             deny_read: self.deps.sandbox_deny.clone(),
+            app_id: self.deps.app_id.clone(),
         })
         .map_err(|e| TurnError::new("workspace_unavailable", e.message().to_owned()))?;
         let entry = Arc::new(WorkspaceSession {

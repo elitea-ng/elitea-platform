@@ -650,13 +650,13 @@ asks `agent_turn_status` and takes its `done` payload as the event.
 order, when committed. `approval_request.can_remember` is true when
 `allow_always` is remembered for this workspace (a simple command or a
 file change); otherwise `allow_always` answers once and the UI does not
-offer it. It is false for every `run_command` on a machine that may run
-commands unconfined: the OS sandbox cannot be enforced, or only Landlock is
-available (Linux without bubblewrap, under partial enforcement), which
-cannot hide credentials or the app's own data. Every command is asked
-there, so a remembered choice would never apply. Such a command's result
-carries `enforcement: "partial"` and an `enforcement_note` saying that
-credentials, the app's data and `path_deny` files were not hidden; the
+offer it. It is false for a `run_command` that would run unconfined,
+decided per command from the sandbox chosen for it: none (a host that
+allows unenforced sandboxes), Landlock alone (Linux without bubblewrap,
+under partial enforcement), or a bubblewrap walk cut at its cap. Such a
+command is asked every time, so a remembered choice would never apply.
+Its result carries `enforcement: "partial"` or `"none"` and, for Landlock
+and a cut walk, an `enforcement_note` saying what was not hidden; the
 turn's `local_work` report keeps the weakest `enforcement` and its note. `can_remember` is
 computed from the very precondition the host's `remember` checks; should
 storing the choice still fail (the scope the person picked does not match,

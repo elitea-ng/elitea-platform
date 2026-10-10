@@ -76,6 +76,7 @@ async fn writes_through_symlinks_are_approved_as_their_targets() {
         data_dir: dir.path().join("data"),
         shell: None,
         deny_read: Vec::new(),
+        app_id: None,
     })
     .expect("session");
 
@@ -185,6 +186,7 @@ async fn a_patch_target_swapped_during_approval_is_refused() {
         data_dir: dir.path().join("data"),
         shell: None,
         deny_read: Vec::new(),
+        app_id: None,
     })
     .expect("session");
     for path in ["a.txt", "other.txt"] {

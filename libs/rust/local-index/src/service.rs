@@ -40,6 +40,7 @@ use elitea_inventory_core::retrieval::view::GraphView;
 use elitea_inventory_core::store::{
     Completion, GraphKey, GraphStore as _, RunCounts, SourceStatus,
 };
+use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::files::MAX_FILE_BYTES;
 use elitea_local_tools::workspace::Workspace;
 use serde::Serialize;
@@ -66,7 +67,9 @@ pub fn policy_fingerprint(path_deny: &[String]) -> String {
     deny.sort();
     deny.dedup();
     let inputs = serde_json::json!({
-        "version": 1,
+        // 2: the host's deny list (credentials, the app's own data) is left
+        // out too; a build made before may hold them and is not answered.
+        "version": 2,
         "path_deny": deny,
         "max_file_bytes": MAX_FILE_BYTES,
         "selection": "all",
@@ -304,8 +307,29 @@ impl IndexService {
         index_dir: &Path,
         events: Arc<dyn IndexEvents>,
     ) -> Result<Arc<Self>, IndexError> {
-        let workspace = Workspace::open(root, path_deny)
+        Self::open_with_deny(workspace_id, root, path_deny, None, index_dir, events)
+    }
+
+    /// [`Self::open`], leaving out what the host's `deny` list covers too
+    /// (credentials, the app's own data): never listed, read or indexed,
+    /// wherever the workspace sits.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn open_with_deny(
+        workspace_id: &str,
+        root: &Path,
+        path_deny: &[String],
+        deny: Option<Arc<DenyList>>,
+        index_dir: &Path,
+        events: Arc<dyn IndexEvents>,
+    ) -> Result<Arc<Self>, IndexError> {
+        let mut workspace = Workspace::open(root, path_deny)
             .map_err(|error| IndexError::new("workspace_unavailable", error.message()))?;
+        if let Some(deny) = deny {
+            workspace = workspace.with_deny_list(deny);
+        }
         let store = SqliteGraphStore::open_for_workspace(index_dir, workspace.root())?;
         let policy = policy_fingerprint(path_deny);
         let built = store.revision_now(KEY)?.is_some();

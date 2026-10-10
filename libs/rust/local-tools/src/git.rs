@@ -62,9 +62,10 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest as _, Sha256};
 
+use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::policy::SandboxMode;
-use crate::sandbox::{SandboxConfig, SandboxRequest, credential_paths, prepare};
+use crate::sandbox::{SandboxConfig, SandboxRequest, prepare};
 
 /// Bytes of git output a tool returns.
 pub const OUTPUT_CAP: usize = 256 * 1024;
@@ -494,6 +495,8 @@ pub struct Repo {
     top: PathBuf,
     git_dir: PathBuf,
     sandbox: SandboxConfig,
+    /// What host git may not read or write: the session's deny list.
+    deny: Arc<DenyList>,
     /// Tests: a global config file instead of the person's.
     global_config: Option<PathBuf>,
     /// Config texts (`(file name, text)`) git's own reader already agreed
@@ -508,13 +511,19 @@ pub struct Repo {
 
 impl Repo {
     /// The repository whose work tree holds `dir` (canonical), found the
-    /// way git looks (the nearest `.git` upwards), and checked.
+    /// way git looks (the nearest `.git` upwards), and checked. Host git
+    /// runs under `sandbox`'s settings and cannot read what `deny` covers
+    /// (the session's deny list).
     ///
     /// # Errors
     ///
     /// [`ErrorCode::UnsafeRepository`] when one is found but must not be
     /// used; `Ok(None)` when there is none.
-    pub fn discover(dir: &Path, sandbox: &SandboxConfig) -> ToolResult<Option<Self>> {
+    pub fn discover(
+        dir: &Path,
+        sandbox: &SandboxConfig,
+        deny: Arc<DenyList>,
+    ) -> ToolResult<Option<Self>> {
         let Some(top) = dir
             .ancestors()
             .find(|candidate| std::fs::symlink_metadata(candidate.join(".git")).is_ok())
@@ -525,6 +534,7 @@ impl Repo {
             top: top.to_path_buf(),
             git_dir: top.join(".git"),
             sandbox: sandbox.clone(),
+            deny,
             global_config: None,
             verified: Arc::default(),
             attributes_checked: Arc::default(),
@@ -1024,21 +1034,13 @@ impl<'a> Git<'a> {
         self.spawn(args)
     }
 
-    fn spawn(&self, args: &[&str]) -> ToolResult<Vec<u8>> {
-        let what = args.first().copied().unwrap_or_default();
-        let mut words = vec![git_binary()?.display().to_string()];
-        words.extend(HARDENING.iter().map(|arg| (*arg).to_owned()));
-        if self.literal {
-            words.push("--literal-pathspecs".to_owned());
-        }
-        words.extend(args.iter().map(|arg| (*arg).to_owned()));
-        let request = SandboxRequest {
+    /// What this git process may write and may not read: its writable
+    /// paths, and the session's deny list.
+    pub(crate) fn sandbox_request(&self) -> SandboxRequest {
+        SandboxRequest {
             writable_roots: self.writable.clone(),
             protected: self.protected.clone(),
-            deny_paths: std::env::var_os("HOME")
-                .filter(|home| !home.is_empty())
-                .map(|home| credential_paths(Path::new(&home)))
-                .unwrap_or_default(),
+            deny_paths: self.repo.deny.paths().to_vec(),
             ..SandboxRequest::new(
                 if self.writable.is_empty() {
                     SandboxMode::ReadOnly
@@ -1047,7 +1049,18 @@ impl<'a> Git<'a> {
                 },
                 false,
             )
-        };
+        }
+    }
+
+    fn spawn(&self, args: &[&str]) -> ToolResult<Vec<u8>> {
+        let what = args.first().copied().unwrap_or_default();
+        let mut words = vec![git_binary()?.display().to_string()];
+        words.extend(HARDENING.iter().map(|arg| (*arg).to_owned()));
+        if self.literal {
+            words.push("--literal-pathspecs".to_owned());
+        }
+        words.extend(args.iter().map(|arg| (*arg).to_owned()));
+        let request = self.sandbox_request();
         // The host's own git: run it under whatever confinement exists
         // (layers 1 and 2 already hold without one).
         let config = SandboxConfig {
@@ -1297,7 +1310,10 @@ mod tests {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    use std::sync::Arc;
+
     use super::{Repo, capped, check_revision, dangerous_key, driver_of, parse_config};
+    use crate::deny::DenyList;
     use crate::error::ErrorCode;
     use crate::sandbox::SandboxConfig;
 
@@ -1318,10 +1334,57 @@ mod tests {
         let top = base.join("repo");
         std::fs::create_dir(&top).expect("repo");
         init(&top);
-        let repo = Repo::discover(&top, &SandboxConfig::default())
+        let repo = Repo::discover(
+            &top,
+            &SandboxConfig::default(),
+            Arc::new(DenyList::default()),
+        )
+        .expect("safe")
+        .expect("a repository");
+        (dir, base, repo)
+    }
+
+    /// Host git runs under the session's deny list (the host's own
+    /// directories, the app's data, the home the session names), not one
+    /// recomputed from the environment's `HOME`.
+    #[test]
+    fn host_git_runs_under_the_sessions_deny_list() {
+        let dir = tempfile::tempdir().expect("dir");
+        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let top = base.join("repo");
+        std::fs::create_dir(&top).expect("repo");
+        init(&top);
+        let host_dir = base.join("app-config");
+        let home = base.join("home");
+        let deny = Arc::new(DenyList::for_session(
+            Some(&home),
+            Some("com.example.app"),
+            true,
+            [host_dir.clone()],
+        ));
+        let repo = Repo::discover(&top, &SandboxConfig::default(), deny)
             .expect("safe")
             .expect("a repository");
-        (dir, base, repo)
+        let request = repo.git(&top).sandbox_request();
+        for path in [
+            host_dir,
+            home.join(".ssh"),
+            home.join("Library/Application Support/com.example.app"),
+        ] {
+            assert!(
+                request.deny_paths.contains(&path),
+                "{} is not denied to host git: {:?}",
+                path.display(),
+                request.deny_paths
+            );
+        }
+        if let Some(env_home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+            let env_ssh = std::path::Path::new(&env_home).join(".ssh");
+            assert!(
+                !request.deny_paths.contains(&env_ssh) || env_ssh.starts_with(&home),
+                "the list is the session's, not recomputed from HOME"
+            );
+        }
     }
 
     #[test]
@@ -1411,7 +1474,12 @@ mod tests {
         );
         assert!(repo.git(repo.top()).worktree().run(&["add", "-A"]).is_err());
         assert!(
-            Repo::discover(repo.top(), &SandboxConfig::default()).is_err(),
+            Repo::discover(
+                repo.top(),
+                &SandboxConfig::default(),
+                Arc::new(DenyList::default())
+            )
+            .is_err(),
             "discovery refuses it too"
         );
         assert!(!marker.exists(), "the payload ran");
