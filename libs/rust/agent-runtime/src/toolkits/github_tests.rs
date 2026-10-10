@@ -290,7 +290,7 @@ fn project_query_uses_the_enterprise_graphql_endpoint_and_one_bounded_body() {
     );
     let encoded = request
         .body()
-        .and_then(reqwest::Body::as_bytes)
+        .and_then(elitea_connectors::transport::Body::as_bytes)
         .expect("bounded GraphQL request body");
     assert_eq!(
         serde_json::from_slice::<Value>(encoded).expect("GraphQL request JSON"),
