@@ -17,7 +17,13 @@ pub mod service;
 pub mod store;
 
 /// The generated `elitea.vector.v1` bindings.
-#[allow(clippy::all, clippy::pedantic, missing_docs, reason = "generated code")]
+#[allow(
+    clippy::all,
+    clippy::pedantic,
+    missing_docs,
+    rustdoc::all,
+    reason = "generated code; its docs are the proto comments verbatim"
+)]
 pub mod proto {
     tonic::include_proto!("elitea");
 }

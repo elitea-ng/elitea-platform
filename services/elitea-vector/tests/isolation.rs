@@ -136,11 +136,18 @@ fn oracle() -> Arc<dyn Introspector> {
 
 // ── the harness ─────────────────────────────────────────────────────────────
 
+/// Serialises the tests that write. Every test uses the same two projects,
+/// and a `Delete` without a space or a `DropProject` spans EVERY collection of
+/// its project, as it must: run side by side, one test's clean-up removes
+/// another test's points.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 struct Harness {
     slug: String,
     worker: VectorServiceClient<Channel>,
     admin: VectorServiceClient<Channel>,
     qdrant: Qdrant,
+    _serial: tokio::sync::MutexGuard<'static, ()>,
 }
 
 fn unique_slug(prefix: &str) -> String {
@@ -202,9 +209,11 @@ async fn client(
 
 async fn harness() -> Option<Harness> {
     let url = qdrant_url()?;
+    let serial = SERIAL.lock().await;
     let pki = pki();
     let address = serve(&url, oracle(), &pki).await;
     Some(Harness {
+        _serial: serial,
         slug: unique_slug("iso"),
         worker: client(address, &pki, &pki.worker).await,
         admin: client(address, &pki, &pki.admin).await,
