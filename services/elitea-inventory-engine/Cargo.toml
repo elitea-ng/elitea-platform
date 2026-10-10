@@ -26,6 +26,9 @@ elitea-content-source = { path = "../../libs/rust/content-source" }
 elitea-doc-extract = { path = "../../libs/rust/doc-extract" }
 # The tree-sitter parsers of the parser stage.
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
+# The graph, the store-free ingestion steps and the retrieval tools, shared
+# with the desktop's local workspace index (ADR-0029 decision 7).
+elitea-inventory-core = { path = "../../libs/rust/inventory-core" }
 # adk's model over the gateway client.
 elitea-adk-gateway = { path = "../../libs/rust/adk-gateway" }
 # investigate's conversation and its summarisation (shared with DeepWiki).
@@ -70,6 +73,9 @@ documents = ["elitea-doc-extract/documents"]
 loopback-git-http = ["elitea-repo-ingest/loopback-git-http"]
 
 [dev-dependencies]
+# The shared GraphStore conformance suite, run against the PostgreSQL store
+# (tests/graph_store.rs).
+elitea-inventory-core = { path = "../../libs/rust/inventory-core", features = ["test-support"] }
 # The ingestion tests' local smart-HTTP git server (`git http-backend`).
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "=1.53.2", features = ["test-util"] }

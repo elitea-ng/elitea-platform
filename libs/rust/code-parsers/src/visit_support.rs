@@ -18,6 +18,7 @@
 //!   the output budget, and a file deeper than `limits::MAX_TREE_DEPTH`
 //!   fails alone ([`crate::limits`]).
 
+use crate::input::Sources;
 use crate::limits;
 use crate::model::{ParseResult, Range, Relationship, RelationshipType, Scope, Symbol, SymbolType};
 use rayon::prelude::*;
@@ -35,6 +36,7 @@ pub(crate) type Visit = fn(&str, &str, Node<'_>) -> ParseResult;
 /// language has cross-file resolution), in parallel on the worker pool.
 pub(crate) fn parse_files(
     files: &[String],
+    sources: Sources<'_>,
     language: &'static str,
     grammar: &Language,
     visit: Visit,
@@ -42,7 +44,7 @@ pub(crate) fn parse_files(
     let parse_all = || -> Vec<ParseResult> {
         files
             .par_iter()
-            .map(|path| parse_path(path, language, grammar, visit))
+            .map(|path| parse_path(path, sources, language, grammar, visit))
             .collect()
     };
     match limits::on_worker_pool(language, WORKER_STACK, parse_all) {
@@ -62,8 +64,14 @@ pub(crate) fn failed(path: &str, language: &str, error: impl Into<String>) -> Pa
 }
 
 /// Read, parse and visit one file.
-fn parse_path(path: &str, language: &str, grammar: &Language, visit: Visit) -> ParseResult {
-    let text = match read_text(path) {
+fn parse_path(
+    path: &str,
+    sources: Sources<'_>,
+    language: &str,
+    grammar: &Language,
+    visit: Visit,
+) -> ParseResult {
+    let text = match read_text(path, sources) {
         Ok(text) => text,
         Err(error) => return failed(path, language, error),
     };
@@ -101,8 +109,10 @@ pub(crate) fn parse_text(
 }
 
 /// Read a file as the Python parsers' `open(..., errors='ignore')` does.
-pub(crate) fn read_text(path: &str) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| python_os_error(&error, path))?;
+pub(crate) fn read_text(path: &str, sources: Sources<'_>) -> Result<String, String> {
+    let bytes = sources
+        .read(path)
+        .map_err(|error| python_os_error(&error, path))?;
     let mut text = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         text.push_str(chunk.valid());
@@ -269,9 +279,12 @@ mod tests {
         let path = dir.join("a.kt");
         let _ = std::fs::write(&path, b"a\xff\r\nb\rc");
         let path = path.to_string_lossy().into_owned();
-        assert_eq!(read_text(&path).ok().as_deref(), Some("a\nb\nc"));
+        assert_eq!(
+            read_text(&path, Sources::Disk).ok().as_deref(),
+            Some("a\nb\nc")
+        );
         let _ = std::fs::remove_dir_all(&dir);
-        let missing = read_text("/nonexistent/it's.kt");
+        let missing = read_text("/nonexistent/it's.kt", Sources::Disk);
         assert_eq!(
             missing.err().as_deref(),
             Some("[Errno 2] No such file or directory: \"/nonexistent/it's.kt\"")

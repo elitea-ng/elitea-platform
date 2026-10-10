@@ -22,8 +22,11 @@ use sqlx::{QueryBuilder, Row};
 use std::str::FromStr;
 use std::time::Duration;
 
+pub mod graph_store;
 pub mod sources;
 pub mod vectors;
+
+pub use graph_store::PgGraphStore;
 
 /// The DSN variable: the engine's database. Unset, the engine stores
 /// nothing (the fixture runner needs no database).
@@ -95,53 +98,12 @@ impl From<MigrateError> for StoreError {
 /// The result type of this module.
 pub type Result<T> = std::result::Result<T, StoreError>;
 
-/// Which graph: the platform project and the Inventory toolkit
-/// (`application_id`), as the sub-application host sends them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GraphKey {
-    pub project_id: i64,
-    pub application_id: i64,
-}
+/// Which graph (the shared core's type, ADR-0029 decision 7).
+pub use elitea_inventory_core::store::{GraphKey, InvalidKey};
 
-impl GraphKey {
-    /// A key from two positive ids.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::InvalidKey`] for an id below 1.
-    pub fn new(project_id: i64, application_id: i64) -> Result<Self> {
-        if project_id < 1 || application_id < 1 {
-            return Err(StoreError::InvalidKey(format!(
-                "a graph is addressed by a positive project id and toolkit id, got {project_id} and {application_id}"
-            )));
-        }
-        Ok(Self {
-            project_id,
-            application_id,
-        })
-    }
-
-    /// The key of a call's `project_id` and `application_id` arguments:
-    /// integers, or strings of one (the host forwards what the request
-    /// carried).
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::InvalidKey`] naming the missing or malformed argument.
-    pub fn from_arguments(arguments: &Map<String, Value>) -> Result<Self> {
-        let id = |name: &str| -> Result<i64> {
-            let parsed = match arguments.get(name) {
-                Some(Value::Number(number)) => number.as_i64(),
-                Some(Value::String(text)) => text.trim().parse().ok(),
-                _ => None,
-            };
-            parsed.ok_or_else(|| {
-                StoreError::InvalidKey(format!(
-                    "the call carries no integer {name}, so it names no graph"
-                ))
-            })
-        };
-        Self::new(id("project_id")?, id("application_id")?)
+impl From<InvalidKey> for StoreError {
+    fn from(error: InvalidKey) -> Self {
+        Self::InvalidKey(error.0)
     }
 }
 
@@ -674,6 +636,7 @@ mod tests {
     fn keys_are_positive_integers_from_numbers_or_digit_strings() {
         let key = |arguments: Value| {
             GraphKey::from_arguments(arguments.as_object().unwrap_or(&Map::new()))
+                .map_err(StoreError::from)
         };
         assert_eq!(
             key(json!({"project_id": 3, "application_id": "17"})).ok(),

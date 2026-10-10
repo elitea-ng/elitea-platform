@@ -24,6 +24,15 @@ on:
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
       - "libs/rust/doc-extract/**"
+      # The local workspace index (ADR-0029 decision 7) links the Inventory
+      # core's parsers and Python-compatible text; both crates keep
+      # `preserve_order` out of their normal dependencies for this host.
+      - "libs/rust/engine-core/**"
+      - "libs/rust/code-parsers/**"
+      - "libs/rust/inventory-core/**"
+      - "libs/rust/local-index/**"
+      # The index tools mirror the cloud Inventory descriptor; a drift test reads it.
+      - "services/elitea-subapp-host/internal/apps/inventory/descriptor.json"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
@@ -43,6 +52,15 @@ on:
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
       - "libs/rust/doc-extract/**"
+      # The local workspace index (ADR-0029 decision 7) links the Inventory
+      # core's parsers and Python-compatible text; both crates keep
+      # `preserve_order` out of their normal dependencies for this host.
+      - "libs/rust/engine-core/**"
+      - "libs/rust/code-parsers/**"
+      - "libs/rust/inventory-core/**"
+      - "libs/rust/local-index/**"
+      # The index tools mirror the cloud Inventory descriptor; a drift test reads it.
+      - "services/elitea-subapp-host/internal/apps/inventory/descriptor.json"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
@@ -122,3 +140,14 @@ jobs:
       - name: Run tests
         working-directory: apps/elitea-desktop/src-tauri
         run: cargo test --locked --all-targets
+
+      # The local workspace index the host links (ADR-0029 decision 7): its
+      # own tests (the shared GraphStore conformance suite over SQLite, the
+      # folder source, owner-only files) run in the libs workspace, built
+      # alone so serde_json's `preserve_order` stays off as in the host.
+      - name: Local index (fmt, clippy, tests)
+        working-directory: libs/rust
+        run: |
+          cargo fmt -p elitea-local-index -- --check
+          cargo clippy --locked -p elitea-local-index --all-targets -- -D warnings
+          cargo test --locked -p elitea-local-index --all-targets

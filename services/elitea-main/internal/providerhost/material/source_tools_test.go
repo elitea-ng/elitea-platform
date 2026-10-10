@@ -234,7 +234,7 @@ func TestReadOnlySourceTool(t *testing.T) {
 // tightens and the platform does not would leave the server-side check
 // weaker than the tool list the model is shown.
 func TestReadOnlyRulesMatchTheEngineAsset(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "..", "elitea-inventory-engine", "assets", "python_inventory.json")
+	path := filepath.Join("..", "..", "..", "..", "..", "libs", "rust", "inventory-core", "assets", "python_inventory.json")
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		t.Skipf("the engine asset is not in this checkout: %s", path)

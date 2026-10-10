@@ -38,11 +38,12 @@ use elitea_agent_runtime::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
+use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
 use elitea_local_tools::approvals::{JsonFileChoices, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
-use elitea_local_tools::provider::{LocalToolProvider, TOOLSET_NAME as LOCAL_TOOLSET};
+use elitea_local_tools::provider::LocalToolProvider;
 use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
 use futures::StreamExt as _;
 use serde_json::{Map, Value, json};
@@ -55,10 +56,13 @@ use super::framing;
 use super::mentions;
 use super::model::GatewayTransport;
 use super::recorder::{FileChange, Recorder};
-use super::remote_tools::{RemoteContext, RemoteToolProvider, RetryPolicy};
+use super::remote_tools::{
+    RemoteContext, RemoteToolProvider, RetryPolicy, TOOLSET_NAME as REMOTE_TOOLSET,
+};
 use super::skills::{self, InvokedSkill};
 use super::tools::{ObservedToolset, ToolObserver};
 use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, TurnTap};
+use crate::index::IndexRegistry;
 use crate::workspaces::{Workspace, WorkspaceStore};
 
 const APP_NAME: &str = "elitea-desktop";
@@ -165,6 +169,8 @@ pub struct HostDeps {
     pub retry: RetryPolicy,
     /// The local thread history; `None` runs without one.
     pub history: Option<Arc<HistoryStore>>,
+    /// The workspaces' local indexes; `None` offers no index tools.
+    pub index: Option<Arc<IndexRegistry>>,
 }
 
 /// One workspace's local session and its prompt.
@@ -616,7 +622,9 @@ impl AgentHost {
             return Ok(existing.clone());
         }
         let data_dir = self.deps.workspaces.data_dir(workspace_id);
-        std::fs::create_dir_all(&data_dir).map_err(|e| {
+        // Owner-only (0700), the workspaces folder above it too: remembered
+        // approvals, copy checkpoints and the index are the folder's data.
+        elitea_local_index::fs::create_private_dir(&data_dir).map_err(|e| {
             TurnError::new(
                 "storage",
                 format!("could not prepare the workspace data: {e}"),
@@ -879,7 +887,14 @@ impl AgentHost {
                 Some("You cannot view this project's context, so this turn runs without it."),
             );
         }
-        let local_names: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
+        // A remote tool never takes a local tool's name, nor an index
+        // tool's (whether or not this workspace has an index: names stay
+        // stable as the index comes and goes).
+        let local_names: Vec<&str> = TOOLS
+            .iter()
+            .map(|tool| tool.name)
+            .chain(INDEX_TOOLS)
+            .collect();
         let admitted = definition::admit(&resolved, &local_names)
             .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
         // A picked skill must be one of this version's own, as the platform
@@ -1016,6 +1031,7 @@ impl AgentHost {
             let _ = sink.finish(RunOutcome::Stopped).await;
             drop(claim);
             let changes = recorder.changes(session.workspace());
+            self.index_changed(&request.workspace_id, changes.len());
             tap.changes(&changes);
             events.status(Phase::Cancelled, None);
             entry.finish(
@@ -1070,6 +1086,7 @@ impl AgentHost {
         // Free before `done`: the UI may send the next turn as soon as it sees it.
         drop(claim);
         let changes = recorder.changes(session.workspace());
+        self.index_changed(&request.workspace_id, changes.len());
         tap.changes(&changes);
         let changed_files = changes.len();
         if let Err(error) = &committed {
@@ -1191,8 +1208,17 @@ impl AgentHost {
         } else {
             admitted.remote_tools.clone()
         };
-        let provider = LocalToolProvider::new(workspace.session.clone())
-            .with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
+        // The workspace's index tools, when its index is on and built: they
+        // only read, so plan mode keeps them.
+        let index = match &self.deps.index {
+            Some(registry) => registry.for_turn(&request.workspace_id).await,
+            None => None,
+        };
+        let mut provider = LocalToolProvider::new(workspace.session.clone());
+        if let Some(index) = index {
+            provider = provider.with(Arc::new(IndexToolProvider::new(index)));
+        }
+        let provider = provider.with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
         let toolsets = provider
             .toolsets(&ToolsetRequest {
                 toolkits: Vec::new(),
@@ -1214,7 +1240,9 @@ impl AgentHost {
             .disallow_transfer_to_peers(true);
         builder = plan.bind_builder(builder);
         for toolset in toolsets {
-            let remote = toolset.name() != LOCAL_TOOLSET;
+            // The local tools and the index tools run here; only the
+            // toolkits' tools are remote.
+            let remote = toolset.name() == REMOTE_TOOLSET;
             builder = builder.toolset(Arc::new(ObservedToolset::new(
                 toolset,
                 observer.clone(),
@@ -1355,24 +1383,45 @@ impl AgentHost {
             .clear();
     }
 
+    /// A turn changed `files` files of the workspace: its index (if open)
+    /// says it may be out of date, and refreshes a few seconds later. A
+    /// signal only: the turn's end never waits on the index.
+    fn index_changed(&self, workspace_id: &str, files: usize) {
+        if let Some(index) = &self.deps.index {
+            index.mark_changed(workspace_id, files);
+        }
+    }
+
     /// `workspace_remove`: forget the workspace, its host data and
-    /// everything this host keeps for it (its session, its turns).
+    /// everything this host keeps for it (its session, its turns, its
+    /// index).
     ///
     /// # Errors
     ///
     /// `workspace_busy` while a turn (or an undo) runs in it, or the
     /// workspace list cannot be written.
-    pub fn remove_workspace(&self, workspace_id: &str) -> Result<(), TurnError> {
+    pub async fn remove_workspace(&self, workspace_id: &str) -> Result<(), TurnError> {
         // Held across the removal: no turn starts on the folder meanwhile.
         let _claim = WorkspaceClaim::take(
             &self.busy,
             workspace_id,
             "Wait for the running turn to end, or stop it, before removing this workspace.",
         )?;
-        self.deps
-            .workspaces
-            .remove(workspace_id)
-            .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        // The index's refresh stopped and its database closed, and held so
+        // until the directory holding it is deleted: nothing reopens it.
+        let workspaces = self.deps.workspaces.clone();
+        let id = workspace_id.to_owned();
+        let remove = move || {
+            workspaces
+                .remove(&id)
+                .map_err(|e| TurnError::new("storage", e.to_string()))
+        };
+        match &self.deps.index {
+            Some(index) => index.with_closed(workspace_id, remove).await??,
+            None => tokio::task::spawn_blocking(remove)
+                .await
+                .map_err(|_| TurnError::new("internal", "the removal stopped unexpectedly"))??,
+        }
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1675,15 +1724,69 @@ impl AgentHost {
 
 /// The Doctor's repairs go through the host's own paths: a workspace leaves
 /// the list as `workspace_remove` removes it (refused while a turn runs in
-/// it; its session, kept turns and thread history go), and a local sign-out
-/// forgets every turn as `host_sign_out` does.
+/// it; its session, kept turns and thread history go), a local sign-out
+/// forgets every turn as `host_sign_out` does, and an index is closed before
+/// its files move and turned on again (`index_enable`) after a rebuild.
 impl crate::doctor::DoctorHooks for AgentHost {
     fn remove_workspace(&self, workspace_id: &str) -> Result<(), String> {
-        Self::remove_workspace(self, workspace_id).map_err(|error| error.message)
+        drive(Self::remove_workspace(self, workspace_id))?.map_err(|error| error.message)
     }
 
     fn signed_out(&self) {
         self.forget_identity();
+    }
+
+    fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
+        match &self.deps.index {
+            // On a thread of its own: the slot is taken with a blocking lock,
+            // which no runtime thread may do.
+            Some(index) => std::thread::scope(|scope| {
+                if scope
+                    .spawn(|| index.with_closed_blocking(workspace_id, work))
+                    .join()
+                    .is_err()
+                {
+                    log::warn!("an index repair stopped unexpectedly");
+                }
+            }),
+            None => work(),
+        }
+    }
+
+    fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
+        match &self.deps.index {
+            Some(index) => drive(index.enable(workspace_id))?
+                .map(|_| ())
+                .map_err(|error| error.message),
+            None => Err("the local index is not available".into()),
+        }
+    }
+}
+
+/// Drive the host's async paths to their end from a synchronous hook (the
+/// Doctor's repairs), whatever thread calls it. Inside a runtime the future
+/// runs on a thread of its own through the runtime's handle, so the caller
+/// may be a blocking thread or the runtime's own thread (a current-thread
+/// runtime included: the paths driven need no timer, and what they spawn
+/// runs once the runtime's thread is free again). Outside any runtime it
+/// gets one of its own.
+fn drive<F>(future: F) -> Result<F::Output, String>
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => std::thread::scope(|scope| {
+            scope
+                .spawn(|| handle.block_on(future))
+                .join()
+                .map_err(|_| "the repair stopped unexpectedly".to_owned())
+        }),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|runtime| runtime.block_on(future))
+            .map_err(|error| format!("could not run the repair: {error}")),
     }
 }
 

@@ -8,10 +8,8 @@
 use super::{GraphKey, Result};
 use sqlx::postgres::PgPool;
 
-/// A ranking: `(entity id, cosine similarity)` best first, or numpy's
-/// message when an entity's vector has another width than the query's
-/// (Python's `semantic_search` raised it, the wrapper printed it).
-pub type Ranking = std::result::Result<Vec<(String, f64)>, String>;
+/// A ranking (the shared core's type, ADR-0029 decision 7).
+pub use elitea_inventory_core::store::Ranking;
 
 /// The entities of `key` whose vector is at least `min_score` similar to
 /// `vector`, best first (ties by entity id, so the order is stable).

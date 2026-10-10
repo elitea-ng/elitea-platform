@@ -51,6 +51,7 @@ use super::java::os_error_text;
 use super::java::source::Source;
 use super::limits;
 use super::model::{ParseResult, Relationship, RelationshipType, SymbolType};
+use crate::input::Sources;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 
@@ -67,9 +68,13 @@ impl LanguageParser for CSharpParser {
         "csharp"
     }
 
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: Sources<'_>,
+    ) -> BTreeMap<String, ParseResult> {
         let parse_all =
-            || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f)).collect() };
+            || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f, sources)).collect() };
         let mut results = match limits::on_worker_pool("C#", WORKER_STACK, parse_all) {
             Ok(results) => results,
             Err(error) => {
@@ -87,8 +92,8 @@ impl LanguageParser for CSharpParser {
 /// Read and parse one file as `parse_file` does: a missing file is
 /// `File not found: …`, any other failure (an invalid UTF-8 byte above all)
 /// is the exception text.
-fn parse_path(path: &str) -> ParseResult {
-    let bytes = match std::fs::read(path) {
+fn parse_path(path: &str, sources: Sources<'_>) -> ParseResult {
+    let bytes = match sources.read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return visitor::failed(path, format!("File not found: {path}"));

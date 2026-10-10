@@ -12,23 +12,9 @@ use sqlx::postgres::{PgPool, Postgres};
 use sqlx::types::Json;
 use std::collections::BTreeMap;
 
-/// What one source's status row says.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SourceStatus {
-    /// The status key: the source toolkit's id, as text.
-    pub toolkit_id: String,
-    pub toolkit_name: String,
-    pub toolkit_type: String,
-    pub branch: Option<String>,
-}
-
-/// The counts a finished run records.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RunCounts {
-    pub entities: i64,
-    pub relations: i64,
-    pub documents: i64,
-}
+/// The status, counts and commit of a run (the shared core's types,
+/// ADR-0029 decision 7).
+pub use elitea_inventory_core::store::{Completion, RunCounts, SourceStatus};
 
 /// `start_ingestion`: the source is `in_progress` from now; its previous
 /// counts stay until the run finishes.
@@ -106,14 +92,9 @@ pub async fn fail(pool: &PgPool, key: GraphKey, toolkit_id: &str, error: &str) -
     Ok(())
 }
 
-/// What the store keeps of one document of a source (ADR-0028): its
-/// version, media type and readers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocumentState {
-    pub version: String,
-    pub mime: String,
-    pub acl: Acl,
-}
+/// What the store keeps of one document of a source (the shared core's
+/// type, ADR-0029 decision 7).
+pub use elitea_inventory_core::store::DocumentState;
 
 /// The version of every document the source's last completed run read,
 /// by key.
@@ -168,17 +149,6 @@ pub async fn restricted_documents(
             ))
         })
         .collect()
-}
-
-/// What a completed run commits.
-#[derive(Debug, Clone)]
-pub struct Completion<'a> {
-    pub toolkit_id: &'a str,
-    pub source_name: &'a str,
-    /// Every document the source now has.
-    pub documents: &'a BTreeMap<String, DocumentState>,
-    pub counts: RunCounts,
-    pub commit_sha: Option<&'a str>,
 }
 
 /// Commit a completed run in ONE transaction: the graph, the source's file

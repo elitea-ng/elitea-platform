@@ -46,7 +46,7 @@ pub type Entity = Map<String, Value>;
 pub fn entity(view: &GraphView, id: &str) -> Option<Entity> {
     view.node(id).map(|attributes| {
         let mut row = attributes.clone();
-        row.shift_remove("id");
+        crate::map::shift_remove(&mut row, "id");
         row.insert("id".to_owned(), Value::String(id.to_owned()));
         row
     })
@@ -1407,7 +1407,7 @@ pub fn new_neighbours<'a>(
 
 /// Remove raw `embedding` vectors from an answered row (deviation D5).
 pub fn strip_embedding(row: &mut Map<String, Value>) {
-    row.shift_remove("embedding");
+    crate::map::shift_remove(row, "embedding");
 }
 
 #[cfg(test)]

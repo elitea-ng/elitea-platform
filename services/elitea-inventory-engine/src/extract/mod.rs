@@ -21,11 +21,13 @@
 //! * **a model edge records where it was found** (`discovered_in_file`,
 //!   `confidence`), so an incremental run removes it with its file.
 
-pub mod assets;
 pub mod chunk;
 pub mod json;
 pub mod skip;
-pub mod types;
+// The prompts and type tables, the type normalisers and the stage's
+// per-file result live in the shared core (ADR-0029 decision 7); re-exported
+// so every path in this crate stays the same.
+pub use elitea_inventory_core::extract::{ModelExtraction, assets, types};
 
 use crate::graph::Citation;
 use crate::ingest::ids::entity_id;
@@ -424,15 +426,6 @@ fn dedupe_facts(facts: Vec<Map<String, Value>>) -> Vec<Map<String, Value>> {
         }
     }
     kept
-}
-
-/// What the model stage gave one file.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ModelExtraction {
-    /// File-level deduplicated entities, then facts.
-    pub entities: Vec<ParsedEntity>,
-    /// Chunks whose entity extraction failed after every retry.
-    pub failed_chunks: usize,
 }
 
 /// The code-like extensions that get the code fact prompt

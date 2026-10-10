@@ -1,0 +1,41 @@
+[package]
+name = "elitea-inventory-core"
+description = "The Inventory knowledge graph, file ingestion over any content source and the retrieval tools, without a store or a model: shared by the Inventory engine and the desktop's local workspace index (ADR-0027, ADR-0029 decision 7)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# `store_conformance`, the suite every `GraphStore` runs against itself (the
+# engine's PostgreSQL store, the desktop's SQLite store).
+test-support = []
+
+[dependencies]
+elitea-code-parsers = { path = "../code-parsers" }
+elitea-content-source = { path = "../content-source" }
+# No features: PDF, Office and e-mail extraction is the engine's choice
+# (its `documents` feature turns on `elitea-doc-extract/documents`).
+elitea-doc-extract = { path = "../doc-extract" }
+elitea-engine-core = { path = "../engine-core" }
+# The graph's node and edge order is insertion order (graph.json, search ties).
+indexmap = { version = "2.14.2", features = ["serde"] }
+# Entity ids are Python's md5 prefix; file hashes its sha256.
+md-5 = "0.10.6"
+serde = { version = "1.0.228", features = ["derive"] }
+# Default features only, so the desktop host can link this crate without
+# `preserve_order` (ADR-0029 decision 2). The engine turns `preserve_order`
+# and `float_roundtrip` on in its own manifest, so its answers are the
+# Python engine's byte for byte; built alone, a map's keys come out sorted
+# (the order-dependent handlers are listed in tests/retrieval_tools.rs).
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+# The current-thread runtime of the synchronous `ingest_tree`, and document
+# extraction off the caller's threads.
+tokio = { version = "1.53.1", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

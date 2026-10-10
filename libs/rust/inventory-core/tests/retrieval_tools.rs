@@ -4,10 +4,13 @@
 //! (frozen; its generator, which documents the order and deviation
 //! patches it applied, is recorded in `fixtures/PROVENANCE.md`).
 
+mod common;
+
 use elitea_engine_core::pyjson::dumps;
-use elitea_inventory_engine::graph::Graph;
-use elitea_inventory_engine::retrieval::view::GraphView;
-use elitea_inventory_engine::retrieval::{Call, dispatch};
+use elitea_inventory_core::graph::Graph;
+use elitea_inventory_core::map::shift_remove;
+use elitea_inventory_core::retrieval::view::GraphView;
+use elitea_inventory_core::retrieval::{Call, dispatch};
 use serde_json::{Map, Value, json};
 
 const GRAPH: &str = include_str!("fixtures/retrieval/graph.json");
@@ -42,7 +45,7 @@ fn without_embeddings(value: &mut Value) -> bool {
     let mut removed = false;
     match value {
         Value::Object(fields) => {
-            removed |= fields.shift_remove("embedding").is_some();
+            removed |= shift_remove(fields, "embedding").is_some();
             for child in fields.values_mut() {
                 removed |= without_embeddings(child);
             }
@@ -102,11 +105,55 @@ fn canonical(value: &Value) -> Value {
     }
 }
 
-fn sorted_lines(text: &str) -> Vec<&str> {
+/// An `unordered` case's answer: a JSON document canonicalised, a text's
+/// lines sorted.
+fn unordered_form(text: &str) -> String {
+    if text.starts_with('{') {
+        return canonical(&serde_json::from_str(text).unwrap()).to_string();
+    }
     let mut lines: Vec<&str> = text.lines().collect();
     lines.sort_unstable();
-    lines
+    lines.join("\n")
 }
+
+/// The handlers (`family/tool`, plus ` json` for an `output_format=json`
+/// answer) whose answer text depends on a JSON map's key order, found by
+/// the order-off run of `every_tool_answers_what_the_python_handler_answered`.
+/// With `preserve_order` (the engine) they answer as Python did, byte for
+/// byte; without it (this crate built alone, as the desktop links it) they
+/// give the same keys and values with the keys sorted, and nothing else
+/// differs. The run fails while this list and what it finds disagree
+/// (`SHOW_ORDER_DIFF=1` prints the lines that differ).
+///
+/// Text answers:
+///
+/// * `get_entity`: the `**Properties:**` list is the node's `properties`
+///   map in its order;
+/// * `get_stats`, `get_graph_info`: entity types with the same count are
+///   listed in the order the type-count map first saw them.
+///
+/// JSON answers: every handler whose document carries a node's attributes,
+/// an edge's or a source's (its keys in the order the graph holds them), or
+/// a type-count map.
+const ORDER_DEPENDENT: &[&str] = &[
+    "inventory/get_entity",
+    "inventory/get_graph_info",
+    "inventory/get_stats",
+    "inventory/get_cross_source_relations json",
+    "inventory/get_entities_by_ids json",
+    "inventory/get_entity_neighbors json",
+    "inventory/get_graph_info json",
+    "inventory/get_related_entities json",
+    "inventory/get_stats json",
+    "inventory/list_entities_by_layer json",
+    "inventory/list_entities_by_type json",
+    "inventory/list_ingested_sources json",
+    "inventory/search_graph json",
+    "inventory_search/get_entity_details json",
+    "inventory_search/get_related_entities json",
+    "inventory_search/query_graph json",
+    "inventory_search/search_knowledge_graph json",
+];
 
 fn is_node_id(goldens: &Value, text: &str) -> bool {
     goldens["ids"]
@@ -139,6 +186,7 @@ fn compared(case: &Value, goldens: &Value) -> bool {
 fn every_tool_answers_what_the_python_handler_answered() {
     let view = view();
     let goldens = goldens();
+    let mut goldens_seen = common::Goldens::default();
     let mut checked = 0;
     let mut embeddings_dropped = 0;
     for case in goldens["cases"].as_array().unwrap() {
@@ -153,32 +201,37 @@ fn every_tool_answers_what_the_python_handler_answered() {
         let actual = run(&view, family, tool, &case["params"]);
         let unordered = case["unordered"] == json!(true);
         let label = format!("{family}/{tool} {}", case["params"]);
-        if expected.starts_with('{') {
+        let json_form = expected.starts_with('{');
+        let (expected, dropped) = if json_form {
             let mut want: Value = serde_json::from_str(expected).unwrap();
-            if without_embeddings(&mut want) {
-                embeddings_dropped += 1;
-            }
-            if unordered {
-                let got: Value = serde_json::from_str(&actual).unwrap();
-                assert_eq!(canonical(&got), canonical(&want), "{label}");
+            let dropped = without_embeddings(&mut want);
+            // Python's text as it is, unless a vector left it: re-written,
+            // a golden parsed without `preserve_order` would have its keys
+            // sorted, and a handler's key order would go unnoticed.
+            let want = if dropped {
+                dumps(&want)
             } else {
-                assert_eq!(actual, dumps(&want), "{label}");
-            }
+                expected.to_owned()
+            };
+            (want, dropped)
         } else {
-            let (expected, dropped) = without_embedding_property(expected);
-            if dropped {
-                embeddings_dropped += 1;
-            }
-            if unordered {
-                assert_eq!(sorted_lines(&actual), sorted_lines(&expected), "{label}");
-            } else {
-                assert_eq!(actual, expected, "{label}");
-            }
+            without_embedding_property(expected)
+        };
+        if dropped {
+            embeddings_dropped += 1;
         }
+        let (got, want) = if unordered {
+            (unordered_form(&actual), unordered_form(&expected))
+        } else {
+            (actual.clone(), expected.clone())
+        };
+        let handler = format!("{family}/{tool}{}", if json_form { " json" } else { "" });
+        goldens_seen.check(&handler, &got, &want, &label);
         checked += 1;
     }
     assert!(checked >= 160, "only {checked} goldens compared");
     assert!(embeddings_dropped > 0, "the fixture exercises D5");
+    goldens_seen.finish(ORDER_DEPENDENT);
 }
 
 #[test]

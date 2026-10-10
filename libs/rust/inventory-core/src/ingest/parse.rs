@@ -463,28 +463,53 @@ pub fn add_relations(
     added
 }
 
-/// Parse `files` (paths relative to `root`) with every parser that has
-/// some of them, one language at a time. Returns each file's parse by its
-/// relative path; a file of a language without a parser is absent.
+/// Parse `files` — each a path relative to `root` and the bytes its
+/// source fetched — with every parser that has some of them, one language
+/// at a time. Returns each file's parse by its relative path; a file of a
+/// language without a parser is absent.
+///
+/// The parsers parse the bytes passed in and never open the files again
+/// (`elitea_code_parsers::Sources::Memory`): what is parsed is exactly what
+/// the source read and versioned. A local folder's source reads through
+/// its confined workspace (no symlink followed, `path_deny` applied); a
+/// parser re-opening `root/path` would follow a link swapped in since.
+/// `root` only makes the keys the parsers see the absolute paths they
+/// always saw (their cross-file resolution and the JavaScript import
+/// lookup use them), so a checkout parses byte for byte as before.
+///
+/// `stop` is asked before each file is read: once it answers `true` the
+/// remaining files are not parsed (they come back failed, and the caller
+/// discards the parse).
 #[must_use]
-pub fn parse_tree(root: &Path, files: &[&str]) -> BTreeMap<String, ParseResult> {
-    let mut by_language: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for path in files {
+pub fn parse_tree(
+    root: &Path,
+    files: &[(&str, &[u8])],
+    stop: elitea_code_parsers::Stop<'_>,
+) -> BTreeMap<String, ParseResult> {
+    let mut by_language: BTreeMap<&str, Vec<(&str, &[u8])>> = BTreeMap::new();
+    for (path, bytes) in files {
         if let Some(language) = language_of(path) {
-            by_language.entry(language).or_default().push(path);
+            by_language.entry(language).or_default().push((path, bytes));
         }
     }
     let prefix = format!("{}/", root.display());
     let mut parsed = BTreeMap::new();
     for (language, paths) in by_language {
+        if stop() {
+            break;
+        }
         let Some(parser) = elitea_code_parsers::parser_for(language) else {
             continue;
         };
-        let absolute: Vec<String> = paths
-            .iter()
-            .map(|path| root.join(path).display().to_string())
-            .collect();
-        for (absolute_path, result) in parser.parse_files(&absolute) {
+        let mut absolute = Vec::with_capacity(paths.len());
+        let mut contents = BTreeMap::new();
+        for (path, bytes) in paths {
+            let key = root.join(path).display().to_string();
+            contents.insert(key.clone(), bytes);
+            absolute.push(key);
+        }
+        let sources = elitea_code_parsers::Sources::MemoryUntil(&contents, stop);
+        for (absolute_path, result) in parser.parse_sources(&absolute, sources) {
             let relative = absolute_path
                 .strip_prefix(&prefix)
                 .unwrap_or(&absolute_path)

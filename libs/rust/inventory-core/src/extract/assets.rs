@@ -1,11 +1,14 @@
 //! The Python engine's prompts and type tables (`assets/python_inventory.json`,
-//! frozen; its generator is recorded in `tests/fixtures/PROVENANCE.md`).
+//! frozen; its generator is recorded in the Inventory engine's
+//! `tests/fixtures/PROVENANCE.md`).
 
 use indexmap::IndexMap;
 use serde::Deserialize;
 use std::sync::OnceLock;
 
-const ASSET: &str = include_str!("../../assets/python_inventory.json");
+/// The asset's text, as compiled in (the engine's `investigate` reads more
+/// of it than [`Assets`] holds).
+pub const ASSET: &str = include_str!("../../assets/python_inventory.json");
 
 /// The four extraction prompts, as `LangChain` f-string templates.
 #[derive(Debug, Deserialize)]

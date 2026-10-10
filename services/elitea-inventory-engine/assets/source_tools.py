@@ -19,7 +19,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SNAPSHOT = os.path.join(
     HERE, "../../elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
 )
-with open(os.path.join(HERE, "python_inventory.json"), encoding="utf-8") as handle:
+# Moved with the code that reads it to the shared core (ADR-0029 decision 7).
+INVENTORY = os.path.join(HERE, "../../../libs/rust/inventory-core/assets/python_inventory.json")
+with open(INVENTORY, encoding="utf-8") as handle:
     rules = json.load(handle)["investigate"]
 with open(SNAPSHOT, encoding="utf-8") as handle:
     snapshot = json.load(handle)

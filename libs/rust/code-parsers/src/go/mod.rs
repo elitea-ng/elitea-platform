@@ -21,6 +21,7 @@ mod visitor;
 mod tests;
 
 use super::LanguageParser;
+use super::input::Sources;
 use super::limits;
 use super::model::{ParseResult, Range, Relationship, RelationshipType, SymbolType};
 use indexmap::IndexMap;
@@ -70,10 +71,14 @@ impl LanguageParser for GoParser {
         "go"
     }
 
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: Sources<'_>,
+    ) -> BTreeMap<String, ParseResult> {
         let results = files
             .par_iter()
-            .map(|path| match read_python_text(path) {
+            .map(|path| match read_python_text(path, sources) {
                 Ok(source) => limits::with_output_budget(|| visitor::parse_source(path, &source))
                     .unwrap_or_else(|error| visitor::failed(path, error)),
                 Err(error) => visitor::failed(path, error),
@@ -86,8 +91,8 @@ impl LanguageParser for GoParser {
 /// Read a file as Python's `open(path, encoding='utf-8', errors='replace')`
 /// does: invalid bytes become U+FFFD and universal newlines turn `\r\n` and
 /// a lone `\r` into `\n` — which moves byte columns, so it matters here.
-pub(crate) fn read_python_text(path: &str) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| match error.kind() {
+pub(crate) fn read_python_text(path: &str, sources: Sources<'_>) -> Result<String, String> {
+    let bytes = sources.read(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => format!("File not found: {path}"),
         _ => error.to_string(),
     })?;

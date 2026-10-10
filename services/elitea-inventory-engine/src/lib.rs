@@ -24,7 +24,9 @@ pub mod config;
 pub mod embed;
 pub mod extract;
 pub mod fixture;
-pub mod graph;
+// The graph lives in the shared core (ADR-0029 decision 7); re-exported so
+// every path in this crate stays the same.
+pub use elitea_inventory_core::graph;
 pub mod ingest;
 pub mod investigate;
 pub mod native;

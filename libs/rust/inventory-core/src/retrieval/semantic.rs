@@ -33,7 +33,7 @@ use super::view::GraphView;
 use super::{Call, Handled};
 use crate::embed::MODEL_KEY;
 use crate::graph::{layer_of, layer_types};
-pub use crate::store::vectors::Ranking;
+pub use crate::store::Ranking;
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::pyjson::float_repr;
 use elitea_engine_core::pyvalue::{py_repr, py_str, py_truthy};

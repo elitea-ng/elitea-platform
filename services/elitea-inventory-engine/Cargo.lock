@@ -1423,6 +1423,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-inventory-core"
+version = "0.1.0"
+dependencies = [
+ "elitea-code-parsers",
+ "elitea-content-source",
+ "elitea-doc-extract",
+ "elitea-engine-core",
+ "indexmap",
+ "md-5 0.10.6",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "elitea-inventory-engine"
 version = "0.1.0"
 dependencies = [
@@ -1439,6 +1455,7 @@ dependencies = [
  "elitea-engine-core",
  "elitea-engine-sidecar",
  "elitea-graph-algos",
+ "elitea-inventory-core",
  "elitea-model-client",
  "elitea-pg-migrate",
  "elitea-repo-ingest",

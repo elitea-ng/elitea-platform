@@ -22,6 +22,7 @@ use crate::store::{self, GraphKey, sources};
 use crate::tools;
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::{Context, StopSignal};
+use elitea_inventory_core::store::GraphStore as _;
 use elitea_model_client::chat::ChatClient;
 use elitea_model_client::embeddings::{EmbeddingClient, EmbeddingOptions};
 use elitea_model_client::settings::ModelSettings;
@@ -43,7 +44,7 @@ pub struct NativeRunner {
     pool: PgPool,
     settings: Arc<Settings>,
     transport: Transport,
-    views: Arc<crate::retrieval::ViewCache>,
+    views: Arc<crate::retrieval::ViewCache<store::PgGraphStore>>,
     /// The ingestion model calls in flight across this process
     /// (`ELITEA_INVENTORY_MODEL_CONCURRENCY`).
     model_calls: Arc<tokio::sync::Semaphore>,
@@ -139,11 +140,14 @@ impl NativeRunner {
                 .model_concurrency
                 .clamp(1, tokio::sync::Semaphore::MAX_PERMITS),
         ));
+        let views = Arc::new(crate::retrieval::ViewCache::new(store::PgGraphStore::new(
+            pool.clone(),
+        )));
         Ok(Self {
             pool,
             settings: Arc::new(settings),
             transport,
-            views: Arc::new(crate::retrieval::ViewCache::default()),
+            views,
             model_calls,
         })
     }
@@ -349,7 +353,7 @@ impl NativeRunner {
         context.thinking("Loading graph and analyzing types...");
         let stored = self
             .views
-            .view(&self.pool, key)
+            .view(key)
             .await
             .map_err(store_error)?
             .unwrap_or_default();
@@ -486,9 +490,9 @@ impl NativeRunner {
                         ..EmbeddingOptions::default()
                     },
                 );
-                let (stop, pool) = (stop.clone(), self.pool.clone());
+                let (stop, graphs) = (stop.clone(), self.views.store().clone());
                 let embed: crate::investigate::Embed = Arc::new(move |query: String| {
-                    let (client, stop, pool) = (client.clone(), stop.clone(), pool.clone());
+                    let (client, stop, graphs) = (client.clone(), stop.clone(), graphs.clone());
                     Box::pin(async move {
                         let text = crate::embed::query_text(client.model(), &query);
                         let vector: Vec<f64> = client
@@ -497,19 +501,15 @@ impl NativeRunner {
                             .into_iter()
                             .map(f64::from)
                             .collect();
-                        store::vectors::rank(
-                            &pool,
-                            key,
-                            &vector,
-                            crate::retrieval::semantic::DEFAULT_MIN_SCORE,
-                        )
-                        .await
-                        .map_err(|e| {
-                            EngineError::new(
-                                ErrorType::Runtime,
-                                format!("the graph store failed: {e}"),
-                            )
-                        })
+                        graphs
+                            .rank(key, &vector, crate::retrieval::semantic::DEFAULT_MIN_SCORE)
+                            .await
+                            .map_err(|e| {
+                                EngineError::new(
+                                    ErrorType::Runtime,
+                                    format!("the graph store failed: {e}"),
+                                )
+                            })
                     })
                 });
                 embed
@@ -559,7 +559,7 @@ impl NativeRunner {
         let settings = Self::model_settings(params, &model_name)?;
         let stored = self
             .views
-            .view(&self.pool, key)
+            .view(key)
             .await
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
             .unwrap_or_default();
@@ -614,7 +614,7 @@ impl NativeRunner {
     ) -> Result<Value, EngineError> {
         let stored = self
             .views
-            .view(&self.pool, key)
+            .view(key)
             .await
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
             .unwrap_or_default();

@@ -181,3 +181,61 @@ jobs:
           ELITEA_DEEPWIKI_NATIVE_ENGINE_BIN: ${{ github.workspace }}/services/elitea-deepwiki-engine/target/release/elitea-deepwiki-engine
           ELITEA_REQUIRE_NATIVE_ENGINE: "1"
         run: go test -race -count=1 -run 'Native' -v ./internal/apps/deepwiki/run
+
+  # The serde_json feature-split checks for the crates the desktop links
+  # (ADR-0029 decisions 2 and 7), in a job of their own: in the engine job
+  # they pushed it past its 30-minute limit, and they need neither Postgres
+  # nor the engine binary.
+  serde-order:
+    name: Shared crates — serde_json order split (desktop links)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Read everywhere, write on main only (as in the engine job).
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: libs/rust
+
+      # engine-core and code-parsers keep `preserve_order` and
+      # `float_roundtrip` in their dev-dependencies only, so the desktop host
+      # can link them (ADR-0029 decisions 2 and 7); every engine binary turns
+      # both on in its own manifest. Their own tests above need both (pyjson's
+      # float repr, the JS/TS/Rust parser goldens compared as text), so the
+      # order-off run is their normal build: linted alone, without
+      # dev-dependencies, and the resolved features checked, since a feature
+      # one of them turned back on would otherwise pass unnoticed.
+      - name: Engine core and code parsers — normal build without preserve_order
+        working-directory: libs/rust
+        run: |
+          cargo clippy --locked -p elitea-engine-core -p elitea-code-parsers --lib -- -D warnings
+          features=$(cargo tree --locked -p elitea-engine-core -p elitea-code-parsers \
+            -e normal,features -i serde_json --prefix none)
+          echo "$features"
+          if ! grep -q '^serde_json feature "std"' <<<"$features"; then
+            echo "cargo tree listed no serde_json features: the check below would check nothing" >&2
+            exit 1
+          fi
+          if grep -E '^serde_json feature "(preserve_order|float_roundtrip|arbitrary_precision)"' <<<"$features"; then
+            echo "a normal dependency of engine-core or code-parsers turns on a serde_json feature the desktop host must not link" >&2
+            exit 1
+          fi
+
+      # elitea-inventory-core (ADR-0029 decision 7) runs its retrieval goldens
+      # in both serde_json builds: in the workspace (other members turn
+      # `preserve_order` on, as the Inventory engine does) every answer is the
+      # Python engine's byte for byte; built alone (as the desktop links it)
+      # a map's keys come out sorted, and the goldens are compared with that
+      # order taken out, against a recorded list of the handlers whose text
+      # depends on it (ORDER_DEPENDENT in tests/retrieval_*.rs).
+      # INVENTORY_CORE_SERDE_ORDER makes each run fail in the other build
+      # rather than pass checking the wrong thing.
+      - name: Inventory core — retrieval goldens with and without preserve_order
+        working-directory: libs/rust
+        run: |
+          INVENTORY_CORE_SERDE_ORDER=preserve cargo test --locked -p elitea-inventory-core -p elitea-engine-sidecar --all-targets --all-features
+          INVENTORY_CORE_SERDE_ORDER=sorted cargo test --locked -p elitea-inventory-core --all-targets --all-features
+          cargo clippy --locked -p elitea-inventory-core --all-targets --all-features -- -D warnings

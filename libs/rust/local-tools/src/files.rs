@@ -419,7 +419,20 @@ fn base_dir(workspace: &Workspace, path: Option<&str>) -> ToolResult<WsPath> {
     }
 }
 
-pub(crate) fn walker(
+/// A walk of the workspace from `base` the way every listing tool walks it:
+/// `.gitignore` honoured (with or without a git repository), hidden files
+/// included, `.git` and `path_deny` matches pruned (never descended into),
+/// symlinks yielded as entries but never followed, names in byte order.
+/// `glob` narrows it to matching paths; `depth` limits it.
+///
+/// Public for the desktop's local index (ADR-0029 decision 7), which lists
+/// a workspace exactly as the agent's tools see it. A caller that wants
+/// files keeps only the entries whose `file_type()` is a regular file.
+///
+/// # Errors
+///
+/// `glob` is not a glob.
+pub fn walker(
     workspace: &Workspace,
     base: &WsPath,
     glob: Option<&str>,
@@ -452,7 +465,10 @@ pub(crate) fn walker(
     Ok(builder.build())
 }
 
-pub(crate) fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
+/// A path [`walker`] yielded, as a workspace path; `None` for one outside
+/// the root or not UTF-8.
+#[must_use]
+pub fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
     WsPath::from_relative(path.strip_prefix(workspace.root()).ok()?).ok()
 }
 

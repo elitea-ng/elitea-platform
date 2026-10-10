@@ -235,6 +235,7 @@ struct Harness {
     folder: tempfile::TempDir,
     policy: Arc<Policy>,
     app: tempfile::TempDir,
+    index: Arc<crate::index::IndexRegistry>,
 }
 
 /// A host on the mock platform; approvals answered `decision` by the UI.
@@ -248,13 +249,18 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
     let emitter = Arc::new(VecEmitter::default());
     let policy = Arc::new(Policy(std::sync::Mutex::new(policy)));
     let credentials = Arc::new(StaticCredentials::new(server.origin.clone()));
+    let index = Arc::new(crate::index::IndexRegistry::new(
+        workspaces.clone(),
+        policy.clone(),
+        Arc::new(elitea_local_index::service::NoEvents),
+    ));
     let host = Arc::new(
         AgentHost::new(HostDeps {
             http: crate::net::SharedHttp::new("0.1.0"),
             credentials: credentials.clone(),
             client_version: "0.1.0".into(),
             policy: policy.clone(),
-            workspaces,
+            workspaces: workspaces.clone(),
             emitter: emitter.clone(),
             retry: RetryPolicy {
                 attempts: 3,
@@ -263,6 +269,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
             history: Some(Arc::new(
                 crate::history::HistoryStore::open(app.path()).unwrap(),
             )),
+            index: Some(index.clone()),
         })
         .unwrap(),
     );
@@ -295,6 +302,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         folder,
         policy,
         app,
+        index,
     }
 }
 
@@ -420,6 +428,17 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
     assert_eq!(calls[0].payload["remote"], false);
     assert_eq!(calls[0].payload["args_summary"], "notes.txt");
     assert_eq!(calls[1].payload["tool"], "Jira_create_issue");
+
+    // The workspace's host data (and the folder holding every workspace's)
+    // is owner-only, whatever the umask.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let data = h.app.path().join("workspaces").join(&h.workspace_id);
+        assert_eq!(mode(&data), 0o700);
+        assert_eq!(mode(&h.app.path().join("workspaces")), 0o700);
+    }
     assert_eq!(calls[1].payload["remote"], true);
     assert!(
         by_kind("tool_result")
@@ -772,13 +791,13 @@ async fn a_workspace_with_a_running_turn_cannot_be_removed() {
     .await;
     let running = h.host.start(request(&h.workspace_id)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let refused = h.host.remove_workspace(&h.workspace_id).unwrap_err();
+    let refused = h.host.remove_workspace(&h.workspace_id).await.unwrap_err();
     assert_eq!(refused.code, "workspace_busy");
 
     h.host.cancel(&running.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
     until_done_of(&h.emitter, &running.turn_id).await;
-    h.host.remove_workspace(&h.workspace_id).unwrap();
+    h.host.remove_workspace(&h.workspace_id).await.unwrap();
     // Its turns are gone from the host, and a new turn finds no workspace.
     assert_eq!(
         h.host.changes(&running.turn_id).unwrap_err().code,
@@ -1240,7 +1259,7 @@ async fn a_workspace_removed_or_rebound_while_a_turn_prepares_is_not_used() {
         if rebind {
             h.host.bind_project(&h.workspace_id, 2).unwrap();
         } else {
-            h.host.remove_workspace(&h.workspace_id).unwrap();
+            h.host.remove_workspace(&h.workspace_id).await.unwrap();
         }
         hold.store(false, Ordering::SeqCst);
         let error = starting.await.unwrap().unwrap_err();
@@ -1502,7 +1521,7 @@ async fn removing_a_workspace_forgets_its_threads() {
             .len(),
         1
     );
-    h.host.remove_workspace(&h.workspace_id).unwrap();
+    h.host.remove_workspace(&h.workspace_id).await.unwrap();
     assert!(
         h.host
             .thread_history(&h.workspace_id, "42")
@@ -1692,4 +1711,208 @@ async fn a_restore_runs_on_the_current_session_and_refuses_a_checkpoint_it_canno
             .code,
         "local_work_disabled"
     );
+}
+
+// ---------------------------------------------------------- local index
+
+fn index_allowed() -> Option<Value> {
+    Some(json!({"allowed": true, "shell": true, "local_index": true}))
+}
+
+/// An agent whose toolkit tool would be named `search_knowledge_graph`.
+fn colliding_details() -> Value {
+    let mut details = agent_details();
+    details["tools"][0]["toolkit_name"] = json!("search_knowledge");
+    details["tools"][0]["selected_tools"] = json!(["graph"]);
+    details
+}
+
+/// [`platform`], with a model that calls the index's search, then the
+/// toolkit tool whose name collided with it, then answers.
+fn index_platform(details: Value) -> impl Fn(&Req) -> Res {
+    let inner = platform(details, &[]);
+    let model_calls = AtomicUsize::new(0);
+    move |req: &Req| {
+        if req.path != "/llm/v1/chat/completions" {
+            return inner(req);
+        }
+        match model_calls.fetch_add(1, Ordering::SeqCst) {
+            0 => tool_call(
+                "call-index",
+                "search_knowledge_graph",
+                &json!({"query": "Users"}),
+            ),
+            1 => tool_call(
+                "call-remote",
+                "search_knowledge_graph_2",
+                &json!({"summary": "Bug"}),
+            ),
+            _ => sse(&[
+                json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+            ]),
+        }
+    }
+}
+
+/// Turn the harness workspace's index on and wait for its first build.
+async fn built_index(h: &Harness) {
+    std::fs::write(
+        h.folder.path().join("users.py"),
+        "class Users:\n    def create(self):\n        return 1\n",
+    )
+    .unwrap();
+    h.index.enable(&h.workspace_id).await.unwrap();
+    for _ in 0..500 {
+        let status = h.index.status(&h.workspace_id).await.unwrap();
+        if status.state == elitea_local_index::service::IndexState::Ready {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the index was not built");
+}
+
+fn offered_tools(server: &MockServer) -> Vec<String> {
+    let llm = seen(server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    first["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["function"]["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn index_tools_run_locally_and_a_toolkit_tool_never_takes_their_names() {
+    let server = serve(index_platform(colliding_details())).await;
+    let h = harness(server, index_allowed(), UiDecision::AllowOnce).await;
+    built_index(&h).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h.emitter).await;
+
+    let tools = offered_tools(&h.server);
+    for name in elitea_local_index::tools::NAMES {
+        assert!(tools.iter().any(|t| t == name), "{name} offered: {tools:?}");
+    }
+    assert!(
+        tools.iter().any(|t| t == "search_knowledge_graph_2"),
+        "the toolkit tool is renamed past the reserved index name: {tools:?}"
+    );
+    let calls: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "tool_call").collect();
+    assert_eq!(calls[0].payload["tool"], "search_knowledge_graph");
+    assert_eq!(calls[0].payload["remote"], false, "the index runs here");
+    assert_eq!(calls[1].payload["tool"], "search_knowledge_graph_2");
+    assert_eq!(calls[1].payload["remote"], true);
+    let results: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "tool_result").collect();
+    assert_eq!(results[0].payload["ok"], true, "{:?}", results[0].payload);
+    // The model read the index's answer.
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert!(llm[1].body.contains("Users"), "{}", llm[1].body);
+    assert_eq!(
+        seen(
+            &h.server,
+            "/api/v2/elitea_core/remote_toolkit_call/prompt_lib/1/3"
+        )
+        .len(),
+        2,
+        "the renamed toolkit tool still reaches its toolkit (409, then confirmed)"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_mode_keeps_the_index_tools() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, index_allowed(), UiDecision::AllowOnce).await;
+    built_index(&h).await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    until_done(&h.emitter).await;
+    let tools = offered_tools(&h.server);
+    assert!(
+        tools.iter().any(|t| t == "search_knowledge_graph"),
+        "{tools:?}"
+    );
+    assert!(!tools.iter().any(|t| t == "Jira_create_issue"), "{tools:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_policy_turning_the_index_off_offers_no_index_tools() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, index_allowed(), UiDecision::AllowOnce).await;
+    built_index(&h).await;
+    // `local_index` absent (off) while local work stays allowed.
+    h.policy.set(allowed());
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h.emitter).await;
+    let tools = offered_tools(&h.server);
+    assert!(tools.iter().any(|t| t == "write_file"), "{tools:?}");
+    for name in elitea_local_index::tools::NAMES {
+        assert!(
+            !tools.iter().any(|t| t == name),
+            "{name} offered: {tools:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turns_changes_mark_the_index_stale_and_removal_deletes_it() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, index_allowed(), UiDecision::AllowOnce).await;
+    built_index(&h).await;
+    // The turn writes notes.txt.
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h.emitter).await;
+    let status = h.index.status(&h.workspace_id).await.unwrap();
+    assert_eq!(status.state, elitea_local_index::service::IndexState::Stale);
+    assert_eq!(status.changed_files, 1);
+    // A few seconds after the turn, the index refreshes itself.
+    let mut refreshed = status;
+    for _ in 0..1000 {
+        refreshed = h.index.status(&h.workspace_id).await.unwrap();
+        if refreshed.state == elitea_local_index::service::IndexState::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        (refreshed.state, refreshed.changed_files),
+        (elitea_local_index::service::IndexState::Ready, 0),
+        "the turn's changes were indexed"
+    );
+
+    let dir = h.index.index_dir(&h.workspace_id);
+    assert!(dir.join("index.sqlite").is_file());
+    h.host.remove_workspace(&h.workspace_id).await.unwrap();
+    assert!(!dir.exists(), "the index went with the workspace's data");
+}
+
+/// The Doctor's index repairs go through the host's hooks from whatever
+/// thread runs them: on a current-thread runtime's own thread too, where a
+/// `block_on` or a blocking lock would panic.
+#[tokio::test]
+async fn the_doctor_index_hooks_work_on_a_current_thread_runtime() {
+    use crate::doctor::DoctorHooks as _;
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, index_allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("users.py"), "class Users:\n    pass\n").unwrap();
+    h.host.rebuild_index(&h.workspace_id).unwrap();
+    let mut built = false;
+    for _ in 0..500 {
+        let status = h.index.status(&h.workspace_id).await.unwrap();
+        if status.state == elitea_local_index::service::IndexState::Ready {
+            built = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(built, "rebuilt through the hook");
+    let dir = h.index.index_dir(&h.workspace_id);
+    let mut gone = false;
+    h.host.with_index_closed(&h.workspace_id, &mut || {
+        gone = std::fs::remove_dir_all(&dir).is_ok();
+    });
+    assert!(gone, "the work ran with the index closed");
+    assert!(!dir.exists());
 }
