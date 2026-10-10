@@ -152,9 +152,12 @@ describe('WorkspacesPage', () => {
 
 describe('WorkspaceSessionPage', () => {
   const createdConversations: unknown[] = [];
-  function serveProject(): void {
+  function serveProject(skills: { id: string; name: string; description?: string }[] = []): void {
     createdConversations.length = 0;
     server.use(
+      http.get(`${BASE}/elitea_core/application_skills/prompt_lib/42/9`, () =>
+        HttpResponse.json({ items: skills.map((s) => ({ ...s, project_id: '42', type: 'skill' })), total: skills.length, page: 1, page_size: skills.length, total_pages: 1 }),
+      ),
       http.get(`${BASE}/elitea_core/applications/prompt_lib/42`, () =>
         HttpResponse.json({ rows: [{ id: '5', name: 'Coder', tags: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', owner_id: '1', is_forked: false, meta: null, has_interrupt: false }], total: 1 }),
       ),
@@ -215,6 +218,7 @@ describe('WorkspaceSessionPage', () => {
       prompt: 'fix the build',
       plan_mode: true,
       mentions: [],
+      skills: [],
     });
 
     const at = (seq: number) => ({ turn_id: 'turn-1', seq });
@@ -670,8 +674,8 @@ describe('WorkspaceSessionPage', () => {
       { path: 'README.md', kind: 'file' as const },
     ];
 
-    async function ready(ipc: FakeWorkspaceIpc): Promise<ReturnType<typeof userEvent.setup>> {
-      serveProject();
+    async function ready(ipc: FakeWorkspaceIpc, skills?: Parameters<typeof serveProject>[0]): Promise<ReturnType<typeof userEvent.setup>> {
+      serveProject(skills);
       const user = userEvent.setup();
       mount(ipc, '/workspaces/w1');
       await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
@@ -802,6 +806,50 @@ describe('WorkspaceSessionPage', () => {
       expect(created).toBe(1);
       expect(ipc.calls.started[1]?.conversation_id).toBe('78');
     }, 30_000);
+
+    it('lists the agent\'s skills after the commands, filtered, and sends the one the message starts with', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [
+        { id: '7', name: 'style', description: 'The house style' },
+        { id: '8', name: 'code-review', description: 'Review a change' },
+      ]);
+      const input = screen.getByTestId('chat-message-input');
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(8));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
+        '/new', '/plan', '/undo', '/agent', '/clear', '/help', '/code-review', '/style',
+      ]);
+      expect(within(menu).getByText('Skills')).toBeInTheDocument();
+      expect(within(menu).getByText('The house style')).toBeInTheDocument();
+
+      // Filtered by what follows the "/": only the skills match "st".
+      await user.type(input, 'st');
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId('workspace-command-menu'))
+            .getAllByRole('option')
+            .map((o) => o.getAttribute('aria-label')),
+        ).toEqual(['/style']),
+      );
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('/style '));
+      expect(screen.queryByTestId('workspace-command-menu')).toBeNull();
+
+      await user.type(input, 'tidy the README{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('/style tidy the README');
+      expect(ipc.calls.started[0]?.skills).toEqual(['style']);
+    });
+
+    it('sends no skill when the message does not start with one', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [{ id: '7', name: 'style' }]);
+      await user.type(screen.getByTestId('chat-message-input'), 'use /style here{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.skills).toEqual([]);
+    });
 
     it('does not open the command menu for a "/" inside the text', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });

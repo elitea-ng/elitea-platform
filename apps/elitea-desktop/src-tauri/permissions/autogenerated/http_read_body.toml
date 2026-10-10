@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-http-read-body"
+description = "Enables the http_read_body command without any pre-configured scope."
+commands.allow = ["http_read_body"]
+
+[[permission]]
+identifier = "deny-http-read-body"
+description = "Denies the http_read_body command without any pre-configured scope."
+commands.deny = ["http_read_body"]

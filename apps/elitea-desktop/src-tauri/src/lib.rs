@@ -15,11 +15,11 @@ mod discovery;
 mod doctor;
 mod error;
 mod history;
-mod http_scope;
 mod local_commands;
 mod logging;
 mod loopback;
 mod menu;
+mod net;
 mod pkce;
 mod platform;
 mod settings;
@@ -94,7 +94,6 @@ pub fn run() {
         );
     let built = builder
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(menu::Zoom::default())
@@ -105,9 +104,14 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if webview.label() == "main"
                 && payload.event() == tauri::webview::PageLoadEvent::Started
-                && let Some(queue) = webview.try_state::<app_events::CommandQueue>()
             {
-                queue.not_ready();
+                if let Some(queue) = webview.try_state::<app_events::CommandQueue>() {
+                    queue.not_ready();
+                }
+                // Nobody will read the old page's bodies or streams.
+                if let Some(fetches) = webview.try_state::<net::WebFetch>() {
+                    fetches.table.clear();
+                }
             }
         })
         .menu(menu::build)
@@ -123,7 +127,11 @@ pub fn run() {
             );
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
-            let tokens = TokenEndpoint::new(env!("CARGO_PKG_VERSION"))?;
+            // The one HTTP client (src/net.rs). Its TLS roots load on a
+            // background thread, so they never hold the window back.
+            let http = net::SharedHttp::new(env!("CARGO_PKG_VERSION"));
+            http.prewarm();
+            let tokens = TokenEndpoint::shared(http.clone(), env!("CARGO_PKG_VERSION"));
             // Read once, on first use, then served from memory. Deliberately NO
             // migration from the old keychain item (`ai.elitea.desktop` /
             // `device-session`): touching the keychain is what prompted for the
@@ -148,8 +156,29 @@ pub fn run() {
                     auth.retry_pending_revokes().await;
                 });
             }
-            let stored_origin = auth.state().ok().and_then(|s| s.origin);
-            http_scope::grant_stored(app.handle(), stored_origin.as_deref());
+            let stored = auth.state().ok();
+            // The webview's fetch reaches the stored deployment, and no other.
+            let scope = Arc::new(net::HttpScope::default());
+            scope.grant_stored(stored.as_ref().and_then(|s| s.origin.as_deref()));
+            app.manage(net::WebFetch {
+                http: http.clone(),
+                scope,
+                table: net::FetchTable::default(),
+            });
+            // Signed in: start the launch's token refresh now, while the
+            // window and the page load, instead of when the page first asks.
+            // The page's own request joins it (refresh_inner re-checks the
+            // cache under the gate), so this never rotates twice.
+            if stored.as_ref().is_some_and(|s| s.signed_in) {
+                let auth = auth.clone();
+                tauri::async_runtime::spawn(async move {
+                    let started = std::time::Instant::now();
+                    match auth.access_token().await {
+                        Ok(_) => log::debug!("launch token ready in {:?}", started.elapsed()),
+                        Err(error) => log::debug!("launch token not ready: {error}"),
+                    }
+                });
+            }
             // Local work (ADR-0029 D0): workspaces and the local agent turn.
             // The thread history; the app runs without it when it is refused.
             let history = match HistoryStore::open(&data_dir) {
@@ -165,6 +194,7 @@ pub fn run() {
             let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
             let agents = Arc::new(
                 AgentHost::new(HostDeps {
+                    http: http.clone(),
                     credentials: Arc::new(AuthCredentials(auth.clone())),
                     client_version: env!("CARGO_PKG_VERSION").to_owned(),
                     policy: Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone()))),
@@ -229,6 +259,9 @@ pub fn run() {
             local_commands::reveal_path,
             local_commands::open_path,
             platform::app_platform,
+            net::http_fetch,
+            net::http_read_body,
+            net::http_cancel,
             app_events::app_ready,
             doctor::doctor_run,
             doctor::doctor_fix,

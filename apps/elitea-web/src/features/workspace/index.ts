@@ -2,10 +2,11 @@
  * Public API — desktop-only Workspace view building blocks (ADR-0029 D0):
  * the turn event reducer + hook, the approval dialog, the transcript, the
  * changed-files card, the workspace list and the composer's "@"/"/"
- * menu (tokens, local commands, popup). Reached only from
+ * menu (tokens, local commands, the agent's skills, popup). Reached only from
  * `pages/workspace`, which is itself reached only in the `desktop` build.
  */
 import { matchingCommands, workspaceCommands } from './model/composerCommands';
+import { invokedSkill, matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { readLastLocation, writeLastLocation } from './model/threads';
 
@@ -25,8 +26,8 @@ export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
 export type { WorkspaceCommandId } from './model/composerCommands';
 
-/** The composer's text rules ("@"/"/" tokens, referenced paths) and its local "/" commands, as one bundle. */
-export const composer = { activeToken, mentionText, referencedPaths, matchingCommands, workspaceCommands };
+/** The composer's text rules ("@"/"/" tokens, referenced paths), its local "/" commands and the agent's skills in the "/" menu, as one bundle. */
+export const composer = { activeToken, mentionText, referencedPaths, matchingCommands, workspaceCommands, matchingSkills, skillToken, invokedSkill };
 
 /** The folder and thread the person was last in (desktop home), read and written as one pair. */
 export const lastLocation = { read: readLastLocation, write: writeLastLocation };

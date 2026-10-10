@@ -73,7 +73,9 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
+import { keepThemeOffTheServer } from '../fixtures/serverTheme';
 import { SNAPSHOT_TOLERANCE, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
+
 
 /*
  * `shellSettled()` now lives in `./lib/settle.ts`, imported above.
@@ -619,6 +621,10 @@ for (const route of ROUTES) {
  * stylesheet actually keys off — not a proxy for it.
  */
 async function useLightScheme(page: Page): Promise<void> {
+  // The click would otherwise store `light` for the persona every parallel
+  // worker shares (`fixtures/serverTheme.ts`). Only switching tests carry the
+  // stub: an intercepted page rasterises its text differently.
+  await keepThemeOffTheServer(page);
   await page.goto(BASE_URL + '/app/settings/personalization', { waitUntil: 'domcontentloaded' });
   const light = page.getByRole('button', { name: 'Light', exact: true });
   await expect(light).toBeVisible({ timeout: 20_000 });

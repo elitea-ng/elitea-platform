@@ -152,50 +152,14 @@ impl InstructionPlan {
 
     fn add_skills(&mut self, skills: &[Value]) -> Result<(), NativeAgentAssemblyError> {
         for skill in skills {
-            let object = skill.as_object().ok_or_else(invalid)?;
-            let content = object
-                .get("instructions")
-                .and_then(Value::as_str)
-                .ok_or_else(invalid)?;
-            let name = object
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(invalid)?;
-            let id = object
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(invalid)?;
-            let revision = object
-                .get("revision")
-                .and_then(Value::as_str)
-                .ok_or_else(invalid)?;
-            let source_scope = object
-                .get("scope")
-                .and_then(Value::as_str)
-                .ok_or_else(invalid)?;
-            let snapshot = Snapshot {
-                id: id.to_owned(),
-                revision: revision.to_owned(),
-                source_scope: source_scope.to_owned(),
-                name: name.to_owned(),
-                description: object
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                content: content.to_owned(),
-                skill_id: object.get("skill_id").cloned().unwrap_or(Value::Null),
-                icon_meta: object.get("icon_meta").cloned().unwrap_or(Value::Null),
-                kind: "skill".to_owned(),
-            };
-            snapshot.validate().map_err(|_| invalid())?;
+            let snapshot = skill_snapshot(skill)?;
             if self.catalog.values().any(|existing| {
-                existing.name.trim().to_lowercase() == name.trim().to_lowercase()
-                    && existing.id != id
+                existing.name.trim().to_lowercase() == snapshot.name.trim().to_lowercase()
+                    && existing.id != snapshot.id
             }) {
                 return Err(invalid());
             }
-            if let Some(existing) = self.catalog.get(id) {
+            if let Some(existing) = self.catalog.get(&snapshot.id) {
                 // Descriptions may carry Main's instruction-reference hint.
                 if existing.revision != snapshot.revision
                     || existing.content != snapshot.content
@@ -205,7 +169,7 @@ impl InstructionPlan {
                     return Err(invalid());
                 }
             } else {
-                self.catalog.insert(id.to_owned(), snapshot);
+                self.catalog.insert(snapshot.id.clone(), snapshot);
             }
         }
         self.validate_bounds()
@@ -737,6 +701,68 @@ pub fn valid_state_delta(delta: &std::collections::HashMap<String, Value>) -> bo
             key == &state_key(&state.scope) && state.validate(&state.scope).is_ok()
         })
 }
+/// One frozen skill snapshot (an entry of a version's `skills`, or an
+/// attached or invoked skill), read and checked the way
+/// [`InstructionPlan::admit`] reads every skill: `id`, `name`,
+/// `instructions`, `revision` and `scope` present, each within its bound,
+/// and `revision` the digest ([`content_digest`]) of the instructions.
+fn skill_snapshot(skill: &Value) -> Result<Snapshot, NativeAgentAssemblyError> {
+    let object = skill.as_object().ok_or_else(invalid)?;
+    let text = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)
+            .map(str::to_owned)
+    };
+    let snapshot = Snapshot {
+        id: text("id")?,
+        revision: text("revision")?,
+        source_scope: text("scope")?,
+        name: text("name")?,
+        description: object
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        content: text("instructions")?,
+        skill_id: object.get("skill_id").cloned().unwrap_or(Value::Null),
+        icon_meta: object.get("icon_meta").cloned().unwrap_or(Value::Null),
+        kind: "skill".to_owned(),
+    };
+    snapshot.validate().map_err(|_| invalid())?;
+    Ok(snapshot)
+}
+
+/// Whether `skill` is a frozen skill snapshot the runtime would admit
+/// (see `skill_snapshot`): for a host that applies a skill itself, before
+/// the runtime sees it.
+///
+/// # Errors
+///
+/// `InvalidInput`: a missing field, a bound exceeded, or a revision that
+/// is not the digest of the instructions.
+pub fn check_skill(skill: &Value) -> Result<(), NativeAgentAssemblyError> {
+    skill_snapshot(skill).map(|_| ())
+}
+
+/// Admit a version's `skills` the way [`InstructionPlan::admit`] does —
+/// each snapshot ([`check_skill`]), no two skills under one name, the same
+/// id never with other content, and the catalogue's bounds — one skill at
+/// a time, so a refusal names the skill.
+///
+/// # Errors
+///
+/// The index of the first skill refused, and why.
+pub fn check_skills(skills: &[Value]) -> Result<(), (usize, NativeAgentAssemblyError)> {
+    let mut plan = InstructionPlan::default();
+    for (index, skill) in skills.iter().enumerate() {
+        plan.add_skills(std::slice::from_ref(skill))
+            .map_err(|error| (index, error))?;
+    }
+    Ok(())
+}
+
 pub fn content_digest(content: &str) -> String {
     let mut result = String::with_capacity(64);
     for byte in digest::digest(&digest::SHA256, content.as_bytes()).as_ref() {

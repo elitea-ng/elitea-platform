@@ -3224,6 +3224,35 @@
       "usedBy": [
         "shared/api/voiceTransport.ts"
       ]
+    },
+    {
+      "$comment": "The user's shared colour-theme preference (web and desktop agree on it). Handwritten over eliteaFetch because the read is a background request: its 401 must not open the re-auth window, which the generated function cannot ask for.",
+      "id": "social.getThemePreference",
+      "method": "GET",
+      "path": "/social/author/theme",
+      "operationId": "getCurrentAuthorTheme",
+      "source": "handwritten",
+      "responseSchema": "ThemePreference",
+      "fixture": null,
+      "usedBy": [
+        "shared/api/themePreference.ts",
+        "app/ThemePreferenceSync.tsx"
+      ]
+    },
+    {
+      "$comment": "Saved by the theme toggle after it applies the mode locally (optimistic; a failure keeps the local choice silently), and by the sync to seed a never-stored server value from the local one. Background for the same reason as the read.",
+      "id": "social.updateThemePreference",
+      "method": "PUT",
+      "path": "/social/author/theme",
+      "operationId": "updateCurrentAuthorTheme",
+      "source": "handwritten",
+      "responseSchema": "ThemePreference",
+      "fixture": null,
+      "usedBy": [
+        "shared/api/themePreference.ts",
+        "shared/ui/ThemeModeToggle.tsx",
+        "app/ThemePreferenceSync.tsx"
+      ]
     }
   ]
 }

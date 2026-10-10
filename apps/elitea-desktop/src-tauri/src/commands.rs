@@ -1,4 +1,4 @@
-//! The connection and sign-in IPC surface: eight commands. The local-work
+//! The connection and sign-in IPC surface: eight commands (the webview's fetch is in `net.rs`). The local-work
 //! commands (workspaces, the agent turn) are in `local_commands.rs`; the
 //! whole surface is listed in `IPC.md`.
 //!
@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{State, WebviewWindow};
 
 use crate::auth::{AccessToken, AuthService, DeploymentInfo, HostState, RefreshResult};
 use crate::error::HostError;
@@ -28,9 +28,9 @@ pub fn host_state(state: State<'_, AppState>) -> Result<HostState, HostError> {
 /// Step one of connecting: validate the address and show whose deployment it is.
 #[tauri::command]
 pub async fn host_connect(
-    app: AppHandle,
     state: State<'_, AppState>,
     local: State<'_, LocalState>,
+    fetches: State<'_, crate::net::WebFetch>,
     url: String,
 ) -> Result<DeploymentInfo, HostError> {
     let before = state.auth.state().ok().and_then(|current| current.origin);
@@ -39,8 +39,11 @@ pub async fn host_connect(
     if before.as_deref() != Some(info.origin.as_str()) {
         local.agents.forget_identity();
     }
-    // From here the webview may reach this deployment through the HTTP plugin, and no other.
-    crate::http_scope::grant(&app, &info.origin).map_err(HostError::Internal)?;
+    // From here the webview's fetch (src/net.rs) may reach this deployment.
+    fetches
+        .scope
+        .grant(&info.origin)
+        .map_err(HostError::Internal)?;
     Ok(info)
 }
 

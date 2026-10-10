@@ -15,6 +15,7 @@ const REQUEST: TurnStartRequest = {
   prompt: 'do it',
   plan_mode: false,
   mentions: [],
+  skills: [],
 };
 
 const ev = (seq: number, e: Omit<AgentEvent, 'turn_id' | 'seq'>): AgentEvent => ({ turn_id: 'turn-1', seq, ...e }) as AgentEvent;

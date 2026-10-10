@@ -43,6 +43,77 @@ upgrade `host_state` reports signed out, and the old device session is revoked
 from the web's Settings › Devices or idles out (README, "Upgrading from a
 keychain build").
 
+## Network (`src/net.rs`)
+
+The webview's `fetch` (`apps/elitea-web/src/shared/desktop/hostFetch.ts`).
+Every request goes out on the host's one pooled HTTP client, the same one the
+host's own calls use. It replaces `tauri-plugin-http`, which built a client
+(and loaded the TLS roots) for every request.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `http_fetch` | the request body as the **raw** IPC payload (a `Uint8Array`, sent as is), and the invoke header `x-elitea-fetch`: percent-encoded JSON `{id, method, url, headers: [name, value][]}` (at most 256 KiB) | `{status, statusText, headers: [name, value][], url, hasBody}`, the response head. The body stays with the host under `id` until it has been read to the end, cancelled, or left unread too long (below). |
+| `http_read_body` | `{id}` | the next chunk as raw bytes (an `ArrayBuffer`); **zero bytes means the end**, and the id is then forgotten |
+| `http_cancel` | `{id}` | `null`. Aborts a pending `http_fetch`, or ends a body or stream; a pending read rejects with `aborted`. An id the host has not seen yet is remembered for 30 s (at most 1024 ids), and an `http_fetch` with it is then refused with `aborted` before anything is sent: IPC calls can overtake each other. |
+
+`id` is chosen by the page, so an abort can name a request before its head
+arrives; an id still in flight is refused. The rules:
+
+- only `http`/`https` URLs on an origin the host granted (the stored
+  deployment at launch, then each `host_connect`), and no userinfo;
+  otherwise `url_not_allowed`, and nothing is sent;
+- redirects are never followed: a 3xx is returned as it is;
+- the fetch spec's forbidden request headers (`Cookie`, `Host`, `Origin`,
+  `Content-Length`, `Sec-*`, `Proxy-*`, …) are dropped; `Origin:
+  tauri://localhost` is sent; there is no cookie jar;
+- a HEAD request and a null-body status (1xx, 204, 205, 304) have
+  `hasBody: false` and nothing to read; the host keeps nothing;
+- a request body is at most **160 MiB**: the largest single-request
+  upload the web app makes is an artifact (one multipart `POST`, whose
+  deployment default is 150 MiB), plus the multipart envelope. The page
+  refuses a larger body before buffering it where it can tell the size
+  (a `Blob`, `File`, buffer, string or `FormData`), the host before
+  sending anything (`body_too_large`). An abort while the page is still
+  reading the body ends the call at once, and nothing reaches the host;
+- the IPC's postMessage fallback (used only when its custom protocol is
+  unavailable, e.g. blocked by a CSP) carries a binary body as one JSON
+  number per byte, tens of bytes of memory per byte sent; there a body is
+  at most **16 MiB**, else `body_too_large` with a message naming the
+  fallback channel;
+- at most **256 requests are open** at once, pending, streaming and unread
+  alike. When the table is full, the longest-unread response that nobody
+  has read for at least 5 s is dropped to make room; with none, the new
+  request is refused with `too_many_requests` (nothing is sent). A
+  response nobody reads for 60 s is dropped (a stream with a read waiting
+  on it is not idle, so SSE is unaffected); a later read answers
+  `unknown_request`. A head that does not arrive within **120 s** fails
+  the request (`network`) and frees its slot; a body, once streaming, has
+  no deadline. The page also cancels a body it can no longer read (its
+  `Response` was garbage-collected) and a HEAD or null-body response at
+  once;
+- a page reload cancels everything the old page had in flight.
+
+Errors reject with `{code, message}`: `aborted` (the page maps it to an
+`AbortError`), `url_not_allowed`, `invalid_request`, `body_too_large`,
+`too_many_requests`, `unknown_request`, `network` (mapped to a
+`TypeError`, as `fetch` throws).
+
+**Copies of an upload** (a 150 MiB body, on the custom-protocol IPC). The
+counts are by reading each copy site, not by profiling; the IPC's own
+copies inside WebKit and wry are outside this code and not counted.
+
+| | before (frame) | now (raw payload + header) |
+| --- | --- | --- |
+| page: `Request.arrayBuffer()` | 150 MiB | 150 MiB |
+| page: frame (metadata + body concatenated) | +150 MiB | — |
+| host: the IPC's buffer (lent to the command for its whole life) | 150 MiB | 150 MiB |
+| host: the command's own copy | +150 MiB (`Bytes::copy_from_slice`) | ≤ 320 KiB (64 KiB pieces, 4 queued + 1 in flight) |
+| **peak held by this code** | **~600 MiB** | **~300 MiB** |
+
+Tauri 2.12 lends the command the IPC buffer (`tauri::ipc::Request` borrows
+it) and has no way to take it, so the host streams from the borrowed buffer
+instead of copying it whole; a body up to 256 KiB is copied, as before.
+
 ## Workspaces (`src/local_commands.rs`, `src/workspaces.rs`)
 
 ```ts
@@ -70,7 +141,7 @@ inside the folder.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[]}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[]}` | `{turn_id, execution_id}` |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
@@ -94,8 +165,8 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `platform_mcp_unsupported`, `unknown_tool_kind`, `toolkit_ref_missing`,
 `model_unresolved`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
-`workspace_project_mismatch`, `workspace_busy`,
-`invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
+`workspace_project_mismatch`, `workspace_busy`, `skill_unknown`,
+`skill_invalid`, `skill_too_large`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
 `not_found`, …).
 
 A turn is held to the session it started under (the connected origin and
@@ -126,6 +197,39 @@ Files the user referenced:
 and that message is what the turn starts, runs and commits with. File
 contents are never inlined: the agent reads them with its own tools.
 
+**Skills.** `skills` are skills the person picked in the composer's "/"
+menu, by name (the UI sends the skill its message starts with as
+`/<name>`; the prompt itself is sent as typed). Only the agent version's
+own skills can be picked, as with the web chat's `~skill`: each name is
+matched, ignoring case and surrounding blanks, against the `skills` of the
+resolved version (or equals a skill's frozen `id`), so the skill is read
+server-side, under the person's own permissions, with the definition.
+At most 5 names, each non-blank, at most 256 bytes and without control
+characters, else `invalid_request` before any request. A name the version
+has no skill with instructions for is refused with `skill_unknown`, and
+more than 64 KiB of picked skill text together with `skill_too_large`
+(refused, not cut). Whether or not a skill is picked, **every** skill of
+the version goes through the runtime's own instruction admission
+(`instruction_authority::check_skills`: each snapshot's `id`, `scope` and
+`revision` present and within bounds, `revision` the SHA-256 of the
+instructions, no two skills under one name, the catalogue's bounds; then
+`InstructionPlan::admit` with the project context): a skill it refuses
+fails the start with `skill_invalid`, naming the skill. All of these after
+the definition is read and before the turn is started on the platform
+(the runtime loads every attached skill, so such a turn could not run).
+The picked skills are appended to the agent's instructions, before the
+AGENTS.md section, as one `## Skill for this turn` section with one
+`<invoked_skill nonce="…" name="…">` block per skill, ending with
+`## End of skill instructions`; the name is escaped as an attribute value
+and the text is framed as AGENTS.md text is (below). Every attached skill
+also stays in the runtime's catalogue, for `load_skill`, as before.
+
+**Precedence.** The system instructions are in the order of their
+authority, and each framed section's preamble says so: the agent's own
+instructions first; then the picked skill, which they outrank and which
+outranks AGENTS.md; then AGENTS.md, which both outrank (a nested
+AGENTS.md is more specific than the root one); then the memory splice.
+
 **AGENTS.md.** At every turn start (plan mode included) the host reads the
 workspace's root `AGENTS.md` (name matched case-insensitively; an exact
 `AGENTS.md` wins over another spelling in the same folder) and, for each
@@ -134,15 +238,23 @@ first, deduplicated. Reads go through the confined workspace: a symlinked
 file or folder is not read and a `path_deny` match is refused. All files
 together are capped at 32 KiB; a cut file ends with a truncation note and
 files past the cap are skipped. They are appended to the agent's system
-instructions, after the agent's own instructions (which keep priority, as
-the section's header says) and before the memory splice, as one
-`## Project instructions (AGENTS.md)` section with one
-`<agents_md path="…">` block per file. The path is escaped as an attribute
-value (`&`, `"`, `<`, `>` and control characters as entities); in the text,
-an opening or closing `agents_md` tag (any case) gets a backslash after its
-`<` (`<\/agents_md>`) and a line that would read as the section's own start
-or end heading gets one in front, so no file can close its block, open
-another or end the section. Edits apply from the next turn.
+instructions, after the agent's own instructions and any picked skill
+(which outrank it, as the section's preamble says) and before the memory
+splice, as one `## Project instructions (AGENTS.md)` section with one
+`<agents_md nonce="…" path="…">` block per file. The path is escaped as an
+attribute value (`&`, `"`, `<`, `>` and control characters as entities).
+Edits apply from the next turn.
+
+**Nonce framing** (AGENTS.md and skills alike, `src/d0/framing.rs`). Every
+turn draws a fresh random 128-bit nonce `N` (32 hex digits). A block opens
+with `<tag nonce="N" …>` and ends only at `</tag nonce="N">`; each section's
+preamble says so, and that everything before that closing tag — including
+text that looks like a closing tag, a heading or the end of the section —
+is the block's content. The text is left byte for byte as written
+(Markdown headings, `Vec<u8>`, `#include`, shell comments and tags of its
+own included), except for the one sequence that could end the block: the
+exact closing tag with this turn's nonce (ASCII case ignored), which the
+text cannot know in advance; should it occur, its `</` becomes `<\/`.
 
 ```ts
 type FileChange = {
@@ -409,5 +521,12 @@ asks `agent_turn_status` and takes its `done` payload as the event.
 `message_ids` are the question's and the answer's message UUIDs, in that
 order, when committed. `approval_request.can_remember` is true when
 `allow_always` is remembered for this workspace (a simple command or a
-file change); otherwise `allow_always` answers once. Remote toolkit
+file change); otherwise `allow_always` answers once and the UI does not
+offer it. It is false for every `run_command` on a machine that may run
+commands unconfined (the OS sandbox cannot be enforced): every command is
+asked there, so a remembered choice would never apply. `can_remember` is
+computed from the very precondition the host's `remember` checks; should
+storing the choice still fail (the scope the person picked does not match,
+or the store cannot be written), the call is approved once and a warning
+logged — an approval is never turned into an error. Remote toolkit
 confirmations (`confirmation_required`) never remember.

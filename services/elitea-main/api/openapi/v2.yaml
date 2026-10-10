@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.6"
+  x-elitea-client-contract: "1.7"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -10504,6 +10504,30 @@ components:
         personalization, which is where apps/elitea-web put them while this
         endpoint still dropped every other top-level key; the top-level
         placement wins, and a nested one is rewritten into the columns.
+        `personalization.theme_mode` is the one key this endpoint never
+        writes: it belongs to PUT /social/author/theme, so any value sent
+        here is dropped and the stored one is carried forward, even when
+        personalization itself is absent.
+
+    ThemePreference:
+      type: object
+      required: [theme_mode]
+      properties:
+        theme_mode:
+          type: string
+          nullable: true
+          description: >
+            One of `system`, `light` or `dark` (the web app's colour-scheme
+            modes; deliberately not an `enum` here, whose `system` member would
+            collide with BucketType's generated constant). On a read, null
+            means the user has never chosen one, and a client keeps its own
+            local choice. A write must send one of the three values; null or
+            anything else is a 400.
+      description: >
+        The caller's colour-theme preference, shared by the web app and the
+        desktop app, which run on different origins and so share no browser
+        storage. Stored in centry.social_users.personalization under
+        `theme_mode` (internal/api/v2/social/theme.go).
 
     CurrentAvatarResponse:
       type: object
@@ -24723,6 +24747,61 @@ paths:
                 $ref: '#/components/schemas/OkResponse'
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /social/author/theme:
+    get:
+      operationId: getCurrentAuthorTheme
+      summary: Get the authenticated user's own colour-theme preference
+      description: |
+        Client contract 1.7. internal/api/v2/social/theme.go (GetThemePreference). Reads
+        `personalization.theme_mode` from the caller's own
+        centry.social_users row, keyed on the authenticated principal's
+        owning user id. `theme_mode` is null when the user has never chosen
+        one, or when the stored value is not one of the three modes.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: The caller's theme preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThemePreference'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
+
+    put:
+      operationId: updateCurrentAuthorTheme
+      summary: Set the authenticated user's own colour-theme preference
+      description: |
+        Client contract 1.7. internal/api/v2/social/theme.go (UpdateThemePreference). Merges
+        `theme_mode` into the caller's personalization blob; every other key
+        (persona, instructions) is kept. Creates the caller's social profile
+        row when there is none. Answers the stored preference.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThemePreference'
+      responses:
+        '200':
+          description: The stored preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThemePreference'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '404': { $ref: '#/components/responses/404' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '500': { $ref: '#/components/responses/500' }
 
   /social/authors/{project_id}:

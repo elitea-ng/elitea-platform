@@ -31,10 +31,15 @@
 //! | `run_command` in `read-only` or `workspace-write`, no network, not destructive (see [`crate::classify`]) | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 //! | `run_command` that is destructive, asks for the network or `full-access`, or may run unconfined (the host allows unenforced sandboxes) | asked |
 //!
-//! Layers 1 to 3 only tighten these defaults: a policy deny, plan mode, or
-//! a workspace deny or ask beats them. A workspace allow of a compound
-//! command holds only when the command is not destructive. Compound
-//! commands and `git_commit` are never remembered.
+//! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
+//! loosen them: a workspace allow or a remembered choice allows a call the
+//! default would ask about. Two limits hold whatever they say: a workspace
+//! allow of a compound command holds only when the command is not
+//! destructive, and on a machine that may run commands unconfined every
+//! command is asked. Compound commands and `git_commit` are never
+//! remembered, nor is any command on a machine that may run it
+//! unconfined: `approve_always` is not offered there and
+//! [`RulesEngine::remember`] refuses it.
 //!
 //! [`RuleApprovals`] exposes the engine as the runtime's
 //! [`ApprovalChannel`]: rule verdicts are answered inline, asks go on to the
@@ -45,9 +50,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use elitea_agent_runtime::host::{
-    ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError, HostErrorCode,
-};
+use elitea_agent_runtime::host::{ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError};
 use globset::{GlobBuilder, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -450,11 +453,25 @@ impl RulesEngine {
         }
         let shape = call.command.as_deref().map(analyse);
         let risk = (call.tool == ToolKind::RunCommand).then(|| self.command_risk(call));
+        // A command that may run unconfined is the person's call every time:
+        // neither a workspace allow nor a remembered choice vouches for it.
+        let unconfined = call.tool == ToolKind::RunCommand && !self.confined;
         if let Some(decision) = self.workspace_rules(call, shape.as_ref(), risk.as_ref()) {
+            if unconfined && decision.verdict == Verdict::Allow {
+                return Decision::new(
+                    Verdict::Ask,
+                    Source::Workspace,
+                    "a workspace rule allows the command, but commands may run without a sandbox on this machine",
+                );
+            }
             return decision;
         }
         let simple = shape.as_ref().is_none_or(CommandShape::is_simple);
-        if simple && call.tool != ToolKind::GitCommit && self.remembered(call, shape.as_ref()) {
+        if simple
+            && !unconfined
+            && call.tool != ToolKind::GitCommit
+            && self.remembered(call, shape.as_ref())
+        {
             return Decision::new(
                 Verdict::Allow,
                 Source::Remembered,
@@ -683,17 +700,17 @@ impl RulesEngine {
     /// * a file tool: a glob the person confirmed, which must match every
     ///   path of the call (`None`: exactly the call's paths).
     ///
-    /// Compound commands and commits are never remembered.
+    /// Compound commands and commits are never remembered, and neither is
+    /// any command on a machine that may run it unconfined: every command
+    /// is asked there ([`Self::decide`]), so the choice would sit unused
+    /// and silently start applying if the sandbox were enforced later.
     ///
     /// # Errors
     ///
     /// When the choice is not rememberable or cannot be stored.
     pub fn remember(&self, call: &ToolCall, scope: Option<&str>) -> ToolResult<()> {
-        if call.tool == ToolKind::GitCommit {
-            return Err(ToolError::new(
-                ErrorCode::Denied,
-                "commits are asked every time",
-            ));
+        if let Some(refusal) = self.never_remembered(call) {
+            return Err(refusal);
         }
         let command = match call.command.as_deref().map(analyse) {
             None => None,
@@ -721,10 +738,7 @@ impl RulesEngine {
                 Some(tokens)
             }
             Some(CommandShape::Compound { .. }) => {
-                return Err(ToolError::new(
-                    ErrorCode::Denied,
-                    "compound commands are asked every time",
-                ));
+                return Err(compound_refusal());
             }
         };
         let (paths, glob) = if command.is_some() {
@@ -753,6 +767,49 @@ impl RulesEngine {
             sandbox: call.sandbox,
             network: call.network,
         })
+    }
+}
+
+fn compound_refusal() -> ToolError {
+    ToolError::new(ErrorCode::Denied, "compound commands are asked every time")
+}
+
+impl RulesEngine {
+    /// Why `call` can never be remembered, whatever its scope: a commit, a
+    /// compound command, or a command on a machine that may run it
+    /// unconfined. The one precondition [`Self::can_remember`] and
+    /// [`Self::remember`] share.
+    fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
+        if call.tool == ToolKind::GitCommit {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "commits are asked every time",
+            ));
+        }
+        if call.tool == ToolKind::RunCommand && !self.confined {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "commands may run without a sandbox on this machine, so each one is asked; \
+                 \"always allow\" cannot be remembered for them",
+            ));
+        }
+        if call
+            .command
+            .as_deref()
+            .is_some_and(|command| !analyse(command).is_simple())
+        {
+            return Some(compound_refusal());
+        }
+        None
+    }
+
+    /// Whether "always allow" may be offered for `call`: exactly when
+    /// [`Self::remember`]'s precondition holds. (`remember` can still fail
+    /// on the scope the person picked, or on storage; the channel then
+    /// approves once.)
+    #[must_use]
+    pub fn can_remember(&self, call: &ToolCall) -> bool {
+        self.never_remembered(call).is_none()
     }
 }
 
@@ -818,11 +875,7 @@ impl ApprovalChannel for RuleApprovals {
             Verdict::Allow => Ok(decided("approve", &decision)),
             Verdict::Deny => Ok(decided("reject", &decision)),
             Verdict::Ask => {
-                let rememberable = call.tool != ToolKind::GitCommit
-                    && call
-                        .command
-                        .as_deref()
-                        .is_none_or(|command| analyse(command).is_simple());
+                let rememberable = self.engine.can_remember(&call);
                 request.available_actions = if rememberable {
                     vec![
                         "approve".to_owned(),
@@ -847,12 +900,14 @@ impl ApprovalChannel for RuleApprovals {
                                 "glob"
                             };
                             let scope = value.get(key).and_then(Value::as_str);
-                            self.engine.remember(&call, scope).map_err(|_| {
-                                HostError::new(
-                                    HostErrorCode::InvalidInput,
-                                    "the choice could not be remembered",
-                                )
-                            })?;
+                            // The person approved: a choice that cannot be
+                            // stored still approves this call, once.
+                            if let Err(error) = self.engine.remember(&call, scope) {
+                                tracing::warn!(
+                                    reason = error.message(),
+                                    "\"always allow\" could not be remembered; approved once"
+                                );
+                            }
                         }
                         Ok(ApprovalOutcome::Decided {
                             action: "approve".to_owned(),
@@ -1270,6 +1325,140 @@ mod tests {
             verdict(&engine, &file(ToolKind::WriteFile, "a")).0,
             Verdict::Allow
         );
+    }
+
+    /// Unconfined, neither a workspace allow nor a remembered choice
+    /// vouches for a command; a workspace deny still denies.
+    #[test]
+    fn unenforced_sandboxes_ask_despite_workspace_allows_and_remembered_choices() {
+        let rule = |command: &str, verdict: Verdict| WorkspaceRule {
+            tools: Vec::new(),
+            command: Some(command.to_owned()),
+            path: None,
+            verdict,
+        };
+        let (_dir, engine) = engine_with(
+            policy(),
+            vec![rule("cargo", Verdict::Allow), rule("make", Verdict::Deny)],
+        );
+        engine
+            .remember(&shell("npm test"), Some("npm test"))
+            .expect("remember");
+        assert_eq!(
+            verdict(&engine, &shell("cargo test")),
+            (Verdict::Allow, Source::Workspace),
+            "confined: the workspace allow holds"
+        );
+        assert_eq!(
+            verdict(&engine, &shell("npm test")),
+            (Verdict::Allow, Source::Remembered),
+            "confined: the remembered choice holds"
+        );
+        let engine = engine.with_unenforced_commands(true);
+        assert_eq!(
+            verdict(&engine, &shell("cargo test")),
+            (Verdict::Ask, Source::Workspace)
+        );
+        assert_eq!(
+            verdict(&engine, &shell("npm test")),
+            (Verdict::Ask, Source::Default)
+        );
+        assert_eq!(
+            verdict(&engine, &shell("make")),
+            (Verdict::Deny, Source::Workspace)
+        );
+    }
+
+    /// Unconfined, "always allow" is neither offered nor stored for a
+    /// command (it would never apply); file changes still remember.
+    #[tokio::test]
+    async fn unenforced_sandboxes_do_not_offer_or_store_always_allow_for_commands() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let engine = Arc::new(engine.with_unenforced_commands(true));
+        assert!(!engine.can_remember(&shell("cargo build")));
+        let error = engine
+            .remember(&shell("cargo build"), Some("cargo"))
+            .expect_err("refused");
+        assert!(
+            error.message().contains("without a sandbox"),
+            "{}",
+            error.message()
+        );
+        assert!(engine.choices.list().is_empty(), "nothing stored");
+        assert!(engine.can_remember(&file(ToolKind::WriteFile, "a")));
+
+        let prompt = Arc::new(ScriptedPrompt {
+            answer: ApprovalOutcome::Decided {
+                action: super::APPROVE_ALWAYS.to_owned(),
+                value: json!({ "prefix": "cargo build" }),
+            },
+            seen: Mutex::new(Vec::new()),
+        });
+        let channel = RuleApprovals::new(engine.clone(), prompt.clone());
+        let answered = channel
+            .request(request(&shell("cargo build")))
+            .await
+            .expect("asked");
+        assert!(
+            matches!(answered, ApprovalOutcome::Decided { ref action, .. } if action == "approve"),
+            "approved once"
+        );
+        let seen = prompt.seen.lock().expect("lock").clone();
+        assert_eq!(seen.len(), 1);
+        assert!(
+            !seen[0]
+                .available_actions
+                .contains(&super::APPROVE_ALWAYS.to_owned()),
+            "not offered"
+        );
+        assert!(engine.choices.list().is_empty(), "nothing stored");
+    }
+
+    /// `can_remember` is exactly `remember`'s precondition: for every call
+    /// it refuses whatever the scope, it is false, and the other way round.
+    #[test]
+    fn can_remember_and_remember_agree() {
+        let (_dir, confined) = engine_with(policy(), Vec::new());
+        let (_dir2, unconfined) = engine_with(policy(), Vec::new());
+        let unconfined = unconfined.with_unenforced_commands(true);
+        let calls = [
+            shell("cargo test"),
+            shell("cargo test && cargo build"),
+            file(ToolKind::WriteFile, "a"),
+            ToolCall::new(ToolKind::GitCommit),
+        ];
+        for engine in [&confined, &unconfined] {
+            for call in &calls {
+                // No scope: the call's own argv or paths, always in scope.
+                let remembered = engine.remember(call, None).is_ok();
+                assert_eq!(engine.can_remember(call), remembered, "{call:?}");
+            }
+        }
+    }
+
+    /// The person chose "always allow" and storing it failed: the call is
+    /// approved once, never turned into an error.
+    #[tokio::test]
+    async fn a_choice_that_cannot_be_stored_still_approves_once() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let engine = Arc::new(engine);
+        let prompt = Arc::new(ScriptedPrompt {
+            answer: ApprovalOutcome::Decided {
+                action: super::APPROVE_ALWAYS.to_owned(),
+                // A prefix that is not a prefix of the command: refused.
+                value: json!({ "prefix": "npm install" }),
+            },
+            seen: Mutex::new(Vec::new()),
+        });
+        let channel = RuleApprovals::new(engine.clone(), prompt);
+        let outcome = channel
+            .request(request(&shell("git reset --hard v1")))
+            .await
+            .expect("approved, not an error");
+        assert!(
+            matches!(outcome, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
+        assert!(engine.choices.list().is_empty());
     }
 
     /// Policy, plan mode and workspace rules only tighten the defaults.

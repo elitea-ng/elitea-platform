@@ -2013,6 +2013,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/secrets/secrets/{mode}/{projectID}",
 		"GET /api/v2/social/author",
 		"GET /api/v2/social/author/",
+		"GET /api/v2/social/author/theme",
 		"GET /api/v2/social/authors/{projectID}",
 		"GET /api/v2/social/feedbacks/default/{projectID}",
 		"GET /api/v2/social/feedbacks/{projectID}",
@@ -2266,6 +2267,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/secrets/secret/{mode}/{projectID}/{name}",
 		"PUT /api/v2/social/author",
 		"PUT /api/v2/social/author/",
+		"PUT /api/v2/social/author/theme",
 		"PUT /api/v2/webhooks/prompt_lib/{projectID}/{webhookID}",
 		"PUT /artifacts/s3/{bucket}/*",
 	}

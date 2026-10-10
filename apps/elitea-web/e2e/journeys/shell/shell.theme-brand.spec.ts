@@ -9,6 +9,14 @@ import { test, expect } from '@playwright/test';
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
 import { skipOnLiveTarget } from '../../fixtures/deployment';
+import { keepThemeOffTheServer } from '../../fixtures/serverTheme';
+
+// The theme is a per-user server preference and this file's tests share a
+// persona with parallel workers: keep every page's theme off the server
+// (`fixtures/serverTheme.ts`).
+test.beforeEach(async ({ page }) => {
+  await keepThemeOffTheServer(page);
+});
 
 /** `shared/brand/constants.ts:27` — the attribute MUI's colour scheme selector resolves to. */
 const SCHEME_ATTRIBUTE = 'data-el-scheme';
