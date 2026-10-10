@@ -423,21 +423,11 @@ pub(in crate::toolkits) fn reqwest_transport()
 
 impl GitLabOrgClient {
     pub(crate) fn new(config: GitLabOrgToolkitConfig) -> Result<Self, GitLabOrgClientError> {
-        let http = reqwest::Client::builder()
-            .https_only(true)
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-            .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|_| invalid_configuration())?;
+        let transport = reqwest_transport()?;
         let active_branch = Mutex::new(config.branch().into());
         Ok(Self {
             config,
-            transport: Arc::new(ReqwestGitLabOrgTransport { http }),
+            transport,
             operation_gate: Mutex::new(()),
             active_branch,
         })
