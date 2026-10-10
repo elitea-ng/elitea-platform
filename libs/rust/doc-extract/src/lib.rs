@@ -123,9 +123,11 @@ pub fn extract_with(mime: &str, bytes: &[u8], options: &ExtractOptions) -> Extra
 ///
 /// Damaged UTF-8 is made of well-formed multi-byte sequences with a few
 /// bad bytes among them; a legacy text has none, or only the odd accidental
-/// one (Shift_JIS pairs can look like a UTF-8 sequence). So the text is
-/// damaged UTF-8 when it holds a well-formed sequence and at least four of
-/// every five of its non-ASCII bytes lie inside well-formed ones.
+/// one (`Shift_JIS` pairs can look like a UTF-8 sequence: in a sample, 22 of
+/// 50 high bytes did). So the text is damaged UTF-8 when it holds a
+/// well-formed sequence and at least four of every five of its non-ASCII
+/// bytes lie inside well-formed ones. This is deliberately not "any
+/// well-formed sequence at all", which would refuse real `Shift_JIS` files.
 fn is_damaged_utf8(bytes: &[u8]) -> bool {
     let (mut well_formed, mut stray) = (0_usize, 0_usize);
     let mut rest = bytes;

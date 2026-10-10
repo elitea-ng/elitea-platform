@@ -82,12 +82,11 @@ impl<'de> Deserialize<'de> for Json {
                 while let Some((key, value)) = map.next_entry::<String, Json>()? {
                     // Python's dict: a repeated key keeps its first
                     // position and takes the last value.
-                    match index.get(&key) {
-                        Some(at) => pairs[*at].1 = value,
-                        None => {
-                            index.insert(key.clone(), pairs.len());
-                            pairs.push((key, value));
-                        }
+                    if let Some(at) = index.get(&key) {
+                        pairs[*at].1 = value;
+                    } else {
+                        index.insert(key.clone(), pairs.len());
+                        pairs.push((key, value));
                     }
                 }
                 Ok(Json::Object(pairs))
@@ -160,8 +159,7 @@ fn dump_str(s: &str, out: &mut String) {
 /// `len(json.dumps(value))`, counted without building the text.
 fn size(value: &Json) -> usize {
     match value {
-        Json::Null => 4,
-        Json::Bool(true) => 4,
+        Json::Null | Json::Bool(true) => 4,
         Json::Bool(false) => 5,
         Json::Number(n) => {
             let mut counter = Counter(0);
@@ -261,6 +259,11 @@ enum Part {
     },
 }
 
+/// A size as a signed number (sizes are far below `isize::MAX`).
+fn signed(n: usize) -> isize {
+    isize::try_from(n).unwrap_or(isize::MAX)
+}
+
 /// How much longer a chunk's text gets when `value` (of `value_size`) is
 /// set at `path` in it: the missing parents' braces and keys, the value, a
 /// separator where the parent already holds keys. A key already there is
@@ -270,17 +273,18 @@ fn added_size(target: &Json, path: &[String], value_size: usize) -> isize {
     for (depth, key) in path.iter().enumerate() {
         let Json::Object(pairs) = cursor else {
             // A non-object parent is replaced by an object holding the rest.
-            return nested_size(&path[depth..], value_size) as isize - size(cursor) as isize;
+            return signed(nested_size(&path[depth..], value_size)) - signed(size(cursor));
         };
         match pairs.iter().find(|(k, _)| k == key) {
             Some((_, next)) if depth + 1 == path.len() => {
-                return value_size as isize - size(next) as isize;
+                return signed(value_size) - signed(size(next));
             }
             Some((_, next)) => cursor = next,
             None => {
                 let separator = if pairs.is_empty() { 0 } else { 2 };
-                return (separator + str_size(key) + 2 + nested_size(&path[depth + 1..], value_size))
-                    as isize;
+                return signed(
+                    separator + str_size(key) + 2 + nested_size(&path[depth + 1..], value_size),
+                );
             }
         }
     }
@@ -373,8 +377,8 @@ impl Splitter {
                 let room = self.max_size.saturating_sub(current);
                 let fits = match self.parts.last() {
                     Some(Part::Open(open)) => {
-                        added_size(&open.value, &new_path, value_size) + current as isize
-                            <= self.max_size as isize
+                        added_size(&open.value, &new_path, value_size) + signed(current)
+                            <= signed(self.max_size)
                     }
                     _ => nested_size(&new_path, value_size) <= self.max_size,
                 };
@@ -402,8 +406,8 @@ impl Splitter {
         }
         let fits_here = match self.parts.last() {
             Some(Part::Open(open)) => {
-                added_size(&open.value, path, leaf_size) + open.size as isize
-                    <= self.max_size as isize
+                added_size(&open.value, path, leaf_size) + signed(open.size)
+                    <= signed(self.max_size)
             }
             _ => true,
         };
@@ -583,7 +587,10 @@ mod tests {
 
     #[test]
     fn a_long_string_leaf_is_cut_into_pieces_within_the_budget_with_its_path() {
-        let words: String = (0..40_000).map(|n| format!("w{n} ")).collect();
+        let mut words = String::new();
+        for n in 0..40_000 {
+            let _ = write!(words, "w{n} ");
+        }
         assert!(words.len() > 200_000);
         let document = format!(r#"{{"id": 1, "body": {{"text": "{words}"}}, "tail": 2}}"#);
         let Split::Chunks(chunks) = split(&document, 512) else {
@@ -638,10 +645,11 @@ mod tests {
             if n > 0 {
                 document.push_str(", ");
             }
-            document.push_str(&format!(
+            let _ = write!(
+                document,
                 r#"{{"id": {n}, "name": "record number {n}", "tags": ["a", "b", "c"], "meta": {{"owner": "someone", "note": "{}"}}}}"#,
                 "x".repeat(40)
-            ));
+            );
             n += 1;
         }
         document.push_str("]}");
