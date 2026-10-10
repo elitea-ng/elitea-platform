@@ -48,7 +48,8 @@ const (
 // *projectprovisioning.Provisioner implements it.
 type ProjectDeletionJournal interface {
 	ClaimNextDeletion(ctx context.Context, grace time.Duration) (projectID int64, ok bool, err error)
-	ResumeDeletion(ctx context.Context, projectID int64) (projectprovisioning.Result, error)
+	// ResumeDeletion reports completed only when the journal row ended complete.
+	ResumeDeletion(ctx context.Context, projectID int64) (completed bool, err error)
 }
 
 // ProjectDeletionReconcilerConfig tunes the loop. Zero fields take the defaults.
@@ -133,12 +134,23 @@ func (r *ProjectDeletionReconciler) RunOnce(ctx context.Context) (int, error) {
 			return worked, nil
 		}
 		worked++
-		_, err = r.journal.ResumeDeletion(ctx, id)
+		completed, err := r.journal.ResumeDeletion(ctx, id)
 		switch {
-		case err == nil, errors.Is(err, projectprovisioning.ErrProjectNotFound):
+		case err == nil && completed:
 			r.finished.Add(1)
 			r.logger.InfoContext(ctx, "finished the cleanup of a deleted project", "project_id", id)
+		case errors.Is(err, projectprovisioning.ErrProjectNotFound):
+			// The journal row vanished between the claim and the read: there is
+			// nothing left to finish, and nothing was finished by this pass.
+			r.logger.WarnContext(ctx, "a claimed project deletion has no journal row", "project_id", id)
+		case err == nil && ctx.Err() != nil:
+			// Not completed, and the process is stopping: the run released its
+			// lease without counting an attempt. The row stays open; nothing is
+			// counted.
+			r.logger.InfoContext(ctx, "the cleanup of a deleted project was interrupted; the journal keeps it open", "project_id", id)
 		default:
+			// A step failed, or one failed quietly (retried, not reported): the
+			// row is open and backs off. Either way it is not finished.
 			r.failed.Add(1)
 			r.logger.ErrorContext(ctx, "the cleanup of a deleted project did not finish; the journal retries it after its backoff",
 				"project_id", id, "failed_total", r.failed.Load(), "err", err)

@@ -207,9 +207,10 @@ type deleteProjectResponse struct {
 //   - 200: the project is gone and every cleanup step finished within the
 //     request's budget.
 //   - 202: the project is gone and its credentials are revoked, but some cleanup
-//     steps are still pending or failed. The body lists them under `pending`;
-//     the cleanup journal and its reconciler finish them in the background. A
-//     retry of the delete answers 404.
+//     steps are still pending or failed. The body lists them under `pending`.
+//     The cleanup run is not bound to this request or its budget: it continues
+//     in the background, and the cleanup journal's reconciler retries whatever it
+//     leaves. A retry of the delete answers 404.
 //   - 404: no such project (also a repeated delete).
 //   - 409: the project has active runs; nothing changed.
 //   - 500: the delete did not happen; the project is unchanged.

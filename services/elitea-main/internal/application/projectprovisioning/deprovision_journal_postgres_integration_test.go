@@ -501,7 +501,7 @@ func TestCleanupFailureLeavesAJournalRowTheReconcilerFinishes(t *testing.T) {
 	if !errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) || !strings.Contains(err.Error(), database) {
 		t.Fatalf("err = %v, want ErrVectorStoreNotDropped naming %s", err, database)
 	}
-	if errors.Is(err, projectprovisioning.ErrTenantSchemaNotRemoved) || errors.Is(err, projectprovisioning.ErrCleanupIncomplete) {
+	if errors.Is(err, projectprovisioning.ErrTenantSchemaNotRemoved) {
 		t.Fatalf("err = %v names leftovers that were cleaned", err)
 	}
 	if result.VectorDatabase != database || !stepFailed(result.RollbackSteps, projectprovisioning.StepProjectPgvectorDrop) {

@@ -126,24 +126,30 @@ func TestCleanupVectorStoreWithoutAProvisionerStore(t *testing.T) {
 	}
 }
 
-func TestStepErrorMapsEachStepToItsSentinel(t *testing.T) {
+func TestEveryCleanupStepNamesItsSentinel(t *testing.T) {
 	cause := errors.New("boom")
 	cleanup := &deletionCleanup{VectorDatabase: "project_7"}
-	for step, want := range map[string]error{
+	want := map[string]error{
 		StepArtifactBuckets:     ErrArtifactsNotRemoved,
 		StepProjectSchema:       ErrTenantSchemaNotRemoved,
 		StepProjectPgvectorDrop: ErrVectorStoreNotDropped,
-		StepProjectSecrets:      ErrCleanupIncomplete,
-		StepSystemToken:         ErrCleanupIncomplete,
-		StepSystemUser:          ErrCleanupIncomplete,
-		StepProjectPermissions:  ErrCleanupIncomplete,
-	} {
-		err := stepError(step, cleanup, cause)
-		if !errors.Is(err, want) || !errors.Is(err, cause) {
-			t.Errorf("%s: %v, want %v wrapping the cause", step, err, want)
+	}
+	steps := cleanupSteps()
+	if len(steps) != len(want) {
+		t.Fatalf("%d cleanup steps, %d sentinels: a step has no mapping", len(steps), len(want))
+	}
+	for _, step := range steps {
+		if step.notDone == nil || !errors.Is(step.notDone, want[step.name]) {
+			t.Errorf("%s: sentinel %v, want %v", step.name, step.notDone, want[step.name])
+			continue
+		}
+		err := step.failure(cleanup, cause)
+		if !errors.Is(err, want[step.name]) || !errors.Is(err, cause) {
+			t.Errorf("%s: %v, want %v wrapping the cause", step.name, err, want[step.name])
 		}
 	}
-	if err := stepError(StepProjectPgvectorDrop, cleanup, cause); !strings.Contains(err.Error(), "project_7") {
+	drop := cleanupSteps()[2]
+	if err := drop.failure(cleanup, cause); !strings.Contains(err.Error(), "project_7") {
 		t.Errorf("the drop error does not name the database: %v", err)
 	}
 }

@@ -204,6 +204,30 @@ RETURNING id`,
 		return fmt.Errorf("insert project: %w", err)
 	}
 
+	// A project id whose delete has not finished cleaning up is not ours to
+	// reuse (explicit ids and restored sequences make it possible): the cleanup
+	// still owes that id's tenant schema, buckets and vector database, and a new
+	// project would start on top of them while the cleanup then destroys it.
+	// runCleanup refuses to touch a project that exists; this refuses to create
+	// one that the cleanup still owns. Read after the insert, in the same
+	// transaction, so either side of a race sees the other.
+	var owed bool
+	if err := transaction.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM centry.project_deletions
+               WHERE project_id = $1 AND completed_at IS NULL)`,
+		state.projectID,
+	).Scan(&owed); err != nil {
+		return fmt.Errorf("check cleanup journal: %w", err)
+	}
+	if owed {
+		// Forget the id: the compensation of a failed create runs every remove
+		// step for state.projectID, and those must not touch the schema, buckets
+		// and vector database that belong to the earlier project's cleanup.
+		reused := state.projectID
+		state.projectID = 0
+		return fmt.Errorf("%w: project id %d", ErrProjectIDInCleanup, reused)
+	}
+
 	limits := state.request.Limits
 	if _, err := transaction.Exec(ctx, `
 INSERT INTO centry.project_quota (

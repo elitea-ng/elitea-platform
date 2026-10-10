@@ -16,14 +16,30 @@
 --      failure in it leaves the project exactly as it was.
 --   2. THE SLOW AND EXTERNAL CLEANUP RUNS FROM THIS ROW: the artifact bytes, the
 --      tenant schema, the PgVector database. Every step is idempotent and marks
---      itself done in `cleanup`. The delete request waits for them only for a
---      short budget (HTTP 202 when some are still pending); a step that fails
---      or is not reached leaves the row incomplete, and a reconciler in
---      elitea-main retries it with backoff until `completed_at` is set.
+--      itself done in `cleanup`. The run is detached from the request, under its
+--      own deadline and holding the row's lease; the delete request waits for it
+--      only for a short budget (HTTP 202 when some steps are still pending) and
+--      the run goes on without it. A step that fails or is not reached leaves the
+--      row incomplete, and a reconciler in elitea-main retries it with backoff
+--      until `completed_at` is set.
+--
+-- The tenant ROWS are not part of step 2: the tenant tables' owner_id foreign
+-- keys cascade from the project row, so they go in the decision (under a
+-- lock_timeout and a statement_timeout). Only the empty schema object is dropped
+-- by the journal.
 --
 -- After the commit nothing can create work for the project: execution_jobs
 -- carries foreign keys to centry.project(id) on both resource_project_id and
 -- projection_project_id, so an admission for a project with no row fails.
+--
+-- AN ID CAN COME BACK (explicit ids, a restored database). Every destructive
+-- step first checks that no centry.project row exists for the id; if one does,
+-- the row is closed as superseded (cleanup.superseded) and nothing is touched.
+-- Provision refuses an id whose row here is incomplete.
+--
+-- A DELETE that finds no project row but finds leftovers (the tenant schema, live
+-- buckets, the PgVector database) and no row here ADOPTS them: it inserts this
+-- row and cleans up as usual.
 --
 -- COLUMNS.
 --   cleanup          what the decision recorded, and per-step completion:
@@ -31,24 +47,31 @@
 --                     "done": {"artifact_buckets": true, ...}}
 --                    had_vector_store is the decision's probe; the PgVector drop
 --                    runs whatever it says, and it only decides how a failed
---                    drop is reported.
---   attempts         cleanup runs so far (the delete's own run included).
+--                    drop is reported. quiet_drop_failures counts the failed
+--                    drops for a store nothing recorded (the journal gives up
+--                    after a limit and notes it under `notes`); superseded marks
+--                    a row closed because the id belongs to a live project.
+--   attempts         cleanup runs so far (the delete's own run included). A run
+--                    the process stopped is not counted.
 --   last_error       the last run's failure, by step name only (no raw error:
---                    it can carry SQL or addresses).
+--                    it can carry SQL or addresses), or "interrupted" for a run
+--                    the process stopped.
 --   next_attempt_at  backoff: the reconciler does not retry before this.
---   claimed_until    the lease of the run working the row. The reconciler
---                    claims ONE row at a time in a short FOR UPDATE SKIP LOCKED
---                    transaction that stamps the lease, works it, then claims
---                    the next; it does not hold a connection or a lock while
---                    the steps run, and leases nothing it is not working.
---                    NULL from the start for a delete that hands its cleanup
---                    off (the login path).
+--   claimed_until    the lease of the run working the row (stamped with
+--                    clock_timestamp(), and restamped when the run starts, so a
+--                    decision that waited on a lock does not shorten it). The
+--                    reconciler claims ONE row at a time in a short FOR UPDATE
+--                    SKIP LOCKED transaction that stamps the lease, works it,
+--                    then claims the next; it does not hold a connection or a
+--                    lock while the steps run, and leases nothing it is not
+--                    working. Released (NULL) when a run ends.
 --   completed_at     set when every step is done. A completed row stays as the
 --                    record of the delete.
 --
 -- No foreign key to centry.project: the row outlives the project by design. A
 -- COMPLETE row for an id is reopened (steps, attempts and lease reset) if a
--- project with that id is deleted again; an incomplete one refuses the delete.
+-- project with that id is deleted again; an incomplete one refuses the delete
+-- (and, from the other side, refuses Provision that id).
 -- Idempotent. No BEGIN/COMMIT: the ledgered runner wraps the file.
 
 CREATE TABLE IF NOT EXISTS centry.project_deletions (

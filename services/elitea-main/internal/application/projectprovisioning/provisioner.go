@@ -33,6 +33,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -191,6 +193,15 @@ type ProjectVectorStore interface {
 	DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (database string, err error)
 }
 
+// VectorDatabaseProbe is the optional half of a ProjectVectorStore that can ask
+// the PgVector server whether a project's database or role exists. Deprovision
+// uses it to find the leftovers of a project whose row is already gone (#1211).
+// checkable is false when the deployment has no PgVector bootstrap, so nothing
+// can be asked. A store without it is simply not asked.
+type VectorDatabaseProbe interface {
+	ProjectVectorDatabaseExists(ctx context.Context, projectID int64) (exists bool, checkable bool, err error)
+}
+
 // Querier is the read half of a pgx transaction, plus Begin, which on a
 // transaction opens a savepoint. A probe that has to install a tenant
 // search_path uses the savepoint to scope it. pgx.Tx satisfies it.
@@ -224,6 +235,20 @@ type Provisioner struct {
 	commit        func(context.Context, pgx.Tx) error
 	defaultModels ProjectDefaultModelSeeder
 	logger        *slog.Logger
+
+	// lifecycle is the context whose end means the process is shutting down.
+	// The detached cleanup runs of a delete derive from it, so a shutdown
+	// reaches them and a client that hangs up does not. Never nil (New).
+	lifecycle context.Context
+	// inflight counts the detached cleanup runs (WaitForCleanups).
+	inflight sync.WaitGroup
+	// quietDropLimit is how many times a drop that fails for a store the
+	// project was never recorded as having is retried before the journal gives
+	// up on it. decisionLockTimeout and decisionStatementTimeout bound the
+	// deciding transaction of a delete.
+	quietDropLimit           int
+	decisionLockTimeout      time.Duration
+	decisionStatementTimeout time.Duration
 }
 
 // Option configures a Provisioner at construction time.
@@ -294,11 +319,72 @@ func New(pool *pgxpool.Pool, migrator TenantMigrator, logger *slog.Logger, optio
 	if logger == nil {
 		logger = slog.Default()
 	}
-	provisioner := &Provisioner{pool: pool, migrator: migrator, logger: logger}
+	provisioner := &Provisioner{
+		pool: pool, migrator: migrator, logger: logger,
+		lifecycle:                context.Background(),
+		quietDropLimit:           DefaultQuietDropLimit,
+		decisionLockTimeout:      DefaultDecisionLockTimeout,
+		decisionStatementTimeout: DefaultDecisionStatementTimeout,
+	}
 	for _, option := range options {
 		option(provisioner)
 	}
 	return provisioner
+}
+
+// WithLifecycleContext sets the context whose cancellation means the process is
+// shutting down. A delete's cleanup run continues after the request that started
+// it has answered, so it is bound to this context and not to the request's: on
+// shutdown the run stops, releases its journal lease without counting an attempt,
+// and the journal row stays open for the next process. Without it the runs are
+// never cancelled by shutdown.
+func WithLifecycleContext(ctx context.Context) Option {
+	return func(p *Provisioner) {
+		if ctx != nil {
+			p.lifecycle = ctx
+		}
+	}
+}
+
+// WithQuietDropLimit sets how many times a PgVector drop that fails for a store
+// the project was never recorded as having is attempted before the journal marks
+// the step done ("gave up"). Zero or negative keeps DefaultQuietDropLimit.
+func WithQuietDropLimit(limit int) Option {
+	return func(p *Provisioner) {
+		if limit > 0 {
+			p.quietDropLimit = limit
+		}
+	}
+}
+
+// WithDecisionTimeouts sets the lock_timeout and statement_timeout of a delete's
+// deciding transaction. Zero keeps the default for that value.
+func WithDecisionTimeouts(lock, statement time.Duration) Option {
+	return func(p *Provisioner) {
+		if lock > 0 {
+			p.decisionLockTimeout = lock
+		}
+		if statement > 0 {
+			p.decisionStatementTimeout = statement
+		}
+	}
+}
+
+// WaitForCleanups blocks until every detached cleanup run has ended, or ctx
+// does. A process that wants its in-flight deletes to record their state before
+// it exits cancels the lifecycle context and then waits here.
+func (p *Provisioner) WaitForCleanups(ctx context.Context) error {
+	finished := make(chan struct{})
+	go func() {
+		p.inflight.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Provision creates the project row, its tenant schema, its tenant migration

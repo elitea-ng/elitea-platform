@@ -2,6 +2,8 @@ package projectprovisioning
 
 import (
 	"context"
+	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -33,3 +35,25 @@ func HeldBackStepMessage(step string) string { return heldBackStepMessage(step) 
 func SetCommitForTest(p *Provisioner, commit func(context.Context, pgx.Tx) error) {
 	p.commit = commit
 }
+
+// SetCleanupTimeoutForTest shrinks the bound of one cleanup run until the test
+// ends. Detached runs read it, so a test that changes it waits for its runs
+// (WaitForCleanups) before it returns.
+func SetCleanupTimeoutForTest(t testing.TB, timeout time.Duration) {
+	t.Helper()
+	previous := cleanupTimeout
+	cleanupTimeout = timeout
+	t.Cleanup(func() { cleanupTimeout = previous })
+}
+
+// SetLeaseMarginForTest changes the margin added to a run's bound to make its
+// lease, until the test ends.
+func SetLeaseMarginForTest(t testing.TB, margin time.Duration) {
+	t.Helper()
+	previous := leaseMargin
+	leaseMargin = margin
+	t.Cleanup(func() { leaseMargin = previous })
+}
+
+// CleanupLeaseForTest is the lease a run of the current bound holds.
+func CleanupLeaseForTest() time.Duration { return cleanupLease(cleanupTimeout) }

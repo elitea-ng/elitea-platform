@@ -2368,6 +2368,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 
 	r := api.NewRouter(api.RouterConfig{
 		OnProjectProvisioner:         startDeletionReconciler,
+		ProjectCleanupContext:        ctx,
 		ProjectDeleteBudget:          projectDeleteBudget,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,

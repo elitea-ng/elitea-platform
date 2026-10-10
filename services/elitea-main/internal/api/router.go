@@ -406,6 +406,11 @@ type RouterConfig struct {
 	// delete with, instead of building a second one (see newProjectProvisioner). It is
 	// not called when the composition has no pool and so no provisioner.
 	OnProjectProvisioner func(*projectprovisioning.Provisioner)
+	// ProjectCleanupContext is the context whose end means the process is
+	// shutting down. A project delete's cleanup continues in the background after
+	// the request has answered, and stops with this context, releasing its
+	// journal lease without counting an attempt. Nil: never cancelled.
+	ProjectCleanupContext context.Context
 	// ProjectDeleteBudget is how long DELETE of a project waits for the slow
 	// cleanup before it answers 202 (zero: v2projects.DefaultDeleteBudget).
 	ProjectDeleteBudget time.Duration
@@ -735,6 +740,9 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	// SECRETS_MASTER_KEY rule.
 	options := []projectprovisioning.Option{
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(cfg.Pool)),
+	}
+	if cfg.ProjectCleanupContext != nil {
+		options = append(options, projectprovisioning.WithLifecycleContext(cfg.ProjectCleanupContext))
 	}
 	// The vector store (#371) IS conditional — see this function's doc comment.
 	if cfg.ProjectVectorStore != nil {

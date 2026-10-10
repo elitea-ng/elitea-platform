@@ -86,7 +86,12 @@ func TestIdentityIsRevokedByTheDecision(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	provisioner := newScriptedProvisioner(t, pool, nil, nil)
+	// The first cleanup step (the artifact purge) is held shut, so whatever is
+	// gone when Deprovision returns was removed by the deciding transaction.
+	buckets := &gatedBuckets{gate: make(chan struct{})}
+	provisioner := projectprovisioning.New(pool, migrate.New(pool, platformmigrations.Files), nil,
+		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
+		projectprovisioning.WithArtifactBuckets(buckets))
 	projectID := provisionPlain(ctx, t, provisioner, "Identity Dies With The Row")
 	email := fmt.Sprintf("system_user_%d@centry.user", projectID)
 
@@ -130,10 +135,11 @@ func TestIdentityIsRevokedByTheDecision(t *testing.T) {
 		t.Fatalf("credentials outlived the decision: tokens=%d users=%d memberships=%d roles=%d bindings=%d vault=%d",
 			tokens, users, memberships, roles, bindings, vault)
 	}
-	// Cleanup has not run: the journal is open, unleased, and the schema is there.
+	// The run is in the background and held at its first step: the journal is
+	// open, leased to it, no run has closed, and the schema is there.
 	entry := readJournal(ctx, t, pool, projectID)
-	if entry.Completed || entry.Leased || entry.Attempts != 0 {
-		t.Fatalf("journal = %+v, want an open, unleased row with no run", entry)
+	if entry.Completed || !entry.Leased || entry.Attempts != 0 {
+		t.Fatalf("journal = %+v, want an open row leased to the background run, none closed", entry)
 	}
 	var schema bool
 	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, fmt.Sprintf("p_%d", projectID)).Scan(&schema); err != nil || !schema {
@@ -149,6 +155,47 @@ func TestIdentityIsRevokedByTheDecision(t *testing.T) {
 		if stepFailed(result.RollbackSteps, name) {
 			t.Errorf("identity step %s is reported failed", name)
 		}
+	}
+
+	// Released, the run finishes by itself: no reconciler is involved.
+	close(buckets.gate)
+	waitForJournalComplete(ctx, t, pool, projectID)
+	if err := provisioner.WaitForCleanups(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// gatedBuckets is an object store whose purge waits for the gate.
+type gatedBuckets struct{ gate chan struct{} }
+
+func (*gatedBuckets) BootstrapProjectBuckets(context.Context, string) error { return nil }
+func (g *gatedBuckets) TeardownProjectBuckets(ctx context.Context, _ string) error {
+	select {
+	case <-g.gate:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// waitForJournalComplete polls until the journal row of the project is complete.
+func waitForJournalComplete(ctx context.Context, t *testing.T, pool *pgxpool.Pool, projectID int64) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var completed bool
+		if err := pool.QueryRow(ctx,
+			`SELECT completed_at IS NOT NULL FROM centry.project_deletions WHERE project_id = $1`, projectID,
+		).Scan(&completed); err != nil {
+			t.Fatalf("read the journal of project %d: %v", projectID, err)
+		}
+		if completed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the journal of project %d did not complete: %+v", projectID, readJournal(ctx, t, pool, projectID))
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
@@ -167,8 +214,9 @@ func TestBookkeepingSurvivesTheCleanupDeadline(t *testing.T) {
 	}}
 	provisioner := newScriptedProvisioner(t, pool, store, nil)
 	projectID := provisionPlain(ctx, t, provisioner, "Deadline Bookkeeping")
+	projectprovisioning.SetCleanupTimeoutForTest(t, 1500*time.Millisecond)
 
-	result, err := provisioner.Deprovision(ctx, projectID, projectprovisioning.WithCleanupBudget(1500*time.Millisecond))
+	result, err := provisioner.Deprovision(ctx, projectID)
 	if !errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) {
 		t.Fatalf("err = %v, want ErrVectorStoreNotDropped from the run that hit its deadline", err)
 	}
@@ -455,15 +503,14 @@ func TestRedeleteOfAReusedId(t *testing.T) {
 			t.Fatal(err)
 		}
 		insertProject(id)
-		if _, err := provisioner.Deprovision(ctx, id, projectprovisioning.HandOffCleanup()); err != nil {
+		if _, err := provisioner.Deprovision(ctx, id); err != nil {
 			t.Fatalf("delete of the reused id: %v", err)
 		}
+		// The reopened row was reset (attempts 7 and the old error are gone) and
+		// then ran once, from no steps done.
 		entry := readJournal(ctx, t, pool, id)
-		if entry.Completed || entry.Attempts != 0 || entry.LastError != nil || entry.Leased {
-			t.Fatalf("journal = %+v, want a reopened row: steps reset, attempts 0, no lease", entry)
-		}
-		if len(entry.Cleanup["done"].(map[string]any)) != 0 {
-			t.Fatalf("done steps survived the reopen: %+v", entry.Cleanup)
+		if !entry.Completed || entry.Attempts != 1 || entry.LastError != nil || entry.Leased {
+			t.Fatalf("journal = %+v, want a reopened row that ran once from scratch", entry)
 		}
 		if projectRowCount(ctx, t, pool, id) != 0 {
 			t.Fatal("the project row survived")

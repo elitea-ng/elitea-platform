@@ -297,8 +297,8 @@ func TestDeprovisionKeepsABucketWhosePurgeFailed(t *testing.T) {
 	if _, err := provisioner.Deprovision(ctx, projectID); !errors.Is(err, projectprovisioning.ErrProjectNotFound) {
 		t.Fatalf("second delete = %v, want ErrProjectNotFound", err)
 	}
-	if result, err := provisioner.ResumeDeletion(ctx, projectID); err != nil {
-		t.Fatalf("resume the journal: %v (steps=%+v)", err, result.RollbackSteps)
+	if completed, err := provisioner.ResumeDeletion(ctx, projectID); err != nil || !completed {
+		t.Fatalf("resume the journal: completed=%v err=%v", completed, err)
 	}
 	if got := countRows(ctx, t, pool, `SELECT count(*) FROM elitea_storage.buckets WHERE project_id = $1`, projectID); got != 0 {
 		t.Errorf("bucket rows after the retry = %d, want 0", got)
