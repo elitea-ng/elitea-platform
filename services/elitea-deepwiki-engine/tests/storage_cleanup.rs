@@ -156,3 +156,104 @@ async fn the_task_stops_after_two_quiet_passes_in_a_row() {
         assert_eq!(count(&pool, table, "bm25").await, 0, "{table}");
     }
 }
+
+/// A mix of `'fts'` and `'bm25'` rows over several wikis and projects: the
+/// pass removes the `'bm25'` rows of every wiki and none of the `'fts'` ones.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pass_over_a_mix_of_branches_and_wikis_removes_exactly_the_dead_branch() {
+    let Some(pool) = common::fresh_database("cleanup_mix").await else {
+        return;
+    };
+    for wiki in ["w-a", "w-b", "w-c"] {
+        seed(&pool, wiki, "fts", 9).await;
+        seed(&pool, wiki, "bm25", 11).await;
+    }
+    // A wiki of another project (seed() writes project 1).
+    sqlx::query(
+        "INSERT INTO wiki_bm25_meta (project_id, wiki_id, branch, doc_count, avgdl, k1, b) \
+         VALUES (2, 'w-a', 'bm25', 1, 1.0, 1.2, 0.75), (2, 'w-a', 'fts', 1, 1.0, 1.2, 0.75)",
+    )
+    .execute(&pool)
+    .await
+    .expect("project 2");
+
+    let report = cleanup::run_pass_report(&pool, &quick(5))
+        .await
+        .expect("pass");
+    // Per wiki: meta 1 + docs 11 + terms 11 + postings 11; plus project 2's meta.
+    assert_eq!(report.removed, 3 * (1 + 33) + 1);
+    assert!(!report.remaining);
+    assert!(!report.quiet(), "a pass that removed rows is not quiet");
+    for table in TABLES {
+        assert_eq!(count(&pool, table, "bm25").await, 0, "{table}");
+    }
+    assert_eq!(count(&pool, "wiki_bm25_postings", "fts").await, 27);
+    assert_eq!(count(&pool, "wiki_bm25_docs", "fts").await, 27);
+    assert_eq!(count(&pool, "wiki_bm25_meta", "fts").await, 4);
+
+    let again = cleanup::run_pass_report(&pool, &quick(5))
+        .await
+        .expect("again");
+    assert!(again.quiet());
+}
+
+/// Rows with no `meta` row (a crashed publish) are found and removed too.
+#[tokio::test(flavor = "multi_thread")]
+async fn rows_without_a_meta_row_are_removed() {
+    let Some(pool) = common::fresh_database("cleanup_stray").await else {
+        return;
+    };
+    seed(&pool, "w-a", "bm25", 4).await;
+    sqlx::query("DELETE FROM wiki_bm25_meta")
+        .execute(&pool)
+        .await
+        .expect("drop the meta row");
+    let report = cleanup::run_pass_report(&pool, &quick(3))
+        .await
+        .expect("pass");
+    assert_eq!(report.removed, 12);
+    assert!(!report.remaining);
+    for table in TABLES {
+        assert_eq!(count(&pool, table, "bm25").await, 0, "{table}");
+    }
+}
+
+/// Rows a publish holds locked are skipped, and that is NOT quiet: the pass
+/// says rows remain, and the scheduled task does not stop on it.
+#[tokio::test(flavor = "multi_thread")]
+async fn locked_rows_do_not_count_as_quiet() {
+    let Some(pool) = common::fresh_database("cleanup_not_quiet").await else {
+        return;
+    };
+    seed(&pool, "w-a", "bm25", 3).await;
+    let mut holder = pool.begin().await.expect("tx");
+    sqlx::query("SELECT 1 FROM wiki_bm25_postings WHERE branch = 'bm25' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .expect("lock the postings");
+
+    // The first pass removes the rest and reports the locked postings.
+    let first = cleanup::run_pass_report(&pool, &quick(100))
+        .await
+        .expect("pass");
+    assert!(first.remaining && !first.quiet());
+    // The second removes nothing (everything left is locked) and is STILL
+    // not quiet: a delete that returned 0 is not the same as nothing there.
+    let second = cleanup::run_pass_report(&pool, &quick(100))
+        .await
+        .expect("pass");
+    assert_eq!(second.removed, 0);
+    assert!(second.remaining && !second.quiet());
+
+    // The task does not give up while the rows exist.
+    let task = tokio::spawn(cleanup::run(pool.clone(), quick(100)));
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(!task.is_finished(), "the task stopped with rows still there");
+    holder.rollback().await.expect("release");
+    let passes = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .expect("the task stops once the rows are gone")
+        .expect("join");
+    assert!(passes >= 3, "removal pass plus two quiet ones, got {passes}");
+    assert_eq!(count(&pool, "wiki_bm25_postings", "bm25").await, 0);
+}
