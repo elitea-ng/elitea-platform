@@ -12,6 +12,7 @@ use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::client::{GitLabApi, GitLabClient, GitLabClientError, GitLabOperation};
 use super::config::{GitLabConfigError, GitLabConfigErrorCode, GitLabToolkitConfig};
+use crate::toolkits::families::connector_client::IntoAdk;
 
 const MAX_ARGUMENT_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;

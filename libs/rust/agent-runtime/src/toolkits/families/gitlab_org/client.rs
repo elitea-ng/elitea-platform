@@ -1,34 +1,39 @@
-use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::DateTime;
-use reqwest::header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, HeaderName, HeaderValue};
-use reqwest::{Method, Request, StatusCode, Url};
+#[cfg(test)]
+use elitea_connectors::transport::HeaderValue;
+use elitea_connectors::transport::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
-use zeroize::Zeroizing;
+
+// The GitLab wire layer lives in `elitea-connectors` (ADR-0030 decision 3),
+// shared with the single-project family and the GitLab connector.
+#[cfg(test)]
+use elitea_connectors::gitlab::wire::parse_next_page;
+use elitea_connectors::gitlab::wire::{
+    CLIENT_POLICY, MAX_RESPONSE_BYTES, error, http_transport, invalid_configuration, invalid_input,
+    invalid_response, org_request, resource_exhausted, response_shape_failure, unknown_outcome,
+};
+pub(in crate::toolkits) use elitea_connectors::gitlab::wire::{
+    GitLabOrgClientError, GitLabOrgClientErrorCode, GitLabOrgHttpResponse, GitLabOrgTransport,
+    map_http_status, validate_effect_status,
+};
 
 use super::config::GitLabOrgToolkitConfig;
 use super::diff::{DiffErrorCode, discussion_position, format_changes};
 use super::edit::{EditErrorCode, apply_update};
+use crate::toolkits::families::connector_client::{IntoAdk, transport};
 use crate::toolkits::families::python_repr::repr_str;
 use crate::toolkits::families::vcs_text::{
     LineRange, file_extension, mime_type, python_line_ranges, requested_label, slice_line_range,
 };
 
-const PRIVATE_TOKEN: HeaderName = HeaderName::from_static("private-token");
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
-const MAX_IDLE_PER_HOST: usize = 8;
-const MAX_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
-const MAX_REQUEST_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_FILE_BYTES: usize = 1_024 * 1_024;
 const MAX_WRITABLE_FILE_BYTES: usize = 256 * 1_024;
 const MAX_OUTPUT_CHARS: usize = 200_000;
@@ -39,43 +44,10 @@ const MAX_TEXT_BYTES: usize = 256 * 1_024;
 const MAX_PAGES: usize = 10;
 const MAX_ITEMS: usize = 1_000;
 const MAX_COMMITS: usize = 1_000;
-const USER_AGENT: &str = "elitea-worker-rust/0.1";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GitLabOrgClientErrorCode {
-    InvalidConfiguration,
-    InvalidInput,
-    Authentication,
-    Authorization,
-    NotFound,
-    Conflict,
-    RateLimited,
-    Timeout,
-    DependencyUnavailable,
-    InvalidResponse,
-    ResourceExhausted,
-    UnknownOutcome,
-}
-
-/// Stable provider failure without origin, repository, path, body, or token.
-pub(crate) struct GitLabOrgClientError {
-    code: GitLabOrgClientErrorCode,
-    retryable: bool,
-}
-
-impl GitLabOrgClientError {
-    #[must_use]
-    pub(crate) const fn code(&self) -> GitLabOrgClientErrorCode {
-        self.code
-    }
-
-    #[must_use]
-    pub(crate) const fn retryable(&self) -> bool {
-        self.retryable
-    }
-
-    pub(crate) fn into_adk(self) -> AdkError {
-        let (category, code, message) = match self.code {
+impl IntoAdk for GitLabOrgClientError {
+    fn into_adk(self) -> AdkError {
+        let (category, code, message) = match self.code() {
             GitLabOrgClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
                 "gitlab_org.configuration.invalid",
@@ -138,57 +110,22 @@ impl GitLabOrgClientError {
             ),
         };
         AdkError::new(ErrorComponent::Tool, category, code, message).with_retry(RetryHint {
-            should_retry: self.retryable,
+            should_retry: self.retryable(),
             retry_after_ms: None,
             max_attempts: None,
         })
     }
-
-    #[cfg(test)]
-    pub(in crate::toolkits) const fn fixture(
-        code: GitLabOrgClientErrorCode,
-        retryable: bool,
-    ) -> Self {
-        Self { code, retryable }
-    }
 }
 
-impl fmt::Debug for GitLabOrgClientError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GitLabOrgClientError")
-            .field("code", &self.code)
-            .field("retryable", &self.retryable)
-            .finish_non_exhaustive()
-    }
+/// The production GitLab transport over the worker's reqwest, shared with
+/// the single-project `gitlab` family so both keep one HTTPS, no-redirect,
+/// bounded wire policy.
+pub(in crate::toolkits) fn reqwest_transport()
+-> Result<Arc<dyn GitLabOrgTransport>, GitLabOrgClientError> {
+    Ok(http_transport(
+        transport(&CLIENT_POLICY).map_err(|_| invalid_configuration())?,
+    ))
 }
-
-impl fmt::Display for GitLabOrgClientError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self.code {
-            GitLabOrgClientErrorCode::InvalidConfiguration => {
-                "the GitLab Org client configuration is invalid"
-            }
-            GitLabOrgClientErrorCode::InvalidInput => "the GitLab Org request is invalid",
-            GitLabOrgClientErrorCode::Authentication => "GitLab authentication failed",
-            GitLabOrgClientErrorCode::Authorization => "GitLab authorization failed",
-            GitLabOrgClientErrorCode::NotFound => "the GitLab resource was not found",
-            GitLabOrgClientErrorCode::Conflict => "the GitLab resource is in conflict",
-            GitLabOrgClientErrorCode::RateLimited => "GitLab rate limited the request",
-            GitLabOrgClientErrorCode::Timeout => "the GitLab request timed out",
-            GitLabOrgClientErrorCode::DependencyUnavailable => "GitLab is unavailable",
-            GitLabOrgClientErrorCode::InvalidResponse => "GitLab returned an invalid response",
-            GitLabOrgClientErrorCode::ResourceExhausted => {
-                "the GitLab Org request or response exceeds its approved limit"
-            }
-            GitLabOrgClientErrorCode::UnknownOutcome => {
-                "the GitLab effect outcome is unknown and must be reconciled"
-            }
-        })
-    }
-}
-
-impl std::error::Error for GitLabOrgClientError {}
 
 pub(in crate::toolkits) enum GitLabOrgOperation<'a> {
     CreateBranch {
@@ -292,135 +229,12 @@ pub(in crate::toolkits) trait GitLabOrgApi: Send + Sync {
     ) -> Result<Value, GitLabOrgClientError>;
 }
 
-pub(in crate::toolkits) struct GitLabOrgHttpResponse {
-    pub(in crate::toolkits) status: StatusCode,
-    pub(in crate::toolkits) body: Option<Value>,
-    pub(in crate::toolkits) json_content_type: bool,
-    pub(in crate::toolkits) next_page: Option<Box<str>>,
-}
-
-impl GitLabOrgHttpResponse {
-    #[cfg(test)]
-    pub(in crate::toolkits) fn fixture(
-        status: StatusCode,
-        body: Option<Value>,
-        next_page: Option<&str>,
-    ) -> Self {
-        Self {
-            status,
-            body,
-            json_content_type: true,
-            next_page: next_page.map(Into::into),
-        }
-    }
-
-    #[cfg(test)]
-    pub(in crate::toolkits) fn non_json_fixture(status: StatusCode) -> Self {
-        Self {
-            status,
-            body: None,
-            json_content_type: false,
-            next_page: None,
-        }
-    }
-}
-
-#[async_trait]
-pub(in crate::toolkits) trait GitLabOrgTransport: Send + Sync {
-    async fn execute(
-        &self,
-        request: Request,
-        effect: bool,
-    ) -> Result<GitLabOrgHttpResponse, GitLabOrgClientError>;
-}
-
-struct ReqwestGitLabOrgTransport {
-    http: reqwest::Client,
-}
-
-#[async_trait]
-impl GitLabOrgTransport for ReqwestGitLabOrgTransport {
-    async fn execute(
-        &self,
-        request: Request,
-        effect: bool,
-    ) -> Result<GitLabOrgHttpResponse, GitLabOrgClientError> {
-        let mut response = self
-            .http
-            .execute(request)
-            .await
-            .map_err(|source| map_reqwest_error(&source, effect))?;
-        if response
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
-        {
-            return Err(response_bound_failure(effect));
-        }
-        let json_content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split(';').next())
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
-        let next_page = parse_next_page(response.headers().get("x-next-page"), effect)?;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|source| map_reqwest_error(&source, effect))?
-        {
-            let next = bytes
-                .len()
-                .checked_add(chunk.len())
-                .ok_or_else(|| response_bound_failure(effect))?;
-            if next > MAX_RESPONSE_BYTES {
-                return Err(response_bound_failure(effect));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        let body = if bytes.is_empty() {
-            None
-        } else if json_content_type {
-            Some(serde_json::from_slice(&bytes).map_err(|_| response_shape_failure(effect))?)
-        } else {
-            None
-        };
-        Ok(GitLabOrgHttpResponse {
-            status: response.status(),
-            body,
-            json_content_type,
-            next_page,
-        })
-    }
-}
-
 /// One claim-scoped GitLab client with invocation-local active-branch state.
 pub(crate) struct GitLabOrgClient {
     config: GitLabOrgToolkitConfig,
     transport: Arc<dyn GitLabOrgTransport>,
     operation_gate: Mutex<()>,
     active_branch: Mutex<Box<str>>,
-}
-
-/// The production GitLab transport, shared with the single-project `gitlab`
-/// family so both families keep one HTTPS, no-redirect, bounded wire policy.
-pub(in crate::toolkits) fn reqwest_transport()
--> Result<Arc<dyn GitLabOrgTransport>, GitLabOrgClientError> {
-    let http = reqwest::Client::builder()
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|_| invalid_configuration())?;
-    Ok(Arc::new(ReqwestGitLabOrgTransport { http }))
 }
 
 impl GitLabOrgClient {
@@ -475,28 +289,6 @@ impl GitLabOrgClient {
         }
     }
 
-    fn url(
-        &self,
-        segments: &[&str],
-        query: &[(&str, String)],
-    ) -> Result<Url, GitLabOrgClientError> {
-        let mut url = self.config.base_url().clone();
-        {
-            let mut path = url
-                .path_segments_mut()
-                .map_err(|()| invalid_configuration())?;
-            path.extend(["api", "v4"]);
-            path.extend(segments.iter().copied());
-        }
-        if !query.is_empty() {
-            let mut pairs = url.query_pairs_mut();
-            for (name, value) in query {
-                pairs.append_pair(name, value);
-            }
-        }
-        Ok(url)
-    }
-
     fn request(
         &self,
         method: Method,
@@ -504,26 +296,7 @@ impl GitLabOrgClient {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<Request, GitLabOrgClientError> {
-        let mut request = Request::new(method, self.url(segments, query)?);
-        request
-            .headers_mut()
-            .insert(ACCEPT, HeaderValue::from_static("application/json"));
-        let mut token =
-            HeaderValue::from_str(&Zeroizing::new(self.config.private_token().to_owned()))
-                .map_err(|_| invalid_configuration())?;
-        token.set_sensitive(true);
-        request.headers_mut().insert(PRIVATE_TOKEN, token);
-        if let Some(body) = body {
-            let encoded = serde_json::to_vec(body).map_err(|_| invalid_input())?;
-            if encoded.len() > MAX_REQUEST_BYTES {
-                return Err(resource_exhausted());
-            }
-            request
-                .headers_mut()
-                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-            *request.body_mut() = Some(encoded.into());
-        }
-        Ok(request)
+        org_request(&self.config, method, segments, query, body)
     }
 
     async fn call(
@@ -932,131 +705,6 @@ fn bounded_output(value: Value) -> Result<Value, GitLabOrgClientError> {
         return Err(resource_exhausted());
     }
     Ok(value)
-}
-
-fn parse_next_page(
-    value: Option<&HeaderValue>,
-    effect: bool,
-) -> Result<Option<Box<str>>, GitLabOrgClientError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let value = value.to_str().map_err(|_| response_shape_failure(effect))?;
-    if value.is_empty() {
-        return Ok(None);
-    }
-    if value.len() > 20
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-        || !value.parse::<u64>().is_ok_and(|page| page > 0)
-    {
-        return Err(response_shape_failure(effect));
-    }
-    Ok(Some(value.into()))
-}
-
-pub(in crate::toolkits) fn validate_effect_status(
-    method: &Method,
-    status: StatusCode,
-) -> Result<(), GitLabOrgClientError> {
-    let expected = match *method {
-        Method::POST => StatusCode::CREATED,
-        Method::DELETE => StatusCode::NO_CONTENT,
-        _ => return Err(invalid_configuration()),
-    };
-    if status != expected {
-        return Err(unknown_outcome());
-    }
-    Ok(())
-}
-
-pub(in crate::toolkits) fn map_http_status(
-    status: StatusCode,
-    effect: bool,
-) -> Result<(), GitLabOrgClientError> {
-    if status.is_success() {
-        return Ok(());
-    }
-    let code = match status {
-        StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS if effect => {
-            GitLabOrgClientErrorCode::UnknownOutcome
-        }
-        status if status.is_server_error() && effect => GitLabOrgClientErrorCode::UnknownOutcome,
-        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
-            GitLabOrgClientErrorCode::InvalidInput
-        }
-        StatusCode::UNAUTHORIZED => GitLabOrgClientErrorCode::Authentication,
-        StatusCode::FORBIDDEN => GitLabOrgClientErrorCode::Authorization,
-        StatusCode::NOT_FOUND => GitLabOrgClientErrorCode::NotFound,
-        StatusCode::CONFLICT => GitLabOrgClientErrorCode::Conflict,
-        StatusCode::REQUEST_TIMEOUT => GitLabOrgClientErrorCode::Timeout,
-        StatusCode::TOO_MANY_REQUESTS => GitLabOrgClientErrorCode::RateLimited,
-        status if status.is_server_error() => GitLabOrgClientErrorCode::DependencyUnavailable,
-        _ if effect => GitLabOrgClientErrorCode::UnknownOutcome,
-        _ => GitLabOrgClientErrorCode::InvalidResponse,
-    };
-    Err(error(
-        code,
-        !effect
-            && matches!(
-                code,
-                GitLabOrgClientErrorCode::Timeout
-                    | GitLabOrgClientErrorCode::RateLimited
-                    | GitLabOrgClientErrorCode::DependencyUnavailable
-            ),
-    ))
-}
-
-fn map_reqwest_error(source: &reqwest::Error, effect: bool) -> GitLabOrgClientError {
-    if effect {
-        return unknown_outcome();
-    }
-    if source.is_timeout() {
-        return error(GitLabOrgClientErrorCode::Timeout, true);
-    }
-    if source.is_connect() || source.is_request() || source.is_body() || source.is_decode() {
-        return error(GitLabOrgClientErrorCode::DependencyUnavailable, true);
-    }
-    invalid_response()
-}
-
-fn response_bound_failure(effect: bool) -> GitLabOrgClientError {
-    if effect {
-        unknown_outcome()
-    } else {
-        resource_exhausted()
-    }
-}
-
-fn response_shape_failure(effect: bool) -> GitLabOrgClientError {
-    if effect {
-        unknown_outcome()
-    } else {
-        invalid_response()
-    }
-}
-
-const fn error(code: GitLabOrgClientErrorCode, retryable: bool) -> GitLabOrgClientError {
-    GitLabOrgClientError { code, retryable }
-}
-
-const fn invalid_configuration() -> GitLabOrgClientError {
-    error(GitLabOrgClientErrorCode::InvalidConfiguration, false)
-}
-
-const fn invalid_input() -> GitLabOrgClientError {
-    error(GitLabOrgClientErrorCode::InvalidInput, false)
-}
-
-const fn invalid_response() -> GitLabOrgClientError {
-    error(GitLabOrgClientErrorCode::InvalidResponse, false)
-}
-
-const fn resource_exhausted() -> GitLabOrgClientError {
-    error(GitLabOrgClientErrorCode::ResourceExhausted, false)
-}
-
-const fn unknown_outcome() -> GitLabOrgClientError {
-    error(GitLabOrgClientErrorCode::UnknownOutcome, false)
 }
 
 #[cfg(test)]

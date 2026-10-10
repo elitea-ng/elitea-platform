@@ -13,13 +13,13 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderName, HeaderValue};
-use reqwest::{Method, Request, StatusCode, Url};
+use elitea_connectors::gitlab::wire::project_request;
+use elitea_connectors::transport::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
-use zeroize::Zeroizing;
 
 use super::config::GitLabToolkitConfig;
+use crate::toolkits::families::connector_client::IntoAdk;
 use crate::toolkits::families::gitlab_org::client::{
     GitLabOrgClientError, GitLabOrgClientErrorCode, GitLabOrgHttpResponse, GitLabOrgTransport,
     map_http_status, python_issue_list, reqwest_transport, validate_effect_status,
@@ -32,10 +32,8 @@ use crate::toolkits::families::vcs_text::{
     measure_result_chars, requested_label, slice_lines,
 };
 
-const PRIVATE_TOKEN: HeaderName = HeaderName::from_static("private-token");
 const MAX_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
-const MAX_REQUEST_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_FILE_BYTES: usize = 1_024 * 1_024;
 const MAX_WRITABLE_FILE_BYTES: usize = 1_024 * 1_024;
 const MAX_PATH_BYTES: usize = 1_024;
@@ -72,76 +70,6 @@ impl GitLabClientError {
     #[must_use]
     pub(crate) const fn code(&self) -> GitLabClientErrorCode {
         self.code
-    }
-
-    pub(crate) fn into_adk(self) -> AdkError {
-        let (category, code, message) = match self.code {
-            GitLabClientErrorCode::InvalidConfiguration => (
-                ErrorCategory::InvalidInput,
-                "gitlab.configuration.invalid",
-                "the GitLab toolkit configuration is invalid",
-            ),
-            GitLabClientErrorCode::InvalidInput => (
-                ErrorCategory::InvalidInput,
-                "gitlab.request.invalid",
-                "the GitLab request is invalid",
-            ),
-            GitLabClientErrorCode::Authentication => (
-                ErrorCategory::Unauthorized,
-                "gitlab.authentication.failed",
-                "GitLab authentication failed",
-            ),
-            GitLabClientErrorCode::Authorization => (
-                ErrorCategory::Forbidden,
-                "gitlab.authorization.failed",
-                "GitLab did not authorize the request",
-            ),
-            GitLabClientErrorCode::NotFound => (
-                ErrorCategory::NotFound,
-                "gitlab.resource.not_found",
-                "the requested GitLab resource was not found",
-            ),
-            GitLabClientErrorCode::Conflict => (
-                ErrorCategory::InvalidInput,
-                "gitlab.resource.conflict",
-                "the GitLab resource changed or already exists",
-            ),
-            GitLabClientErrorCode::RateLimited => (
-                ErrorCategory::RateLimited,
-                "gitlab.rate_limited",
-                "GitLab rate limited the request",
-            ),
-            GitLabClientErrorCode::Timeout => (
-                ErrorCategory::Timeout,
-                "gitlab.timeout",
-                "the GitLab request timed out",
-            ),
-            GitLabClientErrorCode::DependencyUnavailable => (
-                ErrorCategory::Unavailable,
-                "gitlab.unavailable",
-                "GitLab is unavailable",
-            ),
-            GitLabClientErrorCode::InvalidResponse => (
-                ErrorCategory::Internal,
-                "gitlab.response.invalid",
-                "GitLab returned an invalid response",
-            ),
-            GitLabClientErrorCode::ResourceExhausted => (
-                ErrorCategory::InvalidInput,
-                "gitlab.resource_exhausted",
-                "the GitLab request or response exceeds the approved limit",
-            ),
-            GitLabClientErrorCode::UnknownOutcome => (
-                ErrorCategory::Internal,
-                "gitlab.effect.unknown_outcome",
-                "GitLab may have applied the requested effect; reconcile it before retrying",
-            ),
-        };
-        AdkError::new(ErrorComponent::Tool, category, code, message).with_retry(RetryHint {
-            should_retry: self.retryable,
-            retry_after_ms: None,
-            max_attempts: None,
-        })
     }
 
     #[cfg(test)]
@@ -217,6 +145,78 @@ impl fmt::Display for GitLabClientError {
 }
 
 impl std::error::Error for GitLabClientError {}
+
+impl IntoAdk for GitLabClientError {
+    fn into_adk(self) -> AdkError {
+        let (category, code, message) = match self.code {
+            GitLabClientErrorCode::InvalidConfiguration => (
+                ErrorCategory::InvalidInput,
+                "gitlab.configuration.invalid",
+                "the GitLab toolkit configuration is invalid",
+            ),
+            GitLabClientErrorCode::InvalidInput => (
+                ErrorCategory::InvalidInput,
+                "gitlab.request.invalid",
+                "the GitLab request is invalid",
+            ),
+            GitLabClientErrorCode::Authentication => (
+                ErrorCategory::Unauthorized,
+                "gitlab.authentication.failed",
+                "GitLab authentication failed",
+            ),
+            GitLabClientErrorCode::Authorization => (
+                ErrorCategory::Forbidden,
+                "gitlab.authorization.failed",
+                "GitLab did not authorize the request",
+            ),
+            GitLabClientErrorCode::NotFound => (
+                ErrorCategory::NotFound,
+                "gitlab.resource.not_found",
+                "the requested GitLab resource was not found",
+            ),
+            GitLabClientErrorCode::Conflict => (
+                ErrorCategory::InvalidInput,
+                "gitlab.resource.conflict",
+                "the GitLab resource changed or already exists",
+            ),
+            GitLabClientErrorCode::RateLimited => (
+                ErrorCategory::RateLimited,
+                "gitlab.rate_limited",
+                "GitLab rate limited the request",
+            ),
+            GitLabClientErrorCode::Timeout => (
+                ErrorCategory::Timeout,
+                "gitlab.timeout",
+                "the GitLab request timed out",
+            ),
+            GitLabClientErrorCode::DependencyUnavailable => (
+                ErrorCategory::Unavailable,
+                "gitlab.unavailable",
+                "GitLab is unavailable",
+            ),
+            GitLabClientErrorCode::InvalidResponse => (
+                ErrorCategory::Internal,
+                "gitlab.response.invalid",
+                "GitLab returned an invalid response",
+            ),
+            GitLabClientErrorCode::ResourceExhausted => (
+                ErrorCategory::InvalidInput,
+                "gitlab.resource_exhausted",
+                "the GitLab request or response exceeds the approved limit",
+            ),
+            GitLabClientErrorCode::UnknownOutcome => (
+                ErrorCategory::Internal,
+                "gitlab.effect.unknown_outcome",
+                "GitLab may have applied the requested effect; reconcile it before retrying",
+            ),
+        };
+        AdkError::new(ErrorComponent::Tool, category, code, message).with_retry(RetryHint {
+            should_retry: self.retryable,
+            retry_after_ms: None,
+            max_attempts: None,
+        })
+    }
+}
 
 /// One SDK `gitlab` tool call, with arguments already shape-checked.
 pub(in crate::toolkits) enum GitLabOperation<'a> {
@@ -380,24 +380,6 @@ impl GitLabClient {
         }
     }
 
-    fn url(&self, suffix: &[&str], query: &[(&str, String)]) -> Result<Url, GitLabClientError> {
-        let mut url = self.config.base_url().clone();
-        {
-            let mut path = url
-                .path_segments_mut()
-                .map_err(|()| invalid_configuration())?;
-            path.extend(["api", "v4", "projects", self.config.repository()]);
-            path.extend(suffix.iter().copied());
-        }
-        if !query.is_empty() {
-            let mut pairs = url.query_pairs_mut();
-            for (name, value) in query {
-                pairs.append_pair(name, value);
-            }
-        }
-        Ok(url)
-    }
-
     fn request(
         &self,
         method: Method,
@@ -405,26 +387,7 @@ impl GitLabClient {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<Request, GitLabClientError> {
-        let mut request = Request::new(method, self.url(suffix, query)?);
-        request
-            .headers_mut()
-            .insert(ACCEPT, HeaderValue::from_static("application/json"));
-        let mut token =
-            HeaderValue::from_str(&Zeroizing::new(self.config.private_token().to_owned()))
-                .map_err(|_| invalid_configuration())?;
-        token.set_sensitive(true);
-        request.headers_mut().insert(PRIVATE_TOKEN, token);
-        if let Some(body) = body {
-            let encoded = serde_json::to_vec(body).map_err(|_| invalid_input())?;
-            if encoded.len() > MAX_REQUEST_BYTES {
-                return Err(resource_exhausted());
-            }
-            request
-                .headers_mut()
-                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-            *request.body_mut() = Some(encoded.into());
-        }
-        Ok(request)
+        Ok(project_request(&self.config, method, suffix, query, body)?)
     }
 
     async fn call(
@@ -1331,10 +1294,6 @@ const fn error(code: GitLabClientErrorCode) -> GitLabClientError {
         code,
         retryable: false,
     }
-}
-
-const fn invalid_configuration() -> GitLabClientError {
-    error(GitLabClientErrorCode::InvalidConfiguration)
 }
 
 const fn invalid_input() -> GitLabClientError {
