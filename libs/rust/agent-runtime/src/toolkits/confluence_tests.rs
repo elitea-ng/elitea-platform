@@ -890,20 +890,52 @@ async fn delete_tree_title_lookup_and_generic_requests() {
     let (client, transport) = fixture_client(
         &server_settings(),
         vec![
+            // A short first page is not the end: paging stops on an empty
+            // page, like `get_all_descendants`.
             ok(json!({"results": [{"id": "2", "title": "Child"}]})),
+            ok(json!({"results": [{"id": "4", "title": "Sibling"}]})),
+            ok(json!({"results": []})),
             ok(json!({"results": [{"id": "3", "title": "Grandchild"}]})),
+            ok(json!({"results": []})),
+            ok(json!({"results": []})),
             ok(json!({"results": []})),
         ],
     );
     assert_eq!(
         run(&client, ConfluenceOperation::GetPageTree { page_id: "1" }).await,
-        "The list of pages under the '1' was extracted: {\"2\":[\"Child\",\"1\"],\"3\":[\"Grandchild\",\"2\"]}"
+        "The list of pages under the '1' was extracted: {\"2\":[\"Child\",\"1\"],\"3\":[\"Grandchild\",\"2\"],\"4\":[\"Sibling\",\"1\"]}"
     );
+    let urls = transport
+        .requests()
+        .iter()
+        .map(|request| request.url.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(urls.len(), 7);
+    assert!(urls[0].ends_with("/rest/api/content/1/child/page?start=0&limit=100"));
+    assert!(urls[1].ends_with("/rest/api/content/1/child/page?start=1&limit=100"));
+    assert!(urls[2].ends_with("/rest/api/content/1/child/page?start=2&limit=100"));
+    assert!(urls[3].ends_with("/rest/api/content/2/child/page?start=0&limit=100"));
+
+    // A chain deeper than the depth cap (32) is cut, and the output names the
+    // page whose children were not expanded instead of truncating silently.
+    let chain = (0..32)
+        .flat_map(|level| {
+            [
+                ok(json!({"results": [{"id": format!("{}", level + 1), "title": "Level"}]})),
+                ok(json!({"results": []})),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let (client, transport) = fixture_client(&server_settings(), chain);
+    let tree = run(&client, ConfluenceOperation::GetPageTree { page_id: "0" }).await;
+    assert!(tree.contains("\"32\":[\"Level\",\"31\"]"), "{tree}");
     assert!(
-        transport.requests()[0]
-            .url
-            .ends_with("/rest/api/content/1/child/page?start=0&limit=100")
+        tree.ends_with(
+            "\nNotice: the tree is cut at depth 32; the children of these pages were not expanded (call get_page_tree on them to continue): [\"32\"]"
+        ),
+        "{tree}"
     );
+    assert_eq!(transport.requests().len(), 64);
 
     let (client, transport) = fixture_client(
         &server_settings(),

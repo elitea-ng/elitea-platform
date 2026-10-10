@@ -1,5 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1186,6 +1187,7 @@ impl ConfluenceClient {
             Err(message) => return Ok(api_error(&message)),
         };
         let mut stack: Vec<(String, VecDeque<(String, Value)>)> = vec![(page_id.to_owned(), root)];
+        let mut unexpanded = Vec::new();
         while let Some((parent, queue)) = stack.last_mut() {
             let Some((id, title)) = queue.pop_front() else {
                 stack.pop();
@@ -1202,12 +1204,24 @@ impl ConfluenceClient {
                     Err(message) => return Ok(api_error(&message)),
                 };
                 stack.push((id, children));
+            } else {
+                unexpanded.push(Value::String(id));
             }
         }
-        Ok(format!(
+        let mut output = format!(
             "The list of pages under the '{page_id}' was extracted: {}",
             render(&Value::Object(descendants))
-        ))
+        );
+        if !unexpanded.is_empty() {
+            // The SDK recurses without a bound; Rust stops at MAX_TREE_DEPTH
+            // and says so instead of returning a silently partial tree.
+            let _ = write!(
+                output,
+                "\nNotice: the tree is cut at depth {MAX_TREE_DEPTH}; the children of these pages were not expanded (call get_page_tree on them to continue): {}",
+                render(&Value::Array(unexpanded))
+            );
+        }
+        Ok(output)
     }
 
     async fn children(
@@ -1217,6 +1231,10 @@ impl ConfluenceClient {
         validate_identifier(page_id)?;
         let mut children = VecDeque::new();
         let mut start = 0_usize;
+        // `get_all_descendants` pages until an empty page; a page shorter
+        // than the requested limit is not the end (Server caps `limit`).
+        // Every non-empty page advances `start`, and the total is capped, so
+        // the loop ends after at most MAX_TREE_PAGES + 1 requests.
         loop {
             let mut url = self.v1(&["content", page_id, "child", "page"])?;
             url.query_pairs_mut()
@@ -1231,16 +1249,18 @@ impl ConfluenceClient {
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let count = results.len();
+            if results.is_empty() {
+                return Ok(Ok(children));
+            }
+            start += results.len();
             for child in results {
                 if let Some(id) = id_text(child.get("id")) {
                     children.push_back((id, child.get("title").cloned().unwrap_or(Value::Null)));
                 }
             }
-            if count < CHILD_PAGE_SIZE || children.len() > MAX_TREE_PAGES {
-                return Ok(Ok(children));
+            if start > MAX_TREE_PAGES {
+                return Err(resource_exhausted());
             }
-            start += CHILD_PAGE_SIZE;
         }
     }
 
