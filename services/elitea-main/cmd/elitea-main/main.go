@@ -2348,8 +2348,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
 
-	// The tombstone reconciler (#1211) runs over the one provisioner the router
-	// builds, so it is started from the router's hook. A failure to construct it
+	// The project-deletion reconciler (#1211) drains the cleanup journal over
+	// the one provisioner the router builds, so it is started from the router's
+	// hook. A failure to construct it
 	// is carried out of the hook and stops startup like the other composition
 	// errors.
 	deletionReconciler, err := projectDeletionReconcilerFromEnv(os.LookupEnv)
@@ -2358,7 +2359,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	var deletionReconcilerErr error
 	startDeletionReconciler := func(provisioner *projectprovisioning.Provisioner) {
-		deletionReconcilerErr = startProjectDeletionReconciler(ctx, deletionReconciler, provisioner, pool, logger)
+		deletionReconcilerErr = startProjectDeletionReconciler(ctx, deletionReconciler, provisioner, logger)
 	}
 
 	r := api.NewRouter(api.RouterConfig{

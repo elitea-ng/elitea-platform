@@ -402,8 +402,8 @@ type RouterConfig struct {
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
 	// OnProjectProvisioner, when set, is called once with the one shared project
 	// provisioner, after it is built. The process uses it to start the
-	// tombstone reconciler (#1211) over the same provisioner the routes delete
-	// with, instead of building a second one (see newProjectProvisioner). It is
+	// project-deletion reconciler (#1211) over the same provisioner the routes
+	// delete with, instead of building a second one (see newProjectProvisioner). It is
 	// not called when the composition has no pool and so no provisioner.
 	OnProjectProvisioner func(*projectprovisioning.Provisioner)
 	// PlatformModelDefaults is the platform default model service (#6826). It

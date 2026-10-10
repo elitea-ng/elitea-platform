@@ -662,11 +662,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// tool, project, invoking toolkit, source toolkits), read by the
 	// Inventory investigate source-tool gate on test_tool. No permission.
 	//
-	// 160: shared/0160_project_deleting_tombstone.sql, the
-	// centry.project.deleting_at tombstone a project delete sets before it
-	// removes anything (#1211), and the BEFORE INSERT trigger on
-	// elitea_runtime.execution_jobs that refuses new work for a tombstoned
-	// project. No tenant table, no permission.
+	// 160: shared/0160_project_deletions_journal.sql, the cleanup journal
+	// (centry.project_deletions) a project delete writes in the transaction
+	// that removes the project row, and that a reconciler drains (#1211). No
+	// tenant table, no permission.
 	require.EqualValues(t, 160, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

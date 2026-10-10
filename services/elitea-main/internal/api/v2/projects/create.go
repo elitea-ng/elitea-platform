@@ -216,15 +216,10 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, projectprovisioning.ErrProjectNotFound):
 		apierr.WriteStatus(w, http.StatusNotFound, "project not found")
 		return
-	case errors.Is(err, projectprovisioning.ErrProjectDeletionInProgress):
-		// Another delete of this project holds the per-project delete lock. This
-		// call changed nothing; the one that holds the lock is finishing the job.
-		apierr.WriteStatus(w, http.StatusConflict, "deletion already in progress")
-		return
 	case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
-		// The pre-walk refusal, and only that: Deprovision answers it before it
-		// changes anything, so "retry later" is true. A leftover found AFTER the
-		// walk can never be this.
+		// The deciding transaction's refusal, and only that: it rolls back
+		// before anything changes, so "retry later" is true. A cleanup leftover
+		// can never be this.
 		apierr.WriteStatus(w, http.StatusConflict,
 			"project has active runs; stop them or wait for them to finish, then retry the delete")
 		return
@@ -233,10 +228,11 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		// project that still exists as deleted is the failure mode this route
 		// exists to avoid, so the per-step detail is returned with a 500. The
 		// message names EVERY leftover the joined error carries: a retry answers
-		// 404 once the row is gone, so whatever this omits is invisible.
+		// 404 once the row is gone, so whatever this omits is only in the
+		// cleanup journal.
 		writeJSON(w, http.StatusInternalServerError, deleteProjectResponse{
 			Steps:    nonNilSteps(result.RollbackSteps),
-			Message:  deleteFailureMessage(err),
+			Message:  deleteFailureMessage(err, result.RollbackSteps),
 			Database: result.VectorDatabase,
 		})
 		return
@@ -247,19 +243,31 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 // deleteFailureMessage renders one line per leftover a failed delete reports.
 // The text is fixed per leftover and never carries the underlying error, which
 // can hold SQL or addresses.
-func deleteFailureMessage(err error) string {
+func deleteFailureMessage(err error, steps []projectprovisioning.StepStatus) string {
 	var lines []string
 	if errors.Is(err, projectprovisioning.ErrProjectNotRemoved) {
-		lines = append(lines, "the project was not removed; it is marked deleting and another delete resumes it")
-	}
-	if errors.Is(err, projectprovisioning.ErrTenantSchemaNotRemoved) {
-		lines = append(lines, "the project was deleted, but its tenant schema was not removed; another delete of the same id retries it")
+		lines = append(lines, "the project was not removed and is unchanged; retry the delete")
 	}
 	if errors.Is(err, projectprovisioning.ErrArtifactsNotRemoved) {
-		lines = append(lines, "the project was deleted, but its artifact buckets were not purged; another delete of the same id retries the purge")
+		lines = append(lines, "the project was deleted, but its artifact buckets were not purged yet; the cleanup journal retries the purge")
+	}
+	if errors.Is(err, projectprovisioning.ErrTenantSchemaNotRemoved) {
+		lines = append(lines, "the project was deleted, but its tenant schema was not removed yet; the cleanup journal retries it")
 	}
 	if errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) {
-		lines = append(lines, "the project was deleted, but its PgVector database was not dropped; remove it with pgvector-orphans")
+		lines = append(lines, "the project was deleted, but its PgVector database was not dropped yet; the cleanup journal retries it")
+	}
+	if errors.Is(err, projectprovisioning.ErrCleanupIncomplete) {
+		for _, status := range steps {
+			switch status.Step {
+			case projectprovisioning.StepArtifactBuckets, projectprovisioning.StepProjectSchema,
+				projectprovisioning.StepProjectPgvectorDrop, projectprovisioning.StepProjectModel:
+				continue
+			}
+			if status.OK != nil && !*status.OK {
+				lines = append(lines, "the project was deleted, but step "+status.Step+" did not complete; the cleanup journal retries it")
+			}
+		}
 	}
 	if len(lines) == 0 {
 		return "project delete did not complete; see the steps"

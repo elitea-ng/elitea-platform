@@ -51,7 +51,7 @@ func (s *stubVectorStore) RemoveProjectVectorStore(_ context.Context, projectID 
 	return nil
 }
 
-func (s *stubVectorStore) ProjectHasVectorStore(_ context.Context, _ int64) (bool, error) {
+func (s *stubVectorStore) ProjectHasVectorStore(_ context.Context, _ Querier, _ int64) (bool, error) {
 	return s.hasStore, s.hasStoreErr
 }
 

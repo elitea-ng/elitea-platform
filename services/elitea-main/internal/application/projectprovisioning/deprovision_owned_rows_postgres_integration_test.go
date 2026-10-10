@@ -291,11 +291,14 @@ func TestDeprovisionKeepsABucketWhosePurgeFailed(t *testing.T) {
 		t.Errorf("purged bucket rows left = %d, want 0", got)
 	}
 
-	// The store recovers. Another delete of the same id is not a 404: it
-	// finds the kept bucket, purges it and finishes.
+	// The store recovers. The project row is gone, so another delete is a 404;
+	// the cleanup journal kept the purge and its next run finishes it (#1211).
 	store.setFailing("docs", false)
-	if result, err := provisioner.Deprovision(ctx, projectID); err != nil {
-		t.Fatalf("retry deprovision: %v (steps=%+v)", err, result.RollbackSteps)
+	if _, err := provisioner.Deprovision(ctx, projectID); !errors.Is(err, projectprovisioning.ErrProjectNotFound) {
+		t.Fatalf("second delete = %v, want ErrProjectNotFound", err)
+	}
+	if result, err := provisioner.ResumeDeletion(ctx, projectID); err != nil {
+		t.Fatalf("resume the journal: %v (steps=%+v)", err, result.RollbackSteps)
 	}
 	if got := countRows(ctx, t, pool, `SELECT count(*) FROM elitea_storage.buckets WHERE project_id = $1`, projectID); got != 0 {
 		t.Errorf("bucket rows after the retry = %d, want 0", got)
@@ -303,8 +306,10 @@ func TestDeprovisionKeepsABucketWhosePurgeFailed(t *testing.T) {
 	if store.count("docs") != 0 {
 		t.Errorf("object store kept %d object(s) after the retry", store.count("docs"))
 	}
-	if _, err := provisioner.Deprovision(ctx, projectID); !errors.Is(err, projectprovisioning.ErrProjectNotFound) {
-		t.Errorf("third delete = %v, want ErrProjectNotFound", err)
+	var completed bool
+	if err := pool.QueryRow(ctx,
+		`SELECT completed_at IS NOT NULL FROM centry.project_deletions WHERE project_id = $1`, projectID).Scan(&completed); err != nil || !completed {
+		t.Errorf("the journal row is not complete after the resumed purge: %v, %v", completed, err)
 	}
 }
 

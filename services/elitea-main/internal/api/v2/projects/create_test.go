@@ -459,26 +459,17 @@ func TestDeleteProjectAnswersConflictWhileWorkIsActive(t *testing.T) {
 	}
 }
 
-// Another delete of the same project is running: 409, and a joined error that
-// carries the sentinel (the reconciler and the ensurer join other leftovers)
-// still maps to it.
-func TestDeleteProjectAnswersConflictWhileAnotherDeleteIsRunning(t *testing.T) {
-	for name, err := range map[string]error{
-		"plain":  projectprovisioning.ErrProjectDeletionInProgress,
-		"joined": errors.Join(projectprovisioning.ErrProjectDeletionInProgress, errors.New("other")),
-	} {
-		recorder := deleteWith(t, projectprovisioning.Result{}, err)
-		if recorder.Code != http.StatusConflict {
-			t.Fatalf("%s: status = %d, want 409; body=%s", name, recorder.Code, recorder.Body.String())
-		}
-		if !strings.Contains(recorder.Body.String(), "deletion already in progress") {
-			t.Fatalf("%s: the 409 does not say so: %s", name, recorder.Body.String())
-		}
+// A delete that lost a race to another delete of the same project finds no
+// row: 404, the same as any other id with no project.
+func TestDeleteProjectAnswersNotFoundToTheLoserOfTwoDeletes(t *testing.T) {
+	recorder := deleteWith(t, projectprovisioning.Result{}, projectprovisioning.ErrProjectNotFound)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
 // The project is gone but its vector database is not: 500 naming the database
-// and carrying the per-step detail, so an operator can run pgvector-orphans.
+// and carrying the per-step detail; the cleanup journal retries the drop.
 func TestDeleteProjectNamesTheVectorDatabaseItCouldNotDrop(t *testing.T) {
 	failed := false
 	result := projectprovisioning.Result{
@@ -520,14 +511,16 @@ func TestDeleteProjectNamesEveryJoinedFailure(t *testing.T) {
 		VectorDatabase: "project_42",
 		RollbackSteps: []projectprovisioning.StepStatus{
 			{Step: projectprovisioning.StepArtifactBuckets, Initialized: true, OK: &failed, Msg: "x"},
+			{Step: projectprovisioning.StepProjectSecrets, Initialized: true, OK: &failed, Msg: "z"},
 			{Step: projectprovisioning.StepProjectPgvectorDrop, Initialized: true, OK: &failed, Msg: "y"},
 		},
 	}
 	err := errors.Join(
 		projectprovisioning.ErrTenantSchemaNotRemoved,
 		projectprovisioning.ErrArtifactsNotRemoved,
-		fmt.Errorf("%w: database \"project_42\" remains for pgvector-orphans: dial tcp 10.0.0.9:5432: secret-detail",
+		fmt.Errorf("%w: database \"project_42\" remains, the cleanup journal retries it: dial tcp 10.0.0.9:5432: secret-detail",
 			projectprovisioning.ErrVectorStoreNotDropped),
+		fmt.Errorf("%w: step project_secrets: password=hunter2", projectprovisioning.ErrCleanupIncomplete),
 	)
 
 	recorder := deleteWith(t, result, err)
@@ -543,19 +536,21 @@ func TestDeleteProjectNamesEveryJoinedFailure(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v; body=%s", err, recorder.Body.String())
 	}
-	for _, want := range []string{"tenant schema", "artifact buckets", "PgVector database", "pgvector-orphans"} {
+	for _, want := range []string{"tenant schema", "artifact buckets", "PgVector database", "step project_secrets", "cleanup journal"} {
 		if !strings.Contains(body.Message, want) {
 			t.Errorf("message does not name %q:\n%s", want, body.Message)
 		}
 	}
-	if lines := strings.Split(body.Message, "\n"); len(lines) != 3 {
-		t.Errorf("message has %d lines, want one per leftover (3):\n%s", len(lines), body.Message)
+	if lines := strings.Split(body.Message, "\n"); len(lines) != 4 {
+		t.Errorf("message has %d lines, want one per leftover (4):\n%s", len(lines), body.Message)
 	}
-	if strings.Contains(recorder.Body.String(), "secret-detail") || strings.Contains(recorder.Body.String(), "10.0.0.9") {
-		t.Errorf("the body leaks the underlying error: %s", recorder.Body.String())
+	for _, leak := range []string{"secret-detail", "10.0.0.9", "hunter2"} {
+		if strings.Contains(recorder.Body.String(), leak) {
+			t.Errorf("the body leaks the underlying error (%s): %s", leak, recorder.Body.String())
+		}
 	}
-	if body.Database != "project_42" || len(body.Steps) != 2 {
-		t.Errorf("database=%q steps=%d, want project_42 and the 2 steps", body.Database, len(body.Steps))
+	if body.Database != "project_42" || len(body.Steps) != 3 {
+		t.Errorf("database=%q steps=%d, want project_42 and the 3 steps", body.Database, len(body.Steps))
 	}
 }
 

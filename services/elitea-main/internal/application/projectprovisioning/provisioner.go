@@ -112,8 +112,8 @@ type Result struct {
 	ProjectID     int64
 	Steps         []StepStatus
 	RollbackSteps []StepStatus
-	// VectorDatabase names the PgVector database a delete could not drop, for
-	// cmd/pgvector-orphans. It is empty unless ErrVectorStoreNotDropped.
+	// VectorDatabase names the PgVector database a delete could not drop. It is
+	// empty unless ErrVectorStoreNotDropped. The cleanup journal retries it.
 	VectorDatabase string
 }
 
@@ -162,19 +162,28 @@ type ProjectVectorStore interface {
 	// it is safe for the create-failure rollback.
 	RemoveProjectVectorStore(ctx context.Context, projectID int64) error
 	// ProjectHasVectorStore reports whether the project has a PgVector
-	// configuration row on this platform. Deprovision reads it BEFORE the step
-	// walk removes that row, and hands the answer to DropProjectVectorStore.
-	ProjectHasVectorStore(ctx context.Context, projectID int64) (bool, error)
+	// configuration row on this platform. Deprovision asks it INSIDE the
+	// transaction that decides the delete, through that transaction (query), so
+	// the answer is read from the same snapshot that removes the project and no
+	// second pool connection is taken while the project row is locked. The answer
+	// is recorded in the cleanup journal and later handed to
+	// DropProjectVectorStore.
+	ProjectHasVectorStore(ctx context.Context, query Querier, projectID int64) (bool, error)
 	// DropProjectVectorStore irreversibly drops the project's PgVector database
-	// and login role (#1211). It is reached only from Deprovision, after the
-	// project row is proved gone, never from the create-failure rollback. It is
-	// idempotent. hadStore is whether the project had a vector store before its
-	// removal: with no PgVector bootstrap configured, a project that never had
-	// one has nothing to drop (it returns "", nil), but one that did has a
-	// database that cannot be dropped, which is an error. It returns the name of
-	// the database it was asked to drop (also on failure, so the caller can name
-	// the leftover), or "" when there is nothing to drop.
+	// and login role (#1211). It is reached only from Deprovision's cleanup
+	// journal, after the project row is gone, never from the create-failure
+	// rollback. It is idempotent. hadStore is what the journal recorded: with
+	// hadStore false it returns "", nil without connecting anywhere; with
+	// hadStore true and no PgVector bootstrap configured the database cannot be
+	// dropped, which is an error. It returns the name of the database it was
+	// asked to drop (also on failure, so the caller can name the leftover), or
+	// "" when there is nothing to drop.
 	DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (database string, err error)
+}
+
+// Querier is the read half of a pgx connection or transaction.
+type Querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // ProjectDefaultModelSeeder copies the platform default model into a new

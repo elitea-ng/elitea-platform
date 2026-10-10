@@ -331,6 +331,7 @@ func TestEnsureRepairFailsWhenAnythingBesidesTheVectorStoreWasLeft(t *testing.T)
 		"vector store and artifacts":     errors.Join(vector, projectprovisioning.ErrArtifactsNotRemoved),
 		"all three":                      errors.Join(projectprovisioning.ErrTenantSchemaNotRemoved, projectprovisioning.ErrArtifactsNotRemoved, vector),
 		"vector store and an unknown":    errors.Join(vector, errors.New("verify project removal")),
+		"vector store and the vault":     errors.Join(vector, fmt.Errorf("%w: step project_secrets", projectprovisioning.ErrCleanupIncomplete)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -357,38 +358,6 @@ func TestEnsureRepairFailsWhenAnythingBesidesTheVectorStoreWasLeft(t *testing.T)
 			t.Fatalf("Ensure = %d, %v; want a repaired project", projectID, err)
 		}
 	})
-}
-
-// A finished project that is being deleted is never reused: the repair removes
-// it with the same path and provisions a new one.
-func TestEnsureDoesNotReuseAProjectThatIsBeingDeleted(t *testing.T) {
-	ctx := context.Background()
-	pool := newPersonalProjectPool(t)
-	ensurer := newTestEnsurer(t, pool)
-	userID := seedUser(t, pool, "tombstoned@autotest.local", "Tombstoned")
-
-	first, err := ensurer.Ensure(ctx, userID)
-	if err != nil || first == 0 {
-		t.Fatalf("first Ensure = %d, %v", first, err)
-	}
-	if again, err := ensurer.Ensure(ctx, userID); err != nil || again != first {
-		t.Fatalf("premise: a finished project is reused: %d, %v (want %d)", again, err, first)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE centry.project SET deleting_at = now() WHERE id = $1`, first); err != nil {
-		t.Fatal(err)
-	}
-
-	second, err := ensurer.Ensure(ctx, userID)
-	if err != nil {
-		t.Fatalf("Ensure over a tombstoned project: %v", err)
-	}
-	if second == 0 || second == first {
-		t.Fatalf("Ensure returned %d; the tombstoned project %d must not be reused", second, first)
-	}
-	var left int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM centry.project WHERE id = $1`, first).Scan(&left); err != nil || left != 0 {
-		t.Fatalf("the tombstoned project survived the repair: %d, %v", left, err)
-	}
 }
 
 // Active work is retryable and the repair cannot go on: the error says why.
@@ -592,7 +561,6 @@ func resolveAuthorPersonalProjectID(
 		    SELECT 1 AS priority, project.id AS id
 		    FROM centry.project AS project
 		    WHERE project.name = 'project_user_' || $1::integer::text
-		      AND project.deleting_at IS NULL
 		      AND EXISTS (
 		          SELECT 1
 		          FROM public.auth_core__project_user_role AS assignment

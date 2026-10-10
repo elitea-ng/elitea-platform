@@ -603,12 +603,8 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 	// of is not their personal project however much its name looks like one.
 	// Returning such a row here reported success while /social/author went on
 	// answering "" for good.
-	//
-	// A project being deleted (tombstoned by projectprovisioning, #1211) is not
-	// reusable however complete it looks: its delete is under way, or failed
-	// part way and is waiting to be resumed. It is skipped here and removed below.
 	for _, candidate := range candidates {
-		if candidate.member && candidate.created && !candidate.deleting {
+		if candidate.member && candidate.created {
 			return candidate.id, nil
 		}
 	}
@@ -631,30 +627,31 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 	// project whose `p_<id>` schema does not exist.
 	remaining := candidates[:0:0]
 	for _, candidate := range candidates {
-		if candidate.owned && (!candidate.created || candidate.deleting) {
+		if candidate.owned && !candidate.created {
 			e.logger.WarnContext(ctx, "removing an unfinished personal project before recreating it",
-				"user_id", userID, "project_id", candidate.id, "deleting", candidate.deleting)
+				"user_id", userID, "project_id", candidate.id)
 			// An owned personal project is removed here only because it is
-			// unfinished (create_success=false) or already tombstoned; nothing can
-			// be running in either, so the delete skips its active-work count
-			// (it still tombstones the project, so no work is admitted). Counting
-			// would refuse the repair on a stray job row and strand the user
-			// without a personal project. An explicit DELETE keeps the count.
+			// unfinished (create_success=false); nothing can be running in it,
+			// so the delete skips its active-work count. Counting would refuse
+			// the repair on a stray job row and strand the user without a
+			// personal project. An explicit DELETE keeps the count.
 			if _, err := e.provisioner.Deprovision(ctx, candidate.id, projectprovisioning.SkipActiveWorkCheck()); err != nil {
 				switch {
+				case errors.Is(err, projectprovisioning.ErrProjectNotFound):
+					// Another delete of this project (a concurrent login, an
+					// operator) won the row lock and removed it first. The row
+					// is gone, which is all the repair needs.
+					e.logger.InfoContext(ctx, "unfinished personal project was already removed by another delete",
+						"user_id", userID, "project_id", candidate.id)
 				case onlyVectorStoreNotDropped(err):
 					// The row is gone, which is all the repair needs. The
-					// leftover PgVector database is an operator cleanup
-					// (cmd/pgvector-orphans), not a reason to fail login. ONLY
-					// that leftover is tolerated: a tenant schema or artifact
-					// bytes left behind fail the repair as they always did.
-					e.logger.WarnContext(ctx, "unfinished personal project removed, but its PgVector database was not dropped",
+					// leftover PgVector database is in the cleanup journal,
+					// which retries it; not a reason to fail login. ONLY that
+					// leftover is tolerated: a tenant schema, artifact bytes or
+					// identity rows left behind fail the repair as they always
+					// did.
+					e.logger.WarnContext(ctx, "unfinished personal project removed, but its PgVector database was not dropped yet",
 						"user_id", userID, "project_id", candidate.id, "err", err)
-				case errors.Is(err, projectprovisioning.ErrProjectDeletionInProgress):
-					// Another delete of this project (a retry, the tombstone
-					// reconciler, an operator) is finishing it. Not a failure of
-					// the repair, and not something to race: ask again shortly.
-					return 0, fmt.Errorf("personalproject: unfinished project %d is already being deleted by another request; try again later: %w", candidate.id, err)
 				case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
 					return 0, fmt.Errorf("personalproject: cannot remove unfinished project %d yet: it still has active runs; retry once they finish: %w", candidate.id, err)
 				default:
@@ -709,16 +706,13 @@ type existingCandidate struct {
 	// first branch requires. Only a member row may be RETURNED, because only a
 	// member row is one that resolver will ever answer with.
 	member bool
-	// deleting reports a project delete that has started (centry.project.
-	// deleting_at). Such a row is never reused.
-	deleting bool
 }
 
 // onlyVectorStoreNotDropped reports whether a Deprovision error consists solely
-// of ErrVectorStoreNotDropped. Deprovision joins every leftover it finds after
-// the project row is gone; the PgVector database is the only one a login repair
-// may carry on past, because the row (all the repair needs) is gone and the
-// database is an operator cleanup.
+// of ErrVectorStoreNotDropped. Deprovision joins (errors.Join) every cleanup
+// step left after the project row is gone; the PgVector database is the only
+// one a login repair may carry on past, because the row (all the repair needs)
+// is gone and the cleanup journal retries the drop.
 func onlyVectorStoreNotDropped(err error) bool {
 	if err == nil {
 		return false
@@ -759,8 +753,7 @@ SELECT
         FROM public.auth_core__project_user_role AS assignment
         WHERE assignment.project_id = project.id
           AND assignment.user_id = $2::integer
-    ) AS member,
-    project.deleting_at IS NOT NULL AS deleting
+    ) AS member
 FROM centry.project AS project
 WHERE project.name = $1
 ORDER BY project.id`, Name(userID), accountKey)
@@ -772,7 +765,7 @@ ORDER BY project.id`, Name(userID), accountKey)
 	var candidates []existingCandidate
 	for rows.Next() {
 		var candidate existingCandidate
-		if err := rows.Scan(&candidate.id, &candidate.created, &candidate.owned, &candidate.member, &candidate.deleting); err != nil {
+		if err := rows.Scan(&candidate.id, &candidate.created, &candidate.owned, &candidate.member); err != nil {
 			return nil, fmt.Errorf("personalproject: read projects for user %d: %w", userID, err)
 		}
 		candidates = append(candidates, candidate)

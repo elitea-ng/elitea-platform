@@ -8,17 +8,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
 
-// The tombstone reconciler (#1211) finishes project deletes that were started
-// and not completed. It is ON wherever the project provisioner exists, because
-// a tombstoned project that nothing finishes stays refused-for-new-work for
-// ever. The flag exists to switch it off on a replica that should not run it
-// (an incident, a migration window), not to opt in.
+// The project-deletion reconciler (#1211) drains the cleanup journal
+// (centry.project_deletions): it finishes the cleanup of deleted projects whose
+// steps did not all complete. It is ON wherever the project provisioner exists,
+// because a journal row that nothing drains leaves the project's schema, bytes
+// or PgVector database behind for ever. The flag exists to switch it off on a
+// replica that should not run it (an incident, a migration window), not to opt
+// in.
 const (
 	projectDeletionReconcilerEnv = "ELITEA_PROJECT_DELETION_RECONCILER_ENABLED"
 	projectDeletionGraceEnv      = "ELITEA_PROJECT_DELETION_RECONCILER_GRACE"
@@ -59,7 +59,6 @@ func startProjectDeletionReconciler(
 	ctx context.Context,
 	settings projectDeletionReconcilerSettings,
 	provisioner *projectprovisioning.Provisioner,
-	pool *pgxpool.Pool,
 	logger *slog.Logger,
 ) error {
 	if !settings.Enabled {
@@ -67,7 +66,7 @@ func startProjectDeletionReconciler(
 		return nil
 	}
 	reconciler, err := runtimecomposition.NewProjectDeletionReconciler(
-		pool, provisioner,
+		provisioner,
 		runtimecomposition.ProjectDeletionReconcilerConfig{GracePeriod: settings.Grace}, logger)
 	if err != nil {
 		return err

@@ -12,18 +12,19 @@ package projectprovisioning_test
 //   TestDeprovisionToleratesAVectorStoreThatIsAlreadyGone
 //       a missing database or role is a no-op, not an error.
 //   TestDeprovisionRefusesWhileProjectWorkIsActive
-//       non-terminal work of ANY capability refuses the delete before anything changes.
+//       non-terminal work of ANY capability refuses the delete before anything
+//       changes; no cleanup is recorded.
 //   TestDeprovisionKeepsTheVectorStoreWhenTheRowDeleteFails
-//       the drop runs only after the project row is proved gone; the failed
-//       delete leaves a tombstone, admission is refused, and a retry completes.
-//   TestAdmissionRacingTheFenceIsRefusedOrCounted
-//       the FOR UPDATE fence versus a concurrent admission, both orders.
+//       the drop runs only after the project row is gone.
 //   TestDeprovisionDropSurvivesACancelledRequest
-//       the post-commit drop is detached from the request context.
+//       the post-commit cleanup is detached from the request context.
 //   TestDeprovisionReportsAVectorStoreItCannotReach / ...SkipsAProjectThatNeverHadOne
 //       the missing-bootstrap rule.
 //   TestDeprovisionReportsEveryCleanupFailure
 //       a failed vector drop, a surviving bucket: both are named, neither hides the other.
+//
+// The decision transaction, the journal and the reconciler are in
+// deprovision_journal_postgres_integration_test.go.
 
 import (
 	"context"
@@ -34,15 +35,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	vectorstoreapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/vectorstore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -127,7 +125,7 @@ func TestDeprovisionDropsTheVectorStoreDatabaseAndRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deprovision: %v (steps=%+v)", err, result.RollbackSteps)
 	}
-	assertStepCompensated(t, result.RollbackSteps, projectprovisioning.StepProjectPgvector)
+	assertStepCompensated(t, result.RollbackSteps, projectprovisioning.StepProjectPgvectorDrop)
 
 	if database, role := vectorStoreResidue(ctx, t, pool, projectID); database || role {
 		t.Fatalf("after delete: database exists=%v role exists=%v, want both dropped", database, role)
@@ -188,7 +186,7 @@ func TestDeprovisionToleratesAVectorStoreThatIsAlreadyGone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deprovision with a vector store already gone: %v (steps=%+v)", err, result.RollbackSteps)
 	}
-	assertStepCompensated(t, result.RollbackSteps, projectprovisioning.StepProjectPgvector)
+	assertStepCompensated(t, result.RollbackSteps, projectprovisioning.StepProjectPgvectorDrop)
 }
 
 func seedActiveJob(ctx context.Context, t *testing.T, pool *pgxpool.Pool, projectID int64, executionID, capability string) {
@@ -247,8 +245,8 @@ func TestDeprovisionRefusesWhileProjectWorkIsActive(t *testing.T) {
 		t.Fatalf("deprovision err = %v, want ErrProjectWorkActive", err)
 	}
 	// Nothing changed (the 409 is TRUE): the row, the vector store, and every
-	// resource the walk would have removed are still there, and the project is
-	// not tombstoned.
+	// resource the delete would have removed are still there, and no cleanup
+	// was recorded.
 	var projectRows int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM centry.project WHERE id = $1`, projectID).Scan(&projectRows); err != nil {
 		t.Fatal(err)
@@ -257,8 +255,8 @@ func TestDeprovisionRefusesWhileProjectWorkIsActive(t *testing.T) {
 		t.Fatalf("a refused delete changed state: project rows=%d database=%v role=%v", projectRows, database, role)
 	}
 	assertProjectIntact(ctx, t, pool, projectID, resourcesBefore)
-	if deleting := projectTombstoned(ctx, t, pool, projectID); deleting {
-		t.Fatal("a refused delete left the project tombstoned")
+	if rows := journalRows(ctx, t, pool, projectID); rows != 0 {
+		t.Fatalf("a refused delete wrote %d cleanup journal row(s)", rows)
 	}
 
 	// One terminal job is not enough: the other is still running.
@@ -321,221 +319,8 @@ func assertProjectIntact(ctx context.Context, t *testing.T, pool *pgxpool.Pool, 
 		t.Fatalf("premise: the snapshot has an empty resource, so it proves nothing: %+v", before)
 	}
 	if after := snapshotProject(ctx, t, pool, projectID); after != before {
-		t.Fatalf("a refused delete changed the project's resources:\nbefore %+v\nafter  %+v", before, after)
+		t.Fatalf("the project's resources changed:\nbefore %+v\nafter  %+v", before, after)
 	}
-}
-
-func projectTombstoned(ctx context.Context, t *testing.T, pool *pgxpool.Pool, projectID int64) bool {
-	t.Helper()
-	var deleting bool
-	if err := pool.QueryRow(ctx,
-		`SELECT deleting_at IS NOT NULL FROM centry.project WHERE id = $1`, projectID).Scan(&deleting); err != nil {
-		t.Fatalf("read the tombstone: %v", err)
-	}
-	return deleting
-}
-
-// admitJobs tries every admission INSERT the kernel has against a project:
-// the index-ingest query, the agent-execution query, and the generic one the
-// seed helper stands for. Each returns the error the database gave.
-func admitJobs(ctx context.Context, t *testing.T, pool *pgxpool.Pool, projectID int64, tag string) map[string]error {
-	t.Helper()
-	bundle := "bundle-" + tag
-	if _, err := pool.Exec(ctx, `
-INSERT INTO elitea_runtime.input_bundles
-    (input_bundle_id, immutable_version, resource_project_id, media_type,
-     manifest_digest, manifest_size, manifest_bytes, created_by)
-VALUES ($2, 'admission:' || $2, $1, 'application/x-protobuf',
-        decode(repeat('61', 32), 'hex'), 1, decode('00', 'hex'), 'actor-1')`, projectID, bundle); err != nil {
-		t.Fatalf("seed input bundle: %v", err)
-	}
-	queries := sqlcgen.New(pool)
-	digest := make([]byte, 32)
-	admitted := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-	out := map[string]error{}
-	_, out["index.ingest"] = queries.InsertIndexIngestExecutionJob(ctx, sqlcgen.InsertIndexIngestExecutionJobParams{
-		ExecutionID: "exec-" + tag + "-index", Generation: 1, CommandID: "cmd-" + tag + "-index",
-		TenantID: "1", ResourceProjectID: int32(projectID), ProjectionProjectID: int32(projectID),
-		ActorID: "7", PrincipalRef: "7", CapabilityVersion: "v1",
-		InputBundleID: bundle, RequestDigest: digest,
-		IdempotencyScope: "scope-" + tag + "-index", IdempotencyKey: "key-" + tag + "-index",
-		State: "PENDING", AdmittedAt: admitted,
-	})
-	_, out["agent"] = queries.InsertAgentExecutionJob(ctx, sqlcgen.InsertAgentExecutionJobParams{
-		ExecutionID: "exec-" + tag + "-agent", Generation: 1, CommandID: "cmd-" + tag + "-agent",
-		TenantID: "1", ResourceProjectID: int32(projectID), ProjectionProjectID: int32(projectID),
-		ActorID: "7", PrincipalRef: "7", CapabilityID: execution.AgentApplicationCapability, CapabilityVersion: "v1",
-		InputBundleID: bundle, RequestDigest: digest,
-		IdempotencyScope: "scope-" + tag + "-agent", IdempotencyKey: "key-" + tag + "-agent",
-		State: "PENDING", AdmittedAt: admitted,
-	})
-	_, out["generic"] = pool.Exec(ctx, `
-INSERT INTO elitea_runtime.execution_jobs (
-    execution_id, generation, command_id, tenant_id, resource_project_id,
-    projection_project_id, actor_id, principal_ref, capability_id,
-    capability_version, input_bundle_id, request_digest, idempotency_scope,
-    idempotency_key, state, desired_state
-) VALUES (
-    $2, 1, 'cmd-' || $2, ($1::integer)::text, $1::integer, $1::integer, '7', '7', $3, 'v1', $4,
-    decode(repeat('61', 32), 'hex'), 'scope-' || $2, 'key-' || $2, 'PENDING', 'RUNNING')`,
-		projectID, "exec-"+tag+"-generic", execution.IndexIngestCapability, bundle)
-	return out
-}
-
-func isProjectDeletingRefusal(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "55000" && strings.Contains(pgErr.Message, "is being deleted")
-}
-
-// A failed step leaves the project tombstoned, admission is then refused on
-// every path, and a retried delete skips the fence and completes.
-func TestDeprovisionTombstonesTheProjectAndARetryCompletes(t *testing.T) {
-	skipWithoutVectorExtension(t)
-	pool := newProvisioningPool(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-
-	provisioner, projectID := provisionIndexableProject(ctx, t, pool, "Tombstoned Then Retried")
-	// Admission works before the delete starts.
-	for path, err := range admitJobs(ctx, t, pool, projectID, "before") {
-		if err != nil {
-			t.Fatalf("premise: %s admission failed before the delete: %v", path, err)
-		}
-	}
-	for _, statement := range []string{
-		`UPDATE elitea_runtime.execution_jobs SET state = 'SUCCEEDED' WHERE resource_project_id = ` + fmt.Sprint(projectID),
-		`CREATE FUNCTION refuse_project_delete() RETURNS trigger LANGUAGE plpgsql AS
-		 $$ BEGIN RAISE EXCEPTION 'project delete refused by test'; END $$`,
-		`CREATE TRIGGER refuse_project_delete BEFORE DELETE ON centry.project
-		 FOR EACH ROW EXECUTE FUNCTION refuse_project_delete()`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
-
-	// The row delete fails after the fence passed: the project is tombstoned.
-	if _, err := provisioner.Deprovision(ctx, projectID); !errors.Is(err, projectprovisioning.ErrProjectNotRemoved) ||
-		errors.Is(err, projectprovisioning.ErrProjectWorkActive) {
-		t.Fatalf("deprovision err = %v, want ErrProjectNotRemoved and not ErrProjectWorkActive", err)
-	}
-	if !projectTombstoned(ctx, t, pool, projectID) {
-		t.Fatal("a delete that failed after the fence did not leave the tombstone")
-	}
-	for path, err := range admitJobs(ctx, t, pool, projectID, "after") {
-		if !isProjectDeletingRefusal(err) {
-			t.Errorf("%s admission for a tombstoned project: %v, want the 55000 'is being deleted' refusal", path, err)
-		}
-	}
-	// The vector store was not touched: the row is still there.
-	if database, role := vectorStoreResidue(ctx, t, pool, projectID); !database || !role {
-		t.Fatalf("a failed row delete lost the vectors: database=%v role=%v", database, role)
-	}
-
-	// The retry finds the tombstone, skips the fence, and finishes the walk.
-	if _, err := pool.Exec(ctx, `DROP TRIGGER refuse_project_delete ON centry.project`); err != nil {
-		t.Fatal(err)
-	}
-	result, err := provisioner.Deprovision(ctx, projectID)
-	if err != nil {
-		t.Fatalf("retried deprovision: %v (steps=%+v)", err, result.RollbackSteps)
-	}
-	var projectRows int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM centry.project WHERE id = $1`, projectID).Scan(&projectRows); err != nil {
-		t.Fatal(err)
-	}
-	if database, role := vectorStoreResidue(ctx, t, pool, projectID); projectRows != 0 || database || role {
-		t.Fatalf("after the retry: project rows=%d database=%v role=%v, want all gone", projectRows, database, role)
-	}
-}
-
-// The FOR UPDATE fence against a concurrent admission, in both orders.
-func TestAdmissionRacingTheFenceIsRefusedOrCounted(t *testing.T) {
-	skipWithoutVectorExtension(t)
-	pool := newProvisioningPool(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-
-	t.Run("admission waits for the fence and is refused", func(t *testing.T) {
-		_, projectID := provisionIndexableProject(ctx, t, pool, "Admission Loses")
-		fence, err := pool.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = fence.Rollback(context.WithoutCancel(ctx)) }()
-		if _, err := fence.Exec(ctx, `SELECT 1 FROM centry.project WHERE id = $1 FOR UPDATE`, projectID); err != nil {
-			t.Fatal(err)
-		}
-
-		done := make(chan map[string]error, 1)
-		go func() { done <- admitJobs(ctx, t, pool, projectID, "racing") }()
-		select {
-		case <-done:
-			t.Fatal("admission did not wait for the fence's row lock")
-		case <-time.After(500 * time.Millisecond):
-		}
-		if _, err := fence.Exec(ctx, `UPDATE centry.project SET deleting_at = now() WHERE id = $1`, projectID); err != nil {
-			t.Fatal(err)
-		}
-		if err := fence.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-		for path, err := range <-done {
-			if !isProjectDeletingRefusal(err) {
-				t.Errorf("%s admission that raced the fence: %v, want the 'is being deleted' refusal", path, err)
-			}
-		}
-	})
-
-	t.Run("the fence waits for an admission and counts it", func(t *testing.T) {
-		provisioner, projectID := provisionIndexableProject(ctx, t, pool, "Fence Loses")
-		admission, err := pool.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = admission.Rollback(context.WithoutCancel(ctx)) }()
-		bundle := "bundle-fence-loses"
-		if _, err := admission.Exec(ctx, `
-INSERT INTO elitea_runtime.input_bundles
-    (input_bundle_id, immutable_version, resource_project_id, media_type,
-     manifest_digest, manifest_size, manifest_bytes, created_by)
-VALUES ($2, 'admission:' || $2, $1, 'application/x-protobuf',
-        decode(repeat('61', 32), 'hex'), 1, decode('00', 'hex'), 'actor-1')`, projectID, bundle); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := admission.Exec(ctx, `
-INSERT INTO elitea_runtime.execution_jobs (
-    execution_id, generation, command_id, tenant_id, resource_project_id,
-    projection_project_id, actor_id, principal_ref, capability_id,
-    capability_version, input_bundle_id, request_digest, idempotency_scope,
-    idempotency_key, state, desired_state
-) VALUES (
-    'exec-fence-loses', 1, 'cmd-fence-loses', ($1::integer)::text, $1::integer, $1::integer, '7', '7', $2, 'v1', $3,
-    decode(repeat('61', 32), 'hex'), 'scope-fence-loses', 'key-fence-loses', 'PENDING', 'RUNNING')`,
-			projectID, execution.IndexIngestCapability, bundle); err != nil {
-			t.Fatal(err)
-		}
-
-		done := make(chan error, 1)
-		go func() {
-			_, err := provisioner.Deprovision(ctx, projectID)
-			done <- err
-		}()
-		select {
-		case err := <-done:
-			t.Fatalf("the fence did not wait for the uncommitted admission: %v", err)
-		case <-time.After(500 * time.Millisecond):
-		}
-		if err := admission.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-		if err := <-done; !errors.Is(err, projectprovisioning.ErrProjectWorkActive) {
-			t.Fatalf("deprovision err = %v, want ErrProjectWorkActive", err)
-		}
-		if projectTombstoned(ctx, t, pool, projectID) {
-			t.Fatal("the refused fence left the project tombstoned")
-		}
-	})
 }
 
 // cancelDuringDropStore cancels the REQUEST context from inside the drop and

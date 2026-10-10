@@ -94,6 +94,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Step names, as they appear in a Result's status records.
@@ -107,7 +108,8 @@ const (
 	StepArtifactBuckets    = "artifact_buckets"
 	StepProjectPgvector    = "project_pgvector"
 	// StepProjectPgvectorDrop is reported by Deprovision only: the irreversible
-	// drop of the PgVector database, run after the project row is gone. It is
+	// drop of the PgVector database, a cleanup-journal step run after the
+	// transaction that removed the project row committed. It is
 	// not in createSteps and has no create or rollback.
 	StepProjectPgvectorDrop = "project_pgvector_drop"
 	StepProjectAdmin        = "project_admin"
@@ -158,8 +160,7 @@ func createSteps() []step {
 		{name: StepSystemToken, create: createSystemToken, remove: removeSystemToken},
 		// project_secrets sits where pylon puts it: after system_token and
 		// before the bucket step. The position is load-bearing in the OTHER
-		// direction — compensation and Deprovision both walk this list in
-		// reverse — but nothing in the vault depends on a later step, and no
+		// direction — compensation walks this list in reverse — but nothing in the vault depends on a later step, and no
 		// later step reads the vault, so the placement is parity rather than a
 		// constraint.
 		{name: StepProjectSecrets, create: createProjectSecrets, remove: removeProjectSecrets},
@@ -257,7 +258,21 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 	}
 	defer func() { _ = transaction.Rollback(context.WithoutCancel(ctx)) }()
 
-	for _, cleanup := range referencingDeletes() {
+	if err := deleteProjectRows(ctx, transaction, state.projectID); err != nil {
+		return err
+	}
+	return transaction.Commit(ctx)
+}
+
+// deleteProjectRows deletes the project row, its two companion rows and every
+// shared row that points at it, inside the caller's transaction. The
+// create-failure rollback (removeProjectModel) and the delete's decision
+// transaction (decideDeletion) both use it, so the two cannot drift apart.
+func deleteProjectRows(ctx context.Context, transaction pgx.Tx, projectID int64) error {
+	// The referencing rows (#374) first, then the project-owned rows that no
+	// foreign key ties to the project (C1). See referencingDeletes and
+	// projectOwnedDeletes for what each list holds and what stays.
+	for _, cleanup := range append(referencingDeletes(), projectOwnedDeletes()...) {
 		// A deployment that has not applied the shared history yet does not
 		// have these tables. deleteTenantLedger guards the same way, and an
 		// undefined table would abort the whole transaction.
@@ -270,25 +285,7 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 		if !present {
 			continue
 		}
-		if _, err := transaction.Exec(ctx, cleanup.statement, state.projectID); err != nil {
-			return fmt.Errorf("delete rows in %s: %w", cleanup.table, err)
-		}
-	}
-
-	// The project-owned rows that no foreign key ties to the project (C1).
-	// Nothing blocked the delete on them, so the project row went and they
-	// stayed behind as orphans. See projectOwnedDeletes for what stays.
-	for _, cleanup := range projectOwnedDeletes() {
-		var present bool
-		if err := transaction.QueryRow(ctx,
-			`SELECT to_regclass($1) IS NOT NULL`, cleanup.table,
-		).Scan(&present); err != nil {
-			return fmt.Errorf("resolve %s: %w", cleanup.table, err)
-		}
-		if !present {
-			continue
-		}
-		if _, err := transaction.Exec(ctx, cleanup.statement, state.projectID); err != nil {
+		if _, err := transaction.Exec(ctx, cleanup.statement, projectID); err != nil {
 			return fmt.Errorf("delete rows in %s: %w", cleanup.table, err)
 		}
 	}
@@ -298,11 +295,11 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 		`DELETE FROM centry.project_quota WHERE project_id = $1`,
 		`DELETE FROM centry.project WHERE id = $1`,
 	} {
-		if _, err := transaction.Exec(ctx, statement, state.projectID); err != nil {
+		if _, err := transaction.Exec(ctx, statement, projectID); err != nil {
 			return fmt.Errorf("delete project rows: %w", err)
 		}
 	}
-	return transaction.Commit(ctx)
+	return nil
 }
 
 // referencingDelete is one table to clear before the project row goes.
@@ -494,13 +491,13 @@ DELETE FROM elitea_runtime.index_generation_counters WHERE resource_project_id =
 //
 // The artifact bucket rows go here only when they are soft-deleted; the
 // delete cascades to their object rows and transfer grants. The physical
-// objects are purged before this, by the artifact_buckets step
-// (TeardownProjectBuckets), which runs earlier in the reverse walk and
-// soft-deletes a bucket only after its purge succeeded. A LIVE row is a bucket
-// whose purge failed or never ran (no object store is configured). That row is
-// the only handle on the bytes under p/<id>/<bucket>/, so it stays: Deprovision
-// then reports ErrArtifactsNotRemoved, and another delete of the same id
-// retries the purge.
+// objects are purged by TeardownProjectBuckets, which soft-deletes a bucket
+// only after its purge succeeded. A LIVE row is a bucket whose purge failed,
+// never ran (no object store is configured), or has not run yet: a project
+// delete removes the project row FIRST and purges afterwards, from its cleanup
+// journal (#1211). That row is the only handle on the bytes under
+// p/<id>/<bucket>/, so it stays; the journal's artifact_buckets step purges it
+// and then removes the soft-deleted rows itself (cleanupArtifactBuckets).
 //
 // Request logs, usage events, audit events and the budget accumulators
 // (gateway.llm_budget_accumulators) are deliberately NOT here. They are the
@@ -1024,10 +1021,11 @@ func createProjectVectorStore(ctx context.Context, p *Provisioner, state *provis
 // vectors.
 //
 // An explicit project delete drops the database too, but not from this step
-// (#1211): the irreversible drop is not part of the reverse step walk at all.
-// Deprovision runs it after the project row is proved gone, so a failed row
-// delete can never leave a surviving project without its vectors. Nothing in
-// Provision's rollback can reach it.
+// (#1211): Deprovision runs the drop from its cleanup journal, after the
+// transaction that removed the project row committed, so a failed row delete
+// can never leave a surviving project without its vectors. Nothing in
+// Provision's rollback can reach it. The delete does not call this step either:
+// the configuration row lives in the tenant schema, which the delete drops.
 //
 // The compensation still leaves nothing behind on THIS side, which is what the
 // create path needs: no row an index run could resolve, and no vault entry
