@@ -1,9 +1,12 @@
 package vectorintrospection
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"testing"
@@ -44,6 +47,33 @@ func (f fakeFacts) Facts(_ context.Context, tokenID int64) (repos.CallbackTokenF
 	return facts, nil
 }
 
+type fakeClaimTokens map[[32]byte]repos.VectorClaimTokenFacts
+
+func (f fakeClaimTokens) Facts(_ context.Context, hash [32]byte) (repos.VectorClaimTokenFacts, error) {
+	if hash == sha256.Sum256([]byte(claimToken(0x99))) {
+		return repos.VectorClaimTokenFacts{}, errors.New("db down")
+	}
+	facts, ok := f[hash]
+	if !ok {
+		return repos.VectorClaimTokenFacts{}, repos.ErrVectorClaimTokenFactsNotFound
+	}
+	return facts, nil
+}
+
+// claimToken is a well-formed claim token whose 32 random bytes all equal b.
+func claimToken(b byte) string {
+	return ClaimTokenPrefix + base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{b}, 32))
+}
+
+func mustHash(t *testing.T, token string) [32]byte {
+	t.Helper()
+	hash, ok := HashClaimToken(token)
+	if !ok {
+		t.Fatalf("%q is not a claim token", token)
+	}
+	return hash
+}
+
 func ptr[T any](value T) *T { return &value }
 
 func user(tokenID string, project int64, active bool) auth.User {
@@ -73,12 +103,24 @@ func newTestServer(t *testing.T) *Server {
 			"other-owner":    user("6", 7, true),
 			"facts-down":     user("99", 7, true),
 			"elnat_whatever": user("1", 7, true),
+			"inventory":      user("7", 7, true),
+			"unknown-source": user("8", 7, true),
+			// A string with the claim prefix never reaches the PAT validator,
+			// even when the validator would admit it.
+			claimToken(0x0f): user("1", 7, true),
 		},
 		fakeFacts{
 			1: {UserID: 5, ProjectID: 7, ExpiresAt: expires, Provider: "deepwiki"},
 			3: {UserID: 5, ProjectID: 7, ExpiresAt: expires, Provider: "deepwiki"},
 			5: {UserID: 5, ProjectID: 8, ExpiresAt: expires, Provider: "deepwiki"},
 			6: {UserID: 6, ProjectID: 7, ExpiresAt: expires, Provider: "deepwiki"},
+			7: {UserID: 5, ProjectID: 7, ExpiresAt: expires, Provider: "inventory"},
+			8: {UserID: 5, ProjectID: 7, ExpiresAt: expires, Provider: "elsewhere"},
+		},
+		fakeClaimTokens{
+			mustHash(t, claimToken(0x01)): {ProjectID: 7, ActorID: 42, Sources: []string{"toolkit_index"}, ExpiresAt: expires},
+			mustHash(t, claimToken(0x02)): {ProjectID: 7, ActorID: 42, Sources: []string{"not-a-source"}, ExpiresAt: expires},
+			mustHash(t, claimToken(0x03)): {ProjectID: 7, ActorID: 42, ExpiresAt: expires},
 		},
 		[]string{"dns:elitea-vector"},
 		nil,
@@ -96,7 +138,8 @@ func TestIntrospectAdmitsALiveCallbackToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !response.GetActive() || response.GetProjectId() != 7 || response.GetPrincipal() != "user:5" ||
-		response.GetKind() != vectorv1.TokenKind_TOKEN_KIND_ENGINE_CALLBACK || response.GetExpiresAtUnix() <= time.Now().Unix() {
+		response.GetKind() != vectorv1.TokenKind_TOKEN_KIND_ENGINE_CALLBACK || response.GetExpiresAtUnix() <= time.Now().Unix() ||
+		len(response.GetAllowedSources()) != 1 || response.GetAllowedSources()[0] != vectorv1.Source_SOURCE_DEEPWIKI {
 		t.Fatalf("unexpected response %v", response)
 	}
 }
@@ -143,11 +186,77 @@ func TestNewServerRefusesAnIncompleteConfiguration(t *testing.T) {
 		"none":      nil,
 		"bare name": {"elitea-vector"},
 	} {
-		if _, err := NewServer(fakeValidator{}, fakeFacts{}, clients, nil); err == nil {
+		if _, err := NewServer(fakeValidator{}, fakeFacts{}, fakeClaimTokens{}, clients, nil); err == nil {
 			t.Fatalf("%s: accepted", name)
 		}
 	}
-	if _, err := NewServer(nil, fakeFacts{}, []string{"dns:a"}, nil); err == nil {
+	if _, err := NewServer(nil, fakeFacts{}, fakeClaimTokens{}, []string{"dns:a"}, nil); err == nil {
 		t.Fatal("nil validator accepted")
+	}
+	if _, err := NewServer(fakeValidator{}, fakeFacts{}, nil, []string{"dns:a"}, nil); err == nil {
+		t.Fatal("nil claim token facts accepted")
+	}
+}
+
+// A callback token may use only the source of the provider whose facade
+// recorded its grant.
+func TestIntrospectNamesTheCallbackProvidersSource(t *testing.T) {
+	server := newTestServer(t)
+	for token, want := range map[string]vectorv1.Source{
+		"callback":  vectorv1.Source_SOURCE_DEEPWIKI,
+		"inventory": vectorv1.Source_SOURCE_INVENTORY,
+	} {
+		response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !response.GetActive() || len(response.GetAllowedSources()) != 1 || response.GetAllowedSources()[0] != want {
+			t.Fatalf("%q: %v", token, response)
+		}
+	}
+	// A provider with no vector source admits nothing.
+	response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: "unknown-source"})
+	if err != nil || response.GetActive() {
+		t.Fatalf("unknown provider: %v %v", response, err)
+	}
+}
+
+func TestIntrospectAdmitsALiveWorkerClaimToken(t *testing.T) {
+	server := newTestServer(t)
+	response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: claimToken(0x01)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.GetActive() || response.GetProjectId() != 7 || response.GetPrincipal() != "user:42" ||
+		response.GetKind() != vectorv1.TokenKind_TOKEN_KIND_WORKER_CLAIM ||
+		response.GetExpiresAtUnix() <= time.Now().Unix() ||
+		len(response.GetAllowedSources()) != 1 ||
+		response.GetAllowedSources()[0] != vectorv1.Source_SOURCE_TOOLKIT_INDEX {
+		t.Fatalf("unexpected response %v", response)
+	}
+}
+
+func TestIntrospectRefusesEveryOtherClaimToken(t *testing.T) {
+	server := newTestServer(t)
+	for name, token := range map[string]string{
+		"unknown (settled, cancelled, lost)": claimToken(0x04),
+		"unknown source keyword":             claimToken(0x02),
+		"no sources":                         claimToken(0x03),
+		"validator would admit it":           claimToken(0x0f),
+		"short":                              claimToken(0x01)[:ClaimTokenLength-1],
+		"long":                               claimToken(0x01) + "A",
+		"bad alphabet":                       claimToken(0x01)[:ClaimTokenLength-1] + "+",
+		"prefix only":                        ClaimTokenPrefix,
+	} {
+		response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: token})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if response.GetActive() || response.GetProjectId() != 0 || len(response.GetAllowedSources()) != 0 {
+			t.Fatalf("%s admitted: %v", name, response)
+		}
+	}
+	if _, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: claimToken(0x99)}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("store down: got %v, want Unavailable", err)
 	}
 }

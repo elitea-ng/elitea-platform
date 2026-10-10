@@ -6,6 +6,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestVectorIntrospectionClientsParse(t *testing.T) {
@@ -61,11 +62,36 @@ func TestNewVectorIntrospectionComposesOnlyWhenConfigured(t *testing.T) {
 	if _, err := newVectorIntrospection(configured, Dependencies{}); err == nil {
 		t.Fatal("configured without dependencies was accepted")
 	}
+	if _, err := newVectorIntrospection(configured, Dependencies{
+		ProjectTokenValidator: stubValidator{},
+		CallbackTokenFacts:    repos.NewCallbackTokenGrants(nil),
+	}); err == nil {
+		t.Fatal("configured without a control pool was accepted")
+	}
 	server, err = newVectorIntrospection(configured, Dependencies{
 		ProjectTokenValidator: stubValidator{},
 		CallbackTokenFacts:    repos.NewCallbackTokenGrants(nil),
+		// Never queried here; the claim token store only holds it.
+		ControlPool: &pgxpool.Pool{},
 	})
 	if err != nil || server == nil {
 		t.Fatalf("configured: %v %v", server, err)
+	}
+}
+
+// The per-claim token is minted only where it can be verified: with vector
+// token introspection served, and never as a typed nil otherwise.
+func TestVectorClaimTokenIssuerComposesOnlyWithIntrospection(t *testing.T) {
+	issuer, err := newVectorClaimTokenIssuer(Config{}, Dependencies{ControlPool: &pgxpool.Pool{}})
+	if err != nil || issuer != nil {
+		t.Fatalf("unconfigured: %v %v", issuer, err)
+	}
+	configured := Config{VectorIntrospectionClients: []string{"dns:elitea-vector"}}
+	if _, err := newVectorClaimTokenIssuer(configured, Dependencies{}); err == nil {
+		t.Fatal("configured without a control pool was accepted")
+	}
+	issuer, err = newVectorClaimTokenIssuer(configured, Dependencies{ControlPool: &pgxpool.Pool{}})
+	if err != nil || issuer == nil {
+		t.Fatalf("configured: %v %v", issuer, err)
 	}
 }

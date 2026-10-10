@@ -47,7 +47,18 @@ type ClaimInputResolver interface {
 	ResolveClaimInput(ctx context.Context, fence runtimedomain.Fence, reference *runtimev1.ExecutionInputBundleReferenceV1) (*runtimev1.ExecutionInputBundleV1, error)
 }
 
+// VectorTokenIssuer mints the per-claim elitea-vector token (ADR-0031
+// decision 1; vectorintrospection.ClaimTokenIssuer). It returns nil and no
+// error for an execution that gets no token, and runtimedomain.ErrStaleFence
+// when the claim is no longer live.
+type VectorTokenIssuer interface {
+	IssueVectorClaimToken(ctx context.Context, fence runtimedomain.Fence) (*runtimev1.VectorClaimTokenV1, error)
+}
+
 type ServerConfig struct {
+	// VectorTokens, when set, mints a vector token into every receipt that
+	// grants executable authority. Nil leaves receipts without one.
+	VectorTokens           VectorTokenIssuer
 	SandboxGrants          *SandboxGrantIssuer
 	OriginalCodeWorkspaces storage.OriginalCodeWorkspaceCompileAuthorizer
 	SandboxBundles         bool
@@ -178,9 +189,41 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The immutable input manifest does not match the admitted command.", false), nil
 	}
 
+	if s.config.VectorTokens != nil {
+		// Minted last, after every check that can abort the claim, so a
+		// refused claim leaves no token row behind it. The token dies with
+		// the claim (vectorintrospection), so a lost response needs no
+		// revocation either.
+		token, err := s.config.VectorTokens.IssueVectorClaimToken(ctx, lease.Fence)
+		if err != nil {
+			return s.abortVectorTokenMint(ctx, lease.Fence, err), nil
+		}
+		receipt.VectorToken = token
+	}
+
 	receipt.InputBundleRef = proto.Clone(command.GetInputBundleRef()).(*runtimev1.ExecutionInputBundleReferenceV1)
 	receipt.InputBundle = proto.Clone(manifest).(*runtimev1.ExecutionInputBundleV1)
 	return &runtimev1.ClaimCommandResponseV1{Receipt: receipt}, nil
+}
+
+// abortVectorTokenMint releases a claim whose vector token could not be
+// minted, with the same bounded retry as an unavailable input manifest: the
+// execution is retried, and quarantined after maxInputResolutionClaimAttempts.
+// A claim that is no longer live is only reported stale.
+func (s *Server) abortVectorTokenMint(ctx context.Context, fence runtimedomain.Fence, cause error) *runtimev1.ClaimCommandResponseV1 {
+	if errors.Is(cause, runtimedomain.ErrStaleFence) || errors.Is(cause, runtimedomain.ErrLeaseExpired) {
+		return claimRejectionFor(cause)
+	}
+	disposition := executionapp.ClaimAbortInputResolutionRetry
+	retryable := true
+	if fence.ClaimAttempt >= maxInputResolutionClaimAttempts {
+		disposition = executionapp.ClaimAbortInputResolutionExhausted
+		retryable = false
+	}
+	if err := s.abortClaim(ctx, fence, disposition); err != nil {
+		return claimRejectionFor(err)
+	}
+	return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The vector token is temporarily unavailable.", retryable)
 }
 
 func (s *Server) abortInputResolution(ctx context.Context, fence runtimedomain.Fence, cause error) *runtimev1.ClaimCommandResponseV1 {

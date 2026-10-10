@@ -1112,7 +1112,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if compiledSnapshots != nil {
 		compiledAuthority = compiledSnapshots
 	}
+	vectorTokens, err := newVectorClaimTokenIssuer(config, dependencies)
+	if err != nil {
+		return nil, err
+	}
 	controlServer, err := control.NewServer(control.ServerConfig{
+		VectorTokens:           vectorTokens,
 		SandboxGrants:          sandboxGrants,
 		CompiledSnapshots:      compiledAuthority,
 		CompiledProfiles:       compiledProfiles,

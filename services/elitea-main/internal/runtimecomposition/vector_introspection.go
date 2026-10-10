@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
 )
 
@@ -24,13 +26,14 @@ func newVectorIntrospection(config Config, dependencies Dependencies) (vectorv1.
 	if len(config.VectorIntrospectionClients) == 0 {
 		return nil, nil
 	}
-	if dependencies.ProjectTokenValidator == nil || dependencies.CallbackTokenFacts == nil {
+	if dependencies.ProjectTokenValidator == nil || dependencies.CallbackTokenFacts == nil || dependencies.ControlPool == nil {
 		return nil, errors.New(VectorIntrospectionClientsEnv +
-			" is set, but the token validator or the callback token facts are not composed")
+			" is set, but the token validator, the callback token facts or the control pool are not composed")
 	}
 	server, err := vectorintrospection.NewServer(
 		dependencies.ProjectTokenValidator,
 		dependencies.CallbackTokenFacts,
+		repos.NewVectorClaimTokens(dependencies.ControlPool),
 		config.VectorIntrospectionClients,
 		dependencies.Logger,
 	)
@@ -38,6 +41,23 @@ func newVectorIntrospection(config Config, dependencies Dependencies) (vectorv1.
 		return nil, fmt.Errorf("construct vector token introspection: %w", err)
 	}
 	return server, nil
+}
+
+// newVectorClaimTokenIssuer builds the per-claim token issuer when vector
+// token introspection is served: a token nothing can verify is not minted.
+// It returns a nil INTERFACE, never a typed nil, otherwise.
+func newVectorClaimTokenIssuer(config Config, dependencies Dependencies) (control.VectorTokenIssuer, error) {
+	if len(config.VectorIntrospectionClients) == 0 {
+		return nil, nil
+	}
+	if dependencies.ControlPool == nil {
+		return nil, errors.New(VectorIntrospectionClientsEnv + " is set, but the control pool is not composed")
+	}
+	issuer, err := vectorintrospection.NewClaimTokenIssuer(repos.NewVectorClaimTokens(dependencies.ControlPool))
+	if err != nil {
+		return nil, fmt.Errorf("construct vector claim token issuer: %w", err)
+	}
+	return issuer, nil
 }
 
 func vectorIntrospectionClients(lookup LookupEnv) ([]string, error) {
