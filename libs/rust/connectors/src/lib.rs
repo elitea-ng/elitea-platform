@@ -15,7 +15,7 @@
 //!   transport that applies it to every request.
 //! * per provider (feature `providers`): its configuration (secrets
 //!   zeroized), its errors (data-free), its wire layer and its request
-//!   building and authentication — [`ado`], [`gitlab`].
+//!   building and authentication — [`ado`], [`bitbucket`], [`gitlab`].
 
 // The provider modules were crate-private in agent-runtime and are public
 // here only so the families can call them: their accessors are plain getters
@@ -24,6 +24,9 @@
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
 pub mod ado;
 pub mod base_url;
+#[cfg(feature = "providers")]
+#[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+pub mod bitbucket;
 pub mod egress;
 #[cfg(feature = "providers")]
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]

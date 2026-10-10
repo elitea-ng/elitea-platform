@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use adk_core::{ReadonlyContext, ToolContext, Toolset};
 use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
+use elitea_connectors::transport::{Body, Method, Request, StatusCode};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
 use super::families::bitbucket::client::{
@@ -20,6 +20,7 @@ use super::families::bitbucket::config::{
 use super::families::bitbucket::tools::{
     BitbucketToolsetErrorCode, test_build_with_api, test_catalog,
 };
+use super::families::connector_client::IntoAdk;
 use super::policy::ToolAdmissionPolicy;
 
 const SERVER_REPO: &str = "https://bitbucket.example.test/ctx/rest/api/1.0/projects/PROJ/repos/app";
@@ -279,7 +280,7 @@ impl BitbucketTransport for FixtureTransport {
             url: request.url().to_string(),
             body: request
                 .body()
-                .and_then(reqwest::Body::as_bytes)
+                .and_then(Body::as_bytes)
                 .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
                 .unwrap_or_default(),
             content_type: request
