@@ -10,7 +10,7 @@
 //! 4. send Qdrant a filter whose first `must` condition is that project
 //!    ([`Scope`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use qdrant_client::Payload;
@@ -51,18 +51,85 @@ const RRF_K: u32 = 60;
 const DEFAULT_DENSE_WEIGHT: f32 = 0.7;
 const DEFAULT_TEXT_WEIGHT: f32 = 0.3;
 
+/// The default of [`SpaceLimits::max_dimension`]: halfvec-scale models (up
+/// to 3072) with headroom.
+pub const DEFAULT_MAX_DIMENSION: u32 = 4096;
+
+/// What embedding spaces a caller may bring into existence. A space is a
+/// Qdrant collection, a costly resource, and its name comes from the caller.
+#[derive(Clone, Debug)]
+pub struct SpaceLimits {
+    /// The largest dimension of a space (the smallest is 1).
+    pub max_dimension: u32,
+    /// When set, the only spaces that may be created; a space whose
+    /// collection already exists stays usable. `None` allows any space that
+    /// passes the other checks.
+    pub allowed: Option<HashSet<Space>>,
+}
+
+impl Default for SpaceLimits {
+    fn default() -> Self {
+        Self {
+            max_dimension: DEFAULT_MAX_DIMENSION,
+            allowed: None,
+        }
+    }
+}
+
+impl SpaceLimits {
+    /// Refuses a dimension outside `1..=max_dimension`.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` for a dimension out of range.
+    pub fn check_dimension(&self, space: &Space) -> Result<(), Status> {
+        if space.dimension() == 0 || space.dimension() > self.max_dimension {
+            return Err(Status::invalid_argument(format!(
+                "space.dimension must be 1 to {}",
+                self.max_dimension
+            )));
+        }
+        Ok(())
+    }
+
+    /// Refuses creating a space outside the allowlist.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a space the allowlist does not name.
+    pub fn check_creatable(&self, space: &Space) -> Result<(), Status> {
+        match &self.allowed {
+            Some(allowed) if !allowed.contains(space) => Err(Status::permission_denied(
+                "this embedding space is not enabled on this deployment",
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// The service.
 #[derive(Clone)]
 pub struct VectorService {
     auth: Authenticator,
     store: Arc<Store>,
+    limits: Arc<SpaceLimits>,
 }
 
 impl VectorService {
-    /// A service over `store`, admitting callers through `auth`.
+    /// A service over `store`, admitting callers through `auth`, with the
+    /// default [`SpaceLimits`].
     #[must_use]
     pub fn new(auth: Authenticator, store: Arc<Store>) -> Self {
-        Self { auth, store }
+        Self {
+            auth,
+            store,
+            limits: Arc::new(SpaceLimits::default()),
+        }
+    }
+
+    /// Replaces the space limits.
+    #[must_use]
+    pub fn with_limits(mut self, limits: SpaceLimits) -> Self {
+        self.limits = Arc::new(limits);
+        self
     }
 }
 
@@ -74,6 +141,11 @@ impl pb::vector_service_server::VectorService for VectorService {
     ) -> Result<Response<pb::UpsertResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
         caller.require_token()?;
+        // Kept to re-verify the token before every batch: a stream can run
+        // for minutes, and the claim that minted the token can settle or be
+        // lost meanwhile.
+        let token = Authenticator::bearer_token(&request)
+            .ok_or_else(|| Status::unauthenticated("a project token is required"))?;
         let mut stream = request.into_inner();
         let header = match stream.next().await {
             Some(Ok(pb::UpsertRequest {
@@ -101,6 +173,12 @@ impl pb::vector_service_server::VectorService for VectorService {
             generation: layout::generation(&namespace.generation)?.map(str::to_owned),
             dimension: space.dimension(),
         };
+        // Everything the caller chose is checked before Qdrant is asked to
+        // make anything.
+        self.limits.check_dimension(&space)?;
+        if self.store.existing(&space).await?.is_none() {
+            self.limits.check_creatable(&space)?;
+        }
         let collection = self.store.ensure(&space).await?;
         let mut upserted: u64 = 0;
         while let Some(message) = stream.next().await {
@@ -109,6 +187,15 @@ impl pb::vector_service_server::VectorService for VectorService {
                     "only the first Upsert message is a header",
                 ));
             };
+            // The introspection cache keeps this cheap; a token that went
+            // inactive, moved project or lost the source ends the stream.
+            let current = self.auth.verify_token(&token).await?;
+            if current.project(0)? != project_id {
+                return Err(Status::permission_denied(
+                    "the token's project changed during the stream",
+                ));
+            }
+            current.require_source(namespace.source)?;
             if batch.points.len() > MAX_BATCH_POINTS {
                 return Err(Status::invalid_argument("at most 512 points per batch"));
             }
@@ -223,6 +310,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         )?;
         check_query_vector(&request.vector, &space)?;
         let limit = check_limit(request.limit)?;
+        check_score_threshold(request.score_threshold)?;
         let Some(collection) = self.store.existing(&space).await? else {
             return Ok(Response::new(pb::SearchResponse::default()));
         };
@@ -264,6 +352,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         if request.text.trim().is_empty() || request.text.len() > MAX_QUERY_TEXT_BYTES {
             return Err(Status::invalid_argument("text is 1 byte to 8 KiB"));
         }
+        check_score_threshold(request.score_threshold)?;
         let (dense_weight, text_weight) = weights(request.dense_weight, request.text_weight)?;
         let prefetch_limit = match request.prefetch_limit {
             0 => limit.saturating_mul(4).min(MAX_LIMIT),
@@ -514,6 +603,18 @@ fn metadata(raw: &str) -> Result<serde_json::Value, Status> {
     }
 }
 
+/// Refuses a `score_threshold` that is NaN or infinite: Qdrant would compare
+/// every score against it, or reject the request in a way the caller cannot
+/// tell from an outage.
+fn check_score_threshold(threshold: Option<f32>) -> Result<(), Status> {
+    match threshold {
+        Some(value) if !value.is_finite() => Err(Status::invalid_argument(
+            "score_threshold must be a finite number",
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn read_parts(
     caller: &Caller,
     read: Option<&pb::Scope>,
@@ -697,5 +798,80 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_non_finite_score_threshold_is_refused() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(
+                check_score_threshold(Some(bad))
+                    .expect_err("refused")
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+        assert!(check_score_threshold(None).is_ok());
+        assert!(check_score_threshold(Some(0.5)).is_ok());
+        assert!(check_score_threshold(Some(-3.0)).is_ok());
+    }
+
+    #[test]
+    fn space_limits_bound_the_dimension_and_the_creatable_spaces() {
+        let limits = SpaceLimits::default();
+        assert!(
+            limits
+                .check_dimension(&Space::new("m", 1).expect("space"))
+                .is_ok()
+        );
+        assert!(
+            limits
+                .check_dimension(&Space::new("m", 3072).expect("space"))
+                .is_ok()
+        );
+        assert!(
+            limits
+                .check_dimension(&Space::new("m", 4096).expect("space"))
+                .is_ok()
+        );
+        // Valid for the layout, refused for creation.
+        assert_eq!(
+            limits
+                .check_dimension(&Space::new("m", 4097).expect("space"))
+                .expect_err("too large")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        let tight = SpaceLimits {
+            max_dimension: 8,
+            ..SpaceLimits::default()
+        };
+        assert!(
+            tight
+                .check_dimension(&Space::new("m", 9).expect("space"))
+                .is_err()
+        );
+        assert!(
+            limits
+                .check_creatable(&Space::new("any", 7).expect("space"))
+                .is_ok()
+        );
+        let listed = SpaceLimits {
+            allowed: Some(HashSet::from([Space::new("bge-m3", 1024).expect("space")])),
+            ..SpaceLimits::default()
+        };
+        assert!(
+            listed
+                .check_creatable(&Space::new("bge-m3", 1024).expect("space"))
+                .is_ok()
+        );
+        for other in [("bge-m3", 768), ("other", 1024)] {
+            assert_eq!(
+                listed
+                    .check_creatable(&Space::new(other.0, other.1).expect("space"))
+                    .expect_err("not listed")
+                    .code(),
+                tonic::Code::PermissionDenied
+            );
+        }
     }
 }

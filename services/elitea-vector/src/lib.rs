@@ -15,6 +15,7 @@ pub mod layout;
 pub mod scope;
 pub mod service;
 pub mod store;
+pub mod tls;
 
 /// The generated `elitea.vector.v1` bindings.
 #[allow(

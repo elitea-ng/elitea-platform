@@ -24,12 +24,12 @@ use elitea_vector::auth::{
 use elitea_vector::pb;
 use elitea_vector::pb::vector_service_client::VectorServiceClient;
 use elitea_vector::pb::vector_service_server::VectorServiceServer;
-use elitea_vector::service::VectorService;
+use elitea_vector::service::{SpaceLimits, VectorService};
 use elitea_vector::store::{CollectionSettings, Store};
+use elitea_vector::tls::{self, ReloadingCertificate};
 use qdrant_client::Qdrant;
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
-use tokio_stream::wrappers::TcpListenerStream;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity, Server, ServerTlsConfig};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity, Server};
 use tonic::{Code, Request};
 
 const PROJECT_A: i64 = 101;
@@ -176,28 +176,53 @@ fn unique_slug(prefix: &str) -> String {
 }
 
 async fn serve(url: &str, introspector: Arc<dyn Introspector>, pki: &Pki) -> SocketAddr {
+    serve_with(
+        url,
+        introspector,
+        pki,
+        CollectionSettings {
+            // The suite's collections pile up in a Qdrant that outlives a run.
+            max_collections: 100_000,
+            ..CollectionSettings::default()
+        },
+        SpaceLimits::default(),
+    )
+    .await
+}
+
+/// Serves through the production listener: [`tls::tls_incoming`] over a
+/// [`ReloadingCertificate`].
+async fn serve_with(
+    url: &str,
+    introspector: Arc<dyn Introspector>,
+    pki: &Pki,
+    settings: CollectionSettings,
+    limits: SpaceLimits,
+) -> SocketAddr {
     let store = Arc::new(Store::new(
         Qdrant::from_url(url)
             .skip_compatibility_check()
             .build()
             .expect("qdrant client"),
-        CollectionSettings::default(),
+        settings,
     ));
     let auth = Authenticator::new(introspector, HashSet::from(["dns:elitea-main".to_owned()]));
-    let service = VectorService::new(auth, store);
+    let service = VectorService::new(auth, store).with_limits(limits);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let address = listener.local_addr().expect("address");
-    let tls = ServerTlsConfig::new()
-        .identity(Identity::from_pem(&pki.server.0, &pki.server.1))
-        .client_ca_root(Certificate::from_pem(&pki.ca_pem));
+    let dir = std::env::temp_dir().join(unique_slug("elitea-vector-suite"));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    std::fs::write(dir.join("tls.crt"), &pki.server.0).expect("cert");
+    std::fs::write(dir.join("tls.key"), &pki.server.1).expect("key");
+    let certificate = ReloadingCertificate::load(&dir.join("tls.crt"), &dir.join("tls.key"))
+        .expect("certificate");
+    let config = tls::server_config(certificate, pki.ca_pem.as_bytes()).expect("tls config");
     tokio::spawn(
         Server::builder()
-            .tls_config(tls)
-            .expect("server tls")
             .add_service(VectorServiceServer::new(service))
-            .serve_with_incoming(TcpListenerStream::new(listener)),
+            .serve_with_incoming(tls::tls_incoming(listener, config)),
     );
     address
 }
@@ -228,10 +253,30 @@ async fn harness() -> Option<Harness> {
 /// `introspector` is built after the serial lock is taken, so expiries it
 /// computes from the clock do not age while the test waits its turn.
 async fn harness_with(introspector: impl FnOnce() -> Arc<dyn Introspector>) -> Option<Harness> {
+    harness_custom(introspector, |_| {
+        (
+            CollectionSettings {
+                max_collections: 100_000,
+                ..CollectionSettings::default()
+            },
+            SpaceLimits::default(),
+        )
+    })
+    .await
+}
+
+/// As [`harness_with`], with collection settings and space limits chosen
+/// after the serial lock is taken (they may depend on Qdrant's current
+/// state, which only a lock holder can trust).
+async fn harness_custom(
+    introspector: impl FnOnce() -> Arc<dyn Introspector>,
+    configure: impl FnOnce(&str) -> (CollectionSettings, SpaceLimits),
+) -> Option<Harness> {
     let url = qdrant_url()?;
     let serial = SERIAL.lock().await;
     let pki = pki();
-    let address = serve(&url, introspector(), &pki).await;
+    let (settings, limits) = configure(&url);
+    let address = serve_with(&url, introspector(), &pki, settings, limits).await;
     Some(Harness {
         _serial: serial,
         slug: unique_slug("iso"),
@@ -290,11 +335,24 @@ impl Harness {
         namespace: pb::Namespace,
         points: Vec<pb::Point>,
     ) -> Result<pb::UpsertResponse, tonic::Status> {
+        let space = self.space();
+        self.upsert_in(token, project_id, space, namespace, points)
+            .await
+    }
+
+    async fn upsert_in(
+        &mut self,
+        token: &str,
+        project_id: i64,
+        space: pb::EmbeddingSpace,
+        namespace: pb::Namespace,
+        points: Vec<pb::Point>,
+    ) -> Result<pb::UpsertResponse, tonic::Status> {
         let messages = vec![
             pb::UpsertRequest {
                 message: Some(pb::upsert_request::Message::Header(pb::UpsertHeader {
                     project_id,
-                    space: Some(self.space()),
+                    space: Some(space),
                     namespace: Some(namespace),
                 })),
             },
@@ -1309,4 +1367,393 @@ async fn an_unreachable_introspection_service_fails_closed() {
         .await
         .expect_err("refused");
     assert_eq!(status.code(), Code::Unavailable);
+}
+
+// ── review round 1: indexes, space limits, mid-stream revocation ───────────
+
+fn raw_qdrant(url: &str) -> Qdrant {
+    Qdrant::from_url(url)
+        .skip_compatibility_check()
+        .build()
+        .expect("qdrant")
+}
+
+/// A collection in the service's layout but with NO payload index, as an
+/// older build, or a run that stopped before indexing, leaves it.
+async fn bare_collection(qdrant: &Qdrant, slug: &str) -> String {
+    use qdrant_client::qdrant::{
+        CreateCollectionBuilder, Datatype, Distance, Modifier, SparseVectorParamsBuilder,
+        SparseVectorsConfigBuilder, VectorParamsBuilder, VectorsConfigBuilder,
+    };
+    let name = format!("emb_{slug}_{DIMENSION}");
+    let mut vectors = VectorsConfigBuilder::default();
+    vectors.add_named_vector_params(
+        "dense",
+        VectorParamsBuilder::new(u64::from(DIMENSION), Distance::Cosine)
+            .datatype(Datatype::Float16),
+    );
+    let mut sparse = SparseVectorsConfigBuilder::default();
+    sparse.add_named_vector_params(
+        "bm25",
+        SparseVectorParamsBuilder::default().modifier(Modifier::Idf),
+    );
+    qdrant
+        .create_collection(
+            CreateCollectionBuilder::new(&name)
+                .vectors_config(vectors)
+                .sparse_vectors_config(sparse),
+        )
+        .await
+        .expect("bare collection");
+    name
+}
+
+async fn indexed_fields(qdrant: &Qdrant, collection: &str) -> HashSet<String> {
+    qdrant
+        .collection_info(collection)
+        .await
+        .expect("info")
+        .result
+        .map(|info| info.payload_schema.into_keys().collect())
+        .unwrap_or_default()
+}
+
+const REQUIRED_FIELDS: [&str; 10] = [
+    "project_id",
+    "source",
+    "namespace_id",
+    "generation",
+    "document_key",
+    "document_version",
+    "parent_id",
+    "chunk_type",
+    "acl",
+    "text",
+];
+
+#[tokio::test]
+async fn an_existing_collection_without_indexes_gets_them_on_write_and_on_read() {
+    let url = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    let qdrant = raw_qdrant(&url);
+
+    // Write path: the collection exists, bare.
+    let written = bare_collection(&qdrant, &h.slug).await;
+    assert!(indexed_fields(&qdrant, &written).await.is_empty());
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point("doc-1", "alpha", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("upsert into a bare collection");
+    let fields = indexed_fields(&qdrant, &written).await;
+    for field in REQUIRED_FIELDS {
+        assert!(fields.contains(field), "{field} is indexed after a write");
+    }
+
+    // Read path: another bare collection, first touched by a search.
+    let read_slug = unique_slug("bare-read");
+    let read = bare_collection(&qdrant, &read_slug).await;
+    let response = h
+        .worker
+        .search(with_token(
+            TOKEN_A,
+            pb::SearchRequest {
+                scope: Some(Harness::scope(&[NAMESPACE_A])),
+                space: Some(pb::EmbeddingSpace {
+                    model_slug: read_slug,
+                    dimension: DIMENSION,
+                }),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                limit: 10,
+                ..pb::SearchRequest::default()
+            },
+        ))
+        .await
+        .expect("search a bare collection")
+        .into_inner();
+    assert!(response.points.is_empty());
+    let fields = indexed_fields(&qdrant, &read).await;
+    for field in REQUIRED_FIELDS {
+        assert!(fields.contains(field), "{field} is indexed after a read");
+    }
+}
+
+#[tokio::test]
+async fn the_collection_cap_refuses_a_new_space_but_not_an_existing_one() {
+    let url = require_qdrant!();
+    let mut h = harness_custom(oracle, |url| {
+        let present = emb_collections(url);
+        (
+            CollectionSettings {
+                max_collections: present + 1,
+                ..CollectionSettings::default()
+            },
+            SpaceLimits::default(),
+        )
+    })
+    .await
+    .expect("harness");
+    let qdrant = raw_qdrant(&url);
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point("doc-1", "alpha", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("the one allowed new space");
+
+    let other = pb::EmbeddingSpace {
+        model_slug: unique_slug("over-cap"),
+        dimension: DIMENSION,
+    };
+    let status = h
+        .upsert_in(
+            TOKEN_A,
+            0,
+            other.clone(),
+            Harness::namespace(NAMESPACE_A),
+            vec![Harness::point("doc-1", "alpha", [1.0, 0.0, 0.0, 0.0])],
+        )
+        .await
+        .expect_err("over the cap");
+    assert_eq!(status.code(), Code::ResourceExhausted);
+    assert!(status.message().contains("ELITEA_VECTOR_MAX_COLLECTIONS"));
+    assert!(
+        !qdrant
+            .collection_exists(format!("emb_{}_{DIMENSION}", other.model_slug))
+            .await
+            .expect("exists"),
+        "nothing was created"
+    );
+    // The space that exists keeps working.
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point("doc-2", "alpha", [0.0, 1.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("an existing space is not a new collection");
+}
+
+/// The `emb_*` collections Qdrant holds now, counted the way the service
+/// counts them. `harness_custom`'s closure is synchronous, so this runs the
+/// async call on a helper thread.
+fn emb_collections(url: &str) -> usize {
+    let qdrant = raw_qdrant(url);
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async move {
+                qdrant
+                    .list_collections()
+                    .await
+                    .expect("list")
+                    .collections
+                    .into_iter()
+                    .filter(|collection| {
+                        collection.name.starts_with("emb_")
+                            && elitea_vector::layout::Space::from_collection(&collection.name)
+                                .is_some()
+                    })
+                    .count()
+            })
+    })
+    .join()
+    .expect("counted")
+}
+
+#[tokio::test]
+async fn the_space_allowlist_and_dimension_bound_are_checked_before_anything_is_made() {
+    let url = require_qdrant!();
+    let listed = unique_slug("listed");
+    let allowed = elitea_vector::layout::Space::new(&listed, DIMENSION).expect("space");
+    let mut h = harness_custom(oracle, move |_| {
+        (
+            CollectionSettings {
+                max_collections: 100_000,
+                ..CollectionSettings::default()
+            },
+            SpaceLimits {
+                max_dimension: 4096,
+                allowed: Some(HashSet::from([allowed])),
+            },
+        )
+    })
+    .await
+    .expect("harness");
+    let qdrant = raw_qdrant(&url);
+    let point = || vec![Harness::point("doc-1", "alpha", [1.0, 0.0, 0.0, 0.0])];
+
+    let status = h
+        .upsert(TOKEN_A, 0, Harness::namespace(NAMESPACE_A), point())
+        .await
+        .expect_err("not on the allowlist");
+    assert_eq!(status.code(), Code::PermissionDenied);
+    assert!(
+        !qdrant
+            .collection_exists(format!("emb_{}_{DIMENSION}", h.slug))
+            .await
+            .expect("exists")
+    );
+
+    let listed_space = pb::EmbeddingSpace {
+        model_slug: listed.clone(),
+        dimension: DIMENSION,
+    };
+    h.upsert_in(
+        TOKEN_A,
+        0,
+        listed_space,
+        Harness::namespace(NAMESPACE_A),
+        point(),
+    )
+    .await
+    .expect("the listed space may be created");
+
+    // Out-of-range dimensions never reach Qdrant.
+    for dimension in [0, 4097, 65_536] {
+        let slug = unique_slug("dim");
+        let status = h
+            .upsert_in(
+                TOKEN_A,
+                0,
+                pb::EmbeddingSpace {
+                    model_slug: slug.clone(),
+                    dimension,
+                },
+                Harness::namespace(NAMESPACE_A),
+                Vec::new(),
+            )
+            .await
+            .expect_err("dimension out of range");
+        assert_eq!(status.code(), Code::InvalidArgument, "{dimension}");
+        assert!(
+            !qdrant
+                .collection_exists(format!("emb_{slug}_{dimension}"))
+                .await
+                .expect("exists")
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_non_finite_score_threshold_is_an_invalid_argument() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed().await;
+    for threshold in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let status = h
+            .worker
+            .search(with_token(
+                TOKEN_A,
+                pb::SearchRequest {
+                    scope: Some(Harness::scope(&[NAMESPACE_A])),
+                    space: Some(h.space()),
+                    vector: vec![1.0, 0.0, 0.0, 0.0],
+                    limit: 10,
+                    score_threshold: Some(threshold),
+                    ..pb::SearchRequest::default()
+                },
+            ))
+            .await
+            .expect_err("refused");
+        assert_eq!(status.code(), Code::InvalidArgument, "{threshold}");
+    }
+}
+
+/// A token revoked while an Upsert stream is open is refused at the next
+/// batch; what the earlier batch wrote stays.
+#[tokio::test]
+async fn a_token_revoked_mid_stream_is_refused_at_the_next_batch() {
+    const TOKEN_CLAIM: &str = "token-claim-stream";
+    let url = require_qdrant!();
+    let start = unix_now();
+    let claims = Arc::new(LiveClaims(std::sync::Mutex::new(HashMap::from([(
+        TOKEN_CLAIM.to_owned(),
+        grant(PROJECT_A, start + 3600),
+    )]))));
+    let now = Arc::new(AtomicI64::new(start));
+    let policy = CachePolicy::default();
+    let introspector = {
+        let now = Arc::clone(&now);
+        Arc::new(CachingIntrospector::new(
+            Arc::clone(&claims) as Arc<dyn Introspector>,
+            policy,
+            Arc::new(move || now.load(Ordering::SeqCst)),
+        ))
+    };
+    let h = harness_with(move || introspector as Arc<dyn Introspector>)
+        .await
+        .expect("harness");
+
+    let (sender, receiver) = tokio::sync::mpsc::channel::<pb::UpsertRequest>(4);
+    let header = pb::UpsertRequest {
+        message: Some(pb::upsert_request::Message::Header(pb::UpsertHeader {
+            project_id: 0,
+            space: Some(h.space()),
+            namespace: Some(Harness::namespace(NAMESPACE_A)),
+        })),
+    };
+    let batch = |key: &str, vector: [f32; 4]| pb::UpsertRequest {
+        message: Some(pb::upsert_request::Message::Batch(pb::UpsertBatch {
+            points: vec![Harness::point(key, "streamed", vector)],
+        })),
+    };
+    sender.send(header).await.expect("header");
+    sender
+        .send(batch("doc-1", [1.0, 0.0, 0.0, 0.0]))
+        .await
+        .expect("first batch");
+    let qdrant = raw_qdrant(&url);
+    let mut worker = h.worker.clone();
+    let call = tokio::spawn(async move {
+        worker
+            .upsert(with_token(
+                TOKEN_CLAIM,
+                tokio_stream::wrappers::ReceiverStream::new(receiver),
+            ))
+            .await
+    });
+    // The first batch lands.
+    let mut written = 0;
+    for _ in 0..100 {
+        // The collection appears with the first batch.
+        if qdrant
+            .collection_exists(format!("emb_{}_{DIMENSION}", h.slug))
+            .await
+            .expect("exists")
+        {
+            written = h.truth(PROJECT_A).await;
+        }
+        if written == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(written, 1, "the first batch was written");
+
+    // The claim settles; the cache cap passes; the stream is still open.
+    claims.0.lock().expect("claims").remove(TOKEN_CLAIM);
+    now.fetch_add(policy.worker_claim_max_ttl_seconds, Ordering::SeqCst);
+    sender
+        .send(batch("doc-2", [0.0, 1.0, 0.0, 0.0]))
+        .await
+        .expect("second batch");
+    let status = call
+        .await
+        .expect("joined")
+        .expect_err("the stream is aborted");
+    assert_eq!(status.code(), Code::Unauthenticated);
+    assert_eq!(
+        h.truth(PROJECT_A).await,
+        1,
+        "the refused batch wrote nothing"
+    );
 }

@@ -11,12 +11,15 @@ use elitea_vector::auth::{
     Authenticator, CachePolicy, CachingIntrospector, GrpcIntrospector, unix_now,
 };
 use elitea_vector::config::Config;
+use elitea_vector::health::ServiceReadiness;
 use elitea_vector::pb::vector_service_server::VectorServiceServer;
+use elitea_vector::service::SpaceLimits;
 use elitea_vector::service::VectorService;
 use elitea_vector::store::{CollectionSettings, Store};
+use elitea_vector::tls::{self, IntrospectionChannel, ReloadingCertificate};
 use qdrant_client::Qdrant;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity, Server, ServerTlsConfig};
+use tonic::transport::Server;
 
 /// A full Upsert batch at the largest dimension fits with room to spare.
 const MAX_MESSAGE_BYTES: usize = 64 << 20;
@@ -87,24 +90,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         CollectionSettings {
             replication_factor: config.replication_factor,
             shard_number: config.shard_number,
+            max_collections: config.max_collections,
         },
     ));
 
-    let mut main_tls = ClientTlsConfig::new()
-        .ca_certificate(Certificate::from_pem(read(&config.introspection_ca_file)?))
-        .identity(Identity::from_pem(
-            read(&config.client_cert_file)?,
-            read(&config.client_key_file)?,
-        ));
-    if let Some(name) = &config.introspection_server_name {
-        main_tls = main_tls.domain_name(name.clone());
-    }
-    let channel = Endpoint::from_shared(config.introspection_url.clone())?
-        .tls_config(main_tls)?
-        .connect_timeout(config.introspection_timeout)
-        .connect_lazy();
+    // Both certificates follow their files (see `elitea_vector::tls`).
+    let introspection = IntrospectionChannel {
+        url: config.introspection_url.clone(),
+        ca_file: config.introspection_ca_file.clone(),
+        cert_file: config.client_cert_file.clone(),
+        key_file: config.client_key_file.clone(),
+        server_name: config.introspection_server_name.clone(),
+        timeout: config.introspection_timeout,
+    };
+    let (channel, built_from) = introspection.build()?;
+    let grpc_introspector = Arc::new(GrpcIntrospector::new(channel, config.introspection_timeout));
+    let _channel_reloader = tls::spawn_channel_reloader(
+        introspection,
+        Arc::clone(&grpc_introspector),
+        built_from,
+        tls::RELOAD_INTERVAL,
+    );
     let introspector = CachingIntrospector::new(
-        Arc::new(GrpcIntrospector::new(channel, config.introspection_timeout)),
+        grpc_introspector,
         CachePolicy {
             max_ttl_seconds: config.introspection_cache_max_seconds,
             ..CachePolicy::default()
@@ -112,17 +120,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(unix_now),
     );
     let auth = Authenticator::new(Arc::new(introspector), config.admin_identities.clone());
-    let service = VectorService::new(auth, Arc::clone(&store));
+    let service = VectorService::new(auth, Arc::clone(&store)).with_limits(SpaceLimits {
+        max_dimension: config.max_dimension,
+        allowed: config.allowed_spaces.clone(),
+    });
+
+    let certificate = ReloadingCertificate::load(&config.tls_cert_file, &config.tls_key_file)?;
+    let _certificate_reloader = certificate.spawn_reloader(tls::RELOAD_INTERVAL);
+    let tls_config =
+        tls::server_config(Arc::clone(&certificate), &read(&config.tls_client_ca_file)?)?;
 
     let health = tokio::net::TcpListener::bind(config.health_addr).await?;
-    tokio::spawn(elitea_vector::health::serve(health, Arc::clone(&store)));
+    tokio::spawn(elitea_vector::health::serve(
+        health,
+        Arc::new(ServiceReadiness::new(
+            Arc::clone(&store),
+            Some(Arc::clone(&certificate)),
+        )),
+    ));
 
-    let server_tls = ServerTlsConfig::new()
-        .identity(Identity::from_pem(
-            read(&config.tls_cert_file)?,
-            read(&config.tls_key_file)?,
-        ))
-        .client_ca_root(Certificate::from_pem(read(&config.tls_client_ca_file)?));
+    let listener = tokio::net::TcpListener::bind(config.grpc_addr).await?;
     tracing::info!(
         grpc = %config.grpc_addr,
         health = %config.health_addr,
@@ -130,13 +147,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "elitea-vector serving"
     );
     Server::builder()
-        .tls_config(server_tls)?
         .add_service(
             VectorServiceServer::new(service)
                 .max_decoding_message_size(MAX_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_MESSAGE_BYTES),
         )
-        .serve_with_shutdown(config.grpc_addr, shutdown())
+        .serve_with_incoming_shutdown(tls::tls_incoming(listener, tls_config), shutdown())
         .await?;
     Ok(())
 }
