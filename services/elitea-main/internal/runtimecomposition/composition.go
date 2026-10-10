@@ -99,6 +99,11 @@ type Dependencies struct {
 	ReplayPool                    *pgxpool.Pool
 	TerminalEffectsPool           *pgxpool.Pool
 	ContentPool                   *pgxpool.Pool
+	// VectorIntrospectionPool is the seventh, optional pool: the claim-token
+	// reads of elitea-vector's token introspection. Required when
+	// Config.VectorIntrospectionClients is set, and never ControlPool or any
+	// other pool (validateDependencies).
+	VectorIntrospectionPool *pgxpool.Pool
 	// Optional original supervisor state DB, owned and closed by the calling command.
 	CompiledSnapshotStatePool        *pgxpool.Pool
 	CurrentConfigurations            *CurrentConfigurationsRuntime

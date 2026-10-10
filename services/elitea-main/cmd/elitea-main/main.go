@@ -1691,6 +1691,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return openErr
 		}
 		defer runtimePools.Close()
+		if len(runtimeConfig.VectorIntrospectionClients) > 0 {
+			if err := runtimePools.openVectorIntrospection(ctx, dbDSN, databasePoolLimits, openRuntimePostgresPool); err != nil {
+				return err
+			}
+		}
 		compiledState, compiledStateErr := openCompiledSnapshotStatePool(ctx, runtimeConfig)
 		if compiledStateErr != nil {
 			return compiledStateErr
@@ -1726,6 +1731,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ReplayPool:                       runtimePools.Replay,
 			TerminalEffectsPool:              runtimePools.TerminalEffects,
 			ContentPool:                      runtimePools.Content,
+			VectorIntrospectionPool:          runtimePools.VectorIntrospection,
 			CompiledSnapshotStatePool:        compiledState.pool,
 			CodeWorkspaceCapabilities:        codeConsumers.workspaceCapabilities,
 			CodeWorkspacePolicy:              codeConsumers.workspacePolicy,

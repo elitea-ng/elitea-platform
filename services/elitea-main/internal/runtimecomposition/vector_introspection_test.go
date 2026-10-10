@@ -66,13 +66,32 @@ func TestNewVectorIntrospectionComposesOnlyWhenConfigured(t *testing.T) {
 		ProjectTokenValidator: stubValidator{},
 		CallbackTokenFacts:    repos.NewCallbackTokenGrants(nil),
 	}); err == nil {
-		t.Fatal("configured without a control pool was accepted")
+		t.Fatal("configured without an introspection pool was accepted")
+	}
+	// The control pool is not an introspection pool.
+	control := &pgxpool.Pool{}
+	if _, err := newVectorIntrospection(configured, Dependencies{
+		ProjectTokenValidator:   stubValidator{},
+		CallbackTokenFacts:      repos.NewCallbackTokenGrants(nil),
+		ControlPool:             control,
+		VectorIntrospectionPool: control,
+	}); err == nil {
+		t.Fatal("the control pool was accepted as the introspection pool")
+	}
+	// Only the control pool composed: introspection has none of its own.
+	if _, err := newVectorIntrospection(configured, Dependencies{
+		ProjectTokenValidator: stubValidator{},
+		CallbackTokenFacts:    repos.NewCallbackTokenGrants(nil),
+		ControlPool:           control,
+	}); err == nil {
+		t.Fatal("configured with only the control pool was accepted")
 	}
 	server, err = newVectorIntrospection(configured, Dependencies{
 		ProjectTokenValidator: stubValidator{},
 		CallbackTokenFacts:    repos.NewCallbackTokenGrants(nil),
+		ControlPool:           control,
 		// Never queried here; the claim token store only holds it.
-		ControlPool: &pgxpool.Pool{},
+		VectorIntrospectionPool: &pgxpool.Pool{},
 	})
 	if err != nil || server == nil {
 		t.Fatalf("configured: %v %v", server, err)

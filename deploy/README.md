@@ -1033,7 +1033,8 @@ so the DSN switch is the operator's one-line change.
 Two numbers, one on each side of the pooler:
 
 - **Client side, per replica.** `main.env.ELITEA_DATABASE_MAX_CONNS` bounds the
-  connections ONE replica opens toward the pooler. The six runtime pools add
+  connections ONE replica opens toward the pooler. The six runtime pools (seven with `vector.enabled`: the
+  token-introspection pool, default 8, `ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS`) add
   their own `ELITEA_RUNTIME_DB_*_MAX_CONNS`. This is the per-replica number the
   operator tunes.
 - **Server side, whole cluster.** `pgbouncer.poolSize` +

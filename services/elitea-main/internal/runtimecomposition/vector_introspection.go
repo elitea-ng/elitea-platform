@@ -20,20 +20,28 @@ const VectorIntrospectionClientsEnv = "ELITEA_VECTOR_INTROSPECTION_CLIENTS"
 const maxVectorIntrospectionClients = 16
 
 // newVectorIntrospection builds the introspection service when clients are
-// configured. It returns a nil INTERFACE, never a typed nil, when they are
+// configured. Its claim-token reads use VectorIntrospectionPool, a small
+// bounded pool of its own (ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS,
+// 8). The mint stays on the control pool: it is part of the claim. It returns a nil INTERFACE, never a typed nil, when they are
 // not, so the private server set leaves the service unregistered.
 func newVectorIntrospection(config Config, dependencies Dependencies) (vectorv1.TokenIntrospectionServiceServer, error) {
 	if len(config.VectorIntrospectionClients) == 0 {
 		return nil, nil
 	}
-	if dependencies.ProjectTokenValidator == nil || dependencies.CallbackTokenFacts == nil || dependencies.ControlPool == nil {
+	if dependencies.ProjectTokenValidator == nil || dependencies.CallbackTokenFacts == nil || dependencies.VectorIntrospectionPool == nil {
 		return nil, errors.New(VectorIntrospectionClientsEnv +
-			" is set, but the token validator, the callback token facts or the control pool are not composed")
+			" is set, but the token validator, the callback token facts or the introspection pool are not composed")
+	}
+	// Introspection is called once per uncached token by every vector request;
+	// it must not compete with lease and claim traffic for the control pool.
+	if dependencies.VectorIntrospectionPool == dependencies.ControlPool {
+		return nil, errors.New(VectorIntrospectionClientsEnv +
+			" is set, but the introspection pool is the control pool: it needs its own")
 	}
 	server, err := vectorintrospection.NewServer(
 		dependencies.ProjectTokenValidator,
 		dependencies.CallbackTokenFacts,
-		repos.NewVectorClaimTokens(dependencies.ControlPool),
+		repos.NewVectorClaimTokens(dependencies.VectorIntrospectionPool),
 		config.VectorIntrospectionClients,
 		dependencies.Logger,
 	)
