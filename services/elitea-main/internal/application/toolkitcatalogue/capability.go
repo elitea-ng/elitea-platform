@@ -135,6 +135,7 @@ var pythonVerifiedImportKeys = []string{
 var rustNativeToolTypes = []string{
 	"ado_boards",
 	"ado_plans",
+	"ado_wiki",
 	"artifact",
 	"azure",
 	"azure_search",

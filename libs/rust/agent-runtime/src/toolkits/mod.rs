@@ -61,6 +61,8 @@ mod ado_plans_tests;
 #[cfg(test)]
 mod ado_test_support;
 #[cfg(test)]
+mod ado_wiki_tests;
+#[cfg(test)]
 mod aha_tests;
 #[cfg(test)]
 mod azure_search_tests;

@@ -92,7 +92,6 @@ pub(super) struct CapturedRequest {
     pub(super) content_type: Option<String>,
     pub(super) authorization: Option<String>,
     pub(super) authorization_sensitive: bool,
-    #[allow(dead_code)] // Read by the wiki suite.
     pub(super) if_match: Option<String>,
     pub(super) effect: bool,
 }
@@ -189,6 +188,10 @@ pub(super) fn ok(body: Value) -> Result<AdoHttpResponse, AdoClientError> {
         StatusCode::OK,
         AdoBody::Json(body),
     ))
+}
+
+pub(super) fn ok_with_etag(body: &Value, etag: &str) -> Result<AdoHttpResponse, AdoClientError> {
+    Ok(AdoHttpResponse::fixture(StatusCode::OK, AdoBody::Json(body.clone())).with_etag(etag))
 }
 
 #[allow(dead_code)] // Used by the repos suite.

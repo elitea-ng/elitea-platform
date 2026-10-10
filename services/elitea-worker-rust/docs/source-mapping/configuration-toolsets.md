@@ -133,7 +133,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `ado_repos` | `configurations/ado.py::AdoConfiguration` | `tools/ado/repos::AzureDevOpsReposToolkit` | 22 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_repos/` | Planned as its own complete SDK family; 16 repository operations plus 6 inherited indexing tools |
 | `ado_plans` | `configurations/ado.py::AdoConfiguration` | `tools/ado/test_plan::AzureDevOpsPlansToolkit` | 18 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_plans}/` | Partial native family: all 12 test-plan operations; the 6 indexing tools stay on the Python worker |
 | `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 19 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_boards}/` | Partial native family: 11 of 13 work-item operations; `get_image_by_url` (vision LLM), `attach_file_to_work_item` (artifact storage) and the 6 indexing tools stay on the Python worker |
-| `ado_wiki` | `configurations/ado.py::AdoConfiguration` | `tools/ado/wiki::AzureDevOpsWikiToolkit` | 14 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_wiki/` | Planned as its own complete SDK family; 8 wiki operations plus 6 inherited indexing tools |
+| `ado_wiki` | `configurations/ado.py::AdoConfiguration` | `tools/ado/wiki::AzureDevOpsWikiToolkit` | 14 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_wiki}/` | Partial native family: all 8 wiki operations (image description in page content omitted); the 6 indexing tools stay on the Python worker |
 | `gitlab` | `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab::EliteAGitlabToolkit` | 27 | Yes | `toolkits/families/gitlab/{config,client,tools}.rs`, shared `families/vcs_text.rs`; reuses `gitlab_org` transport, status/effect mapping, OLD/NEW editor and MR diff positions | Partial capability-disabled family (per-tool capability): all 21 non-index tools (10 reads, 9 writes, 2 deletes) keep SDK names, argument schemas, messages, protected-base-branch rules, the invocation-local active branch (moved by reads, as in the SDK) and first-page vs all-pages pagination. A selected index tool is omitted with a warning; the 6 index tools, non-UTF-8 document/image parsing, live check, exact-interrupt HITL and effect reconciliation remain gates |
 | `gitlab_org` | shared `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab_org::EliteAGitlabSpaceToolkit` | 17 | Yes | `toolkits/families/gitlab_org/{config,client,edit,diff,tools}.rs` | Capability-disabled complete family: 8 reads, 8 writes and 1 delete; dynamic-project authority, live check, HITL and effect reconciliation remain gates |
 | `qtest` | `configurations/qtest.py::QtestConfiguration` | `tools/qtest::QtestToolkit` | 25 | Yes | `configurations/families/qtest.rs`; `toolkits/families/qtest/` | Planned |
@@ -2723,6 +2723,44 @@ Proof: `toolkits/ado_plans_tests.rs` (ElementTree step golden output, XML
 reader defaults/entities/refusals, create params naming and errors, add/list
 `as_dict` shapes, create-test-case flow and rule-error hint, test case
 details, unknown outcome, argument shapes, SDK conformance).
+
+### Azure DevOps Wiki family
+
+`ado_wiki` serves all eight non-index tools of `tools/ado/wiki/ado_wrapper.py`
+at the pinned SDK revision, over the shared `families/ado` connection and the
+`WikiClient`/`CoreClient` v7.0 routes the wrapper uses (`connection.clients`).
+The live settings path is the common `tools/ado/__init__.py::get_tools`, which
+adds the optional `default_wiki_identifier`; every tool falls back to it, and
+the tool descriptions end with `Default wiki: <name>` as the SDK's do.
+
+| Tool | Route (api-version 7.0) | Result |
+| --- | --- | --- |
+| `get_wiki` | `GET {project}/_apis/wiki/wikis/{wiki}` | `_format_wiki_response`: id, name, type, url, project_id, repository_id, mapped_path, optional remote_url and versions |
+| `get_wiki_page` | `GET .../wikis/{wiki}/pages/{id}` or `.../pages?path=` with `recursionLevel` and `includeContent` | `{eTag (ETag header), page: {id, path, git_item_path, remote_url, url, order, is_parent_page, is_non_conformant, sub_pages, content?}}`; 404 returns the SDK's "Page ... not found in wiki ..." text |
+| `get_wiki_page_by_path` / `get_wiki_page_by_id` | `GET .../pages?path=` or `.../pages/{id}` with `includeContent=true` | the page content |
+| `delete_page_by_path` / `delete_page_by_id` | `DELETE .../pages?path=` or `.../pages/{id}` | the SDK's "has been deleted" sentences |
+| `modify_wiki_page` | `GET .../wikis` (create via `GET _apis/projects` + `POST .../wikis` when missing), `GET .../pages?path=` for the eTag, `PUT .../pages?path=&versionDescriptor.*` with `If-Match` | `{eTag, id, page: url}`, or the expanded page with `expanded` |
+| `rename_wiki_page` | `POST .../wikis/{wiki}/pagemoves?comment=&versionDescriptor.*` | `{eTag, page_move: as_dict(WikiPageMove)}` |
+
+Page writes and moves are retried once without the version descriptor when
+the provider answers "The version '{0}' either is invalid or does not exist."
+as the SDK does; a missing page (404) on the eTag read makes the write a
+create.
+
+Gaps and differences: the SDK describes images in page content with the
+toolkit LLM (`process_images`, `image_description_prompt`) and, for
+`/.attachments/` images, reads them through an internal repos wrapper. No
+LLM is lent to a toolkit here, so content is returned with its image
+references unchanged, which is the SDK's own result when no description is
+produced. `rename_wiki_page` returns the msrest-shaped move instead of the
+SDK's `str()` of a model object. `modify_wiki_page` treats a wiki addressed by
+id as existing; the SDK compares names only and would try to create a wiki
+named after the id.
+
+Proof: `toolkits/ado_wiki_tests.rs` (wiki format and default identifier,
+expanded page and 404 text, raw page content and description suffix, eTag
+`If-Match` write with the version retry, wiki and page creation, page move
+and delete sentences, argument validation, SDK conformance).
 
 ## Special runtime toolsets
 

@@ -160,6 +160,8 @@ impl<K: AdoToolKind> Tool for AdoTool<K> {
 }
 
 /// Build the family's tools for `selected` (all served tools when empty).
+/// `description_suffix` is appended to every description (the wiki's
+/// `Default wiki: <name>` line).
 ///
 /// A selected SDK tool this runtime does not serve (the index tools, and
 /// any per-family gap the capability snapshot lists) is omitted with a
@@ -172,6 +174,7 @@ pub(crate) fn build_toolset<K: AdoToolKind>(
     selected: &[Box<str>],
     policy: &Arc<ToolAdmissionPolicy>,
     executor: &Arc<dyn AdoToolExecutor<K>>,
+    description_suffix: &str,
 ) -> Result<BasicToolset, AdoToolsetError> {
     let kinds: Vec<K> = if selected.is_empty() {
         all.to_vec()
@@ -202,7 +205,10 @@ pub(crate) fn build_toolset<K: AdoToolKind>(
     let tools = kinds
         .into_iter()
         .map(|kind| {
-            let description = format!("Toolkit: {toolkit_name}\n{}", kind.description());
+            let description = format!(
+                "Toolkit: {toolkit_name}\n{}{description_suffix}",
+                kind.description()
+            );
             Arc::new(AdoTool {
                 kind,
                 description: description
