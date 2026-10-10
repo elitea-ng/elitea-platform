@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use crate::toolkits::families::https_base_url::{self, BasePath, BaseUrlError};
 use reqwest::Url;
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
@@ -126,30 +127,12 @@ impl XrayToolkitConfig {
     }
 }
 
-/// HTTPS origin, optional path prefix, no userinfo/query/fragment.
+/// HTTPS origin, optional path prefix (the shared [`https_base_url`] rule).
 fn parse_base(value: &str) -> Result<Url, XrayConfigError> {
-    let value = value.trim();
-    if value.len() > MAX_URL_BYTES {
-        return Err(resource_exhausted());
-    }
-    if value.chars().any(char::is_control) || value.contains(['\\', '%', '?', '#']) {
-        return Err(invalid_configuration());
-    }
-    let mut url = Url::parse(value).map_err(|_| invalid_configuration())?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url
-            .path()
-            .split('/')
-            .any(|segment| matches!(segment, "." | ".."))
-    {
-        return Err(invalid_configuration());
-    }
-    let path = url.path().trim_end_matches('/').to_owned();
-    url.set_path(&path);
-    Ok(url)
+    https_base_url::parse(value, BasePath::Prefix).map_err(|error| match error {
+        BaseUrlError::TooLong => resource_exhausted(),
+        BaseUrlError::Invalid | BaseUrlError::PlainHttp => invalid_configuration(),
+    })
 }
 
 fn required_text<'a>(

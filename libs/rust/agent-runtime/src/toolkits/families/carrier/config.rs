@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use crate::toolkits::families::https_base_url::{self, BasePath, BaseUrlError};
 use reqwest::Url;
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
@@ -119,20 +120,16 @@ impl CarrierToolkitConfig {
     }
 }
 
+/// The shared [`https_base_url`] rule, stored WITH a trailing slash so a
+/// relative endpoint joins beneath the prefix.
 fn parse_base(value: &str) -> Result<Url, CarrierConfigError> {
-    let mut base = Url::parse(value.trim()).map_err(|_| invalid_configuration())?;
-    if base.scheme() != "https"
-        || base.host_str().is_none()
-        || !base.username().is_empty()
-        || base.password().is_some()
-        || base.query().is_some()
-        || base.fragment().is_some()
-    {
-        return Err(invalid_configuration());
-    }
-    let path = base.path().trim_end_matches('/').to_owned();
-    base.set_path(&format!("{path}/"));
-    Ok(base)
+    let mut url = https_base_url::parse(value, BasePath::Prefix).map_err(|error| match error {
+        BaseUrlError::TooLong => resource_exhausted(),
+        BaseUrlError::Invalid | BaseUrlError::PlainHttp => invalid_configuration(),
+    })?;
+    let path = format!("{}/", url.path().trim_end_matches('/'));
+    url.set_path(&path);
+    Ok(url)
 }
 
 /// The SDK declares `project_id` a string; a numeric value frozen by an

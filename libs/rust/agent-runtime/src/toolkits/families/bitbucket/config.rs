@@ -1,5 +1,8 @@
 use std::fmt;
 
+use crate::toolkits::families::https_base_url::{
+    self, BasePath, BaseUrlError, host_matches_domain,
+};
 use reqwest::Url;
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
@@ -174,34 +177,19 @@ impl BitbucketToolkitConfig {
     }
 }
 
+/// Bitbucket Cloud's host or a subdomain of it.
 fn is_bitbucket_org(url: &Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        let host = host.to_ascii_lowercase();
-        host == "bitbucket.org" || host.ends_with(".bitbucket.org")
-    })
+    host_matches_domain(url, "bitbucket.org")
 }
 
 /// An HTTPS origin with an optional context path (Bitbucket Server is often
-/// served under `/bitbucket`), never credentials, a query or a fragment.
+/// served under `/bitbucket`), never credentials, a query or a fragment (the
+/// shared [`https_base_url`] rule).
 fn parse_url(value: &str) -> Result<Url, BitbucketConfigError> {
-    let value = value.trim().trim_end_matches('/');
-    if value.contains(['%', '\\']) {
-        return Err(invalid_configuration());
-    }
-    let url = Url::parse(value).map_err(|_| invalid_configuration())?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url
-            .path_segments()
-            .is_some_and(|mut segments| segments.any(|part| matches!(part, "." | "..")))
-    {
-        return Err(invalid_configuration());
-    }
-    Ok(url)
+    https_base_url::parse(value, BasePath::Prefix).map_err(|error| match error {
+        BaseUrlError::TooLong => resource_exhausted(),
+        BaseUrlError::Invalid | BaseUrlError::PlainHttp => invalid_configuration(),
+    })
 }
 
 fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<Box<str>>, BitbucketConfigError> {

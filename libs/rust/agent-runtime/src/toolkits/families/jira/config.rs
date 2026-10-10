@@ -6,6 +6,9 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
+use crate::toolkits::families::https_base_url::{
+    self, BasePath, BaseUrlError, host_matches_domain,
+};
 use crate::toolkits::is_reserved_platform_header;
 
 const MAX_URL_BYTES: usize = 2 * 1_024;
@@ -250,40 +253,13 @@ impl JiraToolkitConfig {
 }
 
 /// HTTPS origin plus an optional context path (`https://host/jira`), never
-/// user info, query or fragment. Stored without a trailing slash.
+/// user info, query or fragment (the shared [`https_base_url`] rule). Stored
+/// without a trailing slash; plain HTTP is an unsupported capability.
 fn parse_base_url(value: &str) -> Result<Url, JiraConfigError> {
-    if value.contains(['\\']) || value.chars().any(char::is_whitespace) {
-        return Err(invalid_configuration());
-    }
-    let mut url = Url::parse(value).map_err(|_| invalid_configuration())?;
-    if url.scheme() == "http" {
-        return Err(unsupported_capability());
-    }
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(invalid_configuration());
-    }
-    let path = url.path().trim_end_matches('/').to_owned();
-    if path.split('/').any(|segment| matches!(segment, "." | "..")) {
-        return Err(invalid_configuration());
-    }
-    url.set_path(&path);
-    Ok(url)
-}
-
-/// `url_host_matches_domain`: the host is the domain or a subdomain of it.
-pub(super) fn host_matches_domain(url: &Url, domain: &str) -> bool {
-    url.host_str().is_some_and(|host| {
-        let host = host.to_ascii_lowercase();
-        host == domain
-            || host
-                .strip_suffix(domain)
-                .is_some_and(|prefix| prefix.ends_with('.'))
+    https_base_url::parse(value, BasePath::Prefix).map_err(|error| match error {
+        BaseUrlError::PlainHttp => unsupported_capability(),
+        BaseUrlError::TooLong => resource_exhausted(),
+        BaseUrlError::Invalid => invalid_configuration(),
     })
 }
 

@@ -22,6 +22,7 @@ pub(crate) mod github;
 pub(crate) mod gitlab;
 pub(crate) mod gitlab_org;
 pub(crate) mod google_places;
+pub(crate) mod https_base_url;
 pub(crate) mod jira;
 pub(crate) mod keycloak;
 pub(crate) mod kubernetes;
