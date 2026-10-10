@@ -217,28 +217,49 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusNotFound, "project not found")
 		return
 	case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
-		// Retryable and nothing was changed: the project still has runs.
+		// The pre-walk refusal, and only that: Deprovision answers it before it
+		// changes anything, so "retry later" is true. A leftover found AFTER the
+		// walk can never be this.
 		apierr.WriteStatus(w, http.StatusConflict,
 			"project has active runs; stop them or wait for them to finish, then retry the delete")
-		return
-	case errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped):
-		// The project row is gone; its PgVector database is not. A retry answers
-		// 404, so the body names the database for cmd/pgvector-orphans.
-		writeJSON(w, http.StatusInternalServerError, deleteProjectResponse{
-			Steps:    nonNilSteps(result.RollbackSteps),
-			Message:  "project deleted, but its PgVector database was not dropped; remove it with pgvector-orphans",
-			Database: result.VectorDatabase,
-		})
 		return
 	case err != nil:
 		// The reference answers 200 even when every step failed. Reporting a
 		// project that still exists as deleted is the failure mode this route
-		// exists to avoid, so the per-step detail is returned with a 500.
-		writeJSON(w, http.StatusInternalServerError,
-			deleteProjectResponse{Steps: nonNilSteps(result.RollbackSteps)})
+		// exists to avoid, so the per-step detail is returned with a 500. The
+		// message names EVERY leftover the joined error carries: a retry answers
+		// 404 once the row is gone, so whatever this omits is invisible.
+		writeJSON(w, http.StatusInternalServerError, deleteProjectResponse{
+			Steps:    nonNilSteps(result.RollbackSteps),
+			Message:  deleteFailureMessage(err),
+			Database: result.VectorDatabase,
+		})
 		return
 	}
 	writeJSON(w, http.StatusOK, deleteProjectResponse{Steps: nonNilSteps(result.RollbackSteps)})
+}
+
+// deleteFailureMessage renders one line per leftover a failed delete reports.
+// The text is fixed per leftover and never carries the underlying error, which
+// can hold SQL or addresses.
+func deleteFailureMessage(err error) string {
+	var lines []string
+	if errors.Is(err, projectprovisioning.ErrProjectNotRemoved) {
+		lines = append(lines, "the project was not removed; it is marked deleting and another delete resumes it")
+	}
+	if errors.Is(err, projectprovisioning.ErrTenantSchemaNotRemoved) {
+		lines = append(lines, "the project was deleted, but its tenant schema was not removed; another delete of the same id retries it")
+	}
+	if errors.Is(err, projectprovisioning.ErrArtifactsNotRemoved) {
+		lines = append(lines, "the project was deleted, but its artifact buckets were not purged; another delete of the same id retries the purge")
+	}
+	if errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) {
+		lines = append(lines, "the project was deleted, but its PgVector database was not dropped; remove it with pgvector-orphans")
+	}
+	if len(lines) == 0 {
+		return "project delete did not complete; see the steps"
+	}
+	return strings.Join(lines, "\n")
 }
 
 // limits applies ProjectCreatePD's defaults to the fields the body omitted.

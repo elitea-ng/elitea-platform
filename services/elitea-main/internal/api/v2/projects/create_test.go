@@ -492,6 +492,75 @@ func TestDeleteProjectNamesTheVectorDatabaseItCouldNotDrop(t *testing.T) {
 	}
 }
 
+// Every leftover in the joined error is named, whichever combination arrives,
+// and the status is 500 whenever anything was left.
+func TestDeleteProjectNamesEveryJoinedFailure(t *testing.T) {
+	failed := false
+	result := projectprovisioning.Result{
+		ProjectID:      42,
+		VectorDatabase: "project_42",
+		RollbackSteps: []projectprovisioning.StepStatus{
+			{Step: projectprovisioning.StepArtifactBuckets, Initialized: true, OK: &failed, Msg: "x"},
+			{Step: projectprovisioning.StepProjectPgvectorDrop, Initialized: true, OK: &failed, Msg: "y"},
+		},
+	}
+	err := errors.Join(
+		projectprovisioning.ErrTenantSchemaNotRemoved,
+		projectprovisioning.ErrArtifactsNotRemoved,
+		fmt.Errorf("%w: database \"project_42\" remains for pgvector-orphans: dial tcp 10.0.0.9:5432: secret-detail",
+			projectprovisioning.ErrVectorStoreNotDropped),
+	)
+
+	recorder := deleteWith(t, result, err)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Steps    []projectprovisioning.StepStatus `json:"steps"`
+		Message  string                           `json:"message"`
+		Database string                           `json:"database"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, recorder.Body.String())
+	}
+	for _, want := range []string{"tenant schema", "artifact buckets", "PgVector database", "pgvector-orphans"} {
+		if !strings.Contains(body.Message, want) {
+			t.Errorf("message does not name %q:\n%s", want, body.Message)
+		}
+	}
+	if lines := strings.Split(body.Message, "\n"); len(lines) != 3 {
+		t.Errorf("message has %d lines, want one per leftover (3):\n%s", len(lines), body.Message)
+	}
+	if strings.Contains(recorder.Body.String(), "secret-detail") || strings.Contains(recorder.Body.String(), "10.0.0.9") {
+		t.Errorf("the body leaks the underlying error: %s", recorder.Body.String())
+	}
+	if body.Database != "project_42" || len(body.Steps) != 2 {
+		t.Errorf("database=%q steps=%d, want project_42 and the 2 steps", body.Database, len(body.Steps))
+	}
+}
+
+// Each leftover alone is also a 500 that names it; none of them is a 409.
+func TestDeleteProjectSingleLeftoversAreServerErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"tenant schema": {projectprovisioning.ErrTenantSchemaNotRemoved, "tenant schema"},
+		"artifacts":     {projectprovisioning.ErrArtifactsNotRemoved, "artifact buckets"},
+		"not removed":   {projectprovisioning.ErrProjectNotRemoved, "was not removed"},
+		"unknown":       {errors.New("boom"), "did not complete"},
+	} {
+		recorder := deleteWith(t, projectprovisioning.Result{}, tc.err)
+		if recorder.Code != http.StatusInternalServerError {
+			t.Errorf("%s: status = %d, want 500", name, recorder.Code)
+		}
+		if !strings.Contains(recorder.Body.String(), tc.want) {
+			t.Errorf("%s: body does not mention %q: %s", name, tc.want, recorder.Body.String())
+		}
+	}
+}
+
 // TestDeleteProjectAnswersNotFoundForAnUnknownProject keeps "no such project"
 // distinct from "deleted nothing", which the reference conflates: its
 // `delete_project` returns a 2-tuple that the caller wraps as
