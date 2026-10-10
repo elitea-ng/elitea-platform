@@ -52,16 +52,12 @@ func parseProjectName(name, suffix string) (int64, bool) {
 		return 0, false
 	}
 	digits := name[len(projectDatabasePrefix) : len(name)-len(suffix)]
-	for _, c := range digits {
-		if c < '0' || c > '9' {
-			return 0, false
-		}
-	}
 	id, err := strconv.ParseInt(digits, 10, 64)
 	if err != nil || id <= 0 || id > math.MaxInt32 {
 		return 0, false
 	}
-	// Canonical form only: "project_007" is not project 7's database.
+	// Canonical form only: ParseInt accepts a leading sign and leading zeros, and
+	// "project_007" is not project 7's database. The round trip rejects both.
 	if ProjectDatabaseName(id)+suffix != name {
 		return 0, false
 	}
@@ -91,10 +87,11 @@ type DropResult struct {
 // Drop removes one project's PgVector isolation under the bootstrap admin
 // connection, and is the inverse of Provision.
 //
-//   - ModeDatabaseRole: DROP DATABASE project_<id> WITH (FORCE), then DROP ROLE
-//     project_<id>_user. The database goes first so the role no longer owns or
-//     holds grants on anything. FORCE disconnects a worker still attached;
-//     callers that care must settle index runs first.
+//   - ModeDatabaseRole: lock the role out (see prepareForcedDrop), then DROP
+//     DATABASE project_<id> WITH (FORCE), then DROP ROLE project_<id>_user. The
+//     database goes first so the role no longer owns or holds grants on
+//     anything. FORCE disconnects a worker still attached; callers that care
+//     must settle index runs first.
 //   - ModeSchema: DROP SCHEMA project_<id> CASCADE in the admin's own database.
 //     Provision creates no role in this mode, so none is dropped.
 //
@@ -142,17 +139,23 @@ func (p *Provisioner) Drop(ctx context.Context, request DropRequest) (DropResult
 			closeBestEffort(ctx, admin)
 			return DropResult{}, err
 		}
+		roleExists, err := projectRoleExists(ctx, admin, role)
+		if err != nil {
+			closeBestEffort(ctx, admin)
+			return DropResult{}, err
+		}
 		if exists {
+			if roleExists {
+				if err := prepareForcedDrop(ctx, admin, database, role); err != nil {
+					closeBestEffort(ctx, admin)
+					return DropResult{}, err
+				}
+			}
 			if err := exec(ctx, admin, "drop project database", dropDatabaseSQL(database)); err != nil {
 				closeBestEffort(ctx, admin)
 				return DropResult{}, err
 			}
 			result.DatabaseDropped = true
-		}
-		roleExists, err := projectRoleExists(ctx, admin, role)
-		if err != nil {
-			closeBestEffort(ctx, admin)
-			return DropResult{}, err
 		}
 		if roleExists {
 			if err := exec(ctx, admin, "drop project role", dropRoleSQL(role)); err != nil {
@@ -169,10 +172,52 @@ func (p *Provisioner) Drop(ctx context.Context, request DropRequest) (DropResult
 	return result, nil
 }
 
+// prepareForcedDrop makes DROP DATABASE ... WITH (FORCE) work for an admin that
+// is not a superuser (managed Postgres: RDS, Cloud SQL, Azure).
+//
+// FORCE terminates the other sessions on the database. From PG16 a non-superuser
+// CREATEROLE admin may only terminate a backend whose role it is a member of,
+// and creating a role no longer makes the creator a usable member (the grant it
+// gets has ADMIN but not INHERIT or SET). So, in order:
+//
+//  1. ALTER ROLE NOLOGIN: the project role cannot open a new session while the
+//     drop runs.
+//  2. GRANT <role> TO CURRENT_USER, skipped when the admin already has the
+//     role's privileges (a superuser always does). The test is USAGE, not
+//     MEMBER: the creator's automatic ADMIN-only grant makes it a MEMBER
+//     without INHERIT, which is exactly the state that cannot terminate. The
+//     creator has ADMIN OPTION on PG16+, so the grant is allowed; "already a
+//     member" is tolerated.
+//  3. REVOKE CONNECT ON DATABASE FROM PUBLIC and the role: a session that was
+//     not role-based cannot sneak back in either.
+//
+// The role is about to be dropped, so none of this needs undoing; the grant goes
+// with the role.
+func prepareForcedDrop(ctx context.Context, connection Connection, database, role string) error {
+	if err := exec(ctx, connection, "disable project role login", alterRoleNoLoginSQL(role)); err != nil {
+		return err
+	}
+	member, err := queryBool(ctx, connection, "check admin privileges of project role", roleMemberSQL, role)
+	if err != nil {
+		return err
+	}
+	if !member {
+		if err := exec(ctx, connection, "grant project role to admin", grantRoleToAdminSQL(role)); err != nil {
+			// A concurrent grant is the only benign failure; recheck.
+			recheck, checkErr := queryBool(ctx, connection, "recheck admin privileges of project role", roleMemberSQL, role)
+			if checkErr != nil || !recheck {
+				return err
+			}
+		}
+	}
+	return exec(ctx, connection, "revoke project database connect", revokeConnectSQL(database, role))
+}
+
 // Lock-wait bounds for Drop. The wait is independent of the request context:
-// Deprovision runs under context.WithoutCancel, so without its own deadline a
-// provision holding the same project's lock would block the delete for ever.
-// Variables, not constants, so a test can shrink them.
+// Deprovision runs the drop under context.WithoutCancel with its own bound, so
+// without a deadline here a provision holding the same project's lock would
+// block the delete for the whole of that bound. Variables, not constants, so a
+// test can shrink them.
 var (
 	dropLockTimeout     = 30 * time.Second
 	dropLockPollInitial = 50 * time.Millisecond
@@ -243,6 +288,20 @@ func validateDropRequest(request DropRequest) (database string, role string, err
 // in depth.
 func dropDatabaseSQL(database string) string {
 	return "DROP DATABASE " + quoteIdentifier(database) + " WITH (FORCE)"
+}
+
+const roleMemberSQL = `SELECT pg_catalog.pg_has_role(CURRENT_USER, $1::name, 'USAGE')`
+
+func alterRoleNoLoginSQL(role string) string {
+	return "ALTER ROLE " + quoteIdentifier(role) + " NOLOGIN"
+}
+
+func grantRoleToAdminSQL(role string) string {
+	return "GRANT " + quoteIdentifier(role) + " TO CURRENT_USER"
+}
+
+func revokeConnectSQL(database, role string) string {
+	return "REVOKE CONNECT ON DATABASE " + quoteIdentifier(database) + " FROM PUBLIC, " + quoteIdentifier(role)
 }
 
 func dropRoleSQL(role string) string {

@@ -124,3 +124,97 @@ func databaseURLFor(base, database string) string {
 	}
 	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", config.User, config.Password, config.Host, config.Port, database)
 }
+
+// TestPGXDropAsANonSuperuserAdminWithAConnectedProjectSession is the managed
+// Postgres shape (#1211): the bootstrap admin is a plain CREATEROLE CREATEDB
+// role, not a superuser, and the project role has a live session. On PG16+ such
+// an admin cannot terminate that session unless it is a member of the role, so
+// a bare DROP DATABASE ... WITH (FORCE) fails.
+func TestPGXDropAsANonSuperuserAdminWithAConnectedProjectSession(t *testing.T) {
+	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set ELITEA_TEST_DATABASE_URL to run the real PgVector drop test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	config, err := pgx.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	super, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(context.Background()) })
+
+	suffix := time.Now().UnixNano() % 400_000_000
+	projectID := 1_400_000_000 + suffix
+	adminRole := fmt.Sprintf("bootstrap_admin_%d", projectID)
+	database, role := ProjectDatabaseName(projectID), ProjectRoleName(projectID)
+	quote := func(name string) string { return pgx.Identifier{name}.Sanitize() }
+	t.Cleanup(func() {
+		c := context.Background()
+		_, _ = super.Exec(c, "DROP DATABASE IF EXISTS "+quote(database)+" WITH (FORCE)")
+		_, _ = super.Exec(c, "DROP ROLE IF EXISTS "+quote(role))
+		_, _ = super.Exec(c, "DROP ROLE IF EXISTS "+quote(adminRole))
+	})
+
+	const adminPassword = "admin-pw"
+	if _, err := super.Exec(ctx, "CREATE ROLE "+quote(adminRole)+" LOGIN CREATEROLE CREATEDB PASSWORD '"+adminPassword+"'"); err != nil {
+		t.Fatal(err)
+	}
+	var isSuper bool
+	if err := super.QueryRow(ctx, `SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = $1`, adminRole).Scan(&isSuper); err != nil || isSuper {
+		t.Fatalf("premise: the bootstrap admin must not be a superuser (%v, %v)", isSuper, err)
+	}
+
+	// Create the project's pair AS the non-superuser admin, the way production does.
+	adminConfig := config.Copy()
+	adminConfig.User, adminConfig.Password = adminRole, adminPassword
+	admin, err := pgx.ConnectConfig(ctx, adminConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+quote(role)+" LOGIN PASSWORD 'project-pw'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+quote(database)); err != nil {
+		t.Fatal(err)
+	}
+
+	projectConfig := config.Copy()
+	projectConfig.User, projectConfig.Password, projectConfig.Database = role, "project-pw", database
+	session, err := pgx.ConnectConfig(ctx, projectConfig)
+	if err != nil {
+		t.Fatalf("premise: the project role could not connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+
+	connector, err := NewPGXConnector(adminConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisioner, err := NewProvisioner(connector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := provisioner.Drop(ctx, DropRequest{
+		ProjectID: projectID,
+		Admin: AdminConnection{
+			User: adminRole, Password: adminPassword, Host: config.Host, Port: config.Port, Database: config.Database,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Drop as a non-superuser admin: %v", err)
+	}
+	if !result.DatabaseDropped || !result.RoleDropped {
+		t.Fatalf("result = %+v", result)
+	}
+	var left int
+	if err := super.QueryRow(ctx,
+		`SELECT (SELECT count(*) FROM pg_catalog.pg_database WHERE datname = $1)
+		      + (SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname = $2)`, database, role).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("database or role left behind: %d, %v", left, err)
+	}
+}

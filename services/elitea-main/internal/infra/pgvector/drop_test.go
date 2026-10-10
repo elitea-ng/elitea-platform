@@ -41,7 +41,8 @@ func dropAdmin() AdminConnection {
 func TestDropDatabaseRoleDropsDatabaseThenRole(t *testing.T) {
 	t.Parallel()
 
-	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}, {value: true}}}
+	// lock, database exists, role exists, admin is NOT a member of the role.
+	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}, {value: true}, {value: false}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
@@ -58,12 +59,67 @@ func TestDropDatabaseRoleDropsDatabaseThenRole(t *testing.T) {
 	}
 	assertQuery(t, admin, 1, databaseExistsSQL, "project_42")
 	assertQuery(t, admin, 2, roleExistsSQL, "project_42_user")
+	assertQuery(t, admin, 3, roleMemberSQL, "project_42_user")
+	// The managed-Postgres order (#1211): lock the role out, become a member so
+	// FORCE may terminate its sessions, close the door, then drop.
 	assertStatements(t, admin.execStatements, []string{
+		`ALTER ROLE "project_42_user" NOLOGIN`,
+		`GRANT "project_42_user" TO CURRENT_USER`,
+		`REVOKE CONNECT ON DATABASE "project_42" FROM PUBLIC, "project_42_user"`,
 		`DROP DATABASE "project_42" WITH (FORCE)`,
 		`DROP ROLE "project_42_user"`,
 	})
 	if admin.closeCalls != 1 {
 		t.Fatalf("close calls = %d", admin.closeCalls)
+	}
+}
+
+func TestDropSkipsTheGrantWhenTheAdminIsAlreadyAMember(t *testing.T) {
+	t.Parallel()
+
+	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}, {value: true}, {value: true}}}
+	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
+	provisioner, _ := NewProvisioner(connector)
+
+	if _, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()}); err != nil {
+		t.Fatalf("Drop() = %v", err)
+	}
+	assertStatements(t, admin.execStatements, []string{
+		`ALTER ROLE "project_42_user" NOLOGIN`,
+		`REVOKE CONNECT ON DATABASE "project_42" FROM PUBLIC, "project_42_user"`,
+		`DROP DATABASE "project_42" WITH (FORCE)`,
+		`DROP ROLE "project_42_user"`,
+	})
+}
+
+func TestDropToleratesAGrantThatRacedAndStopsOnAGrantThatFailed(t *testing.T) {
+	t.Parallel()
+
+	// The grant errors but a recheck finds the admin a member: tolerated.
+	admin := &scriptedConnection{
+		queryResults: []queryResult{{value: true}, {value: true}, {value: true}, {value: false}, {value: true}},
+		execErrors:   map[int]error{1: errors.New("role is already a member")},
+	}
+	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
+	provisioner, _ := NewProvisioner(connector)
+	if _, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()}); err != nil {
+		t.Fatalf("Drop() with a raced grant = %v", err)
+	}
+
+	// The grant errors and the admin is still not a member: the drop must not run.
+	admin = &scriptedConnection{
+		queryResults: []queryResult{{value: true}, {value: true}, {value: true}, {value: false}, {value: false}},
+		execErrors:   map[int]error{1: errors.New("permission denied")},
+	}
+	connector = &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
+	provisioner, _ = NewProvisioner(connector)
+	if _, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()}); err == nil {
+		t.Fatal("Drop() succeeded although the grant failed")
+	}
+	for _, statement := range admin.execStatements {
+		if statement == `DROP DATABASE "project_42" WITH (FORCE)` {
+			t.Fatalf("dropped the database after a failed grant: %v", admin.execStatements)
+		}
 	}
 }
 
