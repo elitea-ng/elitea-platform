@@ -163,6 +163,7 @@ fn fixture(policy: LocalWorkPolicy) -> Fixture {
         prompt: person.clone(),
         data_dir,
         shell: Some(shell),
+        deny_read: Vec::new(),
     })
     .expect("session");
     let provider = LocalToolProvider::new(session.clone());

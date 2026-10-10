@@ -27,9 +27,9 @@
 //! |------|---------|
 //! | `read_file`, `list_tree`, `search_files`, `read_document`, git reads | allowed |
 //! | `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed (the turn's checkpoint undoes them; `path_deny`, `.git` and paths outside the workspace are refused before any rule) |
-//! | `git_commit` | allowed (denied paths are never staged) |
+//! | `git_commit` | allowed (denied paths are never committed: left out of the given paths; a commit of what is staged is refused while the index holds one) |
 //! | `run_command` in `read-only` or `workspace-write`, no network, not destructive (see [`crate::classify`]) | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
-//! | `run_command` that is destructive, asks for the network or `full-access`, or may run unconfined (the host allows unenforced sandboxes) | asked |
+//! | `run_command` that is destructive, asks for the network or `full-access`, or may run unconfined (the host allows unenforced sandboxes, or only Landlock, which cannot hide credentials, under partial enforcement: [`crate::sandbox::commands_may_read_denied`]) | asked |
 //!
 //! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
 //! loosen them: a workspace allow or a remembered choice allows a call the
@@ -414,9 +414,10 @@ impl RulesEngine {
         })
     }
 
-    /// Whether a command may run without an enforced sandbox (the host's
-    /// [`crate::sandbox::SandboxConfig::allow_unenforced`]): then every
-    /// command is asked.
+    /// Whether a command may run without the sandbox hiding what it
+    /// denies ([`crate::sandbox::commands_may_read_denied`]: unenforced
+    /// sandboxes allowed, or Landlock alone under partial enforcement):
+    /// then every command is asked.
     #[must_use]
     pub fn with_unenforced_commands(mut self, unenforced: bool) -> Self {
         self.confined = !unenforced;

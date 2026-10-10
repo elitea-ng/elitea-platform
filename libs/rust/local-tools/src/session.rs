@@ -27,7 +27,7 @@ use crate::files;
 use crate::git::{Repo, capped, check_revision};
 use crate::ledger::ReadLedger;
 use crate::policy::{LocalWorkPolicy, SandboxMode};
-use crate::sandbox::credential_paths;
+use crate::sandbox::{SandboxRequest, commands_may_read_denied};
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
 
@@ -50,6 +50,12 @@ pub struct SessionConfig {
     /// Command settings; `None`: defaults, with the temporary directory
     /// under `data_dir` and no Linux sandbox helper.
     pub shell: Option<ShellConfig>,
+    /// More directories no command may read, whatever `shell` says: the
+    /// desktop app's own config, data, log and cache directories as the
+    /// host resolved them (canonical when they exist). Added to
+    /// [`ShellConfig::deny_read`]; a writable root inside one (the
+    /// session's temporary directory) stays usable.
+    pub deny_read: Vec<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -249,7 +255,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "git_commit",
         kind: ToolKind::GitCommit,
-        description: "Commit to git through the host (hooks and signing off, your global git identity). With paths, commits exactly those files as they are now; without, commits what is staged. Paths the policy denies are never staged; workspace or policy rules may ask the person first.",
+        description: "Commit to git through the host (hooks and signing off, your global git identity). With paths, commits exactly those files as they are now; without, commits what is staged. Paths the policy denies are never committed: they are left out of the paths you give, and a commit of what is staged is refused while the index holds one. Workspace or policy rules may ask the person first.",
         parameters: || {
             json!({
                 "type": "object",
@@ -311,10 +317,10 @@ fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> ToolResult<T> {
         .map_err(|error| ToolError::invalid(format!("bad arguments: {error}")))
 }
 
-/// Pathspecs that keep `path_deny` matches and the person's credentials
-/// (when the workspace holds them, as a dotfiles repository does) out of
-/// `git diff`, case-insensitively.
-fn diff_exclusions(workspace: &Workspace) -> Vec<String> {
+/// Pathspecs that keep `path_deny` matches and `denied` (the credential
+/// list and the app's own directories, when the workspace holds them, as
+/// a dotfiles repository does) out of `git diff`, case-insensitively.
+fn diff_exclusions(workspace: &Workspace, denied: &[PathBuf]) -> Vec<String> {
     let mut out = Vec::new();
     let mut exclude = |glob: String| {
         out.push(format!(":(exclude,icase,glob){glob}"));
@@ -331,38 +337,37 @@ fn diff_exclusions(workspace: &Workspace) -> Vec<String> {
             exclude(format!("**/{trimmed}"));
         }
     }
-    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
-        for credential in credential_paths(std::path::Path::new(&home)) {
-            if let Ok(relative) = credential.strip_prefix(workspace.root()) {
-                let relative = relative.to_string_lossy();
-                let escaped: String = relative
-                    .chars()
-                    .flat_map(|c| {
-                        let special = matches!(c, '*' | '?' | '[' | ']' | '\\');
-                        let star = c == '*' && relative.ends_with('*');
-                        (if special && !star {
-                            vec!['\\', c]
-                        } else {
-                            vec![c]
-                        })
-                        .into_iter()
+    for credential in denied {
+        if let Ok(relative) = credential.strip_prefix(workspace.root()) {
+            let relative = relative.to_string_lossy();
+            let escaped: String = relative
+                .chars()
+                .flat_map(|c| {
+                    let special = matches!(c, '*' | '?' | '[' | ']' | '\\');
+                    let star = c == '*' && relative.ends_with('*');
+                    (if special && !star {
+                        vec!['\\', c]
+                    } else {
+                        vec![c]
                     })
-                    .collect();
-                exclude(escaped);
-            }
+                    .into_iter()
+                })
+                .collect();
+            exclude(escaped);
         }
     }
     out
 }
 
 /// The staged paths (`git diff --cached --name-only -z` output, relative
-/// to the repository's top) that `path_deny` or the credential list
-/// covers.
-fn denied_staged(workspace: &Workspace, top: &Path, staged: &[u8]) -> Vec<String> {
-    let credentials = std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map(|home| credential_paths(Path::new(&home)))
-        .unwrap_or_default();
+/// to the repository's top) that `path_deny` or `denied` (the credential
+/// list and the app's own directories) covers.
+fn denied_staged(
+    workspace: &Workspace,
+    top: &Path,
+    staged: &[u8],
+    denied: &[PathBuf],
+) -> Vec<String> {
     staged
         .split(|byte| *byte == 0)
         .filter(|name| !name.is_empty())
@@ -375,7 +380,7 @@ fn denied_staged(workspace: &Workspace, top: &Path, staged: &[u8]) -> Vec<String
                 .and_then(|relative| WsPath::from_relative(relative).ok())
                 .is_some_and(|path| workspace.denied_by(&path, Intent::Read).is_some());
             path_deny
-                || credentials.iter().any(|credential| {
+                || denied.iter().any(|credential| {
                     let text = credential.to_string_lossy();
                     match text.strip_suffix('*') {
                         Some(prefix) => absolute.to_string_lossy().starts_with(prefix),
@@ -386,15 +391,14 @@ fn denied_staged(workspace: &Workspace, top: &Path, staged: &[u8]) -> Vec<String
         .collect()
 }
 
-/// After `git add`: refuse the commit, unstaging them, when denied paths
-/// are staged under `selected` (what the exclusions should have kept out).
-fn unstage_denied(
+/// The staged paths under `selected` (all of the index when empty) that
+/// `path_deny` or `denied` covers.
+fn staged_denied(
     workspace: &Workspace,
     repo: &Repo,
     selected: &[String],
-    writes: &[PathBuf],
-    protected: &[PathBuf],
-) -> ToolResult<()> {
+    denied: &[PathBuf],
+) -> ToolResult<Vec<String>> {
     let root = workspace.root();
     let mut words = vec![
         "diff",
@@ -408,7 +412,39 @@ fn unstage_denied(
     ];
     words.extend(selected.iter().map(String::as_str));
     let staged = repo.git(root).literal(false).run(&words)?;
-    let denied = denied_staged(workspace, repo.top(), &staged);
+    Ok(denied_staged(workspace, repo.top(), &staged, denied))
+}
+
+/// Before committing what is staged: refuse, naming them, when the index
+/// holds denied paths (staged outside the session, say). Nothing is
+/// unstaged: the person decides what to do with their index.
+fn refuse_staged_denied(workspace: &Workspace, repo: &Repo, denied: &[PathBuf]) -> ToolResult<()> {
+    let staged = staged_denied(workspace, repo, &[], denied)?;
+    if staged.is_empty() {
+        return Ok(());
+    }
+    Err(ToolError::new(
+        ErrorCode::Denied,
+        format!(
+            "the index holds paths the policy denies ({}); nothing was committed. Unstage them \
+             (git restore --staged <path>) or commit chosen paths instead",
+            staged.join(", ")
+        ),
+    ))
+}
+
+/// After `git add`: refuse the commit, unstaging them, when denied paths
+/// are staged under `selected` (what the exclusions should have kept out).
+fn unstage_denied(
+    workspace: &Workspace,
+    repo: &Repo,
+    selected: &[String],
+    denied_paths: &[PathBuf],
+    writes: &[PathBuf],
+    protected: &[PathBuf],
+) -> ToolResult<()> {
+    let root = workspace.root();
+    let denied = staged_denied(workspace, repo, selected, denied_paths)?;
     if denied.is_empty() {
         return Ok(());
     }
@@ -452,15 +488,19 @@ impl LocalSession {
         let mut shell = config.shell.unwrap_or_else(|| {
             ShellConfig::new(config.data_dir.join("tmp").join(&config.session_id))
         });
+        // Commands that may run with credentials and the app's data
+        // readable (no sandbox, or Landlock alone) are unconfined: every
+        // one is asked.
         let engine = Arc::new(
             RulesEngine::new(config.policy, &workspace, config.settings, config.choices)?
-                .with_unenforced_commands(shell.sandbox.allow_unenforced),
+                .with_unenforced_commands(commands_may_read_denied(&shell.sandbox)),
         );
         let approvals: Arc<dyn ApprovalChannel> =
             Arc::new(RuleApprovals::new(engine.clone(), config.prompt));
         // Copy checkpoints, remembered choices and the host's state live in
         // the data directory: no command reads them (the session's temporary
         // directory inside it stays usable).
+        shell.deny_read.extend(config.deny_read);
         shell.deny_read.push(config.data_dir.clone());
         let checkpoints = Checkpoints::open_with(
             &workspace,
@@ -483,6 +523,16 @@ impl LocalSession {
     #[must_use]
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    /// The sandbox request a command in `mode` would run under: what it
+    /// may write, and what it cannot read.
+    ///
+    /// # Errors
+    ///
+    /// When the temporary directory cannot be created.
+    pub fn sandbox_request(&self, mode: SandboxMode, network: bool) -> ToolResult<SandboxRequest> {
+        shell::sandbox_request(&self.workspace, &self.shell, mode, network)
     }
 
     /// The approval channel (rules in front of the host's prompt): what the
@@ -954,9 +1004,10 @@ impl LocalSession {
             .iter()
             .map(|path| format!(":(literal){}", path.display_string()))
             .collect();
+        let denied = self.shell.denied_paths(true);
         let mut pathspecs = selected.clone();
         if !pathspecs.is_empty() {
-            pathspecs.extend(diff_exclusions(&self.workspace));
+            pathspecs.extend(diff_exclusions(&self.workspace, &denied));
         }
         self.blocking(move |this| {
             let repo = match (this.checkpoints.repo(), this.checkpoints.git_refusal()) {
@@ -969,7 +1020,11 @@ impl LocalSession {
             let (name, email) = repo.global_identity()?;
             let (writes, protected) = repo.commit_access();
             let root = this.workspace.root();
-            if !pathspecs.is_empty() {
+            if pathspecs.is_empty() {
+                // Without paths the commit takes the whole index: denied
+                // paths staged there are never committed.
+                refuse_staged_denied(&this.workspace, repo, &denied)?;
+            } else {
                 let mut words = vec!["add", "--"];
                 words.extend(pathspecs.iter().map(String::as_str));
                 repo.git(root)
@@ -978,7 +1033,14 @@ impl LocalSession {
                     .protect(&protected)
                     .worktree()
                     .run(&words)?;
-                unstage_denied(&this.workspace, repo, &selected, &writes, &protected)?;
+                unstage_denied(
+                    &this.workspace,
+                    repo,
+                    &selected,
+                    &denied,
+                    &writes,
+                    &protected,
+                )?;
             }
             let (name, email) = (
                 std::ffi::OsString::from(name),
@@ -1084,7 +1146,10 @@ impl LocalSession {
                     command_line.push(":(literal).".into());
                 }
                 command_line.extend(paths.iter().map(|path| format!(":(literal){path}")));
-                command_line.extend(diff_exclusions(&self.workspace));
+                command_line.extend(diff_exclusions(
+                    &self.workspace,
+                    &self.shell.denied_paths(true),
+                ));
             }
         }
         let reads_worktree = matches!(tool, "git_status" | "git_diff");
@@ -1129,7 +1194,7 @@ mod tests {
                 .expect("workspace");
         let staged = b"ws/a.txt\0ws/.env\0ws/deep/.env\0ws/secrets/key\0outside/.env\0";
         assert_eq!(
-            denied_staged(&workspace, Path::new(&top), staged),
+            denied_staged(&workspace, Path::new(&top), staged, &[]),
             ["ws/.env", "ws/deep/.env", "ws/secrets/key"]
         );
     }

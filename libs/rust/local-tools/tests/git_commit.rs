@@ -145,6 +145,7 @@ fn fixture_with(
         prompt: prompt.clone(),
         data_dir: base.join("data"),
         shell: Some(shell),
+        deny_read: Vec::new(),
     })
     .expect("session");
     Fixture {
@@ -323,5 +324,38 @@ async fn committing_a_directory_leaves_denied_files_out() {
             &["status", "--porcelain", "--untracked-files=all"]
         ),
         "?? .env\n?? sub/.env"
+    );
+}
+
+/// A commit of what is staged takes the whole index: a denied file staged
+/// there (by the person, outside the session) is never committed. The
+/// commit is refused, naming it, and the index is left as it was.
+#[tokio::test]
+async fn committing_what_is_staged_refuses_a_staged_denied_file() {
+    let fixture = fixture_with("approve", WorkspaceSettings::default(), |_| {});
+    std::fs::write(fixture.root.join("a.txt"), "changed\n").expect("edit");
+    std::fs::create_dir_all(fixture.root.join("sub")).expect("sub");
+    std::fs::write(fixture.root.join("sub/.env"), "TOKEN=1\n").expect("env");
+    git(&fixture.root, &["add", "a.txt", "sub/.env"]);
+    let before = git(&fixture.root, &["rev-parse", "HEAD"]);
+    let result = commit(&fixture, json!({ "message": "staged" })).await;
+    assert_eq!(result["code"], "local_tools.denied", "{result}");
+    let message = result["message"].as_str().unwrap_or_default();
+    assert!(message.contains("sub/.env"), "{message}");
+    assert!(message.contains("nothing was committed"), "{message}");
+    assert_eq!(git(&fixture.root, &["rev-parse", "HEAD"]), before);
+    assert_eq!(
+        git(&fixture.root, &["diff", "--cached", "--name-only"]),
+        "a.txt\nsub/.env",
+        "the index is the person's: left as it was"
+    );
+
+    // Once the denied file is unstaged, the same commit goes through.
+    git(&fixture.root, &["restore", "--staged", "sub/.env"]);
+    let result = commit(&fixture, json!({ "message": "staged" })).await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(
+        git(&fixture.root, &["show", "--name-only", "--format=", "HEAD"]),
+        "a.txt"
     );
 }

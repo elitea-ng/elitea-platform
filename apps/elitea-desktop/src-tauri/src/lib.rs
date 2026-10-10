@@ -213,6 +213,16 @@ pub fn run() {
                     retry: RetryPolicy::default(),
                     history: history.clone(),
                     index: Some(index.clone()),
+                    // Every directory the app keeps data in, as resolved
+                    // here (XDG overrides and Windows included): sandboxed
+                    // commands cannot read the stored sign-in, the history,
+                    // other workspaces' checkpoints and indexes, or logs.
+                    sandbox_deny: d0::turn::app_dirs_for_sandbox([
+                        Some(config_dir.clone()),
+                        Some(data_dir.clone()),
+                        app.path().app_log_dir().ok(),
+                        app.path().app_cache_dir().ok(),
+                    ]),
                 })
                 .map_err(|error| error.message)?,
             );

@@ -13,9 +13,9 @@ destructive.**
 |---|---|
 | `read_file`, `list_tree`, `search_files`, `read_document`, git reads | allowed |
 | `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
-| `git_commit` | allowed: denied paths are never staged |
+| `git_commit` | allowed: denied paths (`path_deny`, credentials, the desktop app's data) are never committed: left out of the given paths, and a commit of what is staged is refused, naming them, while the index holds one |
 | `run_command`, `read-only` or `workspace-write` sandbox, no network, not destructive | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
-| `run_command` that is destructive (below), asks for the network or `full-access`, or may run unconfined (the host allows unenforced sandboxes) | asked |
+| `run_command` that is destructive (below), asks for the network or `full-access`, or may run unconfined (the host allows unenforced sandboxes, or only Landlock is available and the host allows partial enforcement: credentials and the desktop app's data are not hidden there) | asked |
 
 ## What counts as destructive
 

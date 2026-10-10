@@ -161,6 +161,18 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   on every keychain read. The keychain item older builds wrote is never read
   (reading it is what prompted); see "Upgrading from a keychain build".
 
+- **Local commands cannot read the app's own data.** The config, data, log
+  and cache directories the app resolves at launch (wherever `XDG_*` or the
+  platform puts them) are passed to the OS sandbox of every local command,
+  as are the default `ai.elitea.desktop` locations (Application Support,
+  Caches, Logs, WebKit, HTTPStorages, Preferences, saved window state;
+  `~/.config`, `~/.local/share`, `~/.cache`) as a fallback: the stored
+  sign-in, the history, other workspaces' checkpoints and indexes stay out
+  of reach, while the session's temporary directory inside them stays
+  usable. On Linux with only Landlock (no bubblewrap) these paths cannot be
+  hidden: if partial enforcement is allowed, every command is asked and its
+  result says so.
+
 - The window loads **only bundled assets**. `on_navigation` refuses every other
   origin, so remote content never sits next to the IPC commands.
 - IPC is an explicit allowlist: eight `host_*` commands plus the local-work

@@ -50,6 +50,9 @@ struct State {
     commands: Vec<Value>,
     paths: Vec<String>,
     enforcement: Option<String>,
+    /// What the weakest enforcement left out (Landlock only: credentials
+    /// and the app's data not hidden), from the command's result.
+    enforcement_note: Option<String>,
     /// Path → content before the turn first changed it (`None`: absent).
     before: BTreeMap<String, Option<Vec<u8>>>,
     /// `(from, to)` of renames a patch made.
@@ -156,6 +159,12 @@ impl Recorder {
                     .is_none_or(|current| rank(level) < rank(current));
                 if weaker {
                     state.enforcement = Some(level.to_owned());
+                    state.enforcement_note = None;
+                }
+                if state.enforcement.as_deref() == Some(level)
+                    && let Some(note) = result.get("enforcement_note").and_then(Value::as_str)
+                {
+                    state.enforcement_note = Some(note.to_owned());
                 }
             }
         });
@@ -213,6 +222,9 @@ impl Recorder {
             });
             if let Some(enforcement) = &state.enforcement {
                 report["enforcement"] = json!(enforcement);
+            }
+            if let Some(note) = &state.enforcement_note {
+                report["enforcement_note"] = json!(note);
             }
             report
         })
@@ -439,10 +451,23 @@ mod tests {
             "cargo test",
             &json!({"exit_code": 0, "enforcement": "full"}),
         );
-        recorder.command("make", &json!({"exit_code": 2, "enforcement": "partial"}));
+        assert!(
+            recorder.work_report("read-only")["enforcement_note"].is_null(),
+            "no note under full enforcement"
+        );
+        recorder.command(
+            "make",
+            &json!({"exit_code": 2, "enforcement": "partial",
+                "enforcement_note": elitea_local_tools::sandbox::LANDLOCK_GAPS}),
+        );
         recorder.command("ls", &json!({"exit_code": 0, "enforcement": "full"}));
         let report = recorder.work_report("read-only");
         assert_eq!(report["enforcement"], "partial");
+        assert_eq!(
+            report["enforcement_note"],
+            elitea_local_tools::sandbox::LANDLOCK_GAPS,
+            "the report says credentials and the app's data were not hidden"
+        );
         assert_eq!(
             report["commands"][1],
             json!({"command": "make", "exit_code": 2})

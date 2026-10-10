@@ -107,6 +107,7 @@ async fn exercise(planted: &Planted) -> (Checkpoints, Value) {
         prompt: Arc::new(DeferringPrompt),
         data_dir: planted.data.clone(),
         shell: None,
+        deny_read: Vec::new(),
     })
     .expect("session");
     let mut results = Vec::new();

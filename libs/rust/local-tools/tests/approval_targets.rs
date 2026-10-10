@@ -75,6 +75,7 @@ async fn writes_through_symlinks_are_approved_as_their_targets() {
         prompt: prompt.clone(),
         data_dir: dir.path().join("data"),
         shell: None,
+        deny_read: Vec::new(),
     })
     .expect("session");
 
@@ -183,6 +184,7 @@ async fn a_patch_target_swapped_during_approval_is_refused() {
         prompt: Arc::new(SwappingPrompt { root: root.clone() }),
         data_dir: dir.path().join("data"),
         shell: None,
+        deny_read: Vec::new(),
     })
     .expect("session");
     for path in ["a.txt", "other.txt"] {

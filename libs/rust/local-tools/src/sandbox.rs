@@ -4,7 +4,7 @@
 //! |---|---|---|
 //! | macOS | Seatbelt: `/usr/bin/sandbox-exec -p <profile>` with a profile generated per command ([`seatbelt`]) | `full`: writes confined, `.git` read-only, credentials and `path_deny` unreadable, network denied (loopback included) |
 //! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked; the walk is cached per session until a write | `full`; `partial` past 20 000 directories, where commands that may write are **refused** unless the host sets [`SandboxConfig::allow_partial`] |
-//! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/`, has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`] |
+//! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/` (so **credentials, the desktop app's data and `path_deny` files are not hidden**), has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`]; when it does, every command is asked ([`commands_may_read_denied`]) and each result carries [`LANDLOCK_GAPS`] |
 //! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
 //!
 //! What every confined command gets, whatever the mode:
@@ -14,10 +14,17 @@
 //!   store and the refs are where code and checkpoints live, and the host
 //!   runs git there.
 //! * **Credentials are unreadable**: [`credential_paths`] (SSH, cloud, git
-//!   and browser credentials, the keychains), the host's own data
-//!   directory, and the workspace's `path_deny` files. Metadata stays
-//!   visible (`ls`, `git status` work); contents do not. The keychain's mach
-//!   services are not reachable unless the host allows it.
+//!   and browser credentials, the keychains, and the desktop app's own data
+//!   under [`DESKTOP_APP_ID`]: the stored sign-in, other workspaces'
+//!   history, checkpoints and indexes), the directories the host resolved
+//!   for itself (the desktop app's config, data, log and cache directories,
+//!   as `ShellConfig::deny_read`), the session's data directory, and the
+//!   workspace's `path_deny` files. Metadata stays visible (`ls`,
+//!   `git status` work); contents do not. A writable root inside a denied
+//!   directory (the session's temporary directory) is opened again. The
+//!   keychain's mach services are not reachable unless the host allows it.
+//!   Where the OS cannot hide them (Landlock only), the host asks for every
+//!   command instead.
 //! * **No listening sockets** when the network is allowed, unless the host
 //!   allows it.
 //!
@@ -54,6 +61,83 @@ impl Enforcement {
             Self::None => "none",
         }
     }
+}
+
+/// What a Landlock-only result says it does not enforce: the reason every
+/// command is asked there ([`commands_may_read_denied`]).
+pub const LANDLOCK_GAPS: &str = "Landlock only (no bubblewrap): credentials, the desktop app's \
+     data (stored sign-in, history, other workspaces) and path_deny files are NOT hidden from \
+     this command; .git is not read-only under the workspace; UDP and pathname sockets are not \
+     blocked";
+
+/// The confinement mechanism commands get on this machine.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mechanism {
+    /// macOS `sandbox-exec`.
+    Seatbelt,
+    /// Linux bubblewrap.
+    Bubblewrap,
+    /// Linux, the Landlock helper alone.
+    Landlock,
+    /// Nothing usable.
+    None,
+}
+
+impl Mechanism {
+    /// What `config` gives commands on this machine (probes bubblewrap on
+    /// Linux).
+    #[must_use]
+    pub fn detect(config: &SandboxConfig) -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = config;
+            if Path::new("/usr/bin/sandbox-exec").is_file() {
+                Self::Seatbelt
+            } else {
+                Self::None
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if bubblewrap::usable(config).is_some() {
+                Self::Bubblewrap
+            } else if config.linux_helper.is_some() {
+                Self::Landlock
+            } else {
+                Self::None
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = config;
+            Self::None
+        }
+    }
+
+    /// Whether it hides [`SandboxRequest::deny_paths`] from commands.
+    #[must_use]
+    pub const fn hides_denied_paths(self) -> bool {
+        matches!(self, Self::Seatbelt | Self::Bubblewrap)
+    }
+}
+
+/// Whether a command may run on this machine with denied paths readable
+/// (credentials, the desktop app's data, `path_deny`): no sandbox and the
+/// host allows unenforced commands, or Landlock alone (which cannot hide
+/// them) and the host allows partial enforcement. The host then treats
+/// commands as unconfined: every `run_command` is asked
+/// ([`crate::approvals::RulesEngine::with_unenforced_commands`]).
+#[must_use]
+pub fn commands_may_read_denied(config: &SandboxConfig) -> bool {
+    may_read_denied(Mechanism::detect(config), config)
+}
+
+/// [`commands_may_read_denied`] for a given mechanism.
+#[must_use]
+pub fn may_read_denied(mechanism: Mechanism, config: &SandboxConfig) -> bool {
+    // Landlock runs (partial) only when the host allows it; without any
+    // mechanism, only when it allows unenforced commands.
+    config.allow_unenforced || (mechanism == Mechanism::Landlock && config.allow_partial)
 }
 
 /// What one command may do.
@@ -103,10 +187,32 @@ impl SandboxRequest {
     }
 }
 
+/// The desktop app's bundle identifier, which names its directories: the
+/// stored sign-in (`credentials.json`), the thread history
+/// (`threads.sqlite`), the policy, and every workspace's checkpoints,
+/// remembered choices and index.
+pub const DESKTOP_APP_ID: &str = "ai.elitea.desktop";
+
 /// Credentials a command never needs to read: SSH and GPG keys, cloud and
 /// container credentials, git credentials, the keychains, browser profiles
-/// (cookies and saved passwords), and Elitea's own configuration. Caches
-/// and toolchains (`~/.cargo`, `~/.npm`, `~/.rustup`) stay readable.
+/// (cookies and saved passwords), Elitea's own configuration, and the
+/// desktop app's own data under [`DESKTOP_APP_ID`] (the stored sign-in,
+/// other workspaces' history, checkpoints and indexes). Caches and
+/// toolchains (`~/.cargo`, `~/.npm`, `~/.rustup`) stay readable.
+///
+/// The desktop app's entries here are defense in depth for the default
+/// layouts (macOS `~/Library`, Linux XDG defaults): the host passes the
+/// directories it actually resolved (its config, data, log and cache
+/// directories, wherever `XDG_*` puts them) as [`crate::shell::ShellConfig::deny_read`],
+/// and those are the authority. Windows has no list yet (the crate does
+/// not build there: phase D3); there the host-resolved `%APPDATA%` and
+/// `%LOCALAPPDATA%` directories are the only entries.
+///
+/// Each entry is `home` (canonical) joined with a relative path, plus, when
+/// it exists and resolves elsewhere (a symlinked `~/.config`), its
+/// canonical spelling: the sandboxes match resolved paths, so both are
+/// denied. An entry ending in `*` keeps the `*` on its last component and
+/// canonicalises its parent.
 #[must_use]
 pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
     const RELATIVE: &[&str] = &[
@@ -129,8 +235,8 @@ pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
         ".password-store",
         ".local/share/keyrings",
         ".config/elitea*",
-        // The desktop app's own data (credentials.json, threads.sqlite, every
-        // workspace's checkpoints and index), under its bundle identifier.
+        // The desktop app's own data under its bundle identifier (Linux XDG
+        // defaults: config, data and logs, cache).
         ".config/ai.elitea.desktop",
         ".local/share/ai.elitea.desktop",
         ".cache/ai.elitea.desktop",
@@ -151,16 +257,45 @@ pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
         "Library/Application Support/Vivaldi",
         "Library/Application Support/com.operasoftware.Opera",
         "Library/Application Support/elitea*",
+        // The desktop app's own data under its bundle identifier (macOS):
+        // config and data, caches, logs, the webview's storage and cookies,
+        // window state, preferences.
         "Library/Application Support/ai.elitea.desktop",
         "Library/Caches/ai.elitea.desktop",
         "Library/Logs/ai.elitea.desktop",
         "Library/WebKit/ai.elitea.desktop",
+        "Library/HTTPStorages/ai.elitea.desktop",
+        "Library/HTTPStorages/ai.elitea.desktop.binarycookies",
+        "Library/Saved Application State/ai.elitea.desktop.savedState",
+        "Library/Preferences/ai.elitea.desktop.plist",
     ];
     let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
-    RELATIVE
-        .iter()
-        .map(|relative| home.join(relative))
-        .collect()
+    let mut out = Vec::with_capacity(RELATIVE.len());
+    for relative in RELATIVE {
+        let literal = home.join(relative);
+        let canonical = canonical_spelling(&literal);
+        out.push(literal);
+        if let Some(canonical) = canonical
+            && !out.contains(&canonical)
+        {
+            out.push(canonical);
+        }
+    }
+    out
+}
+
+/// The canonical spelling of a deny entry, when it exists and differs: the
+/// path itself, or for a `prefix*` entry its parent directory with the
+/// prefix kept.
+fn canonical_spelling(path: &Path) -> Option<PathBuf> {
+    let text = path.to_string_lossy();
+    let canonical = if text.ends_with('*') {
+        let name = path.file_name()?;
+        std::fs::canonicalize(path.parent()?).ok()?.join(name)
+    } else {
+        std::fs::canonicalize(path).ok()?
+    };
+    (canonical != path).then_some(canonical)
 }
 
 /// The host's sandbox settings.
@@ -195,6 +330,9 @@ pub struct Prepared {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub enforcement: Enforcement,
+    /// What the enforcement leaves out, when it is not obvious from the
+    /// level ([`LANDLOCK_GAPS`]).
+    pub note: Option<&'static str>,
 }
 
 fn unwrapped(argv: &[String], enforcement: Enforcement) -> ToolResult<Prepared> {
@@ -205,6 +343,7 @@ fn unwrapped(argv: &[String], enforcement: Enforcement) -> ToolResult<Prepared> 
         program: PathBuf::from(program),
         args: rest.to_vec(),
         enforcement,
+        note: None,
     })
 }
 
@@ -264,6 +403,7 @@ fn platform_prepare(
         program: PathBuf::from(SANDBOX_EXEC),
         args: wrapped,
         enforcement: Enforcement::Full,
+        note: None,
     }))
 }
 
@@ -280,6 +420,7 @@ fn platform_prepare(
             program: bwrap,
             args: bubblewrap::args(request, &masks, argv),
             enforcement,
+            note: None,
         }));
     }
     let Some(helper) = &config.linux_helper else {
@@ -289,13 +430,15 @@ fn platform_prepare(
         return Err(ToolError::new(
             ErrorCode::SandboxUnavailable,
             "only Landlock is available here, which cannot keep .git read-only, hide \
-             credentials or block UDP; install bubblewrap (bwrap) or allow partial enforcement",
+             credentials and the desktop app's data, or block UDP; install bubblewrap (bwrap) \
+             or allow partial enforcement",
         ));
     }
     Ok(Some(Prepared {
         program: helper.clone(),
         args: landlock::helper_args(request, argv)?,
         enforcement: Enforcement::Partial,
+        note: Some(LANDLOCK_GAPS),
     }))
 }
 
@@ -1327,19 +1470,97 @@ mod tests {
     /// the stored sign-in and every other workspace's data.
     #[test]
     fn the_desktop_apps_own_data_is_denied() {
-        let home = std::path::Path::new("/home/me");
+        let home = std::path::Path::new("/nonexistent-home/me");
         let denied = credential_paths(home);
         for relative in [
-            "Library/Application Support/ai.elitea.desktop",
-            "Library/Logs/ai.elitea.desktop",
+            // Linux XDG defaults.
             ".config/ai.elitea.desktop",
             ".local/share/ai.elitea.desktop",
+            ".cache/ai.elitea.desktop",
+            // macOS.
+            "Library/Application Support/ai.elitea.desktop",
+            "Library/Caches/ai.elitea.desktop",
+            "Library/Logs/ai.elitea.desktop",
+            "Library/WebKit/ai.elitea.desktop",
+            "Library/HTTPStorages/ai.elitea.desktop",
+            "Library/HTTPStorages/ai.elitea.desktop.binarycookies",
+            "Library/Saved Application State/ai.elitea.desktop.savedState",
+            "Library/Preferences/ai.elitea.desktop.plist",
         ] {
             assert!(
                 denied.contains(&home.join(relative)),
                 "{relative} is not denied"
             );
+            assert!(relative.contains(super::DESKTOP_APP_ID));
         }
+    }
+
+    /// A symlinked intermediate directory (`~/.config` pointing elsewhere)
+    /// does not let a command read through the resolved path: both
+    /// spellings are denied, prefix entries included.
+    #[test]
+    fn credential_paths_deny_both_spellings_through_a_symlinked_config() {
+        let dir = tempfile::tempdir().expect("dir");
+        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let home = base.join("home");
+        let real = base.join("dotfiles/config");
+        std::fs::create_dir_all(real.join("ai.elitea.desktop")).expect("app dir");
+        std::fs::create_dir_all(real.join("gh")).expect("gh");
+        std::fs::create_dir_all(&home).expect("home");
+        std::os::unix::fs::symlink(&real, home.join(".config")).expect("symlink");
+        let denied = credential_paths(&home);
+        for path in [
+            home.join(".config/ai.elitea.desktop"),
+            real.join("ai.elitea.desktop"),
+            home.join(".config/gh"),
+            real.join("gh"),
+            home.join(".config/elitea*"),
+            real.join("elitea*"),
+        ] {
+            assert!(denied.contains(&path), "{} is not denied", path.display());
+        }
+        // A path that does not exist has one spelling, once.
+        let ssh = denied.iter().filter(|path| path.ends_with(".ssh")).count();
+        assert_eq!(ssh, 1);
+    }
+
+    /// Landlock alone cannot hide denied paths: when the host lets it run
+    /// (partial), commands may read credentials and the app's data, so
+    /// the host must ask for every one. Seatbelt and bubblewrap hide them.
+    #[test]
+    fn landlock_only_counts_as_commands_reading_denied_paths() {
+        use super::{Mechanism, may_read_denied};
+        let partial = SandboxConfig {
+            allow_partial: true,
+            ..SandboxConfig::default()
+        };
+        let unenforced = SandboxConfig {
+            allow_unenforced: true,
+            ..SandboxConfig::default()
+        };
+        let strict = SandboxConfig::default();
+        assert!(may_read_denied(Mechanism::Landlock, &partial));
+        assert!(
+            !may_read_denied(Mechanism::Landlock, &strict),
+            "refused, never run"
+        );
+        for hiding in [Mechanism::Seatbelt, Mechanism::Bubblewrap] {
+            assert!(hiding.hides_denied_paths());
+            assert!(!may_read_denied(hiding, &partial), "{hiding:?}");
+            assert!(!may_read_denied(hiding, &strict), "{hiding:?}");
+        }
+        assert!(!Mechanism::Landlock.hides_denied_paths());
+        assert!(!may_read_denied(Mechanism::None, &partial), "refused");
+        for mechanism in [
+            Mechanism::Seatbelt,
+            Mechanism::Bubblewrap,
+            Mechanism::Landlock,
+            Mechanism::None,
+        ] {
+            assert!(may_read_denied(mechanism, &unenforced), "{mechanism:?}");
+        }
+        assert!(super::LANDLOCK_GAPS.contains("NOT hidden"));
+        assert!(super::LANDLOCK_GAPS.contains("desktop app's data"));
     }
 
     #[test]
@@ -1614,12 +1835,14 @@ mod tests {
             allow_partial: true,
             ..config
         };
+        let prepared = prepare(&req, &argv, &allowed).expect("partial allowed");
+        assert_eq!(prepared.enforcement, Enforcement::Partial);
         assert_eq!(
-            prepare(&req, &argv, &allowed)
-                .expect("partial allowed")
-                .enforcement,
-            Enforcement::Partial
+            prepared.note,
+            Some(super::LANDLOCK_GAPS),
+            "the result says what is not hidden"
         );
+        assert!(super::commands_may_read_denied(&allowed));
     }
 
     #[test]

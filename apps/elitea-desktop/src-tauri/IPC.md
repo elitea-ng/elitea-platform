@@ -651,8 +651,13 @@ order, when committed. `approval_request.can_remember` is true when
 `allow_always` is remembered for this workspace (a simple command or a
 file change); otherwise `allow_always` answers once and the UI does not
 offer it. It is false for every `run_command` on a machine that may run
-commands unconfined (the OS sandbox cannot be enforced): every command is
-asked there, so a remembered choice would never apply. `can_remember` is
+commands unconfined: the OS sandbox cannot be enforced, or only Landlock is
+available (Linux without bubblewrap, under partial enforcement), which
+cannot hide credentials or the app's own data. Every command is asked
+there, so a remembered choice would never apply. Such a command's result
+carries `enforcement: "partial"` and an `enforcement_note` saying that
+credentials, the app's data and `path_deny` files were not hidden; the
+turn's `local_work` report keeps the weakest `enforcement` and its note. `can_remember` is
 computed from the very precondition the host's `remember` checks; should
 storing the choice still fail (the scope the person picked does not match,
 or the store cannot be written), the call is approved once and a warning
