@@ -1,4 +1,5 @@
 from elitea.runtime.v1 import common_pb2 as _common_pb2
+from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -84,20 +85,39 @@ class IndexIngestArtifactReferenceV1(_message.Message):
     def __init__(self, artifact_id: _Optional[str] = ..., immutable_version: _Optional[str] = ..., media_type: _Optional[str] = ..., byte_length: _Optional[int] = ..., digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., classification: _Optional[str] = ...) -> None: ...
 
 class IndexIngestSummaryV1(_message.Message):
-    __slots__ = ("status", "message", "terminal_state", "indexed", "updated", "reindex")
+    __slots__ = ("status", "message", "terminal_state", "indexed", "updated", "reindex", "indexed_documents", "indexed_chunks", "failed_chunks", "skipped", "embedding_model", "embedding_dimension")
+    class SkippedEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
     STATUS_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     TERMINAL_STATE_FIELD_NUMBER: _ClassVar[int]
     INDEXED_FIELD_NUMBER: _ClassVar[int]
     UPDATED_FIELD_NUMBER: _ClassVar[int]
     REINDEX_FIELD_NUMBER: _ClassVar[int]
+    INDEXED_DOCUMENTS_FIELD_NUMBER: _ClassVar[int]
+    INDEXED_CHUNKS_FIELD_NUMBER: _ClassVar[int]
+    FAILED_CHUNKS_FIELD_NUMBER: _ClassVar[int]
+    SKIPPED_FIELD_NUMBER: _ClassVar[int]
+    EMBEDDING_MODEL_FIELD_NUMBER: _ClassVar[int]
+    EMBEDDING_DIMENSION_FIELD_NUMBER: _ClassVar[int]
     status: IndexIngestStatusV1
     message: str
     terminal_state: IndexIngestTerminalStateV1
     indexed: int
     updated: int
     reindex: bool
-    def __init__(self, status: _Optional[_Union[IndexIngestStatusV1, str]] = ..., message: _Optional[str] = ..., terminal_state: _Optional[_Union[IndexIngestTerminalStateV1, str]] = ..., indexed: _Optional[int] = ..., updated: _Optional[int] = ..., reindex: bool = ...) -> None: ...
+    indexed_documents: int
+    indexed_chunks: int
+    failed_chunks: int
+    skipped: _containers.ScalarMap[str, int]
+    embedding_model: str
+    embedding_dimension: int
+    def __init__(self, status: _Optional[_Union[IndexIngestStatusV1, str]] = ..., message: _Optional[str] = ..., terminal_state: _Optional[_Union[IndexIngestTerminalStateV1, str]] = ..., indexed: _Optional[int] = ..., updated: _Optional[int] = ..., reindex: bool = ..., indexed_documents: _Optional[int] = ..., indexed_chunks: _Optional[int] = ..., failed_chunks: _Optional[int] = ..., skipped: _Optional[_Mapping[str, int]] = ..., embedding_model: _Optional[str] = ..., embedding_dimension: _Optional[int] = ...) -> None: ...
 
 class IndexIngestResultV1(_message.Message):
     __slots__ = ("input_bundle_id", "input_bundle_digest", "toolkit_configuration", "tool_parameters", "llm_model", "llm_configuration", "mcp_tokens", "result_artifact", "result_summary", "embedding_binding")
