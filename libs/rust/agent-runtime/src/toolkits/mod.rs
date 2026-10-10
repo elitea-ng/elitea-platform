@@ -45,6 +45,7 @@ pub mod direct_execution;
 pub mod families;
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod families;
+mod family_error;
 pub(crate) mod invocation;
 pub(crate) mod materialize;
 pub(crate) mod mcp;
@@ -169,9 +170,10 @@ pub use delegated_auth::{
 };
 pub use families::artifact::ArtifactToolAuthority;
 pub use materialize::{
-    ToolsetMaterializationError, ToolsetMaterializationErrorCode,
+    ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,
+    ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,
     materialize_configured_toolsets_with_artifact_authority,
-    materialize_configured_toolsets_with_tokens_and_authorization,
+    materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
 };
 pub use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,

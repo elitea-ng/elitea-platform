@@ -6,6 +6,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
+use crate::toolkits::families::UnsupportedSetting;
 use crate::toolkits::families::https_base_url::{
     self, BasePath, BaseUrlError, host_matches_domain,
 };
@@ -32,10 +33,12 @@ pub(super) const MAX_SEARCH_RESULTS: usize = 1_000;
 pub(crate) enum JiraConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
-    /// A setting the SDK honours that this runtime deliberately does not:
-    /// plain-HTTP origins and `verify_ssl: false`. The toolkit is skipped as
-    /// unsupported rather than failing the whole agent.
-    UnsupportedCapability,
+    /// A setting the SDK honours that this runtime deliberately does not
+    /// (plain-HTTP origins, `verify_ssl: false`, a reserved custom header).
+    /// The toolkit is left out of the agent and the run names the setting
+    /// (`materialize::RefusedToolkit`), rather than failing the whole agent
+    /// or vanishing silently.
+    UnsupportedCapability(UnsupportedSetting),
 }
 
 /// Stable configuration failure that never carries credentials or origins.
@@ -68,7 +71,7 @@ impl fmt::Display for JiraConfigError {
             JiraConfigErrorCode::ResourceExhausted => {
                 "the Jira toolkit configuration exceeds its approved limit"
             }
-            JiraConfigErrorCode::UnsupportedCapability => {
+            JiraConfigErrorCode::UnsupportedCapability(_) => {
                 "the Jira toolkit configuration requires a capability this runtime does not provide"
             }
         })
@@ -166,7 +169,11 @@ impl JiraToolkitConfig {
 
         match settings.get("verify_ssl") {
             None | Some(Value::Null | Value::Bool(true)) => {}
-            Some(Value::Bool(false)) => return Err(unsupported_capability()),
+            Some(Value::Bool(false)) => {
+                return Err(unsupported_capability(
+                    UnsupportedSetting::VerifySslDisabled,
+                ));
+            }
             Some(_) => return Err(invalid_configuration()),
         }
 
@@ -257,7 +264,7 @@ impl JiraToolkitConfig {
 /// without a trailing slash; plain HTTP is an unsupported capability.
 fn parse_base_url(value: &str) -> Result<Url, JiraConfigError> {
     https_base_url::parse(value, BasePath::Prefix).map_err(|error| match error {
-        BaseUrlError::PlainHttp => unsupported_capability(),
+        BaseUrlError::PlainHttp => unsupported_capability(UnsupportedSetting::PlainHttp),
         BaseUrlError::TooLong => resource_exhausted(),
         BaseUrlError::Invalid => invalid_configuration(),
     })
@@ -382,7 +389,7 @@ fn custom_headers(
                     | "accept"
             )
         {
-            return Err(unsupported_capability());
+            return Err(unsupported_capability(UnsupportedSetting::ReservedHeader));
         }
         let mut value = HeaderValue::from_str(value).map_err(|_| invalid_configuration())?;
         value.set_sensitive(true);
@@ -464,8 +471,8 @@ const fn resource_exhausted() -> JiraConfigError {
     }
 }
 
-const fn unsupported_capability() -> JiraConfigError {
+const fn unsupported_capability(setting: UnsupportedSetting) -> JiraConfigError {
     JiraConfigError {
-        code: JiraConfigErrorCode::UnsupportedCapability,
+        code: JiraConfigErrorCode::UnsupportedCapability(setting),
     }
 }

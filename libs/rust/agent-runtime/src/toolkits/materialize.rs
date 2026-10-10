@@ -21,6 +21,7 @@ use std::sync::Arc;
 use adk_core::Toolset;
 
 use super::DelegatedAuthorizationCatalog;
+use super::families::UnsupportedSetting;
 use super::families::artifact::ArtifactToolAuthority;
 use super::families::bigquery;
 use super::families::confluence;
@@ -36,6 +37,7 @@ use super::families::{
     gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
     salesforce, service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
 };
+use super::family_error::family_error;
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
 
@@ -52,12 +54,42 @@ pub enum ToolsetMaterializationErrorCode {
 #[derive(Clone, Copy)]
 pub struct ToolsetMaterializationError {
     code: ToolsetMaterializationErrorCode,
+    /// Set when the toolkit's configuration asks for a setting this runtime
+    /// deliberately refuses (#1207 review round 2). Within one
+    /// materialization pass such a toolkit is collected as a
+    /// [`RefusedToolkit`]; a caller that cannot report one receives it as an
+    /// `UnsupportedToolkit` error carrying the reason.
+    refusal: Option<UnsupportedSetting>,
 }
 
 impl ToolsetMaterializationError {
+    pub(super) const fn new(code: ToolsetMaterializationErrorCode) -> Self {
+        Self {
+            code,
+            refusal: None,
+        }
+    }
+
+    pub(super) const fn refused(setting: UnsupportedSetting) -> Self {
+        Self {
+            code: ToolsetMaterializationErrorCode::UnsupportedToolkit,
+            refusal: Some(setting),
+        }
+    }
+
     #[must_use]
     pub const fn code(self) -> ToolsetMaterializationErrorCode {
         self.code
+    }
+
+    /// The refused setting, as a sentence that carries no configuration
+    /// value; `None` for every other failure.
+    #[must_use]
+    pub const fn refusal_reason(self) -> Option<&'static str> {
+        match self.refusal {
+            Some(setting) => Some(setting.reason()),
+            None => None,
+        }
     }
 }
 
@@ -66,12 +98,17 @@ impl fmt::Debug for ToolsetMaterializationError {
         formatter
             .debug_struct("ToolsetMaterializationError")
             .field("code", &self.code)
+            .field("refusal", &self.refusal)
             .finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for ToolsetMaterializationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(setting) = self.refusal {
+            formatter.write_str("the frozen toolkit configuration is refused: ")?;
+            return formatter.write_str(setting.reason());
+        }
         formatter.write_str(match self.code {
             ToolsetMaterializationErrorCode::DependencyUnavailable => {
                 "the toolkit specification could not be retrieved"
@@ -90,6 +127,89 @@ impl fmt::Display for ToolsetMaterializationError {
 }
 
 impl std::error::Error for ToolsetMaterializationError {}
+
+/// A configured toolkit left out of the agent because its configuration asks
+/// for a setting this runtime refuses (#1207 review round 2).
+///
+/// Before, such a toolkit was skipped exactly like an unported family — one
+/// warning in the worker log — while the capability snapshot listed it as
+/// supported, so the user saw an enabled toolkit that did nothing. The
+/// ordinary agent path now names every refused toolkit in the run's opening
+/// notice ([`refused_toolkits_notice_text`]), in the same place and shape as
+/// the skipped internal tools (#866) and application children (#973).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefusedToolkit {
+    toolkit_name: String,
+    toolkit_type: String,
+    reason: &'static str,
+}
+
+impl RefusedToolkit {
+    fn new(reference: &FrozenToolReference<'_>, setting: UnsupportedSetting) -> Self {
+        Self {
+            toolkit_name: bounded_label(reference.toolkit_name()),
+            toolkit_type: bounded_label(reference.tool_type()),
+            reason: setting.reason(),
+        }
+    }
+
+    #[must_use]
+    pub fn toolkit_name(&self) -> &str {
+        &self.toolkit_name
+    }
+
+    #[must_use]
+    pub fn toolkit_type(&self) -> &str {
+        &self.toolkit_type
+    }
+
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+/// The longest toolkit name or type a notice repeats, in characters. Both
+/// come from stored rows the runtime does not otherwise bound.
+const MAX_NOTICE_LABEL_CHARS: usize = 128;
+
+fn bounded_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_NOTICE_LABEL_CHARS)
+        .collect()
+}
+
+/// One deterministic line per refused toolkit, naming the toolkit and the
+/// reason; `None` when nothing was refused. The set decides the text, never
+/// the order the version listed the toolkits in.
+#[must_use]
+pub fn refused_toolkits_notice_text(refused: &[RefusedToolkit]) -> Option<String> {
+    if refused.is_empty() {
+        return None;
+    }
+    let mut lines = refused
+        .iter()
+        .map(|toolkit| {
+            format!(
+                "toolkit '{}' ({}) is not enabled on this worker: {}",
+                toolkit.toolkit_name, toolkit.toolkit_type, toolkit.reason
+            )
+        })
+        .collect::<Vec<_>>();
+    lines.sort_unstable();
+    lines.dedup();
+    Some(lines.join("\n"))
+}
+
+/// The configured toolsets one pass built, and the toolkits it refused.
+pub struct ConfiguredToolsets {
+    pub toolsets: Vec<Arc<dyn Toolset>>,
+    pub delegated_authorization: DelegatedAuthorizationCatalog,
+    /// Toolkits left out for a refused setting, for the caller to report.
+    pub refused: Vec<RefusedToolkit>,
+}
 
 pub async fn materialize_configured_toolsets_with_tokens_and_authorization(
     snapshot: &AdmittedToolSnapshot<'_>,
@@ -115,12 +235,66 @@ pub async fn materialize_configured_toolsets_with_tokens_and_authorization(
 /// error — the toolkit is a real capability of the product that this runtime
 /// cannot serve in that position, and refusing the whole profile would turn
 /// one unavailable tool into an agent that stops answering.
+///
+/// These callers (pipelines, nested applications, direct tool calls) have no
+/// opening notice to name a refused toolkit in, so a refused setting is an
+/// `UnsupportedToolkit` ERROR here, carrying the reason — visible as
+/// "configuration type is not supported" rather than a toolkit that silently
+/// does nothing. The ordinary agent path uses
+/// [`materialize_configured_toolsets_reporting_refusals`] instead.
 pub async fn materialize_configured_toolsets_with_artifact_authority(
     snapshot: &AdmittedToolSnapshot<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
 ) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
+    let mut refusal = None;
+    let materialized = materialize_all(
+        snapshot,
+        policy,
+        delegated_tokens,
+        artifacts,
+        &mut |_, setting| {
+            refusal.get_or_insert(ToolsetMaterializationError::refused(setting));
+        },
+    )
+    .await?;
+    if let Some(error) = refusal {
+        return Err(error);
+    }
+    Ok((materialized.toolsets, materialized.delegated_authorization))
+}
+
+/// The ordinary agent path: build every configured toolkit, and REPORT the
+/// ones refused for a setting this runtime does not honour instead of
+/// failing the agent, so the run can name them
+/// ([`refused_toolkits_notice_text`]).
+pub async fn materialize_configured_toolsets_reporting_refusals(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
+    let mut refused = Vec::new();
+    let mut materialized = materialize_all(
+        snapshot,
+        policy,
+        delegated_tokens,
+        artifacts,
+        &mut |reference, setting| refused.push(RefusedToolkit::new(reference, setting)),
+    )
+    .await?;
+    materialized.refused = refused;
+    Ok(materialized)
+}
+
+async fn materialize_all(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, UnsupportedSetting) + Send),
+) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
         return Err(resource_exhausted());
     }
@@ -139,6 +313,21 @@ pub async fn materialize_configured_toolsets_with_artifact_authority(
         .await
         {
             Ok(materialized) => materialized,
+            Err(ToolsetMaterializationError {
+                refusal: Some(setting),
+                ..
+            }) => {
+                tracing::warn!(
+                    event = "agent_toolkit_refused",
+                    reason_code = "unsupported_setting",
+                    toolkit_type = reference.tool_type(),
+                    toolkit_id = reference.tool_id(),
+                    reason = setting.reason(),
+                    "agent toolkit configuration asks for a setting this runtime refuses; the toolkit was left out"
+                );
+                on_refused(reference, setting);
+                continue;
+            }
             Err(error) if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit => {
                 tracing::warn!(
                     event = "agent_toolkit_skipped",
@@ -156,7 +345,11 @@ pub async fn materialize_configured_toolsets_with_artifact_authority(
             .map_err(|()| invalid_configuration())?;
         toolsets.push(toolset);
     }
-    Ok((toolsets, delegated_authorization))
+    Ok(ConfiguredToolsets {
+        toolsets,
+        delegated_authorization,
+        refused: Vec::new(),
+    })
 }
 
 async fn materialize(
@@ -209,9 +402,9 @@ async fn materialize(
             .map_err(|error| match error {
                 openapi::source::SourceError::Invalid => invalid_configuration(),
                 openapi::source::SourceError::TooLarge => resource_exhausted(),
-                openapi::source::SourceError::Unavailable => ToolsetMaterializationError {
-                    code: ToolsetMaterializationErrorCode::DependencyUnavailable,
-                },
+                openapi::source::SourceError::Unavailable => ToolsetMaterializationError::new(
+                    ToolsetMaterializationErrorCode::DependencyUnavailable,
+                ),
             })?;
         let config = match remote.as_ref() {
             Some(spec) => openapi::config::OpenApiToolkitConfig::parse_with_spec(
@@ -274,24 +467,24 @@ fn materialize_zephyr_rest(
         "zephyr_enterprise" => zephyr_enterprise::tools::build_zephyr_enterprise_toolset(
             name,
             zephyr_enterprise::config::ZephyrEnterpriseToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         ),
         "zephyr_essential" => zephyr_essential::tools::build_zephyr_essential_toolset(
             name,
             zephyr_essential::config::ZephyrEssentialToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         ),
         "zephyr_scale" => zephyr_scale::tools::build_zephyr_scale_toolset(
             name,
             zephyr_scale::config::ZephyrScaleToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         ),
         _ => return Ok(None),
     }
-    .map_err(|error| zephyr_rest_toolset_materialization_error(error.code()))?;
+    .map_err(|error| family_error(error.code()))?;
     Ok(Some(Arc::new(toolset)))
 }
 
@@ -302,60 +495,42 @@ fn materialize_ado(
     settings: &serde_json::Map<String, serde_json::Value>,
     policy: &Arc<ToolAdmissionPolicy>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
-    use super::families::ado::config::AdoConfigErrorCode;
     use super::families::ado_boards;
     use super::families::ado_plans;
     use super::families::ado_repos;
     use super::families::ado_wiki;
-    let config_error = |code: AdoConfigErrorCode| match code {
-        AdoConfigErrorCode::InvalidConfiguration => invalid_configuration(),
-        AdoConfigErrorCode::ResourceExhausted => resource_exhausted(),
-    };
     let toolset = match tool_type {
         "ado_boards" => ado_boards::tools::build_ado_boards_toolset(
             name,
             ado_boards::config::AdoBoardsToolkitConfig::parse(settings)
-                .map_err(|error| config_error(error.code()))?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| ado_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         "ado_plans" => ado_plans::tools::build_ado_plans_toolset(
             name,
             ado_plans::config::AdoPlansToolkitConfig::parse(settings)
-                .map_err(|error| config_error(error.code()))?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| ado_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         "ado_repos" => ado_repos::tools::build_ado_repos_toolset(
             name,
             ado_repos::config::AdoReposToolkitConfig::parse(settings)
-                .map_err(|error| config_error(error.code()))?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| ado_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         "ado_wiki" => ado_wiki::tools::build_ado_wiki_toolset(
             name,
             ado_wiki::config::AdoWikiToolkitConfig::parse(settings)
-                .map_err(|error| config_error(error.code()))?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| ado_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))
-}
-
-const fn ado_toolset_materialization_error(
-    code: super::families::ado::toolset::AdoToolsetErrorCode,
-) -> ToolsetMaterializationError {
-    use super::families::ado::toolset::AdoToolsetErrorCode;
-    match code {
-        AdoToolsetErrorCode::InvalidConfiguration
-        | AdoToolsetErrorCode::Client
-        | AdoToolsetErrorCode::InvalidDefinition => invalid_configuration(),
-        AdoToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-        AdoToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-    }
 }
 
 fn materialize_a_to_k(
@@ -449,72 +624,61 @@ fn materialize_ported_saas(
         // without one and serves every tool but attach_file.
         "aha" => aha::tools::build_aha_toolset(
             name,
-            aha::config::AhaToolkitConfig::parse(settings).map_err(|_| invalid_configuration())?,
+            aha::config::AhaToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
             policy,
             None,
         )
-        .map_err(|error| aha_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         "bigquery" => bigquery::tools::build_bigquery_toolset(
             name,
             bigquery::config::BigQueryToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| bigquery_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         "bitbucket" => bitbucket::tools::build_bitbucket_toolset(
             name,
             bitbucket::config::BitbucketToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| {
-            if error.code() == bitbucket::tools::BitbucketToolsetErrorCode::UnsupportedSelection {
-                unsupported_toolkit()
-            } else {
-                invalid_configuration()
-            }
-        })?,
+        .map_err(|error| family_error(error.code()))?,
         "carrier" => carrier::tools::build_carrier_toolset(
             name,
             carrier::config::CarrierToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| carrier_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         "confluence" => confluence::tools::build_confluence_toolset(
             name,
             confluence::config::ConfluenceToolkitConfig::parse(settings)
-                .map_err(|error| confluence_config_materialization_error(error.code()))?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| confluence_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         "figma" => figma::tools::build_figma_toolset(
             name,
             figma::config::FigmaToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| figma_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         "gitlab" => gitlab::tools::build_gitlab_toolset(
             name,
             gitlab::config::GitLabToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| {
-            if error.code() == gitlab::tools::GitLabToolsetErrorCode::UnsupportedSelection {
-                unsupported_toolkit()
-            } else {
-                invalid_configuration()
-            }
-        })?,
+        .map_err(|error| family_error(error.code()))?,
         "jira" => jira::tools::build_jira_toolset(
             name,
             jira::config::JiraToolkitConfig::parse(settings)
-                .map_err(|error| jira_config_materialization_error(error.code()))?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| jira_toolset_materialization_error(error.code()))?,
+        .map_err(|error| family_error(error.code()))?,
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))
@@ -625,79 +789,46 @@ fn materialize_test_management(
         "qtest" => qtest::tools::build_qtest_toolset(
             name,
             qtest::config::QtestToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| match error.code() {
-            qtest::tools::QtestToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-            _ => invalid_configuration(),
-        })?,
+        .map_err(|error| family_error(error.code()))?,
         "testio" => testio::tools::build_testio_toolset(
             name,
             testio::config::TestIoToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| match error.code() {
-            testio::tools::TestIoToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-            _ => invalid_configuration(),
-        })?,
+        .map_err(|error| family_error(error.code()))?,
         "testrail" => testrail::tools::build_testrail_toolset(
             name,
             testrail::config::TestRailToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| match error.code() {
-            testrail::tools::TestRailToolsetErrorCode::UnsupportedSelection => {
-                unsupported_toolkit()
-            }
-            _ => invalid_configuration(),
-        })?,
+        .map_err(|error| family_error(error.code()))?,
         "xray_cloud" => xray_cloud::tools::build_xray_cloud_toolset(
             name,
             xray_cloud::config::XrayToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
+                .map_err(|error| family_error(error.code()))?,
             policy,
         )
-        .map_err(|error| match error.code() {
-            xray_cloud::tools::XrayToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-            _ => invalid_configuration(),
-        })?,
+        .map_err(|error| family_error(error.code()))?,
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))
 }
 
 const fn invalid_configuration() -> ToolsetMaterializationError {
-    ToolsetMaterializationError {
-        code: ToolsetMaterializationErrorCode::InvalidConfiguration,
-    }
+    ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::InvalidConfiguration)
 }
 
 const fn unsupported_toolkit() -> ToolsetMaterializationError {
-    ToolsetMaterializationError {
-        code: ToolsetMaterializationErrorCode::UnsupportedToolkit,
-    }
+    ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::UnsupportedToolkit)
 }
 
 const fn resource_exhausted() -> ToolsetMaterializationError {
-    ToolsetMaterializationError {
-        code: ToolsetMaterializationErrorCode::ResourceExhausted,
-    }
-}
-
-/// A Zephyr REST family serves a subset of its SDK tools; a selection that
-/// leaves none of them is unsupported (skipped), not misconfigured.
-const fn zephyr_rest_toolset_materialization_error(
-    code: super::families::zephyr_rest::tools::ZephyrRestToolsetErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        super::families::zephyr_rest::tools::ZephyrRestToolsetErrorCode::UnsupportedSelection => {
-            unsupported_toolkit()
-        }
-        _ => invalid_configuration(),
-    }
+    ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::ResourceExhausted)
 }
 
 const fn artifact_config_materialization_error(
@@ -729,72 +860,6 @@ const fn openapi_materialization_error(
     }
 }
 
-const fn aha_toolset_materialization_error(
-    code: aha::tools::AhaToolsetErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        aha::tools::AhaToolsetErrorCode::InvalidConfiguration
-        | aha::tools::AhaToolsetErrorCode::Client
-        | aha::tools::AhaToolsetErrorCode::InvalidDefinition => invalid_configuration(),
-        aha::tools::AhaToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-        aha::tools::AhaToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-    }
-}
-
-const fn confluence_config_materialization_error(
-    code: confluence::config::ConfluenceConfigErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        confluence::config::ConfluenceConfigErrorCode::InvalidConfiguration => {
-            invalid_configuration()
-        }
-        confluence::config::ConfluenceConfigErrorCode::ResourceExhausted => resource_exhausted(),
-        confluence::config::ConfluenceConfigErrorCode::UnsupportedCapability => {
-            unsupported_toolkit()
-        }
-    }
-}
-
-const fn confluence_toolset_materialization_error(
-    code: confluence::tools::ConfluenceToolsetErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        confluence::tools::ConfluenceToolsetErrorCode::InvalidConfiguration
-        | confluence::tools::ConfluenceToolsetErrorCode::Client
-        | confluence::tools::ConfluenceToolsetErrorCode::InvalidDefinition => {
-            invalid_configuration()
-        }
-        confluence::tools::ConfluenceToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-        confluence::tools::ConfluenceToolsetErrorCode::UnsupportedCapability
-        | confluence::tools::ConfluenceToolsetErrorCode::UnsupportedSelection => {
-            unsupported_toolkit()
-        }
-    }
-}
-
-const fn jira_config_materialization_error(
-    code: jira::config::JiraConfigErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        jira::config::JiraConfigErrorCode::InvalidConfiguration => invalid_configuration(),
-        jira::config::JiraConfigErrorCode::ResourceExhausted => resource_exhausted(),
-        jira::config::JiraConfigErrorCode::UnsupportedCapability => unsupported_toolkit(),
-    }
-}
-
-const fn jira_toolset_materialization_error(
-    code: jira::tools::JiraToolsetErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        jira::tools::JiraToolsetErrorCode::InvalidConfiguration
-        | jira::tools::JiraToolsetErrorCode::Client
-        | jira::tools::JiraToolsetErrorCode::InvalidDefinition => invalid_configuration(),
-        jira::tools::JiraToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-        jira::tools::JiraToolsetErrorCode::UnsupportedCapability
-        | jira::tools::JiraToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-    }
-}
-
 const fn github_toolset_materialization_error(
     code: github::tools::GitHubToolsetErrorCode,
 ) -> ToolsetMaterializationError {
@@ -803,30 +868,6 @@ const fn github_toolset_materialization_error(
         | github::tools::GitHubToolsetErrorCode::Client
         | github::tools::GitHubToolsetErrorCode::InvalidDefinition => invalid_configuration(),
         github::tools::GitHubToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-    }
-}
-
-const fn carrier_toolset_materialization_error(
-    code: carrier::tools::CarrierToolsetErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        carrier::tools::CarrierToolsetErrorCode::InvalidConfiguration
-        | carrier::tools::CarrierToolsetErrorCode::Client
-        | carrier::tools::CarrierToolsetErrorCode::InvalidDefinition => invalid_configuration(),
-        carrier::tools::CarrierToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-        carrier::tools::CarrierToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-    }
-}
-
-const fn figma_toolset_materialization_error(
-    code: figma::tools::FigmaToolsetErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        figma::tools::FigmaToolsetErrorCode::InvalidConfiguration
-        | figma::tools::FigmaToolsetErrorCode::Client
-        | figma::tools::FigmaToolsetErrorCode::InvalidDefinition => invalid_configuration(),
-        figma::tools::FigmaToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-        figma::tools::FigmaToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
     }
 }
 
@@ -870,19 +911,5 @@ const fn sharepoint_toolset_materialization_error(
         | sharepoint::tools::SharePointToolsetErrorCode::UnsupportedSelection => {
             unsupported_toolkit()
         }
-    }
-}
-
-const fn bigquery_toolset_materialization_error(
-    code: bigquery::tools::BigQueryToolsetErrorCode,
-) -> ToolsetMaterializationError {
-    match code {
-        // Only SDK tools this runtime does not serve were selected: skip the
-        // toolkit with the materializer's warning rather than fail the run.
-        bigquery::tools::BigQueryToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-        bigquery::tools::BigQueryToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-        bigquery::tools::BigQueryToolsetErrorCode::InvalidConfiguration
-        | bigquery::tools::BigQueryToolsetErrorCode::Client
-        | bigquery::tools::BigQueryToolsetErrorCode::InvalidDefinition => invalid_configuration(),
     }
 }

@@ -6,6 +6,7 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::UnsupportedSetting;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -37,7 +38,7 @@ const UNSERVED_TOOLS: [&str; 9] = [
 pub(crate) enum ConfluenceToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
-    UnsupportedCapability,
+    UnsupportedCapability(UnsupportedSetting),
     UnsupportedSelection,
     Client,
     InvalidDefinition,
@@ -72,7 +73,7 @@ impl fmt::Display for ConfluenceToolsetError {
             ConfluenceToolsetErrorCode::ResourceExhausted => {
                 "the Confluence toolkit configuration exceeds its approved limit"
             }
-            ConfluenceToolsetErrorCode::UnsupportedCapability => {
+            ConfluenceToolsetErrorCode::UnsupportedCapability(_) => {
                 "the Confluence toolkit configuration requires a capability this runtime does not provide"
             }
             ConfluenceToolsetErrorCode::UnsupportedSelection => {
@@ -98,8 +99,8 @@ impl From<ConfluenceConfigError> for ConfluenceToolsetError {
                 ConfluenceConfigErrorCode::ResourceExhausted => {
                     ConfluenceToolsetErrorCode::ResourceExhausted
                 }
-                ConfluenceConfigErrorCode::UnsupportedCapability => {
-                    ConfluenceToolsetErrorCode::UnsupportedCapability
+                ConfluenceConfigErrorCode::UnsupportedCapability(setting) => {
+                    ConfluenceToolsetErrorCode::UnsupportedCapability(setting)
                 }
             },
         }

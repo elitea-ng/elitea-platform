@@ -11,6 +11,7 @@ use reqwest::header::{AUTHORIZATION, COOKIE};
 use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
+use super::families::UnsupportedSetting;
 use super::families::jira::client::{
     JiraApi, JiraClient, JiraClientError, JiraClientErrorCode, JiraHttpResponse, JiraOperation,
     JiraTransport,
@@ -19,7 +20,12 @@ use super::families::jira::config::{JiraApiVersion, JiraConfigErrorCode, JiraToo
 use super::families::jira::tools::{
     JiraToolsetErrorCode, build_jira_toolset, test_build_with_api, test_catalog,
 };
+use super::materialize::{
+    ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,
+    materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
+};
 use super::policy::ToolAdmissionPolicy;
+use super::snapshot::FrozenToolSnapshot;
 
 const TOKEN: &str = "jira-private-token";
 const API_KEY: &str = "jira-private-api-key";
@@ -277,10 +283,13 @@ fn unsupported_and_invalid_configuration_fail_closed_with_distinct_codes() {
     };
     let mut http = server_settings();
     http["jira_configuration"]["base_url"] = json!("http://jira.example.test");
-    assert_eq!(code(http), JiraConfigErrorCode::UnsupportedCapability);
+    assert_eq!(
+        code(http),
+        JiraConfigErrorCode::UnsupportedCapability(UnsupportedSetting::PlainHttp)
+    );
     assert_eq!(
         code(with(server_settings(), "verify_ssl", json!(false))),
-        JiraConfigErrorCode::UnsupportedCapability
+        JiraConfigErrorCode::UnsupportedCapability(UnsupportedSetting::VerifySslDisabled)
     );
     assert_eq!(
         code(with(
@@ -288,7 +297,7 @@ fn unsupported_and_invalid_configuration_fail_closed_with_distinct_codes() {
             "custom_headers",
             json!({"Authorization": "Basic other"})
         )),
-        JiraConfigErrorCode::UnsupportedCapability
+        JiraConfigErrorCode::UnsupportedCapability(UnsupportedSetting::ReservedHeader)
     );
     assert_eq!(
         code(with(
@@ -296,7 +305,7 @@ fn unsupported_and_invalid_configuration_fail_closed_with_distinct_codes() {
             "custom_headers",
             json!({"X-Elitea-Project-Id": "7"})
         )),
-        JiraConfigErrorCode::UnsupportedCapability
+        JiraConfigErrorCode::UnsupportedCapability(UnsupportedSetting::ReservedHeader)
     );
     let mut no_credential = server_settings();
     no_credential["jira_configuration"]["api_key"] = json!("");
@@ -1233,5 +1242,77 @@ async fn generic_non_json_replies_are_returned_as_text() {
         )
         .await,
         "HTTP: GET /rest/api/2/serverInfo -> 200 OK <html><body>Server info</body></html>"
+    );
+}
+
+/// #1207 review round 2: a Jira config the Rust worker refuses (plain HTTP,
+/// `verify_ssl=false`, a reserved header) used to be skipped with one log
+/// line while the toolkit stayed listed as enabled. The ordinary agent path
+/// now reports it with a sentence naming the setting, and a caller with no
+/// notice to put it in fails with that reason instead of skipping silently.
+#[tokio::test]
+async fn a_refused_setting_is_named_to_the_user_not_silently_skipped() {
+    let mut plain_http = server_settings();
+    plain_http["jira_configuration"]["base_url"] = json!("http://jira.example.test");
+    let version = json!({"tools": [
+        {"id": 1, "type": "jira", "toolkit_name": "tracker",
+         "settings": with(server_settings(), "verify_ssl", json!(false))},
+        {"id": 2, "type": "jira", "toolkit_name": "legacy", "settings": plain_http},
+        {"id": 3, "type": "jira", "toolkit_name": "headers",
+         "settings": with(server_settings(), "custom_headers", json!({"Cookie": "a=b"}))},
+        {"id": 4, "type": "jira", "toolkit_name": "served", "settings": server_settings()}
+    ]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("Jira snapshot")
+        .apply_policy(policy(&[]).as_ref());
+
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+        None,
+    )
+    .await
+    .expect("a refused toolkit does not fail the agent");
+    assert_eq!(
+        materialized.toolsets.len(),
+        1,
+        "only the served toolkit binds"
+    );
+    assert_eq!(materialized.refused.len(), 3);
+    let notice = refused_toolkits_notice_text(&materialized.refused).expect("a notice");
+    assert_eq!(
+        notice,
+        [
+            "toolkit 'headers' (jira) is not enabled on this worker: a custom header that overrides the credential or request framing (Authorization, Cookie, Host, Content-Type, Accept or a platform header) is not supported by the Rust worker",
+            "toolkit 'legacy' (jira) is not enabled on this worker: a plain http:// base URL is not supported by the Rust worker; configure an https:// URL",
+            "toolkit 'tracker' (jira) is not enabled on this worker: verify_ssl=false is not supported by the Rust worker; TLS certificates are always verified",
+        ]
+        .join("\n")
+    );
+    assert!(!notice.contains(API_KEY) && !notice.contains("jira.example.test"));
+
+    let Err(error) = materialize_configured_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    else {
+        panic!("a caller with no notice must not skip a refused toolkit silently");
+    };
+    assert_eq!(
+        error.code(),
+        ToolsetMaterializationErrorCode::UnsupportedToolkit
+    );
+    assert_eq!(
+        error.refusal_reason(),
+        Some(UnsupportedSetting::VerifySslDisabled.reason())
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("verify_ssl=false is not supported by the Rust worker"),
+        "{error}"
     );
 }

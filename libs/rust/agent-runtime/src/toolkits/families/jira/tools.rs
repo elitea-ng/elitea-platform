@@ -6,6 +6,7 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::UnsupportedSetting;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -40,7 +41,7 @@ const UNSERVED_TOOLS: [&str; 11] = [
 pub(crate) enum JiraToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
-    UnsupportedCapability,
+    UnsupportedCapability(UnsupportedSetting),
     UnsupportedSelection,
     Client,
     InvalidDefinition,
@@ -75,7 +76,7 @@ impl fmt::Display for JiraToolsetError {
             JiraToolsetErrorCode::ResourceExhausted => {
                 "the Jira toolkit configuration exceeds its approved limit"
             }
-            JiraToolsetErrorCode::UnsupportedCapability => {
+            JiraToolsetErrorCode::UnsupportedCapability(_) => {
                 "the Jira toolkit configuration requires a capability this runtime does not provide"
             }
             JiraToolsetErrorCode::UnsupportedSelection => {
@@ -97,8 +98,8 @@ impl From<JiraConfigError> for JiraToolsetError {
                     JiraToolsetErrorCode::InvalidConfiguration
                 }
                 JiraConfigErrorCode::ResourceExhausted => JiraToolsetErrorCode::ResourceExhausted,
-                JiraConfigErrorCode::UnsupportedCapability => {
-                    JiraToolsetErrorCode::UnsupportedCapability
+                JiraConfigErrorCode::UnsupportedCapability(setting) => {
+                    JiraToolsetErrorCode::UnsupportedCapability(setting)
                 }
             },
         }

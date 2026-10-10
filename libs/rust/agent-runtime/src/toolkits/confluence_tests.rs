@@ -12,6 +12,7 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
+use super::families::UnsupportedSetting;
 use super::families::confluence::client::{
     ConfluenceApi, ConfluenceClient, ConfluenceClientError, ConfluenceClientErrorCode,
     ConfluenceHttpResponse, ConfluenceOperation, ConfluenceTransport,
@@ -22,7 +23,11 @@ use super::families::confluence::config::{
 use super::families::confluence::tools::{
     ConfluenceToolsetErrorCode, build_confluence_toolset, test_build_with_api, test_catalog,
 };
+use super::materialize::{
+    materialize_configured_toolsets_reporting_refusals, refused_toolkits_notice_text,
+};
 use super::policy::ToolAdmissionPolicy;
+use super::snapshot::FrozenToolSnapshot;
 
 const TOKEN: &str = "confluence-private-token";
 
@@ -239,10 +244,13 @@ fn configuration_normalises_urls_hosting_versions_and_bounds_like_the_sdk() {
     };
     let mut http = server_settings();
     http["confluence_configuration"]["base_url"] = json!("http://wiki.example.test");
-    assert_eq!(code(http), ConfluenceConfigErrorCode::UnsupportedCapability);
+    assert_eq!(
+        code(http),
+        ConfluenceConfigErrorCode::UnsupportedCapability(UnsupportedSetting::PlainHttp)
+    );
     assert_eq!(
         code(with(server_settings(), "verify_ssl", json!(false))),
-        ConfluenceConfigErrorCode::UnsupportedCapability
+        ConfluenceConfigErrorCode::UnsupportedCapability(UnsupportedSetting::VerifySslDisabled)
     );
     let mut no_credential = server_settings();
     no_credential["confluence_configuration"]["token"] = json!("");
@@ -1018,4 +1026,46 @@ async fn delete_tree_title_lookup_and_generic_requests() {
         .expect_err("unknown outcome");
     assert_eq!(error.code(), ConfluenceClientErrorCode::UnknownOutcome);
     assert!(!error.retryable());
+}
+
+/// #1207 review round 2: the refusal reaches the run as a sentence naming
+/// the setting, not as a toolkit that is listed enabled and does nothing.
+#[tokio::test]
+async fn a_refused_setting_is_named_in_the_run_notice() {
+    let mut plain_http = server_settings();
+    plain_http["confluence_configuration"]["base_url"] = json!("http://wiki.example.test");
+    let version = json!({"tools": [
+        {"id": 1, "type": "confluence", "toolkit_name": "wiki",
+         "settings": with(server_settings(), "verify_ssl", json!(false))},
+        {"id": 2, "type": "confluence", "toolkit_name": "old wiki", "settings": plain_http},
+        {"id": 3, "type": "confluence", "toolkit_name": "served", "settings": server_settings()}
+    ]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("Confluence snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+        None,
+    )
+    .await
+    .expect("a refused toolkit does not fail the agent");
+    assert_eq!(materialized.toolsets.len(), 1);
+    let notice = refused_toolkits_notice_text(&materialized.refused).expect("a notice");
+    assert!(
+        notice.contains(&format!(
+            "toolkit 'wiki' (confluence) is not enabled on this worker: {}",
+            UnsupportedSetting::VerifySslDisabled.reason()
+        )),
+        "{notice}"
+    );
+    assert!(notice.contains("verify_ssl=false is not supported by the Rust worker"));
+    assert!(
+        notice.contains(
+            "toolkit 'old wiki' (confluence) is not enabled on this worker: a plain http:// base URL is not supported by the Rust worker"
+        ),
+        "{notice}"
+    );
+    assert!(!notice.contains(TOKEN));
 }

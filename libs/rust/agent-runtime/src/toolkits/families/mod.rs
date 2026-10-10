@@ -54,3 +54,39 @@ pub(crate) mod zephyr_essential;
 pub(crate) mod zephyr_rest;
 pub(crate) mod zephyr_scale;
 pub(crate) mod zephyr_squad;
+
+/// A configured setting the SDK honours and this runtime deliberately
+/// refuses (#1207 review round 2). A family that refuses one names it, so the
+/// refusal reaches the user as a sentence rather than as a toolkit that is
+/// listed as enabled and silently does nothing (see
+/// `materialize::RefusedToolkit`). The security policy itself is unchanged:
+/// these stay refused until the owner decides otherwise.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnsupportedSetting {
+    /// A plain `http://` base URL.
+    PlainHttp,
+    /// `verify_ssl: false`.
+    VerifySslDisabled,
+    /// A custom header that would replace the credential, carry platform
+    /// identity or change request framing.
+    ReservedHeader,
+}
+
+impl UnsupportedSetting {
+    /// The reason, as the user and the model read it. Carries no
+    /// configuration value.
+    #[must_use]
+    pub(crate) const fn reason(self) -> &'static str {
+        match self {
+            Self::PlainHttp => {
+                "a plain http:// base URL is not supported by the Rust worker; configure an https:// URL"
+            }
+            Self::VerifySslDisabled => {
+                "verify_ssl=false is not supported by the Rust worker; TLS certificates are always verified"
+            }
+            Self::ReservedHeader => {
+                "a custom header that overrides the credential or request framing (Authorization, Cookie, Host, Content-Type, Accept or a platform header) is not supported by the Rust worker"
+            }
+        }
+    }
+}

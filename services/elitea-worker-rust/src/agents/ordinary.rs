@@ -41,9 +41,9 @@ use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind, McpConnector,
-    McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy, ToolBindingError,
-    ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
-    materialize_configured_toolsets_with_artifact_authority,
+    McpMaterializationError, McpMaterializationErrorCode, RefusedToolkit, ToolAdmissionPolicy,
+    ToolBindingError, ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
+    materialize_configured_toolsets_reporting_refusals,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::model_facade::{
@@ -307,6 +307,7 @@ impl OrdinaryNativeAgentAssembler {
             mut toolsets,
             sensitive: sensitive_tools,
             delegated_authorization,
+            refused: refused_toolkits,
         } = materialize_direct_toolsets(
             tool_snapshot,
             self.mcp_connector.as_ref(),
@@ -431,6 +432,7 @@ impl OrdinaryNativeAgentAssembler {
             .with_instruction_plan(profile.instruction_plan().clone())
             .with_skipped_application_children(skipped_applications)
             .with_renamed_tools(renamed_tools)
+            .with_refused_toolkits(refused_toolkits)
             .with_toolkit_attribution(toolkit_attribution),
             fresh_execution_mode,
         ))
@@ -647,6 +649,9 @@ struct DirectToolsets {
     toolsets: Vec<Arc<dyn adk_rust::Toolset>>,
     sensitive: SensitiveToolCatalog,
     delegated_authorization: crate::toolkits::DelegatedAuthorizationCatalog,
+    /// Configured toolkits left out for a setting this runtime refuses
+    /// (#1207 review round 2), named in the session's opening notice.
+    refused: Vec<RefusedToolkit>,
 }
 
 /// Materialize the configured and MCP toolkits, then decide what the model is
@@ -667,15 +672,18 @@ async fn materialize_direct_toolsets(
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: &ArtifactToolAuthority,
 ) -> Result<DirectToolsets, NativeAgentAssemblyError> {
-    let (mut toolsets, mut delegated_authorization) =
-        materialize_configured_toolsets_with_artifact_authority(
-            snapshot,
-            policy,
-            mcp_tokens,
-            Some(artifacts),
-        )
-        .await
-        .map_err(tool_materialization_error)?;
+    let crate::toolkits::ConfiguredToolsets {
+        mut toolsets,
+        mut delegated_authorization,
+        refused,
+    } = materialize_configured_toolsets_reporting_refusals(
+        snapshot,
+        policy,
+        mcp_tokens,
+        Some(artifacts),
+    )
+    .await
+    .map_err(tool_materialization_error)?;
     let mut sensitive = sensitive_tools_for_kind(
         snapshot,
         FrozenToolKind::Configured,
@@ -699,6 +707,7 @@ async fn materialize_direct_toolsets(
         toolsets,
         sensitive,
         delegated_authorization,
+        refused,
     })
 }
 
@@ -749,8 +758,19 @@ pub(super) fn tool_materialization_error(
             NativeAgentAssemblyErrorCode::ResourceExhausted
         }
     };
-    NativeAgentAssemblyError::new(code, "the native agent toolsets could not be materialized")
+    let assembly =
+        NativeAgentAssemblyError::new(code, "the native agent toolsets could not be materialized");
+    // A refused setting (#1207 review round 2) on a path with no opening
+    // notice: the turn ends as "Configuration type is not supported." and
+    // the structured log names the setting.
+    match error.refusal_reason() {
+        Some(reason) => assembly.with_cause(REFUSED_TOOLKIT_SETTING_CODE, Some(reason)),
+        None => assembly,
+    }
 }
+
+/// Cause code of a toolkit refused for a setting this runtime does not honour.
+pub(crate) const REFUSED_TOOLKIT_SETTING_CODE: &str = "toolkit.configuration_setting_refused";
 
 pub(super) fn mcp_materialization_error(
     error: &McpMaterializationError,
