@@ -703,22 +703,57 @@ fn a_claim_without_a_vector_token_carries_none() {
     );
 }
 
+/// The token only gates vector calls: whatever the receipt's token looks
+/// like, the claim itself is accepted.
 #[test]
-fn a_malformed_vector_token_refuses_the_claim() {
-    use crate::protocol::vector_token::test_vector_claim_token;
+fn a_bad_vector_token_never_fails_the_claim() {
+    use crate::protocol::vector_token::{VectorSource, test_vector_claim_token};
 
+    for (name, wire) in [
+        (
+            "malformed bearer",
+            VectorClaimTokenV1 {
+                bearer: "garbage".to_owned(),
+                ..test_vector_claim_token()
+            },
+        ),
+        (
+            "no usable source",
+            VectorClaimTokenV1 {
+                allowed_sources: vec!["everything".to_owned()],
+                ..test_vector_claim_token()
+            },
+        ),
+        (
+            "no expiry",
+            VectorClaimTokenV1 {
+                expires_at_unix_millis: 0,
+                ..test_vector_claim_token()
+            },
+        ),
+    ] {
+        let (command, mut response) = fixture(ToolkitCommandKind::CallTool);
+        response.receipt.as_mut().unwrap().vector_token = Some(wire);
+        let claim = parse_accepted_agent_claim(
+            &verified(&command),
+            response,
+            "workload-1",
+            "worker-1",
+            NOW,
+        )
+        .unwrap_or_else(|error| panic!("{name}: the claim was refused: {error:?}"));
+        assert!(claim.vector_token().is_none(), "{name}");
+    }
+
+    // An unknown source beside a known one: the claim keeps the known one.
     let (command, mut response) = fixture(ToolkitCommandKind::CallTool);
     response.receipt.as_mut().unwrap().vector_token = Some(VectorClaimTokenV1 {
-        allowed_sources: vec!["everything".to_owned()],
+        allowed_sources: vec!["toolkit_index".to_owned(), "a_future_source".to_owned()],
         ..test_vector_claim_token()
     });
-    let Err(error) =
+    let claim =
         parse_accepted_agent_claim(&verified(&command), response, "workload-1", "worker-1", NOW)
-    else {
-        panic!("a malformed vector token was accepted");
-    };
-    assert!(
-        matches!(error, ControlSemanticError::AuthorizationFailed(_)),
-        "{error:?}"
-    );
+            .expect("accepted");
+    let token = claim.vector_token().expect("carried");
+    assert!(token.allows(VectorSource::ToolkitIndex));
 }

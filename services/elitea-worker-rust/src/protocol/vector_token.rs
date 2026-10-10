@@ -13,19 +13,44 @@
 //! its `Debug` is redacted. It is never spooled: the execution spool holds
 //! output frames, and nothing here can become one.
 
+use std::collections::HashSet;
 use std::fmt;
+use std::sync::{LazyLock, Mutex};
 
 use zeroize::Zeroizing;
 
-use super::control::ControlSemanticError;
 use super::elitea::runtime::v1::VectorClaimTokenV1;
 
 /// Every claim token starts with this.
 const BEARER_PREFIX: &str = "elvc_";
 /// The prefix and 43 base64url characters (32 random bytes).
 const BEARER_LENGTH: usize = BEARER_PREFIX.len() + 43;
-/// The most sources a token can name.
-const MAX_SOURCES: usize = 4;
+/// The most distinct sources a token can carry (the keywords this build
+/// knows).
+const MAX_SOURCES: usize = 3;
+/// The most unknown keywords remembered for the log-once rule.
+const MAX_REMEMBERED_UNKNOWN: usize = 16;
+
+static LOGGED_UNKNOWN_SOURCES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Logs an unknown source keyword the first time this process sees it.
+fn log_unknown_source_once(keyword: &str) {
+    let shown: String = keyword
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(64)
+        .collect();
+    let Ok(mut logged) = LOGGED_UNKNOWN_SOURCES.lock() else {
+        return;
+    };
+    if logged.len() < MAX_REMEMBERED_UNKNOWN && logged.insert(shown.clone()) {
+        tracing::warn!(
+            source = shown,
+            "the claim's vector token names a source this worker does not know; ignoring it"
+        );
+    }
+}
 
 /// A vector source a token may be admitted for, by its payload keyword.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -74,20 +99,18 @@ pub(crate) struct VectorClaimToken {
 }
 
 impl VectorClaimToken {
-    /// Validates the receipt's token. A receipt without one is `Ok(None)`;
-    /// a malformed one refuses the claim, as any malformed receipt field
-    /// does.
+    /// Reads the receipt's token. The token only gates calls to
+    /// elitea-vector, so this never fails the claim:
     ///
-    /// # Errors
-    ///
-    /// `AuthorizationFailed` for a bearer of the wrong shape, no expiry, or a
-    /// missing, unknown or excessive source list.
-    pub(crate) fn from_receipt(
-        token: Option<VectorClaimTokenV1>,
-    ) -> Result<Option<Self>, ControlSemanticError> {
-        let Some(token) = token else {
-            return Ok(None);
-        };
+    /// * a receipt without a token is `None`;
+    /// * a token that is malformed (a bearer of the wrong shape, no expiry,
+    ///   no source it can use) is dropped and logged, without its value, and
+    ///   the claim runs without one (its vector calls are refused
+    ///   `UNAUTHENTICATED`);
+    /// * a source keyword this build does not know (a newer Main) is ignored
+    ///   and logged once per process; the known sources are kept.
+    pub(crate) fn from_receipt(token: Option<VectorClaimTokenV1>) -> Option<Self> {
+        let token = token?;
         // Owned from here so the wire copy is zeroized with it.
         let VectorClaimTokenV1 {
             bearer,
@@ -101,36 +124,35 @@ impl VectorClaimToken {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
         if !well_formed {
-            return Err(ControlSemanticError::AuthorizationFailed(
-                "the accepted claim carries a malformed vector token",
-            ));
+            tracing::warn!("the claim's vector token is malformed; running without it");
+            return None;
         }
         if expires_at_unix_millis <= 0 {
-            return Err(ControlSemanticError::AuthorizationFailed(
-                "the accepted claim's vector token has no expiry",
-            ));
+            tracing::warn!("the claim's vector token has no expiry; running without it");
+            return None;
         }
-        if allowed_sources.is_empty() || allowed_sources.len() > MAX_SOURCES {
-            return Err(ControlSemanticError::AuthorizationFailed(
-                "the accepted claim's vector token names no or too many sources",
-            ));
-        }
-        let mut sources = Vec::with_capacity(allowed_sources.len());
+        let mut sources = Vec::with_capacity(MAX_SOURCES);
         for keyword in &allowed_sources {
-            let source = VectorSource::from_keyword(keyword).ok_or(
-                ControlSemanticError::AuthorizationFailed(
-                    "the accepted claim's vector token names an unknown source",
-                ),
-            )?;
-            if !sources.contains(&source) {
-                sources.push(source);
+            match VectorSource::from_keyword(keyword) {
+                Some(source) => {
+                    if !sources.contains(&source) {
+                        sources.push(source);
+                    }
+                }
+                None => log_unknown_source_once(keyword),
             }
         }
-        Ok(Some(Self {
+        if sources.is_empty() {
+            tracing::warn!(
+                "the claim's vector token names no source this worker knows; running without it"
+            );
+            return None;
+        }
+        Some(Self {
             bearer,
             expires_at_unix_millis,
             sources,
-        }))
+        })
     }
 
     /// The bearer, for the `authorization` metadata of an elitea-vector
@@ -196,20 +218,14 @@ mod tests {
 
     #[test]
     fn a_receipt_without_a_token_carries_none() {
-        assert!(
-            VectorClaimToken::from_receipt(None)
-                .expect("absent")
-                .is_none()
-        );
+        assert!(VectorClaimToken::from_receipt(None).is_none());
     }
 
     #[test]
     fn a_well_formed_token_is_carried_with_its_sources() {
         let wire = test_vector_claim_token();
         let bearer = wire.bearer.clone();
-        let token = VectorClaimToken::from_receipt(Some(wire))
-            .expect("valid")
-            .expect("present");
+        let token = VectorClaimToken::from_receipt(Some(wire)).expect("present");
         assert_eq!(token.bearer(), bearer);
         assert_eq!(token.expires_at_unix_millis(), 4_102_444_800_000);
         assert!(token.allows(VectorSource::ToolkitIndex));
@@ -225,16 +241,14 @@ mod tests {
     fn the_bearer_never_reaches_debug_output() {
         let wire = test_vector_claim_token();
         let bearer = wire.bearer.clone();
-        let token = VectorClaimToken::from_receipt(Some(wire))
-            .expect("valid")
-            .expect("present");
+        let token = VectorClaimToken::from_receipt(Some(wire)).expect("present");
         let printed = format!("{token:?} {:?}", Some(&token));
         assert!(!printed.contains(&bearer), "{printed}");
         assert!(printed.contains("<redacted>"), "{printed}");
     }
 
     #[test]
-    fn a_malformed_token_refuses_the_claim() {
+    fn a_malformed_token_is_dropped_and_never_fails() {
         let good = test_vector_claim_token();
         let cases = [
             VectorClaimTokenV1 {
@@ -262,7 +276,15 @@ mod tests {
                 ..good.clone()
             },
             VectorClaimTokenV1 {
+                bearer: "not a token at all \u{1f510}".to_owned(),
+                ..good.clone()
+            },
+            VectorClaimTokenV1 {
                 expires_at_unix_millis: 0,
+                ..good.clone()
+            },
+            VectorClaimTokenV1 {
+                expires_at_unix_millis: -5,
                 ..good.clone()
             },
             VectorClaimTokenV1 {
@@ -270,20 +292,40 @@ mod tests {
                 ..good.clone()
             },
             VectorClaimTokenV1 {
-                allowed_sources: vec!["toolkit_index".to_owned(), "everything".to_owned()],
-                ..good.clone()
-            },
-            VectorClaimTokenV1 {
-                allowed_sources: vec!["toolkit_index".to_owned(); MAX_SOURCES + 1],
+                allowed_sources: vec!["everything".to_owned()],
                 ..good.clone()
             },
         ];
         for case in cases {
-            let error = VectorClaimToken::from_receipt(Some(case)).expect_err("malformed");
-            assert!(
-                matches!(error, ControlSemanticError::AuthorizationFailed(_)),
-                "{error:?}"
-            );
+            assert!(VectorClaimToken::from_receipt(Some(case)).is_none());
         }
+    }
+
+    #[test]
+    fn an_unknown_source_is_ignored_and_the_known_ones_are_kept() {
+        let wire = VectorClaimTokenV1 {
+            allowed_sources: vec![
+                "toolkit_index".to_owned(),
+                "a_future_source".to_owned(),
+                "deepwiki".to_owned(),
+                "a_future_source".to_owned(),
+                "toolkit_index".to_owned(),
+            ],
+            ..test_vector_claim_token()
+        };
+        let token = VectorClaimToken::from_receipt(Some(wire)).expect("kept");
+        assert!(token.allows(VectorSource::ToolkitIndex));
+        assert!(token.allows(VectorSource::Deepwiki));
+        assert!(!token.allows(VectorSource::Inventory));
+        assert_eq!(token.sources.len(), 2);
+    }
+
+    #[test]
+    fn an_unknown_source_is_logged_once_per_process() {
+        let keyword = "only_logged_once_in_this_test";
+        log_unknown_source_once(keyword);
+        log_unknown_source_once(keyword);
+        let logged = LOGGED_UNKNOWN_SOURCES.lock().expect("lock");
+        assert_eq!(logged.iter().filter(|name| *name == keyword).count(), 1);
     }
 }

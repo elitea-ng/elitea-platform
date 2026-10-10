@@ -2836,7 +2836,7 @@ fn parse_input_claim_binding(
         input_bundle,
         request_entry,
         arguments_entry,
-        vector_token: VectorClaimToken::from_receipt(receipt.vector_token)?,
+        vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
     })
 }
 
