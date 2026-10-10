@@ -30,4 +30,6 @@ pub(crate) mod sonar;
 pub(crate) mod sql;
 pub(crate) mod yagmail;
 pub(crate) mod zephyr;
+pub(crate) mod zephyr_enterprise;
+pub(crate) mod zephyr_rest;
 pub(crate) mod zephyr_squad;

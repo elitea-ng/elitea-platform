@@ -156,7 +156,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `zephyr` | None; base URL and Basic-auth credentials are inline toolkit settings | `tools/zephyr::ZephyrToolkit` | 4 | No | `toolkits/families/zephyr/{config,client,tools}.rs` | Capability-disabled complete legacy family: one bounded step read plus all three sequential create effects; exact-interrupt HITL, durable partial-effect reconciliation, approved egress and live legacy-ZAPI proof remain gates |
 | `zephyr_scale` | `configurations/zephyr.py::ZephyrConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_scale::ZephyrScaleToolkit` | 26 | Yes | future `toolkits/families/zephyr_scale/` | Planned after the shared indexing overlay; 20 business operations plus 6 inherited indexing tools |
 | `zephyr_squad` | None; credentials are inline toolkit settings | `tools/zephyr_squad::ZephyrSquadToolkit` | 15 | No | `toolkits/families/zephyr_squad/{config,client,tools}.rs` | Capability-disabled complete family: five bounded reads plus all eight writes and two deletes over fixed Squad Cloud JWT routes; authorized materialization, live credential proof, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
-| `zephyr_enterprise` | `ZephyrEnterpriseConfiguration` | `ZephyrEnterpriseToolkit` | 11 | Yes | corresponding family paths | Planned; source has no focused family tests |
+| `zephyr_enterprise` | `configurations/zephyr_enterprise.py::ZephyrEnterpriseConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_enterprise::ZephyrEnterpriseToolkit` | 11 | Yes | `toolkits/families/zephyr_enterprise/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all five business operations (three reads, two effects) over one bearer flex-REST client; the six inherited indexing tools are not served and the capability snapshot lists the family per tool |
 | `zephyr_essential` | `ZephyrEssentialConfiguration` | `ZephyrEssentialToolkit` | 51 | Yes | corresponding family paths | Planned; largest fixed catalog, no focused tests |
 | `figma` | `configurations/figma.py::FigmaConfiguration` | `tools/figma::FigmaToolkit` | 17 | Yes | corresponding family paths | Planned; content/artifact limits required |
 | `rally` | `configurations/rally.py::RallyConfiguration` | `tools/rally::RallyToolkit` | 8 | No | `toolkits/families/rally/{config,client,tools}.rs` | Capability-disabled complete family: six bounded WSAPI reads plus create/update, with lazy per-invocation API-key/Basic authority; authorized materialization, exact-interrupt HITL, live WSAPI proof and cancellation-safe effect reconciliation remain gates |
@@ -1145,6 +1145,51 @@ read against the currently supported SmartBear endpoint, the shared durable
 exact-`interrupt_id` HITL wrapper, and cancellation-safe effect
 identity/reconciliation. Any read may independently be configured sensitive;
 catalog effect groups never authorize execution.
+
+### Zephyr Enterprise business family
+
+Zephyr Enterprise serves the five business operations of the worker-pinned
+SDK revision `b5113a129329b85d23c2d5c2bf55f18e307414ec` (none of the five
+worker patches touch Zephyr). The six inherited indexing tools
+(`index_data`, `list_indexes`, `remove_index`, `search_index`,
+`stepback_search_index`, `stepback_summary_index`) are not served, because
+indexing does not exist in this runtime; `supported_tools.zephyr_enterprise`
+in the Rust capability snapshot lists the five served names, so the
+catalogue marks the others unavailable and a direct call to one is refused.
+A persisted selection keeps the served names it contains and logs the omitted
+ones; a selection of only indexing tools skips the toolkit.
+
+Main freezes `zephyr_configuration` (`base_url`, redeemed `token`).
+`config.rs` requires an HTTPS base (a path prefix such as `/zephyr` is kept)
+and the token: the SDK schema marks it optional, but its client refuses to
+start without it. The shared `zephyr_rest` client sends a sensitive
+`Authorization: Bearer` header, disables redirects and automatic retries,
+bounds request, response and output sizes, and appends every identifier as
+one percent-encoded path segment, refusing dot segments and control
+characters, so no argument can leave the `flex/services/rest/latest` prefix
+of the configured instance.
+
+| SDK operation | Route | Rust behavior |
+| --- | --- | --- |
+| `get_test_case` (read) | `GET testcase/{testcase_id}` | Provider object (an empty body is `""`) |
+| `search_zql` (read) | `POST advancesearch/zql` with the decoded `zql_json` | Provider result; a failure is a read failure, never an unknown effect |
+| `create_testcase` (effect) | `POST testcase/` (trailing slash kept) with the decoded `create_testcase_json` | Provider object; post-dispatch ambiguity is `UnknownOutcome` |
+| `add_steps` (effect) | `GET testcase/{tree}`, then `GET testcase/versions?testcaseid=` (last entry), then `GET testcase/{version}/teststep`, then one `POST testcase/{version}/teststep/detail/{tree}` per step | Same body (`tcId`, `maxId`, `step{step,data,result,orderId}`, `tctId`, chained `id`), order continuing from the highest existing `orderId`; the SDK's `Step added: ...` lines joined by `;`; empty or null `steps` returns the SDK's `Steps cannot be empty.`; a failure after the first confirmed append is `UnknownOutcome` |
+| `get_testcases_by_zql` (read) | `GET testcase?zqlquery=` | The SDK's `Test case ID: {id}, Test case: {testcase}` lines, or its `No test cases found for the provided ZQL query.` sentence |
+
+Every description keeps the SDK's `Toolkit: {name}` prefix line and its
+`Zephyr Enterprise instance: {base_url}` suffix line, cut at 1000
+characters. Provider objects inside text are canonical JSON rather than
+Python's `str(dict)`. Where the SDK returns `ToolException("Unable to ...:
+{e}")` as the tool text for an HTTP failure, Rust returns the shared stable,
+redacted error taxonomy instead (no provider bodies, routes or tokens). The
+configuration model's `check_connection` probe is not part of the toolkit and
+is not ported here. Proof: `toolkits/zephyr_enterprise_tests.rs`
+(configuration, catalogue/selection/policy, exact routes and bodies, SDK
+output text, add-steps version resolution and partial-effect handling,
+redaction, SDK schema gate) and `toolkits/zephyr_rest_tests.rs` (shared
+transport). Live provider proof, exact-interrupt HITL and durable effect
+reconciliation remain activation gates, as for the other families.
 
 ### ReportPortal complete read family
 

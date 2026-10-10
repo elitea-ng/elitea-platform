@@ -386,6 +386,17 @@ fn materialize_p_to_z(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
+        "zephyr_enterprise" => {
+            super::families::zephyr_enterprise::tools::build_zephyr_enterprise_toolset(
+                name,
+                super::families::zephyr_enterprise::config::ZephyrEnterpriseToolkitConfig::parse(
+                    settings,
+                )
+                .map_err(|_| invalid_configuration())?,
+                policy,
+            )
+            .map_err(|error| zephyr_rest_toolset_materialization_error(error.code()))?
+        }
         "zephyr_squad" => zephyr_squad::tools::build_zephyr_squad_toolset(
             name,
             zephyr_squad::config::ZephyrSquadToolkitConfig::parse(settings)
@@ -415,6 +426,19 @@ const fn unsupported_toolkit() -> ToolsetMaterializationError {
 const fn resource_exhausted() -> ToolsetMaterializationError {
     ToolsetMaterializationError {
         code: ToolsetMaterializationErrorCode::ResourceExhausted,
+    }
+}
+
+/// A Zephyr REST family serves a subset of its SDK tools; a selection that
+/// leaves none of them is unsupported (skipped), not misconfigured.
+const fn zephyr_rest_toolset_materialization_error(
+    code: super::families::zephyr_rest::tools::ZephyrRestToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        super::families::zephyr_rest::tools::ZephyrRestToolsetErrorCode::UnsupportedSelection => {
+            unsupported_toolkit()
+        }
+        _ => invalid_configuration(),
     }
 }
 

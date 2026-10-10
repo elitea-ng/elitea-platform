@@ -155,6 +155,7 @@ var rustNativeToolTypes = []string{
 	"sql",
 	"yagmail",
 	"zephyr",
+	"zephyr_enterprise",
 	"zephyr_squad",
 }
 
