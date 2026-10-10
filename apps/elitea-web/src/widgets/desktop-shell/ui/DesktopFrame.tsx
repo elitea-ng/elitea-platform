@@ -83,7 +83,8 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
 
   return (
     <NativeLook>
-      <Box data-testid="desktop-frame" sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {/* `clip`, not `hidden`: a hidden box can still be scrolled by code (a pane's scrollIntoView), which shifted the whole window. */}
+      <Box data-testid="desktop-frame" sx={{ display: 'flex', height: '100vh', overflow: 'clip' }}>
         {sidebarOpen && (
           <DesktopSidebar
             location={location}

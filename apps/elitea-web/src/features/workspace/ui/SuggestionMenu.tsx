@@ -35,9 +35,16 @@ export interface SuggestionMenuProps {
 export function SuggestionMenu({ title, items, activeIndex, onPick, onClose, 'data-testid': testId }: SuggestionMenuProps): ReactNode {
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Keep the highlighted row visible by scrolling the LIST only: scrollIntoView
+  // would also scroll every ancestor, the window's frame included.
   useEffect(() => {
-    const active = listRef.current?.querySelector('[data-highlighted="true"]');
-    if (active instanceof HTMLElement && typeof active.scrollIntoView === 'function') active.scrollIntoView({ block: 'nearest' });
+    const list = listRef.current;
+    const active = list?.querySelector('[data-highlighted="true"]');
+    if (list === null || list === undefined || !(active instanceof HTMLElement)) return;
+    const row = active.getBoundingClientRect();
+    const box = list.getBoundingClientRect();
+    if (row.top < box.top) list.scrollTop -= box.top - row.top;
+    else if (row.bottom > box.bottom) list.scrollTop += row.bottom - box.bottom;
   }, [activeIndex]);
 
   return (
