@@ -9,6 +9,7 @@ import (
 const (
 	projectLockNamespace     int32 = 0x454c4954 // ASCII "ELIT"
 	acquireProjectLockSQL          = `SELECT pg_catalog.pg_advisory_lock($1, $2)`
+	tryProjectLockSQL              = `SELECT pg_catalog.pg_try_advisory_lock($1, $2)`
 	roleExistsSQL                  = `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1)`
 	databaseExistsSQL              = `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname = $1)`
 	schemaExistsSQL                = `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1)`

@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-
-	"github.com/jackc/pgx/v5"
+	"time"
 )
 
 // ErrInvalidDropTarget means a drop was asked for a name that is not exactly
@@ -118,7 +117,7 @@ func (p *Provisioner) Drop(ctx context.Context, request DropRequest) (DropResult
 	if err != nil {
 		return DropResult{}, err
 	}
-	if err := acquireProjectLock(ctx, admin, request.ProjectID); err != nil {
+	if err := acquireProjectLockBounded(ctx, admin, request.ProjectID); err != nil {
 		closeBestEffort(ctx, admin)
 		return DropResult{}, err
 	}
@@ -170,6 +169,50 @@ func (p *Provisioner) Drop(ctx context.Context, request DropRequest) (DropResult
 	return result, nil
 }
 
+// Lock-wait bounds for Drop. The wait is independent of the request context:
+// Deprovision runs under context.WithoutCancel, so without its own deadline a
+// provision holding the same project's lock would block the delete for ever.
+// Variables, not constants, so a test can shrink them.
+var (
+	dropLockTimeout     = 30 * time.Second
+	dropLockPollInitial = 50 * time.Millisecond
+	dropLockPollMax     = 1 * time.Second
+)
+
+// ErrDropLockTimeout means the per-project advisory lock stayed held by another
+// session for the whole bounded wait. Nothing was dropped.
+var ErrDropLockTimeout = errors.New("pgvector: timed out waiting for the project advisory lock")
+
+// acquireProjectLockBounded takes the same advisory lock as Provision, but with
+// pg_try_advisory_lock in a bounded retry loop instead of blocking.
+func acquireProjectLockBounded(ctx context.Context, connection Connection, projectID int64) error {
+	deadline := time.Now().Add(dropLockTimeout)
+	delay := dropLockPollInitial
+	for {
+		// The query itself is not bounded by the request context's absence:
+		// it returns immediately either way.
+		got, err := queryBool(ctx, connection, "try project advisory lock",
+			tryProjectLockSQL, projectLockNamespace, int32(projectID))
+		if err != nil {
+			return err
+		}
+		if got {
+			return nil
+		}
+		if time.Now().Add(delay).After(deadline) {
+			return ErrDropLockTimeout
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		if delay *= 2; delay > dropLockPollMax {
+			delay = dropLockPollMax
+		}
+	}
+}
+
 func validateDropRequest(request DropRequest) (database string, role string, err error) {
 	if request.ProjectID <= 0 || request.ProjectID > math.MaxInt32 ||
 		(request.Mode != ModeDatabaseRole && request.Mode != ModeSchema) ||
@@ -195,16 +238,17 @@ func validateDropRequest(request DropRequest) (database string, role string, err
 	return database, role, nil
 }
 
-// The identifiers are quoted with pgx's own sanitizer; the names have already
-// been re-derived from an integer id, so quoting is defence in depth.
+// The identifiers go through the package's one quoter (quoteIdentifier); the
+// names have already been re-derived from an integer id, so quoting is defence
+// in depth.
 func dropDatabaseSQL(database string) string {
-	return "DROP DATABASE " + pgx.Identifier{database}.Sanitize() + " WITH (FORCE)"
+	return "DROP DATABASE " + quoteIdentifier(database) + " WITH (FORCE)"
 }
 
 func dropRoleSQL(role string) string {
-	return "DROP ROLE " + pgx.Identifier{role}.Sanitize()
+	return "DROP ROLE " + quoteIdentifier(role)
 }
 
 func dropSchemaSQL(schema string) string {
-	return "DROP SCHEMA " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
+	return "DROP SCHEMA " + quoteIdentifier(schema) + " CASCADE"
 }

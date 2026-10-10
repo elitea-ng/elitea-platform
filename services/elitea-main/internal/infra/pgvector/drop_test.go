@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestParseProjectNamesAcceptOnlyCanonicalProjectNames(t *testing.T) {
@@ -40,7 +41,7 @@ func dropAdmin() AdminConnection {
 func TestDropDatabaseRoleDropsDatabaseThenRole(t *testing.T) {
 	t.Parallel()
 
-	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}}}
+	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}, {value: true}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
@@ -51,10 +52,13 @@ func TestDropDatabaseRoleDropsDatabaseThenRole(t *testing.T) {
 	if !result.DatabaseDropped || !result.RoleDropped {
 		t.Fatalf("result = %+v", result)
 	}
-	assertQuery(t, admin, 0, databaseExistsSQL, "project_42")
-	assertQuery(t, admin, 1, roleExistsSQL, "project_42_user")
+	if call := admin.queryCalls[0]; call.statement != tryProjectLockSQL ||
+		len(call.args) != 2 || call.args[0] != projectLockNamespace || call.args[1] != int32(42) {
+		t.Fatalf("lock query = %#v", call)
+	}
+	assertQuery(t, admin, 1, databaseExistsSQL, "project_42")
+	assertQuery(t, admin, 2, roleExistsSQL, "project_42_user")
 	assertStatements(t, admin.execStatements, []string{
-		acquireProjectLockSQL,
 		`DROP DATABASE "project_42" WITH (FORCE)`,
 		`DROP ROLE "project_42_user"`,
 	})
@@ -66,7 +70,7 @@ func TestDropDatabaseRoleDropsDatabaseThenRole(t *testing.T) {
 func TestDropIsANoOpWhenDatabaseAndRoleAreMissing(t *testing.T) {
 	t.Parallel()
 
-	admin := &scriptedConnection{queryResults: []queryResult{{value: false}, {value: false}}}
+	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: false}, {value: false}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
@@ -77,13 +81,13 @@ func TestDropIsANoOpWhenDatabaseAndRoleAreMissing(t *testing.T) {
 	if result != (DropResult{}) {
 		t.Fatalf("result = %+v, want nothing dropped", result)
 	}
-	assertStatements(t, admin.execStatements, []string{acquireProjectLockSQL})
+	assertStatements(t, admin.execStatements, nil)
 }
 
 func TestDropSchemaModeDropsOnlyTheProjectSchemaAndNoRole(t *testing.T) {
 	t.Parallel()
 
-	admin := &scriptedConnection{queryResults: []queryResult{{value: true}}}
+	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
@@ -94,8 +98,8 @@ func TestDropSchemaModeDropsOnlyTheProjectSchemaAndNoRole(t *testing.T) {
 	if !result.SchemaDropped || result.DatabaseDropped || result.RoleDropped {
 		t.Fatalf("result = %+v", result)
 	}
-	assertQuery(t, admin, 0, schemaExistsSQL, "project_9")
-	assertStatements(t, admin.execStatements, []string{acquireProjectLockSQL, `DROP SCHEMA "project_9" CASCADE`})
+	assertQuery(t, admin, 1, schemaExistsSQL, "project_9")
+	assertStatements(t, admin.execStatements, []string{`DROP SCHEMA "project_9" CASCADE`})
 }
 
 func TestDropRefusesNamesThatAreNotTheProjectsOwn(t *testing.T) {
@@ -145,4 +149,53 @@ func TestDropSQLQuotesIdentifiers(t *testing.T) {
 	if got := dropDatabaseSQL(`a"b`); got != `DROP DATABASE "a""b" WITH (FORCE)` {
 		t.Fatalf("dropDatabaseSQL = %s", got)
 	}
+}
+
+func TestDropWaitsBrieflyForTheProjectLockAndThenSucceeds(t *testing.T) {
+	shrinkLockWait(t, 2*time.Second)
+
+	admin := &scriptedConnection{queryResults: []queryResult{
+		{value: false}, {value: false}, {value: true}, {value: false}, {value: false}}}
+	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
+	provisioner, _ := NewProvisioner(connector)
+
+	if _, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()}); err != nil {
+		t.Fatalf("Drop() = %v", err)
+	}
+	if got := len(admin.queryCalls); got != 5 {
+		t.Fatalf("queries = %d, want 3 lock attempts then the 2 existence checks", got)
+	}
+}
+
+func TestDropGivesUpWhenTheProjectLockIsNeverFreed(t *testing.T) {
+	shrinkLockWait(t, 50*time.Millisecond)
+
+	results := make([]queryResult, 200)
+	admin := &scriptedConnection{queryResults: results}
+	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
+	provisioner, _ := NewProvisioner(connector)
+
+	// A background context with no deadline: the wait must be bounded by the
+	// drop's own timeout, the way Deprovision's context.WithoutCancel is.
+	started := time.Now()
+	_, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()})
+	if !errors.Is(err, ErrDropLockTimeout) {
+		t.Fatalf("Drop() = %v, want ErrDropLockTimeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Drop() waited %s", elapsed)
+	}
+	if len(admin.execStatements) != 0 {
+		t.Fatalf("a timed-out drop executed %v", admin.execStatements)
+	}
+	if admin.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want the session closed", admin.closeCalls)
+	}
+}
+
+func shrinkLockWait(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	oldTimeout, oldInitial, oldMax := dropLockTimeout, dropLockPollInitial, dropLockPollMax
+	dropLockTimeout, dropLockPollInitial, dropLockPollMax = timeout, 5*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { dropLockTimeout, dropLockPollInitial, dropLockPollMax = oldTimeout, oldInitial, oldMax })
 }
