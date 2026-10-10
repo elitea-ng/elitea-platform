@@ -58,6 +58,7 @@ libs/rust/doc-extract/Cargo.toml member of the libs/rust workspace: the /libs/ru
 libs/rust/doc-chunk/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/pg-migrate/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/repo-ingest/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/vector-index/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 scripts/runtime/fixtures/code-data-processing/Cargo.toml locked acceptance fixture: package versions are test inputs; runner and worker scan shipping dependencies
 EXEMPTIONS
 )

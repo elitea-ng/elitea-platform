@@ -1,0 +1,42 @@
+[package]
+name = "elitea-vector-index"
+description = "The caller side of elitea-vector (ADR-0030 decisions 2 and 5): a typed elitea.vector.v1 gRPC client, the SDK search semantics, and the SDK filter translation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Also generates the elitea.vector.v1 SERVER, for the in-process fake the
+# tests serve. Nothing in a shipped binary needs it.
+test-server = ["dep:tokio", "tokio-stream/net"]
+
+[dependencies]
+# Request and response messages of elitea.vector.v1.
+prost = "0.14.4"
+# `preserve_order`: the SDK's output dicts keep their key order, and
+# `json.dumps` prints them in it. `float_roundtrip`: scores print the same
+# digits they were parsed from.
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["net", "rt"], optional = true }
+tokio-stream = "0.1.19"
+# mTLS to elitea-vector, with ring like the worker (`tls-ring`). No
+# reqwest: this crate makes gRPC calls only; model calls go through the
+# `QueryEmbedder` and `StepbackModel` traits the worker implements.
+tonic = { version = "0.14.6", features = ["tls-ring"] }
+tonic-prost = "0.14.6"
+tracing = "0.1.44"
+
+[build-dependencies]
+protoc-bin-vendored = "3.2.0"
+tonic-prost-build = "0.14.6"
+
+[dev-dependencies]
+# The crate's own `test-server` feature, so a plain `cargo test -p` has it.
+elitea-vector-index = { path = ".", features = ["test-server"] }
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
