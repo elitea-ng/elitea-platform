@@ -321,6 +321,76 @@ func TestEnsureRepairContinuesWhenTheVectorStoreWasNotDropped(t *testing.T) {
 	}
 }
 
+// Only a leftover PgVector database is tolerated. The same delete reporting a
+// tenant schema or artifact bytes left behind as well fails the repair, as it
+// did before the vector store existed.
+func TestEnsureRepairFailsWhenAnythingBesidesTheVectorStoreWasLeft(t *testing.T) {
+	vector := fmt.Errorf("%w: database \"project_9\" remains", projectprovisioning.ErrVectorStoreNotDropped)
+	for name, outcome := range map[string]error{
+		"vector store and tenant schema": errors.Join(projectprovisioning.ErrTenantSchemaNotRemoved, vector),
+		"vector store and artifacts":     errors.Join(vector, projectprovisioning.ErrArtifactsNotRemoved),
+		"all three":                      errors.Join(projectprovisioning.ErrTenantSchemaNotRemoved, projectprovisioning.ErrArtifactsNotRemoved, vector),
+		"vector store and an unknown":    errors.Join(vector, errors.New("verify project removal")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newPersonalProjectPool(t)
+			var logs bytes.Buffer
+			ensurer := newOutcomeEnsurer(t, pool, outcome, &logs)
+			userID := seedUser(t, pool, "multi-leftover@autotest.local", "Multi Leftover")
+			seedUnfinishedProject(ctx, t, pool, userID)
+
+			if _, err := ensurer.Ensure(ctx, userID); err == nil {
+				t.Fatal("Ensure carried on past a leftover that is not only the vector store")
+			}
+		})
+	}
+	t.Run("vector store alone continues", func(t *testing.T) {
+		ctx := context.Background()
+		pool := newPersonalProjectPool(t)
+		var logs bytes.Buffer
+		ensurer := newOutcomeEnsurer(t, pool, errors.Join(vector), &logs)
+		userID := seedUser(t, pool, "single-leftover@autotest.local", "Single Leftover")
+		seedUnfinishedProject(ctx, t, pool, userID)
+
+		if projectID, err := ensurer.Ensure(ctx, userID); err != nil || projectID == 0 {
+			t.Fatalf("Ensure = %d, %v; want a repaired project", projectID, err)
+		}
+	})
+}
+
+// A finished project that is being deleted is never reused: the repair removes
+// it with the same path and provisions a new one.
+func TestEnsureDoesNotReuseAProjectThatIsBeingDeleted(t *testing.T) {
+	ctx := context.Background()
+	pool := newPersonalProjectPool(t)
+	ensurer := newTestEnsurer(t, pool)
+	userID := seedUser(t, pool, "tombstoned@autotest.local", "Tombstoned")
+
+	first, err := ensurer.Ensure(ctx, userID)
+	if err != nil || first == 0 {
+		t.Fatalf("first Ensure = %d, %v", first, err)
+	}
+	if again, err := ensurer.Ensure(ctx, userID); err != nil || again != first {
+		t.Fatalf("premise: a finished project is reused: %d, %v (want %d)", again, err, first)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE centry.project SET deleting_at = now() WHERE id = $1`, first); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := ensurer.Ensure(ctx, userID)
+	if err != nil {
+		t.Fatalf("Ensure over a tombstoned project: %v", err)
+	}
+	if second == 0 || second == first {
+		t.Fatalf("Ensure returned %d; the tombstoned project %d must not be reused", second, first)
+	}
+	var left int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM centry.project WHERE id = $1`, first).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("the tombstoned project survived the repair: %d, %v", left, err)
+	}
+}
+
 // Active work is retryable and the repair cannot go on: the error says why.
 func TestEnsureRepairReportsActiveWorkClearly(t *testing.T) {
 	ctx := context.Background()

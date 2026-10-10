@@ -603,8 +603,12 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 	// of is not their personal project however much its name looks like one.
 	// Returning such a row here reported success while /social/author went on
 	// answering "" for good.
+	//
+	// A project being deleted (tombstoned by projectprovisioning, #1211) is not
+	// reusable however complete it looks: its delete is under way, or failed
+	// part way and is waiting to be resumed. It is skipped here and removed below.
 	for _, candidate := range candidates {
-		if candidate.member && candidate.created {
+		if candidate.member && candidate.created && !candidate.deleting {
 			return candidate.id, nil
 		}
 	}
@@ -627,16 +631,17 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 	// project whose `p_<id>` schema does not exist.
 	remaining := candidates[:0:0]
 	for _, candidate := range candidates {
-		if candidate.owned && !candidate.created {
+		if candidate.owned && (!candidate.created || candidate.deleting) {
 			e.logger.WarnContext(ctx, "removing an unfinished personal project before recreating it",
-				"user_id", userID, "project_id", candidate.id)
+				"user_id", userID, "project_id", candidate.id, "deleting", candidate.deleting)
 			if _, err := e.provisioner.Deprovision(ctx, candidate.id); err != nil {
 				switch {
-				case errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) &&
-					!errors.Is(err, projectprovisioning.ErrProjectNotRemoved):
+				case onlyVectorStoreNotDropped(err):
 					// The row is gone, which is all the repair needs. The
 					// leftover PgVector database is an operator cleanup
-					// (cmd/pgvector-orphans), not a reason to fail login.
+					// (cmd/pgvector-orphans), not a reason to fail login. ONLY
+					// that leftover is tolerated: a tenant schema or artifact
+					// bytes left behind fail the repair as they always did.
 					e.logger.WarnContext(ctx, "unfinished personal project removed, but its PgVector database was not dropped",
 						"user_id", userID, "project_id", candidate.id, "err", err)
 				case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
@@ -693,6 +698,30 @@ type existingCandidate struct {
 	// first branch requires. Only a member row may be RETURNED, because only a
 	// member row is one that resolver will ever answer with.
 	member bool
+	// deleting reports a project delete that has started (centry.project.
+	// deleting_at). Such a row is never reused.
+	deleting bool
+}
+
+// onlyVectorStoreNotDropped reports whether a Deprovision error consists solely
+// of ErrVectorStoreNotDropped. Deprovision joins every leftover it finds after
+// the project row is gone; the PgVector database is the only one a login repair
+// may carry on past, because the row (all the repair needs) is gone and the
+// database is an operator cleanup.
+func onlyVectorStoreNotDropped(err error) bool {
+	if err == nil {
+		return false
+	}
+	leaves := []error{err}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		leaves = joined.Unwrap()
+	}
+	for _, leaf := range leaves {
+		if !errors.Is(leaf, projectprovisioning.ErrVectorStoreNotDropped) {
+			return false
+		}
+	}
+	return len(leaves) > 0
 }
 
 // existingProjects reads EVERY row already carrying this user's
@@ -719,7 +748,8 @@ SELECT
         FROM public.auth_core__project_user_role AS assignment
         WHERE assignment.project_id = project.id
           AND assignment.user_id = $2::integer
-    ) AS member
+    ) AS member,
+    project.deleting_at IS NOT NULL AS deleting
 FROM centry.project AS project
 WHERE project.name = $1
 ORDER BY project.id`, Name(userID), accountKey)
@@ -731,7 +761,7 @@ ORDER BY project.id`, Name(userID), accountKey)
 	var candidates []existingCandidate
 	for rows.Next() {
 		var candidate existingCandidate
-		if err := rows.Scan(&candidate.id, &candidate.created, &candidate.owned, &candidate.member); err != nil {
+		if err := rows.Scan(&candidate.id, &candidate.created, &candidate.owned, &candidate.member, &candidate.deleting); err != nil {
 			return nil, fmt.Errorf("personalproject: read projects for user %d: %w", userID, err)
 		}
 		candidates = append(candidates, candidate)
