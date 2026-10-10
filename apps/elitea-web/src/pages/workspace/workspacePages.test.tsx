@@ -12,12 +12,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
+import { IndexIpcProvider } from '@/features/workspace-index';
 import type { Application } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import type { AgentEvent, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
+import { createFakeIndexIpc, type FakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 
 import { server } from '../../test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -34,7 +36,7 @@ const globals = globalThis as unknown as Record<string, unknown>;
 const FOLDER: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: null, is_git: true };
 
 /** Mounts the pages at `path`; answers a function that opens another folder's session. */
-function mount(ipc: FakeWorkspaceIpc, path: string): (workspaceId: string) => Promise<void> {
+function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc): (workspaceId: string) => Promise<void> {
   const rootRoute = createRootRoute();
   const list = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces', component: WorkspacesPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage });
@@ -44,11 +46,10 @@ function mount(ipc: FakeWorkspaceIpc, path: string): (workspaceId: string) => Pr
     routeTree: rootRoute.addChildren([list, session, chat, createAgent]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
+  const pages = <RouterProvider router={router} />;
   render(
     <AppProviders>
-      <WorkspaceIpcProvider ipc={ipc}>
-        <RouterProvider router={router} />
-      </WorkspaceIpcProvider>
+      <WorkspaceIpcProvider ipc={ipc}>{indexIpc === undefined ? pages : <IndexIpcProvider ipc={indexIpc}>{pages}</IndexIpcProvider>}</WorkspaceIpcProvider>
     </AppProviders>,
   );
   return (workspaceId) => router.navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
@@ -92,6 +93,8 @@ describe('WorkspacesPage', () => {
     expect(within(rows[0] as HTMLElement).getByText('app')).toBeInTheDocument();
     expect(within(rows[0] as HTMLElement).getByText('/Users/me/code/app')).toBeInTheDocument();
     expect(within(rows[0] as HTMLElement).getByText('Git')).toBeInTheDocument();
+    // No host index client (a plain browser tab): no index chip.
+    expect(within(rows[0] as HTMLElement).queryByTestId('index-status-chip')).toBeNull();
     await waitFor(() => expect(within(rows[0] as HTMLElement).getByRole('combobox')).toHaveTextContent('Marketing'));
 
     await user.click(screen.getByRole('button', { name: 'Open folder' }));
@@ -100,6 +103,14 @@ describe('WorkspacesPage', () => {
     expect(within(after[1] as HTMLElement).queryByText('Git')).toBeNull();
     // An unbound folder cannot start a session yet.
     expect(within(after[1] as HTMLElement).getByRole('button', { name: 'Open' })).toBeDisabled();
+  });
+
+  it('shows each folder\'s code index on its row', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER, { ...FOLDER, id: 'w2', name: 'notes' }] });
+    mount(ipc, '/workspaces', createFakeIndexIpc({ statuses: { w1: { state: 'ready', entities: 42 } } }));
+    const rows = await screen.findAllByTestId('workspace-row');
+    await waitFor(() => expect(within(rows[0] as HTMLElement).getByTestId('index-status-chip')).toHaveTextContent('Ready · 42 entities'));
+    await waitFor(() => expect(within(rows[1] as HTMLElement).getByTestId('index-status-chip')).toHaveTextContent('Off'));
   });
 
   it('binds a project to a folder through the project picker', async () => {
@@ -181,6 +192,13 @@ describe('WorkspaceSessionPage', () => {
       http.post(`${BASE}/elitea_core/participants/prompt_lib/42/77`, () => HttpResponse.json([])),
     );
   }
+
+  it('shows the folder\'s code index in the header', async () => {
+    serveProject();
+    mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1', createFakeIndexIpc({ statuses: { w1: { state: 'stale' } } }));
+    const session = await screen.findByTestId('workspace-session');
+    await waitFor(() => expect(within(session).getByTestId('index-status-chip')).toHaveTextContent('Stale'));
+  });
 
   it('asks to bind a project first when the folder has none', async () => {
     mount(createFakeWorkspaceIpc({ workspaces: [FOLDER] }), '/workspaces/w1');

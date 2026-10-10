@@ -25,6 +25,7 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
+import { WorkspaceIndexControl } from '@/features/workspace-index';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
@@ -50,7 +51,7 @@ interface HeaderProps {
   onProjectMenuOpenChange: (open: boolean) => void;
 }
 
-/** The folder, its project and agent, "Open in chat" for a started thread, and the panel toggle. */
+/** The folder, its project and agent, the folder's code index, "Open in chat" for a started thread, and the panel toggle. */
 function SessionHeader({ session, workspace, projectId, conversationId, busy, projectMenuOpen, onProjectMenuOpenChange }: HeaderProps): React.JSX.Element {
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
@@ -62,6 +63,7 @@ function SessionHeader({ session, workspace, projectId, conversationId, busy, pr
         logo={false}
         trailing={
           <>
+            <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} />
             {conversationId !== '' && <OpenInChat conversationId={conversationId} />}
             {!changesOpen && <PanelToggle count={attention} />}
           </>

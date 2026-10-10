@@ -336,6 +336,7 @@ describe('desktop catalogue split', () => {
   it('treats the desktop modules as desktop-only, and the web door to them as shared', () => {
     expect(isDesktopOnlyPath('src/pages/workspace/WorkspacesPage.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src/features/workspace/ui/TurnTranscript.tsx')).toBe(true);
+    expect(isDesktopOnlyPath('src/features/workspace-index/ui/IndexStatusChip.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src/widgets/desktop-shell/ui/DesktopFrame.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src\\entries\\desktop\\DesktopShell.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src/pages/workspace/desktopEntry.tsx')).toBe(false);

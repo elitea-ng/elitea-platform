@@ -3,6 +3,8 @@
  * each. Presentational — the page owns the IPC calls and the project list
  * (the picker's data comes from a widget this feature may not import).
  */
+import type { ReactNode } from 'react';
+
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
@@ -25,9 +27,11 @@ export interface WorkspaceListProps {
   onSelect: (workspace: Workspace) => void;
   onRemove: (workspace: Workspace) => void;
   onBind: (workspace: Workspace, projectId: number) => void;
+  /** More badges after the name (the page's local-index chip, from a slice this one may not import). */
+  badges?: (workspace: Workspace) => ReactNode;
 }
 
-export function WorkspaceList({ workspaces, projects, onSelect, onRemove, onBind }: WorkspaceListProps): React.JSX.Element {
+export function WorkspaceList({ workspaces, projects, onSelect, onRemove, onBind, badges }: WorkspaceListProps): React.JSX.Element {
   return (
     <Box component="ul" sx={{ margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
       {workspaces.map((workspace) => (
@@ -50,6 +54,7 @@ export function WorkspaceList({ workspaces, projects, onSelect, onRemove, onBind
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Typography variant="headingSmall">{workspace.name}</Typography>
               {workspace.is_git && <Chip size="small" variant="outlined" label={t('workspace.git', 'Git')} />}
+              {badges?.(workspace)}
             </Box>
             <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary, wordBreak: 'break-all' }}>
               {workspace.path}

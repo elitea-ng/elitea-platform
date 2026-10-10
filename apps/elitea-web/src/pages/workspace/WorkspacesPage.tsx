@@ -20,6 +20,7 @@ import Typography from '@mui/material/Typography';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 
 import { WorkspaceList, describeWorkspaceError, useWorkspaceIpc } from '@/features/workspace';
+import { WorkspaceIndexControl } from '@/features/workspace-index';
 import { toWorkspaceIpcError, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { ShowSidebarButton, TitleBarSpacer, useDesktopLayout } from '@/widgets/desktop-shell';
@@ -119,6 +120,7 @@ export default function WorkspacesPage(): React.JSX.Element {
               onSelect={(workspace) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: workspace.id } })}
               onRemove={(workspace) => remove.mutate(workspace)}
               onBind={(workspace, projectId) => bind.mutate({ workspace, projectId })}
+              badges={(workspace) => <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} />}
             />
           </>
         )}
