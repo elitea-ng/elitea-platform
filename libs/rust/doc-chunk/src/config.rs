@@ -17,9 +17,10 @@ pub struct ChunkParams {
     /// `chunking_tool` / `chunker`: `markdown`, `text`, `json`, `code`,
     /// `universal`, or a model-calling one (`statistical`, `proposal`).
     pub chunker: Option<String>,
-    /// Tokens per chunk (markdown, text); characters for the code chunker's
-    /// known languages, where the SDK reads the same key. `chunk_size` is the
-    /// code chunker's other spelling. Zero or negative means "default" (the
+    /// Tokens per chunk (markdown, text) at any level. The code and JSON
+    /// chunkers count characters, so they read it only from their own
+    /// extension's block (the SDK's per-extension override), never from the
+    /// top level. `chunk_size` is the code chunker's character setting. Zero or negative means "default" (the
     /// CSV and Excel loaders use -1 for "no limit").
     pub max_tokens: Option<i64>,
     pub chunk_size: Option<i64>,
@@ -32,6 +33,8 @@ pub struct ChunkParams {
     /// Markdown header markers and their metadata names, e.g.
     /// `("##", "Header 2")`. Empty means the default H1-H4.
     pub headers_to_split_on: Option<Vec<(String, String)>>,
+    /// The JSON chunker's maximum chunk size (its own key, at any level).
+    pub max_chunk_size: Option<i64>,
     /// The code chunker's token split for languages it has no grammar for.
     pub unknown_chunk_size: Option<i64>,
     pub unknown_chunk_overlap: Option<i64>,
@@ -57,6 +60,7 @@ impl ChunkParams {
             strip_header,
             return_each_line,
             headers_to_split_on,
+            max_chunk_size,
             unknown_chunk_size,
             unknown_chunk_overlap,
             use_llm
@@ -98,6 +102,7 @@ impl ChunkParams {
         let chunk_size = int("chunk_size");
         let token_overlap = int("token_overlap");
         let chunk_overlap = int("chunk_overlap");
+        let max_chunk_size = int("max_chunk_size");
         let min_chunk_chars = int("min_chunk_chars").map(|n| usize::try_from(n).unwrap_or(0));
         let unknown_chunk_size = int("unknown_chunk_size");
         // `token_chunk_size` is the SDK model's name for it
@@ -150,6 +155,7 @@ impl ChunkParams {
             strip_header,
             return_each_line,
             headers_to_split_on,
+            max_chunk_size,
             unknown_chunk_size,
             unknown_chunk_overlap,
             use_llm,
@@ -260,6 +266,18 @@ impl ChunkingConfig {
         }
         config.warnings = warnings;
         Ok(config)
+    }
+
+    /// The settings object of `extension`'s own block, if the config has one
+    /// (`".md"` or `"md"`).
+    #[must_use]
+    pub fn own_params_for(&self, extension: &str) -> Option<&ChunkParams> {
+        let key = if extension.starts_with('.') {
+            extension.to_ascii_lowercase()
+        } else {
+            format!(".{}", extension.to_ascii_lowercase())
+        };
+        self.by_extension.get(&key)
     }
 
     /// The settings for files of `extension` (`".md"` or `"md"`): that

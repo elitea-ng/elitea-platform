@@ -1,7 +1,8 @@
 //! The extension router (`universal_chunker`) and the entry point.
 //!
-//! * markdown extensions (and HTML, which `doc-extract` hands over as
-//!   markdown) -> `markdown`
+//! * markdown extensions -> `markdown`; HTML only when the caller says it
+//!   converted the page to markdown ([`ChunkOptions::html_converted`]), else
+//!   it is text like any other source file
 //! * `.json`, `.jsonl`, `.jsonc` -> `json`
 //! * the SDK's code extensions -> `code`
 //! * everything else -> `text`
@@ -25,16 +26,34 @@ pub enum Chunker {
     Code,
 }
 
+/// What the caller knows about the text it hands over.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChunkOptions {
+    /// The text of an HTML source (`.html`, `text/html`, …) is the markdown
+    /// the caller converted it to. Off (the default), HTML is the markup as
+    /// written and is chunked as text: the markdown chunker would read its
+    /// `#` lines as headings.
+    pub html_converted: bool,
+}
+
 /// The chunker `universal` picks for a lower-case, dotted extension: the
-/// kind the shared extension table (`elitea-content-source`) gives it.
+/// kind the shared extension table (`elitea-content-source`) gives it. HTML
+/// is text here; see [`chunker_for_with`].
 #[must_use]
 pub fn chunker_for(extension: &str) -> Chunker {
+    chunker_for_with(extension, ChunkOptions::default())
+}
+
+/// [`chunker_for`] with the caller's [`ChunkOptions`].
+#[must_use]
+pub fn chunker_for_with(extension: &str, options: ChunkOptions) -> Chunker {
     match kind_of_extension(extension) {
-        // HTML reaches the chunker as markdown (`doc-extract`).
-        Kind::Markdown | Kind::Html => Chunker::Markdown,
+        Kind::Markdown => Chunker::Markdown,
+        Kind::Html if options.html_converted => Chunker::Markdown,
         Kind::Json => Chunker::Json,
         Kind::Code => Chunker::Code,
-        Kind::Text | Kind::Binary => Chunker::Text,
+        // HTML as written is text; see `ChunkOptions::html_converted`.
+        Kind::Html | Kind::Text | Kind::Binary => Chunker::Text,
     }
 }
 
@@ -103,11 +122,11 @@ pub fn extension_of(source: &str) -> String {
     let name = path.rsplit(['/', '\\']).next().unwrap_or("");
     match name.rsplit_once('.') {
         Some((_, ext)) if !ext.is_empty() => format!(".{ext}"),
-        // No dot: a bare extension such as `md`.
-        None if (1..=5).contains(&name.len())
-            && name.chars().all(|c| c.is_ascii_alphanumeric()) =>
-        {
-            format!(".{name}")
+        // A bare extension such as `md`: the whole source, no `/`, no `.`,
+        // and one the extension table lists. `TODO`, `Makefile`, `bin/sh`
+        // and `https://host/api/json` are names or paths, not extensions.
+        None if !path.contains(['/', '\\']) && elitea_content_source::is_known_extension(&path) => {
+            format!(".{path}")
         }
         _ => String::new(),
     }
@@ -126,13 +145,17 @@ fn non_negative(value: Option<i64>) -> Option<usize> {
     value.and_then(|n| usize::try_from(n).ok())
 }
 
-fn chunker_named(name: &str, extension: &str) -> Result<Chunker, ChunkError> {
+fn chunker_named(
+    name: &str,
+    extension: &str,
+    options: ChunkOptions,
+) -> Result<Chunker, ChunkError> {
     match name.trim().to_ascii_lowercase().as_str() {
         "markdown" => Ok(Chunker::Markdown),
         "text" => Ok(Chunker::Text),
         "json" => Ok(Chunker::Json),
         "code" | "code_parser" => Ok(Chunker::Code),
-        "universal" => Ok(chunker_for(extension)),
+        "universal" => Ok(chunker_for_with(extension, options)),
         "statistical" => Err(ChunkError::RequiresModel {
             chunker: "statistical",
             reason: "it embeds sentences to find topic boundaries".to_owned(),
@@ -173,11 +196,21 @@ fn text_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkErro
     )
 }
 
-fn json_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkError> {
-    match json::split(
-        text,
-        positive(params.max_tokens).unwrap_or(json::MAX_CHUNK_SIZE),
-    ) {
+/// The JSON chunker's size: `max_tokens` from the extension's own block
+/// (the SDK's per-extension override), else `max_chunk_size` at any level.
+/// A top-level `max_tokens` is the token chunkers' and does not apply.
+fn json_size(params: &ChunkParams, own: &ChunkParams) -> usize {
+    positive(own.max_tokens)
+        .or(positive(params.max_chunk_size))
+        .unwrap_or(json::MAX_CHUNK_SIZE)
+}
+
+fn json_chunks(
+    text: &str,
+    params: &ChunkParams,
+    own: &ChunkParams,
+) -> Result<Vec<Chunk>, ChunkError> {
+    match json::split(text, json_size(params, own)) {
         json::Split::Whole => Ok(vec![
             Chunk::new(text.to_owned(), 1, "document", "json").with("headers", ""),
         ]),
@@ -198,15 +231,18 @@ fn json_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkErro
     }
 }
 
-/// The code chunker's settings: `max_tokens` over `chunk_size`, and
-/// `token_overlap` over `chunk_overlap`, each falling to the other when the
-/// first is unset or unusable (zero, negative).
-fn code_settings(params: &ChunkParams) -> Code {
+/// The code chunker's settings, in characters: `chunk_size` and
+/// `chunk_overlap` at any level; `max_tokens` and `token_overlap` only from
+/// the extension's own block (the SDK's per-extension override, which beats
+/// them), each falling to the other when the first is unset or unusable
+/// (zero, negative). A top-level `max_tokens` is the token chunkers' and
+/// does not apply.
+fn code_settings(params: &ChunkParams, own: &ChunkParams) -> Code {
     Code {
-        chunk_size: positive(params.max_tokens)
+        chunk_size: positive(own.max_tokens)
             .or(positive(params.chunk_size))
             .unwrap_or(code::CHUNK_SIZE),
-        chunk_overlap: non_negative(params.token_overlap)
+        chunk_overlap: non_negative(own.token_overlap)
             .or(non_negative(params.chunk_overlap))
             .unwrap_or(code::CHUNK_OVERLAP),
         unknown_chunk_size: positive(params.unknown_chunk_size).unwrap_or(code::UNKNOWN_CHUNK_SIZE),
@@ -219,8 +255,9 @@ fn code_chunks(
     text: &str,
     extension: &str,
     params: &ChunkParams,
+    own: &ChunkParams,
 ) -> Result<Vec<Chunk>, ChunkError> {
-    code::code(text, extension, &code_settings(params))
+    code::code(text, extension, &code_settings(params, own))
 }
 
 /// Chunk `document_text`. `source` says what the document is: a file name
@@ -228,7 +265,10 @@ fn code_chunks(
 ///
 /// The chunker is `config`'s `chunking_tool` when it names one, else the
 /// router's pick for the extension; settings are the extension's own keys
-/// over the top-level ones over the SDK defaults.
+/// over the top-level ones over the SDK defaults, except that the character
+/// chunkers (code, JSON) take `max_tokens` / `token_overlap` only from the
+/// extension's own block. `document_text` is taken as written: HTML is
+/// chunked as text (see [`chunk_with`] for converted pages).
 ///
 /// # Errors
 /// [`ChunkError::RequiresModel`] for the statistical and proposal chunkers
@@ -239,7 +279,25 @@ pub fn chunk(
     source: &str,
     config: &ChunkingConfig,
 ) -> Result<Vec<Chunk>, ChunkError> {
+    chunk_with(document_text, source, config, ChunkOptions::default())
+}
+
+/// [`chunk`] with the caller's [`ChunkOptions`]: an indexer that converted an
+/// HTML page to markdown says so, and the page is chunked as markdown.
+///
+/// # Errors
+/// As [`chunk`].
+pub fn chunk_with(
+    document_text: &str,
+    source: &str,
+    config: &ChunkingConfig,
+    options: ChunkOptions,
+) -> Result<Vec<Chunk>, ChunkError> {
     let extension = extension_of(source);
+    let own = config
+        .own_params_for(&extension)
+        .cloned()
+        .unwrap_or_default();
     let params = config.params_for(&extension);
     if params.use_llm == Some(true) {
         return Err(ChunkError::RequiresModel {
@@ -248,14 +306,14 @@ pub fn chunk(
         });
     }
     let chunker = match params.chunker.as_deref() {
-        Some(name) => chunker_named(name, &extension)?,
-        None => chunker_for(&extension),
+        Some(name) => chunker_named(name, &extension, options)?,
+        None => chunker_for_with(&extension, options),
     };
     match chunker {
         Chunker::Markdown => markdown_chunks(document_text, &params),
         Chunker::Text => text_chunks(document_text, &params),
-        Chunker::Json => json_chunks(document_text, &params),
-        Chunker::Code => code_chunks(document_text, &extension, &params),
+        Chunker::Json => json_chunks(document_text, &params, &own),
+        Chunker::Code => code_chunks(document_text, &extension, &params, &own),
     }
 }
 
@@ -280,6 +338,100 @@ mod tests {
         ] {
             assert_eq!(extension_of(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn a_bare_extension_is_a_known_one_with_no_slash_or_dot() {
+        for (source, expected) in [
+            ("bin/sh", ""),
+            ("https://host/api/json", ""),
+            ("TODO", ""),
+            ("Makefile", ""),
+            ("README", ""),
+            ("sh", ".sh"),
+            ("json", ".json"),
+            ("MD", ".md"),
+            (".md", ".md"),
+            ("nope", ""),
+        ] {
+            assert_eq!(extension_of(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn html_is_text_unless_the_caller_converted_it() {
+        let page = "# not a heading\n\n<p>one two three</p>\n";
+        let config = ChunkingConfig::default();
+        let plain = chunk(page, "page.html", &config).unwrap_or_default();
+        assert_eq!(plain[0].metadata["headers"], "", "chunked as text");
+        let mime = chunk(page, "text/html", &config).unwrap_or_default();
+        assert_eq!(mime, plain);
+        assert_eq!(chunker_for(".html"), Chunker::Text);
+        let converted = ChunkOptions {
+            html_converted: true,
+        };
+        assert_eq!(chunker_for_with(".html", converted), Chunker::Markdown);
+        assert_eq!(chunker_for_with(".xhtml", converted), Chunker::Markdown);
+        let as_markdown = chunk_with(page, "page.html", &config, converted).unwrap_or_default();
+        assert_eq!(
+            as_markdown[0].metadata["headers"], "not a heading",
+            "{as_markdown:?}"
+        );
+        // Other sources do not care.
+        assert_eq!(
+            chunk_with("# h\n\nbody", "a.md", &config, converted).unwrap_or_default(),
+            chunk("# h\n\nbody", "a.md", &config).unwrap_or_default()
+        );
+        // An explicit `universal` follows the same rule.
+        let universal =
+            ChunkingConfig::from_value(&json!({"chunking_tool": "universal"})).unwrap_or_default();
+        assert_eq!(
+            chunk_with(page, "page.html", &universal, converted).unwrap_or_default(),
+            as_markdown
+        );
+    }
+
+    #[test]
+    fn top_level_token_settings_leave_the_character_chunkers_alone() {
+        let config = ChunkingConfig::from_value(&json!({"max_tokens": 128, "token_overlap": 9}))
+            .unwrap_or_default();
+        for ext in [".py", ".json"] {
+            let params = config.params_for(ext);
+            let own = config.own_params_for(ext).cloned().unwrap_or_default();
+            let code = code_settings(&params, &own);
+            assert_eq!(
+                (code.chunk_size, code.chunk_overlap),
+                (code::CHUNK_SIZE, code::CHUNK_OVERLAP)
+            );
+            assert_eq!(json_size(&params, &own), json::MAX_CHUNK_SIZE);
+        }
+        // The token chunkers still read them.
+        let text: String = (0..400).map(|n| format!("w{n} ")).collect();
+        let small = chunk(&text, "a.txt", &config).unwrap_or_default();
+        assert!(small.len() > 2, "{}", small.len());
+        // An extension's own block still overrides, and the character keys
+        // apply at any level.
+        let config = ChunkingConfig::from_value(&json!({
+            "chunk_size": 200, "chunk_overlap": 20, "max_chunk_size": 64,
+            ".py": {"max_tokens": 300, "token_overlap": 7},
+            ".json": {"max_tokens": 99}
+        }))
+        .unwrap_or_default();
+        let (params, own) = (
+            config.params_for(".py"),
+            config.own_params_for(".py").cloned().unwrap_or_default(),
+        );
+        let code = code_settings(&params, &own);
+        assert_eq!((code.chunk_size, code.chunk_overlap), (300, 7));
+        let (params, own) = (
+            config.params_for(".json"),
+            config.own_params_for(".json").cloned().unwrap_or_default(),
+        );
+        assert_eq!(json_size(&params, &own), 99);
+        let params = config.params_for(".go");
+        assert_eq!(json_size(&params, &ChunkParams::default()), 64);
+        let code = code_settings(&params, &ChunkParams::default());
+        assert_eq!((code.chunk_size, code.chunk_overlap), (200, 20));
     }
 
     #[test]
@@ -385,11 +537,16 @@ mod tests {
             chunker_for(&extension_of("build.gradle.kts")),
             Chunker::Code
         );
-        assert_eq!(chunker_for(&extension_of("a.xhtml")), Chunker::Markdown);
+        assert_eq!(chunker_for(&extension_of("a.xhtml")), Chunker::Text);
         assert_eq!(
             chunker_for(&extension_of("application/xhtml+xml")),
-            Chunker::Markdown
+            Chunker::Text
         );
+    }
+
+    /// `code_settings` with the same params as the extension's own block.
+    fn code_settings_own(params: &ChunkParams) -> Code {
+        code_settings(params, params)
     }
 
     #[test]
@@ -401,18 +558,18 @@ mod tests {
             chunk_overlap,
             ..ChunkParams::default()
         };
-        let settings = code_settings(&params(Some(100), Some(300), Some(5), Some(50)));
+        let settings = code_settings_own(&params(Some(100), Some(300), Some(5), Some(50)));
         assert_eq!((settings.chunk_size, settings.chunk_overlap), (100, 5));
         // -1 is "no limit" in the loaders that write it: not a size.
-        let settings = code_settings(&params(Some(-1), Some(300), Some(-1), Some(50)));
+        let settings = code_settings_own(&params(Some(-1), Some(300), Some(-1), Some(50)));
         assert_eq!((settings.chunk_size, settings.chunk_overlap), (300, 50));
-        let settings = code_settings(&params(Some(0), None, None, None));
+        let settings = code_settings_own(&params(Some(0), None, None, None));
         assert_eq!(
             (settings.chunk_size, settings.chunk_overlap),
             (code::CHUNK_SIZE, code::CHUNK_OVERLAP)
         );
         // An overlap of zero is a set overlap.
-        let settings = code_settings(&params(None, Some(300), Some(0), Some(50)));
+        let settings = code_settings_own(&params(None, Some(300), Some(0), Some(50)));
         assert_eq!(settings.chunk_overlap, 0);
     }
 }

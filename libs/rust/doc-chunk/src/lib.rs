@@ -20,7 +20,8 @@
 //! [`ChunkError::RequiresModel`], so the caller can report the document as
 //! skipped with a reason (they arrive with ADR-0030's I4).
 //!
-//! The entry point is [`chunk`].
+//! The entry point is [`chunk`]; an indexer that converted an HTML page to
+//! markdown uses [`chunk_with`] and says so ([`ChunkOptions`]).
 
 mod code;
 mod config;
@@ -30,7 +31,9 @@ mod route;
 mod tokens;
 
 pub use config::{ChunkParams, ChunkingConfig, ConfigError};
-pub use route::{Chunker, chunk, chunker_for, extension_of};
+pub use route::{
+    ChunkOptions, Chunker, chunk, chunk_with, chunker_for, chunker_for_with, extension_of,
+};
 
 use serde_json::{Map, Value};
 

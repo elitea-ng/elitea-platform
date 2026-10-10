@@ -156,7 +156,7 @@ fn golden_json() {
         "config_json_default",
         &run(&text, "config.json", &ChunkingConfig::default()),
     );
-    let small = config(&json!({"max_tokens": 160}));
+    let small = config(&json!({"max_chunk_size": 160}));
     let chunks = run(&text, "config.json", &small);
     golden("config_json_160", &chunks);
     // The pieces of keys are Python-style dumps: ", " and ": " separators,
@@ -333,7 +333,7 @@ fn json_chunks_are_valid_bounded_and_keep_every_value() {
     leaves(&original, &mut want);
     want.sort();
     for max in [120_usize, 160, 300, 512] {
-        let c = config(&json!({"max_tokens": max}));
+        let c = config(&json!({"max_chunk_size": max}));
         let chunks = run(&text, "config.json", &c);
         let mut got = Vec::new();
         let mut pieces: Vec<&str> = Vec::new();
