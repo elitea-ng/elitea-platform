@@ -9,6 +9,15 @@
 //!   show). The token's project is the request's project, and the token's
 //!   sources are the only sources the request may name
 //!   ([`Caller::require_source`]).
+//!
+//!   **Bounded revocation lag.** elitea-main reads revocation on every
+//!   introspection call, but this service answers repeat calls from the
+//!   cache, so a revoked token keeps working here for at most the cache
+//!   cap: [`WORKER_CLAIM_CAP_SECONDS`] (5 s) for a worker claim token,
+//!   [`DEFAULT_MAX_TTL_SECONDS`] (60 s) for an engine callback token by
+//!   default, and never more than [`HARD_MAX_TTL_SECONDS`] (300 s) whatever
+//!   is configured. A refusal is cached for at most
+//!   [`NEGATIVE_TTL_SECONDS`] (5 s).
 //! * **Administrator.** No token, and a client certificate whose identity
 //!   ([`crate::identity`]) is in the administrator list (elitea-main). This
 //!   caller names the project in the request.
@@ -34,6 +43,22 @@ use crate::pb::token_introspection_service_client::TokenIntrospectionServiceClie
 
 /// The longest bearer token accepted.
 const MAX_TOKEN_BYTES: usize = 4096;
+
+/// How long a worker claim token's answer is cached at most: the bound on
+/// how long a revoked claim token still works here.
+pub const WORKER_CLAIM_CAP_SECONDS: i64 = 5;
+/// The default longest an engine callback token's answer is cached.
+pub const DEFAULT_MAX_TTL_SECONDS: i64 = 60;
+/// The most the configured cache cap may be; a larger value is clamped.
+pub const HARD_MAX_TTL_SECONDS: i64 = 300;
+/// How long a refusal is cached at most.
+pub const NEGATIVE_TTL_SECONDS: i64 = 5;
+/// `/readyz` fails while an introspection attempt within this many seconds
+/// was refused by elitea-main as not authorized.
+pub const NOT_AUTHORIZED_WINDOW_SECONDS: i64 = 60;
+/// The token the startup self-check presents: no token is ever minted with
+/// it, so an authorized caller is answered "inactive".
+const SELF_CHECK_TOKEN: &str = "elitea-vector-introspection-self-check";
 
 /// A verified token.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +193,56 @@ pub enum IntrospectError {
     /// elitea-main did not answer in time, or answered with an error.
     #[error("token introspection is unavailable: {0}")]
     Unavailable(String),
+    /// elitea-main refused this service as a caller (`PERMISSION_DENIED` or
+    /// `UNAUTHENTICATED`): a misconfiguration, not an outage, and not
+    /// something a retry fixes.
+    #[error("elitea-main does not authorize this service to introspect tokens")]
+    NotAuthorized,
+}
+
+/// The message of the `FAILED_PRECONDITION` a caller gets when
+/// [`IntrospectError::NotAuthorized`].
+pub const NOT_AUTHORIZED_MESSAGE: &str = "vector service is not authorized to introspect tokens; \
+check ELITEA_VECTOR_INTROSPECTION_CLIENTS and the client certificate";
+
+/// What the last attempts to reach elitea-main showed; read by `/readyz`.
+#[derive(Debug, Default)]
+pub struct IntrospectionHealth {
+    /// `(unix seconds, refused as not authorized)` of the last attempt that
+    /// told us anything: an answer (authorized) or a refusal. An outage
+    /// (`Unavailable`) tells nothing and leaves it as it was.
+    last: std::sync::Mutex<Option<(i64, bool)>>,
+}
+
+impl IntrospectionHealth {
+    /// Records an attempt that elitea-main answered (`not_authorized` false)
+    /// or refused as not authorized (true) at `now`.
+    pub fn record(&self, now: i64, not_authorized: bool) {
+        if let Ok(mut last) = self.last.lock() {
+            *last = Some((now, not_authorized));
+        }
+    }
+
+    /// Whether the last informative attempt, made within
+    /// [`NOT_AUTHORIZED_WINDOW_SECONDS`] of `now`, was refused as not
+    /// authorized.
+    #[must_use]
+    pub fn not_authorized(&self, now: i64) -> bool {
+        self.last.lock().is_ok_and(|last| {
+            matches!(*last, Some((at, true)) if now.saturating_sub(at) < NOT_AUTHORIZED_WINDOW_SECONDS)
+        })
+    }
+}
+
+/// The [`IntrospectError`] of a failed call to elitea-main.
+#[must_use]
+pub fn error_from_status(status: &Status) -> IntrospectError {
+    match status.code() {
+        tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
+            IntrospectError::NotAuthorized
+        }
+        code => IntrospectError::Unavailable(code.to_string()),
+    }
 }
 
 /// Verifies a token with elitea-main.
@@ -195,6 +270,7 @@ pub struct GrpcIntrospector {
     /// Swapped when the client certificate rotates ([`crate::tls`]).
     client: ArcSwap<TokenIntrospectionServiceClient<Channel>>,
     timeout: Duration,
+    health: Arc<IntrospectionHealth>,
 }
 
 impl GrpcIntrospector {
@@ -204,7 +280,45 @@ impl GrpcIntrospector {
         Self {
             client: ArcSwap::from_pointee(TokenIntrospectionServiceClient::new(channel)),
             timeout,
+            health: Arc::new(IntrospectionHealth::default()),
         }
+    }
+
+    /// What the attempts so far showed, for `/readyz`.
+    #[must_use]
+    pub fn health(&self) -> Arc<IntrospectionHealth> {
+        Arc::clone(&self.health)
+    }
+
+    /// Asks elitea-main about a token nobody holds. An authorized caller is
+    /// answered "inactive"; one that is not authorized is refused with
+    /// `PERMISSION_DENIED`. The outcome lands in [`Self::health`]; an outage
+    /// is only logged (elitea-main may still be starting).
+    pub async fn self_check(&self) {
+        match self.introspect(SELF_CHECK_TOKEN).await {
+            Ok(_) => tracing::debug!("introspection self-check passed"),
+            Err(IntrospectError::NotAuthorized) => tracing::error!(
+                "introspection self-check: elitea-main refused this service; \
+                 check ELITEA_VECTOR_INTROSPECTION_CLIENTS and the client certificate"
+            ),
+            Err(error) => {
+                tracing::warn!(%error, "introspection self-check could not reach elitea-main");
+            }
+        }
+    }
+
+    /// Runs [`Self::self_check`] now and every `interval` until the task is
+    /// dropped, so `/readyz` follows a fixed (or newly broken) grant.
+    pub fn spawn_self_check(self: &Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                this.self_check().await;
+            }
+        })
     }
 
     /// Uses `channel` for every call from now on; calls already in flight
@@ -222,11 +336,20 @@ impl Introspector for GrpcIntrospector {
         let call = client.introspect_token(pb::IntrospectTokenRequest {
             token: token.to_owned(),
         });
-        let response = tokio::time::timeout(self.timeout, call)
+        let outcome = tokio::time::timeout(self.timeout, call)
             .await
-            .map_err(|_| IntrospectError::Unavailable("timed out".to_owned()))?
-            .map_err(|status| IntrospectError::Unavailable(status.code().to_string()))?
-            .into_inner();
+            .map_err(|_| IntrospectError::Unavailable("timed out".to_owned()))?;
+        let response = match outcome {
+            Ok(response) => response.into_inner(),
+            Err(status) => {
+                let error = error_from_status(&status);
+                if matches!(error, IntrospectError::NotAuthorized) {
+                    self.health.record(unix_now(), true);
+                }
+                return Err(error);
+            }
+        };
+        self.health.record(unix_now(), false);
         Ok(grant_from_response(&response, unix_now()))
     }
 }
@@ -281,11 +404,13 @@ struct CacheEntry {
 #[derive(Clone, Copy, Debug)]
 pub struct CachePolicy {
     /// The longest an admitted answer is kept, whatever the token's expiry.
+    /// Never more than [`HARD_MAX_TTL_SECONDS`].
     pub max_ttl_seconds: i64,
     /// The longest an admitted worker claim token is kept. A claim token is
     /// revoked by its claim settling, being cancelled or being lost, which
     /// its expiry does not show, so this bounds how long a revoked one still
-    /// works here. It never exceeds `max_ttl_seconds`.
+    /// works here. It never exceeds `max_ttl_seconds` or
+    /// [`WORKER_CLAIM_CAP_SECONDS`].
     pub worker_claim_max_ttl_seconds: i64,
     /// How long a refusal is kept. Refusals are cached only briefly (at most
     /// a few seconds): long enough that a flood of one bad token costs
@@ -299,11 +424,43 @@ pub struct CachePolicy {
 impl Default for CachePolicy {
     fn default() -> Self {
         Self {
-            max_ttl_seconds: 300,
-            worker_claim_max_ttl_seconds: 30,
-            negative_ttl_seconds: 5,
+            max_ttl_seconds: DEFAULT_MAX_TTL_SECONDS,
+            worker_claim_max_ttl_seconds: WORKER_CLAIM_CAP_SECONDS,
+            negative_ttl_seconds: NEGATIVE_TTL_SECONDS,
             max_entries: 10_000,
         }
+    }
+}
+
+impl CachePolicy {
+    /// This policy held to the hard bounds: `max_ttl_seconds` at most
+    /// [`HARD_MAX_TTL_SECONDS`], the worker claim cap at most
+    /// [`WORKER_CLAIM_CAP_SECONDS`] and `max_ttl_seconds`, refusals at most
+    /// [`NEGATIVE_TTL_SECONDS`]; nothing below zero. A value that had to
+    /// change is logged.
+    #[must_use]
+    pub fn bounded(self) -> Self {
+        let max_ttl_seconds = self.max_ttl_seconds.clamp(0, HARD_MAX_TTL_SECONDS);
+        let bounded = Self {
+            max_ttl_seconds,
+            worker_claim_max_ttl_seconds: self
+                .worker_claim_max_ttl_seconds
+                .clamp(0, WORKER_CLAIM_CAP_SECONDS)
+                .min(max_ttl_seconds),
+            negative_ttl_seconds: self.negative_ttl_seconds.clamp(0, NEGATIVE_TTL_SECONDS),
+            max_entries: self.max_entries,
+        };
+        if bounded.max_ttl_seconds != self.max_ttl_seconds
+            || bounded.worker_claim_max_ttl_seconds != self.worker_claim_max_ttl_seconds
+            || bounded.negative_ttl_seconds != self.negative_ttl_seconds
+        {
+            tracing::warn!(
+                requested = ?self,
+                applied = ?bounded,
+                "introspection cache lifetimes clamped to their hard maximums"
+            );
+        }
+        bounded
     }
 }
 
@@ -327,6 +484,7 @@ impl CachingIntrospector {
     /// A cache in front of `inner`.
     #[must_use]
     pub fn new(inner: Arc<dyn Introspector>, policy: CachePolicy, clock: Clock) -> Self {
+        let policy = policy.bounded();
         let backstop = policy.max_ttl_seconds.max(policy.negative_ttl_seconds);
         let entries = Cache::builder()
             .max_capacity(policy.max_entries as u64)
@@ -370,7 +528,12 @@ impl CachingIntrospector {
                 Ok::<_, IntrospectError>(Arc::new(CacheEntry { grant, valid_until }))
             })
             .await
-            .map_err(|error: Arc<IntrospectError>| IntrospectError::Unavailable(error.to_string()))
+            .map_err(|error: Arc<IntrospectError>| match *error {
+                IntrospectError::NotAuthorized => IntrospectError::NotAuthorized,
+                IntrospectError::Unavailable(ref reason) => {
+                    IntrospectError::Unavailable(reason.clone())
+                }
+            })
     }
 }
 
@@ -432,11 +595,20 @@ impl Authenticator {
     ///
     /// # Errors
     /// `UNAUTHENTICATED` for a token that is not accepted; `UNAVAILABLE`
-    /// when elitea-main cannot verify it.
+    /// when elitea-main cannot verify it; `FAILED_PRECONDITION` (not
+    /// retryable) when elitea-main does not authorize this service to
+    /// introspect at all.
     pub async fn verify_token(&self, token: &str) -> Result<Caller, Status> {
         match self.introspector.introspect(token).await {
             Ok(Some(grant)) => Ok(Caller::Token(grant)),
             Ok(None) => Err(Status::unauthenticated("the token is not accepted")),
+            Err(IntrospectError::NotAuthorized) => {
+                tracing::error!(
+                    "elitea-main refuses this service's token introspection; \
+                     check ELITEA_VECTOR_INTROSPECTION_CLIENTS and the client certificate"
+                );
+                Err(Status::failed_precondition(NOT_AUTHORIZED_MESSAGE))
+            }
             Err(error) => {
                 tracing::warn!(%error, "token introspection failed; request refused");
                 Err(Status::unavailable("token verification is unavailable"))
@@ -532,11 +704,11 @@ mod tests {
         let now = Arc::new(AtomicI64::new(1_000));
         let cache = CachingIntrospector::new(inner.clone(), CachePolicy::default(), clock(&now));
         cache.introspect("t").await.expect("ok");
-        now.store(1_029, Ordering::SeqCst);
+        now.store(1_004, Ordering::SeqCst);
         cache.introspect("t").await.expect("ok");
         assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
-        // Past the worker claim cap (30 s), well inside the general one.
-        now.store(1_030, Ordering::SeqCst);
+        // Past the worker claim cap (5 s), well inside the general one.
+        now.store(1_005, Ordering::SeqCst);
         cache.introspect("t").await.expect("ok");
         assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
     }
@@ -579,6 +751,204 @@ mod tests {
             );
         }
         assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_default_caps_are_short() {
+        let policy = CachePolicy::default();
+        assert_eq!(policy.worker_claim_max_ttl_seconds, 5);
+        assert_eq!(policy.max_ttl_seconds, 60);
+        assert!(policy.negative_ttl_seconds <= 5);
+    }
+
+    #[test]
+    fn configured_caps_are_clamped_to_the_hard_maximums() {
+        let policy = CachePolicy {
+            max_ttl_seconds: 86_400,
+            worker_claim_max_ttl_seconds: 600,
+            negative_ttl_seconds: 120,
+            max_entries: 10,
+        }
+        .bounded();
+        assert_eq!(policy.max_ttl_seconds, 300);
+        assert_eq!(policy.worker_claim_max_ttl_seconds, 5);
+        assert_eq!(policy.negative_ttl_seconds, 5);
+        // The worker cap never exceeds the general one.
+        let tight = CachePolicy {
+            max_ttl_seconds: 2,
+            ..CachePolicy::default()
+        }
+        .bounded();
+        assert_eq!(tight.worker_claim_max_ttl_seconds, 2);
+        // A configured value inside the bounds is kept.
+        let kept = CachePolicy {
+            max_ttl_seconds: 120,
+            ..CachePolicy::default()
+        }
+        .bounded();
+        assert_eq!(kept.max_ttl_seconds, 120);
+    }
+
+    #[tokio::test]
+    async fn an_over_long_configured_cap_still_cannot_exceed_the_hard_maximum() {
+        let inner = Arc::new(Counting {
+            calls: AtomicUsize::new(0),
+            answer: Some(grant(7, 1_000_000)),
+        });
+        let now = Arc::new(AtomicI64::new(1_000));
+        let policy = CachePolicy {
+            max_ttl_seconds: 86_400,
+            ..CachePolicy::default()
+        };
+        let cache = CachingIntrospector::new(inner.clone(), policy, clock(&now));
+        cache.introspect("t").await.expect("ok");
+        now.store(1_299, Ordering::SeqCst);
+        cache.introspect("t").await.expect("ok");
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+        now.store(1_300, Ordering::SeqCst);
+        cache.introspect("t").await.expect("ok");
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_callback_token_is_cached_for_the_default_minute() {
+        let inner = Arc::new(Counting {
+            calls: AtomicUsize::new(0),
+            answer: Some(grant(7, 100_000)),
+        });
+        let now = Arc::new(AtomicI64::new(1_000));
+        let cache = CachingIntrospector::new(inner.clone(), CachePolicy::default(), clock(&now));
+        cache.introspect("t").await.expect("ok");
+        now.store(1_059, Ordering::SeqCst);
+        cache.introspect("t").await.expect("ok");
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+        now.store(1_060, Ordering::SeqCst);
+        cache.introspect("t").await.expect("ok");
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    struct Unauthorized;
+
+    #[async_trait]
+    impl Introspector for Unauthorized {
+        async fn introspect(&self, _: &str) -> Result<Option<TokenGrant>, IntrospectError> {
+            Err(IntrospectError::NotAuthorized)
+        }
+    }
+
+    #[test]
+    fn a_permission_refusal_from_main_is_not_authorized() {
+        for code in [tonic::Code::PermissionDenied, tonic::Code::Unauthenticated] {
+            assert!(matches!(
+                error_from_status(&Status::new(code, "no")),
+                IntrospectError::NotAuthorized
+            ));
+        }
+        for code in [
+            tonic::Code::Unavailable,
+            tonic::Code::DeadlineExceeded,
+            tonic::Code::Internal,
+        ] {
+            assert!(matches!(
+                error_from_status(&Status::new(code, "x")),
+                IntrospectError::Unavailable(_)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn not_authorized_reaches_the_caller_as_a_failed_precondition() {
+        let now = Arc::new(AtomicI64::new(1_000));
+        // Through the cache too: the distinction survives single-flight.
+        let cache =
+            CachingIntrospector::new(Arc::new(Unauthorized), CachePolicy::default(), clock(&now));
+        let auth = Authenticator::new(Arc::new(cache), HashSet::new());
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("authorization", "Bearer t".parse().expect("metadata"));
+        let status = auth.authenticate(&request).await.expect_err("refused");
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            status.message(),
+            "vector service is not authorized to introspect tokens; check \
+             ELITEA_VECTOR_INTROSPECTION_CLIENTS and the client certificate"
+        );
+    }
+
+    #[test]
+    fn readiness_follows_the_last_introspection_attempt_for_a_minute() {
+        let health = IntrospectionHealth::default();
+        assert!(!health.not_authorized(1_000), "nothing attempted yet");
+        health.record(1_000, true);
+        assert!(health.not_authorized(1_000));
+        assert!(health.not_authorized(1_059));
+        assert!(!health.not_authorized(1_060), "the refusal aged out");
+        // An answered attempt clears it.
+        health.record(1_010, false);
+        assert!(!health.not_authorized(1_011));
+        health.record(1_020, true);
+        assert!(health.not_authorized(1_021));
+    }
+
+    #[tokio::test]
+    async fn a_refused_attempt_records_not_authorized_and_an_answer_clears_it() {
+        // A real tonic server standing in for elitea-main (plaintext over
+        // loopback), answering as configured.
+        use crate::pb::token_introspection_service_server::{
+            TokenIntrospectionService, TokenIntrospectionServiceServer,
+        };
+        type Answer = Arc<std::sync::Mutex<Result<(), tonic::Code>>>;
+        struct Main(Answer);
+        #[tonic::async_trait]
+        impl TokenIntrospectionService for Main {
+            async fn introspect_token(
+                &self,
+                _: Request<pb::IntrospectTokenRequest>,
+            ) -> Result<tonic::Response<pb::IntrospectTokenResponse>, Status> {
+                match *self.0.lock().expect("lock") {
+                    Ok(()) => Ok(tonic::Response::new(pb::IntrospectTokenResponse::default())),
+                    Err(code) => Err(Status::new(code, "denied")),
+                }
+            }
+        }
+        let answer: Answer = Arc::new(std::sync::Mutex::new(Err(tonic::Code::PermissionDenied)));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(TokenIntrospectionServiceServer::new(Main(Arc::clone(
+                    &answer,
+                ))))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .expect("endpoint")
+            .connect_lazy();
+        let introspector = Arc::new(GrpcIntrospector::new(channel, Duration::from_secs(2)));
+        let health = introspector.health();
+
+        // Not authorized: the self-check records it.
+        introspector.self_check().await;
+        assert!(health.not_authorized(unix_now()));
+        assert!(matches!(
+            introspector.introspect("t").await,
+            Err(IntrospectError::NotAuthorized)
+        ));
+
+        // Authorized (main answers "inactive"): the next check clears it.
+        *answer.lock().expect("lock") = Ok(());
+        introspector.self_check().await;
+        assert!(!health.not_authorized(unix_now()));
+        assert!(
+            introspector
+                .introspect("t")
+                .await
+                .expect("answered")
+                .is_none()
+        );
     }
 
     #[tokio::test]

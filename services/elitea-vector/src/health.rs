@@ -3,8 +3,9 @@
 //!
 //! * `GET /healthz` answers 200 while the process serves.
 //! * `GET /readyz` answers 200 when [`Readiness::ready`] says so (Qdrant
-//!   answers its health check and the serving certificate is not about to
-//!   expire), else 503.
+//!   answers its health check, the serving certificate is not about to
+//!   expire, and elitea-main has not refused this service's token
+//!   introspection within the last minute), else 503.
 //!
 //! It carries no data and reads at most one small request per connection.
 //! The listener is a small attack surface on an unauthenticated port, so it
@@ -20,7 +21,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
-use crate::auth::unix_now;
+use crate::auth::{IntrospectionHealth, unix_now};
 use crate::store::Store;
 use crate::tls::{MIN_VALIDITY_SECONDS, ReloadingCertificate};
 
@@ -41,13 +42,42 @@ pub trait Readiness: Send + Sync {
 pub struct ServiceReadiness {
     store: Arc<Store>,
     certificate: Option<Arc<ReloadingCertificate>>,
+    introspection: Option<Arc<IntrospectionHealth>>,
 }
 
 impl ServiceReadiness {
     /// Readiness over `store` and, when given, the serving `certificate`.
     #[must_use]
     pub fn new(store: Arc<Store>, certificate: Option<Arc<ReloadingCertificate>>) -> Self {
-        Self { store, certificate }
+        Self {
+            store,
+            certificate,
+            introspection: None,
+        }
+    }
+
+    /// Also not ready while elitea-main refuses this service's token
+    /// introspection ([`IntrospectionHealth::not_authorized`]).
+    #[must_use]
+    pub fn with_introspection(mut self, introspection: Arc<IntrospectionHealth>) -> Self {
+        self.introspection = Some(introspection);
+        self
+    }
+
+    /// Whether elitea-main has not refused this service's introspection
+    /// within the last minute.
+    fn introspection_ok(&self, now: i64) -> bool {
+        let refused = self
+            .introspection
+            .as_ref()
+            .is_some_and(|health| health.not_authorized(now));
+        if refused {
+            tracing::warn!(
+                "elitea-main refuses this service's token introspection; not ready \
+                 (check ELITEA_VECTOR_INTROSPECTION_CLIENTS and the client certificate)"
+            );
+        }
+        !refused
     }
 }
 
@@ -73,7 +103,8 @@ impl ServiceReadiness {
 #[async_trait]
 impl Readiness for ServiceReadiness {
     async fn ready(&self) -> bool {
-        self.certificate_ok(unix_now()) && self.store.ready().await
+        let now = unix_now();
+        self.certificate_ok(now) && self.introspection_ok(now) && self.store.ready().await
     }
 }
 
@@ -227,6 +258,30 @@ mod tests {
         assert!(!readiness.certificate_ok(not_after - MIN_VALIDITY_SECONDS));
         assert!(!readiness.certificate_ok(not_after - 60));
         assert!(!readiness.certificate_ok(not_after + 1), "expired");
+    }
+
+    #[test]
+    fn readiness_fails_while_main_refuses_introspection() {
+        use crate::store::CollectionSettings;
+        let store = Arc::new(Store::new(
+            qdrant_client::Qdrant::from_url("http://127.0.0.1:1")
+                .build()
+                .expect("client"),
+            CollectionSettings::default(),
+        ));
+        let health = Arc::new(IntrospectionHealth::default());
+        let readiness = ServiceReadiness::new(store, None).with_introspection(Arc::clone(&health));
+        assert!(readiness.introspection_ok(1_000));
+        health.record(1_000, true);
+        assert!(!readiness.introspection_ok(1_030));
+        assert!(!readiness.introspection_ok(1_059));
+        assert!(readiness.introspection_ok(1_060), "the refusal aged out");
+        health.record(1_100, true);
+        health.record(1_110, false);
+        assert!(
+            readiness.introspection_ok(1_111),
+            "an answered attempt clears it"
+        );
     }
 
     struct Switch(AtomicBool);

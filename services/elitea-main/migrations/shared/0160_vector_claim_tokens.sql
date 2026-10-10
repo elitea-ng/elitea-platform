@@ -21,6 +21,12 @@
 -- (cancelled, draining). No settle, cancel or takeover path has to remember
 -- to revoke anything, so none can forget to.
 --
+-- BOUNDED LAG. "Read on every call" is every call to Main. elitea-vector
+-- caches an introspection answer, so a revoked token keeps working there for
+-- at most that cache's cap: 5 s for a worker claim token (this table's
+-- tokens), 60 s by default for an engine callback token (0159) and never
+-- more than 300 s whatever is configured.
+--
 -- One row per claim: a repeated claim receipt for the same claim replaces the
 -- hash, so only the bearer of the latest receipt works. The rows go with
 -- their claim and execution (ON DELETE CASCADE) under the replay-retention

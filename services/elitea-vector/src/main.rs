@@ -24,6 +24,10 @@ use tonic::transport::Server;
 /// A full Upsert batch at the largest dimension fits with room to spare.
 const MAX_MESSAGE_BYTES: usize = 64 << 20;
 
+/// How often the introspection self-check runs: well inside the window
+/// `/readyz` remembers a refusal for.
+const INTROSPECTION_SELF_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn main() -> ExitCode {
     elitea_vector::install_crypto_provider();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -94,7 +98,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         },
     ));
 
-    // Both certificates follow their files (see `elitea_vector::tls`).
+    // The certificates and the client CA follow their files (see `elitea_vector::tls`).
     let introspection = IntrospectionChannel {
         url: config.introspection_url.clone(),
         ca_file: config.introspection_ca_file.clone(),
@@ -105,6 +109,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let (channel, built_from) = introspection.build()?;
     let grpc_introspector = Arc::new(GrpcIntrospector::new(channel, config.introspection_timeout));
+    // Main answers "inactive" to a dummy token when it authorizes this
+    // service and PERMISSION_DENIED when it does not; `/readyz` follows.
+    let _self_check = grpc_introspector.spawn_self_check(INTROSPECTION_SELF_CHECK_INTERVAL);
+    let introspection_health = grpc_introspector.health();
     let _channel_reloader = tls::spawn_channel_reloader(
         introspection,
         Arc::clone(&grpc_introspector),
@@ -127,16 +135,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let certificate = ReloadingCertificate::load(&config.tls_cert_file, &config.tls_key_file)?;
     let _certificate_reloader = certificate.spawn_reloader(tls::RELOAD_INTERVAL);
-    let tls_config =
-        tls::server_config(Arc::clone(&certificate), &read(&config.tls_client_ca_file)?)?;
+    let client_ca = tls::ReloadingClientCa::load(&config.tls_client_ca_file)?;
+    let _client_ca_reloader = client_ca.spawn_reloader(tls::RELOAD_INTERVAL);
+    let tls_config = tls::server_config_with_ca(Arc::clone(&certificate), client_ca);
 
     let health = tokio::net::TcpListener::bind(config.health_addr).await?;
     tokio::spawn(elitea_vector::health::serve(
         health,
-        Arc::new(ServiceReadiness::new(
-            Arc::clone(&store),
-            Some(Arc::clone(&certificate)),
-        )),
+        Arc::new(
+            ServiceReadiness::new(Arc::clone(&store), Some(Arc::clone(&certificate)))
+                .with_introspection(introspection_health),
+        ),
     ));
 
     let listener = tokio::net::TcpListener::bind(config.grpc_addr).await?;

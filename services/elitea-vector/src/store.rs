@@ -23,10 +23,13 @@ pub struct CollectionSettings {
     pub replication_factor: u32,
     /// Qdrant `shard_number` of a new collection.
     pub shard_number: u32,
-    /// The most `emb_*` collections this service lets exist. Creating one
-    /// beyond it is `RESOURCE_EXHAUSTED`. The count is read from Qdrant just
-    /// before a create, so two replicas racing at the edge can overshoot by
-    /// the number of racers; the cap bounds growth, it is not a quota.
+    /// A **soft** cap on `emb_*` collections. Creating one beyond it is
+    /// `RESOURCE_EXHAUSTED`, but the count is read from Qdrant just before a
+    /// create and nothing serializes creators, so concurrent creators (in one
+    /// process or across replicas) can overshoot it by their number. It
+    /// bounds ordinary growth; it is not a quota. The hard bound is
+    /// `ELITEA_VECTOR_ALLOWED_SPACES` ([`crate::service::SpaceLimits::allowed`]),
+    /// which production deployments should set.
     pub max_collections: usize,
 }
 

@@ -11,20 +11,21 @@
 //! | `ELITEA_VECTOR_QDRANT_URL` | Qdrant gRPC URL | required |
 //! | `ELITEA_VECTOR_QDRANT_API_KEY_FILE` | file holding the Qdrant API key | none |
 //! | `ELITEA_VECTOR_COLLECTION_REPLICATION_FACTOR`, `ELITEA_VECTOR_COLLECTION_SHARD_NUMBER` | settings of a new collection | `1`, `1` |
-//! | `ELITEA_VECTOR_MAX_COLLECTIONS` | the most `emb_*` collections; creating one beyond it is `RESOURCE_EXHAUSTED` | `64` |
+//! | `ELITEA_VECTOR_MAX_COLLECTIONS` | a **soft** cap on `emb_*` collections: creating one beyond it is `RESOURCE_EXHAUSTED`, but concurrent creators can overshoot it by their number. Use `ELITEA_VECTOR_ALLOWED_SPACES` for a hard bound | `64` |
 //! | `ELITEA_VECTOR_MAX_DIMENSION` | the largest space dimension a caller may create | `4096` |
-//! | `ELITEA_VECTOR_ALLOWED_SPACES` | comma-separated `slug:dimension`; when set, only these spaces may be created | any |
+//! | `ELITEA_VECTOR_ALLOWED_SPACES` | comma-separated `slug:dimension`; when set, only these spaces may be created: the **hard** bound on collections (recommended in production) | any |
 //! | `ELITEA_VECTOR_INTROSPECTION_URL` | elitea-main's private control listener, `https://…` | required |
 //! | `ELITEA_VECTOR_INTROSPECTION_CA_FILE` | CA of elitea-main's server certificate | required |
 //! | `ELITEA_VECTOR_INTROSPECTION_SERVER_NAME` | TLS server name of elitea-main | the URL host |
 //! | `ELITEA_VECTOR_INTROSPECTION_TIMEOUT_MS` | per-call timeout | `2000` |
-//! | `ELITEA_VECTOR_INTROSPECTION_CACHE_MAX_SECONDS` | longest a verified token is cached | `300` |
+//! | `ELITEA_VECTOR_INTROSPECTION_CACHE_MAX_SECONDS` | longest a verified engine callback token is cached (a worker claim token: 5 s); above 300 it is clamped to 300 and logged | `60` |
 //!
 //! A Qdrant served over `https://` with a private CA is trusted through
 //! `SSL_CERT_FILE`: the Qdrant client reads the platform trust store only.
 
 use std::collections::HashSet;
 
+use crate::auth::{DEFAULT_MAX_TTL_SECONDS, HARD_MAX_TTL_SECONDS};
 use crate::layout::Space;
 use crate::service::DEFAULT_MAX_DIMENSION;
 use crate::store::DEFAULT_MAX_COLLECTIONS;
@@ -158,12 +159,26 @@ impl Config {
             )?),
             introspection_cache_max_seconds: i64::try_from(number(
                 "ELITEA_VECTOR_INTROSPECTION_CACHE_MAX_SECONDS",
-                300,
+                u64::try_from(DEFAULT_MAX_TTL_SECONDS).unwrap_or(60),
                 86_400,
             )?)
-            .unwrap_or(300),
+            .map_or(DEFAULT_MAX_TTL_SECONDS, clamp_cache_seconds),
         })
     }
+}
+
+/// The configured cache cap held to [`HARD_MAX_TTL_SECONDS`], logging when it
+/// had to change.
+fn clamp_cache_seconds(seconds: i64) -> i64 {
+    if seconds > HARD_MAX_TTL_SECONDS {
+        tracing::warn!(
+            configured = seconds,
+            applied = HARD_MAX_TTL_SECONDS,
+            "ELITEA_VECTOR_INTROSPECTION_CACHE_MAX_SECONDS exceeds the hard maximum; clamped"
+        );
+        return HARD_MAX_TTL_SECONDS;
+    }
+    seconds
 }
 
 fn admin_identities(value: Option<&str>) -> Result<HashSet<String>, ConfigError> {
@@ -241,6 +256,26 @@ mod tests {
         assert_eq!(config.max_dimension, 4096);
         assert!(config.allowed_spaces.is_none());
         assert_eq!(config.introspection_timeout, Duration::from_secs(2));
+        assert_eq!(config.introspection_cache_max_seconds, 60);
+    }
+
+    #[test]
+    fn the_cache_cap_is_clamped_to_five_minutes() {
+        for (value, want) in [
+            ("1", 1),
+            ("120", 120),
+            ("300", 300),
+            ("301", 300),
+            ("86400", 300),
+        ] {
+            let mut env = base();
+            env.insert("ELITEA_VECTOR_INTROSPECTION_CACHE_MAX_SECONDS", value);
+            assert_eq!(
+                load(&env).expect("valid").introspection_cache_max_seconds,
+                want,
+                "{value}"
+            );
+        }
     }
 
     #[test]
