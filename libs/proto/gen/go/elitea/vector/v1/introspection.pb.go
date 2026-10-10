@@ -31,7 +31,9 @@ type TokenKind int32
 
 const (
 	TokenKind_TOKEN_KIND_UNSPECIFIED TokenKind = 0
-	// A token minted for one worker claim. Not minted yet; see the V0 notes.
+	// A token minted for one worker claim (elitea.runtime.v1
+	// VectorClaimTokenV1). Active only while that claim is live and its
+	// execution is not settling or terminal.
 	TokenKind_TOKEN_KIND_WORKER_CLAIM TokenKind = 1
 	// A provider callback token, minted for one engine invocation
 	// (v2auth.CallbackTokenMinter).
@@ -136,8 +138,13 @@ type IntrospectTokenResponse struct {
 	Kind      TokenKind `protobuf:"varint,4,opt,name=kind,proto3,enum=elitea.vector.v1.TokenKind" json:"kind,omitempty"`
 	// expires_at_unix is the token expiry, in seconds since the Unix epoch.
 	ExpiresAtUnix int64 `protobuf:"varint,5,opt,name=expires_at_unix,json=expiresAtUnix,proto3" json:"expires_at_unix,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// allowed_sources are the sources the token may read and write; an active
+	// answer names at least one. A worker claim token names
+	// SOURCE_TOOLKIT_INDEX. A callback token names the source of the provider
+	// that minted it. elitea-vector refuses every other source.
+	AllowedSources []Source `protobuf:"varint,6,rep,packed,name=allowed_sources,json=allowedSources,proto3,enum=elitea.vector.v1.Source" json:"allowed_sources,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *IntrospectTokenResponse) Reset() {
@@ -205,20 +212,28 @@ func (x *IntrospectTokenResponse) GetExpiresAtUnix() int64 {
 	return 0
 }
 
+func (x *IntrospectTokenResponse) GetAllowedSources() []Source {
+	if x != nil {
+		return x.AllowedSources
+	}
+	return nil
+}
+
 var File_elitea_vector_v1_introspection_proto protoreflect.FileDescriptor
 
 const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\n" +
-	"$elitea/vector/v1/introspection.proto\x12\x10elitea.vector.v1\".\n" +
+	"$elitea/vector/v1/introspection.proto\x12\x10elitea.vector.v1\x1a\x1delitea/vector/v1/vector.proto\".\n" +
 	"\x16IntrospectTokenRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\xc7\x01\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\x8a\x02\n" +
 	"\x17IntrospectTokenResponse\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x02 \x01(\x03R\tprojectId\x12\x1c\n" +
 	"\tprincipal\x18\x03 \x01(\tR\tprincipal\x12/\n" +
 	"\x04kind\x18\x04 \x01(\x0e2\x1b.elitea.vector.v1.TokenKindR\x04kind\x12&\n" +
-	"\x0fexpires_at_unix\x18\x05 \x01(\x03R\rexpiresAtUnix*d\n" +
+	"\x0fexpires_at_unix\x18\x05 \x01(\x03R\rexpiresAtUnix\x12A\n" +
+	"\x0fallowed_sources\x18\x06 \x03(\x0e2\x18.elitea.vector.v1.SourceR\x0eallowedSources*d\n" +
 	"\tTokenKind\x12\x1a\n" +
 	"\x16TOKEN_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17TOKEN_KIND_WORKER_CLAIM\x10\x01\x12\x1e\n" +
@@ -244,16 +259,18 @@ var file_elitea_vector_v1_introspection_proto_goTypes = []any{
 	(TokenKind)(0),                  // 0: elitea.vector.v1.TokenKind
 	(*IntrospectTokenRequest)(nil),  // 1: elitea.vector.v1.IntrospectTokenRequest
 	(*IntrospectTokenResponse)(nil), // 2: elitea.vector.v1.IntrospectTokenResponse
+	(Source)(0),                     // 3: elitea.vector.v1.Source
 }
 var file_elitea_vector_v1_introspection_proto_depIdxs = []int32{
 	0, // 0: elitea.vector.v1.IntrospectTokenResponse.kind:type_name -> elitea.vector.v1.TokenKind
-	1, // 1: elitea.vector.v1.TokenIntrospectionService.IntrospectToken:input_type -> elitea.vector.v1.IntrospectTokenRequest
-	2, // 2: elitea.vector.v1.TokenIntrospectionService.IntrospectToken:output_type -> elitea.vector.v1.IntrospectTokenResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	3, // 1: elitea.vector.v1.IntrospectTokenResponse.allowed_sources:type_name -> elitea.vector.v1.Source
+	1, // 2: elitea.vector.v1.TokenIntrospectionService.IntrospectToken:input_type -> elitea.vector.v1.IntrospectTokenRequest
+	2, // 3: elitea.vector.v1.TokenIntrospectionService.IntrospectToken:output_type -> elitea.vector.v1.IntrospectTokenResponse
+	3, // [3:4] is the sub-list for method output_type
+	2, // [2:3] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_elitea_vector_v1_introspection_proto_init() }
@@ -261,6 +278,7 @@ func file_elitea_vector_v1_introspection_proto_init() {
 	if File_elitea_vector_v1_introspection_proto != nil {
 		return
 	}
+	file_elitea_vector_v1_vector_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

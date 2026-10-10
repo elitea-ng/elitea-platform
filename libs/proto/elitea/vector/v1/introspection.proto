@@ -7,6 +7,8 @@ syntax = "proto3";
 
 package elitea.vector.v1;
 
+import "elitea/vector/v1/vector.proto";
+
 option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
 
 service TokenIntrospectionService {
@@ -20,7 +22,9 @@ service TokenIntrospectionService {
 // TokenKind names what minted a token.
 enum TokenKind {
   TOKEN_KIND_UNSPECIFIED = 0;
-  // A token minted for one worker claim. Not minted yet; see the V0 notes.
+  // A token minted for one worker claim (elitea.runtime.v1
+  // VectorClaimTokenV1). Active only while that claim is live and its
+  // execution is not settling or terminal.
   TOKEN_KIND_WORKER_CLAIM = 1;
   // A provider callback token, minted for one engine invocation
   // (v2auth.CallbackTokenMinter).
@@ -43,4 +47,9 @@ message IntrospectTokenResponse {
   TokenKind kind = 4;
   // expires_at_unix is the token expiry, in seconds since the Unix epoch.
   int64 expires_at_unix = 5;
+  // allowed_sources are the sources the token may read and write; an active
+  // answer names at least one. A worker claim token names
+  // SOURCE_TOOLKIT_INDEX. A callback token names the source of the provider
+  // that minted it. elitea-vector refuses every other source.
+  repeated Source allowed_sources = 6;
 }
