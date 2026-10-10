@@ -31,10 +31,13 @@
 //! | `run_command` in `read-only` or `workspace-write`, no network, not destructive (see [`crate::classify`]) | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 //! | `run_command` that is destructive, asks for the network or `full-access`, or may run unconfined (the host allows unenforced sandboxes) | asked |
 //!
-//! Layers 1 to 3 only tighten these defaults: a policy deny, plan mode, or
-//! a workspace deny or ask beats them. A workspace allow of a compound
-//! command holds only when the command is not destructive. Compound
-//! commands and `git_commit` are never remembered.
+//! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
+//! loosen them: a workspace allow or a remembered choice allows a call the
+//! default would ask about. Two limits hold whatever they say: a workspace
+//! allow of a compound command holds only when the command is not
+//! destructive, and on a machine that may run commands unconfined every
+//! command is asked. Compound commands and `git_commit` are never
+//! remembered.
 //!
 //! [`RuleApprovals`] exposes the engine as the runtime's
 //! [`ApprovalChannel`]: rule verdicts are answered inline, asks go on to the
@@ -450,11 +453,25 @@ impl RulesEngine {
         }
         let shape = call.command.as_deref().map(analyse);
         let risk = (call.tool == ToolKind::RunCommand).then(|| self.command_risk(call));
+        // A command that may run unconfined is the person's call every time:
+        // neither a workspace allow nor a remembered choice vouches for it.
+        let unconfined = call.tool == ToolKind::RunCommand && !self.confined;
         if let Some(decision) = self.workspace_rules(call, shape.as_ref(), risk.as_ref()) {
+            if unconfined && decision.verdict == Verdict::Allow {
+                return Decision::new(
+                    Verdict::Ask,
+                    Source::Workspace,
+                    "a workspace rule allows the command, but commands may run without a sandbox on this machine",
+                );
+            }
             return decision;
         }
         let simple = shape.as_ref().is_none_or(CommandShape::is_simple);
-        if simple && call.tool != ToolKind::GitCommit && self.remembered(call, shape.as_ref()) {
+        if simple
+            && !unconfined
+            && call.tool != ToolKind::GitCommit
+            && self.remembered(call, shape.as_ref())
+        {
             return Decision::new(
                 Verdict::Allow,
                 Source::Remembered,
@@ -1269,6 +1286,48 @@ mod tests {
         assert_eq!(
             verdict(&engine, &file(ToolKind::WriteFile, "a")).0,
             Verdict::Allow
+        );
+    }
+
+    /// Unconfined, neither a workspace allow nor a remembered choice
+    /// vouches for a command; a workspace deny still denies.
+    #[test]
+    fn unenforced_sandboxes_ask_despite_workspace_allows_and_remembered_choices() {
+        let rule = |command: &str, verdict: Verdict| WorkspaceRule {
+            tools: Vec::new(),
+            command: Some(command.to_owned()),
+            path: None,
+            verdict,
+        };
+        let (_dir, engine) = engine_with(
+            policy(),
+            vec![rule("cargo", Verdict::Allow), rule("make", Verdict::Deny)],
+        );
+        engine
+            .remember(&shell("npm test"), Some("npm test"))
+            .expect("remember");
+        assert_eq!(
+            verdict(&engine, &shell("cargo test")),
+            (Verdict::Allow, Source::Workspace),
+            "confined: the workspace allow holds"
+        );
+        assert_eq!(
+            verdict(&engine, &shell("npm test")),
+            (Verdict::Allow, Source::Remembered),
+            "confined: the remembered choice holds"
+        );
+        let engine = engine.with_unenforced_commands(true);
+        assert_eq!(
+            verdict(&engine, &shell("cargo test")),
+            (Verdict::Ask, Source::Workspace)
+        );
+        assert_eq!(
+            verdict(&engine, &shell("npm test")),
+            (Verdict::Ask, Source::Default)
+        );
+        assert_eq!(
+            verdict(&engine, &shell("make")),
+            (Verdict::Deny, Source::Workspace)
         );
     }
 
