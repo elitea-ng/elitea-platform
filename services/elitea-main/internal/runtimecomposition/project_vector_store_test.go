@@ -210,11 +210,13 @@ type projectVectorStoreFinderStub struct {
 	found bool
 	err   error
 	data  map[string]any
+	calls int
 }
 
 func (s *projectVectorStoreFinderStub) FindByEliteaTitle(
 	_ context.Context, projectID int32, _ string, _ bool,
 ) (configurationapp.CurrentExpansionConfiguration, bool, error) {
+	s.calls++
 	if s.err != nil {
 		return configurationapp.CurrentExpansionConfiguration{}, false, s.err
 	}
@@ -299,4 +301,38 @@ func (r projectVectorStoreRowStub) Scan(dest ...any) error {
 	}
 	*target = r.tenantPresent
 	return nil
+}
+
+// A project that never had a vector store has nothing to drop, so the drop
+// returns a skip without so much as reading the bootstrap, let alone connecting
+// to the PgVector server (#1211). The bootstrap here points at a port nothing
+// listens on and the finder would also fail: any attempt to use either fails
+// the case.
+func TestDropProjectVectorStoreSkipsWithoutConnectingWhenTheProjectNeverHadOne(t *testing.T) {
+	t.Parallel()
+
+	finder := &projectVectorStoreFinderStub{
+		found: true,
+		err:   errors.New("the bootstrap must not be read"),
+		data:  map[string]any{"connection_string": "postgres://admin:pw@127.0.0.1:1/postgres?connect_timeout=1"},
+	}
+	store := newProjectVectorStoreForTest(t, finder, &projectVectorStoreUnsecreterStub{}, true)
+
+	database, err := store.DropProjectVectorStore(context.Background(), 7, false)
+	if err != nil || database != "" {
+		t.Fatalf("DropProjectVectorStore(hadStore=false) = (%q, %v), want a skip: (\"\", nil)", database, err)
+	}
+	if finder.calls != 0 {
+		t.Fatalf("the bootstrap was read %d times for a project with no vector store", finder.calls)
+	}
+
+	// The same call for a project that DID have one reaches for the bootstrap, so
+	// the skip above is the hadStore flag and not a store that cannot drop.
+	database, err = store.DropProjectVectorStore(context.Background(), 7, true)
+	if err == nil || database != "project_7" {
+		t.Fatalf("DropProjectVectorStore(hadStore=true) = (%q, %v), want project_7 and the bootstrap error", database, err)
+	}
+	if finder.calls != 1 {
+		t.Fatalf("finder calls = %d, want 1", finder.calls)
+	}
 }

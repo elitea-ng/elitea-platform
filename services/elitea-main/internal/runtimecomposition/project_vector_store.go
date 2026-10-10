@@ -231,11 +231,11 @@ SELECT EXISTS (
 // calls RemoveProjectVectorStore, which never reaches this.
 //
 // It is idempotent (a missing database or role is a no-op). hadStore is whether
-// the project had a vector store before its removal. With no public
-// elitea-pgvector configuration there is nothing to drop from: for a project
-// that never had a store that is a skip (database ""), but for one that did it
-// is ErrProjectVectorStoreBootstrapMissing, because its database exists and
-// cannot be reached.
+// the project had a vector store before its removal (recorded on the tombstone by
+// the delete fence). With hadStore false it returns a skip (database "") without
+// connecting to the PgVector server. With no public elitea-pgvector
+// configuration and hadStore true it is ErrProjectVectorStoreBootstrapMissing,
+// because the database exists and cannot be reached.
 func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (string, error) {
 	if s == nil {
 		return "", errors.New("project vector store is not configured")
@@ -243,16 +243,21 @@ func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, project
 	if projectID <= 0 {
 		return "", vectorstoreapp.ErrInvalidProjectPgvectorRequest
 	}
+	// A project that never had a vector store has no database to drop. Return
+	// before touching the PgVector server at all: connecting to it (and its admin
+	// credentials) to confirm an absence would make a delete of a project that
+	// never indexed depend on a server it does not use, and fail when that server
+	// is down.
+	if !hadStore {
+		return "", nil
+	}
 	database := pgvector.ProjectDatabaseName(projectID)
 	bootstrap, configured, err := s.resolveBootstrap(ctx)
 	if err != nil {
 		return database, err
 	}
 	if !configured {
-		if hadStore {
-			return database, ErrProjectVectorStoreBootstrapMissing
-		}
-		return "", nil
+		return database, ErrProjectVectorStoreBootstrapMissing
 	}
 	databases, err := newCurrentProjectPgvectorDatabaseProvisioner(bootstrap)
 	if err != nil {
