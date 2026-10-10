@@ -154,7 +154,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `bigquery` | `configurations/bigquery.py::BigQueryConfiguration` | `tools/google/bigquery::BigQueryToolkit` | 11 | No | `configurations/families/bigquery.rs`; `toolkits/families/bigquery/` | Planned; source has no focused family tests |
 | `xray` | `configurations/xray.py::XrayConfiguration` | `tools/xray::XrayToolkit` as `xray_cloud` | 12 | Yes | `configurations/families/xray.rs`; `toolkits/families/xray/` | Planned; preserve runtime alias |
 | `zephyr` | None; base URL and Basic-auth credentials are inline toolkit settings | `tools/zephyr::ZephyrToolkit` | 4 | No | `toolkits/families/zephyr/{config,client,tools}.rs` | Capability-disabled complete legacy family: one bounded step read plus all three sequential create effects; exact-interrupt HITL, durable partial-effect reconciliation, approved egress and live legacy-ZAPI proof remain gates |
-| `zephyr_scale` | `configurations/zephyr.py::ZephyrConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_scale::ZephyrScaleToolkit` | 26 | Yes | future `toolkits/families/zephyr_scale/` | Planned after the shared indexing overlay; 20 business operations plus 6 inherited indexing tools |
+| `zephyr_scale` | `configurations/zephyr.py::ZephyrConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_scale::ZephyrScaleToolkit` | 26 | Yes | `toolkits/families/zephyr_scale/{config,client,folders,render,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all 20 business operations against the fixed Cloud API with the token; the 6 inherited indexing tools are not served |
 | `zephyr_squad` | None; credentials are inline toolkit settings | `tools/zephyr_squad::ZephyrSquadToolkit` | 15 | No | `toolkits/families/zephyr_squad/{config,client,tools}.rs` | Capability-disabled complete family: five bounded reads plus all eight writes and two deletes over fixed Squad Cloud JWT routes; authorized materialization, live credential proof, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `zephyr_enterprise` | `configurations/zephyr_enterprise.py::ZephyrEnterpriseConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_enterprise::ZephyrEnterpriseToolkit` | 11 | Yes | `toolkits/families/zephyr_enterprise/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all five business operations (three reads, two effects) over one bearer flex-REST client; the six inherited indexing tools are not served and the capability snapshot lists the family per tool |
 | `zephyr_essential` | `configurations/zephyr_essential.py::ZephyrEssentialConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_essential::ZephyrEssentialToolkit` | 51 | Yes | `toolkits/families/zephyr_essential/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: 41 of the 45 business operations (24 reads, 17 effects); not served are the six indexing tools, the three automation-result uploads and the BDD ZIP download (see the family section) |
@@ -1254,6 +1254,88 @@ every table operation, `values` projection, issue-link guidance, folder
 lookup paging, parent resolution and not-found text, text/empty replies and
 argument refusal, SDK schema gate). Live provider proof, exact-interrupt HITL
 and durable effect reconciliation remain activation gates.
+
+### Zephyr Scale business family
+
+Zephyr Scale serves all twenty business operations of the worker-pinned SDK
+revision `b5113a129329b85d23c2d5c2bf55f18e307414ec`, which drive
+`zephyr-python-api==0.1.0` (its Cloud wrapper, `CloudApiWrapper`, and
+`ZephyrSession`). The six inherited indexing tools are not served (no
+indexing in this runtime); `supported_tools.zephyr_scale` lists the twenty.
+
+Configuration. Main freezes the shared `zephyr` configuration under
+`zephyr_configuration`. The SDK validator accepts a token, username/password
+or cookies, but then always builds `ZephyrScale(token=values['token'])`: the
+library's Cloud wrapper with its fixed `https://api.zephyrscale.smartbear.com/v2/`
+origin and bearer authentication, ignoring `base_url`. Rust does the same,
+explicitly: the origin is the fixed Cloud API, the token is required, and the
+other fields are accepted and ignored. Requests go through the shared
+`zephyr_rest` client (sensitive bearer header, no redirects or automatic
+retries, bounded bodies, percent-encoded path segments).
+
+Pagination. The library's `get_paginated` reads every page from the given
+`startAt`, following each `next` link's query until `isLast`; `maxResults`
+is only the page size. `client.rs::paginated` keeps that, takes only the
+query of `next` (so a provider link can never move the token to another
+origin), stops when a page has no `values`, no usable `next` or an unchanged
+query (the library would loop), and is bounded (200 pages, 10,000 items).
+
+Outputs follow the SDK's strings: `Extracted tests: ...`, `Extracted test
+steps: ...`, `Test case with name ... was created: ...`, `Steps for test
+case ... were added/updated: ...`, `Extracted folders: ...`, `Versions for
+test case ...`, `Found N test cases matching ...: [json]` and the rest.
+`render.rs` reproduces Python's `str()`/`repr()` of the decoded objects
+(`'single quotes'`, `True`, `None`, Python's quote choice and escapes) and
+`json.dumps(indent=2)` with `ensure_ascii` for the search result; object
+members are written in sorted key order (the canonical-ordering rule of
+`crate::canonical`), the only difference from the SDK's text. `folders.rs`
+reproduces the folder-tree helpers (`_build_folder_hierarchy`, name and
+path lookup, `_collect_subfolders`) and `_parse_tests`.
+
+Behavior preserved: the search's client-side filters (search term over
+`str(tc.values())`, any-of labels, custom-field rules for scalar and list
+values, step search over `inline` description/test data/expected result with
+optional inclusion), sort, `limit_results`, field projection including
+`customFields.<name>`, the criteria message; folder reads that fail are
+skipped with a warning as in the SDK; `update_test_steps` reads all steps,
+validates every update (its exact `index`/`inline` messages) before the
+single `OVERWRITE` write.
+
+Deliberate differences, each a defect in the pinned SDK:
+
+- `get_test_steps` and `get_links` read `kwargs['return_list']` /
+  `kwargs['return_only_links']`, which a tool call never passes, so both
+  always returned a `KeyError` text after fetching; Rust returns the
+  intended `Extracted test steps: ...` / `Links for test case ...` text.
+- `create_test_case` with `steps` reads `response['test_case_key']`, which
+  the Cloud API never returns, so the case was created but the steps were not
+  and the tool reported failure; Rust appends the steps to the response's
+  `key`.
+- `update_test_case` forwarded the raw `additional_fields` JSON string as a
+  body member named `additional_fields`; Rust merges the decoded fields, as
+  the argument documents.
+- `create_test_cases` validates every case before the first create (the SDK
+  raised mid-batch on a malformed case after creating the earlier ones), and
+  treats a missing `additional_fields`/`steps` as empty instead of raising;
+  the result is the SDK's list of per-case lines, an API failure for one case
+  reported as its `Unable to create test case ...` line.
+- `_collect_subfolders` returned `list(set(...))`; Rust keeps first-seen
+  order so the folder chosen as `folder ID` and the request order are
+  deterministic. A cyclic folder tree terminates instead of recursing.
+- Sorting mixed value types (a `TypeError` in the SDK) uses a total order.
+- `archived` is accepted and, as in the SDK, never sent.
+- HTTP failures use the stable redacted taxonomy instead of the library's
+  `Error {status}. Response: {body}` text.
+
+Proof: `toolkits/zephyr_scale_tests.rs` (token-only configuration, Python
+renderings, catalogue and effect groups, `next`-link pagination and parsed
+rows, the read sentences and routes, create-with-steps on the created key,
+batch validation and per-case lines, step updates and their refusals, effect
+bodies, folder path/name/recursive walks with a skipped folder, search
+filters/sort/limit/projection/message, folder-scoped step search and the
+custom-field refusal text, SDK schema gate). Live provider proof,
+exact-interrupt HITL and durable effect reconciliation remain activation
+gates.
 
 ### ReportPortal complete read family
 

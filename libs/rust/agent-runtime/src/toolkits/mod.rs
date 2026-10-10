@@ -119,6 +119,8 @@ mod zephyr_essential_tests;
 #[cfg(test)]
 mod zephyr_rest_tests;
 #[cfg(test)]
+mod zephyr_scale_tests;
+#[cfg(test)]
 mod zephyr_squad_tests;
 #[cfg(test)]
 mod zephyr_tests;

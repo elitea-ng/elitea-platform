@@ -157,6 +157,7 @@ var rustNativeToolTypes = []string{
 	"zephyr",
 	"zephyr_enterprise",
 	"zephyr_essential",
+	"zephyr_scale",
 	"zephyr_squad",
 }
 

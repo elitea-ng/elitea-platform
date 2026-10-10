@@ -244,7 +244,7 @@ fn materialize_zephyr_rest(
     settings: &serde_json::Map<String, serde_json::Value>,
     policy: &Arc<ToolAdmissionPolicy>,
 ) -> Result<Option<Arc<dyn Toolset>>, ToolsetMaterializationError> {
-    use super::families::{zephyr_enterprise, zephyr_essential};
+    use super::families::{zephyr_enterprise, zephyr_essential, zephyr_scale};
     let toolset = match tool_type {
         "zephyr_enterprise" => zephyr_enterprise::tools::build_zephyr_enterprise_toolset(
             name,
@@ -255,6 +255,12 @@ fn materialize_zephyr_rest(
         "zephyr_essential" => zephyr_essential::tools::build_zephyr_essential_toolset(
             name,
             zephyr_essential::config::ZephyrEssentialToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        ),
+        "zephyr_scale" => zephyr_scale::tools::build_zephyr_scale_toolset(
+            name,
+            zephyr_scale::config::ZephyrScaleToolkitConfig::parse(settings)
                 .map_err(|_| invalid_configuration())?,
             policy,
         ),

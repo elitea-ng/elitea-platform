@@ -33,4 +33,5 @@ pub(crate) mod zephyr;
 pub(crate) mod zephyr_enterprise;
 pub(crate) mod zephyr_essential;
 pub(crate) mod zephyr_rest;
+pub(crate) mod zephyr_scale;
 pub(crate) mod zephyr_squad;
