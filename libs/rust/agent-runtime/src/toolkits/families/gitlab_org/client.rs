@@ -289,10 +289,10 @@ pub(in crate::toolkits) trait GitLabOrgApi: Send + Sync {
 }
 
 pub(in crate::toolkits) struct GitLabOrgHttpResponse {
-    status: StatusCode,
-    body: Option<Value>,
-    json_content_type: bool,
-    next_page: Option<Box<str>>,
+    pub(in crate::toolkits) status: StatusCode,
+    pub(in crate::toolkits) body: Option<Value>,
+    pub(in crate::toolkits) json_content_type: bool,
+    pub(in crate::toolkits) next_page: Option<Box<str>>,
 }
 
 impl GitLabOrgHttpResponse {
@@ -399,6 +399,24 @@ pub(crate) struct GitLabOrgClient {
     transport: Arc<dyn GitLabOrgTransport>,
     operation_gate: Mutex<()>,
     active_branch: Mutex<Box<str>>,
+}
+
+/// The production GitLab transport, shared with the single-project `gitlab`
+/// family so both families keep one HTTPS, no-redirect, bounded wire policy.
+pub(in crate::toolkits) fn reqwest_transport()
+-> Result<Arc<dyn GitLabOrgTransport>, GitLabOrgClientError> {
+    let http = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|_| invalid_configuration())?;
+    Ok(Arc::new(ReqwestGitLabOrgTransport { http }))
 }
 
 impl GitLabOrgClient {
@@ -697,7 +715,7 @@ enum WildcardToken {
     },
 }
 
-fn wildcard_matches(pattern: &str, candidate: &str) -> bool {
+pub(in crate::toolkits) fn wildcard_matches(pattern: &str, candidate: &str) -> bool {
     let pattern = wildcard_tokens(pattern);
     let candidate = candidate.chars().collect::<Vec<_>>();
     let mut previous = vec![false; candidate.len() + 1];
@@ -778,7 +796,7 @@ fn wildcard_tokens(pattern: &str) -> Vec<WildcardToken> {
     tokens
 }
 
-fn python_quote(value: &str) -> String {
+pub(in crate::toolkits) fn python_quote(value: &str) -> String {
     let mut output = String::with_capacity(value.len() + 2);
     output.push('\'');
     for character in value.chars() {
@@ -795,7 +813,7 @@ fn python_quote(value: &str) -> String {
     output
 }
 
-fn python_issue_list(issues: &[(&str, u64)]) -> String {
+pub(in crate::toolkits) fn python_issue_list(issues: &[(&str, u64)]) -> String {
     let mut output = String::from("[");
     for (index, (title, iid)) in issues.iter().enumerate() {
         if index > 0 {
@@ -1043,7 +1061,10 @@ fn parse_next_page(
     Ok(Some(value.into()))
 }
 
-fn validate_effect_status(method: &Method, status: StatusCode) -> Result<(), GitLabOrgClientError> {
+pub(in crate::toolkits) fn validate_effect_status(
+    method: &Method,
+    status: StatusCode,
+) -> Result<(), GitLabOrgClientError> {
     let expected = match *method {
         Method::POST => StatusCode::CREATED,
         Method::DELETE => StatusCode::NO_CONTENT,
@@ -1055,7 +1076,10 @@ fn validate_effect_status(method: &Method, status: StatusCode) -> Result<(), Git
     Ok(())
 }
 
-fn map_http_status(status: StatusCode, effect: bool) -> Result<(), GitLabOrgClientError> {
+pub(in crate::toolkits) fn map_http_status(
+    status: StatusCode,
+    effect: bool,
+) -> Result<(), GitLabOrgClientError> {
     if status.is_success() {
         return Ok(());
     }

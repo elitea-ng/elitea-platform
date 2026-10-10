@@ -68,7 +68,7 @@ pub(super) fn format_changes(
     Ok(output)
 }
 
-pub(super) fn discussion_position(
+pub(in crate::toolkits) fn discussion_position(
     merge_request: &Value,
     changes_response: &Value,
     file_path: &str,

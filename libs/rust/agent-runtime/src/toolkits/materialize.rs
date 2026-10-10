@@ -25,9 +25,9 @@ use super::families::artifact::ArtifactToolAuthority;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
 use super::families::{
-    artifact, azure, azure_search, elastic, gcp, github, gitlab_org, google_places, keycloak,
-    kubernetes, openapi, postman, rally, report_portal, salesforce, service_now, sharepoint, slack,
-    sonar, yagmail, zephyr, zephyr_squad,
+    artifact, azure, azure_search, elastic, gcp, github, gitlab, gitlab_org, google_places,
+    keycloak, kubernetes, openapi, postman, rally, report_portal, salesforce, service_now,
+    sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
@@ -181,6 +181,7 @@ async fn materialize(
             | "elastic"
             | "gcp"
             | "github"
+            | "gitlab"
             | "gitlab_org"
             | "google_places"
             | "keycloak"
@@ -311,6 +312,19 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|error| github_toolset_materialization_error(error.code()))?,
+        "gitlab" => gitlab::tools::build_gitlab_toolset(
+            name,
+            gitlab::config::GitLabToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| {
+            if error.code() == gitlab::tools::GitLabToolsetErrorCode::UnsupportedSelection {
+                unsupported_toolkit()
+            } else {
+                invalid_configuration()
+            }
+        })?,
         "gitlab_org" => gitlab_org::tools::build_gitlab_org_toolset(
             name,
             gitlab_org::config::GitLabOrgToolkitConfig::parse(settings)

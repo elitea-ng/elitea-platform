@@ -9,6 +9,7 @@ pub(crate) mod azure_search;
 pub(crate) mod elastic;
 pub(crate) mod gcp;
 pub(crate) mod github;
+pub(crate) mod gitlab;
 pub(crate) mod gitlab_org;
 pub(crate) mod google_places;
 pub(crate) mod keycloak;
@@ -28,6 +29,7 @@ pub(crate) mod slack;
 pub(crate) mod sonar;
 #[cfg(feature = "toolkit-sql")]
 pub(crate) mod sql;
+pub(crate) mod vcs_text;
 pub(crate) mod yagmail;
 pub(crate) mod zephyr;
 pub(crate) mod zephyr_enterprise;

@@ -25,7 +25,7 @@ enum Section {
     New,
 }
 
-pub(super) fn apply_update(
+pub(in crate::toolkits) fn apply_update(
     file_path: &str,
     content: &str,
     query: &str,
