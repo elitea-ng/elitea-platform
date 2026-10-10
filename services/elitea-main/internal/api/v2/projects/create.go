@@ -185,6 +185,10 @@ const DeleteProjectPermission = "projects.projects.project.delete"
 // the key `steps`.
 type deleteProjectResponse struct {
 	Steps []projectprovisioning.StepStatus `json:"steps"`
+	// Message and Database appear only on the failures an operator acts on:
+	// Database names the PgVector database a delete left behind (#1211).
+	Message  string `json:"message,omitempty"`
+	Database string `json:"database,omitempty"`
 }
 
 // DeleteProject serves `DELETE /api/v2/projects/project/{mode}/{projectID}`.
@@ -211,6 +215,20 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, projectprovisioning.ErrProjectNotFound):
 		apierr.WriteStatus(w, http.StatusNotFound, "project not found")
+		return
+	case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
+		// Retryable and nothing was changed: the project still has runs.
+		apierr.WriteStatus(w, http.StatusConflict,
+			"project has active runs; stop them or wait for them to finish, then retry the delete")
+		return
+	case errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped):
+		// The project row is gone; its PgVector database is not. A retry answers
+		// 404, so the body names the database for cmd/pgvector-orphans.
+		writeJSON(w, http.StatusInternalServerError, deleteProjectResponse{
+			Steps:    nonNilSteps(result.RollbackSteps),
+			Message:  "project deleted, but its PgVector database was not dropped; remove it with pgvector-orphans",
+			Database: result.VectorDatabase,
+		})
 		return
 	case err != nil:
 		// The reference answers 200 even when every step failed. Reporting a

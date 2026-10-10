@@ -13,8 +13,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -419,6 +422,73 @@ func TestDeleteProjectReportsAFailedRemovalAsAnError(t *testing.T) {
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func deleteWith(t *testing.T, result projectprovisioning.Result, err error) *httptest.ResponseRecorder {
+	t.Helper()
+	stub := stubProvisioner{
+		provision: func(context.Context, projectprovisioning.Request) (projectprovisioning.Result, error) {
+			t.Fatal("the delete route called Provision")
+			return projectprovisioning.Result{}, nil
+		},
+		deprovision: func(context.Context, int64) (projectprovisioning.Result, error) { return result, err },
+	}
+	router := createRouter(t,
+		grantingResolver(auth.PermissionModeAdministration, handler.DeleteProjectPermission), stub)
+	request := withUser(
+		httptest.NewRequest(http.MethodDelete, "/projects/project/administration/42", nil),
+		auth.User{ID: "7", UserID: "7"},
+	)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// Active work is retryable: 409 with advice, and no step list because nothing ran.
+func TestDeleteProjectAnswersConflictWhileWorkIsActive(t *testing.T) {
+	recorder := deleteWith(t, projectprovisioning.Result{}, projectprovisioning.ErrProjectWorkActive)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "stop them or wait") || !strings.Contains(body, "retry") {
+		t.Fatalf("the 409 does not tell the caller to stop or wait and retry: %s", body)
+	}
+}
+
+// The project is gone but its vector database is not: 500 naming the database
+// and carrying the per-step detail, so an operator can run pgvector-orphans.
+func TestDeleteProjectNamesTheVectorDatabaseItCouldNotDrop(t *testing.T) {
+	failed := false
+	result := projectprovisioning.Result{
+		ProjectID:      42,
+		VectorDatabase: "project_42",
+		RollbackSteps: []projectprovisioning.StepStatus{
+			{Step: projectprovisioning.StepProjectPgvectorDrop, Initialized: true, OK: &failed, Msg: "step project_pgvector_drop did not complete"},
+		},
+	}
+	err := errors.Join(projectprovisioning.ErrArtifactsNotRemoved,
+		fmt.Errorf("%w: database \"project_42\" remains", projectprovisioning.ErrVectorStoreNotDropped))
+
+	recorder := deleteWith(t, result, err)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Steps    []projectprovisioning.StepStatus `json:"steps"`
+		Database string                           `json:"database"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, recorder.Body.String())
+	}
+	if body.Database != "project_42" {
+		t.Errorf("database = %q, want project_42", body.Database)
+	}
+	if len(body.Steps) != 1 || body.Steps[0].Step != projectprovisioning.StepProjectPgvectorDrop {
+		t.Errorf("steps = %+v", body.Steps)
 	}
 }
 

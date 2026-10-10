@@ -631,7 +631,19 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 			e.logger.WarnContext(ctx, "removing an unfinished personal project before recreating it",
 				"user_id", userID, "project_id", candidate.id)
 			if _, err := e.provisioner.Deprovision(ctx, candidate.id); err != nil {
-				return 0, fmt.Errorf("personalproject: remove unfinished project %d: %w", candidate.id, err)
+				switch {
+				case errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) &&
+					!errors.Is(err, projectprovisioning.ErrProjectNotRemoved):
+					// The row is gone, which is all the repair needs. The
+					// leftover PgVector database is an operator cleanup
+					// (cmd/pgvector-orphans), not a reason to fail login.
+					e.logger.WarnContext(ctx, "unfinished personal project removed, but its PgVector database was not dropped",
+						"user_id", userID, "project_id", candidate.id, "err", err)
+				case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
+					return 0, fmt.Errorf("personalproject: cannot remove unfinished project %d yet: it still has active runs; retry once they finish: %w", candidate.id, err)
+				default:
+					return 0, fmt.Errorf("personalproject: remove unfinished project %d: %w", candidate.id, err)
+				}
 			}
 			continue
 		}

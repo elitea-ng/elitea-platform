@@ -18,9 +18,13 @@ package personalproject_test
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,6 +251,105 @@ func TestEnsureRepairsAnUnfinishedPersonalProject(t *testing.T) {
 	if resolved := resolveAuthorPersonalProjectID(ctx, t, pool, userID); resolved != repaired {
 		t.Fatalf("the author resolver answered %d, want the repaired project %d", resolved, repaired)
 	}
+}
+
+// deprovisionOutcomeProvisioner runs the real provisioner and then reports the
+// given outcome from Deprovision, so the ensurer's reaction to each delete
+// failure is tested against a real half-created project.
+type deprovisionOutcomeProvisioner struct {
+	*projectprovisioning.Provisioner
+	outcome error
+}
+
+func (p deprovisionOutcomeProvisioner) Deprovision(ctx context.Context, projectID int64) (projectprovisioning.Result, error) {
+	result, err := p.Provisioner.Deprovision(ctx, projectID)
+	if err != nil {
+		return result, err
+	}
+	return result, p.outcome
+}
+
+func seedUnfinishedProject(ctx context.Context, t *testing.T, pool *pgxpool.Pool, userID int64) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO centry.project (name, owner_id, plugins, create_success)
+		 VALUES ($1, $2, '{}', false) RETURNING id`,
+		personalproject.Name(userID), userID,
+	).Scan(&id); err != nil {
+		t.Fatalf("seed the unfinished project: %v", err)
+	}
+	return id
+}
+
+func newOutcomeEnsurer(t *testing.T, pool *pgxpool.Pool, outcome error, logs *bytes.Buffer) *personalproject.Ensurer {
+	t.Helper()
+	provisioner := projectprovisioning.New(
+		pool,
+		migrate.New(pool, platformmigrations.Files),
+		nil,
+		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
+	)
+	ensurer, err := personalproject.NewEnsurer(pool,
+		deprovisionOutcomeProvisioner{Provisioner: provisioner, outcome: outcome},
+		personalproject.WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	if err != nil {
+		t.Fatalf("build ensurer: %v", err)
+	}
+	return ensurer
+}
+
+// The row is gone, so a leftover PgVector database must not fail the repair.
+func TestEnsureRepairContinuesWhenTheVectorStoreWasNotDropped(t *testing.T) {
+	ctx := context.Background()
+	pool := newPersonalProjectPool(t)
+	var logs bytes.Buffer
+	ensurer := newOutcomeEnsurer(t, pool,
+		fmt.Errorf("%w: database \"project_9\" remains", projectprovisioning.ErrVectorStoreNotDropped), &logs)
+	userID := seedUser(t, pool, "leftover@autotest.local", "Leftover")
+	strandedID := seedUnfinishedProject(ctx, t, pool, userID)
+
+	repaired, err := ensurer.Ensure(ctx, userID)
+	if err != nil {
+		t.Fatalf("Ensure must continue past ErrVectorStoreNotDropped: %v", err)
+	}
+	if repaired == 0 || repaired == strandedID {
+		t.Fatalf("Ensure returned %d for stranded project %d", repaired, strandedID)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "PgVector database was not dropped") {
+		t.Fatalf("the leftover was not logged at warn:\n%s", out)
+	}
+}
+
+// Active work is retryable and the repair cannot go on: the error says why.
+func TestEnsureRepairReportsActiveWorkClearly(t *testing.T) {
+	ctx := context.Background()
+	pool := newPersonalProjectPool(t)
+	var logs bytes.Buffer
+	refusing, err := personalproject.NewEnsurer(pool, activeWorkProvisioner{}, personalproject.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID := seedUser(t, pool, "busyrepair@autotest.local", "Busy Repair")
+	seedUnfinishedProject(ctx, t, pool, userID)
+
+	_, err = refusing.Ensure(ctx, userID)
+	if !errors.Is(err, projectprovisioning.ErrProjectWorkActive) {
+		t.Fatalf("Ensure err = %v, want ErrProjectWorkActive", err)
+	}
+	if !strings.Contains(err.Error(), "active runs") {
+		t.Fatalf("the error does not say what to do: %v", err)
+	}
+}
+
+type activeWorkProvisioner struct{}
+
+func (activeWorkProvisioner) Provision(context.Context, projectprovisioning.Request) (projectprovisioning.Result, error) {
+	panic("provision must not run while the repair is blocked")
+}
+
+func (activeWorkProvisioner) Deprovision(context.Context, int64) (projectprovisioning.Result, error) {
+	return projectprovisioning.Result{}, projectprovisioning.ErrProjectWorkActive
 }
 
 // The three identities that must NOT be given a personal project, and the
