@@ -46,6 +46,12 @@ import (
 // no vector store, a malformed one means it is misconfigured.
 var ErrProjectVectorStoreBootstrap = errors.New("runtimecomposition: project vector-store bootstrap is unusable")
 
+// ErrProjectVectorStoreBootstrapMissing reports a drop for a project that HAD a
+// vector store, on a deployment whose public elitea-pgvector bootstrap is gone.
+// The database exists and cannot be reached, so the drop is not OK and not a
+// skip (#1211).
+var ErrProjectVectorStoreBootstrapMissing = errors.New("PgVector bootstrap not configured")
+
 type projectVectorStoreFinder interface {
 	FindByEliteaTitle(
 		context.Context,
@@ -190,14 +196,47 @@ func (s *ProjectVectorStore) RemoveProjectVectorStore(ctx context.Context, proje
 	return nil
 }
 
+// ProjectHasVectorStore reports whether the project has its `vectorstorage`
+// configuration row. A project whose tenant schema is already gone has none.
+func (s *ProjectVectorStore) ProjectHasVectorStore(ctx context.Context, projectID int64) (bool, error) {
+	if s == nil {
+		return false, errors.New("project vector store is not configured")
+	}
+	if projectID <= 0 {
+		return false, vectorstoreapp.ErrInvalidProjectPgvectorRequest
+	}
+	present, err := s.tenantConfigurationPresent(ctx, projectID)
+	if err != nil || !present {
+		return false, err
+	}
+	var has bool
+	// The schema name is built from an int64 id, never from caller input.
+	if err := s.schemas.QueryRow(ctx, fmt.Sprintf(`
+SELECT EXISTS (
+    SELECT 1 FROM p_%d.configuration
+    WHERE project_id = $1::integer
+      AND elitea_title = $2::text
+      AND type = 'pgvector'
+      AND section = 'vectorstorage'
+      AND source = 'system')`, projectID),
+		projectID, vectorstoreapp.DefaultProjectPgvectorTitle,
+	).Scan(&has); err != nil {
+		return false, fmt.Errorf("read project vector-store configuration: %w", err)
+	}
+	return has, nil
+}
+
 // DropProjectVectorStore drops the project's PgVector database and login role
 // (#1211). Callers: only an explicit project delete. The create-failure rollback
 // calls RemoveProjectVectorStore, which never reaches this.
 //
-// It is idempotent (a missing database or role is a no-op) and a no-op on a
-// deployment with no public elitea-pgvector configuration, which has nothing to
-// drop from.
-func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64) (string, error) {
+// It is idempotent (a missing database or role is a no-op). hadStore is whether
+// the project had a vector store before its removal. With no public
+// elitea-pgvector configuration there is nothing to drop from: for a project
+// that never had a store that is a skip (database ""), but for one that did it
+// is ErrProjectVectorStoreBootstrapMissing, because its database exists and
+// cannot be reached.
+func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (string, error) {
 	if s == nil {
 		return "", errors.New("project vector store is not configured")
 	}
@@ -210,6 +249,9 @@ func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, project
 		return database, err
 	}
 	if !configured {
+		if hadStore {
+			return database, ErrProjectVectorStoreBootstrapMissing
+		}
 		return "", nil
 	}
 	databases, err := newCurrentProjectPgvectorDatabaseProvisioner(bootstrap)

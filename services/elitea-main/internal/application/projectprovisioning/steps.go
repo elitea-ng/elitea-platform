@@ -257,29 +257,6 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 	}
 	defer func() { _ = transaction.Rollback(context.WithoutCancel(ctx)) }()
 
-	// THE FENCE (#1211). On an explicit delete with a vector store (the only case
-	// with a database to protect), take the project row's lock and
-	// count active work under it. Admitting work inserts an execution_jobs row
-	// that references this project, which needs a KEY SHARE lock on the row and
-	// so waits for this transaction; after the row is gone it fails on the
-	// foreign key. Work that was admitted before the lock is counted here and
-	// refuses the delete with the row intact. Counting AFTER the row is gone
-	// would see nothing, because the delete below removes the project's jobs.
-	if state.deleting && p.vectorStore != nil {
-		if _, err := transaction.Exec(ctx,
-			`SELECT 1 FROM centry.project WHERE id = $1 FOR UPDATE`, state.projectID); err != nil {
-			return fmt.Errorf("lock project row: %w", err)
-		}
-		active, err := activeWork(ctx, transaction, state.projectID)
-		if err != nil {
-			return fmt.Errorf("count active work: %w", err)
-		}
-		if active > 0 {
-			state.workActive = true
-			return ErrProjectWorkActive
-		}
-	}
-
 	for _, cleanup := range referencingDeletes() {
 		// A deployment that has not applied the shared history yet does not
 		// have these tables. deleteTenantLedger guards the same way, and an

@@ -14,21 +14,19 @@ import (
 
 func TestTheStepWalkNeverDropsTheVectorStore(t *testing.T) {
 	attempted := []StepStatus{{Step: StepProjectPgvector, Initialized: true}}
-	for _, deleting := range []bool{false, true} {
-		store := &stubVectorStore{}
-		p := New(nil, nil, nil, WithVectorStore(store))
+	store := &stubVectorStore{}
+	p := New(nil, nil, nil, WithVectorStore(store))
 
-		rollback := p.compensate(context.Background(), &provisionState{projectID: 7, deleting: deleting}, attempted)
+	rollback := p.compensate(context.Background(), &provisionState{projectID: 7}, attempted)
 
-		if len(store.removed) != 1 || store.removed[0] != 7 {
-			t.Fatalf("deleting=%v: removed %v, want the configuration row of [7]", deleting, store.removed)
-		}
-		if len(store.dropped) != 0 {
-			t.Fatalf("deleting=%v: the step walk dropped the vector store: %v", deleting, store.dropped)
-		}
-		if len(rollback) != 1 || rollback[0].OK == nil || !*rollback[0].OK {
-			t.Fatalf("deleting=%v: rollback = %+v", deleting, rollback)
-		}
+	if len(store.removed) != 1 || store.removed[0] != 7 {
+		t.Fatalf("removed %v, want the configuration row of [7]", store.removed)
+	}
+	if len(store.dropped) != 0 {
+		t.Fatalf("the step walk dropped the vector store: %v", store.dropped)
+	}
+	if len(rollback) != 1 || rollback[0].OK == nil || !*rollback[0].OK {
+		t.Fatalf("rollback = %+v", rollback)
 	}
 }
 

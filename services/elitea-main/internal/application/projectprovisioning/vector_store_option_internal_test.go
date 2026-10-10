@@ -34,6 +34,11 @@ type stubVectorStore struct {
 	dropped      []int64
 	dropErr      error
 	provisionErr error
+
+	hasStore        bool
+	hasStoreErr     error
+	droppedHadStore []bool
+	dropFn          func(ctx context.Context, projectID int64, hadStore bool) (string, error)
 }
 
 func (s *stubVectorStore) ProvisionProjectVectorStore(_ context.Context, projectID int64) error {
@@ -46,8 +51,16 @@ func (s *stubVectorStore) RemoveProjectVectorStore(_ context.Context, projectID 
 	return nil
 }
 
-func (s *stubVectorStore) DropProjectVectorStore(_ context.Context, projectID int64) (string, error) {
+func (s *stubVectorStore) ProjectHasVectorStore(_ context.Context, _ int64) (bool, error) {
+	return s.hasStore, s.hasStoreErr
+}
+
+func (s *stubVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (string, error) {
 	s.dropped = append(s.dropped, projectID)
+	s.droppedHadStore = append(s.droppedHadStore, hadStore)
+	if s.dropFn != nil {
+		return s.dropFn(ctx, projectID, hadStore)
+	}
 	return "project_" + strconv.FormatInt(projectID, 10), s.dropErr
 }
 

@@ -161,13 +161,20 @@ type ProjectVectorStore interface {
 	// (the configuration row). It never drops the PgVector database or role, so
 	// it is safe for the create-failure rollback.
 	RemoveProjectVectorStore(ctx context.Context, projectID int64) error
+	// ProjectHasVectorStore reports whether the project has a PgVector
+	// configuration row on this platform. Deprovision reads it BEFORE the step
+	// walk removes that row, and hands the answer to DropProjectVectorStore.
+	ProjectHasVectorStore(ctx context.Context, projectID int64) (bool, error)
 	// DropProjectVectorStore irreversibly drops the project's PgVector database
 	// and login role (#1211). It is reached only from Deprovision, after the
 	// project row is proved gone, never from the create-failure rollback. It is
-	// idempotent and a no-op on a deployment with no PgVector bootstrap. It
-	// returns the name of the database it was asked to drop (also on failure,
-	// so the caller can name the leftover), or "" when there is nothing to drop.
-	DropProjectVectorStore(ctx context.Context, projectID int64) (database string, err error)
+	// idempotent. hadStore is whether the project had a vector store before its
+	// removal: with no PgVector bootstrap configured, a project that never had
+	// one has nothing to drop (it returns "", nil), but one that did has a
+	// database that cannot be dropped, which is an error. It returns the name of
+	// the database it was asked to drop (also on failure, so the caller can name
+	// the leftover), or "" when there is nothing to drop.
+	DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (database string, err error)
 }
 
 // ProjectDefaultModelSeeder copies the platform default model into a new
@@ -463,13 +470,6 @@ type provisionState struct {
 	request      Request
 	projectID    int64
 	systemUserID int64
-	// deleting is true only while Deprovision runs an explicit project delete.
-	// Provision never sets it. removeProjectModel uses it to fence out new work
-	// before the row goes (#1211).
-	deleting bool
-	// workActive records that removeProjectModel found non-terminal work for the
-	// project under the row lock, so Deprovision can answer ErrProjectWorkActive.
-	workActive bool
 }
 
 // projectIDString is the decimal project id, for the interfaces that take one.
