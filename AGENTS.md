@@ -41,11 +41,14 @@ prototype shortcuts into new code merely to preserve current behavior.
   architecture.
 - Durable asynchronous worker commands use the runtime command bus, NATS
   JetStream (docs/runtime-command-bus.md); PostgreSQL is the authority and the
-  bus is transport only. Use an
-  authenticated mTLS HTTP/JSON API for identity, credential redemption,
-  provider catalogs, artifact grants, health, and capability discovery. Do not
-  introduce gRPC until profiling proves it solves a measured control-plane
-  bottleneck.
+  bus is transport only.
+- Synchronous internal service-to-service calls use gRPC over mTLS, with the
+  contracts in `libs/proto` (as the worker's control, output and content planes
+  on 9443–9445 already do; ADR-0031's `elitea-vector`). Internal REST is not
+  added for new service-to-service paths. HTTP/JSON is for browser- and
+  client-facing APIs; existing internal HTTP/JSON endpoints (identity,
+  credential redemption, provider catalogs, artifact grants) move to gRPC
+  when they are next reworked, not as a separate rewrite.
 - Durable messages contain identifiers, immutable revisions, encrypted
   references and non-sensitive bounded metadata. Plaintext prompts, repository
   content, tool payloads, secret values, bearer credentials, arbitrary

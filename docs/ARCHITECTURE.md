@@ -16,7 +16,7 @@ elitea-platform/
 │   ├── eventslib/          # Domain event types & publisher interface
 │   ├── rpclib/             # Inter-service HTTP RPC helpers
 │   └── observability/      # OTel SDK setup
-├── libs/proto/             # Protobuf definitions (future gRPC)
+├── libs/proto/             # Protobuf definitions (internal gRPC contracts)
 ├── deploy/                 # Kubernetes/Helm, docker-compose, ArgoCD
 ├── tools/scripts/          # Developer tooling
 └── .github/workflows/      # CI pipelines
