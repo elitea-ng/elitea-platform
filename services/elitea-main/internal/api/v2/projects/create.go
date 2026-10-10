@@ -185,17 +185,34 @@ const DeleteProjectPermission = "projects.projects.project.delete"
 // the key `steps`.
 type deleteProjectResponse struct {
 	Steps []projectprovisioning.StepStatus `json:"steps"`
-	// Message and Database appear only on the failures an operator acts on:
-	// Database names the PgVector database a delete left behind (#1211).
-	Message  string `json:"message,omitempty"`
+	// Pending and Message appear with a 202: the cleanup steps still to finish,
+	// and what happens to them. Message also carries the reason of a 500.
+	Pending []string `json:"pending,omitempty"`
+	Message string   `json:"message,omitempty"`
+	// Database names the PgVector database a delete has not dropped yet, when
+	// the project was recorded as having one (#1211).
 	Database string `json:"database,omitempty"`
 }
 
 // DeleteProject serves `DELETE /api/v2/projects/project/{mode}/{projectID}`.
 //
-// Destructive and irreversible: it drops the tenant schema with CASCADE. It is
-// gated on the same administration-mode permission the reference declares, and
-// answers 404 for any other `{mode}`.
+// Destructive and irreversible: it removes the project row and revokes its
+// credentials in one transaction, then cleans up what is slow or external
+// (artifact bytes, the tenant schema with CASCADE, the PgVector database) from
+// the cleanup journal. It is gated on the same administration-mode permission
+// the reference declares, and answers 404 for any other `{mode}`.
+//
+// The answers:
+//
+//   - 200: the project is gone and every cleanup step finished within the
+//     request's budget.
+//   - 202: the project is gone and its credentials are revoked, but some cleanup
+//     steps are still pending or failed. The body lists them under `pending`;
+//     the cleanup journal and its reconciler finish them in the background. A
+//     retry of the delete answers 404.
+//   - 404: no such project (also a repeated delete).
+//   - 409: the project has active runs; nothing changed.
+//   - 500: the delete did not happen; the project is unchanged.
 func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	if chi.URLParam(r, "mode") != administrationMode {
 		apierr.WriteStatus(w, http.StatusNotFound, "not found")
@@ -211,7 +228,11 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.provisioner.Deprovision(r.Context(), projectID)
+	budget := h.deleteBudget
+	if budget <= 0 {
+		budget = DefaultDeleteBudget
+	}
+	result, err := h.provisioner.Deprovision(r.Context(), projectID, projectprovisioning.WithCleanupBudget(budget))
 	switch {
 	case errors.Is(err, projectprovisioning.ErrProjectNotFound):
 		apierr.WriteStatus(w, http.StatusNotFound, "project not found")
@@ -223,56 +244,29 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusConflict,
 			"project has active runs; stop them or wait for them to finish, then retry the delete")
 		return
-	case err != nil:
+	case errors.Is(err, projectprovisioning.ErrProjectNotRemoved), err != nil && result.ProjectID == 0:
 		// The reference answers 200 even when every step failed. Reporting a
 		// project that still exists as deleted is the failure mode this route
-		// exists to avoid, so the per-step detail is returned with a 500. The
-		// message names EVERY leftover the joined error carries: a retry answers
-		// 404 once the row is gone, so whatever this omits is only in the
-		// cleanup journal.
+		// exists to avoid, so the per-step detail is returned with a 500.
 		writeJSON(w, http.StatusInternalServerError, deleteProjectResponse{
+			Steps:   nonNilSteps(result.RollbackSteps),
+			Message: "the project was not removed and is unchanged; retry the delete",
+		})
+		return
+	case err != nil || len(result.Pending) > 0:
+		// The project row and every credential are gone; only cleanup is left.
+		// That is accepted work, not a failure and not a finished delete: the
+		// journal retries it with backoff. The body names what is pending, never
+		// the underlying error, which can hold SQL or addresses.
+		writeJSON(w, http.StatusAccepted, deleteProjectResponse{
 			Steps:    nonNilSteps(result.RollbackSteps),
-			Message:  deleteFailureMessage(err, result.RollbackSteps),
+			Pending:  result.Pending,
+			Message:  "the project was deleted and its access revoked; cleanup of the remaining steps continues in the background",
 			Database: result.VectorDatabase,
 		})
 		return
 	}
 	writeJSON(w, http.StatusOK, deleteProjectResponse{Steps: nonNilSteps(result.RollbackSteps)})
-}
-
-// deleteFailureMessage renders one line per leftover a failed delete reports.
-// The text is fixed per leftover and never carries the underlying error, which
-// can hold SQL or addresses.
-func deleteFailureMessage(err error, steps []projectprovisioning.StepStatus) string {
-	var lines []string
-	if errors.Is(err, projectprovisioning.ErrProjectNotRemoved) {
-		lines = append(lines, "the project was not removed and is unchanged; retry the delete")
-	}
-	if errors.Is(err, projectprovisioning.ErrArtifactsNotRemoved) {
-		lines = append(lines, "the project was deleted, but its artifact buckets were not purged yet; the cleanup journal retries the purge")
-	}
-	if errors.Is(err, projectprovisioning.ErrTenantSchemaNotRemoved) {
-		lines = append(lines, "the project was deleted, but its tenant schema was not removed yet; the cleanup journal retries it")
-	}
-	if errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) {
-		lines = append(lines, "the project was deleted, but its PgVector database was not dropped yet; the cleanup journal retries it")
-	}
-	if errors.Is(err, projectprovisioning.ErrCleanupIncomplete) {
-		for _, status := range steps {
-			switch status.Step {
-			case projectprovisioning.StepArtifactBuckets, projectprovisioning.StepProjectSchema,
-				projectprovisioning.StepProjectPgvectorDrop, projectprovisioning.StepProjectModel:
-				continue
-			}
-			if status.OK != nil && !*status.OK {
-				lines = append(lines, "the project was deleted, but step "+status.Step+" did not complete; the cleanup journal retries it")
-			}
-		}
-	}
-	if len(lines) == 0 {
-		return "project delete did not complete; see the steps"
-	}
-	return strings.Join(lines, "\n")
 }
 
 // limits applies ProjectCreatePD's defaults to the fields the body omitted.

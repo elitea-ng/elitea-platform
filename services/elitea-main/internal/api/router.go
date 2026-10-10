@@ -406,6 +406,9 @@ type RouterConfig struct {
 	// delete with, instead of building a second one (see newProjectProvisioner). It is
 	// not called when the composition has no pool and so no provisioner.
 	OnProjectProvisioner func(*projectprovisioning.Provisioner)
+	// ProjectDeleteBudget is how long DELETE of a project waits for the slow
+	// cleanup before it answers 202 (zero: v2projects.DefaultDeleteBudget).
+	ProjectDeleteBudget time.Duration
 	// PlatformModelDefaults is the platform default model service (#6826). It
 	// backs /api/v2/admin/gateway/default_model, the default_usage count a
 	// platform-model delete reads, the release of stored defaults after a
@@ -1894,7 +1897,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				v2projects.WithPermissionResolver(permissionResolver),
 			}
 			if projectProvisionerOK {
-				projectOptions = append(projectOptions, v2projects.WithProvisioner(projectProvisioner))
+				projectOptions = append(projectOptions, v2projects.WithProvisioner(projectProvisioner),
+					v2projects.WithDeleteBudget(cfg.ProjectDeleteBudget))
 			}
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
 

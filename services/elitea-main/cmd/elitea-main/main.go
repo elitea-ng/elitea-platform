@@ -2357,6 +2357,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load project deletion reconciler settings: %w", err)
 	}
+	projectDeleteBudget, err := projectDeleteBudgetFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load project delete budget: %w", err)
+	}
 	var deletionReconcilerErr error
 	startDeletionReconciler := func(provisioner *projectprovisioning.Provisioner) {
 		deletionReconcilerErr = startProjectDeletionReconciler(ctx, deletionReconciler, provisioner, logger)
@@ -2364,6 +2368,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 
 	r := api.NewRouter(api.RouterConfig{
 		OnProjectProvisioner:         startDeletionReconciler,
+		ProjectDeleteBudget:          projectDeleteBudget,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,

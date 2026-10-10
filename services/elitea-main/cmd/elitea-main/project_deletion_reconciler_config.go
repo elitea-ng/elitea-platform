@@ -22,7 +22,24 @@ import (
 const (
 	projectDeletionReconcilerEnv = "ELITEA_PROJECT_DELETION_RECONCILER_ENABLED"
 	projectDeletionGraceEnv      = "ELITEA_PROJECT_DELETION_RECONCILER_GRACE"
+	// projectDeleteBudgetEnv is how long DELETE of a project waits for the slow
+	// cleanup before it answers 202 and leaves the rest to the journal.
+	projectDeleteBudgetEnv = "ELITEA_PROJECT_DELETE_REQUEST_BUDGET"
 )
+
+// projectDeleteBudgetFromEnv reads the in-request cleanup budget. Unset or
+// empty is zero, which the route reads as its default (20s).
+func projectDeleteBudgetFromEnv(lookup func(string) (string, bool)) (time.Duration, error) {
+	raw, ok := lookup(projectDeleteBudgetEnv)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return 0, nil
+	}
+	budget, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || budget <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration such as 20s, got %q", projectDeleteBudgetEnv, raw)
+	}
+	return budget, nil
+}
 
 type projectDeletionReconcilerSettings struct {
 	Enabled bool

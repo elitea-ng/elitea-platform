@@ -253,22 +253,6 @@ func TestEnsureRepairsAnUnfinishedPersonalProject(t *testing.T) {
 	}
 }
 
-// deprovisionOutcomeProvisioner runs the real provisioner and then reports the
-// given outcome from Deprovision, so the ensurer's reaction to each delete
-// failure is tested against a real half-created project.
-type deprovisionOutcomeProvisioner struct {
-	*projectprovisioning.Provisioner
-	outcome error
-}
-
-func (p deprovisionOutcomeProvisioner) Deprovision(ctx context.Context, projectID int64, options ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error) {
-	result, err := p.Provisioner.Deprovision(ctx, projectID, options...)
-	if err != nil {
-		return result, err
-	}
-	return result, p.outcome
-}
-
 func seedUnfinishedProject(ctx context.Context, t *testing.T, pool *pgxpool.Pool, userID int64) int64 {
 	t.Helper()
 	var id int64
@@ -282,113 +266,102 @@ func seedUnfinishedProject(ctx context.Context, t *testing.T, pool *pgxpool.Pool
 	return id
 }
 
-func newOutcomeEnsurer(t *testing.T, pool *pgxpool.Pool, outcome error, logs *bytes.Buffer) *personalproject.Ensurer {
-	t.Helper()
+// untouchableVectorStore is a vector store whose every drop fails the test: the
+// login path must not run cleanup steps, it hands them to the journal.
+type untouchableVectorStore struct {
+	projectprovisioning.ProjectVectorStore
+	t *testing.T
+}
+
+func (s untouchableVectorStore) ProvisionProjectVectorStore(context.Context, int64) error { return nil }
+
+func (s untouchableVectorStore) RemoveProjectVectorStore(context.Context, int64) error { return nil }
+
+func (s untouchableVectorStore) ProjectHasVectorStore(context.Context, projectprovisioning.Querier, int64) (bool, error) {
+	return true, nil
+}
+
+func (s untouchableVectorStore) DropProjectVectorStore(context.Context, int64, bool) (string, error) {
+	s.t.Error("the login path ran a cleanup step; it must hand the cleanup to the journal")
+	return "", errors.New("must not be called")
+}
+
+// The repair does not wait for the cleanup: the decision (the row and every
+// credential) has committed when Deprovision returns, and the slow steps are
+// left to the cleanup journal, whatever they would have done.
+func TestEnsureRepairHandsTheCleanupToTheJournal(t *testing.T) {
+	ctx := context.Background()
+	pool := newPersonalProjectPool(t)
 	provisioner := projectprovisioning.New(
 		pool,
 		migrate.New(pool, platformmigrations.Files),
 		nil,
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
+		projectprovisioning.WithVectorStore(untouchableVectorStore{t: t}),
 	)
-	ensurer, err := personalproject.NewEnsurer(pool,
-		deprovisionOutcomeProvisioner{Provisioner: provisioner, outcome: outcome},
-		personalproject.WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	var logs bytes.Buffer
+	ensurer, err := personalproject.NewEnsurer(pool, provisioner,
+		personalproject.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
 	if err != nil {
 		t.Fatalf("build ensurer: %v", err)
 	}
-	return ensurer
-}
-
-// The row is gone, so a leftover PgVector database must not fail the repair.
-func TestEnsureRepairContinuesWhenTheVectorStoreWasNotDropped(t *testing.T) {
-	ctx := context.Background()
-	pool := newPersonalProjectPool(t)
-	var logs bytes.Buffer
-	ensurer := newOutcomeEnsurer(t, pool,
-		fmt.Errorf("%w: database \"project_9\" remains", projectprovisioning.ErrVectorStoreNotDropped), &logs)
-	userID := seedUser(t, pool, "leftover@autotest.local", "Leftover")
+	userID := seedUser(t, pool, "handoff@autotest.local", "Handoff")
 	strandedID := seedUnfinishedProject(ctx, t, pool, userID)
 
 	repaired, err := ensurer.Ensure(ctx, userID)
 	if err != nil {
-		t.Fatalf("Ensure must continue past ErrVectorStoreNotDropped: %v", err)
+		t.Fatalf("Ensure over an unfinished project: %v", err)
 	}
 	if repaired == 0 || repaired == strandedID {
 		t.Fatalf("Ensure returned %d for stranded project %d", repaired, strandedID)
 	}
-	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "PgVector database was not dropped") {
-		t.Fatalf("the leftover was not logged at warn:\n%s", out)
+	var (
+		completed bool
+		leased    bool
+		recorded  bool
+	)
+	if err := pool.QueryRow(ctx, `
+SELECT completed_at IS NOT NULL, claimed_until IS NOT NULL,
+       (cleanup->>'had_vector_store')::boolean
+FROM centry.project_deletions WHERE project_id = $1`, strandedID,
+	).Scan(&completed, &leased, &recorded); err != nil {
+		t.Fatalf("read the journal row of the removed project: %v", err)
+	}
+	if completed || leased || !recorded {
+		t.Fatalf("journal: completed=%v leased=%v had_vector_store=%v; want an open, unleased row for the reconciler",
+			completed, leased, recorded)
 	}
 }
 
-// Only a leftover PgVector database is tolerated. The same delete reporting a
-// tenant schema or artifact bytes left behind as well fails the repair, as it
-// did before the vector store existed.
-func TestEnsureRepairFailsWhenAnythingBesidesTheVectorStoreWasLeft(t *testing.T) {
-	vector := fmt.Errorf("%w: database \"project_9\" remains", projectprovisioning.ErrVectorStoreNotDropped)
-	for name, outcome := range map[string]error{
-		"vector store and tenant schema": errors.Join(projectprovisioning.ErrTenantSchemaNotRemoved, vector),
-		"vector store and artifacts":     errors.Join(vector, projectprovisioning.ErrArtifactsNotRemoved),
-		"all three":                      errors.Join(projectprovisioning.ErrTenantSchemaNotRemoved, projectprovisioning.ErrArtifactsNotRemoved, vector),
-		"vector store and an unknown":    errors.Join(vector, errors.New("verify project removal")),
-		"vector store and the vault":     errors.Join(vector, fmt.Errorf("%w: step project_secrets", projectprovisioning.ErrCleanupIncomplete)),
-	} {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			pool := newPersonalProjectPool(t)
-			var logs bytes.Buffer
-			ensurer := newOutcomeEnsurer(t, pool, outcome, &logs)
-			userID := seedUser(t, pool, "multi-leftover@autotest.local", "Multi Leftover")
-			seedUnfinishedProject(ctx, t, pool, userID)
-
-			if _, err := ensurer.Ensure(ctx, userID); err == nil {
-				t.Fatal("Ensure carried on past a leftover that is not only the vector store")
-			}
-		})
-	}
-	t.Run("vector store alone continues", func(t *testing.T) {
-		ctx := context.Background()
-		pool := newPersonalProjectPool(t)
-		var logs bytes.Buffer
-		ensurer := newOutcomeEnsurer(t, pool, errors.Join(vector), &logs)
-		userID := seedUser(t, pool, "single-leftover@autotest.local", "Single Leftover")
-		seedUnfinishedProject(ctx, t, pool, userID)
-
-		if projectID, err := ensurer.Ensure(ctx, userID); err != nil || projectID == 0 {
-			t.Fatalf("Ensure = %d, %v; want a repaired project", projectID, err)
-		}
-	})
-}
-
-// Active work is retryable and the repair cannot go on: the error says why.
-func TestEnsureRepairReportsActiveWorkClearly(t *testing.T) {
+// A decision that fails is a repair that fails: the error says which project.
+func TestEnsureRepairFailsWhenTheDeleteDoesNotHappen(t *testing.T) {
 	ctx := context.Background()
 	pool := newPersonalProjectPool(t)
 	var logs bytes.Buffer
-	refusing, err := personalproject.NewEnsurer(pool, activeWorkProvisioner{}, personalproject.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+	refusing, err := personalproject.NewEnsurer(pool, failingDeleteProvisioner{}, personalproject.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
 	if err != nil {
 		t.Fatal(err)
 	}
-	userID := seedUser(t, pool, "busyrepair@autotest.local", "Busy Repair")
-	seedUnfinishedProject(ctx, t, pool, userID)
+	userID := seedUser(t, pool, "failrepair@autotest.local", "Fail Repair")
+	strandedID := seedUnfinishedProject(ctx, t, pool, userID)
 
 	_, err = refusing.Ensure(ctx, userID)
-	if !errors.Is(err, projectprovisioning.ErrProjectWorkActive) {
-		t.Fatalf("Ensure err = %v, want ErrProjectWorkActive", err)
+	if !errors.Is(err, projectprovisioning.ErrProjectNotRemoved) {
+		t.Fatalf("Ensure err = %v, want ErrProjectNotRemoved", err)
 	}
-	if !strings.Contains(err.Error(), "active runs") {
-		t.Fatalf("the error does not say what to do: %v", err)
+	if !strings.Contains(err.Error(), fmt.Sprint(strandedID)) {
+		t.Fatalf("the error does not name the project: %v", err)
 	}
 }
 
-type activeWorkProvisioner struct{}
+type failingDeleteProvisioner struct{}
 
-func (activeWorkProvisioner) Provision(context.Context, projectprovisioning.Request) (projectprovisioning.Result, error) {
+func (failingDeleteProvisioner) Provision(context.Context, projectprovisioning.Request) (projectprovisioning.Result, error) {
 	panic("provision must not run while the repair is blocked")
 }
 
-func (activeWorkProvisioner) Deprovision(context.Context, int64, ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error) {
-	return projectprovisioning.Result{}, projectprovisioning.ErrProjectWorkActive
+func (failingDeleteProvisioner) Deprovision(context.Context, int64, ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error) {
+	return projectprovisioning.Result{}, projectprovisioning.ErrProjectNotRemoved
 }
 
 // The three identities that must NOT be given a personal project, and the

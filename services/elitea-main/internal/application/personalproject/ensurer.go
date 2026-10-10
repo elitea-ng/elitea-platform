@@ -635,7 +635,14 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 			// so the delete skips its active-work count. Counting would refuse
 			// the repair on a stray job row and strand the user without a
 			// personal project. An explicit DELETE keeps the count.
-			if _, err := e.provisioner.Deprovision(ctx, candidate.id, projectprovisioning.SkipActiveWorkCheck()); err != nil {
+			//
+			// It also does not wait for the cleanup: the decision (the row and
+			// every credential) is committed when Deprovision returns, and the
+			// artifact bytes, the schema and the PgVector database are the
+			// journal's, which the reconciler finishes. A login must not wait on
+			// an object store or a vector server.
+			if _, err := e.provisioner.Deprovision(ctx, candidate.id,
+				projectprovisioning.SkipActiveWorkCheck(), projectprovisioning.HandOffCleanup()); err != nil {
 				switch {
 				case errors.Is(err, projectprovisioning.ErrProjectNotFound):
 					// Another delete of this project (a concurrent login, an
@@ -643,17 +650,6 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 					// is gone, which is all the repair needs.
 					e.logger.InfoContext(ctx, "unfinished personal project was already removed by another delete",
 						"user_id", userID, "project_id", candidate.id)
-				case onlyVectorStoreNotDropped(err):
-					// The row is gone, which is all the repair needs. The
-					// leftover PgVector database is in the cleanup journal,
-					// which retries it; not a reason to fail login. ONLY that
-					// leftover is tolerated: a tenant schema, artifact bytes or
-					// identity rows left behind fail the repair as they always
-					// did.
-					e.logger.WarnContext(ctx, "unfinished personal project removed, but its PgVector database was not dropped yet",
-						"user_id", userID, "project_id", candidate.id, "err", err)
-				case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
-					return 0, fmt.Errorf("personalproject: cannot remove unfinished project %d yet: it still has active runs; retry once they finish: %w", candidate.id, err)
 				default:
 					return 0, fmt.Errorf("personalproject: remove unfinished project %d: %w", candidate.id, err)
 				}
@@ -706,27 +702,6 @@ type existingCandidate struct {
 	// first branch requires. Only a member row may be RETURNED, because only a
 	// member row is one that resolver will ever answer with.
 	member bool
-}
-
-// onlyVectorStoreNotDropped reports whether a Deprovision error consists solely
-// of ErrVectorStoreNotDropped. Deprovision joins (errors.Join) every cleanup
-// step left after the project row is gone; the PgVector database is the only
-// one a login repair may carry on past, because the row (all the repair needs)
-// is gone and the cleanup journal retries the drop.
-func onlyVectorStoreNotDropped(err error) bool {
-	if err == nil {
-		return false
-	}
-	leaves := []error{err}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		leaves = joined.Unwrap()
-	}
-	for _, leaf := range leaves {
-		if !errors.Is(leaf, projectprovisioning.ErrVectorStoreNotDropped) {
-			return false
-		}
-	}
-	return len(leaves) > 0
 }
 
 // existingProjects reads EVERY row already carrying this user's
