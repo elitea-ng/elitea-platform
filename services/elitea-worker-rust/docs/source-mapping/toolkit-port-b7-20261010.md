@@ -42,3 +42,40 @@ Unblock: an owner decision on a native table engine (the data-analysis row of
 `configuration-toolsets.md` already points at Polars) and on the query
 language, then a family over that engine with a bounded scan instead of a
 whole-table load.
+
+## `aws` (blocked)
+
+SDK: `tools/cloud/aws/{__init__,api_wrapper}.py`. Inline settings `region`,
+`access_key_id`, secret `secret_access_key`; one tool, `execute_aws`, whose
+`query` (JSON text or object) names `service`, `method_name` and
+`method_arguments` and is meant to call that boto3 client method and return
+`str(response)`.
+
+The pinned SDK cannot materialize it, in three independent ways:
+
+- `tools/__init__.py` registers `aws` with no `get_tools`
+  (`_safe_import_tool('aws', 'cloud.aws', None, 'AWSToolkit')`), so the SDK
+  runtime binds no tool for a saved `aws` toolkit;
+- `AWSToolConfig.validate_toolkit` calls `boto3.client('service', ...)`, and
+  `service` is not an AWS service name, so construction raises
+  `UnknownServiceError`;
+- `execute_aws` calls the client object (`self._client(service=...)`), which is
+  not callable.
+
+The Python worker image does not ship boto3 either (`aws` is in the Python
+capability's `unsupported_import_keys`).
+
+Why not in Rust: the contract is boto3's dynamic operation dispatch. Turning
+`{"service": "s3", "method_name": "list_objects_v2", ...}` into a request needs
+botocore's service models: the per-service protocol (`query`, `ec2`, `json`,
+`rest-json`, `rest-xml`), endpoint and signing names, operation names and
+input/output shapes. The Rust ecosystem has per-service SDK crates, not a
+model-driven dynamic client, and the agent runtime has no SigV4 signer (the
+`gcp` family's signing is an RS256 JWT grant, which does not apply). A
+GCP-style generic signed HTTP tool would not honor this argument contract, so
+it would be a different tool under the same name.
+
+Unblock: an owner decision between (a) embedding a bounded subset of the
+botocore service models with a SigV4 signer and a model-driven serializer, or
+(b) a new tool contract (generic SigV4 request) under a new name, with the SDK
+schema left unserved.
