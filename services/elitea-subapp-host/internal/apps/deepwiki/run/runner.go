@@ -70,6 +70,7 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 	// — is stamped with the same project, and none can name another.
 	project, projectErr := TrustedProject(call.Identity, r.VerifiedIdentity, params)
 	ctx = withProject(ctx, projectResolution{id: project, err: projectErr})
+	ctx = withCaller(ctx, caller{verified: r.VerifiedIdentity, userID: call.Identity.UserID})
 
 	// Reader-selected wiki pages, resolved into the question BEFORE the
 	// argument set is derived — see contextpaths.go for why it happens here

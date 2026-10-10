@@ -154,7 +154,7 @@ func ComposeResultObjects(tool string, result map[string]any) []Object {
 	// repository context. None of those tools produces an artifact, and the
 	// legacy handlers wrote their one-object list themselves.
 	switch tool {
-	case "list_wikis", "resolve_and_ask", "resolve_and_deep_research", "delete_wiki":
+	case "list_wikis", "resolve_and_ask", "resolve_and_deep_research", "delete_wiki", "delete_project_wikis":
 		return []Object{Response(stringOr(result, "object_type", "message"), str(result["data"]))}
 	}
 	switch tool {

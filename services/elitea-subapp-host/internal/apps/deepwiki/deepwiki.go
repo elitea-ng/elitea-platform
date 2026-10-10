@@ -77,7 +77,7 @@ var Toolkits = spi.Toolkits{
 		{
 			Name:                      "wiki_query",
 			Aliases:                   []string{"wiki_query", "WikiQuery", "wiki-query"},
-			Tools:                     []string{"list_wikis", "resolve_and_ask", "resolve_and_deep_research", "delete_wiki"},
+			Tools:                     []string{"list_wikis", "resolve_and_ask", "resolve_and_deep_research", "delete_wiki", "delete_project_wikis"},
 			UnknownToolIsInvalidInput: true,
 			Label:                     "wiki_query",
 		},

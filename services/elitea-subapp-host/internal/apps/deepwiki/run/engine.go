@@ -19,7 +19,7 @@ import (
 // SidecarTools are the tools the Python sidecar runs itself: the three that
 // need the analysis engine, plus the wiki resolver, which needs a model.
 // Everything else is refused at the door, as the fixture table does.
-var SidecarTools = []string{"generate_wiki", "ask", "deep_research", ResolveWikiTool}
+var SidecarTools = []string{"generate_wiki", "ask", "deep_research", ResolveWikiTool, DeleteWikiIndexTool, DeleteProjectWikisTool}
 
 // EngineTools are the tools a wired engine runner SERVES — the admission
 // table's whole tool set (deepwiki.go), which until the wiki_query family
@@ -70,8 +70,9 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	transport := ArtifactClientFrom(settings.CallbackCA())
 	tools := map[string]Tool{}
 	for name, tool := range sidecar {
-		if name == ResolveWikiTool {
-			// Reachable only through the two resolve_and_* tools.
+		if name == ResolveWikiTool || name == DeleteWikiIndexTool || name == DeleteProjectWikisTool {
+			// Reachable only through the two resolve_and_* tools and the
+			// wiki_query delete tools, which wrap them.
 			continue
 		}
 		tools[name] = tool
@@ -79,9 +80,11 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	// The wiki_query family: composed HERE, over the host's artifact
 	// transport, delegating only the model-backed steps to the sidecar.
 	for name, tool := range WikiQueryTools(transport, WikiQueryDeps{
-		Resolve:      sidecar[ResolveWikiTool],
-		Ask:          sidecar["ask"],
-		DeepResearch: sidecar["deep_research"],
+		Resolve:            sidecar[ResolveWikiTool],
+		Ask:                sidecar["ask"],
+		DeepResearch:       sidecar["deep_research"],
+		DeleteIndex:        sidecar[DeleteWikiIndexTool],
+		DeleteProjectIndex: sidecar[DeleteProjectWikisTool],
 	}) {
 		tools[name] = tool
 	}

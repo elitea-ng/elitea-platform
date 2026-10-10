@@ -45,7 +45,49 @@ const ProjectArgument = "_elitea_project_id"
 
 // IndexTools are the engine tools that read or write the index. Each is
 // refused without an authenticated project.
-var IndexTools = map[string]bool{"generate_wiki": true, "ask": true, "deep_research": true}
+var IndexTools = map[string]bool{
+	"generate_wiki": true, "ask": true, "deep_research": true,
+	// The index deletions (issue #1243): they delete rows, so they are
+	// refused without an authenticated project like the rest.
+	DeleteWikiIndexTool: true, DeleteProjectWikisTool: true,
+}
+
+// The engine tools that delete an index (services/elitea-deepwiki-engine,
+// runner::maintenance).
+const (
+	DeleteWikiIndexTool    = "delete_wiki_index"
+	DeleteProjectWikisTool = "delete_project_wikis"
+)
+
+type callerKey struct{}
+
+// caller is what Runner.Invoke knows about WHO is calling, beyond the
+// project: whether the hop's identity is signature-verified, and the user.
+type caller struct {
+	verified bool
+	userID   string
+}
+
+func withCaller(ctx context.Context, c caller) context.Context {
+	return context.WithValue(ctx, callerKey{}, c)
+}
+
+// RequirePlatformCaller refuses an invocation that does not come from the
+// platform itself. A project-wide operation is called by elitea-main's
+// project deprovisioning, which signs the project and NO user; a user
+// session, whose hop always carries a user id, is refused. An unverified hop
+// is refused too: without a signature the project is only as trustworthy as
+// llm_settings, which is not enough to delete a whole project's index.
+func RequirePlatformCaller(ctx context.Context, tool string) error {
+	c, _ := ctx.Value(callerKey{}).(caller)
+	if !c.verified {
+		return spi.Failf(spi.KindValue, "%s needs a verified platform identity; this hop carries none", tool)
+	}
+	if c.userID != "" {
+		return spi.Failf(spi.KindValue, "%s is a platform operation (project deletion) and cannot be run from a user session", tool)
+	}
+	return nil
+}
 
 // projectResolution is what Runner.Invoke learned about the caller's
 // project: a validated id, or why there is none.
