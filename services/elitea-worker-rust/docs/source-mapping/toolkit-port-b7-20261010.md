@@ -140,3 +140,38 @@ shape in any runtime.
 
 Unblock: the native indexing gate (`indexing.md`); the three search tools would
 then be thin bindings over its search service.
+
+## `sandbox` (blocked: no code-execution authority for tools)
+
+SDK: `runtime/tools/sandbox.py::{SandboxToolkit,PyodideSandboxTool,StatefulPyodideSandboxTool}`
+over `runtime/langchain/pyodide_sandbox.py`. Two tools with one argument,
+`code`: `pyodide_sandbox` runs Python in Pyodide under a local Deno process,
+and `stateful_pyodide_sandbox` carries the interpreter state between calls as
+pickled `session_bytes`. Both inject a `SandboxClient` preamble holding the
+platform URL, project id and the caller's auth token, gate on a `pgrep deno`
+concurrency count and cgroup memory pressure, and return a dict of `result`,
+`output`, `error`, `status` and `execution_info`.
+
+How the SDK reaches it: `runtime/toolkits/tools.py` dispatches only the
+`internal_tool` named `pyodide` (stateless, network allowed). A configured
+toolkit of type `sandbox` has no branch there and falls through to the
+standard registry, which does not know it, so it binds nothing. The Python
+worker image ships no Deno and skips `pyodide` too
+(`services/elitea-worker-python/src/elitea_worker/agents/internal_tools.py`),
+and the Rust runtime lists `pyodide` as recognized and skipped
+(`src/agents/internal_tools.rs`).
+
+Why not in Rust: the Rust code runner (`src/sandbox/**`) executes pipeline
+Code nodes in a supervisor-isolated container, and every job needs a
+Main-signed sandbox grant obtained through the control channel for that node.
+The toolkit families in `libs/rust/agent-runtime` have no handle to that
+authority (the `artifact` family is the only one lent a claim-scoped
+authority), a model-written call has no Main-authorized job to attach to, and
+the runner has no equivalent of Pyodide's pickled session for the stateful
+tool. Embedding Pyodide or any interpreter in the worker would be running
+untrusted code without the isolation the runner exists to provide.
+
+Unblock: a Main grant path for model-initiated sandbox jobs, a lent
+code-execution authority from the worker into toolkit materialization (the
+`artifact` pattern), mandatory sensitive-tool approval for `code`, and a
+decision on the stateful tool (a per-conversation workspace or dropping it).
