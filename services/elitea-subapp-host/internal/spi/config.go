@@ -54,8 +54,12 @@ type Settings struct {
 	// callback trusts TLSCAFile (see CallbackCA).
 	CallbackCAFile string
 	IdentitySecret string
-	GitAllowlist   string
-	ListenAddr     string
+	// PlatformClients are the certificate identities (common name or DNS
+	// SAN) allowed to call the /internal/ platform routes (platform.go),
+	// from <PREFIX>PLATFORM_CLIENTS. Empty refuses every such call.
+	PlatformClients []string
+	GitAllowlist    string
+	ListenAddr      string
 	// DatabaseURL selects the durable invocation store (ADR-0023 H2b); empty
 	// keeps invocations in memory, and /health says so.
 	DatabaseURL string
@@ -134,6 +138,7 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 		TLSCAFile:          raw("TLS_CA_FILE", ""),
 		CallbackCAFile:     raw("CALLBACK_CA_FILE", ""),
 		IdentitySecret:     raw("IDENTITY_SECRET", ""),
+		PlatformClients:    PlatformClients(raw("PLATFORM_CLIENTS", "")),
 		GitAllowlist:       raw("GIT_ALLOWLIST", ""),
 		ListenAddr:         raw("LISTEN_ADDR", ":8080"),
 		EngineSocket:       raw("ENGINE_SOCKET", ""),

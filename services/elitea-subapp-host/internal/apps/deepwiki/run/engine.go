@@ -80,11 +80,10 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	// The wiki_query family: composed HERE, over the host's artifact
 	// transport, delegating only the model-backed steps to the sidecar.
 	for name, tool := range WikiQueryTools(transport, WikiQueryDeps{
-		Resolve:            sidecar[ResolveWikiTool],
-		Ask:                sidecar["ask"],
-		DeepResearch:       sidecar["deep_research"],
-		DeleteIndex:        sidecar[DeleteWikiIndexTool],
-		DeleteProjectIndex: sidecar[DeleteProjectWikisTool],
+		Resolve:      sidecar[ResolveWikiTool],
+		Ask:          sidecar["ask"],
+		DeepResearch: sidecar["deep_research"],
+		DeleteIndex:  sidecar[DeleteWikiIndexTool],
 	}) {
 		tools[name] = tool
 	}
@@ -94,5 +93,6 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 		Egress:           spi.ParseEgressPolicy(settings.GitAllowlist),
 		Artifacts:        transport,
 		VerifiedIdentity: settings.IdentitySecret != "",
+		deleteProject:    sidecar[DeleteProjectWikisTool],
 	}
 }

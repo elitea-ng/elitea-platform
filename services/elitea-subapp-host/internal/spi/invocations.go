@@ -137,6 +137,13 @@ type Context struct {
 	manager    *Manager
 }
 
+// DetachedContext is the Context for work that is not an invocation (a
+// platform route, platform.go): it has an id for the engine's registry, its
+// progress goes nowhere, and nothing can stop it.
+func DetachedContext(id string) *Context {
+	return &Context{invocation: &Invocation{ID: id}, manager: NewManager(nil, 0, nil)}
+}
+
 // InvocationID names the invocation.
 func (c *Context) InvocationID() string { return c.invocation.ID }
 

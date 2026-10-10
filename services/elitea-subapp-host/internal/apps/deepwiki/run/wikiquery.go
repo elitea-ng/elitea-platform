@@ -35,18 +35,21 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // WikiQueryTools are the four tools of the wiki_query family, in the order
 // the legacy handler listed them.
-var WikiQueryToolNames = []string{"list_wikis", "resolve_and_ask", "resolve_and_deep_research", "delete_wiki", DeleteProjectWikisTool}
+var WikiQueryToolNames = []string{"list_wikis", "resolve_and_ask", "resolve_and_deep_research", "delete_wiki"}
 
 // ResolveWikiTool is the engine tool that decides WHICH wiki a question is
 // about. It is the one part of this family that needs a model.
@@ -68,12 +71,11 @@ type WikiQueryDeps struct {
 	Ask          Tool
 	DeepResearch Tool
 	// DeleteIndex deletes one wiki's search index in the engine
-	// (delete_wiki_index), and DeleteProjectIndex every wiki of the
-	// invocation's project (delete_project_wikis). Nil when the runner has
-	// no engine (the fixture table): delete_wiki then deletes the artifacts
-	// only and says nothing of an index, and delete_project_wikis refuses.
-	DeleteIndex        Tool
-	DeleteProjectIndex Tool
+	// (delete_wiki_index). Nil when the runner has no engine (the fixture
+	// table): delete_wiki then deletes the artifacts only and says nothing
+	// of an index. Deleting a whole project's indexes is NOT a toolkit tool;
+	// it is the platform route (Runner.DeleteProject, spi/platform.go).
+	DeleteIndex Tool
 }
 
 // WikiQueryTools builds the family over an artifact transport and those
@@ -87,7 +89,6 @@ func WikiQueryTools(transport ArtifactClientFactory, deps WikiQueryDeps) map[str
 		"resolve_and_ask":           family.resolveAndAsk,
 		"resolve_and_deep_research": family.resolveAndDeepResearch,
 		"delete_wiki":               family.deleteWiki,
-		DeleteProjectWikisTool:      family.deleteProjectWikis,
 	}
 }
 
@@ -223,6 +224,10 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 		// delete finishes the job.
 		index := q.deleteIndex(ctx, wikiID, tc)
 		switch {
+		case index.unavailable:
+			// Nothing to clean here and the engine cannot say whether an
+			// index exists: the wiki is as absent as the bucket shows.
+			return response("message", fmt.Sprintf("Wiki '%s' not found in registry.\n- Search index: %s", wikiID, indexUnavailable)), nil
 		case index.err != nil:
 			return response("message", fmt.Sprintf(
 				"Wiki '%s' has no objects in the bucket, but removing its search index failed: %v\nRetry the delete to remove it.",
@@ -283,7 +288,9 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 			"Wiki '%s' deletion completed with errors:\n- Objects removed: %d\n- Registry updated: %s\n- Search index: removing it failed: %v\n\nRetry the delete to remove the search index.",
 			wikiID, len(deleted), yesNo(unregistered), index.err)), nil
 	}
-	if index.removed {
+	if index.unavailable {
+		message += "\n- Search index: " + indexUnavailable
+	} else if index.removed {
 		message += fmt.Sprintf("\n- Search index removed: Yes (%d rows)", index.rows)
 	} else {
 		message += "\n- Search index removed: No (the wiki had no search index)"
@@ -293,10 +300,18 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 
 // indexOutcome is what the engine said about deleting a wiki's search index.
 type indexOutcome struct {
-	removed bool // there was an index and it is gone
-	rows    int  // rows removed, the wikis row included
-	err     error
+	removed bool // any index row was removed (a wikis row or stray statistics)
+	rows    int  // rows removed, as the engine counted them
+	// unavailable is set when the engine does not serve index deletion (an
+	// older release, during a rolling deploy). It is not a failure: such an
+	// engine never created an index to delete in this release's sense.
+	unavailable bool
+	err         error
 }
+
+// indexUnavailable is the text a caller reads when the engine cannot delete
+// an index.
+const indexUnavailable = "search index cleanup unavailable on this engine version"
 
 // deleteIndex deletes one wiki's search index in the engine. A host without
 // an engine (DeleteIndex nil) reports nothing removed and no error.
@@ -308,17 +323,24 @@ func (q *wikiQuery) deleteIndex(ctx context.Context, wikiID string, tc *spi.Cont
 		return indexOutcome{err: err}
 	}
 	result, err := q.deps.DeleteIndex(ctx, map[string]any{"wiki_id": wikiID}, tc)
+	if errors.Is(err, engine.ErrUnknownTool) {
+		slog.Warn("the engine does not serve delete_wiki_index; its search index cannot be deleted by this host until the engine is upgraded", "wiki_id", wikiID)
+		return indexOutcome{unavailable: true}
+	}
 	if err != nil {
 		return indexOutcome{err: err}
 	}
 	if !Truthy(result["success"]) {
 		return indexOutcome{err: EngineError(result)}
 	}
-	return indexOutcome{removed: Truthy(result["deleted"]), rows: countRows(result["rows"])}
+	// `deleted` is the engine's word for "any row was removed", also when
+	// there was no wikis row; the counts are what it removed.
+	rows := countRows(result["rows"])
+	return indexOutcome{removed: Truthy(result["deleted"]) || rows > 0, rows: rows}
 }
 
-// countRows adds up the engine's per-table row counts, the wikis row
-// included when the wiki existed.
+// countRows adds up the engine's per-table row counts (the wikis row is one
+// of them, as "wikis").
 func countRows(value any) int {
 	total := 0
 	for _, count := range object(value) {
@@ -326,38 +348,7 @@ func countRows(value any) int {
 			total += int(n)
 		}
 	}
-	return total + 1
-}
-
-// deleteProjectWikis removes the search index of every wiki of the
-// invocation's project. It is the entry point for project deprovisioning
-// (issue #1243): elitea-main calls it with the project signed and no user.
-// It deletes the INDEX only; the project's artifacts are purged by the
-// platform's own project deletion.
-func (q *wikiQuery) deleteProjectWikis(ctx context.Context, _ map[string]any, tc *spi.Context) (map[string]any, error) {
-	if err := RequirePlatformCaller(ctx, DeleteProjectWikisTool); err != nil {
-		return nil, err
-	}
-	project, err := ProjectFromContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if q.deps.DeleteProjectIndex == nil {
-		return nil, spi.Failf(spi.KindRuntime, "this host has no search index engine, so there is no index to delete")
-	}
-	if err := tc.Thinking(ctx, "Deleting the search index of the project's wikis"); err != nil {
-		return nil, err
-	}
-	result, err := q.deps.DeleteProjectIndex(ctx, map[string]any{}, tc)
-	if err != nil {
-		return nil, err
-	}
-	if !Truthy(result["success"]) {
-		return nil, EngineError(result)
-	}
-	wikis, _ := result["wikis"].([]any)
-	return response("message", fmt.Sprintf(
-		"Project %s: removed the search index of %d wiki(s).", project, len(wikis))), nil
+	return total
 }
 
 func yesNo(value bool) string {

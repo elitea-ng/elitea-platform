@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,7 @@ func NewServer(settings Settings, app App, logger *slog.Logger, options ...Optio
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /ready", s.readiness)
 	mux.HandleFunc("GET /slots", s.slots)
+	mux.HandleFunc("POST "+DeleteProjectPath, s.deleteProject)
 	mux.HandleFunc("POST /tools/{toolkit}/{tool}/invoke", s.invoke)
 	mux.HandleFunc("GET /tools/{toolkit}/{tool}/invocations/{invocation}", s.poll)
 	mux.HandleFunc("DELETE /tools/{toolkit}/{tool}/invocations/{invocation}", s.cancel)
@@ -144,6 +146,13 @@ func (s *Server) identityGate(next http.Handler) http.Handler {
 	required := s.settings.MTLSRequired()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity := Identity{}
+		if strings.HasPrefix(r.URL.Path, internalPrefix) {
+			// The platform routes are authorised by the client certificate
+			// alone (platform.go): no identity is read, and none is required.
+			StripIdentityHeaders(r.Header)
+			next.ServeHTTP(w, r.WithContext(withIdentity(r.Context(), identity)))
+			return
+		}
 		if len(secret) > 0 {
 			switch {
 			case VerifySignature(r.Header, secret):

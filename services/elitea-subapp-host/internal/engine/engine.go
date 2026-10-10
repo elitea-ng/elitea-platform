@@ -34,6 +34,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -61,6 +62,15 @@ const (
 	// MaxExportDocumentBytes.
 	streamLineOverhead = 1 << 20
 )
+
+// ErrUnknownTool is what errors.Is finds in an error when the engine answered
+// that it does not serve the tool asked for.
+var ErrUnknownTool = errors.New("the engine does not serve this tool")
+
+type unknownToolError struct{ error }
+
+func (e unknownToolError) Unwrap() error      { return e.error }
+func (unknownToolError) Is(target error) bool { return target == ErrUnknownTool }
 
 // line is one NDJSON line of the sidecar's stream.
 type line struct {
@@ -131,7 +141,13 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		text, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return nil, spi.Failf(spi.KindRuntime, "%s refused the invocation: HTTP %d %s", c.subject(), response.StatusCode, strings.TrimSpace(string(text)))
+		refusal := fmt.Errorf("%s refused the invocation: HTTP %d %s", c.subject(), response.StatusCode, strings.TrimSpace(string(text)))
+		if response.StatusCode == http.StatusBadRequest && strings.Contains(string(text), "Unknown tool") {
+			// An engine of an older release does not serve this tool (a
+			// rolling deploy: the host is newer than the engine).
+			refusal = unknownToolError{refusal}
+		}
+		return nil, spi.NewFailure(spi.KindRuntime, refusal)
 	}
 
 	// The stop watcher: the host's checkpoint is the only place a stop is
@@ -182,7 +198,11 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 				return nil, err
 			}
 		case next.Error != nil:
-			return nil, spi.Failf(KindOf(next.Error.ErrorType), "%s", next.Error.Message)
+			failure := fmt.Errorf("%s", next.Error.Message)
+			if next.Error.ErrorType == "KeyError" && strings.HasPrefix(next.Error.Message, "Unknown tool:") {
+				failure = unknownToolError{failure}
+			}
+			return nil, spi.NewFailure(KindOf(next.Error.ErrorType), failure)
 		case next.Result != nil:
 			return next.Result, nil
 		}

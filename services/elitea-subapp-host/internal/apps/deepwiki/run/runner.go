@@ -2,6 +2,8 @@ package run
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,7 +33,56 @@ type Runner struct {
 	// identity signature (an identity secret is configured). It decides
 	// where the index project comes from: see project.go.
 	VerifiedIdentity bool
+
+	// deleteProject is the engine's delete_project_wikis, reachable only
+	// through DeleteProject (the platform route), never as a toolkit tool.
+	// Nil for a runner with no engine.
+	deleteProject Tool
 }
+
+// DeleteProject removes the search index of every wiki of one project in the
+// engine. It is the platform route's operation (spi.PlatformOps), called
+// for elitea-main's project deprovisioning after the route authorised the
+// caller by its mTLS client certificate. It deletes the INDEX only; the
+// project's artifacts are purged by the platform's own project deletion.
+//
+// The project comes from the route's body and is stamped on the engine call
+// exactly as an invocation's is; there is no user and no identity here.
+func (r *Runner) DeleteProject(ctx context.Context, projectID string) (map[string]any, error) {
+	if r.deleteProject == nil {
+		return nil, spi.Failf(spi.KindRuntime, "this host has no search index engine, so there is no index to delete")
+	}
+	project, ok := validProject(projectID)
+	if !ok {
+		return nil, spi.Failf(spi.KindValue, "%q is not a project id", projectID)
+	}
+	ctx = withProject(ctx, projectResolution{id: project})
+	stamped, err := StampProject(ctx, DeleteProjectWikisTool, map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var id [8]byte
+	_, _ = rand.Read(id[:])
+	tc := spi.DetachedContext("platform-delete-project-" + hex.EncodeToString(id[:]))
+	result, err := r.deleteProject(ctx, stamped, tc)
+	if err != nil {
+		return nil, err
+	}
+	if !Truthy(result["success"]) {
+		return nil, EngineError(result)
+	}
+	wikis, _ := result["wikis"].([]any)
+	return map[string]any{
+		"project_id":  project,
+		"wikis":       len(wikis),
+		"wiki_ids":    wikis,
+		"rows":        result["rows"],
+		"builds":      result["builds"],
+		"live_builds": result["live_builds"],
+	}, nil
+}
+
+var _ spi.PlatformOps = (*Runner)(nil)
 
 // Name is the runner's name as /health reports it.
 func (r *Runner) Name() string {
@@ -70,7 +121,6 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 	// — is stamped with the same project, and none can name another.
 	project, projectErr := TrustedProject(call.Identity, r.VerifiedIdentity, params)
 	ctx = withProject(ctx, projectResolution{id: project, err: projectErr})
-	ctx = withCaller(ctx, caller{verified: r.VerifiedIdentity, userID: call.Identity.UserID})
 
 	// Reader-selected wiki pages, resolved into the question BEFORE the
 	// argument set is derived — see contextpaths.go for why it happens here
