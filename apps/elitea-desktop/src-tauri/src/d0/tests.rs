@@ -791,13 +791,13 @@ async fn a_workspace_with_a_running_turn_cannot_be_removed() {
     .await;
     let running = h.host.start(request(&h.workspace_id)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let refused = h.host.remove_workspace(&h.workspace_id).unwrap_err();
+    let refused = h.host.remove_workspace(&h.workspace_id).await.unwrap_err();
     assert_eq!(refused.code, "workspace_busy");
 
     h.host.cancel(&running.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
     until_done_of(&h.emitter, &running.turn_id).await;
-    h.host.remove_workspace(&h.workspace_id).unwrap();
+    h.host.remove_workspace(&h.workspace_id).await.unwrap();
     // Its turns are gone from the host, and a new turn finds no workspace.
     assert_eq!(
         h.host.changes(&running.turn_id).unwrap_err().code,
@@ -1259,7 +1259,7 @@ async fn a_workspace_removed_or_rebound_while_a_turn_prepares_is_not_used() {
         if rebind {
             h.host.bind_project(&h.workspace_id, 2).unwrap();
         } else {
-            h.host.remove_workspace(&h.workspace_id).unwrap();
+            h.host.remove_workspace(&h.workspace_id).await.unwrap();
         }
         hold.store(false, Ordering::SeqCst);
         let error = starting.await.unwrap().unwrap_err();
@@ -1521,7 +1521,7 @@ async fn removing_a_workspace_forgets_its_threads() {
             .len(),
         1
     );
-    h.host.remove_workspace(&h.workspace_id).unwrap();
+    h.host.remove_workspace(&h.workspace_id).await.unwrap();
     assert!(
         h.host
             .thread_history(&h.workspace_id, "42")
@@ -1761,19 +1761,9 @@ async fn built_index(h: &Harness) {
         "class Users:\n    def create(self):\n        return 1\n",
     )
     .unwrap();
-    let index = h.index.clone();
-    let id = h.workspace_id.clone();
-    tokio::task::spawn_blocking(move || index.enable(&id))
-        .await
-        .unwrap()
-        .unwrap();
+    h.index.enable(&h.workspace_id).await.unwrap();
     for _ in 0..500 {
-        let index = h.index.clone();
-        let id = h.workspace_id.clone();
-        let status = tokio::task::spawn_blocking(move || index.status(&id))
-            .await
-            .unwrap()
-            .unwrap();
+        let status = h.index.status(&h.workspace_id).await.unwrap();
         if status.state == elitea_local_index::service::IndexState::Ready {
             return;
         }
@@ -1874,12 +1864,26 @@ async fn a_turns_changes_mark_the_index_stale_and_removal_deletes_it() {
     // The turn writes notes.txt.
     h.host.start(request(&h.workspace_id)).await.unwrap();
     until_done(&h.emitter).await;
-    let status = h.index.status(&h.workspace_id).unwrap();
+    let status = h.index.status(&h.workspace_id).await.unwrap();
     assert_eq!(status.state, elitea_local_index::service::IndexState::Stale);
     assert_eq!(status.changed_files, 1);
+    // A few seconds after the turn, the index refreshes itself.
+    let mut refreshed = status;
+    for _ in 0..1000 {
+        refreshed = h.index.status(&h.workspace_id).await.unwrap();
+        if refreshed.state == elitea_local_index::service::IndexState::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        (refreshed.state, refreshed.changed_files),
+        (elitea_local_index::service::IndexState::Ready, 0),
+        "the turn's changes were indexed"
+    );
 
     let dir = h.index.index_dir(&h.workspace_id);
     assert!(dir.join("index.sqlite").is_file());
-    h.host.remove_workspace(&h.workspace_id).unwrap();
+    h.host.remove_workspace(&h.workspace_id).await.unwrap();
     assert!(!dir.exists(), "the index went with the workspace's data");
 }

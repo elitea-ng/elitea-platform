@@ -16,6 +16,17 @@
 //!
 //! Nothing here talks to the network: the index is code structure parsed
 //! locally.
+//!
+//! **What the desktop host links through this crate.** `elitea-inventory-core`,
+//! `elitea-engine-core` and `elitea-code-parsers` (the parsers, the
+//! Python-compatible text, the progress context). The host must never build
+//! `serde_json` with `preserve_order` (ADR-0029 decision 2), and none of them
+//! turns it on in its normal dependencies any more: engine-core and
+//! code-parsers keep it (and `float_roundtrip`) in their dev-dependencies,
+//! each engine binary turns it on in its own manifest, and CI checks the
+//! resolved features with `cargo tree` (`ci-deepwiki-engine.yml`, "Engine
+//! core and code parsers — normal build without `preserve_order`"). This crate
+//! takes `serde_json` with default features only.
 #![cfg_attr(
     not(test),
     deny(

@@ -113,6 +113,16 @@ describe('WorkspacesPage', () => {
     await waitFor(() => expect(within(rows[1] as HTMLElement).getByTestId('index-status-chip')).toHaveTextContent('Off'));
   });
 
+  it('never opens or refreshes an index from the list (every row reads its status only)', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER, { ...FOLDER, id: 'w2', name: 'notes' }] });
+    const indexIpc = createFakeIndexIpc({ statuses: { w1: { state: 'stale', entities: 42 }, w2: { state: 'stale', entities: 7 } } });
+    mount(ipc, '/workspaces', indexIpc);
+    const rows = await screen.findAllByTestId('workspace-row');
+    await waitFor(() => expect(within(rows[1] as HTMLElement).getByTestId('index-status-chip')).toHaveTextContent('Stale'));
+    expect(indexIpc.calls.opened).toEqual([]);
+    expect(indexIpc.calls.refreshes).toEqual([]);
+  });
+
   it('binds a project to a folder through the project picker', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
     const user = userEvent.setup();
@@ -195,9 +205,12 @@ describe('WorkspaceSessionPage', () => {
 
   it('shows the folder\'s code index in the header', async () => {
     serveProject();
-    mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1', createFakeIndexIpc({ statuses: { w1: { state: 'stale' } } }));
+    const indexIpc = createFakeIndexIpc({ statuses: { w1: { state: 'stale' } } });
+    mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1', indexIpc);
     const session = await screen.findByTestId('workspace-session');
-    await waitFor(() => expect(within(session).getByTestId('index-status-chip')).toHaveTextContent('Stale'));
+    // The session page opens the index, which checks the folder.
+    await waitFor(() => expect(within(session).getByTestId('index-status-chip')).toHaveTextContent('Building…'));
+    expect(indexIpc.calls.opened).toEqual(['w1']);
   });
 
   it('asks to bind a project first when the folder has none', async () => {

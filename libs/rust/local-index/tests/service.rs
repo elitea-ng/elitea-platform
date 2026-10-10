@@ -89,6 +89,8 @@ async fn a_build_then_an_incremental_refresh_reads_only_what_changed() {
         .unwrap()
         .iter()
         .map(|e| e.phase)
+        // Another test's refresh may hold the turn first.
+        .filter(|phase| *phase != "queued")
         .collect();
     assert_eq!(phases.first(), Some(&"listing"));
     assert_eq!(phases.last(), Some(&"ready"));
@@ -179,13 +181,337 @@ async fn a_cancelled_refresh_keeps_the_previous_build() {
     assert_eq!(status.entities, built.entities);
     let last = opened.events.0.lock().unwrap().last().unwrap().clone();
     assert_eq!(last.phase, "cancelled");
+    // Recorded as cancelled, not as a failure: the source still reads as
+    // its last completed build.
     let report = service
         .store()
         .status_document(GraphKey::LOCAL)
         .await
         .unwrap();
-    assert_eq!(report["sources"]["workspace"]["error_message"], "cancelled");
+    assert_eq!(report["sources"]["workspace"]["status"], "completed");
+    assert!(report["sources"]["workspace"]["error_message"].is_null());
     assert!(!service.cancel(), "nothing runs now");
+}
+
+/// A cancelled refresh goes back to where the index was (here: stale, not
+/// checked since it opened), never to `ready`; it is recorded in the runs
+/// as cancelled and never as the source's error, so the last build's time
+/// survives a restart.
+#[tokio::test]
+async fn a_cancelled_refresh_restores_the_state_and_keeps_the_last_run() {
+    let folder = tempfile::tempdir().unwrap();
+    fixture(folder.path());
+    let data = tempfile::tempdir().unwrap();
+    let dir = data.path().join("index");
+    let first = IndexService::open("ws", folder.path(), &[], &dir, Arc::new(NoEvents)).unwrap();
+    let built = first.refresh(false).await.unwrap();
+    let last_run = built.last_run.clone().unwrap();
+    first.close();
+
+    let again = IndexService::open("ws", folder.path(), &[], &dir, Arc::new(NoEvents)).unwrap();
+    assert_eq!(again.status().state, IndexState::Stale);
+    assert_eq!(again.status().last_run.as_deref(), Some(last_run.as_str()));
+    again.start_refresh(false).unwrap();
+    assert!(again.cancel());
+    for _ in 0..500 {
+        if !again.is_building() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let status = again.status();
+    assert_eq!(
+        status.state,
+        IndexState::Stale,
+        "not checked yet: still stale"
+    );
+    assert_eq!(status.last_run.as_deref(), Some(last_run.as_str()));
+    let runs = again.store().runs(GraphKey::LOCAL).unwrap();
+    let statuses: Vec<&str> = runs.iter().map(|run| run.status.as_str()).collect();
+    assert!(
+        statuses == ["completed", "cancelled"] || statuses == ["completed"],
+        "{statuses:?}"
+    );
+    assert!(runs.iter().all(|run| run.status != "error"), "{runs:?}");
+    again.close();
+
+    let reopened = IndexService::open("ws", folder.path(), &[], &dir, Arc::new(NoEvents)).unwrap();
+    assert_eq!(
+        reopened.status().last_run.as_deref(),
+        Some(last_run.as_str()),
+        "the last build's time survives the cancel and a restart"
+    );
+    let report = reopened
+        .store()
+        .status_document(GraphKey::LOCAL)
+        .await
+        .unwrap();
+    assert_eq!(report["sources"]["workspace"]["status"], "completed");
+}
+
+/// A build is served only under the policy it was made with: reopened with
+/// a `path_deny` that now hides a file, the old build is not loaded, the
+/// tools answer nothing from it, and a refresh rebuilds without that file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_from_another_policy_is_never_served() {
+    let folder = tempfile::tempdir().unwrap();
+    fixture(folder.path());
+    let data = tempfile::tempdir().unwrap();
+    let dir = data.path().join("index");
+    let first = IndexService::open("ws", folder.path(), &[], &dir, Arc::new(NoEvents)).unwrap();
+    first.refresh(false).await.unwrap();
+    assert_eq!(
+        first.store().policy().unwrap().as_deref(),
+        Some(first.policy())
+    );
+    first.close();
+
+    let deny = vec!["pkg/store.py".to_owned()];
+    let again = IndexService::open("ws", folder.path(), &deny, &dir, Arc::new(NoEvents)).unwrap();
+    assert_eq!(again.status().state, IndexState::StalePolicy);
+    assert_eq!(again.status().entities, 0, "the old build is not loaded");
+    assert!(again.view().is_none(), "nothing is served from it");
+    let refused = call(&again, "search_knowledge_graph", json!({"query": "Store"})).await;
+    assert_eq!(refused["code"], "index.not_ready", "{refused}");
+
+    let rebuilt = again.refresh(false).await.unwrap();
+    assert_eq!(rebuilt.state, IndexState::Ready);
+    assert_eq!(
+        again.store().policy().unwrap().as_deref(),
+        Some(again.policy())
+    );
+    let (view, _) = again.view().unwrap();
+    let names: Vec<&str> = view
+        .graph
+        .nodes()
+        .filter_map(|(_, node)| node.get("name")?.as_str())
+        .collect();
+    assert!(
+        !names
+            .iter()
+            .any(|name| *name == "Store" || *name == "store.py"),
+        "the denied file is gone: {names:?}"
+    );
+    assert!(names.contains(&"Users"), "{names:?}");
+    // The same policy, in another order: the same fingerprint.
+    assert_eq!(
+        elitea_local_index::service::policy_fingerprint(&["b".to_owned(), "a".to_owned()]),
+        elitea_local_index::service::policy_fingerprint(&[
+            "a".to_owned(),
+            "b".to_owned(),
+            "a".to_owned()
+        ])
+    );
+}
+
+/// Closed while a refresh runs (the index removed or turned off): the
+/// refresh's end changes nothing, and the tools a turn still holds answer
+/// that the index is gone.
+#[tokio::test]
+async fn a_closed_service_stays_closed_and_answers_no_tool() {
+    let opened = open();
+    let service = &opened.service;
+    service.refresh(false).await.unwrap();
+    service.start_refresh(false).unwrap();
+    service.close();
+    for _ in 0..500 {
+        if !service.is_building() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(!service.is_building());
+    assert_eq!(service.status().state, IndexState::Off);
+    assert!(service.view().is_none());
+    let answer = call(service, "search_knowledge_graph", json!({"query": "Users"})).await;
+    assert_eq!(answer["code"], "index.closed", "{answer}");
+    assert!(
+        answer["message"]
+            .as_str()
+            .unwrap()
+            .contains("removed or turned off"),
+        "{answer}"
+    );
+    assert_eq!(
+        service.refresh(false).await.unwrap_err().code,
+        "index_closed"
+    );
+    let phases: Vec<&str> = opened
+        .events
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|e| e.phase)
+        .collect();
+    assert_eq!(
+        phases.last(),
+        Some(&"ready"),
+        "nothing reported after the close: {phases:?}"
+    );
+}
+
+/// A turn's changes schedule one incremental refresh, once they stop
+/// coming for the refresh delay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changes_schedule_one_debounced_refresh() {
+    let opened = open();
+    let service = &opened.service;
+    service.refresh(false).await.unwrap();
+    service.set_refresh_delay(Some(std::time::Duration::from_millis(200)));
+    opened.events.0.lock().unwrap().clear();
+    write(
+        opened.folder.path(),
+        "pkg/extra.py",
+        "def extra():
+    pass
+",
+    );
+    service.mark_changed(1);
+    service.mark_changed(1);
+    service.mark_changed(1);
+    assert_eq!(service.status().state, IndexState::Stale);
+    assert_eq!(service.status().changed_files, 3);
+    for _ in 0..500 {
+        if service.status().state == IndexState::Ready {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let status = service.status();
+    assert_eq!(status.state, IndexState::Ready, "{status:?}");
+    assert_eq!(status.changed_files, 0);
+    assert_eq!(service.last_report().unwrap().read, 1, "incremental");
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let listings = opened
+        .events
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| e.phase == "listing")
+        .count();
+    assert_eq!(listings, 1, "one refresh for three changes");
+}
+
+/// An incremental refresh starts from the build in memory when it is the
+/// stored revision; it loads from SQLite only when the stored graph moved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_incremental_refresh_starts_from_the_build_in_memory() {
+    use elitea_inventory_core::store::{Completion, RunCounts};
+    let opened = open();
+    let service = &opened.service;
+    // Nothing in memory yet: the first refresh reads the store.
+    service.refresh(false).await.unwrap();
+    let opened_loads = service.store().loads();
+    service.refresh(false).await.unwrap();
+    write(
+        opened.folder.path(),
+        "pkg/extra.py",
+        "def extra():
+    pass
+",
+    );
+    service.refresh(false).await.unwrap();
+    assert_eq!(
+        service.store().loads(),
+        opened_loads,
+        "no reload while in step"
+    );
+    assert_eq!(service.last_report().unwrap().read, 1);
+
+    // Another writer moves the stored graph: the next refresh loads it.
+    let (view, _) = service.view().unwrap();
+    let other = elitea_local_index::sqlite_store::SqliteGraphStore::open(
+        service.store().path().parent().unwrap(),
+    )
+    .unwrap();
+    other
+        .complete_with_stats(
+            GraphKey::LOCAL,
+            &view.graph,
+            &Completion {
+                toolkit_id: "workspace",
+                source_name: "workspace",
+                documents: &std::collections::BTreeMap::default(),
+                counts: RunCounts::default(),
+                commit_sha: None,
+            },
+            &std::collections::HashMap::default(),
+            Some(service.policy()),
+        )
+        .unwrap();
+    other.close();
+    service.refresh(false).await.unwrap();
+    assert_eq!(service.store().loads(), opened_loads + 1);
+}
+
+/// At most one refresh runs at a time across workspaces: the second waits
+/// (`queued`) until the first ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refreshes_of_different_workspaces_never_overlap() {
+    let events = Arc::new(Recorded::default());
+    let mut services = Vec::new();
+    let mut guards = Vec::new();
+    for id in ["a", "b", "c"] {
+        let folder = tempfile::tempdir().unwrap();
+        for n in 0..60 {
+            write(
+                folder.path(),
+                &format!("m{n}.py"),
+                &format!(
+                    "class C{n}:
+    def m(self):
+        return C{}()
+",
+                    (n + 1) % 60
+                ),
+            );
+        }
+        let data = tempfile::tempdir().unwrap();
+        let service = IndexService::open(
+            id,
+            folder.path(),
+            &[],
+            &data.path().join("index"),
+            events.clone(),
+        )
+        .unwrap();
+        services.push(service);
+        guards.push((folder, data));
+    }
+    for service in &services {
+        service.start_refresh(false).unwrap();
+    }
+    for _ in 0..1000 {
+        if services.iter().all(|service| !service.is_building()) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        services
+            .iter()
+            .all(|s| s.status().state == IndexState::Ready)
+    );
+    let mut running: Option<String> = None;
+    for event in events.0.lock().unwrap().iter() {
+        match event.phase {
+            "listing" => {
+                assert!(
+                    running.is_none(),
+                    "{} started while {running:?} ran",
+                    event.workspace_id
+                );
+                running = Some(event.workspace_id.clone());
+            }
+            "ready" | "cancelled" | "error" => {
+                assert_eq!(running.as_deref(), Some(event.workspace_id.as_str()));
+                running = None;
+            }
+            _ => {}
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -289,7 +615,9 @@ async fn the_tools_answer_from_the_build_and_say_when_it_may_be_stale() {
     .await;
     assert!(text(&missing).contains("not found"), "{missing}");
 
-    // A turn changed two files: answers carry the notice until a refresh.
+    // A turn changed two files: answers carry the notice until a refresh
+    // (the automatic one is off here; the test refreshes itself).
+    service.set_refresh_delay(None);
     service.mark_changed(2);
     assert_eq!(service.status().state, IndexState::Stale);
     let stale = call(service, "search_knowledge_graph", json!({"query": "Users"})).await;

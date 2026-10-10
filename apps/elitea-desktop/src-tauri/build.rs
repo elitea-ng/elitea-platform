@@ -29,6 +29,7 @@ fn main() {
             "reveal_path",
             "open_path",
             "index_status",
+            "index_open",
             "index_enable",
             "index_disable",
             "index_refresh",

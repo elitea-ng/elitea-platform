@@ -29,6 +29,7 @@
     "allow-reveal-path",
     "allow-open-path",
     "allow-index-status",
+    "allow-index-open",
     "allow-index-enable",
     "allow-index-disable",
     "allow-index-refresh",

@@ -174,7 +174,7 @@
   "desktop.doctor.status.warn": "Warning",
   "desktop.doctor.title": "Diagnostics",
   "workspace.index.cancel": "Cancel build",
-  "workspace.index.changedSince": "{{files}} files changed since; it refreshes when it is next used.",
+  "workspace.index.changedSince": "{{files}} files changed since; it refreshes a few seconds after the agent’s changes.",
   "workspace.index.chip.building": "Building…",
   "workspace.index.chip.buildingCount": "Building {{done}}/{{total}}",
   "workspace.index.chip.buildingHint": "Indexing the code structure of this folder.",
@@ -188,7 +188,7 @@
   "workspace.index.chip.ready": "Ready · {{entities}} entities",
   "workspace.index.chip.readyHint": "Agents can search this folder’s code structure.",
   "workspace.index.chip.stale": "Stale",
-  "workspace.index.chip.staleHint": "Files changed since the last build; it refreshes when it is next used.",
+  "workspace.index.chip.staleHint": "Not checked since the app started. It is checked when you open this folder, or when you refresh it.",
   "workspace.index.close": "Close",
   "workspace.index.disable": "Turn off",
   "workspace.index.embeddings.body": "Searching by meaning needs embeddings from your deployment’s models. This is not available yet.",
@@ -211,5 +211,11 @@
   "workspace.index.summary.buildingCount": "Building the index: {{done}} of {{total}} files read.",
   "workspace.index.summary.built": "{{files}} files, {{entities}} entities and {{relations}} relations.",
   "workspace.index.summary.off": "The index is off for this folder.",
-  "workspace.index.title": "Code index · {{name}}"
+  "workspace.index.title": "Code index · {{name}}",
+  "workspace.index.chip.staleChangedHint": "Files changed since the last build. It refreshes a few seconds after the agent’s changes, or when you refresh it.",
+  "workspace.index.chip.stalePolicy": "Policy changed",
+  "workspace.index.chip.stalePolicyHint": "Your organisation’s file access rules changed. Agents get the index again once it is rebuilt under them, when you open this folder.",
+  "workspace.index.notChecked": "Not checked since the app started; it is checked when you open this folder.",
+  "workspace.index.refresh": "Refresh",
+  "workspace.index.summary.stalePolicy": "Your organisation’s file access rules changed since this index was built. Agents get it again once it is rebuilt under the new rules."
 }

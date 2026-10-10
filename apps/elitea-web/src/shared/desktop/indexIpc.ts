@@ -8,7 +8,13 @@
 import type { HostInvoke } from './hostBridge';
 import { tauriListen, toWorkspaceIpcError, type ListenFn, type TauriEventInternals } from './workspaceIpc';
 
-export type IndexState = 'off' | 'building' | 'ready' | 'stale' | 'error';
+/**
+ * `stale`: files may have changed since the last build (or it was not checked
+ * since the app started). `stale_policy`: the build was made under another
+ * file access policy (`path_deny`); agents are not offered it until the
+ * rebuild under the current one finishes.
+ */
+export type IndexState = 'off' | 'building' | 'ready' | 'stale' | 'stale_policy' | 'error';
 
 export interface IndexStatus {
   state: IndexState;
@@ -26,7 +32,8 @@ export interface IndexStatus {
   error: string | null;
 }
 
-export type IndexPhase = 'listing' | 'parsing' | 'building' | 'saving' | 'ready' | 'stale' | 'cancelled' | 'error';
+/** `queued`: waiting for another folder's refresh (one runs at a time). */
+export type IndexPhase = 'queued' | 'listing' | 'parsing' | 'building' | 'saving' | 'ready' | 'stale' | 'cancelled' | 'error';
 
 export interface IndexEvent {
   workspace_id: string;
@@ -40,12 +47,15 @@ export interface IndexEvent {
 export type IndexEventHandler = (event: IndexEvent) => void;
 
 export interface IndexIpc {
+  /** Where the index is, from a small read; never opens it or starts a refresh. */
   status(workspaceId: string): Promise<IndexStatus>;
+  /** Open the index (the folder's session page is open) and check the folder for changes. */
+  open(workspaceId: string): Promise<IndexStatus>;
   /** Turn the index on and start building it. */
   enable(workspaceId: string): Promise<IndexStatus>;
   /** Stop building and stop offering the index; the build is kept. */
   disable(workspaceId: string): Promise<IndexStatus>;
-  /** Start a refresh; `full` rebuilds from nothing. */
+  /** Start a refresh (only what changed is read again); `full` rebuilds from nothing. */
   refresh(workspaceId: string, full?: boolean): Promise<IndexStatus>;
   /** Stop the running refresh; `false` when none runs. */
   cancel(workspaceId: string): Promise<boolean>;
@@ -76,6 +86,7 @@ export function createIndexIpc(hostInvoke: HostInvoke, listen: ListenFn): IndexI
     });
   return {
     status: (workspaceId) => invoke<IndexStatus>('index_status', { workspace_id: workspaceId }),
+    open: (workspaceId) => invoke<IndexStatus>('index_open', { workspace_id: workspaceId }),
     enable: (workspaceId) => invoke<IndexStatus>('index_enable', { workspace_id: workspaceId }),
     disable: (workspaceId) => invoke<IndexStatus>('index_disable', { workspace_id: workspaceId }),
     refresh: (workspaceId, full) =>

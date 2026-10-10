@@ -85,8 +85,9 @@ pub trait DoctorHooks: Send + Sync {
     /// webview, as a local sign-out does.
     fn signed_out(&self);
     /// Stop the workspace's local index and close its database (if open),
-    /// before its files are moved or deleted.
-    fn close_index(&self, workspace_id: &str);
+    /// then run `work` (the move or deletion of its files) while still
+    /// holding it: nothing opens the index again until `work` is done.
+    fn with_index_closed(&self, workspace_id: &str, work: &mut dyn FnMut());
     /// Turn the workspace's index on again and build it from nothing, after
     /// its damaged files were deleted; why not, for a person.
     ///
@@ -833,8 +834,10 @@ impl LocalDoctor {
                 ))
             }
             "index.move_aside" => {
-                self.hooks.close_index(&workspace.id);
-                Ok(match move_aside(&dir)? {
+                let mut moved = None;
+                self.hooks
+                    .with_index_closed(&workspace.id, &mut || moved = Some(move_aside(&dir)));
+                Ok(match moved.unwrap_or(Ok(None))? {
                     Some(aside) => format!(
                         "Moved to {}. Turn the index on again to build a new one.",
                         aside.display()
@@ -851,17 +854,18 @@ impl LocalDoctor {
                         dir.display()
                     )));
                 }
-                self.hooks.close_index(&workspace.id);
-                match fs::remove_dir_all(&dir) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(HostError::Storage(format!(
+                let mut deleted = None;
+                self.hooks.with_index_closed(&workspace.id, &mut || {
+                    deleted = Some(match fs::remove_dir_all(&dir) {
+                        Ok(()) => Ok(()),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                        Err(error) => Err(HostError::Storage(format!(
                             "could not delete {}: {error}",
                             dir.display()
-                        )));
-                    }
-                }
+                        ))),
+                    });
+                });
+                deleted.unwrap_or(Ok(()))?;
                 log::warn!("diagnostics: deleted the damaged index {}", dir.display());
                 Ok(match self.hooks.rebuild_index(&workspace.id) {
                     Ok(()) => format!(
@@ -1148,6 +1152,9 @@ mod tests {
         signed_out: AtomicUsize,
         /// Indexes closed, and rebuilt, through the app's paths.
         closed_indexes: Mutex<Vec<String>>,
+        /// Whether each closed index's directory was gone (moved or
+        /// deleted) before the index was released again.
+        gone_while_closed: Mutex<Vec<bool>>,
         rebuilt_indexes: Mutex<Vec<String>>,
     }
 
@@ -1173,11 +1180,17 @@ mod tests {
             self.signed_out.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn close_index(&self, workspace_id: &str) {
+        fn with_index_closed(&self, workspace_id: &str, work: &mut dyn FnMut()) {
             self.closed_indexes
                 .lock()
                 .unwrap()
                 .push(workspace_id.to_owned());
+            work();
+            let dir = self.workspaces.data_dir(workspace_id).join("index");
+            self.gone_while_closed
+                .lock()
+                .unwrap()
+                .push(fs::symlink_metadata(dir).is_err());
         }
 
         fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
@@ -1210,6 +1223,7 @@ mod tests {
             removed: Mutex::default(),
             signed_out: AtomicUsize::new(0),
             closed_indexes: Mutex::default(),
+            gone_while_closed: Mutex::default(),
             rebuilt_indexes: Mutex::default(),
         });
         let doctor = LocalDoctor {
@@ -1730,6 +1744,11 @@ mod tests {
             vec![workspace.id.clone()]
         );
         assert!(fs::symlink_metadata(&dir).is_err());
+        assert_eq!(
+            *f.hooks.gone_while_closed.lock().unwrap(),
+            vec![true],
+            "moved while the index was held closed"
+        );
         assert!(
             elsewhere.path().join("index").join(INDEX_FILE).is_file(),
             "the target is untouched"
@@ -1771,6 +1790,11 @@ mod tests {
         assert_eq!(
             *f.hooks.rebuilt_indexes.lock().unwrap(),
             vec![workspace.id.clone()]
+        );
+        assert_eq!(
+            *f.hooks.gone_while_closed.lock().unwrap(),
+            vec![true],
+            "deleted while the index was held closed"
         );
     }
 

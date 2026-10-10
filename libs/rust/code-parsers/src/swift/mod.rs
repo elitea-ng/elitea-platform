@@ -60,9 +60,13 @@ impl LanguageParser for SwiftParser {
         "swift"
     }
 
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, crate::model::ParseResult> {
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: crate::Sources<'_>,
+    ) -> BTreeMap<String, crate::model::ParseResult> {
         let grammar = tree_sitter_swift::LANGUAGE.into();
-        visit_support::parse_files(files, "swift", &grammar, visitor::visit)
+        visit_support::parse_files(files, sources, "swift", &grammar, visitor::visit)
     }
 }
 

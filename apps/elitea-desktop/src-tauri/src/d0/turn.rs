@@ -1031,7 +1031,8 @@ impl AgentHost {
             let _ = sink.finish(RunOutcome::Stopped).await;
             drop(claim);
             let changes = recorder.changes(session.workspace());
-            self.index_changed(&request.workspace_id, changes.len());
+            self.index_changed(&request.workspace_id, changes.len())
+                .await;
             tap.changes(&changes);
             events.status(Phase::Cancelled, None);
             entry.finish(
@@ -1086,7 +1087,8 @@ impl AgentHost {
         // Free before `done`: the UI may send the next turn as soon as it sees it.
         drop(claim);
         let changes = recorder.changes(session.workspace());
-        self.index_changed(&request.workspace_id, changes.len());
+        self.index_changed(&request.workspace_id, changes.len())
+            .await;
         tap.changes(&changes);
         let changed_files = changes.len();
         if let Err(error) = &committed {
@@ -1211,14 +1213,7 @@ impl AgentHost {
         // The workspace's index tools, when its index is on and built: they
         // only read, so plan mode keeps them.
         let index = match &self.deps.index {
-            Some(registry) => {
-                let registry = registry.clone();
-                let workspace_id = request.workspace_id.clone();
-                tokio::task::spawn_blocking(move || registry.for_turn(&workspace_id))
-                    .await
-                    .ok()
-                    .flatten()
-            }
+            Some(registry) => registry.for_turn(&request.workspace_id).await,
             None => None,
         };
         let mut provider = LocalToolProvider::new(workspace.session.clone());
@@ -1391,10 +1386,10 @@ impl AgentHost {
     }
 
     /// A turn changed `files` files of the workspace: its index (if open)
-    /// says it may be out of date until the next refresh.
-    fn index_changed(&self, workspace_id: &str, files: usize) {
+    /// says it may be out of date, and refreshes a few seconds later.
+    async fn index_changed(&self, workspace_id: &str, files: usize) {
         if let Some(index) = &self.deps.index {
-            index.mark_changed(workspace_id, files);
+            index.mark_changed(workspace_id, files).await;
         }
     }
 
@@ -1406,22 +1401,28 @@ impl AgentHost {
     ///
     /// `workspace_busy` while a turn (or an undo) runs in it, or the
     /// workspace list cannot be written.
-    pub fn remove_workspace(&self, workspace_id: &str) -> Result<(), TurnError> {
+    pub async fn remove_workspace(&self, workspace_id: &str) -> Result<(), TurnError> {
         // Held across the removal: no turn starts on the folder meanwhile.
         let _claim = WorkspaceClaim::take(
             &self.busy,
             workspace_id,
             "Wait for the running turn to end, or stop it, before removing this workspace.",
         )?;
-        // The index's refresh stopped and its database closed before the
-        // directory holding it is deleted.
-        if let Some(index) = &self.deps.index {
-            index.forget(workspace_id);
+        // The index's refresh stopped and its database closed, and held so
+        // until the directory holding it is deleted: nothing reopens it.
+        let workspaces = self.deps.workspaces.clone();
+        let id = workspace_id.to_owned();
+        let remove = move || {
+            workspaces
+                .remove(&id)
+                .map_err(|e| TurnError::new("storage", e.to_string()))
+        };
+        match &self.deps.index {
+            Some(index) => index.with_closed(workspace_id, remove).await??,
+            None => tokio::task::spawn_blocking(remove)
+                .await
+                .map_err(|_| TurnError::new("internal", "the removal stopped unexpectedly"))??,
         }
-        self.deps
-            .workspaces
-            .remove(workspace_id)
-            .map_err(|e| TurnError::new("storage", e.to_string()))?;
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1729,27 +1730,51 @@ impl AgentHost {
 /// its files move and turned on again (`index_enable`) after a rebuild.
 impl crate::doctor::DoctorHooks for AgentHost {
     fn remove_workspace(&self, workspace_id: &str) -> Result<(), String> {
-        Self::remove_workspace(self, workspace_id).map_err(|error| error.message)
+        drive(Self::remove_workspace(self, workspace_id))?.map_err(|error| error.message)
     }
 
     fn signed_out(&self) {
         self.forget_identity();
     }
 
-    fn close_index(&self, workspace_id: &str) {
-        if let Some(index) = &self.deps.index {
-            index.forget(workspace_id);
+    fn with_index_closed(&self, workspace_id: &str, work: &mut dyn FnMut()) {
+        match &self.deps.index {
+            Some(index) => off_the_runtime(|| index.with_closed_blocking(workspace_id, work)),
+            None => work(),
         }
     }
 
     fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
         match &self.deps.index {
-            Some(index) => index
-                .enable(workspace_id)
+            Some(index) => drive(index.enable(workspace_id))?
                 .map(|_| ())
                 .map_err(|error| error.message),
             None => Err("the local index is not available".into()),
         }
+    }
+}
+
+/// Run blocking `work` from a synchronous hook. The Doctor calls its hooks
+/// on the blocking pool; a caller on a runtime worker thread (a test) gets
+/// the thread taken off the runtime first.
+fn off_the_runtime<T>(work: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(work)
+        }
+        _ => work(),
+    }
+}
+
+/// Drive the host's async paths from a synchronous hook ([`off_the_runtime`]).
+fn drive<F: std::future::Future>(future: F) -> Result<F::Output, String> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => Ok(off_the_runtime(|| handle.block_on(future))),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|runtime| runtime.block_on(future))
+            .map_err(|error| format!("could not run the repair: {error}")),
     }
 }
 

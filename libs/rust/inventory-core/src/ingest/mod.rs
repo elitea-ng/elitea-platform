@@ -109,10 +109,72 @@ pub struct FileToRead {
     /// The document's key in its source (a repository path for git).
     pub path: String,
     pub text: String,
-    /// The document's version (a git file's: the SHA-256 of its bytes).
+    /// The version of exactly the bytes read (a git file's or a local
+    /// file's: the SHA-256 of them), as the fetch gave it.
     pub hash: String,
     pub mime: String,
     pub acl: Acl,
+    /// The bytes the source fetched, for a file a parser reads
+    /// ([`parse::language_of`]); empty for any other. The parser parses
+    /// these, never the file again ([`parse::parse_tree`]).
+    pub bytes: Vec<u8>,
+}
+
+/// What reading one new or changed document gave.
+enum Read {
+    /// Its text, the version of exactly the bytes read, and those bytes.
+    Text {
+        text: String,
+        version: String,
+        bytes: Vec<u8>,
+    },
+    Unsupported,
+    Unreadable,
+    Empty,
+}
+
+/// Fetch one document and extract its text. The version recorded is the
+/// one of the bytes read now, not the listing's: the document may have
+/// changed in between, and the next run must compare against what was
+/// parsed. The bytes come back for the parser, which never reads the
+/// document again ([`parse::parse_tree`]).
+async fn read_document<S: ContentSource>(
+    documents: &S,
+    reference: &elitea_content_source::DocumentRef,
+) -> Read {
+    let Ok(document) = documents.fetch(&reference.key).await else {
+        return Read::Unreadable;
+    };
+    let version = if document.reference.version.is_empty() {
+        reference.version.clone()
+    } else {
+        document.reference.version
+    };
+    // Extraction is CPU work (a PDF, a spreadsheet): off the runtime's
+    // threads.
+    let mime = reference.mime.clone();
+    let bytes = document.bytes;
+    let (extracted, bytes) =
+        tokio::task::spawn_blocking(move || (elitea_doc_extract::extract(&mime, &bytes), bytes))
+            .await
+            .unwrap_or_else(|join| {
+                (
+                    elitea_doc_extract::Extracted::Unreadable(format!(
+                        "extraction ended abnormally ({join})"
+                    )),
+                    Vec::new(),
+                )
+            });
+    match extracted {
+        elitea_doc_extract::Extracted::Text { text, .. } if text.is_empty() => Read::Empty,
+        elitea_doc_extract::Extracted::Text { text, .. } => Read::Text {
+            text,
+            version,
+            bytes,
+        },
+        elitea_doc_extract::Extracted::Unsupported => Read::Unsupported,
+        elitea_doc_extract::Extracted::Unreadable(_) => Read::Unreadable,
+    }
 }
 
 /// Step 4a: list the source's documents, select them as the SDK loader
@@ -170,47 +232,42 @@ pub async fn prepare<S: ContentSource>(
                     outcome.documents.insert(path.clone(), state);
                     continue;
                 }
-                let Ok(document) = documents.fetch(path).await else {
-                    outcome.skipped_unreadable += 1;
-                    continue;
-                };
-                // Extraction is CPU work (a PDF, a spreadsheet): off the
-                // runtime's threads.
-                let mime = reference.mime.clone();
-                let extracted = tokio::task::spawn_blocking(move || {
-                    elitea_doc_extract::extract(&mime, &document.bytes)
-                })
-                .await
-                .unwrap_or_else(|join| {
-                    elitea_doc_extract::Extracted::Unreadable(format!(
-                        "extraction ended abnormally ({join})"
-                    ))
-                });
-                let text = match extracted {
-                    elitea_doc_extract::Extracted::Text { text, .. } => text,
-                    elitea_doc_extract::Extracted::Unsupported => {
+                let (text, version, bytes) = match read_document(documents, reference).await {
+                    Read::Text {
+                        text,
+                        version,
+                        bytes,
+                    } => (text, version, bytes),
+                    Read::Unsupported => {
                         outcome.skipped_unsupported += 1;
                         continue;
                     }
-                    elitea_doc_extract::Extracted::Unreadable(_) => {
+                    Read::Unreadable => {
                         outcome.skipped_unreadable += 1;
                         continue;
                     }
+                    Read::Empty => {
+                        outcome.skipped_empty += 1;
+                        continue;
+                    }
                 };
-                if text.is_empty() {
-                    outcome.skipped_empty += 1;
-                    continue;
-                }
-                outcome
-                    .hashes
-                    .insert(path.clone(), reference.version.clone());
+                let state = DocumentState {
+                    version: version.clone(),
+                    ..state
+                };
+                outcome.hashes.insert(path.clone(), version.clone());
                 outcome.documents.insert(path.clone(), state);
                 to_read.push(FileToRead {
                     path: path.clone(),
                     text,
-                    hash: reference.version.clone(),
+                    hash: version,
                     mime: reference.mime.clone(),
                     acl: reference.acl.clone(),
+                    bytes: if parse::language_of(path).is_some() {
+                        bytes
+                    } else {
+                        Vec::new()
+                    },
                 });
             }
         }
@@ -230,7 +287,8 @@ pub async fn prepare<S: ContentSource>(
     Ok((outcome, to_read))
 }
 
-/// Step 4b: parse the files to read, one batch per language.
+/// Step 4b: parse the files to read, one batch per language, from the
+/// bytes [`prepare`] fetched.
 #[must_use]
 pub fn parse_files(
     source: &SourceSelection,
@@ -241,8 +299,11 @@ pub fn parse_files(
     if !to_read.is_empty() {
         context.thinking(format!("[extract] Parsing {} files", to_read.len()));
     }
-    let paths: Vec<&str> = to_read.iter().map(|file| file.path.as_str()).collect();
-    parse::parse_tree(root, &paths)
+    let files: Vec<(&str, &[u8])> = to_read
+        .iter()
+        .map(|file| (file.path.as_str(), file.bytes.as_slice()))
+        .collect();
+    parse::parse_tree(root, &files)
         .into_iter()
         .filter_map(|(path, result)| {
             let hash = &to_read.iter().find(|file| file.path == path)?.hash;
@@ -396,8 +457,9 @@ pub fn quality_pass(graph: &mut Graph) -> usize {
 /// document is in the graph are the relations added — a relation names its
 /// ends, which may be declared in a later document or an earlier run.
 ///
-/// The parsers read the documents to read from `root` by key (a tree
-/// source's key is its path under `root`).
+/// The parsers parse the bytes `documents` fetched, never the files again
+/// ([`parse::parse_tree`]); `root` is where a tree source's keys are paths
+/// under.
 ///
 /// # Errors
 ///

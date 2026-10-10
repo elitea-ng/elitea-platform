@@ -8,7 +8,7 @@ import type { IndexEvent, IndexEventHandler, IndexIpc, IndexStatus } from './ind
 import { OFF_STATUS } from './indexIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
-type FailableCommand = 'status' | 'enable' | 'disable' | 'refresh' | 'cancel' | 'remove';
+type FailableCommand = 'status' | 'open' | 'enable' | 'disable' | 'refresh' | 'cancel' | 'remove';
 
 export interface FakeIndexIpc extends IndexIpc {
   /** Deliver an event to every subscriber (and record its status). */
@@ -20,7 +20,7 @@ export interface FakeIndexIpc extends IndexIpc {
   /** Make the next call of `command` reject the way the host does. */
   failNext(command: FailableCommand, code: string, message: string): void;
   subscriberCount(): number;
-  readonly calls: { enabled: string[]; disabled: string[]; refreshes: { workspaceId: string; full: boolean }[]; cancelled: string[]; removed: string[] };
+  readonly calls: { opened: string[]; enabled: string[]; disabled: string[]; refreshes: { workspaceId: string; full: boolean }[]; cancelled: string[]; removed: string[] };
 }
 
 export interface FakeIndexOptions {
@@ -33,7 +33,7 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
   const statuses = new Map<string, IndexStatus>(Object.entries(options.statuses ?? {}).map(([id, status]) => [id, { ...OFF_STATUS, ...status }]));
   const handlers = new Set<IndexEventHandler>();
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
-  const calls: FakeIndexIpc['calls'] = { enabled: [], disabled: [], refreshes: [], cancelled: [], removed: [] };
+  const calls: FakeIndexIpc['calls'] = { opened: [], enabled: [], disabled: [], refreshes: [], cancelled: [], removed: [] };
   let policyAllowed = options.policyAllowed ?? true;
 
   const current = (id: string): IndexStatus => statuses.get(id) ?? { ...OFF_STATUS };
@@ -51,6 +51,15 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
     calls,
     status(workspaceId) {
       return gate('status') ?? Promise.resolve({ ...current(workspaceId) });
+    },
+    open(workspaceId) {
+      calls.opened.push(workspaceId);
+      const refused = gate('open');
+      if (refused !== undefined) return refused;
+      // Opening checks the folder: an index that is on starts a refresh.
+      const status = current(workspaceId);
+      if (status.state === 'stale' || status.state === 'stale_policy') statuses.set(workspaceId, { ...status, state: 'building' });
+      return Promise.resolve({ ...current(workspaceId) });
     },
     enable(workspaceId) {
       calls.enabled.push(workspaceId);

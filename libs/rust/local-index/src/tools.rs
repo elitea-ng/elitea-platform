@@ -11,12 +11,16 @@
 //! * `get_entity_content` reads the cited lines from the folder (through
 //!   the confined read), where the cloud answers with the location only;
 //! * an answer from a build that may be out of date starts with a one-line
-//!   notice ([`IndexService::view`]).
+//!   notice ([`IndexService::view`]);
+//! * once the index is removed, turned off or reopened under another policy,
+//!   the tools a turn already holds answer `index.closed`, and a build made
+//!   under another `path_deny` is never answered from (`index.not_ready`
+//!   until the rebuild commits).
 //!
 //! Every tool only reads, so each runs without an approval, in plan mode
 //! too, and calls may run concurrently.
 
-use crate::service::IndexService;
+use crate::service::{IndexService, IndexState};
 use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{HostError, ToolProvider, ToolsetRequest};
@@ -327,11 +331,21 @@ impl IndexTool {
     /// Run the tool without the agent runtime (the host's tests, a UI
     /// preview).
     pub async fn call(&self, args: Value) -> Value {
-        let Some((view, notice)) = self.service.view() else {
+        if self.service.is_closed() {
+            // Removed, turned off, or reopened under another policy since
+            // the turn was offered it: answer nothing from it.
             return failure(
-                "index.not_ready",
-                "The workspace index has not been built yet; use the file tools.",
+                "index.closed",
+                "The workspace index was removed or turned off; use the file tools.",
             );
+        }
+        let Some((view, notice)) = self.service.view() else {
+            let message = if self.service.status().state == IndexState::StalePolicy {
+                "The workspace index is being rebuilt under the current file access policy; use the file tools."
+            } else {
+                "The workspace index has not been built yet; use the file tools."
+            };
+            return failure("index.not_ready", message);
         };
         let spec = self.spec;
         let workspace = Arc::clone(self.service.workspace());

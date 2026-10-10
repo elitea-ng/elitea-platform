@@ -1,7 +1,8 @@
 /**
  * A workspace's code index settings: turn it on (the code structure, parsed
- * on this computer, free), rebuild it, cancel a running build, turn it off
- * (the build is kept), or remove it (asks first). Embeddings come later and
+ * on this computer, free), refresh it (only what changed is read) or rebuild
+ * it (everything is read again), cancel a running build, turn it off (the
+ * build is kept), or remove it (asks first). Embeddings come later and
  * show as such. When the policy turns the index off, the dialog says so
  * instead of offering controls.
  */
@@ -46,6 +47,8 @@ function summary(status: IndexStatus, progress: IndexProgress | null): string {
         : t('workspace.index.summary.buildingCount', 'Building the index: {{done}} of {{total}} files read.', { done: String(progress.done), total: String(progress.total) });
     case 'error':
       return status.error ?? t('workspace.index.chip.errorHint', 'The last build failed.');
+    case 'stale_policy':
+      return t('workspace.index.summary.stalePolicy', 'Your organisation’s file access rules changed since this index was built. Agents get it again once it is rebuilt under the new rules.');
     case 'ready':
     case 'stale':
       return t('workspace.index.summary.built', '{{files}} files, {{entities}} entities and {{relations}} relations.', {
@@ -67,7 +70,12 @@ function Details({ status, progress }: { status: IndexStatus; progress: IndexPro
       )}
       {status.state === 'stale' && status.changed_files > 0 && (
         <Typography variant="bodySmall" sx={mutedSx}>
-          {t('workspace.index.changedSince', '{{files}} files changed since; it refreshes when it is next used.', { files: String(status.changed_files) })}
+          {t('workspace.index.changedSince', '{{files}} files changed since; it refreshes a few seconds after the agent’s changes.', { files: String(status.changed_files) })}
+        </Typography>
+      )}
+      {status.state === 'stale' && status.changed_files === 0 && (
+        <Typography variant="bodySmall" sx={mutedSx}>
+          {t('workspace.index.notChecked', 'Not checked since the app started; it is checked when you open this folder.')}
         </Typography>
       )}
     </Box>
@@ -109,9 +117,14 @@ function Actions({ status, busy, run, onRemove }: { status: IndexStatus; busy: b
               {t('workspace.index.cancel', 'Cancel build')}
             </Button>
           ) : (
-            <Button variant="contained" disabled={busy} onClick={() => run('rebuild')}>
-              {t('workspace.index.rebuild', 'Rebuild')}
-            </Button>
+            <>
+              <Button disabled={busy} onClick={() => run('rebuild')}>
+                {t('workspace.index.rebuild', 'Rebuild')}
+              </Button>
+              <Button variant="contained" disabled={busy} onClick={() => run('refresh')}>
+                {t('workspace.index.refresh', 'Refresh')}
+              </Button>
+            </>
           )}
         </>
       )}

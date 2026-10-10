@@ -41,13 +41,20 @@ similar = { version = "2", default-features = false, features = ["text"] }
 shlex = "2"
 # The D0 local agent turn (ADR-0029, src/d0): the shared runtime's host
 # interface and instruction authority, the local tool family, and the /llm
-# caller contract. Deliberately NOT model-client, adk-gateway, engine-core or
-# any other crate that turns on serde_json `preserve_order` (decision 2; the
-# `serde_json_preserve_order_is_off` test asserts it).
+# caller contract. Nothing linked here may turn on serde_json
+# `preserve_order` (decision 2; the `serde_json_preserve_order_is_off` test
+# asserts it), so model-client, adk-gateway and the other crates that do are
+# left out. engine-core and code-parsers ARE linked, through local-index
+# below: that is safe because they no longer turn `preserve_order` (or
+# `float_roundtrip`) on in their normal dependencies, only in their
+# dev-dependencies and in each engine binary's own manifest. CI guards it
+# (ci-deepwiki-engine.yml, "Engine core and code parsers — normal build
+# without preserve_order": a `cargo tree` of their normal features).
 elitea-agent-runtime = { path = "../../../libs/rust/agent-runtime" }
 elitea-local-tools = { path = "../../../libs/rust/local-tools" }
 # The local workspace index (decision 7): the folder source, its owner-only
-# SQLite store and the index tools. Order-free like everything above.
+# SQLite store and the index tools. It brings engine-core, code-parsers and
+# inventory-core, all order-free in their normal builds (see above).
 elitea-local-index = { path = "../../../libs/rust/local-index" }
 elitea-llm-wire = { path = "../../../libs/rust/llm-wire" }
 # Tilde, like the runtime: adk breaks its API between minors. adk-agent and

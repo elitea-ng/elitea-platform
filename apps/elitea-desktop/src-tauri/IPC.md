@@ -374,7 +374,7 @@ sent anywhere: there are no embeddings yet.
 
 ```ts
 type IndexStatus = {
-  state: "off" | "building" | "ready" | "stale" | "error";
+  state: "off" | "building" | "ready" | "stale" | "stale_policy" | "error";
   files: number;          // documents of the last build
   entities: number;
   relations: number;
@@ -385,21 +385,45 @@ type IndexStatus = {
 };
 ```
 
-`off`: not turned on (or turned off). `building`: a refresh runs (the
-previous build, if any, still answers). `ready`: built, nothing known to
-have changed. `stale`: built, but turns changed files since, or the folder
-has not been checked since the app started (a refresh starts on its own
-when the index is first used after a launch). `error`: the last refresh
-failed; the previous build, if any, still answers.
+`off`: not turned on (or turned off). `building`: a refresh runs or waits
+its turn (the previous build, if any, still answers). `ready`: built,
+nothing known to have changed. `stale`: built, but turns changed files
+since (an incremental refresh starts on its own about 3 s after the turn
+that changed them, once changes stop), or the folder has not been checked
+since the app started (it is when the index opens: below).
+`stale_policy`: the build on disk was made under another file access
+policy (`local_work.path_deny` changed): it is never loaded or answered
+from, turns are offered no index tools, and the index is rebuilt from
+nothing when it next opens; the fingerprint of the policy a build was made
+under is committed with it. `error`: the last refresh failed; the previous
+build, if any, still answers. A cancelled refresh goes back to the state it
+started from and is recorded as cancelled, not as an error, so `last_run`
+stays the last completed build's.
+
+**Opened lazily.** `index_status` never opens an index or starts a refresh:
+until the index is open it answers from a small read of its file (`stale`
+or `stale_policy` with the last build's counts, or `off`). An index opens,
+and checks the folder for what changed while it was closed, on
+`index_open` (the folder's session page), on a turn in the folder, or on
+`index_enable` / `index_refresh`. Refreshes run one at a time across every
+folder; a waiting one reports `queued`.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `index_status` | `{workspace_id}` | `IndexStatus` |
+| `index_status` | `{workspace_id}` | `IndexStatus` — never opens the index (above). |
+| `index_open` | `{workspace_id}` | `IndexStatus` — opens the index (if on) and starts checking the folder; `off` when not turned on. |
 | `index_enable` | `{workspace_id}` | `IndexStatus` — turns the index on and starts building it (incrementally, over what an earlier build kept). |
 | `index_disable` | `{workspace_id}` | `IndexStatus` (`off`) — stops a running refresh and stops offering the index; the build is kept for when it is turned on again. Allowed whatever the policy. |
 | `index_refresh` | `{workspace_id, full?: boolean}` | `IndexStatus` — starts a refresh: only files whose size or mtime changed are read again; `full` rebuilds from nothing. Rejects `index_off` (not turned on), `index_busy` (`full` while one runs). |
-| `index_cancel` | `{workspace_id}` | `boolean` — stops the running refresh at its next checkpoint (nothing it did is kept); `false` when none runs. Never rejects. |
+| `index_cancel` | `{workspace_id}` | `boolean` — stops the running (or waiting) refresh at its next checkpoint (nothing it did is kept); `false` when none runs. Never rejects. |
 | `index_remove` | `{workspace_id, confirm: true}` | `null` — deletes the index (it can be built again). Rejects `confirmation_required` without `confirm: true`. Allowed whatever the policy. |
+
+Every command is async. Each folder's index has its own slot: turning it
+off and removing it (`index_remove`, `workspace_remove`, the Doctor's
+`index.move_aside` and `index.rebuild`) hold that slot from closing the
+index to deleting its files, so no status read or turn reopens it in
+between, and a turn that still holds the closed index's tools is answered
+`index.closed` ("The workspace index was removed or turned off").
 
 Every command also rejects `workspace_unknown`; an index that cannot be
 opened rejects `index_refused` (its directory is a symlink, another user's
@@ -561,15 +585,18 @@ Three event names, all emitted to the `main` window only: `app://command`
 ```ts
 type IndexEvent = {
   workspace_id: string;
-  phase: "listing" | "parsing" | "building" | "saving" | "ready" | "stale" | "cancelled" | "error";
+  phase: "queued" | "listing" | "parsing" | "building" | "saving" | "ready" | "stale" | "cancelled" | "error";
   message: string | null; // progress text, or why it failed
   status: IndexStatus;    // as index_status would answer now
 };
 ```
 
-A refresh reports `listing`, then `parsing` / `building` progress, then
-`saving` and `ready`, or ends `cancelled` or `error`. `stale` is sent when
-a turn's changes make a ready index out of date.
+A refresh reports `queued` while another folder's refresh runs, then
+`listing`, `parsing` / `building` progress, then `saving` and `ready`, or
+ends `cancelled` or `error`. `stale` is sent when a turn's changes make a
+ready index out of date (its refresh follows a few seconds later). A
+closed index (removed, turned off, or reopened under another policy)
+reports nothing more.
 
 `agent://event`:
 

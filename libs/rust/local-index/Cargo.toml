@@ -31,8 +31,9 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10.9"
 thiserror = "2.0.21"
-# A refresh runs on the blocking pool, on its own current-thread runtime.
-tokio = { version = "1.53.1", features = ["rt", "sync"] }
+# A refresh runs on the blocking pool, on its own current-thread runtime;
+# the refresh after a turn's changes waits out its debounce (`time`).
+tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
 
 # The owner check on the database and its sidecars (geteuid), without
 # `unsafe`.

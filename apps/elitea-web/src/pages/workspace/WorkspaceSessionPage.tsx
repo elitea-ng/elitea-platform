@@ -63,7 +63,7 @@ function SessionHeader({ session, workspace, projectId, conversationId, busy, pr
         logo={false}
         trailing={
           <>
-            <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} />
+            <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} open />
             {conversationId !== '' && <OpenInChat conversationId={conversationId} />}
             {!changesOpen && <PanelToggle count={attention} />}
           </>

@@ -1,11 +1,13 @@
 /**
  * A workspace's local index at a glance: Off / Building n/m / Ready · N
- * entities / Stale / Error. Clicking it opens the index settings.
+ * entities / Stale / Policy changed / Error. Clicking it opens the index
+ * settings.
  */
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import Chip from '@mui/material/Chip';
 import Tooltip from '@mui/material/Tooltip';
 
+import type { IndexStatus } from '@/shared/desktop/indexIpc';
 import { t } from '@/shared/i18n';
 
 import { describeIndexError } from '../model/describeIndexError';
@@ -34,6 +36,13 @@ function describeNoStatus(view: IndexView | undefined, loadError: unknown): Chip
   return { label: t('workspace.index.chip.error', 'Error'), color: 'error', hint: describeIndexError(loadError) };
 }
 
+/** When a stale index refreshes: after the agent's changes, or when the folder is opened. */
+function staleHint(status: IndexStatus): string {
+  return status.changed_files > 0
+    ? t('workspace.index.chip.staleChangedHint', 'Files changed since the last build. It refreshes a few seconds after the agent’s changes, or when you refresh it.')
+    : t('workspace.index.chip.staleHint', 'Not checked since the app started. It is checked when you open this folder, or when you refresh it.');
+}
+
 /** The label, colour and longer explanation for one view of the index. */
 function describeChip(view: IndexView | undefined, loadError: unknown, progress: IndexProgress | null): ChipLook {
   if (view?.kind !== 'status') return describeNoStatus(view, loadError);
@@ -57,10 +66,12 @@ function describeChip(view: IndexView | undefined, loadError: unknown, progress:
         hint: t('workspace.index.chip.readyHint', 'Agents can search this folder’s code structure.'),
       };
     case 'stale':
+      return { label: t('workspace.index.chip.stale', 'Stale'), color: 'warning', hint: staleHint(status) };
+    case 'stale_policy':
       return {
-        label: t('workspace.index.chip.stale', 'Stale'),
+        label: t('workspace.index.chip.stalePolicy', 'Policy changed'),
         color: 'warning',
-        hint: t('workspace.index.chip.staleHint', 'Files changed since the last build; it refreshes when it is next used.'),
+        hint: t('workspace.index.chip.stalePolicyHint', 'Your organisation’s file access rules changed. Agents get the index again once it is rebuilt under them, when you open this folder.'),
       };
     case 'error':
       return { label: t('workspace.index.chip.error', 'Error'), color: 'error', hint: status.error ?? t('workspace.index.chip.errorHint', 'The last build failed.') };

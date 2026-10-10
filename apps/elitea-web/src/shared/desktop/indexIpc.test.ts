@@ -12,6 +12,7 @@ describe('createIndexIpc', () => {
     const ipc = createIndexIpc(invoke, noListen);
 
     await ipc.status('w1');
+    await ipc.open('w1');
     await ipc.enable('w1');
     await ipc.disable('w1');
     await ipc.refresh('w1');
@@ -21,6 +22,7 @@ describe('createIndexIpc', () => {
 
     expect(invoke.mock.calls).toEqual([
       ['index_status', { workspace_id: 'w1' }],
+      ['index_open', { workspace_id: 'w1' }],
       ['index_enable', { workspace_id: 'w1' }],
       ['index_disable', { workspace_id: 'w1' }],
       ['index_refresh', { workspace_id: 'w1' }],

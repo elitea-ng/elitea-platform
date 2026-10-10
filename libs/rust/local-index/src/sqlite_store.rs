@@ -5,7 +5,8 @@
 //! that wrote it knows it and this one does not):
 //!
 //! ```sql
-//! meta      (key TEXT PRIMARY KEY, value TEXT)            -- schema_version, revision_seq, setting:*
+//! meta      (key TEXT PRIMARY KEY, value TEXT)            -- schema_version, revision_seq, setting:*,
+//!                                                           -- policy (the fingerprint of the last build's policy)
 //! graphs    (project_id, application_id, revision, attributes, metadata, schema)
 //! entities  (project_id, application_id, entity_id, ordinal UNIQUE per graph,
 //!            attributes, embedding BLOB NULL, attr_hash)
@@ -41,7 +42,9 @@
 use crate::fs;
 use elitea_content_source::Acl;
 use elitea_inventory_core::graph::Graph;
-use elitea_inventory_core::store::{Completion, GraphKey, GraphStore, Ranking, SourceStatus};
+/// The key every call of this store takes (re-exported for its callers).
+pub use elitea_inventory_core::store::GraphKey;
+use elitea_inventory_core::store::{Completion, GraphStore, Ranking, SourceStatus};
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, params};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -142,6 +145,30 @@ pub struct DocumentStat {
 /// The `(size, mtime_ns)` of each document a run hashed or kept, by key.
 pub type Stats = HashMap<String, (u64, i64)>;
 
+/// What [`SqliteGraphStore::peek`] reads of an index without loading it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Peek {
+    /// The stored settings (`setting:*` in `meta`), by name.
+    pub settings: HashMap<String, String>,
+    /// Whether a build was ever committed.
+    pub built: bool,
+    pub entities: u64,
+    pub relations: u64,
+    pub documents: u64,
+    /// When the last completed run finished ([`SqliteGraphStore::last_completed_run`]).
+    pub last_run: Option<String>,
+    /// The policy fingerprint the last build was committed under.
+    pub policy: Option<String>,
+}
+
+/// One row of the `runs` table: its status and when it finished.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunRow {
+    pub status: String,
+    pub finished_at: Option<String>,
+    pub error: Option<String>,
+}
+
 /// The right to ingest into one graph, held until dropped.
 #[derive(Debug)]
 pub struct Lease {
@@ -165,6 +192,8 @@ pub struct SqliteGraphStore {
     conn: Mutex<Option<Connection>>,
     leases: Arc<Mutex<HashSet<GraphKey>>>,
     last_commit_rows: AtomicU64,
+    /// How many times a graph was loaded from the database.
+    loads: AtomicU64,
 }
 
 fn open_connection(path: &Path) -> Result<Connection> {
@@ -233,7 +262,69 @@ impl SqliteGraphStore {
             conn: Mutex::new(Some(conn)),
             leases: Arc::default(),
             last_commit_rows: AtomicU64::new(0),
+            loads: AtomicU64::new(0),
         })
+    }
+
+    /// What an index in `dir` holds, read without loading its graph: the
+    /// small status read `index_status` answers from before (or without)
+    /// opening the index. `None` when there is no index file. The file is
+    /// opened with the same checks as [`Self::open`] and closed again.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`], or the store failed.
+    pub fn peek(dir: &Path) -> Result<Option<Peek>> {
+        match std::fs::symlink_metadata(dir.join(FILE_NAME)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+            Ok(_) => {}
+        }
+        let store = Self::open(dir)?;
+        let peeked = store.with(|conn| {
+            let key = GraphKey::LOCAL;
+            let mut settings = HashMap::new();
+            {
+                let mut statement =
+                    conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'setting:%'")?;
+                let rows = statement.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                for row in rows {
+                    let (name, value) = row?;
+                    settings.insert(name.trim_start_matches("setting:").to_owned(), value);
+                }
+            }
+            let built = conn
+                .query_row(
+                    "SELECT 1 FROM graphs WHERE project_id = ?1 AND application_id = ?2",
+                    params![key.project_id, key.application_id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            let count_of = |table: &str| -> Result<u64> {
+                let n: i64 = conn.query_row(
+                    &format!(
+                        "SELECT count(*) FROM {table} WHERE project_id = ?1 AND application_id = ?2"
+                    ),
+                    params![key.project_id, key.application_id],
+                    |row| row.get(0),
+                )?;
+                Ok(u64::try_from(n).unwrap_or(0))
+            };
+            Ok(Peek {
+                settings,
+                built,
+                entities: count_of("entities")?,
+                relations: count_of("relations")?,
+                documents: count_of("documents")?,
+                last_run: last_completed_run(conn, key)?,
+                policy: policy_of(conn)?,
+            })
+        });
+        store.close();
+        peeked.map(Some)
     }
 
     /// [`Self::open`], refusing a directory inside `workspace_root`.
@@ -265,6 +356,122 @@ impl SqliteGraphStore {
             let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
             drop(conn);
         }
+    }
+
+    /// How many times a graph was loaded from the database (the service
+    /// loads only when its in-memory build is not the stored one).
+    #[must_use]
+    pub fn loads(&self) -> u64 {
+        self.loads.load(Ordering::SeqCst)
+    }
+
+    /// The fingerprint of the policy the last build was committed under
+    /// (`None` before the first build).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn policy(&self) -> Result<Option<String>> {
+        self.with(|conn| policy_of(conn))
+    }
+
+    /// When the source's last completed run finished, from the runs: a
+    /// cancelled or failed run since does not hide it.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn last_completed_run(&self, key: GraphKey) -> Result<Option<String>> {
+        self.with(|conn| last_completed_run(conn, key))
+    }
+
+    /// Every run of the graph, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn runs(&self, key: GraphKey) -> Result<Vec<RunRow>> {
+        self.with(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT status, finished_at, error FROM runs
+                  WHERE project_id = ?1 AND application_id = ?2 ORDER BY id",
+            )?;
+            let rows = statement.query_map(params![key.project_id, key.application_id], |row| {
+                Ok(RunRow {
+                    status: row.get(0)?,
+                    finished_at: row.get(1)?,
+                    error: row.get(2)?,
+                })
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Record that the running refresh was cancelled: its run ends
+    /// `cancelled`, and the source's status goes back to what the last
+    /// completed run left (`completed`, its time and document count), so
+    /// nothing reads the cancellation as a failure or loses the last build's
+    /// time. Without a completed run the source is `cancelled`.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn cancel_run(&self, key: GraphKey, toolkit_id: &str) -> Result<()> {
+        self.with(|conn| {
+            let transaction = conn.transaction()?;
+            transaction.execute(
+                &format!(
+                    "UPDATE runs SET status = 'cancelled', finished_at = {NOW}
+                      WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id = ?3
+                        AND status = 'in_progress'"
+                ),
+                params![key.project_id, key.application_id, toolkit_id],
+            )?;
+            let completed: Option<(String, Option<String>)> = transaction
+                .query_row(
+                    "SELECT finished_at, counts FROM runs
+                      WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id = ?3
+                        AND status = 'completed'
+                      ORDER BY id DESC LIMIT 1",
+                    params![key.project_id, key.application_id, toolkit_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            match completed {
+                Some((finished_at, counts)) => {
+                    let documents = counts
+                        .as_deref()
+                        .and_then(|counts| serde_json::from_str::<Value>(counts).ok())
+                        .and_then(|counts| counts["documents"].as_i64())
+                        .unwrap_or(0);
+                    transaction.execute(
+                        "UPDATE sources SET status = 'completed', last_updated = ?4,
+                                documents_processed = ?5, error_message = NULL,
+                                progress_message = NULL
+                          WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id = ?3",
+                        params![
+                            key.project_id,
+                            key.application_id,
+                            toolkit_id,
+                            finished_at,
+                            documents
+                        ],
+                    )?;
+                }
+                None => {
+                    transaction.execute(
+                        &format!(
+                            "UPDATE sources SET status = 'cancelled', progress_message = NULL,
+                                    last_updated = {NOW}
+                              WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id = ?3"
+                        ),
+                        params![key.project_id, key.application_id, toolkit_id],
+                    )?;
+                }
+            }
+            transaction.commit()?;
+            Ok(())
+        })
     }
 
     /// How many rows the last [`GraphStore::complete`] inserted, updated or
@@ -319,7 +526,25 @@ impl SqliteGraphStore {
     ///
     /// The store failed or a row is damaged.
     pub fn load_now(&self, key: GraphKey) -> Result<Option<(Graph, i64)>> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
         self.with(|conn| load(conn, key))
+    }
+
+    /// [`GraphStore::revision`], synchronously.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn revision_now(&self, key: GraphKey) -> Result<Option<i64>> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT revision FROM graphs WHERE project_id = ?1 AND application_id = ?2",
+                    params![key.project_id, key.application_id],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        })
     }
 
     /// [`GraphStore::status_document`], synchronously.
@@ -379,7 +604,9 @@ impl SqliteGraphStore {
 
     /// [`GraphStore::complete`] that also records each document's
     /// `(size, mtime)` from `stats`, in the same transaction: the stat cache
-    /// is only ever the one the committed versions were computed with.
+    /// is only ever the one the committed versions were computed with. With
+    /// `policy`, the fingerprint of the policy the build was made under is
+    /// recorded in the same transaction too ([`Self::policy`]).
     ///
     /// # Errors
     ///
@@ -390,11 +617,17 @@ impl SqliteGraphStore {
         graph: &Graph,
         completion: &Completion<'_>,
         stats: &Stats,
+        policy: Option<&str>,
     ) -> Result<i64> {
         let entities = entity_rows(graph)?;
         let relations = relation_rows(graph)?;
-        let (revision, rows) =
-            self.with(|conn| commit(conn, key, graph, &entities, &relations, completion, stats))?;
+        let written = Written {
+            entities: &entities,
+            relations: &relations,
+            stats,
+            policy,
+        };
+        let (revision, rows) = self.with(|conn| commit(conn, key, graph, completion, &written))?;
         self.last_commit_rows.store(rows, Ordering::SeqCst);
         Ok(revision)
     }
@@ -793,18 +1026,48 @@ fn write_documents(
     Ok(written)
 }
 
+/// The rows a commit writes beside the graph's head.
+struct Written<'a> {
+    entities: &'a [EntityRow],
+    relations: &'a [RelationRow],
+    stats: &'a Stats,
+    policy: Option<&'a str>,
+}
+
+fn policy_of(conn: &Connection) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT value FROM meta WHERE key = 'policy'", [], |row| {
+            row.get(0)
+        })
+        .optional()?)
+}
+
+fn last_completed_run(conn: &Connection, key: GraphKey) -> Result<Option<String>> {
+    Ok(conn.query_row(
+        "SELECT max(finished_at) FROM runs
+          WHERE project_id = ?1 AND application_id = ?2 AND status = 'completed'",
+        params![key.project_id, key.application_id],
+        |row| row.get(0),
+    )?)
+}
+
 fn commit(
     conn: &mut Connection,
     key: GraphKey,
     graph: &Graph,
-    entities: &[EntityRow],
-    relations: &[RelationRow],
     completion: &Completion<'_>,
-    stats: &Stats,
+    rows: &Written<'_>,
 ) -> Result<(i64, u64)> {
     let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let mut written = write_entities(&transaction, key, entities)?;
-    written += write_relations(&transaction, key, relations)?;
+    let mut written = write_entities(&transaction, key, rows.entities)?;
+    written += write_relations(&transaction, key, rows.relations)?;
+    if let Some(policy) = rows.policy {
+        written += count(transaction.execute(
+            "INSERT INTO meta (key, value) VALUES ('policy', ?1)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            [policy],
+        )?);
+    }
     let revision = next_revision(&transaction)?;
     let schema = graph.schema.as_ref().map(to_text).transpose()?;
     written += count(transaction.execute(
@@ -822,7 +1085,7 @@ fn commit(
             schema
         ],
     )?);
-    written += write_documents(&transaction, key, completion, stats)?;
+    written += write_documents(&transaction, key, completion, rows.stats)?;
     written += count(transaction.execute(
         &format!(
             "UPDATE sources
@@ -1039,15 +1302,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     async fn revision(&self, key: GraphKey) -> Result<Option<i64>> {
-        self.with(|conn| {
-            Ok(conn
-                .query_row(
-                    "SELECT revision FROM graphs WHERE project_id = ?1 AND application_id = ?2",
-                    params![key.project_id, key.application_id],
-                    |row| row.get(0),
-                )
-                .optional()?)
-        })
+        self.revision_now(key)
     }
 
     async fn document_versions(
@@ -1161,7 +1416,7 @@ impl GraphStore for SqliteGraphStore {
         graph: &Graph,
         completion: &Completion<'_>,
     ) -> Result<i64> {
-        self.complete_with_stats(key, graph, completion, &Stats::new())
+        self.complete_with_stats(key, graph, completion, &Stats::new(), None)
     }
 
     async fn status_document(&self, key: GraphKey) -> Result<Value> {

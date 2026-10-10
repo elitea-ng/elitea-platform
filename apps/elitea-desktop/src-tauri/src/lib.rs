@@ -271,6 +271,7 @@ pub fn run() {
             local_commands::reveal_path,
             local_commands::open_path,
             index::index_status,
+            index::index_open,
             index::index_enable,
             index::index_disable,
             index::index_refresh,

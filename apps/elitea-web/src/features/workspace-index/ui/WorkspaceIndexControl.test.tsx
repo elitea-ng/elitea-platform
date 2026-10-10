@@ -17,12 +17,12 @@ import { WorkspaceIndexControl } from './WorkspaceIndexControl';
 
 const READY: Partial<IndexStatus> = { state: 'ready', files: 120, entities: 12_400, relations: 3_000, last_run: '2026-10-10T08:00:00Z' };
 
-function mount(ipc: FakeIndexIpc): void {
+function mount(ipc: FakeIndexIpc, open = false): void {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   renderWithTheme(
     <QueryClientProvider client={client}>
       <IndexIpcProvider ipc={ipc}>
-        <WorkspaceIndexControl workspaceId="w1" name="app" />
+        <WorkspaceIndexControl workspaceId="w1" name="app" open={open} />
       </IndexIpcProvider>
     </QueryClientProvider>,
   );
@@ -40,6 +40,7 @@ describe('IndexStatusChip states', () => {
     [{ state: 'off' }, 'Off'],
     [READY, /Ready · 12(\.4)?K entities/],
     [{ ...READY, state: 'stale', changed_files: 3 }, 'Stale'],
+    [{ ...READY, state: 'stale_policy' }, 'Policy changed'],
     [{ state: 'error', error: 'disk full' }, 'Error'],
     [{ state: 'building' }, 'Building…'],
   ] satisfies [Partial<IndexStatus>, string | RegExp][])('shows %o as %s', async (status, label) => {
@@ -62,6 +63,30 @@ describe('IndexStatusChip states', () => {
     expect(chip()).toHaveTextContent('Building 10/40');
     act(() => ipc.emit({ workspace_id: 'w1', phase: 'ready', message: null, status: { ...OFF_STATUS, ...READY } }));
     expect(chip()).toHaveTextContent(/Ready · 12(\.4)?K entities/);
+  });
+
+  it('says when a stale index refreshes: after the agent\'s changes, or when the folder is opened', async () => {
+    const user = userEvent.setup();
+    mount(createFakeIndexIpc({ statuses: { w1: { ...READY, state: 'stale', changed_files: 3 } } }));
+    await waitFor(() => expect(chip()).toHaveTextContent('Stale'));
+    await user.hover(chip());
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('refreshes a few seconds after the agent’s changes');
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent('when it is next used');
+  });
+
+  it('only reads the status on a row, and opens the index on the session page', async () => {
+    const listed = createFakeIndexIpc({ statuses: { w1: { ...READY, state: 'stale' } } });
+    mount(listed);
+    await waitFor(() => expect(chip()).toHaveTextContent('Stale'));
+    expect(listed.calls.opened).toEqual([]);
+    expect(listed.calls.refreshes).toEqual([]);
+  });
+
+  it('opens the index when asked to (the session page), which checks the folder', async () => {
+    const opened = createFakeIndexIpc({ statuses: { w1: { ...READY, state: 'stale' } } });
+    mount(opened, true);
+    await waitFor(() => expect(chip()).toHaveTextContent('Building…'));
+    expect(opened.calls.opened).toEqual(['w1']);
   });
 
   it('shows Off, and why, when the policy turns the index off', async () => {
@@ -92,6 +117,17 @@ describe('IndexSettingsDialog flows', () => {
     expect(ipc.calls.cancelled).toEqual(['w1']);
     // The fake leaves an index that never finished a build in `error`; the re-read shows it.
     await waitFor(() => expect(chip()).toHaveTextContent('Error'));
+  });
+
+  it('refreshes a built index incrementally, next to the full rebuild', async () => {
+    const ipc = createFakeIndexIpc({ statuses: { w1: { ...READY, state: 'stale', changed_files: 2 } } });
+    const user = userEvent.setup();
+    mount(ipc);
+    const dialog = await openDialog(user);
+    expect(within(dialog).getByRole('button', { name: 'Rebuild' })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Refresh' }));
+    expect(ipc.calls.refreshes).toEqual([{ workspaceId: 'w1', full: false }]);
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel build' })).toBeInTheDocument());
   });
 
   it('rebuilds and turns off a built index', async () => {

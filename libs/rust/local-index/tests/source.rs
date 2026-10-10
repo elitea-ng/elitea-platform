@@ -219,6 +219,7 @@ async fn a_folder_builds_into_the_store_and_refreshes_incrementally() {
                 commit_sha: None,
             },
             &source.stats(),
+            None,
         )
         .unwrap();
 
@@ -263,4 +264,127 @@ fn context() -> (
             elitea_engine_core::stream::StopSignal::default(),
         ),
     )
+}
+
+/// The folder source, with something done to the folder just before or
+/// just after each fetch: a file changed between the listing and the read,
+/// or swapped between the read and the parse.
+struct Hooked {
+    inner: LocalFolderSource,
+    before_fetch: Box<dyn Fn(&str) + Send + Sync>,
+    after_fetch: Box<dyn Fn(&str) + Send + Sync>,
+}
+
+impl Hooked {
+    fn new(root: &Path) -> Self {
+        Self {
+            inner: LocalFolderSource::new(workspace(root, &[])).selecting(Selection::default()),
+            before_fetch: Box::new(|_| {}),
+            after_fetch: Box::new(|_| {}),
+        }
+    }
+}
+
+impl elitea_content_source::ContentSource for Hooked {
+    async fn list(
+        &self,
+    ) -> Result<Vec<elitea_content_source::DocumentRef>, elitea_content_source::SourceError> {
+        self.inner.list_now()
+    }
+
+    async fn fetch(
+        &self,
+        key: &str,
+    ) -> Result<elitea_content_source::Document, elitea_content_source::SourceError> {
+        (self.before_fetch)(key);
+        let document = self.inner.fetch_now(key);
+        (self.after_fetch)(key);
+        document
+    }
+}
+
+async fn ingest_hooked(
+    source: &Hooked,
+    root: &Path,
+) -> (
+    elitea_inventory_core::graph::Graph,
+    elitea_inventory_core::ingest::Outcome,
+    Vec<String>,
+) {
+    use elitea_inventory_core::ingest::{SourceSelection, ingest_documents};
+    let (_lines, context) = context();
+    let mut graph = elitea_inventory_core::graph::Graph::new();
+    let outcome = ingest_documents(
+        &mut graph,
+        &SourceSelection::all("workspace"),
+        source,
+        root,
+        &std::collections::BTreeMap::default(),
+        &context,
+    )
+    .await
+    .unwrap();
+    let names = graph
+        .nodes()
+        .filter_map(|(_, node)| node.get("name")?.as_str().map(str::to_owned))
+        .collect();
+    (graph, outcome, names)
+}
+
+/// Plan risk 7: the parser parses the bytes the confined read returned. A
+/// file replaced by a symlink to a file outside the folder after it was
+/// read is not read through the link; before, the parser opened
+/// `root/path` again and indexed the outside file's symbols.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_parser_parses_the_bytes_read_never_the_path_again() {
+    use elitea_content_source::content_version;
+
+    let folder = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let root = folder.path().to_owned();
+    write(&root, "app.py", "class Mine:\n    pass\n");
+    write(outside.path(), "secret.py", "class Secret:\n    pass\n");
+    let secret = outside.path().join("secret.py");
+    let swapped = root.clone();
+    let mut source = Hooked::new(&root);
+    source.after_fetch = Box::new(move |key| {
+        let path = swapped.join(key);
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&secret, &path).unwrap();
+    });
+    let (_, outcome, names) = ingest_hooked(&source, &root).await;
+    assert!(names.iter().any(|n| n == "Mine"), "{names:?}");
+    assert!(
+        !names.iter().any(|n| n == "Secret"),
+        "read through a symlink: {names:?}"
+    );
+    assert_eq!(
+        outcome.hashes["app.py"],
+        content_version(b"class Mine:\n    pass\n")
+    );
+}
+
+/// The version recorded is the hash of the bytes parsed: a file that
+/// changed between the listing and the read is recorded with what was
+/// read, so the next run compares against what the graph holds.
+#[tokio::test]
+async fn the_version_recorded_is_the_one_of_the_bytes_parsed() {
+    use elitea_content_source::content_version;
+
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().to_owned();
+    write(&root, "app.py", "class Before:\n    pass\n");
+    let after = "class After:\n    pass\n";
+    let edited = root.join("app.py");
+    let mut source = Hooked::new(&root);
+    source.before_fetch = Box::new(move |_| fs::write(&edited, after).unwrap());
+    let (_, outcome, names) = ingest_hooked(&source, &root).await;
+    assert!(names.iter().any(|n| n == "After"), "{names:?}");
+    assert_eq!(outcome.hashes["app.py"], content_version(after.as_bytes()));
+    assert_eq!(
+        outcome.documents["app.py"].version,
+        content_version(after.as_bytes()),
+        "not the listing's version of the old bytes"
+    );
 }

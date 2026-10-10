@@ -120,6 +120,7 @@ async fn commit(store: &SqliteGraphStore, graph: &Graph, documents: usize) -> i6
                 commit_sha: None,
             },
             &stats,
+            None,
         )
         .unwrap()
 }

@@ -1,20 +1,37 @@
 //! One workspace's index, kept current: [`IndexService`].
 //!
-//! A refresh takes the store's lease, loads the stored graph, lists the
-//! folder ([`LocalFolderSource`], re-hashing only what changed since the
-//! last build), runs the shared ingestion over it (`ingest_documents`:
-//! unchanged files skipped, changed and deleted ones removed first, new and
-//! changed ones parsed), commits graph, versions and stat cache in one
-//! transaction, and swaps the in-memory view the tools read. It runs on
-//! the blocking pool, reports progress through [`IndexEvents`], and stops
-//! at its next checkpoint when cancelled; a cancelled or failed refresh
-//! commits nothing, so the previous build stays what the tools answer
-//! from.
+//! A refresh takes the store's lease, starts from the build it answers from
+//! (its in-memory graph, when that is still the stored revision; loaded
+//! from SQLite otherwise), lists the folder ([`LocalFolderSource`],
+//! re-hashing only what changed since the last build), runs the shared
+//! ingestion over it (`ingest_documents`: unchanged files skipped, changed
+//! and deleted ones removed first, new and changed ones parsed from the
+//! bytes the confined read returned), commits graph, versions, stat cache
+//! and policy fingerprint in one transaction, and swaps the in-memory view
+//! the tools read. It runs on the blocking pool, one at a time across every
+//! workspace (a process-wide gate), reports progress through [`IndexEvents`], and
+//! stops at its next checkpoint when cancelled; a cancelled or failed
+//! refresh commits nothing, so the previous build stays what the tools
+//! answer from. A cancelled one is recorded as such, never as a failure.
+//!
+//! A build is only served under the policy it was made with
+//! ([`policy_fingerprint`]): one made before `path_deny` changed may hold
+//! files the person has since denied, so it is never loaded, and the tools
+//! are withheld ([`IndexState::StalePolicy`]) until a rebuild under the
+//! current policy commits.
+//!
+//! A turn that changed files marks the index stale ([`IndexService::mark_changed`])
+//! and an incremental refresh follows a few seconds later, once changes
+//! stop coming ([`DEFAULT_REFRESH_DELAY`]).
+//!
+//! Once closed (the index removed, turned off, or reopened under another
+//! policy) a service writes, reports and answers nothing more.
 //!
 //! The tools never touch SQLite: they read the view held here.
 
 use crate::source::{LocalFolderSource, SOURCE_NAME};
 use crate::sqlite_store::{SqliteGraphStore, StoreError};
+use elitea_content_source::content_version;
 use elitea_engine_core::stream::{Context, Line, StopSignal};
 use elitea_inventory_core::graph::Graph;
 use elitea_inventory_core::ingest::files::Selection;
@@ -23,26 +40,61 @@ use elitea_inventory_core::retrieval::view::GraphView;
 use elitea_inventory_core::store::{
     Completion, GraphKey, GraphStore as _, RunCounts, SourceStatus,
 };
+use elitea_local_tools::files::MAX_FILE_BYTES;
 use elitea_local_tools::workspace::Workspace;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
+use tokio::sync::Semaphore;
 
 const KEY: GraphKey = GraphKey::LOCAL;
 
+/// One refresh at a time, across every workspace of the process: a refresh
+/// parses on half the cores ([`limit_parser_threads`]), so two at once
+/// would take the whole machine. A refresh waits here (`queued`) before it
+/// lists anything; a cancel or a close ends the wait.
+static REFRESHES: Semaphore = Semaphore::const_new(1);
+
+/// How long after the last change a turn reported its index refreshes.
+pub const DEFAULT_REFRESH_DELAY: Duration = Duration::from_secs(3);
+
+/// The fingerprint of what decides which files an index holds: the
+/// workspace's `path_deny` (as a set), the largest file read, and the
+/// selection (every supported document). A build is served only under the
+/// fingerprint it was committed with.
+#[must_use]
+pub fn policy_fingerprint(path_deny: &[String]) -> String {
+    let mut deny = path_deny.to_vec();
+    deny.sort();
+    deny.dedup();
+    let inputs = serde_json::json!({
+        "version": 1,
+        "path_deny": deny,
+        "max_file_bytes": MAX_FILE_BYTES,
+        "selection": "all",
+    });
+    content_version(inputs.to_string().as_bytes())
+}
+
 /// Where an index is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum IndexState {
     /// Not turned on (or turned off): nothing is built or offered.
     Off,
-    /// A refresh runs; the previous build (if any) still answers.
+    /// A refresh runs (or waits its turn); the previous build (if any)
+    /// still answers.
     Building,
     /// Built, and nothing is known to have changed since.
     Ready,
     /// Built, but files changed since (or the app has not checked yet).
     Stale,
+    /// The build on disk was made under another policy (`path_deny`
+    /// changed): it is not served, and the tools are withheld until a
+    /// rebuild under the current policy commits.
+    StalePolicy,
     /// The last refresh failed; the previous build (if any) still answers.
     Error,
 }
@@ -98,7 +150,9 @@ pub struct RunReport {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct IndexEvent {
     pub workspace_id: String,
-    /// `listing`, `parsing`, `saving`, `ready`, `cancelled` or `error`.
+    /// `queued` (waiting for another workspace's refresh), `listing`,
+    /// `parsing`, `building`, `saving`, `ready`, `stale`, `cancelled` or
+    /// `error`.
     pub phase: &'static str,
     pub message: Option<String>,
     pub status: IndexStatus,
@@ -170,6 +224,21 @@ struct Inner {
     report: Option<RunReport>,
     /// The running refresh's stop flag.
     running: Option<StopSignal>,
+    /// The state before the running refresh began: what a cancelled one
+    /// goes back to.
+    before: IndexState,
+    /// `changed_files` when the running refresh began: changes reported
+    /// during it may not be in what it reads.
+    changed_at_start: u64,
+    /// The build on disk is from another policy: the next refresh rebuilds
+    /// from nothing, and nothing is served until it commits.
+    policy_mismatch: bool,
+    /// Bumped by every [`IndexService::mark_changed`]: a debounced refresh
+    /// starts only when no later change came during its delay.
+    changes: u64,
+    /// The debounce of the refresh after a change; `None`: no automatic
+    /// refresh.
+    refresh_delay: Option<Duration>,
     closed: bool,
 }
 
@@ -179,6 +248,8 @@ pub struct IndexService {
     workspace: Arc<Workspace>,
     store: SqliteGraphStore,
     events: Arc<dyn IndexEvents>,
+    /// [`policy_fingerprint`] of the policy it was opened under.
+    policy: String,
     inner: Mutex<Inner>,
 }
 
@@ -205,12 +276,21 @@ fn count(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
 
+fn closed_error() -> IndexError {
+    IndexError::new(
+        "index_closed",
+        "The workspace index was removed or turned off.",
+    )
+}
+
 impl IndexService {
     /// Open the index of the workspace at `root` (its `path_deny`
     /// applies) kept in `index_dir`, and load its last build. Blocking.
     ///
     /// It comes up [`IndexState::Stale`]: the folder may have changed while
-    /// the app was closed (or it was never built); a refresh says.
+    /// the app was closed (or it was never built); a refresh says. A build
+    /// made under another `path_deny` is not loaded at all: the index comes
+    /// up [`IndexState::StalePolicy`], with nothing to answer from.
     ///
     /// # Errors
     ///
@@ -228,35 +308,40 @@ impl IndexService {
         let workspace = Workspace::open(root, path_deny)
             .map_err(|error| IndexError::new("workspace_unavailable", error.message()))?;
         let store = SqliteGraphStore::open_for_workspace(index_dir, workspace.root())?;
-        let loaded = store.load_now(KEY)?;
-        let status = store.status_document_now(KEY)?;
-        let files = store.document_stats(KEY, SOURCE_NAME)?.len();
-        let source = &status["sources"][SOURCE_NAME];
-        let last_run = (source["status"] == "completed")
-            .then(|| source["last_updated"].as_str().map(str::to_owned))
-            .flatten();
-        let (state, view) = match loaded {
-            Some((graph, revision)) => (
-                IndexState::Stale,
-                Some(Arc::new(GraphView::new(graph, revision))),
-            ),
-            // Turned on, never built yet.
-            None => (IndexState::Stale, None),
+        let policy = policy_fingerprint(path_deny);
+        let built = store.revision_now(KEY)?.is_some();
+        let policy_mismatch = built && store.policy()?.as_deref() != Some(policy.as_str());
+        let last_run = store.last_completed_run(KEY)?;
+        let (state, view, files) = if policy_mismatch {
+            (IndexState::StalePolicy, None, 0)
+        } else {
+            let files = count(store.document_stats(KEY, SOURCE_NAME)?.len());
+            let view = store
+                .load_now(KEY)?
+                .map(|(graph, revision)| Arc::new(GraphView::new(graph, revision)));
+            // Turned on, never built yet, or built: not checked yet.
+            (IndexState::Stale, view, files)
         };
         Ok(Arc::new(Self {
             workspace_id: workspace_id.to_owned(),
             workspace: Arc::new(workspace),
             store,
             events,
+            policy,
             inner: Mutex::new(Inner {
                 state,
                 view,
                 error: None,
                 changed_files: 0,
-                files: count(files),
+                files,
                 last_run,
                 report: None,
                 running: None,
+                before: state,
+                changed_at_start: 0,
+                policy_mismatch,
+                changes: 0,
+                refresh_delay: Some(DEFAULT_REFRESH_DELAY),
                 closed: false,
             }),
         }))
@@ -282,6 +367,18 @@ impl IndexService {
     #[must_use]
     pub fn store(&self) -> &SqliteGraphStore {
         &self.store
+    }
+
+    /// [`policy_fingerprint`] of the policy this service was opened under.
+    #[must_use]
+    pub fn policy(&self) -> &str {
+        &self.policy
+    }
+
+    /// Set the debounce of the refresh that follows a change
+    /// ([`Self::mark_changed`]); `None` turns it off.
+    pub fn set_refresh_delay(&self, delay: Option<Duration>) {
+        self.inner().refresh_delay = delay;
     }
 
     fn status_of(inner: &Inner) -> IndexStatus {
@@ -315,6 +412,12 @@ impl IndexService {
         Self::status_of(&self.inner())
     }
 
+    /// Whether [`Self::close`] ran.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.inner().closed
+    }
+
     fn emit(&self, phase: &'static str, message: Option<String>) {
         let status = {
             let inner = self.inner();
@@ -333,13 +436,16 @@ impl IndexService {
 
     /// The build the tools answer from, and the one-line notice an answer
     /// starts with when that build may be out of date. `None` until there
-    /// is a build.
+    /// is a build made under the current policy, and once closed.
     #[must_use]
     pub fn view(&self) -> Option<(Arc<GraphView>, Option<String>)> {
         let inner = self.inner();
+        if inner.closed || inner.policy_mismatch {
+            return None;
+        }
         let view = inner.view.clone()?;
         let notice = match inner.state {
-            IndexState::Ready | IndexState::Off => None,
+            IndexState::Ready | IndexState::Off | IndexState::StalePolicy => None,
             IndexState::Building => Some(
                 "Note: the workspace index is being refreshed; this answer is from the previous build."
                     .to_owned(),
@@ -361,22 +467,57 @@ impl IndexService {
     }
 
     /// Note that `files` files changed (a turn wrote them): a ready index
-    /// becomes stale until the next refresh.
-    pub fn mark_changed(&self, files: u64) {
+    /// becomes stale, and an incremental refresh starts once no further
+    /// change has come for the refresh delay ([`DEFAULT_REFRESH_DELAY`]).
+    /// The refresh is scheduled on the current tokio runtime; outside one
+    /// only the state changes.
+    pub fn mark_changed(self: &Arc<Self>, files: u64) {
         if files == 0 {
             return;
         }
-        {
+        let scheduled = {
             let mut inner = self.inner();
+            if inner.closed {
+                return;
+            }
             inner.changed_files = inner.changed_files.saturating_add(files);
             if inner.state == IndexState::Ready {
                 inner.state = IndexState::Stale;
             }
-        }
+            inner.changes = inner.changes.wrapping_add(1);
+            inner.refresh_delay.map(|delay| (inner.changes, delay))
+        };
         self.emit("stale", None);
+        if let Some((changes, delay)) = scheduled
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            let this = Arc::clone(self);
+            runtime.spawn(async move { this.refresh_after(changes, delay).await });
+        }
     }
 
-    /// Whether a refresh runs.
+    /// The debounced refresh of change `changes`: after `delay`, unless a
+    /// later change came (its own wait takes over) or the index closed;
+    /// when a refresh is already running, after it.
+    async fn refresh_after(self: Arc<Self>, changes: u64, delay: Duration) {
+        tokio::time::sleep(delay).await;
+        loop {
+            {
+                let inner = self.inner();
+                if inner.closed || inner.changes != changes {
+                    return;
+                }
+            }
+            match self.start_refresh(false) {
+                Err(error) if error.code == "index_busy" => {
+                    tokio::time::sleep(delay).await;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// Whether a refresh runs (or waits its turn).
     #[must_use]
     pub fn is_building(&self) -> bool {
         self.inner().running.is_some()
@@ -393,8 +534,9 @@ impl IndexService {
     }
 
     /// Stop any refresh and close the database (its WAL folded in): what a
-    /// removal does before it deletes the directory. Nothing is written or
-    /// reported afterwards.
+    /// removal, turning it off or a policy change does. Nothing is written,
+    /// reported or answered afterwards: a refresh that ends later leaves
+    /// the service as it is, and the tools answer `index.closed`.
     pub fn close(&self) {
         {
             let mut inner = self.inner();
@@ -438,7 +580,7 @@ impl IndexService {
     fn begin(&self) -> Result<StopSignal, IndexError> {
         let mut inner = self.inner();
         if inner.closed {
-            return Err(IndexError::new("index_closed", "The index was removed."));
+            return Err(closed_error());
         }
         if inner.running.is_some() {
             return Err(IndexError::new(
@@ -448,6 +590,8 @@ impl IndexService {
         }
         let stop = StopSignal::default();
         inner.running = Some(stop.clone());
+        inner.before = inner.state;
+        inner.changed_at_start = inner.changed_files;
         inner.state = IndexState::Building;
         inner.error = None;
         Ok(stop)
@@ -458,35 +602,73 @@ impl IndexService {
         full: bool,
         stop: StopSignal,
     ) -> Result<IndexStatus, IndexError> {
-        self.emit("listing", None);
-        let this = Arc::clone(self);
-        let worker_stop = stop.clone();
-        let outcome = tokio::task::spawn_blocking(move || this.build(full, &worker_stop))
-            .await
-            .unwrap_or_else(|_| {
-                Err(IndexError::new(
-                    "internal",
-                    "the refresh stopped unexpectedly",
-                ))
-            });
+        // One refresh at a time across every workspace.
+        let permit = if let Ok(permit) = REFRESHES.try_acquire() {
+            Some(permit)
+        } else {
+            self.emit("queued", None);
+            tokio::select! {
+                permit = REFRESHES.acquire() => permit.ok(),
+                () = stop.stopped() => None,
+            }
+        };
+        let outcome = if permit.is_some() {
+            self.emit("listing", None);
+            let this = Arc::clone(self);
+            let worker_stop = stop.clone();
+            tokio::task::spawn_blocking(move || this.build(full, &worker_stop))
+                .await
+                .unwrap_or_else(|_| {
+                    Err(IndexError::new(
+                        "internal",
+                        "the refresh stopped unexpectedly",
+                    ))
+                })
+        } else {
+            Err(IndexError::new("index_cancelled", "cancelled while queued"))
+        };
+        drop(permit);
+        let last_run = if outcome.is_ok() {
+            self.store.last_completed_run(KEY).ok().flatten()
+        } else {
+            None
+        };
         let phase = {
             let mut inner = self.inner();
             inner.running = None;
+            if inner.closed {
+                // Removed, turned off or reopened meanwhile: nothing it
+                // built is kept or served, and nothing is reported.
+                return Err(closed_error());
+            }
             match &outcome {
                 Ok((view, files, report)) => {
                     inner.view = Some(Arc::clone(view));
                     inner.files = *files;
                     inner.report = Some(*report);
-                    inner.state = IndexState::Ready;
-                    inner.changed_files = 0;
+                    inner.policy_mismatch = false;
+                    // Changes reported while it ran may not be in what it
+                    // read: they keep it stale (their refresh follows).
+                    inner.changed_files =
+                        inner.changed_files.saturating_sub(inner.changed_at_start);
+                    inner.state = if inner.changed_files == 0 {
+                        IndexState::Ready
+                    } else {
+                        IndexState::Stale
+                    };
                     inner.error = None;
+                    if last_run.is_some() {
+                        inner.last_run = last_run;
+                    }
                     "ready"
                 }
                 Err(_) if stop.is_requested() => {
-                    // The previous build stays; so does what was known of it.
-                    inner.state = match (&inner.view, inner.changed_files) {
-                        (Some(_), 0) if inner.last_run.is_some() => IndexState::Ready,
-                        _ => IndexState::Stale,
+                    // The previous build stays, and so does where it was.
+                    inner.state = match inner.before {
+                        IndexState::Ready if inner.changed_files > inner.changed_at_start => {
+                            IndexState::Stale
+                        }
+                        before => before,
                     };
                     "cancelled"
                 }
@@ -497,14 +679,6 @@ impl IndexService {
                 }
             }
         };
-        if phase == "ready" {
-            let last_run = self.store.status_document_now(KEY).ok().and_then(|status| {
-                status["sources"][SOURCE_NAME]["last_updated"]
-                    .as_str()
-                    .map(str::to_owned)
-            });
-            self.inner().last_run = last_run;
-        }
         let message = outcome.as_ref().err().map(|error| error.message.clone());
         self.emit(phase, message);
         match outcome {
@@ -542,29 +716,50 @@ impl IndexService {
                 })
                 .map_err(|error| IndexError::new("internal", error.to_string()))?
         };
-        let result = self.build_with(full, &context);
+        let (result, started) = self.build_with(full, &context);
         drop(context);
         let _ = reporter.join();
-        if let Err(error) = &result {
-            let reason = if stop.is_requested() {
-                "cancelled"
+        if started && let Err(error) = &result {
+            // A cancellation is not a failure: its run is recorded as
+            // cancelled and the last completed one stays the source's.
+            if stop.is_requested() {
+                let _ = self.store.cancel_run(KEY, SOURCE_NAME);
             } else {
-                error.message.as_str()
-            };
-            let _ = block_on(self.store.fail(KEY, SOURCE_NAME, reason));
+                let _ = block_on(self.store.fail(KEY, SOURCE_NAME, &error.message));
+            }
         }
         drop(lease);
         result
     }
 
-    fn build_with(&self, full: bool, context: &Context) -> Result<Built, IndexError> {
-        block_on(async {
+    /// The graph an incremental refresh starts from: the build the tools
+    /// answer from, when it is still the stored revision (no SQLite read);
+    /// else the stored graph.
+    fn starting_graph(&self) -> Result<Graph, IndexError> {
+        let view = self.inner().view.clone();
+        let stored = self.store.revision_now(KEY)?;
+        match view {
+            Some(view) if Some(view.revision) == stored => Ok(view.graph.clone()),
+            _ => Ok(self
+                .store
+                .load_now(KEY)?
+                .map(|(graph, _)| graph)
+                .unwrap_or_default()),
+        }
+    }
+
+    /// The run, and whether it got as far as recording its start.
+    fn build_with(&self, full: bool, context: &Context) -> (Result<Built, IndexError>, bool) {
+        let mut started = false;
+        let result = block_on(async {
             let source_status = SourceStatus {
                 toolkit_id: SOURCE_NAME.to_owned(),
                 toolkit_name: "Workspace folder".to_owned(),
                 toolkit_type: "local_folder".to_owned(),
                 branch: None,
             };
+            // A build from another policy is never the start of this one.
+            let full = full || self.inner().policy_mismatch;
             let (mut graph, previous, stat_cache) = if full {
                 (
                     Graph::new(),
@@ -572,14 +767,14 @@ impl IndexService {
                     std::collections::HashMap::new(),
                 )
             } else {
-                let graph = self.store.load(KEY).await?.map(|(graph, _)| graph);
                 (
-                    graph.unwrap_or_default(),
+                    self.starting_graph()?,
                     self.store.document_versions(KEY, SOURCE_NAME).await?,
                     self.store.document_stats(KEY, SOURCE_NAME)?,
                 )
             };
             self.store.start(KEY, &source_status).await?;
+            started = true;
             let source = LocalFolderSource::new(Arc::clone(&self.workspace))
                 .with_previous(stat_cache)
                 .selecting(Selection::default());
@@ -608,9 +803,13 @@ impl IndexService {
                 },
                 commit_sha: None,
             };
-            let revision =
-                self.store
-                    .complete_with_stats(KEY, &graph, &completion, &source.stats())?;
+            let revision = self.store.complete_with_stats(
+                KEY,
+                &graph,
+                &completion,
+                &source.stats(),
+                Some(&self.policy),
+            )?;
             let report = RunReport {
                 read: count(outcome.documents_processed),
                 unchanged: count(outcome.unchanged),
@@ -622,6 +821,7 @@ impl IndexService {
                 count(outcome.documents.len()),
                 report,
             ))
-        })?
+        });
+        (result.and_then(|built| built), started)
     }
 }
