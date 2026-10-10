@@ -136,6 +136,7 @@ var rustNativeToolTypes = []string{
 	"artifact",
 	"azure",
 	"azure_search",
+	"carrier",
 	"elastic",
 	"gcp",
 	"github",

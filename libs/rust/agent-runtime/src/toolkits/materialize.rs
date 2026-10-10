@@ -28,9 +28,9 @@ use super::families::jira;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
 use super::families::{
-    aha, artifact, azure, azure_search, bitbucket, elastic, gcp, github, gitlab, gitlab_org,
-    google_places, keycloak, kubernetes, openapi, postman, rally, report_portal, salesforce,
-    service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
+    aha, artifact, azure, azure_search, bitbucket, carrier, elastic, gcp, github, gitlab,
+    gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
+    salesforce, service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
@@ -185,6 +185,7 @@ async fn materialize(
             | "bitbucket"
             | "confluence"
             | "bigquery"
+            | "carrier"
             | "elastic"
             | "gcp"
             | "github"
@@ -336,6 +337,13 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|error| bigquery_toolset_materialization_error(error.code()))?,
+        "carrier" => carrier::tools::build_carrier_toolset(
+            name,
+            carrier::config::CarrierToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| carrier_toolset_materialization_error(error.code()))?,
         "elastic" => elastic::tools::build_elastic_toolset(
             name,
             elastic::config::ElasticToolkitConfig::parse(settings)
@@ -635,6 +643,18 @@ const fn github_toolset_materialization_error(
         | github::tools::GitHubToolsetErrorCode::Client
         | github::tools::GitHubToolsetErrorCode::InvalidDefinition => invalid_configuration(),
         github::tools::GitHubToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+    }
+}
+
+const fn carrier_toolset_materialization_error(
+    code: carrier::tools::CarrierToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        carrier::tools::CarrierToolsetErrorCode::InvalidConfiguration
+        | carrier::tools::CarrierToolsetErrorCode::Client
+        | carrier::tools::CarrierToolsetErrorCode::InvalidDefinition => invalid_configuration(),
+        carrier::tools::CarrierToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        carrier::tools::CarrierToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
     }
 }
 

@@ -166,7 +166,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `google_places` | `configurations/google_places.py::GooglePlacesConfiguration` | `tools/google_places::GooglePlacesToolkit` | 2 | No | `toolkits/families/google_places/{config,client,tools}.rs` | Capability-disabled complete read family: supported Places API (New) projection for `places` and `find_near`; attribution/persisted-result policy, authorized materialization and live provider proof remain gates |
 | `salesforce` | `configurations/salesforce.py::SalesforceConfiguration` | `tools/salesforce::SalesforceToolkit` | 6 | No | `toolkits/families/salesforce/{config,client,tools}.rs` | Capability-disabled complete family: six bounded CRM tools, including create/update and generic GET/POST/PATCH/DELETE; authorized materialization, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `sharepoint` | `configurations/sharepoint.py::SharepointConfiguration` | `tools/sharepoint::SharepointToolkit` | 28 | Yes | `toolkits/families/sharepoint/{config,client,tools}.rs` | Partial capability-disabled delegated read family: 8 explicitly selected Graph operations cover lists, columns, metadata-only recursive file discovery and bounded raw OneNote XHTML with proactive missing-token guards and direct-node reactive 401 interrupts. Empty/all selection, ACS/app-only auth, remaining content/artifact/index/effect tools, rich OAuth discovery/DCR/refresh metadata, model-loop reactive 401 confirmation, approved egress and live-provider proof remain gates |
-| `carrier` | `CarrierConfiguration` | `EliteACarrierToolkit` | 18 | No | corresponding family paths | Planned; source has no focused family tests |
+| `carrier` | `configurations/carrier.py::CarrierConfiguration` | `tools/carrier::EliteACarrierToolkit` | 18 | No | `toolkits/families/carrier/{config,client,tools}.rs` | Partial capability-disabled family: 15 ticket, backend and UI test/report operations with the SDK's confirmation steps; the archive tools `get_report_by_id`, `create_excel_report` and `create_ui_excel_report` stay SDK-only (archive/xlsx writers), and exact-interrupt HITL, effect reconciliation, approved egress and live proof remain gates |
 | `report_portal` | `configurations/report_portal.py::ReportPortalConfiguration` | `tools/report_portal::ReportPortalToolkit` | 9 | Yes | `toolkits/families/report_portal/{config,client,tools}.rs` | Capability-disabled complete read family: nine bounded project/report reads, including explicit UTF-8 HTML and base64 PDF export projections; authorized materialization, egress policy and live provider proof remain gates |
 | `testio` | `TestIOConfiguration` | `TestIOToolkit` | 15 | Yes | corresponding family paths | Deferred as an incoherent source contract: the check and official API require `Authorization: Token`, while runtime tools send `Bearer`; exploratory-test retrieval cannot receive its implementation-required product ID; and the two SDK write payloads do not map to the current provider create/confirmation operations without inventing product behavior |
 | `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Direct-node delegated 401 recovery has component proof in `delegated-auth-expiry.md`. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
@@ -2392,6 +2392,74 @@ unavailable. A result over 1000 rows is refused with a narrow-the-filter error
 rather than returned unbounded. Production registration remains gated on the
 same live service-account, exact-interrupt HITL, effect-reconciliation and
 egress proofs as the `gcp` family.
+
+### Carrier partial performance-testing family
+
+Ported from the worker-pinned SDK revision
+`b5113a129329b85d23c2d5c2bf55f18e307414ec` (the five pinned patches do not
+touch Carrier). The SDK has no focused Carrier tests, so the fixtures in
+`libs/rust/agent-runtime/src/toolkits/carrier_tests.rs` are the primary
+compatibility proof.
+
+Configuration is the SDK's: `carrier_configuration.{url,organization,private_token}`
+plus the toolkit-level `project_id`, which the SDK refuses when empty. The URL
+must be HTTPS without credentials, query or fragment; a path prefix is kept.
+`project_id` becomes a path segment, so only a bounded URL-safe token (or a
+non-negative integer frozen by an older form) is admitted. The token is a
+sensitive header and never reaches an error.
+
+Every request goes through the family's bounded transport (redirects and
+automatic retries disabled, fixed timeouts, 4 MiB response cap). Each model id
+is ONE percent-encoded path segment, so `report_id="55/../x"` cannot reach a
+second route. The SDK's two header sets are kept: the session calls carry
+`Authorization: Bearer` and `X-Organization`; `add_tag_to_report` and
+`create_backend_test` use the bare lower-case `bearer` and no organization.
+`create_backend_test` and `create_ui_test` post the definition as the
+form field `data`, as `requests.post(data=...)` does.
+
+| SDK tool | Route(s) | Rust behaviour |
+| --- | --- | --- |
+| `get_ticket_list` | `GET issues/issues/{pid}?board_id=&limit=100` | Tag (lower-cased) and status filters, newline-joined titles |
+| `create_ticket` | `GET engagements/engagements/{pid}`, `POST issues/issues/{pid}` | Date validation before any request, engagement name to hash id, `None` fields omitted, `item` required |
+| `get_reports` | `GET backend_performance/reports/{pid}` | Name/tag filters and the SDK's trimmed fields |
+| `add_tag_to_report` | `POST backend_performance/tags/{pid}/{id}` | Success is the answer text containing `Tags was updated`, whatever the status |
+| `get_tests`, `get_test_by_id` | `GET backend_performance/tests/{pid}` | Trimmed list; `{}` when the id is absent |
+| `run_test_by_id` | tests list, `GET shared/locations/default/{pid}`, `POST backend_performance/test/{pid}/{id}` | The SDK's four confirmation answers (missing test, parameters, location, cloud settings) and one run |
+| `create_backend_test` | `GET integrations/integrations/{pid}?name=reporter_email`, `POST backend_performance/tests/{pid}` | The SDK's prompts for each missing field and runner/email shaping |
+| `get_ui_reports` | `GET ui_performance/reports/{pid}` | Name and naive/aware ISO date filtering; a naive-versus-aware comparison answers Python's own error text |
+| `get_ui_report_by_id` | reports list, `GET ui_performance/results/{pid}/{uid}?sort=loop&order=asc` | Unique sorted `.html` links under the SDK's fixed `platform.getcarrier.io` prefix; a link failure is an empty list, as in the SDK |
+| `get_ui_tests` | `GET ui_performance/tests/{pid}` | Trimmed source (repository credentials are never projected), optional config and schedules |
+| `run_ui_test` | tests list, `GET ui_performance/test/{pid}/{id}`, `GET shared/locations/{pid}`, `POST ui_performance/test/{pid}/{id}` | Default-configuration prompt, location validation and public/project/cloud region resolution |
+| `update_ui_test_schedule` | tests list, `GET`/`PUT ui_performance/test/{pid}/{id}` | Cron shape check and the SDK's PUT body with existing schedules kept |
+| `create_ui_test` | `POST ui_performance/tests/{pid}` | The SDK's success and 400/other-status markdown |
+| `cancel_ui_test` | `GET ui_performance/reports/{pid}`, `PUT ui_performance/report_status/{pid}/{id}` | Command parsing, cancelable listing and final-state refusal |
+
+Deliberate differences, each a repair of a source defect:
+
+- The SDK's `get_tools` reads `selected_tools` from the tool dictionary rather
+  than its settings, so the Python toolkit always serves all eighteen tools.
+  Rust honours `settings.selected_tools`; an empty list serves all fifteen,
+  an explicit list keeps the served names and omits the three SDK-only names
+  with one `agent_toolkit_tools_skipped` warning, and an unknown name refuses
+  the toolkit.
+- `run_test_by_id` compares `str(test["id"])` with the INTEGER `test_id`, so
+  an id lookup never matches in the SDK. Rust compares the id as text.
+- Results that the SDK `json.dumps` are returned as JSON values; dictionaries
+  the SDK returns as prompts stay JSON objects.
+- A post-dispatch transport failure, 408, 429 or 5xx on an effect is an
+  unknown-outcome error (never retried), where the SDK printed a failure
+  report for a test or cancellation that may have applied.
+- The SDK raises `KeyError` when a test parameter lacks `default`/`type`;
+  Rust projects `null`.
+
+Not ported: `get_report_by_id` downloads every `reports_test_results_<build>`
+zip from the report bucket, unzips and merges JMeter/Gatling logs, re-zips the
+merged errors and uploads that archive back to Carrier; `create_excel_report`
+and `create_ui_excel_report` additionally parse the logs and write `.xlsx`
+workbooks. Those need zip read/write and an xlsx writer that neither the
+worker's nor the desktop host's Cargo lock carries (the libs workspace has
+`zip` only transitively through `calamine`). The capability snapshot lists
+the fifteen served tools, so elitea-main marks the three unavailable.
 
 ## Special runtime toolsets
 
