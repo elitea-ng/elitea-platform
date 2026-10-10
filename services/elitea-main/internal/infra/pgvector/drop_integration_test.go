@@ -76,6 +76,11 @@ func TestPGXDropRealPostgres(t *testing.T) {
 		t.Fatal("premise: provisioning left no database or role")
 	}
 
+	// Exists sees the database and the role, read-only.
+	if found, err := provisioner.Exists(ctx, DropRequest{ProjectID: projectID, Admin: adminConnection}); err != nil || !found {
+		t.Fatalf("Exists after provisioning = %v, %v; want true", found, err)
+	}
+
 	// A connected worker must not block the drop (WITH FORCE).
 	project, err := pgx.Connect(ctx, databaseURLFor(databaseURL, database))
 	if err == nil {
@@ -89,6 +94,9 @@ func TestPGXDropRealPostgres(t *testing.T) {
 	if !first.DatabaseDropped || !first.RoleDropped || dbExists() || roleExists() {
 		t.Fatalf("first drop = %+v, database exists=%v role exists=%v", first, dbExists(), roleExists())
 	}
+	if found, err := provisioner.Exists(ctx, DropRequest{ProjectID: projectID, Admin: adminConnection}); err != nil || found {
+		t.Fatalf("Exists after the drop = %v, %v; want false", found, err)
+	}
 	second, err := provisioner.Drop(ctx, DropRequest{ProjectID: projectID, Admin: adminConnection})
 	if err != nil || second != (DropResult{}) {
 		t.Fatalf("second drop = %+v, %v; want a clean no-op", second, err)
@@ -96,6 +104,9 @@ func TestPGXDropRealPostgres(t *testing.T) {
 	// Only the database gone (role orphan) is also fine.
 	if _, err := admin.Exec(ctx, "CREATE ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
 		t.Fatal(err)
+	}
+	if found, err := provisioner.Exists(ctx, DropRequest{ProjectID: projectID, Admin: adminConnection}); err != nil || !found {
+		t.Fatalf("Exists with only the role = %v, %v; want true", found, err)
 	}
 	third, err := provisioner.Drop(ctx, DropRequest{ProjectID: projectID, Admin: adminConnection})
 	if err != nil || third.DatabaseDropped || !third.RoleDropped || roleExists() {

@@ -274,6 +274,32 @@ func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, project
 	return database, nil
 }
 
+// ProjectVectorDatabaseExists reports whether the project's PgVector database or
+// role exists on the PgVector server. checkable is false when this deployment has
+// no PgVector bootstrap, so nothing can be asked. The project delete uses it to
+// find the leftovers of a project whose row is already gone (#1211).
+func (s *ProjectVectorStore) ProjectVectorDatabaseExists(ctx context.Context, projectID int64) (exists bool, checkable bool, err error) {
+	if s == nil {
+		return false, false, errors.New("project vector store is not configured")
+	}
+	if projectID <= 0 {
+		return false, false, vectorstoreapp.ErrInvalidProjectPgvectorRequest
+	}
+	bootstrap, configured, err := s.resolveBootstrap(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	if !configured {
+		return false, false, nil
+	}
+	databases, err := newCurrentProjectPgvectorDatabaseProvisioner(bootstrap)
+	if err != nil {
+		return false, false, fmt.Errorf("%w: %s", ErrProjectVectorStoreBootstrap, err)
+	}
+	exists, err = databases.Exists(ctx, projectID)
+	return exists, err == nil, err
+}
+
 // tenantConfigurationPresent reports whether the project's tenant configuration
 // table exists. The delete runs inside a tenant transaction, which refuses a
 // schema that is not there.

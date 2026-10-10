@@ -64,6 +64,21 @@ func (a *currentProjectPgvectorDatabaseProvisioner) Drop(
 	})
 }
 
+// Exists reports whether the project's PgVector database or role is present.
+func (a *currentProjectPgvectorDatabaseProvisioner) Exists(
+	ctx context.Context,
+	projectID int64,
+) (bool, error) {
+	if a == nil || a.provisioner == nil {
+		return false, pgvector.ErrInvalidConnector
+	}
+	return a.provisioner.Exists(ctx, pgvector.DropRequest{
+		ProjectID: projectID,
+		Admin:     a.admin,
+		Mode:      pgvector.ModeDatabaseRole,
+	})
+}
+
 func (*currentProjectPgvectorDatabaseProvisioner) NewProjectPassword() (string, error) {
 	return pgvector.NewProjectPassword()
 }

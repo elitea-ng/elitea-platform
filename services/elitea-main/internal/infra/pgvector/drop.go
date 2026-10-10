@@ -177,6 +177,33 @@ func (p *Provisioner) Drop(ctx context.Context, request DropRequest) (DropResult
 	return result, nil
 }
 
+// Exists reports whether the project's PgVector isolation is present: its
+// database or its login role (ModeDatabaseRole), or its schema (ModeSchema). It
+// is read-only and takes no lock. The project delete uses it to find the
+// leftovers of a project whose row is already gone (#1211).
+func (p *Provisioner) Exists(ctx context.Context, request DropRequest) (bool, error) {
+	if ctx == nil || p == nil || p.connector == nil {
+		return false, ErrInvalidRequest
+	}
+	database, role, err := validateDropRequest(request)
+	if err != nil {
+		return false, err
+	}
+	admin, err := p.connect(ctx, request.Admin.Database)
+	if err != nil {
+		return false, err
+	}
+	defer closeBestEffort(ctx, admin)
+	if request.Mode == ModeSchema {
+		return queryBool(ctx, admin, "check project schema", schemaExistsSQL, database)
+	}
+	exists, err := queryBool(ctx, admin, "check project database", databaseExistsSQL, database)
+	if err != nil || exists {
+		return exists, err
+	}
+	return projectRoleExists(ctx, admin, role)
+}
+
 // dropLogger is where Drop reports a non-fatal close failure. A variable so a
 // test can capture it.
 var dropLogger = slog.Default
