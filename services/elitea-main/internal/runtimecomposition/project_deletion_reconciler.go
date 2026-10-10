@@ -9,10 +9,12 @@ package runtimecomposition
 // rows older than a grace period and past their backoff, and resumes their
 // remaining steps.
 //
-// The journal row is the single source of truth. The claim is a short
-// FOR UPDATE SKIP LOCKED transaction that stamps a lease on the rows
-// (projectprovisioning.ClaimStaleDeletions), so concurrent replicas never work
-// the same row and no lock or connection is held while the steps run. The
+// The journal row is the single source of truth. A pass claims ONE row at a
+// time: the claim is a short FOR UPDATE SKIP LOCKED transaction that stamps a
+// lease on that row (projectprovisioning.ClaimNextDeletion), the row is worked,
+// and only then is the next claimed. No row is leased while it waits in a local
+// queue, so a slow row never ties up its neighbours, concurrent replicas never
+// work the same row, and no lock or connection is held while the steps run. The
 // backoff is stored in the row (attempts, next_attempt_at), not in memory, so a
 // restart or another replica keeps it.
 //
@@ -45,7 +47,7 @@ const (
 // ProjectDeletionJournal is the cleanup journal the reconciler drains.
 // *projectprovisioning.Provisioner implements it.
 type ProjectDeletionJournal interface {
-	ClaimStaleDeletions(ctx context.Context, grace time.Duration, limit int) ([]int64, error)
+	ClaimNextDeletion(ctx context.Context, grace time.Duration) (projectID int64, ok bool, err error)
 	ResumeDeletion(ctx context.Context, projectID int64) (projectprovisioning.Result, error)
 }
 
@@ -113,23 +115,25 @@ func (r *ProjectDeletionReconciler) Failed() int64 { return r.failed.Load() }
 // Errors is the number of passes that could not claim rows at all.
 func (r *ProjectDeletionReconciler) Errors() int64 { return r.errored.Load() }
 
-// RunOnce claims up to one batch of stale journal rows and resumes each. It
-// returns how many rows it worked. A failed cleanup is logged and counted; the
-// journal row records its own backoff. The error is non-nil only when the claim
-// itself failed or ctx ended.
+// RunOnce works up to one batch of stale journal rows, claiming and resuming
+// them one at a time. It returns how many rows it worked. A failed cleanup is
+// logged and counted; the journal row records its own backoff. The error is
+// non-nil only when a claim itself failed or ctx ended.
 func (r *ProjectDeletionReconciler) RunOnce(ctx context.Context) (int, error) {
-	ids, err := r.journal.ClaimStaleDeletions(ctx, r.config.GracePeriod, r.config.BatchSize)
-	if err != nil {
-		return 0, err
-	}
 	worked := 0
-	for _, id := range ids {
-		if ctx.Err() != nil {
-			// The claimed rows' leases expire and the next pass takes them.
-			return worked, ctx.Err()
+	for worked < r.config.BatchSize {
+		if err := ctx.Err(); err != nil {
+			return worked, err
+		}
+		id, ok, err := r.journal.ClaimNextDeletion(ctx, r.config.GracePeriod)
+		if err != nil {
+			return worked, err
+		}
+		if !ok {
+			return worked, nil
 		}
 		worked++
-		_, err := r.journal.ResumeDeletion(ctx, id)
+		_, err = r.journal.ResumeDeletion(ctx, id)
 		switch {
 		case err == nil, errors.Is(err, projectprovisioning.ErrProjectNotFound):
 			r.finished.Add(1)

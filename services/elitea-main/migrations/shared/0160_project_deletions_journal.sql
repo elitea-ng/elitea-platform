@@ -2,19 +2,23 @@
 -- (#1211).
 --
 -- WHY. A project delete removes resources in places one transaction cannot
--- span: the vault rows, the artifact bytes in object storage, the tenant schema,
--- and the per-project PgVector database and role on another server. So the
--- delete is split in two:
+-- span: the artifact bytes in object storage, the tenant schema (a DROP SCHEMA
+-- that waits on every lock in it), and the per-project PgVector database and
+-- role on another server. So the delete is split in two:
 --
 --   1. ONE TRANSACTION DECIDES. It locks the project row FOR UPDATE, refuses
 --      (rolls back, nothing changed) while the project has non-terminal
---      execution_jobs, records what the project owns that must be cleaned up,
---      inserts that record here, deletes every row that references the project
---      and the project row itself, and commits. Any failure in it leaves the
---      project exactly as it was.
---   2. THE CLEANUP RUNS FROM THIS ROW. Every step is idempotent and marks
---      itself done in `cleanup`. The delete runs it right after the commit; a
---      step that fails leaves the row incomplete, and a reconciler in
+--      execution_jobs, inserts a row here recording what is left to clean up,
+--      REVOKES THE PROJECT'S IDENTITY (the vault, the system PAT and user, the
+--      project roles and memberships, the token bindings: plain SQL in this
+--      database, so they die atomically with the row), deletes every row that
+--      references the project and the project row itself, and commits. Any
+--      failure in it leaves the project exactly as it was.
+--   2. THE SLOW AND EXTERNAL CLEANUP RUNS FROM THIS ROW: the artifact bytes, the
+--      tenant schema, the PgVector database. Every step is idempotent and marks
+--      itself done in `cleanup`. The delete request waits for them only for a
+--      short budget (HTTP 202 when some are still pending); a step that fails
+--      or is not reached leaves the row incomplete, and a reconciler in
 --      elitea-main retries it with backoff until `completed_at` is set.
 --
 -- After the commit nothing can create work for the project: execution_jobs
@@ -23,22 +27,28 @@
 --
 -- COLUMNS.
 --   cleanup          what the decision recorded, and per-step completion:
---                    {"tenant_schema": "p_42", "system_user_id": 17,
---                     "vault_project": "42", "buckets": ["reports"],
---                     "had_vector_store": true, "vector_database": "project_42",
---                     "done": {"system_user": true, ...}}
+--                    {"had_vector_store": true, "vector_database": "project_42",
+--                     "done": {"artifact_buckets": true, ...}}
+--                    had_vector_store is the decision's probe; the PgVector drop
+--                    runs whatever it says, and it only decides how a failed
+--                    drop is reported.
 --   attempts         cleanup runs so far (the delete's own run included).
 --   last_error       the last run's failure, by step name only (no raw error:
 --                    it can carry SQL or addresses).
 --   next_attempt_at  backoff: the reconciler does not retry before this.
 --   claimed_until    the lease of the run working the row. The reconciler
---                    claims a row in a short FOR UPDATE SKIP LOCKED transaction
---                    that stamps the lease; it does not hold a connection or a
---                    lock while the steps run.
+--                    claims ONE row at a time in a short FOR UPDATE SKIP LOCKED
+--                    transaction that stamps the lease, works it, then claims
+--                    the next; it does not hold a connection or a lock while
+--                    the steps run, and leases nothing it is not working.
+--                    NULL from the start for a delete that hands its cleanup
+--                    off (the login path).
 --   completed_at     set when every step is done. A completed row stays as the
 --                    record of the delete.
 --
--- No foreign key to centry.project: the row outlives the project by design.
+-- No foreign key to centry.project: the row outlives the project by design. A
+-- COMPLETE row for an id is reopened (steps, attempts and lease reset) if a
+-- project with that id is deleted again; an incomplete one refuses the delete.
 -- Idempotent. No BEGIN/COMMIT: the ledgered runner wraps the file.
 
 CREATE TABLE IF NOT EXISTS centry.project_deletions (

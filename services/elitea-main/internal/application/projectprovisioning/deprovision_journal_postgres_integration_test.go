@@ -19,8 +19,8 @@ package projectprovisioning_test
 //   TestConcurrentDeletesOnASmallPool
 //       two deletes of one project on a pool of two connections: one 200, one
 //       404, no deadlock.
-//   TestClaimStaleDeletions
-//       the reconciler's claim: grace, backoff, lease, SKIP LOCKED, batch.
+//   TestClaimNextDeletion
+//       the reconciler's claim: one row, grace, backoff, lease, SKIP LOCKED.
 
 import (
 	"context"
@@ -518,9 +518,13 @@ func TestCleanupFailureLeavesAJournalRowTheReconcilerFinishes(t *testing.T) {
 	if entry.Leased || !entry.BackedOff {
 		t.Fatalf("journal = %+v, want the lease released and a backoff set", entry)
 	}
-	for _, step := range []string{projectprovisioning.StepProjectSchema, projectprovisioning.StepProjectSecrets, projectprovisioning.StepSystemUser} {
-		if !entry.done(step) {
-			t.Errorf("step %s is not recorded done: %+v", step, entry.Cleanup)
+	if !entry.done(projectprovisioning.StepProjectSchema) {
+		t.Errorf("step %s is not recorded done: %+v", projectprovisioning.StepProjectSchema, entry.Cleanup)
+	}
+	// The identity steps are not the journal's: the decision revoked them.
+	for _, step := range []string{projectprovisioning.StepProjectSecrets, projectprovisioning.StepSystemUser} {
+		if entry.done(step) {
+			t.Errorf("identity step %s is in the journal, want it done by the decision: %+v", step, entry.Cleanup)
 		}
 	}
 	if entry.done(projectprovisioning.StepProjectPgvectorDrop) {
@@ -653,16 +657,17 @@ func TestConcurrentDeletesOnASmallPool(t *testing.T) {
 	}
 }
 
-// The claim the reconciler makes. Rows (all incomplete unless said):
+// The claim the reconciler makes: ONE row per claim, each with its own lease.
+// Rows (all incomplete unless said):
 //
-//	101 old, due            → claimed
+//	101 old, due            → claimed first (most overdue)
 //	102 old, backing off    → not yet
 //	103 fresh               → inside the grace
 //	104 old, due, leased    → another run owns it
 //	105 old, due, complete  → done
 //	106 old, due, row-locked by another transaction → SKIP LOCKED
-//	107 old, due            → claimed, but beyond a batch of one
-func TestClaimStaleDeletions(t *testing.T) {
+//	107 old, due            → claimed second
+func TestClaimNextDeletion(t *testing.T) {
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -688,34 +693,54 @@ INSERT INTO centry.project_deletions (project_id, cleanup, created_at, next_atte
 		t.Fatal(err)
 	}
 
-	// A batch of one takes the most overdue row.
-	ids, err := provisioner.ClaimStaleDeletions(ctx, 5*time.Minute, 1)
-	if err != nil || !slices.Equal(ids, []int64{101}) {
-		t.Fatalf("batch of one = %v, %v; want [101]", ids, err)
-	}
-	// A larger batch does not wait for the locked row, and does not take 101
-	// again: the first claim leased it.
-	claimed := make(chan []int64, 1)
-	go func() {
-		ids, err := provisioner.ClaimStaleDeletions(ctx, 5*time.Minute, 10)
+	leased := func() []int64 {
+		rows, err := pool.Query(ctx, `SELECT project_id FROM centry.project_deletions WHERE claimed_until > now() AND project_id <> 104 ORDER BY project_id`)
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
-		claimed <- ids
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ids
+	}
+
+	// The most overdue row, and only that row is leased.
+	id, ok, err := provisioner.ClaimNextDeletion(ctx, 5*time.Minute)
+	if err != nil || !ok || id != 101 {
+		t.Fatalf("first claim = %d, %v, %v; want 101", id, ok, err)
+	}
+	if got := leased(); !slices.Equal(got, []int64{101}) {
+		t.Fatalf("leased rows after one claim = %v, want only [101]", got)
+	}
+	// The next claim does not wait for the locked row and does not take 101
+	// again: the first claim leased it.
+	type claim struct {
+		id  int64
+		ok  bool
+		err error
+	}
+	claimed := make(chan claim, 1)
+	go func() {
+		id, ok, err := provisioner.ClaimNextDeletion(ctx, 5*time.Minute)
+		claimed <- claim{id, ok, err}
 	}()
 	select {
-	case ids = <-claimed:
+	case got := <-claimed:
+		if got.err != nil || !got.ok || got.id != 107 {
+			t.Fatalf("second claim = %+v, want 107", got)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the claim waited for a row another transaction holds")
-	}
-	if !slices.Equal(ids, []int64{107}) {
-		t.Fatalf("second claim = %v, want [107]", ids)
 	}
 	if err := holder.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if ids, err := provisioner.ClaimStaleDeletions(ctx, 5*time.Minute, 10); err != nil || !slices.Equal(ids, []int64{106}) {
-		t.Fatalf("claim after the lock went = %v, %v; want [106]", ids, err)
+	if id, ok, err := provisioner.ClaimNextDeletion(ctx, 5*time.Minute); err != nil || !ok || id != 106 {
+		t.Fatalf("claim after the lock went = %d, %v, %v; want 106", id, ok, err)
+	}
+	if _, ok, err := provisioner.ClaimNextDeletion(ctx, 5*time.Minute); err != nil || ok {
+		t.Fatalf("claim with nothing due = %v, %v; want none", ok, err)
 	}
 	// A claimed row with no journal content to resume is reported, not hidden.
 	if _, err := provisioner.ResumeDeletion(ctx, 999); !errors.Is(err, projectprovisioning.ErrProjectNotFound) {

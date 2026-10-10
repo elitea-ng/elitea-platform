@@ -23,33 +23,36 @@ type fakeDeletionJournal struct {
 	claimable []int64
 	claimErr  error
 	failures  map[int64]error
-	claims    []struct {
-		grace time.Duration
-		limit int
-	}
-	resumed []int64
+	graces    []time.Duration
+	resumed   []int64
+	// claimedWhileWorking records, for each claim, how many rows were claimed
+	// and not yet resumed: one lease per row means it is never above zero.
+	claimedWhileWorking []int
+	outstanding         int
 }
 
-func (f *fakeDeletionJournal) ClaimStaleDeletions(_ context.Context, grace time.Duration, limit int) ([]int64, error) {
+func (f *fakeDeletionJournal) ClaimNextDeletion(_ context.Context, grace time.Duration) (int64, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.claims = append(f.claims, struct {
-		grace time.Duration
-		limit int
-	}{grace, limit})
+	f.graces = append(f.graces, grace)
 	if f.claimErr != nil {
-		return nil, f.claimErr
+		return 0, false, f.claimErr
 	}
-	n := min(limit, len(f.claimable))
-	ids := slices.Clone(f.claimable[:n])
-	f.claimable = f.claimable[n:]
-	return ids, nil
+	if len(f.claimable) == 0 {
+		return 0, false, nil
+	}
+	f.claimedWhileWorking = append(f.claimedWhileWorking, f.outstanding)
+	f.outstanding++
+	id := f.claimable[0]
+	f.claimable = f.claimable[1:]
+	return id, true, nil
 }
 
 func (f *fakeDeletionJournal) ResumeDeletion(_ context.Context, projectID int64) (projectprovisioning.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resumed = append(f.resumed, projectID)
+	f.outstanding--
 	return projectprovisioning.Result{ProjectID: projectID}, f.failures[projectID]
 }
 
@@ -83,8 +86,15 @@ func TestProjectDeletionReconcilerResumesTheClaimedBatch(t *testing.T) {
 	if !slices.Equal(journal.resumed, []int64{3, 4, 5}) {
 		t.Fatalf("resumed %v, want the claimed batch [3 4 5]", journal.resumed)
 	}
-	if got := journal.claims[0]; got.grace != 7*time.Minute || got.limit != 3 {
-		t.Fatalf("claim = %+v, want the configured grace and batch", got)
+	if got := journal.graces[0]; got != 7*time.Minute {
+		t.Fatalf("claim grace = %v, want the configured one", got)
+	}
+	// One lease per row: a row is claimed only after the previous one was
+	// worked, so no claimed row ever waits in a local queue.
+	for i, outstanding := range journal.claimedWhileWorking {
+		if outstanding != 0 {
+			t.Fatalf("claim %d was made while %d claimed row(s) were still unworked", i, outstanding)
+		}
 	}
 	if reconciler.Finished() != 2 || reconciler.Failed() != 1 {
 		t.Fatalf("finished=%d failed=%d, want 2 and 1", reconciler.Finished(), reconciler.Failed())

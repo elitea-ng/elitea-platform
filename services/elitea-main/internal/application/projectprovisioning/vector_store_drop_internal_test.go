@@ -61,24 +61,67 @@ func TestActiveWorkCountsEveryCapabilityBothSidesAndTheSharedStates(t *testing.T
 	}
 }
 
-// A project that never had a vector store skips the drop without touching the
-// store (and so without connecting to the PgVector server).
-func TestCleanupVectorStoreSkipsWithoutAStore(t *testing.T) {
+// The drop is ALWAYS attempted when a vector store is configured, whatever the
+// probe recorded: a database can exist without its configuration row.
+func TestCleanupVectorStoreAlwaysAttemptsTheDrop(t *testing.T) {
 	store := &stubVectorStore{}
 	p := New(nil, nil, nil, WithVectorStore(store))
 
-	note, err := cleanupVectorStore(context.Background(), p, 7, &deletionCleanup{})
-	if err != nil || note != "skipped: no vector store" {
-		t.Fatalf("cleanupVectorStore = %q, %v", note, err)
+	cleanup := &deletionCleanup{}
+	if _, err := cleanupVectorStore(context.Background(), p, 7, cleanup); err != nil {
+		t.Fatalf("cleanupVectorStore = %v", err)
 	}
-	if len(store.dropped) != 0 {
-		t.Fatalf("the skip called the drop: %v", store.dropped)
+	if len(store.dropped) != 1 || store.droppedHadStore[0] {
+		t.Fatalf("drops = %v (hadStore %v), want one drop with hadStore=false", store.dropped, store.droppedHadStore)
+	}
+	if cleanup.VectorDatabase != "" {
+		t.Fatalf("a drop for an unrecorded store recorded database %q", cleanup.VectorDatabase)
 	}
 
-	// The journal says it had one, and this provisioner has no store to drop it
-	// with: that is a failure, not a skip.
+	// A bootstrap-less deployment: the store answers "nothing to drop".
+	store.dropFn = func(context.Context, int64, bool) (string, error) { return "", nil }
+	note, err := cleanupVectorStore(context.Background(), p, 7, &deletionCleanup{})
+	if err != nil || note != "skipped: no vector store" {
+		t.Fatalf("no bootstrap, no recorded store = %q, %v; want a skip", note, err)
+	}
+}
+
+// Probe said no and the drop fails: the journal retries it, the client is not
+// told (a quietRetry), and the database is not named as a leak.
+func TestCleanupVectorStoreFailureForAnUnrecordedStoreIsQuiet(t *testing.T) {
+	store := &stubVectorStore{dropErr: errors.New("server unreachable")}
+	p := New(nil, nil, nil, WithVectorStore(store))
+
+	cleanup := &deletionCleanup{}
+	_, err := cleanupVectorStore(context.Background(), p, 7, cleanup)
+	var quiet quietRetry
+	if !errors.As(err, &quiet) {
+		t.Fatalf("err = %v, want a quietRetry", err)
+	}
+	if cleanup.VectorDatabase != "" {
+		t.Fatalf("an unrecorded store was named: %q", cleanup.VectorDatabase)
+	}
+
+	// The same failure for a RECORDED store is reported.
+	recorded := &deletionCleanup{HadVectorStore: true}
+	_, err = cleanupVectorStore(context.Background(), p, 7, recorded)
+	if err == nil || errors.As(err, &quiet) {
+		t.Fatalf("recorded-store failure = %v, want a reported error", err)
+	}
+	if recorded.VectorDatabase != "project_7" {
+		t.Fatalf("recorded database = %q, want project_7", recorded.VectorDatabase)
+	}
+}
+
+// No vector store configured on the provisioner: a skip when none was recorded,
+// a reported leak when one was.
+func TestCleanupVectorStoreWithoutAProvisionerStore(t *testing.T) {
 	bare := New(nil, nil, nil)
-	if _, err := cleanupVectorStore(context.Background(), bare, 7, &deletionCleanup{HadVectorStore: true, VectorDatabase: "project_7"}); err == nil {
+	note, err := cleanupVectorStore(context.Background(), bare, 7, &deletionCleanup{})
+	if err != nil || !strings.HasPrefix(note, "skipped") {
+		t.Fatalf("unrecorded store, no collaborator = %q, %v; want a skip", note, err)
+	}
+	if _, err := cleanupVectorStore(context.Background(), bare, 7, &deletionCleanup{HadVectorStore: true}); err == nil {
 		t.Fatal("a recorded store with no way to drop it was reported done")
 	}
 }
@@ -105,18 +148,21 @@ func TestStepErrorMapsEachStepToItsSentinel(t *testing.T) {
 	}
 }
 
-// Every step the journal runs is a step a caller can name, and the order puts
-// the bytes first and the tenant schema and the vector database last.
+// The journal runs only the slow and external steps: the bytes first, then the
+// tenant schema and the vector database.
 func TestCleanupStepOrder(t *testing.T) {
 	var names []string
 	for _, step := range cleanupSteps() {
 		names = append(names, step.name)
 	}
-	want := []string{
-		StepArtifactBuckets, StepProjectSecrets, StepSystemToken, StepSystemUser,
-		StepProjectPermissions, StepProjectSchema, StepProjectPgvectorDrop,
-	}
+	want := []string{StepArtifactBuckets, StepProjectSchema, StepProjectPgvectorDrop}
 	if !slices.Equal(names, want) {
 		t.Fatalf("cleanup steps = %v, want %v", names, want)
+	}
+	// The identity steps are the decision's, not the journal's.
+	for _, name := range decisionSteps() {
+		if slices.Contains(names, name) {
+			t.Errorf("identity step %s is a journal step", name)
+		}
 	}
 }

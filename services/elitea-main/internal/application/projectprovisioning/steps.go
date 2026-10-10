@@ -95,6 +95,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Step names, as they appear in a Result's status records.
@@ -638,20 +639,37 @@ func removeProjectPermissions(ctx context.Context, p *Provisioner, state *provis
 	}
 	defer func() { _ = transaction.Rollback(context.WithoutCancel(ctx)) }()
 
-	if _, err := transaction.Exec(ctx,
-		`DELETE FROM elitea_identity.token_project_binding WHERE project_id = $1`,
-		state.projectID,
-	); err != nil {
-		return fmt.Errorf("delete token project bindings: %w", err)
-	}
-	if _, err := transaction.Exec(ctx,
-		`DELETE FROM public.auth_core__project_role WHERE project_id = $1`,
-		state.projectID,
-	); err != nil {
-		return fmt.Errorf("delete project roles: %w", err)
+	if err := deleteProjectPermissions(ctx, transaction, state.projectID); err != nil {
+		return err
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// execer is the write half of a pgx pool, connection or transaction. The remove
+// statements take one so the same SQL runs on its own connection (the create
+// compensation) and inside the transaction that decides a delete (#1211).
+type execer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+// deleteProjectPermissions is removeProjectPermissions' two statements on a
+// connection or transaction the caller owns. Run on a pool they are two
+// statements; the caller wraps them in a transaction when they must be one.
+func deleteProjectPermissions(ctx context.Context, db execer, projectID int64) error {
+	if _, err := db.Exec(ctx,
+		`DELETE FROM elitea_identity.token_project_binding WHERE project_id = $1`,
+		projectID,
+	); err != nil {
+		return fmt.Errorf("delete token project bindings: %w", err)
+	}
+	if _, err := db.Exec(ctx,
+		`DELETE FROM public.auth_core__project_role WHERE project_id = $1`,
+		projectID,
+	); err != nil {
+		return fmt.Errorf("delete project roles: %w", err)
 	}
 	return nil
 }
@@ -708,13 +726,17 @@ ON CONFLICT (project_id, user_id, role_id) DO NOTHING`,
 }
 
 func removeSystemUser(ctx context.Context, p *Provisioner, state *provisionState) error {
-	if state.systemUserID == 0 {
+	return deleteSystemUser(ctx, p.pool, state.systemUserID)
+}
+
+func deleteSystemUser(ctx context.Context, db execer, systemUserID int64) error {
+	if systemUserID == 0 {
 		return nil
 	}
 	// auth_core__token and auth_core__project_user_role both cascade from the
 	// user row, so this also removes the PAT created by the next step.
-	if _, err := p.pool.Exec(ctx,
-		`DELETE FROM public.auth_core__user WHERE id = $1`, state.systemUserID,
+	if _, err := db.Exec(ctx,
+		`DELETE FROM public.auth_core__user WHERE id = $1`, systemUserID,
 	); err != nil {
 		return fmt.Errorf("delete system user: %w", err)
 	}
@@ -763,12 +785,16 @@ WHERE NOT EXISTS (
 }
 
 func removeSystemToken(ctx context.Context, p *Provisioner, state *provisionState) error {
-	if state.systemUserID == 0 {
+	return deleteSystemToken(ctx, p.pool, state.systemUserID)
+}
+
+func deleteSystemToken(ctx context.Context, db execer, systemUserID int64) error {
+	if systemUserID == 0 {
 		return nil
 	}
-	if _, err := p.pool.Exec(ctx,
+	if _, err := db.Exec(ctx,
 		`DELETE FROM public.auth_core__token WHERE user_id = $1 AND name = $2`,
-		state.systemUserID, systemTokenName,
+		systemUserID, systemTokenName,
 	); err != nil {
 		return fmt.Errorf("delete system token: %w", err)
 	}

@@ -115,6 +115,11 @@ type Result struct {
 	// VectorDatabase names the PgVector database a delete could not drop. It is
 	// empty unless ErrVectorStoreNotDropped. The cleanup journal retries it.
 	VectorDatabase string
+	// Pending names the cleanup steps a delete left to the journal: those that
+	// ran and failed, and those its budget did not reach (every one after
+	// HandOffCleanup). Empty means the cleanup is complete. Journal retries
+	// finish them.
+	Pending []string
 }
 
 // ArtifactBootstrapper creates and removes a project's system buckets. It is
@@ -143,6 +148,10 @@ type ProjectVaultBootstrapper interface {
 	// write, because it alone knows how the key is wrapped.
 	EnsureProjectSecretsHeaderValue(ctx context.Context, projectID string) (bool, error)
 	RemoveProjectVault(ctx context.Context, projectID string) error
+	// RemoveProjectVaultTx is RemoveProjectVault through a transaction the
+	// caller owns (no commit, no rollback): the project delete revokes the vault
+	// in the transaction that removes the project row.
+	RemoveProjectVaultTx(ctx context.Context, tx pgx.Tx, projectID string) error
 }
 
 // ProjectVectorStore creates and removes a project's vector-store credentials
@@ -176,8 +185,7 @@ type ProjectVectorStore interface {
 	// bootstrap is configured, whatever hadStore (the probe's answer, recorded in
 	// the journal) says, so a database with no configuration row is caught. Only
 	// the absence of a bootstrap depends on hadStore: false is a skip ("", nil),
-	// true means the database exists and cannot be reached, which is an error.
-	// It returns the name of the database it was
+	// true means the database exists and cannot be reached, which is an error. It returns the name of the database it was
 	// asked to drop (also on failure, so the caller can name the leftover), or
 	// "" when there is nothing to drop.
 	DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (database string, err error)
@@ -206,11 +214,14 @@ type ProjectDefaultModelSeeder interface {
 
 // Provisioner runs the project-create pipeline.
 type Provisioner struct {
-	pool          *pgxpool.Pool
-	migrator      TenantMigrator
-	buckets       ArtifactBootstrapper
-	vault         ProjectVaultBootstrapper
-	vectorStore   ProjectVectorStore
+	pool        *pgxpool.Pool
+	migrator    TenantMigrator
+	buckets     ArtifactBootstrapper
+	vault       ProjectVaultBootstrapper
+	vectorStore ProjectVectorStore
+	// commit ends the deciding transaction of a delete. Nil is tx.Commit; a test
+	// replaces it to simulate a commit that reports an error.
+	commit        func(context.Context, pgx.Tx) error
 	defaultModels ProjectDefaultModelSeeder
 	logger        *slog.Logger
 }

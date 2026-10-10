@@ -8,19 +8,21 @@ package projectprovisioning
 // the create path compensates with, but it is shaped differently (#1211):
 //
 //  1. ONE TRANSACTION DECIDES (decideDeletion). It locks the project row
-//     FOR UPDATE, refuses while the project has work in flight, records what the
-//     project owns that has to be cleaned up, writes that record to the cleanup
-//     journal (centry.project_deletions, shared/0160), deletes every row that
-//     references the project and the project row itself, and commits. If any of
+//     FOR UPDATE, refuses while the project has work in flight, REVOKES THE
+//     PROJECT'S IDENTITY (the vault, the system token and user, the project
+//     roles and their memberships, the token bindings), records what is left to
+//     clean up in the journal (centry.project_deletions, shared/0160), deletes
+//     every row that references the project and the project row itself, and
+//     commits. The credentials therefore die atomically with the row. If any of
 //     it fails the project is unchanged and fully usable, and the delete answers
 //     ErrProjectNotRemoved.
-//  2. THE CLEANUP RUNS FROM THE JOURNAL (runCleanup), after the commit, detached
-//     from the request and with its own bound: the artifact purge, the vault,
-//     the system token and user, the project roles, the tenant schema, and the
-//     PgVector database. Every step is idempotent and marks itself done in the
-//     journal row. Whatever is left is reported by name, and the reconciler
-//     (ClaimStaleDeletions / ResumeDeletion) retries it with backoff until the
-//     journal row is complete.
+//  2. THE SLOW AND EXTERNAL CLEANUP RUNS FROM THE JOURNAL (runCleanup), after
+//     the commit: the artifact bytes (object store), the tenant schema, and the
+//     PgVector database (another server). Every step is idempotent and marks
+//     itself done in the journal row. The request waits for them only for a
+//     short budget (WithCleanupBudget); whatever is left is reported as pending,
+//     and ProjectDeletionReconciler (ClaimNextDeletion / ResumeDeletion) retries
+//     it with backoff until the journal row is complete.
 //
 // WHY THE ROW GOES FIRST. A project row that survives is a usable project, and a
 // project whose row is gone can no longer get new work: execution_jobs carries
@@ -31,10 +33,19 @@ package projectprovisioning
 // that decides is a delete that did not happen. There is no in-between state for
 // a resolver or a worker to see.
 //
-// The tenant schema, which used to be dropped last and only after the row was
-// proved gone (#374), still is: it is a journal step, and the journal exists
-// only once the row is gone. cmd/elitea-migrate can never see a project row
-// whose schema is missing.
+// WHY THE IDENTITY IS NOT IN THE JOURNAL. A credential that outlives the
+// deleted row for the length of a retry backoff is a window in which a deleted
+// project's system PAT still validates. The identity rows are plain SQL in this
+// database, so they go in the deciding transaction and die with the row.
+//
+// WHY THE TENANT SCHEMA IS STILL IN THE JOURNAL. DROP SCHEMA ... CASCADE takes
+// an ACCESS EXCLUSIVE lock on every table in the schema, so inside the deciding
+// transaction it would wait behind any session that still reads a tenant table
+// (a UI poll, a late worker write) while holding the project row lock, and the
+// table files are unlinked at commit. The schema is not a credential: nothing
+// can reach it through a deleted project, and cmd/elitea-migrate reads projects
+// and not schemas, so it can never see a project row whose schema is missing.
+// It stays a journal step (#374).
 
 import (
 	"context"
@@ -42,7 +53,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -104,16 +114,21 @@ var ErrVectorStoreNotDropped = errors.New("projectprovisioning: project vector s
 // detached from the request (the project row is already gone, so a client that
 // hangs up must not abandon the cleanup half way), so this is its deadline.
 // vectorDropTimeout bounds the drop inside it: the advisory-lock wait plus the
-// drop itself. Variables so a test can shrink them.
+// drop itself. bookkeepingTimeout bounds each journal write a run makes, on a
+// context of its own so a run that hit its deadline still records what it did.
+// leaseMargin is added to a run's bound to make its lease. Variables so a test
+// can shrink them.
 var (
-	cleanupTimeout    = 5 * time.Minute
-	vectorDropTimeout = 2 * time.Minute
+	cleanupTimeout     = 5 * time.Minute
+	vectorDropTimeout  = 2 * time.Minute
+	bookkeepingTimeout = 10 * time.Second
+	leaseMargin        = time.Minute
 )
 
-// cleanupLease is how long a run owns a journal row: the run's own bound plus a
-// margin. A run that dies leaves the lease to expire, and the reconciler picks
-// the row up again after it.
-func cleanupLease() time.Duration { return cleanupTimeout + time.Minute }
+// cleanupLease is how long a run bounded by bound owns a journal row: the bound
+// plus a margin. A run that dies leaves the lease to expire, and the reconciler
+// picks the row up again after it.
+func cleanupLease(bound time.Duration) time.Duration { return bound + leaseMargin }
 
 // The journal's retry backoff: the first failed run waits deletionRetryBase,
 // each further failure doubles it, up to deletionRetryMax. Stored in the row
@@ -152,6 +167,10 @@ type DeprovisionOption func(*deprovisionConfig)
 
 type deprovisionConfig struct {
 	skipActiveWork bool
+	// budget is how long the call waits for the cleanup after the decision
+	// commits. Zero with handOff false means the full cleanupTimeout.
+	budget  time.Duration
+	handOff bool
 }
 
 // SkipActiveWorkCheck makes Deprovision skip the count of non-terminal work. For
@@ -163,15 +182,31 @@ func SkipActiveWorkCheck() DeprovisionOption {
 	return func(c *deprovisionConfig) { c.skipActiveWork = true }
 }
 
-// deletionCleanup is the journal record: what the deciding transaction found the
-// project owns, and which cleanup steps are done. It is everything a later run
-// needs, because by then the project row (and with it every way to re-derive
-// these facts) is gone.
+// WithCleanupBudget bounds how long Deprovision waits for the journal's cleanup
+// steps after the decision commits. When the budget runs out, the steps still
+// undone are reported in Result.Pending and the journal (the reconciler)
+// finishes them. The default, with no option, is to wait for the whole run
+// (cleanupTimeout).
+func WithCleanupBudget(budget time.Duration) DeprovisionOption {
+	return func(c *deprovisionConfig) { c.budget = budget }
+}
+
+// HandOffCleanup makes Deprovision return as soon as the decision commits,
+// without running any cleanup step: every step is left to the journal. For the
+// login path, which must not wait for an object store or a vector server.
+func HandOffCleanup() DeprovisionOption {
+	return func(c *deprovisionConfig) { c.handOff = true }
+}
+
+// deletionCleanup is the journal record: what the deciding transaction found is
+// left to clean up, and which cleanup steps are done. It is everything a later
+// run needs, because by then the project row (and with it every way to
+// re-derive these facts) is gone.
+//
+// It holds only what a step reads. The tenant schema name derives from the
+// project id; the identity rows are gone with the decision; the bucket rows are
+// the artifact step's own handle and it lists them itself.
 type deletionCleanup struct {
-	TenantSchema   string          `json:"tenant_schema"`
-	SystemUserID   int64           `json:"system_user_id,omitempty"`
-	VaultProject   string          `json:"vault_project"`
-	Buckets        []string        `json:"buckets,omitempty"`
 	HadVectorStore bool            `json:"had_vector_store"`
 	VectorDatabase string          `json:"vector_database,omitempty"`
 	Done           map[string]bool `json:"done"`
@@ -185,30 +220,31 @@ type cleanupStep struct {
 }
 
 // cleanupSteps is the journal's step list, in the order a run takes it. The
-// bytes go first (the bucket rows are their only handle), the identity rows
-// after, the tenant schema and the PgVector database last.
+// bytes go first (the bucket rows are their only handle), the tenant schema and
+// the PgVector database after.
 //
-// The memberships (project_admin's rows) go with the project roles: an
-// assignment cascades from its role. The PgVector configuration row lives in
+// The identity steps (the vault, the system token and user, the project roles
+// and the memberships that cascade from them, the token bindings) are not here:
+// they ran in the deciding transaction. The PgVector configuration row lives in
 // the tenant schema and goes with it.
 func cleanupSteps() []cleanupStep {
 	return []cleanupStep{
 		{name: StepArtifactBuckets, run: cleanupArtifactBuckets},
-		{name: StepProjectSecrets, run: withState(removeProjectSecrets)},
-		{name: StepSystemToken, run: withState(removeSystemToken)},
-		{name: StepSystemUser, run: withState(removeSystemUser)},
-		{name: StepProjectPermissions, run: withState(removeProjectPermissions)},
 		{name: StepProjectSchema, run: withState(removeProjectSchema)},
 		{name: StepProjectPgvectorDrop, run: cleanupVectorStore},
 	}
 }
 
-// withState adapts a create step's remove function to a journal step. The
-// recorded system user id is the one state the remove functions read.
+// decisionSteps are the steps the deciding transaction performs, in the order
+// the response reports them. They are reported OK once the decision commits.
+func decisionSteps() []string {
+	return []string{StepProjectSecrets, StepSystemToken, StepSystemUser, StepProjectPermissions}
+}
+
+// withState adapts a create step's remove function to a journal step.
 func withState(remove func(context.Context, *Provisioner, *provisionState) error) func(context.Context, *Provisioner, int64, *deletionCleanup) (string, error) {
-	return func(ctx context.Context, p *Provisioner, projectID int64, cleanup *deletionCleanup) (string, error) {
-		state := &provisionState{projectID: projectID, systemUserID: cleanup.SystemUserID}
-		return "", remove(ctx, p, state)
+	return func(ctx context.Context, p *Provisioner, projectID int64, _ *deletionCleanup) (string, error) {
+		return "", remove(ctx, p, &provisionState{projectID: projectID})
 	}
 }
 
@@ -242,20 +278,47 @@ func cleanupArtifactBuckets(ctx context.Context, p *Provisioner, projectID int64
 	return "", nil
 }
 
+// quietRetry marks a step failure the journal retries and the client is not
+// told about: the leftover of a database the project was never recorded as
+// having. It is logged, not reported (see cleanupVectorStore).
+type quietRetry struct{ err error }
+
+func (q quietRetry) Error() string { return q.err.Error() }
+func (q quietRetry) Unwrap() error { return q.err }
+
 // cleanupVectorStore drops the project's PgVector database and role, under its
 // own bound inside the run's.
+//
+// With a vector store configured on the provisioner the drop is ALWAYS
+// attempted, whatever the configuration-row probe recorded: it is idempotent,
+// and a database can exist without the row (a provisioning run that died
+// between the two). What the probe decides is how a failure is told:
+//
+//   - recorded store, drop failed: reported (ErrVectorStoreNotDropped, the
+//     database named), the journal retries it.
+//   - no recorded store, drop failed (the server is unreachable, say): the
+//     journal retries it, and it is logged, not reported. The client is not told
+//     a database was left that nothing says existed.
+//   - no vector store configured: a skip when none was recorded, and a leak,
+//     reported, when one was.
 func cleanupVectorStore(ctx context.Context, p *Provisioner, projectID int64, cleanup *deletionCleanup) (string, error) {
-	if !cleanup.HadVectorStore {
-		return "skipped: no vector store", nil
-	}
 	if p.vectorStore == nil {
+		if !cleanup.HadVectorStore {
+			return "skipped: no vector store configured", nil
+		}
 		return "", errors.New("this provisioner has no vector store configured")
 	}
 	dropCtx, cancel := context.WithTimeout(ctx, vectorDropTimeout)
 	defer cancel()
-	database, err := p.vectorStore.DropProjectVectorStore(dropCtx, projectID, true)
-	if database != "" {
+	database, err := p.vectorStore.DropProjectVectorStore(dropCtx, projectID, cleanup.HadVectorStore)
+	if cleanup.HadVectorStore && database != "" {
 		cleanup.VectorDatabase = database
+	}
+	if err != nil && !cleanup.HadVectorStore {
+		return "", quietRetry{err: err}
+	}
+	if err == nil && database == "" {
+		return "skipped: no vector store", nil
 	}
 	return "", err
 }
@@ -285,13 +348,16 @@ func stepError(step string, cleanup *deletionCleanup, err error) error {
 //     deletes: it waits for the winner's row lock, then finds the row gone).
 //   - ErrProjectWorkActive: refused, nothing changed.
 //   - ErrProjectNotRemoved: the deciding transaction failed, nothing changed.
-//   - nil: the project is gone and every cleanup step is done.
+//   - nil: the project is gone and its identity is revoked. Result.Pending names
+//     the cleanup steps still to run (all of them after HandOffCleanup, those the
+//     CleanupBudget did not reach otherwise); empty means every step is done.
 //   - otherwise: the project is gone, and the joined error names every cleanup
-//     step left (ErrArtifactsNotRemoved, ErrTenantSchemaNotRemoved,
-//     ErrVectorStoreNotDropped, ErrCleanupIncomplete). The journal retries them.
+//     step that ran and failed (ErrArtifactsNotRemoved, ErrTenantSchemaNotRemoved,
+//     ErrVectorStoreNotDropped, ErrCleanupIncomplete). They are in Result.Pending
+//     too, and the journal retries them.
 //
-// Result.RollbackSteps reports project_model (the deciding transaction) and then
-// every journal step.
+// Result.RollbackSteps reports project_model (the deciding transaction), the
+// identity steps it performed, and then every journal step.
 //
 // THE CONNECTIONS. The deciding transaction is one pool connection and takes no
 // other while it holds the project row: everything it reads, it reads through
@@ -313,7 +379,13 @@ func (p *Provisioner) Deprovision(ctx context.Context, projectID int64, options 
 		return Result{}, errors.New("projectprovisioning: provisioner is not configured")
 	}
 
-	cleanup, err := p.decideDeletion(ctx, projectID, config.skipActiveWork)
+	// The run's bound: the budget when one was given, the full timeout otherwise.
+	// The lease the journal row carries is this bound plus a margin.
+	bound := cleanupTimeout
+	if config.budget > 0 && config.budget < bound {
+		bound = config.budget
+	}
+	cleanup, err := p.decideDeletion(ctx, projectID, config.skipActiveWork, !config.handOff, bound)
 	if err != nil {
 		if errors.Is(err, ErrProjectNotFound) || errors.Is(err, ErrProjectWorkActive) {
 			return Result{}, err
@@ -325,16 +397,37 @@ func (p *Provisioner) Deprovision(ctx context.Context, projectID int64, options 
 		return Result{ProjectID: projectID, RollbackSteps: []StepStatus{status}}, err
 	}
 
-	// The row is gone. The cleanup is DETACHED from the request: a client that
-	// hangs up (or a proxy timeout) must not abandon it half way. It gets its own
-	// bound instead, and the journal row (claimed by the deciding transaction for
-	// that bound) keeps the reconciler off it meanwhile.
-	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-	defer cancel()
-	result, cleanupErr := p.runCleanup(runCtx, projectID, cleanup)
+	decided := []StepStatus{}
 	model := StepStatus{Step: StepProjectModel, Initialized: true}
 	model.setOK()
-	result.RollbackSteps = append([]StepStatus{model}, result.RollbackSteps...)
+	decided = append(decided, model)
+	for _, name := range decisionSteps() {
+		status := StepStatus{Step: name, Initialized: true}
+		status.setOK()
+		decided = append(decided, status)
+	}
+
+	var (
+		result     Result
+		cleanupErr error
+	)
+	if config.handOff {
+		// The journal row was written without a lease: the reconciler takes it.
+		result = Result{ProjectID: projectID}
+		for _, step := range cleanupSteps() {
+			result.Pending = append(result.Pending, step.name)
+			result.RollbackSteps = append(result.RollbackSteps, StepStatus{Step: step.name})
+		}
+	} else {
+		// The row is gone. The cleanup is DETACHED from the request: a client that
+		// hangs up (or a proxy timeout) must not abandon it half way. It gets its
+		// own bound instead, and the journal row (leased by the deciding
+		// transaction for that bound) keeps the reconciler off it meanwhile.
+		runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+		defer cancel()
+		result, cleanupErr = p.runCleanup(runCtx, projectID, cleanup)
+	}
+	result.RollbackSteps = append(decided, result.RollbackSteps...)
 	return result, cleanupErr
 }
 
@@ -344,18 +437,22 @@ func (p *Provisioner) Deprovision(ctx context.Context, projectID int64, options 
 //     delete of the same project waits here and then finds the row gone.
 //  2. Unless skipActiveWork, count the project's non-terminal execution_jobs. Any
 //     is ErrProjectWorkActive: roll back, nothing has changed.
-//  3. Record the cleanup: the tenant schema, the system user, the vault, the
-//     live buckets, and whether the project has a vector store. A vector-store
-//     probe that fails fails the whole decision (ErrProjectNotRemoved, safe to
-//     retry): guessing would either leak a database or report a drop that was
-//     never needed.
-//  4. Insert the journal row, claimed by this delete for one cleanup run.
-//  5. Delete every row that references the project, and the project row.
-//  6. Commit.
+//  3. Record whether the project has a vector store. A probe that fails fails
+//     the whole decision (ErrProjectNotRemoved, safe to retry): guessing would
+//     either leak a database or report a drop that was never needed.
+//  4. Insert the journal row. With lease it is leased to this delete for one
+//     run of the given bound; without, the reconciler may take it at once.
+//  5. Revoke the identity: the vault, the system token and user, the project
+//     roles (and the memberships that cascade from them) and the token
+//     bindings. They die atomically with the row.
+//  6. Delete every row that references the project, and the project row.
+//  7. Commit.
 //
 // Any failure after step 1 is wrapped in ErrProjectNotRemoved: the transaction
-// rolls back and the project is exactly as it was.
-func (p *Provisioner) decideDeletion(ctx context.Context, projectID int64, skipActiveWork bool) (*deletionCleanup, error) {
+// rolls back and the project is exactly as it was. A commit that returns an
+// error is the one ambiguous case (the server may have committed before the
+// connection broke); it is settled by asking on a fresh connection.
+func (p *Provisioner) decideDeletion(ctx context.Context, projectID int64, skipActiveWork, lease bool, bound time.Duration) (*deletionCleanup, error) {
 	notRemoved := func(what string, err error) error {
 		return fmt.Errorf("%w: %s for project %d: %w", ErrProjectNotRemoved, what, projectID, err)
 	}
@@ -395,12 +492,41 @@ func (p *Provisioner) decideDeletion(ctx context.Context, projectID int64, skipA
 	if err != nil {
 		return nil, notRemoved("encode cleanup", err)
 	}
-	if _, err := transaction.Exec(ctx, `
+	// A journal row for this id that is COMPLETE belongs to an earlier project
+	// that had the same id (a restored database, a test that resets the
+	// sequence): reopen it. One that is INCOMPLETE would mean its cleanup is
+	// still owed for a project whose row exists again, which cannot happen (the
+	// row went in the transaction that wrote the journal); refuse rather than
+	// overwrite a record of work not done.
+	leaseSeconds := 0.0
+	if lease {
+		leaseSeconds = cleanupLease(bound).Seconds()
+	}
+	var journaled int64
+	switch err := transaction.QueryRow(ctx, `
 INSERT INTO centry.project_deletions (project_id, cleanup, claimed_until)
-VALUES ($1, $2::jsonb, now() + make_interval(secs => $3))`,
-		projectID, string(encoded), cleanupLease().Seconds(),
-	); err != nil {
+VALUES ($1, $2::jsonb, CASE WHEN $3::float8 > 0 THEN now() + make_interval(secs => $3::float8) END)
+ON CONFLICT (project_id) DO UPDATE
+SET cleanup = EXCLUDED.cleanup,
+    created_at = now(),
+    attempts = 0,
+    last_error = NULL,
+    next_attempt_at = now(),
+    claimed_until = EXCLUDED.claimed_until,
+    completed_at = NULL
+WHERE centry.project_deletions.completed_at IS NOT NULL
+RETURNING project_id`,
+		projectID, string(encoded), leaseSeconds,
+	).Scan(&journaled); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, notRemoved("write cleanup journal",
+			errors.New("an incomplete cleanup journal row already exists for this project id; it must finish before the id can be deleted again"))
+	case err != nil:
 		return nil, notRemoved("write cleanup journal", err)
+	}
+
+	if err := p.revokeIdentity(ctx, transaction, projectID); err != nil {
+		return nil, notRemoved("revoke identity", err)
 	}
 	if err := deleteProjectRows(ctx, transaction, projectID); err != nil {
 		return nil, notRemoved("delete project rows", err)
@@ -409,53 +535,75 @@ VALUES ($1, $2::jsonb, now() + make_interval(secs => $3))`,
 	// the client would leave the caller unsure whether the row went.
 	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if err := transaction.Commit(commitCtx); err != nil {
-		return nil, notRemoved("commit", err)
+	commit := p.commit
+	if commit == nil {
+		commit = func(ctx context.Context, tx pgx.Tx) error { return tx.Commit(ctx) }
+	}
+	if err := commit(commitCtx, transaction); err != nil {
+		// The answer to a failed commit is not the error: the server may have
+		// applied the transaction before the connection failed. Ask a fresh
+		// connection. Row gone and journal present is a delete that happened.
+		committed, checkErr := p.deletionCommitted(ctx, projectID)
+		switch {
+		case checkErr != nil:
+			return nil, notRemoved("commit (outcome unknown: "+checkErr.Error()+")", err)
+		case !committed:
+			return nil, notRemoved("commit", err)
+		}
+		p.logger.WarnContext(ctx, "the commit of a project delete returned an error, but the delete is in place",
+			"project_id", projectID, "err", err)
 	}
 	return cleanup, nil
 }
 
-// recordCleanup reads, through the deciding transaction, what the project owns
-// that the cleanup has to remove.
-func (p *Provisioner) recordCleanup(ctx context.Context, transaction pgx.Tx, projectID int64) (*deletionCleanup, error) {
-	state := &provisionState{projectID: projectID}
-	cleanup := &deletionCleanup{
-		TenantSchema: state.tenantSchema(),
-		VaultProject: state.projectIDString(),
-		Done:         map[string]bool{},
+// deletionCommitted reports, on a connection of its own, whether a delete of the
+// project took effect: the project row is gone AND its journal row exists. The
+// two are written in one transaction, so seeing both is seeing the commit.
+func (p *Provisioner) deletionCommitted(ctx context.Context, projectID int64) (bool, error) {
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bookkeepingTimeout)
+	defer cancel()
+	var rowExists, journalExists bool
+	if err := p.pool.QueryRow(checkCtx, `
+SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1),
+       EXISTS (SELECT 1 FROM centry.project_deletions WHERE project_id = $1)`,
+		projectID).Scan(&rowExists, &journalExists); err != nil {
+		return false, err
 	}
+	return !rowExists && journalExists, nil
+}
 
-	// removeSystemUser deletes by id. An absent row is not an error: a project
-	// provisioned before the step existed has none.
+// revokeIdentity removes, through the deciding transaction, every credential and
+// membership the project owns: the vault, the system token and user, the token
+// bindings and the project roles (the assignments cascade from the role and from
+// the user). They are the same functions the create path compensates with. A
+// project provisioned before the system user existed has none; an absent row is
+// not an error.
+func (p *Provisioner) revokeIdentity(ctx context.Context, transaction pgx.Tx, projectID int64) error {
+	state := &provisionState{projectID: projectID}
+	if err := p.vault.RemoveProjectVaultTx(ctx, transaction, state.projectIDString()); err != nil {
+		return fmt.Errorf("remove project secrets vault: %w", err)
+	}
 	var systemUserID int64
 	switch err := transaction.QueryRow(ctx,
 		`SELECT id FROM public.auth_core__user WHERE email = $1`, systemUserEmail(projectID),
 	).Scan(&systemUserID); {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:
-		return nil, fmt.Errorf("read system user: %w", err)
-	default:
-		cleanup.SystemUserID = systemUserID
+		return fmt.Errorf("read system user: %w", err)
 	}
+	if err := deleteSystemToken(ctx, transaction, systemUserID); err != nil {
+		return err
+	}
+	if err := deleteSystemUser(ctx, transaction, systemUserID); err != nil {
+		return err
+	}
+	return deleteProjectPermissions(ctx, transaction, projectID)
+}
 
-	var bucketsPresent bool
-	if err := transaction.QueryRow(ctx,
-		`SELECT to_regclass('elitea_storage.buckets') IS NOT NULL`).Scan(&bucketsPresent); err != nil {
-		return nil, fmt.Errorf("resolve elitea_storage.buckets: %w", err)
-	}
-	if bucketsPresent {
-		rows, err := transaction.Query(ctx,
-			`SELECT name FROM elitea_storage.buckets WHERE project_id = $1 AND deleted_at IS NULL ORDER BY name`, projectID)
-		if err != nil {
-			return nil, fmt.Errorf("list live buckets: %w", err)
-		}
-		names, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return nil, fmt.Errorf("list live buckets: %w", err)
-		}
-		cleanup.Buckets = names
-	}
-
+// recordCleanup reads, through the deciding transaction, what the cleanup
+// journal has to remember: whether the project has a vector store.
+func (p *Provisioner) recordCleanup(ctx context.Context, transaction pgx.Tx, projectID int64) (*deletionCleanup, error) {
+	cleanup := &deletionCleanup{Done: map[string]bool{}}
 	if p.vectorStore != nil {
 		had, err := p.vectorStore.ProjectHasVectorStore(ctx, transaction, projectID)
 		if err != nil {
@@ -473,6 +621,12 @@ func (p *Provisioner) recordCleanup(ctx context.Context, transaction pgx.Tx, pro
 // succeeds, and closes the run in the journal row: attempts, last_error, the
 // next retry or completed_at, and the lease released. Failures are reported per
 // step and joined; none hides another.
+//
+// The journal writes use a context of their own (bookkeepingContext), so a run
+// whose context ended at its deadline still records the steps it finished and
+// its backoff. A step not reached because the context ended is pending, not
+// failed: it has no status of its own and no error, and the journal row stays
+// open for the next run.
 func (p *Provisioner) runCleanup(ctx context.Context, projectID int64, cleanup *deletionCleanup) (Result, error) {
 	if cleanup.Done == nil {
 		cleanup.Done = map[string]bool{}
@@ -489,21 +643,38 @@ func (p *Provisioner) runCleanup(ctx context.Context, projectID int64, cleanup *
 			result.RollbackSteps = append(result.RollbackSteps, status)
 			continue
 		}
+		if ctx.Err() != nil {
+			// The run's bound is spent: leave the step to the journal.
+			result.RollbackSteps = append(result.RollbackSteps, StepStatus{Step: step.name})
+			result.Pending = append(result.Pending, step.name)
+			failedSteps = append(failedSteps, step.name)
+			continue
+		}
 		note, err := step.run(ctx, p, projectID, cleanup)
-		if err != nil {
+		var quiet quietRetry
+		switch {
+		case err == nil:
+			status.setOK()
+			status.Msg = note
+			cleanup.Done[step.name] = true
+			p.markCleanupStep(ctx, projectID, step.name)
+		case errors.As(err, &quiet):
+			// Retried by the journal, not reported: see cleanupVectorStore.
+			p.logger.ErrorContext(ctx, "project delete cleanup step failed for a store the project was not recorded as having; the cleanup journal retries it",
+				"step", step.name, "project_id", projectID, "err", err)
+			status.setOK()
+			status.Msg = "skipped: no vector store recorded"
+			failedSteps = append(failedSteps, step.name)
+		default:
 			p.logger.ErrorContext(ctx, "project delete cleanup step failed; the cleanup journal retries it",
 				"step", step.name, "project_id", projectID, "err", err)
 			status.setFailed(safeStepMessage(step.name))
 			failures = append(failures, stepError(step.name, cleanup, err))
 			failedSteps = append(failedSteps, step.name)
+			result.Pending = append(result.Pending, step.name)
 			if step.name == StepProjectPgvectorDrop {
 				result.VectorDatabase = cleanup.VectorDatabase
 			}
-		} else {
-			status.setOK()
-			status.Msg = note
-			cleanup.Done[step.name] = true
-			p.markCleanupStep(ctx, projectID, step.name)
 		}
 		result.RollbackSteps = append(result.RollbackSteps, status)
 	}
@@ -511,10 +682,18 @@ func (p *Provisioner) runCleanup(ctx context.Context, projectID int64, cleanup *
 	return result, errors.Join(failures...)
 }
 
+// bookkeepingContext is the context for one journal write: detached from the
+// run's (which may have ended at its deadline) with a short bound of its own.
+func bookkeepingContext(runCtx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(runCtx), bookkeepingTimeout)
+}
+
 // markCleanupStep records one finished step in the journal row. A failure is
 // logged only: the step is idempotent, so the worst outcome is that a later run
 // repeats it.
-func (p *Provisioner) markCleanupStep(ctx context.Context, projectID int64, step string) {
+func (p *Provisioner) markCleanupStep(runCtx context.Context, projectID int64, step string) {
+	ctx, cancel := bookkeepingContext(runCtx)
+	defer cancel()
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
 SET cleanup = jsonb_set(cleanup, ARRAY['done', $2::text], 'true'::jsonb, true)
@@ -528,7 +707,9 @@ WHERE project_id = $1`, projectID, step); err != nil {
 // row is complete. Otherwise last_error names the failed steps (names only: a
 // raw error can carry SQL or addresses) and next_attempt_at backs off by the
 // number of runs so far.
-func (p *Provisioner) finishCleanupRun(ctx context.Context, projectID int64, failedSteps []string) {
+func (p *Provisioner) finishCleanupRun(runCtx context.Context, projectID int64, failedSteps []string) {
+	ctx, cancel := bookkeepingContext(runCtx)
+	defer cancel()
 	var lastError *string
 	if len(failedSteps) > 0 {
 		message := "steps did not complete: " + fmt.Sprint(failedSteps)
@@ -550,21 +731,25 @@ WHERE project_id = $1`,
 	}
 }
 
-// ClaimStaleDeletions claims up to limit incomplete journal rows that are older
-// than grace, past their backoff and not leased to a run, and returns their
-// project ids in ascending order. The claim is one short transaction: FOR
-// UPDATE SKIP LOCKED picks the rows (a row another replica is claiming right
-// now is skipped, not waited for) and the same statement stamps a lease on
-// them. No lock or connection is held while the caller then runs the cleanup
-// (ResumeDeletion), so a claim cannot starve the pool the steps need.
-func (p *Provisioner) ClaimStaleDeletions(ctx context.Context, grace time.Duration, limit int) ([]int64, error) {
+// ClaimNextDeletion claims ONE incomplete journal row that is older than grace,
+// past its backoff and not leased, and leases it for one cleanup run
+// (cleanupTimeout plus a margin). ok is false when there is none.
+//
+// One row per claim, and the claim is its own short transaction: FOR UPDATE
+// SKIP LOCKED picks the row (a row another replica is claiming right now is
+// skipped, not waited for) and the same statement stamps the lease. The caller
+// works that row (ResumeDeletion), then claims the next. A lease is therefore
+// held only by a row that is being worked, never by one waiting in a local
+// queue behind slow neighbours, and no lock or connection is held while the
+// steps run.
+func (p *Provisioner) ClaimNextDeletion(ctx context.Context, grace time.Duration) (projectID int64, ok bool, err error) {
 	if p.pool == nil {
-		return nil, errors.New("projectprovisioning: provisioner is not configured")
+		return 0, false, errors.New("projectprovisioning: provisioner is not configured")
 	}
-	if limit <= 0 || grace < 0 {
-		return nil, errors.New("projectprovisioning: claim needs a positive limit and a non-negative grace")
+	if grace < 0 {
+		return 0, false, errors.New("projectprovisioning: claim needs a non-negative grace")
 	}
-	rows, err := p.pool.Query(ctx, `
+	switch err := p.pool.QueryRow(ctx, `
 WITH claimable AS (
     SELECT project_id
     FROM centry.project_deletions
@@ -573,28 +758,26 @@ WITH claimable AS (
       AND next_attempt_at <= now()
       AND (claimed_until IS NULL OR claimed_until < now())
     ORDER BY next_attempt_at, project_id
-    LIMIT $2
+    LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
 UPDATE centry.project_deletions AS journal
-SET claimed_until = now() + make_interval(secs => $3)
+SET claimed_until = now() + make_interval(secs => $2)
 FROM claimable
 WHERE journal.project_id = claimable.project_id
 RETURNING journal.project_id`,
-		grace.Seconds(), limit, cleanupLease().Seconds())
-	if err != nil {
-		return nil, fmt.Errorf("projectprovisioning: claim project deletions: %w", err)
+		grace.Seconds(), cleanupLease(cleanupTimeout).Seconds(),
+	).Scan(&projectID); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("projectprovisioning: claim project deletion: %w", err)
 	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
-	if err != nil {
-		return nil, fmt.Errorf("projectprovisioning: claim project deletions: %w", err)
-	}
-	slices.Sort(ids)
-	return ids, nil
+	return projectID, true, nil
 }
 
 // ResumeDeletion runs the remaining cleanup steps of a journal row the caller
-// has claimed (ClaimStaleDeletions). It answers like the second phase of
+// has claimed (ClaimNextDeletion). It answers like the second phase of
 // Deprovision: nil when every step is done, otherwise the joined leftovers. A
 // project with no journal row is ErrProjectNotFound; a complete row is nil.
 func (p *Provisioner) ResumeDeletion(ctx context.Context, projectID int64) (Result, error) {
