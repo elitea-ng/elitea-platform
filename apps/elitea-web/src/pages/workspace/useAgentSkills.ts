@@ -7,7 +7,7 @@
  */
 import { useMemo } from 'react';
 
-import type { ComposerSkill } from '@/features/workspace';
+import { composer } from '@/features/workspace';
 import { useListApplicationSkills } from '@/shared/api/generated/skills/skills';
 import { unwrapList } from '@/shared/api/unwrap';
 
@@ -16,6 +16,9 @@ interface SkillRow {
   name?: unknown;
   description?: unknown;
 }
+
+/** One skill the composer's "/" menu offers (the shape `composer.matchingSkills` filters). */
+export type ComposerSkill = Parameters<typeof composer.matchingSkills>[0][number];
 
 /** `[]` until an agent version is picked, while it loads and when the read fails. */
 export function useAgentSkills(projectId: number, versionId: string): ComposerSkill[] {

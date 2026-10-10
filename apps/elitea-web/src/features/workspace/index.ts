@@ -25,7 +25,6 @@ export type { WorkspaceTurn } from './model/useWorkspaceTurn';
 export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
 export type { WorkspaceCommandId } from './model/composerCommands';
-export type { ComposerSkill } from './model/composerSkills';
 
 /** The composer's text rules ("@"/"/" tokens, referenced paths), its local "/" commands and the agent's skills in the "/" menu, as one bundle. */
 export const composer = { activeToken, mentionText, referencedPaths, matchingCommands, workspaceCommands, matchingSkills, skillToken, invokedSkill };

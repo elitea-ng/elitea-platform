@@ -30,7 +30,9 @@ import type { Theme } from '@mui/material/styles';
 import Switch from '@mui/material/Switch';
 
 import { NewChatInput } from '@/features/chat-input';
-import { composer, SuggestionMenu, type ComposerSkill, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
+import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
+
+import type { ComposerSkill } from './useAgentSkills';
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
