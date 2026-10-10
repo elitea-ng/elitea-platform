@@ -6,6 +6,7 @@ pub mod artifact;
 pub(crate) mod artifact;
 pub(crate) mod azure;
 pub(crate) mod azure_search;
+pub(crate) mod bigquery;
 pub(crate) mod bitbucket;
 pub(crate) mod confluence;
 pub(crate) mod elastic;

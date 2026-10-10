@@ -151,7 +151,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `slack` | `configurations/slack.py::SlackConfiguration` | `tools/slack::SlackToolkit` | 7 | No | `toolkits/families/slack/{config,client,tools}.rs` | Capability-disabled complete family: seven bounded fixed-origin messaging, membership and workspace operations; authorized materialization, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `azure_search` | `configurations/azure_search.py::AzureSearchConfiguration` | `tools/azure_ai/search::AzureSearchToolkit` | 2 | No | `toolkits/families/azure_search/{config,client,tools}.rs` | Capability-disabled complete read family: fixed configured index, two bounded reads, SDK 11.5.2 wire/result projection and no unbounded continuation; authorized materialization and live provider proof remain gates |
 | `delta_lake` | `configurations/delta_lake.py::DeltaLakeConfiguration` | `tools/aws/delta_lake::DeltaLakeToolkit` | 3 | No | `configurations/families/delta_lake.rs`; `toolkits/families/delta_lake/` | Planned; source has no focused family tests |
-| `bigquery` | `configurations/bigquery.py::BigQueryConfiguration` | `tools/google/bigquery::BigQueryToolkit` | 11 | No | `configurations/families/bigquery.rs`; `toolkits/families/bigquery/` | Planned; source has no focused family tests |
+| `bigquery` | `configurations/bigquery.py::BigQueryConfiguration` | `tools/google/bigquery::BigQueryToolkit` | 11 | No | `toolkits/families/bigquery/{config,client,format,tools}.rs` | Partial capability-disabled family: 8 of 11 tools (reads, nearest-neighbour searches, job statistics, vector-index DDL and Delta Lake external-table creation); `similarity_search`, `similarity_search_with_score` and `execute` are not served |
 | `xray` | `configurations/xray.py::XrayConfiguration` | `tools/xray::XrayToolkit` as `xray_cloud` | 12 | Yes | `configurations/families/xray.rs`; `toolkits/families/xray/` | Planned; preserve runtime alias |
 | `zephyr` | None; base URL and Basic-auth credentials are inline toolkit settings | `tools/zephyr::ZephyrToolkit` | 4 | No | `toolkits/families/zephyr/{config,client,tools}.rs` | Capability-disabled complete legacy family: one bounded step read plus all three sequential create effects; exact-interrupt HITL, durable partial-effect reconciliation, approved egress and live legacy-ZAPI proof remain gates |
 | `zephyr_scale` | `configurations/zephyr.py::ZephyrConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_scale::ZephyrScaleToolkit` | 26 | Yes | `toolkits/families/zephyr_scale/{config,client,folders,render,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all 20 business operations against the fixed Cloud API with the token; the 6 inherited indexing tools are not served |
@@ -2353,6 +2353,44 @@ certificate or a future claim-owned CA contract plus live Kubernetes RBAC prove
 both application and ad-hoc materialization. Reads may independently be marked
 sensitive because API responses can expose secrets, workload configuration and
 cluster topology.
+
+### BigQuery partial warehouse family
+
+BigQuery is a configuration-backed family: Main seals
+`bigquery_configuration.api_key`, which holds the complete service-account
+JSON, and freezes the optional `project`, `location`, `dataset` and `table`
+defaults beside it. Worker-pinned SDK `b5113a1` exposes eleven tools. The SDK
+toolkit binds only explicitly selected tools (an empty selection binds none),
+prefixes `Toolkit:` and then `Project:` to each description and cuts it to 1000
+characters. Rust keeps all three rules.
+
+The pinned SDK cannot run any of its tools. `BigQueryAction` is built without
+`mode`, so every call dispatches the empty tool name and returns an
+`Error: ... Unknown tool name` traceback; the vector tools call a
+`_row_to_document` helper that does not exist; the vector SQL calls
+`VECTOR_DISTANCE`, which BigQuery does not have; and `execute` requires a client
+that only a previous call would have created. Rust therefore ports what each
+wrapper method was written to do rather than the failure, and records each
+repair here.
+
+| Python source | Observable responsibility | Rust target |
+| --- | --- | --- |
+| `configurations/bigquery.py` and `tools/google/bigquery/__init__.py::{BigQueryToolkit,get_tools}` | Nested sealed service account, table defaults, explicit-only selection and description prefix | `config.rs` parses `bigquery_configuration` through the `gcp` family's non-debuggable signing configuration; `tools.rs` selects in SDK order and omits unserved names with a warning |
+| `BigQueryApiWrapper.bigquery_client` (`google.cloud.bigquery.Client`) | Service-account OAuth, job project (configured, else the key's `project_id`) and location | `client.rs` signs with `gcp::client::service_account_token_request` and the `bigquery` scope, then runs jobs.query, jobs.getQueryResults polling and paging over verified HTTPS with no redirect or retry |
+| `get_documents`, `_create_filters`, `_get_table_id` | `SELECT *` over the configured table with `doc_id IN UNNEST(@ids)` and a dict or WHERE-text filter | `tools.rs::where_clause` reproduces the bare-number/quoted-text rule; values become escaped GoogleSQL literals, keys must be field paths and `;` is refused |
+| `similarity_search_by_vector[_with_score]`, `similarity_search_by_vectors`, `batch_search` | Nearest rows by a `FLOAT64` array parameter, `ORDER BY score ASC LIMIT k`; `batch_search` quotes every dict value and refuses text queries without an embedding model | `EUCLIDEAN_DISTANCE(embedding, @query_embedding)`, the distance the SDK's own vector index declares; the `{**d, ...}` branches of `similarity_search_by_vectors` are kept as written |
+| `create_vector_index`, `create_delta_lake_table` | `CREATE VECTOR INDEX IF NOT EXISTS ... IVF/EUCLIDEAN`; tables.insert of a `DELTA_LAKE` external table with `exists_ok=True` | DDL and tables.insert are effects: a post-dispatch timeout, 408, 429, 5xx or unreadable answer is a non-retryable unknown outcome; a 409 reads the existing table back |
+| `job_stats` | `get_job(job_id)._properties["statistics"]` | jobs.get in the configured location, projected to `statistics` |
+| `process_output` (`json.dumps(rows, default=str)`) | Result text | `format.rs` emits CPython's default `json.dumps`: schema column order, `", "`/`": "` separators, `ensure_ascii`, `repr` floats and the `str()` forms of TIMESTAMP, DATETIME and TIME values the Python client builds |
+
+Not served: `similarity_search` and `similarity_search_with_score` embed text
+through `self.embedding`, which no toolkit path sets, and `execute` reflects
+over arbitrary Python client methods, which has no REST equivalent. They are
+absent from `supported_tools.bigquery`, so the catalogue marks them
+unavailable. A result over 1000 rows is refused with a narrow-the-filter error
+rather than returned unbounded. Production registration remains gated on the
+same live service-account, exact-interrupt HITL, effect-reconciliation and
+egress proofs as the `gcp` family.
 
 ## Special runtime toolsets
 

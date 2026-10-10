@@ -22,6 +22,7 @@ use adk_core::Toolset;
 
 use super::DelegatedAuthorizationCatalog;
 use super::families::artifact::ArtifactToolAuthority;
+use super::families::bigquery;
 use super::families::confluence;
 use super::families::jira;
 #[cfg(feature = "toolkit-sql")]
@@ -183,6 +184,7 @@ async fn materialize(
             | "azure_search"
             | "bitbucket"
             | "confluence"
+            | "bigquery"
             | "elastic"
             | "gcp"
             | "github"
@@ -327,6 +329,13 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|error| confluence_toolset_materialization_error(error.code()))?,
+        "bigquery" => bigquery::tools::build_bigquery_toolset(
+            name,
+            bigquery::config::BigQueryToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| bigquery_toolset_materialization_error(error.code()))?,
         "elastic" => elastic::tools::build_elastic_toolset(
             name,
             elastic::config::ElasticToolkitConfig::parse(settings)
@@ -669,5 +678,19 @@ const fn sharepoint_toolset_materialization_error(
         | sharepoint::tools::SharePointToolsetErrorCode::UnsupportedSelection => {
             unsupported_toolkit()
         }
+    }
+}
+
+const fn bigquery_toolset_materialization_error(
+    code: bigquery::tools::BigQueryToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        // Only SDK tools this runtime does not serve were selected: skip the
+        // toolkit with the materializer's warning rather than fail the run.
+        bigquery::tools::BigQueryToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+        bigquery::tools::BigQueryToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        bigquery::tools::BigQueryToolsetErrorCode::InvalidConfiguration
+        | bigquery::tools::BigQueryToolsetErrorCode::Client
+        | bigquery::tools::BigQueryToolsetErrorCode::InvalidDefinition => invalid_configuration(),
     }
 }
