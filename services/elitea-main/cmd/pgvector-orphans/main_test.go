@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"strings"
 	"testing"
@@ -172,7 +173,7 @@ func TestRunAgainstPostgres(t *testing.T) {
 
 	cfg, _ := pgx.ParseConfig(url)
 	cfg.Database = platformDB
-	platformURL := strings.TrimSuffix(url, "/postgres") + "/" + platformDB
+	platformURL := withDatabase(t, url, platformDB)
 	platform, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -425,11 +426,8 @@ INSERT INTO centry.project (id) VALUES (1), (2);`); err != nil {
 	}
 	t.Cleanup(func() { beforeDrop = func(orphan) {} })
 
-	adminURL := strings.TrimSuffix(url, "/postgres")
-	if adminURL == url {
-		t.Skip("ELITEA_TEST_DATABASE_URL does not end in /postgres; cannot build a URL with no database")
-	}
-	platformURL := adminURL + "/" + platformDB
+	adminURL := withDatabase(t, url, "")
+	platformURL := withDatabase(t, url, platformDB)
 	lookup := func(string) (string, bool) { return "", false }
 
 	var out, errOut bytes.Buffer
@@ -469,4 +467,21 @@ INSERT INTO centry.project (id) VALUES (1), (2);`); err != nil {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
 	}
+}
+
+// withDatabase returns raw with its database (the URL path) replaced, keeping
+// the query string (sslmode, ...). An empty database yields a URL that names
+// none. Test URLs differ between local runs and CI, so no suffix is assumed.
+func withDatabase(t *testing.T, raw, database string) string {
+	t.Helper()
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse ELITEA_TEST_DATABASE_URL: %v", err)
+	}
+	if database == "" {
+		u.Path = ""
+	} else {
+		u.Path = "/" + database
+	}
+	return u.String()
 }
