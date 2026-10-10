@@ -28,6 +28,7 @@ use super::families::jira;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
 use super::families::testio;
+use super::families::testrail;
 use super::families::{
     aha, artifact, azure, azure_search, bitbucket, carrier, elastic, figma, gcp, github, gitlab,
     gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
@@ -246,6 +247,10 @@ async fn materialize(
     }
     if reference.tool_type().starts_with("ado_") {
         let toolset = materialize_ado(reference.tool_type(), name, settings, policy)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
+    if matches!(reference.tool_type(), "testio" | "testrail") {
+        let toolset = materialize_test_management(reference.tool_type(), name, settings, policy)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     let toolset = materialize_p_to_z(reference.tool_type(), name, settings, policy)?;
@@ -558,16 +563,6 @@ fn materialize_p_to_z(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
-        "testio" => testio::tools::build_testio_toolset(
-            name,
-            testio::config::TestIoToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
-            policy,
-        )
-        .map_err(|error| match error.code() {
-            testio::tools::TestIoToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
-            _ => invalid_configuration(),
-        })?,
         "yagmail" => yagmail::tools::build_yagmail_toolset(
             name,
             yagmail::config::YagmailToolkitConfig::parse(settings)
@@ -590,6 +585,43 @@ fn materialize_p_to_z(
         )
         .map_err(|_| invalid_configuration())?,
         // MCP and nested applications are rejected above by kind.
+        _ => return Err(unsupported_toolkit()),
+    };
+    Ok(Arc::new(toolset))
+}
+
+/// The test-management families. A selection that names only tools a
+/// partial family does not serve skips the toolkit, as an unsupported family
+/// is skipped.
+fn materialize_test_management(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let toolset = match tool_type {
+        "testio" => testio::tools::build_testio_toolset(
+            name,
+            testio::config::TestIoToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| match error.code() {
+            testio::tools::TestIoToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+            _ => invalid_configuration(),
+        })?,
+        "testrail" => testrail::tools::build_testrail_toolset(
+            name,
+            testrail::config::TestRailToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| match error.code() {
+            testrail::tools::TestRailToolsetErrorCode::UnsupportedSelection => {
+                unsupported_toolkit()
+            }
+            _ => invalid_configuration(),
+        })?,
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))

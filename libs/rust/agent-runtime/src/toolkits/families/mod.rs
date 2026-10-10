@@ -31,6 +31,7 @@ pub mod openapi;
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod openapi;
 pub(crate) mod postman;
+pub(crate) mod python_repr;
 pub(crate) mod rally;
 pub(crate) mod report_portal;
 pub(crate) mod salesforce;
@@ -41,6 +42,7 @@ pub(crate) mod sonar;
 #[cfg(feature = "toolkit-sql")]
 pub(crate) mod sql;
 pub(crate) mod testio;
+pub(crate) mod testrail;
 pub(crate) mod vcs_text;
 pub(crate) mod yagmail;
 pub(crate) mod zephyr;

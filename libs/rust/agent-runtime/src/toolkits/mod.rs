@@ -137,6 +137,8 @@ mod sql_tests;
 #[cfg(test)]
 mod testio_tests;
 #[cfg(test)]
+mod testrail_tests;
+#[cfg(test)]
 mod yagmail_tests;
 #[cfg(test)]
 mod zephyr_enterprise_tests;
