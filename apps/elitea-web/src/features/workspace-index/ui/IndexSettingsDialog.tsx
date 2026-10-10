@@ -132,8 +132,31 @@ function Actions({ status, busy, run, onRemove }: { status: IndexStatus; busy: b
   );
 }
 
+/** The policy turns the index off, but one is on this computer: it may still be turned off or removed. */
+function PolicyOffActions({ busy, run, onRemove }: { busy: boolean; run: (action: IndexAction) => void; onRemove: () => void }): React.JSX.Element {
+  return (
+    <>
+      <Button color="error" disabled={busy} onClick={onRemove} sx={{ marginRight: 'auto' }}>
+        {t('workspace.index.remove', 'Remove index…')}
+      </Button>
+      <Button disabled={busy} onClick={() => run('disable')}>
+        {t('workspace.index.disable', 'Turn off')}
+      </Button>
+    </>
+  );
+}
+
+/** What the footer offers: the controls, the two still allowed under a policy that turns the index off, or nothing but Close. */
+function footerActions(index: WorkspaceIndex, onRemove: () => void): React.ReactNode {
+  const { view } = index;
+  if (view?.kind === 'status') return <Actions status={view.status} busy={index.pending} run={index.run} onRemove={onRemove} />;
+  if (view?.kind === 'disabled' && view.onDisk) return <PolicyOffActions busy={index.pending} run={index.run} onRemove={onRemove} />;
+  return null;
+}
+
 interface FooterProps {
-  status: IndexStatus;
+  /** The actions offered (not while confirming a removal). */
+  actions: React.ReactNode;
   index: WorkspaceIndex;
   confirming: boolean;
   onConfirming: (confirming: boolean) => void;
@@ -141,7 +164,7 @@ interface FooterProps {
 }
 
 /** The actions, or the remove confirmation's two answers. */
-function Footer({ status, index, confirming, onConfirming, onClose }: FooterProps): React.JSX.Element {
+function Footer({ actions, index, confirming, onConfirming, onClose }: FooterProps): React.JSX.Element {
   if (confirming) {
     return (
       <>
@@ -162,7 +185,7 @@ function Footer({ status, index, confirming, onConfirming, onClose }: FooterProp
   }
   return (
     <>
-      <Actions status={status} busy={index.pending} run={index.run} onRemove={() => onConfirming(true)} />
+      {actions}
       <Button onClick={onClose}>{t('workspace.index.close', 'Close')}</Button>
     </>
   );
@@ -176,6 +199,7 @@ export function IndexSettingsDialog({ open, onClose, name, index }: IndexSetting
     onClose();
   };
   const status = view?.kind === 'status' ? view.status : undefined;
+  const actions = footerActions(index, () => setConfirming(true));
 
   return (
     <Dialog open={open} onClose={close} aria-labelledby="workspace-index-title" fullWidth maxWidth="sm">
@@ -207,10 +231,10 @@ export function IndexSettingsDialog({ open, onClose, name, index }: IndexSetting
         {actionError !== null && <Alert severity="error">{describeIndexError(actionError)}</Alert>}
       </DialogContent>
       <DialogActions>
-        {status === undefined ? (
+        {actions === null ? (
           <Button onClick={close}>{t('workspace.index.close', 'Close')}</Button>
         ) : (
-          <Footer status={status} index={index} confirming={confirming} onConfirming={setConfirming} onClose={close} />
+          <Footer actions={actions} index={index} confirming={confirming} onConfirming={setConfirming} onClose={close} />
         )}
       </DialogActions>
     </Dialog>

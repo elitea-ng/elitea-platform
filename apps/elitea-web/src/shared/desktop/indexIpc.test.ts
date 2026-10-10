@@ -61,7 +61,9 @@ describe('createFakeIndexIpc', () => {
     expect((await ipc.status('w1')).state).toBe('off');
 
     ipc.setPolicyAllowed(false);
-    await expect(ipc.status('w1')).rejects.toBeInstanceOf(WorkspaceIpcError);
+    // The policy off is a status (turning off and removing stay allowed); other commands reject.
+    await expect(ipc.status('w1')).resolves.toMatchObject({ state: 'off', policy_off: true, on_disk: false });
+    await expect(ipc.enable('w1')).rejects.toBeInstanceOf(WorkspaceIpcError);
     // Turning off and removing are allowed whatever the policy says.
     await expect(ipc.disable('w1')).resolves.toMatchObject({ state: 'off' });
     await expect(ipc.remove('w1')).resolves.toBeUndefined();

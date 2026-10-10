@@ -18,25 +18,53 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io;
 
+/// A caller's stop request, asked before each file is read.
+pub type Stop<'a> = &'a (dyn Fn() -> bool + Sync);
+
+/// The error text of a file not read because the parse was stopped.
+pub const STOPPED: &str = "the parse was stopped";
+
 /// The bytes of the files a parse reads.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub enum Sources<'a> {
     /// Each path is read from disk.
     Disk,
     /// Each path's bytes, as the caller read them. A path absent here is
     /// "not found": it is never read from disk instead.
     Memory(&'a BTreeMap<String, &'a [u8]>),
+    /// [`Self::Memory`], and once `stop` answers `true` no further file is
+    /// read: each fails at once with [`STOPPED`], so a stopped parse ends
+    /// after the files already being parsed instead of parsing them all.
+    /// The caller discards the results then.
+    MemoryUntil(&'a BTreeMap<String, &'a [u8]>, Stop<'a>),
+}
+
+impl std::fmt::Debug for Sources<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disk => f.write_str("Disk"),
+            Self::Memory(files) | Self::MemoryUntil(files, _) => {
+                f.debug_tuple("Memory").field(&files.len()).finish()
+            }
+        }
+    }
 }
 
 impl<'a> Sources<'a> {
     /// The bytes of `path`.
     pub(crate) fn read(self, path: &str) -> io::Result<Cow<'a, [u8]>> {
-        match self {
-            Self::Disk => std::fs::read(path).map(Cow::Owned),
-            Self::Memory(files) => files
+        let memory = |files: &'a BTreeMap<String, &'a [u8]>| {
+            files
                 .get(path)
                 .map(|bytes| Cow::Borrowed(*bytes))
-                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound)),
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        };
+        match self {
+            Self::Disk => std::fs::read(path).map(Cow::Owned),
+            Self::MemoryUntil(_, stop) if stop() => {
+                Err(io::Error::new(io::ErrorKind::Interrupted, STOPPED))
+            }
+            Self::Memory(files) | Self::MemoryUntil(files, _) => memory(files),
         }
     }
 }
@@ -127,5 +155,30 @@ mod tests {
             assert_eq!(still, passed_in, "{language}: the disk was read");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stopped parse reads no further file: every file read after the
+    /// stop fails at once, whatever its language.
+    #[test]
+    fn a_stopped_parse_reads_no_further_file() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let files: Vec<String> = (0..40).map(|n| format!("/m/f{n}.py")).collect();
+        let text = b"class A:\n    def m(self):\n        return 1\n".as_slice();
+        let bytes: BTreeMap<String, &[u8]> = files.iter().map(|f| (f.clone(), text)).collect();
+        let asked = AtomicUsize::new(0);
+        // Stop after the fifth file asked to be read.
+        let stop = || asked.fetch_add(1, Ordering::SeqCst) >= 5;
+        let Some(parser) = crate::parser_for("python") else {
+            unreachable!("python")
+        };
+        let results = parser.parse_sources(&files, Sources::MemoryUntil(&bytes, &stop));
+        let stopped = results
+            .values()
+            .filter(|r| r.errors.iter().any(|e| e.contains(STOPPED)))
+            .count();
+        assert_eq!(stopped, 35, "{results:?}");
+        let never = || false;
+        let all = parser.parse_sources(&files, Sources::MemoryUntil(&bytes, &never));
+        assert_eq!(all, parser.parse_sources(&files, Sources::Memory(&bytes)));
     }
 }

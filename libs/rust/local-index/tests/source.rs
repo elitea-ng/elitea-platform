@@ -65,6 +65,9 @@ fn the_listing_is_what_the_agent_tools_see() {
     );
 }
 
+/// The listing reads nothing (a file never seen is listed by its stat);
+/// the fetch reads the file once, confined, and its version is the hash of
+/// those bytes.
 #[tokio::test]
 async fn documents_are_versioned_by_content_and_read_confined() {
     let folder = tempfile::tempdir().unwrap();
@@ -72,14 +75,20 @@ async fn documents_are_versioned_by_content_and_read_confined() {
     let source = LocalFolderSource::new(workspace(folder.path(), &[]));
     let listed = source.list().await.unwrap();
     assert_eq!(listed.len(), 1);
+    assert_eq!(source.reads(), 0, "the listing reads no file");
+    let (size, mtime_ns) = source.stats()["a.py"];
     assert_eq!(
         listed[0].version,
-        elitea_content_source::content_version(b"x = 1\n")
+        elitea_local_index::source::stat_version(size, mtime_ns)
     );
     assert_eq!(listed[0].mime, "text/plain");
     let document = source.fetch("a.py").await.unwrap();
     assert_eq!(document.bytes, b"x = 1\n");
-    assert_eq!(document.reference.version, listed[0].version);
+    assert_eq!(
+        document.reference.version,
+        elitea_content_source::content_version(b"x = 1\n")
+    );
+    assert_eq!(source.reads(), 1);
     assert!(source.fetch("../etc/passwd").await.is_err());
     assert!(source.fetch("missing.py").await.is_err());
 }
@@ -93,6 +102,8 @@ fn set_mtime(path: &Path, when: SystemTime) {
         .unwrap();
 }
 
+/// What a completed run records: each file's fetched (content) version
+/// with the stat the listing paired it with.
 fn previous_of(source: &LocalFolderSource) -> HashMap<String, DocumentStat> {
     let listed = source.list_now().unwrap();
     let stats = source.stats();
@@ -100,10 +111,11 @@ fn previous_of(source: &LocalFolderSource) -> HashMap<String, DocumentStat> {
         .into_iter()
         .map(|reference| {
             let (size, mtime_ns) = stats[&reference.key];
+            let version = source.fetch_now(&reference.key).unwrap().reference.version;
             (
                 reference.key,
                 DocumentStat {
-                    version: reference.version,
+                    version,
                     size,
                     mtime_ns,
                 },
@@ -113,7 +125,7 @@ fn previous_of(source: &LocalFolderSource) -> HashMap<String, DocumentStat> {
 }
 
 #[test]
-fn only_files_whose_size_or_mtime_changed_are_hashed_again() {
+fn only_files_whose_size_or_mtime_changed_are_read_again() {
     let folder = tempfile::tempdir().unwrap();
     let root = folder.path();
     write(root, "same.py", "a = 1\n");
@@ -126,19 +138,28 @@ fn only_files_whose_size_or_mtime_changed_are_hashed_again() {
     let ws = workspace(root, &[]);
     let first = LocalFolderSource::new(ws.clone());
     let previous = previous_of(&first);
-    assert_eq!(first.hashed(), 3, "a first listing hashes everything");
+    assert_eq!(first.hashed(), 3, "a first listing finds everything new");
+    assert_eq!(first.reads(), 3, "each file read once, by its fetch");
 
-    // Same size, new content, new mtime: hashed again, new version.
+    // Same size, new content, new mtime: listed by its stat (read later).
     fs::write(root.join("edited.py"), "b = 2\n").unwrap();
-    // Touched, content unchanged: hashed again, same version.
+    // Touched, content unchanged: listed by its stat too.
     set_mtime(&root.join("touched.py"), SystemTime::now());
     let second = LocalFolderSource::new(ws).with_previous(previous.clone());
-    let now = previous_of(&second);
-    assert_eq!(second.hashed(), 2, "the unchanged file is not read");
-    assert_eq!(now["same.py"].version, previous["same.py"].version);
-    assert_ne!(now["edited.py"].version, previous["edited.py"].version);
-    assert_eq!(now["touched.py"].version, previous["touched.py"].version);
-    assert_ne!(now["touched.py"].mtime_ns, previous["touched.py"].mtime_ns);
+    let listed: HashMap<String, String> = second
+        .list_now()
+        .unwrap()
+        .into_iter()
+        .map(|reference| (reference.key, reference.version))
+        .collect();
+    assert_eq!(second.hashed(), 2);
+    assert_eq!(second.reads(), 0, "the listing reads nothing");
+    assert_eq!(
+        listed["same.py"], previous["same.py"].version,
+        "kept unread"
+    );
+    assert_ne!(listed["edited.py"], previous["edited.py"].version);
+    assert_ne!(listed["touched.py"], previous["touched.py"].version);
 }
 
 #[test]
@@ -387,4 +408,77 @@ async fn the_version_recorded_is_the_one_of_the_bytes_parsed() {
         content_version(after.as_bytes()),
         "not the listing's version of the old bytes"
     );
+}
+
+/// A file only touched (new mtime, same bytes) is read once to hash it and
+/// keeps its build: it is not parsed again. Every new file is read once.
+#[tokio::test]
+async fn a_touched_file_is_read_once_and_not_parsed_again() {
+    use elitea_inventory_core::graph::Graph;
+    use elitea_inventory_core::ingest::{SourceSelection, ingest_documents};
+
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().to_owned();
+    write(&root, "a.py", "class A:\n    pass\n");
+    write(&root, "b.py", "class B:\n    pass\n");
+    let past = SystemTime::now() - Duration::from_hours(1);
+    for name in ["a.py", "b.py"] {
+        set_mtime(&root.join(name), past);
+    }
+    let ws = workspace(&root, &[]);
+    let (_lines, context) = context();
+    let selection = SourceSelection::all("workspace");
+    let first = LocalFolderSource::new(ws.clone()).selecting(Selection::default());
+    let mut graph = Graph::new();
+    let built = ingest_documents(
+        &mut graph,
+        &selection,
+        &first,
+        &root,
+        &std::collections::BTreeMap::default(),
+        &context,
+    )
+    .await
+    .unwrap();
+    assert_eq!(built.documents_processed, 2);
+    assert_eq!(
+        first.reads(),
+        2,
+        "each file read once, not once to list and once to parse"
+    );
+
+    set_mtime(&root.join("a.py"), SystemTime::now());
+    let stats = first.stats();
+    let previous: HashMap<String, DocumentStat> = built
+        .documents
+        .iter()
+        .map(|(key, state)| {
+            let (size, mtime_ns) = stats[key];
+            (
+                key.clone(),
+                DocumentStat {
+                    version: state.version.clone(),
+                    size,
+                    mtime_ns,
+                },
+            )
+        })
+        .collect();
+    let second = LocalFolderSource::new(ws)
+        .with_previous(previous)
+        .selecting(Selection::default());
+    let again = ingest_documents(
+        &mut graph,
+        &selection,
+        &second,
+        &root,
+        &built.hashes,
+        &context,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.reads(), 1, "only the touched file is read");
+    assert_eq!(again.documents_processed, 0, "and it is not parsed again");
+    assert_eq!(again.unchanged, 2);
+    assert_eq!(again.hashes, built.hashes);
 }

@@ -87,7 +87,7 @@ pub trait DoctorHooks: Send + Sync {
     /// Stop the workspace's local index and close its database (if open),
     /// then run `work` (the move or deletion of its files) while still
     /// holding it: nothing opens the index again until `work` is done.
-    fn with_index_closed(&self, workspace_id: &str, work: &mut dyn FnMut());
+    fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send));
     /// Turn the workspace's index on again and build it from nothing, after
     /// its damaged files were deleted; why not, for a person.
     ///
@@ -1180,7 +1180,7 @@ mod tests {
             self.signed_out.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn with_index_closed(&self, workspace_id: &str, work: &mut dyn FnMut()) {
+        fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
             self.closed_indexes
                 .lock()
                 .unwrap()

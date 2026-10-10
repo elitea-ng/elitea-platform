@@ -62,14 +62,18 @@ pub async fn prepare<S: ContentSource>(
     core::prepare(graph, &source.selection(), documents, previous, context).await
 }
 
-/// Step 4b ([`core::parse_files`]) for `source`.
-#[must_use]
+/// Step 4b ([`core::parse_files`]) for `source`: each file's bytes are
+/// dropped once parsed.
+///
+/// # Errors
+///
+/// A stop was requested.
 pub fn parse_files(
     source: &Source,
     root: &Path,
-    to_read: &[FileToRead],
+    to_read: &mut [FileToRead],
     context: &Context,
-) -> BTreeMap<String, parse::FileExtraction> {
+) -> Result<BTreeMap<String, parse::FileExtraction>, EngineError> {
     core::parse_files(&source.selection(), root, to_read, context)
 }
 
@@ -548,7 +552,8 @@ async fn run_started(
     let source_for_tree = source.clone();
     let context_for_tree = context.clone();
     let (to_read, parsed) = tokio::task::spawn_blocking(move || {
-        let parsed = parse_files(&source_for_tree, &tree, &to_read, &context_for_tree);
+        let mut to_read = to_read;
+        let parsed = parse_files(&source_for_tree, &tree, &mut to_read, &context_for_tree);
         (to_read, parsed)
     })
     .await
@@ -558,6 +563,7 @@ async fn run_started(
             format!("the ingestion task ended abnormally ({join})"),
         )
     })?;
+    let parsed = parsed?;
     let mut outcome = outcome;
     context.checkpoint()?;
 

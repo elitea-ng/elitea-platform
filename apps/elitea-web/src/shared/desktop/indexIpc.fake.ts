@@ -30,7 +30,9 @@ export interface FakeIndexOptions {
 }
 
 export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc {
-  const statuses = new Map<string, IndexStatus>(Object.entries(options.statuses ?? {}).map(([id, status]) => [id, { ...OFF_STATUS, ...status }]));
+  const statuses = new Map<string, IndexStatus>(
+    Object.entries(options.statuses ?? {}).map(([id, status]) => [id, { ...OFF_STATUS, on_disk: status.state !== undefined && status.state !== 'off', ...status }]),
+  );
   const handlers = new Set<IndexEventHandler>();
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
   const calls: FakeIndexIpc['calls'] = { opened: [], enabled: [], disabled: [], refreshes: [], cancelled: [], removed: [] };
@@ -50,7 +52,11 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
   return {
     calls,
     status(workspaceId) {
-      return gate('status') ?? Promise.resolve({ ...current(workspaceId) });
+      const failed = failure('status');
+      if (failed !== undefined) return failed;
+      // The policy off is a status, not an error: the person may still turn the index off or remove it.
+      if (!policyAllowed) return Promise.resolve({ ...OFF_STATUS, policy_off: true, on_disk: current(workspaceId).on_disk });
+      return Promise.resolve({ ...current(workspaceId) });
     },
     open(workspaceId) {
       calls.opened.push(workspaceId);
@@ -65,15 +71,16 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
       calls.enabled.push(workspaceId);
       const refused = gate('enable');
       if (refused !== undefined) return refused;
-      statuses.set(workspaceId, { ...current(workspaceId), state: 'building', error: null });
+      statuses.set(workspaceId, { ...current(workspaceId), state: 'building', error: null, on_disk: true });
       return Promise.resolve({ ...current(workspaceId) });
     },
     disable(workspaceId) {
       calls.disabled.push(workspaceId);
       const failed = failure('disable');
       if (failed !== undefined) return failed;
-      statuses.set(workspaceId, { ...OFF_STATUS });
-      return Promise.resolve({ ...OFF_STATUS });
+      // The build is kept.
+      statuses.set(workspaceId, { ...OFF_STATUS, on_disk: current(workspaceId).on_disk });
+      return Promise.resolve({ ...current(workspaceId), policy_off: !policyAllowed });
     },
     refresh(workspaceId, full) {
       calls.refreshes.push({ workspaceId, full: full === true });

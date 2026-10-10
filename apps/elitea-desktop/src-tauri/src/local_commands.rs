@@ -65,7 +65,7 @@ impl crate::doctor::DoctorHooks for AppDoctorHooks {
         crate::app_events::emit_live(&self.app, "signed_out");
     }
 
-    fn with_index_closed(&self, workspace_id: &str, work: &mut dyn FnMut()) {
+    fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
         crate::doctor::DoctorHooks::with_index_closed(self.agents.as_ref(), workspace_id, work);
     }
 

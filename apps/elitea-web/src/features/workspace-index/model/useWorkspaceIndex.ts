@@ -13,12 +13,13 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { OFF_STATUS, type IndexIpc, type IndexStatus } from '@/shared/desktop/indexIpc';
+import type { IndexIpc, IndexStatus } from '@/shared/desktop/indexIpc';
 import { toWorkspaceIpcError } from '@/shared/desktop/workspaceIpc';
 
 import { foldProgress, type IndexProgress } from './progress';
 
-export type IndexView = { kind: 'status'; status: IndexStatus } | { kind: 'disabled' };
+/** `disabled`: the policy turns the index off; `onDisk` says whether there is one to turn off or remove. */
+export type IndexView = { kind: 'status'; status: IndexStatus } | { kind: 'disabled'; onDisk: boolean };
 
 /** `refresh` reads only what changed; `rebuild` reads everything again. */
 export type IndexAction = 'enable' | 'refresh' | 'rebuild' | 'cancel' | 'disable' | 'remove';
@@ -35,9 +36,9 @@ export interface WorkspaceIndex {
 
 const indexQueryKey = (workspaceId: string, open: boolean) => ['workspace', 'index', workspaceId, open ? 'open' : 'status'] as const;
 
-const DISABLED: IndexView = { kind: 'disabled' };
+const DISABLED: IndexView = { kind: 'disabled', onDisk: false };
 
-const statusView = (status: IndexStatus): IndexView => ({ kind: 'status', status });
+const statusView = (status: IndexStatus): IndexView => (status.policy_off ? { kind: 'disabled', onDisk: status.on_disk } : { kind: 'status', status });
 
 function isPolicyOff(error: unknown): boolean {
   return toWorkspaceIpcError(error).code === 'local_index_disabled';
@@ -52,23 +53,31 @@ async function readIndex(ipc: IndexIpc, workspaceId: string, open: boolean): Pro
   }
 }
 
-/** Runs one action; the status it leaves, or `null` when only a re-read knows. */
-async function perform(ipc: IndexIpc, workspaceId: string, action: IndexAction): Promise<IndexStatus | null> {
+/**
+ * Runs one action. What it answers is not kept: `index://event` may already
+ * have delivered a newer status while the command was in flight, so the
+ * status is read again instead.
+ */
+async function perform(ipc: IndexIpc, workspaceId: string, action: IndexAction): Promise<void> {
   switch (action) {
     case 'enable':
-      return ipc.enable(workspaceId);
+      await ipc.enable(workspaceId);
+      return;
     case 'refresh':
-      return ipc.refresh(workspaceId, false);
+      await ipc.refresh(workspaceId, false);
+      return;
     case 'rebuild':
-      return ipc.refresh(workspaceId, true);
+      await ipc.refresh(workspaceId, true);
+      return;
     case 'cancel':
       await ipc.cancel(workspaceId);
-      return null;
+      return;
     case 'disable':
-      return ipc.disable(workspaceId);
+      await ipc.disable(workspaceId);
+      return;
     case 'remove':
       await ipc.remove(workspaceId);
-      return OFF_STATUS;
+      return;
   }
 }
 
@@ -106,14 +115,17 @@ export function useWorkspaceIndex(ipc: IndexIpc, workspaceId: string, options: U
 
   const action = useMutation({
     mutationFn: (next: IndexAction) => perform(ipc, workspaceId, next),
-    onSuccess: (status, next) => {
+    onSuccess: (_done, next) => {
       if (next === 'remove' || next === 'disable') setProgress(null);
-      if (status === null) void queryClient.invalidateQueries({ queryKey: key });
-      else queryClient.setQueryData<IndexView>(key, statusView(status));
+      // Never the command's answer over a newer event: read the status again.
+      void queryClient.invalidateQueries({ queryKey: key });
     },
     onError: (error) => {
-      // The policy changed under the open dialog: show why, not the controls.
-      if (isPolicyOff(error)) queryClient.setQueryData<IndexView>(key, DISABLED);
+      // The policy changed under the open dialog: show why (and what is still allowed), not the controls.
+      if (isPolicyOff(error)) {
+        queryClient.setQueryData<IndexView>(key, (previous) => (previous?.kind === 'disabled' ? previous : DISABLED));
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
     },
   });
 

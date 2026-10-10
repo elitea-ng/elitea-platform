@@ -1031,8 +1031,7 @@ impl AgentHost {
             let _ = sink.finish(RunOutcome::Stopped).await;
             drop(claim);
             let changes = recorder.changes(session.workspace());
-            self.index_changed(&request.workspace_id, changes.len())
-                .await;
+            self.index_changed(&request.workspace_id, changes.len());
             tap.changes(&changes);
             events.status(Phase::Cancelled, None);
             entry.finish(
@@ -1087,8 +1086,7 @@ impl AgentHost {
         // Free before `done`: the UI may send the next turn as soon as it sees it.
         drop(claim);
         let changes = recorder.changes(session.workspace());
-        self.index_changed(&request.workspace_id, changes.len())
-            .await;
+        self.index_changed(&request.workspace_id, changes.len());
         tap.changes(&changes);
         let changed_files = changes.len();
         if let Err(error) = &committed {
@@ -1386,10 +1384,11 @@ impl AgentHost {
     }
 
     /// A turn changed `files` files of the workspace: its index (if open)
-    /// says it may be out of date, and refreshes a few seconds later.
-    async fn index_changed(&self, workspace_id: &str, files: usize) {
+    /// says it may be out of date, and refreshes a few seconds later. A
+    /// signal only: the turn's end never waits on the index.
+    fn index_changed(&self, workspace_id: &str, files: usize) {
         if let Some(index) = &self.deps.index {
-            index.mark_changed(workspace_id, files).await;
+            index.mark_changed(workspace_id, files);
         }
     }
 
@@ -1737,9 +1736,19 @@ impl crate::doctor::DoctorHooks for AgentHost {
         self.forget_identity();
     }
 
-    fn with_index_closed(&self, workspace_id: &str, work: &mut dyn FnMut()) {
+    fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
         match &self.deps.index {
-            Some(index) => off_the_runtime(|| index.with_closed_blocking(workspace_id, work)),
+            // On a thread of its own: the slot is taken with a blocking lock,
+            // which no runtime thread may do.
+            Some(index) => std::thread::scope(|scope| {
+                if scope
+                    .spawn(|| index.with_closed_blocking(workspace_id, work))
+                    .join()
+                    .is_err()
+                {
+                    log::warn!("an index repair stopped unexpectedly");
+                }
+            }),
             None => work(),
         }
     }
@@ -1754,22 +1763,25 @@ impl crate::doctor::DoctorHooks for AgentHost {
     }
 }
 
-/// Run blocking `work` from a synchronous hook. The Doctor calls its hooks
-/// on the blocking pool; a caller on a runtime worker thread (a test) gets
-/// the thread taken off the runtime first.
-fn off_the_runtime<T>(work: impl FnOnce() -> T) -> T {
+/// Drive the host's async paths to their end from a synchronous hook (the
+/// Doctor's repairs), whatever thread calls it. Inside a runtime the future
+/// runs on a thread of its own through the runtime's handle, so the caller
+/// may be a blocking thread or the runtime's own thread (a current-thread
+/// runtime included: the paths driven need no timer, and what they spawn
+/// runs once the runtime's thread is free again). Outside any runtime it
+/// gets one of its own.
+fn drive<F>(future: F) -> Result<F::Output, String>
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(work)
-        }
-        _ => work(),
-    }
-}
-
-/// Drive the host's async paths from a synchronous hook ([`off_the_runtime`]).
-fn drive<F: std::future::Future>(future: F) -> Result<F::Output, String> {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => Ok(off_the_runtime(|| handle.block_on(future))),
+        Ok(handle) => std::thread::scope(|scope| {
+            scope
+                .spawn(|| handle.block_on(future))
+                .join()
+                .map_err(|_| "the repair stopped unexpectedly".to_owned())
+        }),
         Err(_) => tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

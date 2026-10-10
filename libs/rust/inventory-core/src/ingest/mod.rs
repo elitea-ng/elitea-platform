@@ -116,7 +116,9 @@ pub struct FileToRead {
     pub acl: Acl,
     /// The bytes the source fetched, for a file a parser reads
     /// ([`parse::language_of`]); empty for any other. The parser parses
-    /// these, never the file again ([`parse::parse_tree`]).
+    /// these, never the file again ([`parse::parse_tree`]), and
+    /// [`parse_files`] empties them once parsed: only `text` is held
+    /// through the model stage.
     pub bytes: Vec<u8>,
 }
 
@@ -128,6 +130,10 @@ enum Read {
         version: String,
         bytes: Vec<u8>,
     },
+    /// The bytes read are the version the last run recorded (the listing
+    /// could not tell: a local folder lists a changed size or mtime, not a
+    /// hash): nothing to read again.
+    Same(String),
     Unsupported,
     Unreadable,
     Empty,
@@ -141,6 +147,7 @@ enum Read {
 async fn read_document<S: ContentSource>(
     documents: &S,
     reference: &elitea_content_source::DocumentRef,
+    previous: Option<&String>,
 ) -> Read {
     let Ok(document) = documents.fetch(&reference.key).await else {
         return Read::Unreadable;
@@ -150,6 +157,11 @@ async fn read_document<S: ContentSource>(
     } else {
         document.reference.version
     };
+    // A source whose listing gives the content's version (git) never gets
+    // here with an unchanged one: the listing already matched.
+    if previous == Some(&version) {
+        return Read::Same(version);
+    }
     // Extraction is CPU work (a PDF, a spreadsheet): off the runtime's
     // threads.
     let mime = reference.mime.clone();
@@ -232,25 +244,34 @@ pub async fn prepare<S: ContentSource>(
                     outcome.documents.insert(path.clone(), state);
                     continue;
                 }
-                let (text, version, bytes) = match read_document(documents, reference).await {
-                    Read::Text {
-                        text,
-                        version,
-                        bytes,
-                    } => (text, version, bytes),
-                    Read::Unsupported => {
-                        outcome.skipped_unsupported += 1;
-                        continue;
-                    }
-                    Read::Unreadable => {
-                        outcome.skipped_unreadable += 1;
-                        continue;
-                    }
-                    Read::Empty => {
-                        outcome.skipped_empty += 1;
-                        continue;
-                    }
-                };
+                let (text, version, bytes) =
+                    match read_document(documents, reference, previous.get(path)).await {
+                        Read::Text {
+                            text,
+                            version,
+                            bytes,
+                        } => (text, version, bytes),
+                        Read::Same(version) => {
+                            outcome.unchanged += 1;
+                            outcome.hashes.insert(path.clone(), version.clone());
+                            outcome
+                                .documents
+                                .insert(path.clone(), DocumentState { version, ..state });
+                            continue;
+                        }
+                        Read::Unsupported => {
+                            outcome.skipped_unsupported += 1;
+                            continue;
+                        }
+                        Read::Unreadable => {
+                            outcome.skipped_unreadable += 1;
+                            continue;
+                        }
+                        Read::Empty => {
+                            outcome.skipped_empty += 1;
+                            continue;
+                        }
+                    };
                 let state = DocumentState {
                     version: version.clone(),
                     ..state
@@ -288,29 +309,53 @@ pub async fn prepare<S: ContentSource>(
 }
 
 /// Step 4b: parse the files to read, one batch per language, from the
-/// bytes [`prepare`] fetched.
-#[must_use]
+/// bytes [`prepare`] fetched. The bytes are dropped once parsed (each
+/// file's `bytes` is left empty): only the text goes on to the model stage,
+/// as before the parsers took bytes.
+///
+/// A stop is noticed between files, inside each language's parse
+/// ([`parse::parse_tree`]): the files not read yet are not parsed, and the
+/// stop is returned.
+///
+/// # Errors
+///
+/// A stop was requested (before, during or right after the parse).
 pub fn parse_files(
     source: &SourceSelection,
     root: &Path,
-    to_read: &[FileToRead],
+    to_read: &mut [FileToRead],
     context: &Context,
-) -> BTreeMap<String, parse::FileExtraction> {
+) -> Result<BTreeMap<String, parse::FileExtraction>, EngineError> {
+    let drop_bytes = |to_read: &mut [FileToRead]| {
+        for file in to_read {
+            file.bytes = Vec::new();
+        }
+    };
+    if let Err(stopped) = context.checkpoint() {
+        drop_bytes(to_read);
+        return Err(stopped);
+    }
     if !to_read.is_empty() {
         context.thinking(format!("[extract] Parsing {} files", to_read.len()));
     }
-    let files: Vec<(&str, &[u8])> = to_read
-        .iter()
-        .map(|file| (file.path.as_str(), file.bytes.as_slice()))
-        .collect();
-    parse::parse_tree(root, &files)
+    let stopped = || context.checkpoint().is_err();
+    let parsed = {
+        let files: Vec<(&str, &[u8])> = to_read
+            .iter()
+            .map(|file| (file.path.as_str(), file.bytes.as_slice()))
+            .collect();
+        parse::parse_tree(root, &files, &stopped)
+    };
+    drop_bytes(to_read);
+    context.checkpoint()?;
+    Ok(parsed
         .into_iter()
         .filter_map(|(path, result)| {
             let hash = &to_read.iter().find(|file| file.path == path)?.hash;
             let extraction = parse::extract(&path, &result, &source.name, hash);
             Some((path, extraction))
         })
-        .collect()
+        .collect())
 }
 
 /// What step 4c added for one file: the entities a model relation step
@@ -472,8 +517,8 @@ pub async fn ingest_documents<S: ContentSource>(
     previous: &BTreeMap<String, String>,
     context: &Context,
 ) -> Result<Outcome, EngineError> {
-    let (mut outcome, to_read) = prepare(graph, source, documents, previous, context).await?;
-    let parsed = parse_files(source, root, &to_read, context);
+    let (mut outcome, mut to_read) = prepare(graph, source, documents, previous, context).await?;
+    let parsed = parse_files(source, root, &mut to_read, context)?;
     let (relations, _) = assemble(
         graph,
         source,
@@ -531,4 +576,82 @@ pub fn add_parser_relations(
         ));
     }
     outcome.relations_added += parse::add_relations(graph, relations, &source.name, "parser");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use elitea_engine_core::stream::StopSignal;
+
+    fn file(path: &str, text: &str) -> FileToRead {
+        FileToRead {
+            path: path.to_owned(),
+            text: text.to_owned(),
+            hash: "h".to_owned(),
+            mime: "text/x-python".to_owned(),
+            acl: Acl::Project,
+            bytes: text.as_bytes().to_vec(),
+        }
+    }
+
+    fn context() -> (Context, StopSignal) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        std::mem::forget(receiver);
+        let stop = StopSignal::default();
+        (Context::new(sender, stop.clone()), stop)
+    }
+
+    /// The raw bytes live only as long as the parse: the model stage that
+    /// follows holds the text alone, as before the parsers took bytes.
+    #[test]
+    fn the_bytes_are_dropped_once_parsed() {
+        let (context, _) = context();
+        let mut to_read = vec![
+            file("a.py", "class A:\n    pass\n"),
+            file("b.py", "def b():\n    return 1\n"),
+        ];
+        let parsed = parse_files(
+            &SourceSelection::all("repo"),
+            Path::new("/r"),
+            &mut to_read,
+            &context,
+        )
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        assert!(!parsed["a.py"].entities.is_empty(), "{parsed:?}");
+        assert!(to_read.iter().all(|file| file.bytes.is_empty()));
+        assert!(to_read.iter().all(|file| !file.text.is_empty()));
+    }
+
+    /// A stopped run parses nothing more and says so (the files not read
+    /// yet are not parsed: `parse_tree` asks before each read); the bytes
+    /// are dropped all the same.
+    #[test]
+    fn a_stopped_parse_returns_the_stop() {
+        let (context, stop) = context();
+        let mut to_read: Vec<FileToRead> = (0..50)
+            .map(|n| file(&format!("m{n}.py"), "class A:\n    pass\n"))
+            .collect();
+        stop.request();
+        let parsed = parse_files(
+            &SourceSelection::all("repo"),
+            Path::new("/r"),
+            &mut to_read,
+            &context,
+        );
+        assert!(parsed.is_err(), "a stopped parse is not a result");
+        assert!(to_read.iter().all(|file| file.bytes.is_empty()));
+
+        // Asked before each read: stopped after the second ask, the rest
+        // fail unread.
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let stop_after_two = || asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 2;
+        let bytes = b"class A:\n    pass\n".as_slice();
+        let files: Vec<(String, &[u8])> = (0..20).map(|n| (format!("m{n}.py"), bytes)).collect();
+        let refs: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (p.as_str(), *b)).collect();
+        let results = parse::parse_tree(Path::new("/r"), &refs, &stop_after_two);
+        // (The first ask is parse_tree's own, before the language.)
+        let parsed = results.values().filter(|r| r.errors.is_empty()).count();
+        assert_eq!(parsed, 1, "{results:?}");
+        assert_eq!(results.len(), 20);
+    }
 }

@@ -351,47 +351,41 @@ async fn a_closed_service_stays_closed_and_answers_no_tool() {
     );
 }
 
-/// A turn's changes schedule one incremental refresh, once they stop
-/// coming for the refresh delay.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn changes_schedule_one_debounced_refresh() {
+/// Cancelled after a failed refresh, the index goes back to `error` with
+/// the failure's message, not to `error` without one.
+#[tokio::test]
+async fn a_cancel_after_a_failure_keeps_the_failure() {
     let opened = open();
     let service = &opened.service;
     service.refresh(false).await.unwrap();
-    service.set_refresh_delay(Some(std::time::Duration::from_millis(200)));
-    opened.events.0.lock().unwrap().clear();
-    write(
-        opened.folder.path(),
-        "pkg/extra.py",
-        "def extra():
-    pass
-",
-    );
-    service.mark_changed(1);
-    service.mark_changed(1);
-    service.mark_changed(1);
-    assert_eq!(service.status().state, IndexState::Stale);
-    assert_eq!(service.status().changed_files, 3);
+    // Someone else holds the graph: the next refresh fails.
+    let lease = service
+        .store()
+        .lease(GraphKey::LOCAL)
+        .await
+        .unwrap()
+        .unwrap();
+    let failed = service.refresh(false).await.unwrap_err();
+    drop(lease);
+    let status = service.status();
+    assert_eq!(status.state, IndexState::Error);
+    assert_eq!(status.error.as_deref(), Some(failed.message.as_str()));
+
+    service.start_refresh(false).unwrap();
+    assert!(service.cancel());
     for _ in 0..500 {
-        if service.status().state == IndexState::Ready {
+        if !service.is_building() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     let status = service.status();
-    assert_eq!(status.state, IndexState::Ready, "{status:?}");
-    assert_eq!(status.changed_files, 0);
-    assert_eq!(service.last_report().unwrap().read, 1, "incremental");
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    let listings = opened
-        .events
-        .0
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|e| e.phase == "listing")
-        .count();
-    assert_eq!(listings, 1, "one refresh for three changes");
+    assert_eq!(status.state, IndexState::Error);
+    assert_eq!(
+        status.error.as_deref(),
+        Some(failed.message.as_str()),
+        "the failure's message comes back with its state"
+    );
 }
 
 /// An incremental refresh starts from the build in memory when it is the
@@ -615,9 +609,7 @@ async fn the_tools_answer_from_the_build_and_say_when_it_may_be_stale() {
     .await;
     assert!(text(&missing).contains("not found"), "{missing}");
 
-    // A turn changed two files: answers carry the notice until a refresh
-    // (the automatic one is off here; the test refreshes itself).
-    service.set_refresh_delay(None);
+    // A turn changed two files: answers carry the notice until a refresh.
     service.mark_changed(2);
     assert_eq!(service.status().state, IndexState::Stale);
     let stale = call(service, "search_knowledge_graph", json!({"query": "Users"})).await;

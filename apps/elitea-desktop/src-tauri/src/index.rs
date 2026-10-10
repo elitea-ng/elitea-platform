@@ -19,11 +19,20 @@
 //! service's own gate).
 //!
 //! **Locking.** Each workspace has its own async slot; the registry's map
-//! is locked only to find or add a slot, never across I/O. Opening, turning
-//! off and removing hold the workspace's slot for their whole length, so a
-//! removal (`index_remove`, `workspace_remove`, the Doctor's repairs) closes
-//! the index and deletes its files before any status read or turn can open
-//! it again. A closed service answers no tool call.
+//! is locked only to find, add or drop an entry, never across I/O. Opening,
+//! turning off and removing hold the workspace's slot for their whole
+//! length, so a removal (`index_remove`, `workspace_remove`, the Doctor's
+//! repairs) closes the index and deletes its files before any status read
+//! or turn can open it again, and drops the workspace's entry afterwards.
+//! A closed service answers no tool call. `index_cancel` and a turn's
+//! change signal never take the slot: they reach the open service through
+//! the entry, so neither waits behind an open loading a large graph.
+//!
+//! **The policy is live.** Every entry point reads the policy once
+//! (`policy_now`) and checks it against the open service: turned off, the
+//! service is closed; made under another `path_deny`, it is closed and
+//! reopened under the new one, which rebuilds before it is served. No
+//! refresh ever runs with the `Workspace` of an older policy.
 //!
 //! Indexes are kept across sign-out and `host_wipe`: they hold code
 //! structure parsed from the person's own folders, no account data. The
@@ -32,7 +41,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use elitea_local_index::service::{
     IndexError, IndexEvent, IndexEvents, IndexService, IndexState, IndexStatus,
@@ -78,6 +89,9 @@ async fn blocking<T: Send + 'static>(
         .map_err(|_| stopped())
 }
 
+/// How long after a turn's last change its index refreshes.
+pub const DEFAULT_REFRESH_DELAY: Duration = Duration::from_secs(3);
+
 /// What one workspace's slot knows.
 #[derive(Default)]
 struct Slot {
@@ -86,6 +100,9 @@ struct Slot {
     /// What a small read of the index file said, while it is not open
     /// (`Some(None)`: there is no index file). Cleared by every change.
     peeked: Option<Option<Peek>>,
+    /// The entry was dropped from the registry (its index removed): a
+    /// caller that waited for this slot looks the workspace up again.
+    removed: bool,
 }
 
 struct Open {
@@ -99,17 +116,41 @@ impl Open {
         if self.enabled {
             self.service.status()
         } else {
-            IndexStatus::off()
+            IndexStatus {
+                on_disk: true,
+                ..IndexStatus::off()
+            }
         }
     }
 }
 
-/// One workspace's slot: held across the I/O of opening, turning off and
-/// removing its index, and only by that workspace's commands.
+/// One workspace: its slot, held across the I/O of opening, turning off
+/// and removing its index, and what must never wait behind that I/O.
 #[derive(Default)]
 struct Entry {
-    slot: tokio::sync::Mutex<Slot>,
+    slot: Arc<tokio::sync::Mutex<Slot>>,
+    /// The open service, readable without the slot: `index_cancel` and a
+    /// turn's change signal never wait behind an open.
+    current: Mutex<Option<Arc<IndexService>>>,
+    /// Bumped by every change signal: the debounced refresh runs for the
+    /// latest only.
+    changes: AtomicU64,
 }
+
+impl Entry {
+    fn current(&self) -> Option<Arc<IndexService>> {
+        self.current
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_current(&self, service: Option<Arc<IndexService>>) {
+        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = service;
+    }
+}
+
+type SlotGuard = tokio::sync::OwnedMutexGuard<Slot>;
 
 fn is_enabled(peek: Option<&Peek>) -> bool {
     peek.is_some_and(|peek| peek.settings.get(ENABLED).map(String::as_str) != Some("false"))
@@ -118,11 +159,18 @@ fn is_enabled(peek: Option<&Peek>) -> bool {
 /// What `index_status` answers for an index that is not open, from a read
 /// of its file under the policy fingerprint `policy`.
 fn peeked_status(peek: Option<&Peek>, policy: &str) -> IndexStatus {
+    let on_disk = peek.is_some();
     let Some(peek) = peek.filter(|peek| is_enabled(Some(peek))) else {
-        return IndexStatus::off();
+        return IndexStatus {
+            on_disk,
+            ..IndexStatus::off()
+        };
     };
     let stale_policy = peek.built && peek.policy.as_deref() != Some(policy);
-    let mut status = IndexStatus::off();
+    let mut status = IndexStatus {
+        on_disk,
+        ..IndexStatus::off()
+    };
     status.last_run.clone_from(&peek.last_run);
     if stale_policy {
         status.state = IndexState::StalePolicy;
@@ -136,13 +184,32 @@ fn peeked_status(peek: Option<&Peek>, policy: &str) -> IndexStatus {
     status
 }
 
+/// The policy as it is now, read and parsed once: whether it allows the
+/// index (`allowed && local_index`), and the fingerprint a build must have
+/// been made under to be served.
+struct PolicyNow {
+    allowed: Option<LocalWorkPolicy>,
+    fingerprint: String,
+}
+
+impl PolicyNow {
+    fn gate(self) -> Result<(LocalWorkPolicy, String), TurnError> {
+        match self.allowed {
+            Some(policy) => Ok((policy, self.fingerprint)),
+            None => Err(disabled()),
+        }
+    }
+}
+
 /// Every workspace's index service, opened on first use.
 pub struct IndexRegistry {
     workspaces: Arc<WorkspaceStore>,
     policy: Arc<dyn PolicySource>,
     events: Arc<dyn IndexEvents>,
-    /// Locked only to find or add a slot.
+    /// Locked only to find, add or drop an entry.
     entries: Mutex<HashMap<String, Arc<Entry>>>,
+    /// The debounce of the refresh after a turn's changes; `None`: none.
+    refresh_delay: Option<Duration>,
 }
 
 impl IndexRegistry {
@@ -158,31 +225,31 @@ impl IndexRegistry {
             policy,
             events,
             entries: Mutex::new(HashMap::new()),
+            refresh_delay: Some(DEFAULT_REFRESH_DELAY),
         }
     }
 
-    /// The policy, when it allows the index: `allowed && local_index`.
-    fn gate(&self) -> Result<LocalWorkPolicy, TurnError> {
+    /// The debounce of the refresh that follows a turn's changes (`None`:
+    /// no automatic refresh).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_refresh_delay(mut self, delay: Option<Duration>) -> Self {
+        self.refresh_delay = delay;
+        self
+    }
+
+    /// The policy now, parsed once.
+    fn policy_now(&self) -> PolicyNow {
         let policy: LocalWorkPolicy = self
             .policy
             .local_work()
             .and_then(|section| serde_json::from_value(section).ok())
             .unwrap_or_default();
-        if policy.allowed && policy.local_index {
-            Ok(policy)
-        } else {
-            Err(disabled())
+        let fingerprint = policy_fingerprint(&policy.path_deny);
+        PolicyNow {
+            allowed: (policy.allowed && policy.local_index).then_some(policy),
+            fingerprint,
         }
-    }
-
-    /// The policy fingerprint an index is served under now.
-    fn fingerprint(&self) -> String {
-        let policy: LocalWorkPolicy = self
-            .policy
-            .local_work()
-            .and_then(|section| serde_json::from_value(section).ok())
-            .unwrap_or_default();
-        policy_fingerprint(&policy.path_deny)
     }
 
     /// Where a workspace's index lives.
@@ -209,6 +276,56 @@ impl IndexRegistry {
             .clone()
     }
 
+    fn existing(&self, workspace_id: &str) -> Option<Arc<Entry>> {
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(workspace_id)
+            .cloned()
+    }
+
+    /// The workspace's entry and its slot, held. An entry dropped while
+    /// this waited for it is looked up again.
+    async fn lock(&self, workspace_id: &str) -> (Arc<Entry>, SlotGuard) {
+        loop {
+            let entry = self.entry(workspace_id);
+            let slot = entry.slot.clone().lock_owned().await;
+            if !slot.removed {
+                return (entry, slot);
+            }
+        }
+    }
+
+    /// [`Self::lock`] from a blocking thread (outside any async context).
+    fn lock_blocking(&self, workspace_id: &str) -> (Arc<Entry>, SlotGuard) {
+        loop {
+            let entry = self.entry(workspace_id);
+            let slot = entry.slot.clone().blocking_lock_owned();
+            if !slot.removed {
+                return (entry, slot);
+            }
+        }
+    }
+
+    /// Drop the workspace's entry: its index is gone. Waiters on the slot
+    /// see `removed` and look it up again.
+    fn forget(&self, workspace_id: &str, entry: &Arc<Entry>, slot: &mut Slot) {
+        slot.removed = true;
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        if entries
+            .get(workspace_id)
+            .is_some_and(|known| Arc::ptr_eq(known, entry))
+        {
+            entries.remove(workspace_id);
+        }
+    }
+
+    /// Take the open service out of the slot (it is closed by the caller).
+    fn take_open(entry: &Entry, slot: &mut Slot) -> Option<Open> {
+        entry.set_current(None);
+        slot.open.take()
+    }
+
     /// What the index file says, read once and kept until something
     /// changes it (the slot is held).
     async fn peek(&self, workspace_id: &str, slot: &mut Slot) -> Result<Option<Peek>, TurnError> {
@@ -231,28 +348,43 @@ impl IndexRegistry {
         }
     }
 
+    /// Close the open service (if any): the policy turned the index off.
+    async fn close_open(entry: &Entry, slot: &mut Slot) -> Result<(), TurnError> {
+        if let Some(open) = Self::take_open(entry, slot) {
+            blocking(move || open.service.close()).await?;
+        }
+        Ok(())
+    }
+
     /// The workspace's service in its held slot, opened (and checked for
     /// what changed while it was closed: a refresh in the background, with
-    /// `catch_up`) when it is not open, or open under another policy.
+    /// `catch_up`) when it is not open, or open under another policy: a
+    /// service is only ever refreshed with the `Workspace` of the policy
+    /// now.
     async fn open_in(
         &self,
         workspace: &Workspace,
         policy: &LocalWorkPolicy,
+        entry: &Entry,
         slot: &mut Slot,
         catch_up: bool,
     ) -> Result<Arc<IndexService>, TurnError> {
         let fingerprint = policy_fingerprint(&policy.path_deny);
-        if let Some(open) = &slot.open {
-            if open.service.policy() == fingerprint && !open.service.is_closed() {
-                return Ok(open.service.clone());
-            }
-            // Another policy: this one is closed (the tools a turn holds
-            // answer that it is gone) and the index reopened under the new.
-            let old = open.service.clone();
-            blocking(move || old.close()).await?;
+        if let Some(open) = &slot.open
+            && open.service.policy() == fingerprint
+            && !open.service.is_closed()
+        {
+            return Ok(open.service.clone());
         }
-        let enabled = match slot.open.take() {
-            Some(open) => open.enabled,
+        // Another policy (or closed): this one is closed — the tools a turn
+        // holds answer that it is gone — and the index reopened under the
+        // policy now.
+        let enabled = match Self::take_open(entry, slot) {
+            Some(open) => {
+                let enabled = open.enabled;
+                blocking(move || open.service.close()).await?;
+                enabled
+            }
             None => is_enabled(self.peek(&workspace.id, slot).await?.as_ref()),
         };
         let (id, root, deny, dir, events) = (
@@ -269,6 +401,7 @@ impl IndexRegistry {
             service: service.clone(),
             enabled,
         });
+        entry.set_current(Some(service.clone()));
         if catch_up
             && enabled
             && let Err(error) = service.start_refresh(false)
@@ -278,21 +411,43 @@ impl IndexRegistry {
         Ok(service)
     }
 
-    /// `index_status`: never opens the index nor starts a refresh.
+    /// `index_status`. Never opens an index that is not open; an open one
+    /// is checked against the policy now: turned off by it, it is closed
+    /// (`off`, `policy_off`); made under another `path_deny`, it is reopened
+    /// under the new one (`stale_policy`, rebuilding). With the policy off
+    /// it answers `off` with `policy_off` and whether an index is on disk
+    /// (turning it off and removing it stay allowed).
     ///
     /// # Errors
     ///
-    /// `local_index_disabled`, `workspace_unknown`, or the index refused.
+    /// `workspace_unknown`, or the index refused.
     pub async fn status(&self, workspace_id: &str) -> Result<IndexStatus, TurnError> {
-        self.gate()?;
-        self.workspace(workspace_id).await?;
-        let entry = self.entry(workspace_id);
-        let mut slot = entry.slot.lock().await;
+        let now = self.policy_now();
+        let workspace = self.workspace(workspace_id).await?;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        let Some(policy) = now.allowed else {
+            Self::close_open(&entry, &mut slot).await?;
+            slot.peeked = None;
+            let file = self.index_dir(workspace_id).join(FILE_NAME);
+            let on_disk = blocking(move || std::fs::symlink_metadata(file).is_ok()).await?;
+            return Ok(IndexStatus {
+                policy_off: true,
+                on_disk,
+                ..IndexStatus::off()
+            });
+        };
         if let Some(open) = &slot.open {
-            return Ok(open.status());
+            if open.enabled && open.service.policy() != now.fingerprint {
+                self.open_in(&workspace, &policy, &entry, &mut slot, true)
+                    .await?;
+            }
+            return Ok(slot
+                .open
+                .as_ref()
+                .map_or_else(IndexStatus::off, Open::status));
         }
         let peek = self.peek(workspace_id, &mut slot).await?;
-        Ok(peeked_status(peek.as_ref(), &self.fingerprint()))
+        Ok(peeked_status(peek.as_ref(), &now.fingerprint))
     }
 
     /// `index_open`: open the workspace's index (its session page is open)
@@ -302,14 +457,14 @@ impl IndexRegistry {
     ///
     /// `local_index_disabled`, `workspace_unknown`, or the index refused.
     pub async fn open(&self, workspace_id: &str) -> Result<IndexStatus, TurnError> {
-        let policy = self.gate()?;
+        let (policy, _) = self.policy_now().gate()?;
         let workspace = self.workspace(workspace_id).await?;
-        let entry = self.entry(workspace_id);
-        let mut slot = entry.slot.lock().await;
+        let (entry, mut slot) = self.lock(workspace_id).await;
         if !self.enabled(workspace_id, &mut slot).await? {
-            return Ok(IndexStatus::off());
+            return Ok(peeked_status(slot.peeked.clone().flatten().as_ref(), ""));
         }
-        self.open_in(&workspace, &policy, &mut slot, true).await?;
+        self.open_in(&workspace, &policy, &entry, &mut slot, true)
+            .await?;
         Ok(slot
             .open
             .as_ref()
@@ -322,11 +477,12 @@ impl IndexRegistry {
     ///
     /// `local_index_disabled`, `workspace_unknown`, or the index refused.
     pub async fn enable(&self, workspace_id: &str) -> Result<IndexStatus, TurnError> {
-        let policy = self.gate()?;
+        let (policy, _) = self.policy_now().gate()?;
         let workspace = self.workspace(workspace_id).await?;
-        let entry = self.entry(workspace_id);
-        let mut slot = entry.slot.lock().await;
-        let service = self.open_in(&workspace, &policy, &mut slot, false).await?;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        let service = self
+            .open_in(&workspace, &policy, &entry, &mut slot, false)
+            .await?;
         let writer = service.clone();
         blocking(move || writer.store().set_setting(ENABLED, "true"))
             .await?
@@ -351,48 +507,52 @@ impl IndexRegistry {
     /// `workspace_unknown`, or the index could not be written.
     pub async fn disable(&self, workspace_id: &str) -> Result<IndexStatus, TurnError> {
         self.workspace(workspace_id).await?;
-        let entry = self.entry(workspace_id);
-        let mut slot = entry.slot.lock().await;
-        let open = slot.open.take();
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        let open = Self::take_open(&entry, &mut slot);
         slot.peeked = None;
         let dir = self.index_dir(workspace_id);
-        blocking(move || {
+        let on_disk = blocking(move || {
             if let Some(open) = open {
                 open.service.cancel();
                 let saved = open.service.store().set_setting(ENABLED, "false");
                 open.service.close();
-                saved
+                saved.map(|()| true)
             } else if std::fs::symlink_metadata(dir.join(FILE_NAME)).is_ok() {
                 let store = SqliteGraphStore::open(&dir)?;
                 let saved = store.set_setting(ENABLED, "false");
                 store.close();
-                saved
+                saved.map(|()| true)
             } else {
-                Ok(())
+                Ok(false)
             }
         })
         .await?
         .map_err(IndexError::from)?;
-        Ok(IndexStatus::off())
+        Ok(IndexStatus {
+            on_disk,
+            policy_off: self.policy_now().allowed.is_none(),
+            ..IndexStatus::off()
+        })
     }
 
-    /// `index_refresh` (`full`: rebuild from nothing).
+    /// `index_refresh` (`full`: rebuild from nothing), under the policy now.
     ///
     /// # Errors
     ///
     /// `local_index_disabled`, `index_off` (not turned on), `index_busy`.
     pub async fn refresh(&self, workspace_id: &str, full: bool) -> Result<IndexStatus, TurnError> {
-        let policy = self.gate()?;
+        let (policy, _) = self.policy_now().gate()?;
         let workspace = self.workspace(workspace_id).await?;
-        let entry = self.entry(workspace_id);
-        let mut slot = entry.slot.lock().await;
+        let (entry, mut slot) = self.lock(workspace_id).await;
         if !self.enabled(workspace_id, &mut slot).await? {
             return Err(TurnError::new(
                 "index_off",
                 "Turn the index on for this workspace first.",
             ));
         }
-        let service = self.open_in(&workspace, &policy, &mut slot, false).await?;
+        let service = self
+            .open_in(&workspace, &policy, &entry, &mut slot, false)
+            .await?;
         match service.start_refresh(full) {
             // An incremental refresh asked for while one runs: that one is it.
             Err(error) if error.code == "index_busy" && !full => {}
@@ -401,30 +561,26 @@ impl IndexRegistry {
         Ok(service.status())
     }
 
-    /// `index_cancel`: `true` when a refresh was running.
-    pub async fn cancel(&self, workspace_id: &str) -> bool {
-        let entry = self
-            .entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(workspace_id)
-            .cloned();
-        let Some(entry) = entry else { return false };
-        let slot = entry.slot.lock().await;
-        slot.open.as_ref().is_some_and(|open| open.service.cancel())
+    /// `index_cancel`: `true` when a refresh was running. Never waits for
+    /// the workspace's slot (an open in progress has nothing to cancel).
+    #[must_use]
+    pub fn cancel(&self, workspace_id: &str) -> bool {
+        self.existing(workspace_id)
+            .and_then(|entry| entry.current())
+            .is_some_and(|service| service.cancel())
     }
 
     /// Close the workspace's index (if open) and run `work` — the removal
     /// of its files — holding its slot throughout, on the blocking pool: no
-    /// status read or turn opens it again before `work` is done.
+    /// status read or turn opens it again before `work` is done. The
+    /// workspace's entry is dropped afterwards (its index is gone).
     pub async fn with_closed<T: Send + 'static>(
         &self,
         workspace_id: &str,
         work: impl FnOnce() -> T + Send + 'static,
     ) -> Result<T, TurnError> {
-        let entry = self.entry(workspace_id);
-        let mut slot = entry.slot.lock().await;
-        let open = slot.open.take();
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        let open = Self::take_open(&entry, &mut slot);
         slot.peeked = None;
         let done = blocking(move || {
             if let Some(open) = open {
@@ -433,24 +589,21 @@ impl IndexRegistry {
             work()
         })
         .await;
+        self.forget(workspace_id, &entry, &mut slot);
         drop(slot);
         done
     }
 
-    /// [`Self::with_closed`] for a caller on a blocking thread (the
-    /// Doctor's repairs), running `work` on that thread.
-    ///
-    /// # Panics
-    ///
-    /// Called from an async context (`tokio`'s `blocking_lock`).
+    /// [`Self::with_closed`] for a caller on a blocking thread outside any
+    /// async context (the Doctor's repairs), running `work` on that thread.
     pub fn with_closed_blocking<T>(&self, workspace_id: &str, work: impl FnOnce() -> T) -> T {
-        let entry = self.entry(workspace_id);
-        let mut slot = entry.slot.blocking_lock();
-        if let Some(open) = slot.open.take() {
+        let (entry, mut slot) = self.lock_blocking(workspace_id);
+        if let Some(open) = Self::take_open(&entry, &mut slot) {
             open.service.close();
         }
         slot.peeked = None;
         let done = work();
+        self.forget(workspace_id, &entry, &mut slot);
         drop(slot);
         done
     }
@@ -485,12 +638,17 @@ impl IndexRegistry {
     /// The service whose tools a turn in the workspace is offered: when the
     /// policy allows the index, it is turned on, and a build made under the
     /// current policy exists (a stale or rebuilding one too; its answers say
-    /// so). Opens the index on first use.
+    /// so). Opens the index on first use, under the policy now.
     pub async fn for_turn(&self, workspace_id: &str) -> Option<Arc<IndexService>> {
-        let policy = self.gate().ok()?;
+        let now = self.policy_now();
         let workspace = self.workspace(workspace_id).await.ok()?;
-        let entry = self.entry(workspace_id);
-        let mut slot = entry.slot.lock().await;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        let Some(policy) = now.allowed else {
+            if let Err(error) = Self::close_open(&entry, &mut slot).await {
+                log::warn!("an index could not be closed: {}", error.code);
+            }
+            return None;
+        };
         match self.enabled(workspace_id, &mut slot).await {
             Ok(true) => {}
             Ok(false) => return None,
@@ -499,7 +657,10 @@ impl IndexRegistry {
                 return None;
             }
         }
-        match self.open_in(&workspace, &policy, &mut slot, true).await {
+        match self
+            .open_in(&workspace, &policy, &entry, &mut slot, true)
+            .await
+        {
             Ok(service) => service.view().is_some().then_some(service),
             Err(error) => {
                 log::warn!("a turn runs without its index: {}", error.code);
@@ -508,27 +669,94 @@ impl IndexRegistry {
         }
     }
 
-    /// A turn changed `files` files of the workspace: its index (if open)
-    /// is stale, and refreshes a few seconds after the changes stop.
-    pub async fn mark_changed(&self, workspace_id: &str, files: usize) {
-        let entry = self
-            .entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(workspace_id)
-            .cloned();
-        let Some(entry) = entry else { return };
-        let slot = entry.slot.lock().await;
-        if let Some(open) = slot.open.as_ref().filter(|open| open.enabled) {
-            open.service
-                .mark_changed(u64::try_from(files).unwrap_or(u64::MAX));
+    /// A turn changed `files` files of the workspace. Never waits: the open
+    /// index (if any) is marked stale at once, and a refresh follows once
+    /// the changes stop for the refresh delay — under the policy then
+    /// (closed if the policy turned the index off, reopened if `path_deny`
+    /// changed).
+    pub fn mark_changed(self: &Arc<Self>, workspace_id: &str, files: usize) {
+        if files == 0 {
+            return;
+        }
+        let Some(entry) = self.existing(workspace_id) else {
+            return;
+        };
+        if let Some(service) = entry.current() {
+            service.mark_changed(u64::try_from(files).unwrap_or(u64::MAX));
+        }
+        let change = entry.changes.fetch_add(1, Ordering::SeqCst) + 1;
+        if let (Some(delay), Ok(runtime)) =
+            (self.refresh_delay, tokio::runtime::Handle::try_current())
+        {
+            let this = Arc::clone(self);
+            let id = workspace_id.to_owned();
+            runtime
+                .spawn(async move { this.refresh_after_change(&id, &entry, change, delay).await });
+        }
+    }
+
+    /// The debounced refresh of change `change`, unless a later one came.
+    async fn refresh_after_change(
+        &self,
+        workspace_id: &str,
+        entry: &Arc<Entry>,
+        change: u64,
+        delay: Duration,
+    ) {
+        tokio::time::sleep(delay).await;
+        loop {
+            if entry.changes.load(Ordering::SeqCst) != change {
+                return;
+            }
+            let now = self.policy_now();
+            let Ok(workspace) = self.workspace(workspace_id).await else {
+                return;
+            };
+            let (current, mut slot) = self.lock(workspace_id).await;
+            if !Arc::ptr_eq(&current, entry) || !slot.open.as_ref().is_some_and(|open| open.enabled)
+            {
+                return;
+            }
+            let Some(policy) = now.allowed else {
+                // Turned off by the policy since: closed, not refreshed.
+                if let Err(error) = Self::close_open(&current, &mut slot).await {
+                    log::warn!("an index could not be closed: {}", error.code);
+                }
+                return;
+            };
+            let service = match self
+                .open_in(&workspace, &policy, &current, &mut slot, false)
+                .await
+            {
+                Ok(service) => service,
+                Err(error) => {
+                    log::warn!("an index could not refresh after a turn: {}", error.code);
+                    return;
+                }
+            };
+            drop(slot);
+            match service.start_refresh(false) {
+                Err(error) if error.code == "index_busy" => {
+                    tokio::time::sleep(delay).await;
+                }
+                _ => return,
+            }
         }
     }
 
     /// Whether the workspace's index is open (tests).
     #[cfg(test)]
     async fn is_open(&self, workspace_id: &str) -> bool {
-        self.entry(workspace_id).slot.lock().await.open.is_some()
+        self.lock(workspace_id).await.1.open.is_some()
+    }
+
+    /// How many workspaces the registry keeps an entry for (tests).
+    #[cfg(test)]
+    fn entry_count(&self) -> usize {
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
     }
 }
 
@@ -601,7 +829,7 @@ pub async fn index_cancel(
     state: State<'_, LocalState>,
     workspace_id: String,
 ) -> Result<bool, IpcError> {
-    Ok(state.index.cancel(&workspace_id).await)
+    Ok(state.index.cancel(&workspace_id))
 }
 
 /// Delete the workspace's index; `confirm` must be `true`.
@@ -622,7 +850,7 @@ mod tests {
     use super::*;
     use elitea_local_index::service::NoEvents;
     use serde_json::{Value, json};
-    use std::time::Duration;
+    use std::time::Instant;
 
     struct Policy(Mutex<Option<Value>>);
 
@@ -638,44 +866,56 @@ mod tests {
         policy: Arc<Policy>,
         workspaces: Arc<WorkspaceStore>,
         _app: tempfile::TempDir,
-        folder: tempfile::TempDir,
+        _folder: tempfile::TempDir,
     }
 
-    fn registry(policy: Value) -> Fixture {
+    fn registry_with(policy: Value, delay: Option<Duration>) -> Fixture {
         let app = tempfile::tempdir().unwrap();
         let folder = tempfile::tempdir().unwrap();
         std::fs::write(folder.path().join("a.py"), "class A:\n    pass\n").unwrap();
         let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
         let id = workspaces.add(folder.path()).unwrap().id;
         let policy = Arc::new(Policy(Mutex::new(Some(policy))));
-        let registry = Arc::new(IndexRegistry::new(
-            workspaces.clone(),
-            policy.clone(),
-            Arc::new(NoEvents),
-        ));
+        let registry = Arc::new(
+            IndexRegistry::new(workspaces.clone(), policy.clone(), Arc::new(NoEvents))
+                .with_refresh_delay(delay),
+        );
         Fixture {
             registry,
             id,
             policy,
             workspaces,
             _app: app,
-            folder,
+            _folder: folder,
         }
+    }
+
+    fn registry(policy: Value) -> Fixture {
+        registry_with(policy, None)
     }
 
     fn on() -> Value {
         json!({"allowed": true, "local_index": true})
     }
 
-    async fn until_built(registry: &IndexRegistry, id: &str) -> IndexStatus {
+    async fn until(
+        registry: &IndexRegistry,
+        id: &str,
+        done: impl Fn(&IndexStatus) -> bool,
+    ) -> IndexStatus {
+        let mut status = registry.status(id).await.unwrap();
         for _ in 0..500 {
-            let status = registry.status(id).await.unwrap();
-            if status.state == IndexState::Ready {
+            if done(&status) {
                 return status;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
+            status = registry.status(id).await.unwrap();
         }
-        panic!("the index was not built");
+        panic!("never reached: {status:?}");
+    }
+
+    async fn until_built(registry: &IndexRegistry, id: &str) -> IndexStatus {
+        until(registry, id, |status| status.state == IndexState::Ready).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -687,9 +927,10 @@ mod tests {
         ] {
             let f = registry(policy.clone());
             let (registry, id) = (&f.registry, &f.id);
+            let status = registry.status(id).await.unwrap();
             assert_eq!(
-                registry.status(id).await.unwrap_err().code,
-                "local_index_disabled"
+                (status.state, status.policy_off, status.on_disk),
+                (IndexState::Off, true, false)
             );
             assert_eq!(
                 registry.open(id).await.unwrap_err().code,
@@ -722,6 +963,7 @@ mod tests {
         registry.enable(id).await.unwrap();
         let built = until_built(registry, id).await;
         assert!(built.entities >= 2, "{built:?}");
+        assert!(built.on_disk && !built.policy_off);
         let dir = registry.index_dir(id);
         #[cfg(unix)]
         {
@@ -750,6 +992,7 @@ mod tests {
         );
         registry.remove(id, true).await.unwrap();
         assert!(!dir.exists());
+        assert_eq!(registry.entry_count(), 0, "a removed index leaves no entry");
         assert_eq!(registry.status(id).await.unwrap().state, IndexState::Off);
     }
 
@@ -803,7 +1046,8 @@ mod tests {
 
     /// A removal holds the workspace's slot from the close to the deletion:
     /// a turn asking meanwhile waits, then finds no index, and nothing is
-    /// recreated. Other workspaces are not held up meanwhile.
+    /// recreated. Other workspaces are not held up meanwhile, and the
+    /// removed workspace's entry is dropped.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_removal_holds_the_workspace_until_its_files_are_gone() {
         let f = registry(on());
@@ -848,30 +1092,156 @@ mod tests {
             .call(json!({"query": "A"}))
             .await;
         assert_eq!(answer["code"], "index.closed", "{answer}");
-        drop(f.folder);
     }
 
-    /// A policy change reopens the index under the new policy: the build
-    /// made under the old one is not offered until a rebuild commits.
+    /// The policy is checked against the open service at every entry point:
+    /// a changed `path_deny` reopens it under the new one (the old build is
+    /// never offered), and the policy turning the index off closes it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_policy_change_withholds_the_old_build() {
+    async fn the_open_service_follows_the_policy() {
         let f = registry(on());
         f.registry.enable(&f.id).await.unwrap();
         until_built(&f.registry, &f.id).await;
         let held = f.registry.for_turn(&f.id).await.unwrap();
         *f.policy.0.lock().unwrap() =
             Some(json!({"allowed": true, "local_index": true, "path_deny": ["a.py"]}));
-        // The turn's old service is closed; the new one serves nothing old.
-        let offered = f.registry.for_turn(&f.id).await;
-        assert!(held.is_closed());
-        if let Some(service) = &offered {
-            let (view, _) = service.view().unwrap();
-            assert!(
-                !view.graph.nodes().any(|(_, node)| node["name"] == "A"),
-                "only a build under the new policy is offered"
-            );
-        }
+        // A status read finds the open service under the old policy: it is
+        // closed and the index reopened (and rebuilt) under the new one.
+        let status = f.registry.status(&f.id).await.unwrap();
+        assert!(
+            held.is_closed(),
+            "the old Workspace is never refreshed again"
+        );
+        assert!(
+            matches!(status.state, IndexState::StalePolicy | IndexState::Building),
+            "{status:?}"
+        );
         let rebuilt = until_built(&f.registry, &f.id).await;
-        assert_eq!(rebuilt.entities, 0, "{rebuilt:?}");
+        assert_eq!(rebuilt.entities, 0, "a.py is denied now: {rebuilt:?}");
+        let reopened = f.registry.for_turn(&f.id).await.unwrap();
+        assert_eq!(reopened.workspace().root(), held.workspace().root());
+
+        // The policy turns the index off: the open service is closed.
+        *f.policy.0.lock().unwrap() = Some(json!({"allowed": true, "local_index": false}));
+        let off = f.registry.status(&f.id).await.unwrap();
+        assert_eq!(
+            (off.state, off.policy_off, off.on_disk),
+            (IndexState::Off, true, true)
+        );
+        assert!(reopened.is_closed());
+        assert!(!f.registry.is_open(&f.id).await);
+    }
+
+    /// A turn's changes refresh the index under the policy at the time of
+    /// the refresh: here `path_deny` changed meanwhile, so the refresh runs
+    /// on the index reopened under the new policy, never on the old
+    /// service's `Workspace`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_refresh_after_a_change_runs_under_the_policy_then() {
+        let f = registry_with(on(), Some(Duration::from_millis(50)));
+        f.registry.enable(&f.id).await.unwrap();
+        until_built(&f.registry, &f.id).await;
+        let held = f.registry.for_turn(&f.id).await.unwrap();
+        *f.policy.0.lock().unwrap() =
+            Some(json!({"allowed": true, "local_index": true, "path_deny": ["a.py"]}));
+        f.registry.mark_changed(&f.id, 1);
+        assert_eq!(held.status().state, IndexState::Stale, "marked at once");
+        // Watched without a status read (which would check the policy too).
+        let mut rebuilt = None;
+        for _ in 0..500 {
+            if let Some(service) = f.registry.existing(&f.id).and_then(|entry| entry.current())
+                && !Arc::ptr_eq(&service, &held)
+                && service.status().state == IndexState::Ready
+            {
+                rebuilt = Some(service);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let rebuilt = rebuilt.expect("the refresh ran on the index reopened under the new policy");
+        assert_eq!(rebuilt.status().entities, 0, "a.py is denied now");
+        assert!(held.is_closed());
+    }
+
+    /// A turn's changes schedule one refresh, a little after they stop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn changes_schedule_one_debounced_refresh() {
+        let f = registry_with(on(), Some(Duration::from_millis(100)));
+        f.registry.enable(&f.id).await.unwrap();
+        until_built(&f.registry, &f.id).await;
+        let service = f.registry.for_turn(&f.id).await.unwrap();
+        std::fs::write(f._folder.path().join("b.py"), "def b():\n    pass\n").unwrap();
+        for _ in 0..3 {
+            f.registry.mark_changed(&f.id, 1);
+        }
+        assert_eq!(service.status().changed_files, 3);
+        let status = until(&f.registry, &f.id, |status| {
+            status.state == IndexState::Ready && status.changed_files == 0
+        })
+        .await;
+        assert_eq!(
+            service.last_report().unwrap().read,
+            1,
+            "incremental: {status:?}"
+        );
+        let runs = service
+            .store()
+            .runs(elitea_local_index::sqlite_store::GraphKey::LOCAL)
+            .unwrap()
+            .len();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let after = service
+            .store()
+            .runs(elitea_local_index::sqlite_store::GraphKey::LOCAL)
+            .unwrap()
+            .len();
+        assert_eq!(after, runs, "one refresh for three changes");
+    }
+
+    /// Neither `index_cancel` nor a turn's change signal waits for the
+    /// workspace's slot (held here as a slow open would hold it).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancel_and_the_change_signal_never_wait_for_the_slot() {
+        let f = registry_with(on(), Some(Duration::from_millis(50)));
+        f.registry.enable(&f.id).await.unwrap();
+        until_built(&f.registry, &f.id).await;
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let holder = {
+            let registry = f.registry.clone();
+            let id = f.id.clone();
+            tokio::spawn(async move {
+                registry
+                    .with_closed(&id, move || {
+                        let _ = wait.recv_timeout(Duration::from_secs(10));
+                    })
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let started = Instant::now();
+        let _ = f.registry.cancel(&f.id);
+        f.registry.mark_changed(&f.id, 1);
+        let took = started.elapsed();
+        release.send(()).unwrap();
+        holder.await.unwrap().unwrap();
+        assert!(took < Duration::from_millis(500), "waited {took:?}");
+    }
+
+    /// `workspace_remove`'s path (`with_closed`) drops the workspace's
+    /// entry with its files.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_removed_workspace_leaves_no_entry() {
+        let f = registry(on());
+        f.registry.enable(&f.id).await.unwrap();
+        until_built(&f.registry, &f.id).await;
+        assert_eq!(f.registry.entry_count(), 1);
+        let workspaces = f.workspaces.clone();
+        let id = f.id.clone();
+        f.registry
+            .with_closed(&f.id, move || workspaces.remove(&id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.registry.entry_count(), 0);
     }
 }

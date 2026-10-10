@@ -30,6 +30,10 @@ export interface IndexStatus {
   changed_files: number;
   /** Why the last refresh failed. */
   error: string | null;
+  /** The policy turns the index off (`state` is `off`); turning it off and removing it stay allowed. */
+  policy_off: boolean;
+  /** An index exists on this computer. */
+  on_disk: boolean;
 }
 
 /** `queued`: waiting for another folder's refresh (one runs at a time). */
@@ -77,6 +81,8 @@ export const OFF_STATUS: IndexStatus = Object.freeze({
   last_run: null,
   changed_files: 0,
   error: null,
+  policy_off: false,
+  on_disk: false,
 });
 
 export function createIndexIpc(hostInvoke: HostInvoke, listen: ListenFn): IndexIpc {

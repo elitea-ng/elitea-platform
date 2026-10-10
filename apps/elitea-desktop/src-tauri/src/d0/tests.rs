@@ -1887,3 +1887,32 @@ async fn a_turns_changes_mark_the_index_stale_and_removal_deletes_it() {
     h.host.remove_workspace(&h.workspace_id).await.unwrap();
     assert!(!dir.exists(), "the index went with the workspace's data");
 }
+
+/// The Doctor's index repairs go through the host's hooks from whatever
+/// thread runs them: on a current-thread runtime's own thread too, where a
+/// `block_on` or a blocking lock would panic.
+#[tokio::test]
+async fn the_doctor_index_hooks_work_on_a_current_thread_runtime() {
+    use crate::doctor::DoctorHooks as _;
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, index_allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("users.py"), "class Users:\n    pass\n").unwrap();
+    h.host.rebuild_index(&h.workspace_id).unwrap();
+    let mut built = false;
+    for _ in 0..500 {
+        let status = h.index.status(&h.workspace_id).await.unwrap();
+        if status.state == elitea_local_index::service::IndexState::Ready {
+            built = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(built, "rebuilt through the hook");
+    let dir = h.index.index_dir(&h.workspace_id);
+    let mut gone = false;
+    h.host.with_index_closed(&h.workspace_id, &mut || {
+        gone = std::fs::remove_dir_all(&dir).is_ok();
+    });
+    assert!(gone, "the work ran with the index closed");
+    assert!(!dir.exists());
+}

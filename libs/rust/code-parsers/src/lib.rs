@@ -33,7 +33,7 @@ pub mod swift;
 pub mod typescript;
 mod visit_support;
 
-pub use input::Sources;
+pub use input::{STOPPED, Sources, Stop};
 pub use limits::{LARGEST_PARSER_STACK, parser_threads, set_parser_threads, with_pool_failures};
 
 use model::ParseResult;

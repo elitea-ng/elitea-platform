@@ -368,8 +368,10 @@ graph of the folder, parsed on this machine and kept in the app data
 directory (`workspaces/<id>/index/index.sqlite`, owner-only), never in the
 folder. It is turned on per workspace, and only while the policy allows
 both local work and the index (`local_work.allowed && local_work.local_index`);
-otherwise every command but `index_disable` and `index_remove` rejects with
-`local_index_disabled`, and turns are offered no index tools. Nothing is
+otherwise `index_status` answers `off` with `policy_off: true` (and
+`on_disk`, whether an index is on this computer), every other command but
+`index_disable` and `index_remove` rejects with `local_index_disabled`, and
+turns are offered no index tools. Nothing is
 sent anywhere: there are no embeddings yet.
 
 ```ts
@@ -382,6 +384,8 @@ type IndexStatus = {
   last_run: string | null; // when the last build was committed (UTC, ISO 8601)
   changed_files: number;  // files turns changed since the last build
   error: string | null;   // why the last refresh failed
+  policy_off: boolean;    // the policy turns the index off (state "off")
+  on_disk: boolean;       // an index exists on this computer
 };
 ```
 
@@ -396,9 +400,18 @@ policy (`local_work.path_deny` changed): it is never loaded or answered
 from, turns are offered no index tools, and the index is rebuilt from
 nothing when it next opens; the fingerprint of the policy a build was made
 under is committed with it. `error`: the last refresh failed; the previous
-build, if any, still answers. A cancelled refresh goes back to the state it
-started from and is recorded as cancelled, not as an error, so `last_run`
-stays the last completed build's.
+build, if any, still answers. A cancelled refresh goes back to the state
+(and, after a failure, the error) it started from and is recorded as
+cancelled, not as an error, so `last_run` stays the last completed build's.
+A cancel stops the parse between files, so it ends promptly and frees the
+next folder's refresh.
+
+**The policy is live.** `index_status`, every command that opens or
+refreshes, a turn, and the refresh after a turn's changes read the policy
+first. Turned off by it, an open index is closed. Made under another
+`path_deny`, it is closed (the tools a turn holds answer `index.closed`)
+and reopened under the new one, `stale_policy` until its rebuild commits.
+No refresh runs with an older policy's folder view.
 
 **Opened lazily.** `index_status` never opens an index or starts a refresh:
 until the index is open it answers from a small read of its file (`stale`
@@ -410,12 +423,12 @@ folder; a waiting one reports `queued`.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `index_status` | `{workspace_id}` | `IndexStatus` — never opens the index (above). |
+| `index_status` | `{workspace_id}` | `IndexStatus` — never opens an index that is not open (above); `policy_off` instead of rejecting. |
 | `index_open` | `{workspace_id}` | `IndexStatus` — opens the index (if on) and starts checking the folder; `off` when not turned on. |
 | `index_enable` | `{workspace_id}` | `IndexStatus` — turns the index on and starts building it (incrementally, over what an earlier build kept). |
 | `index_disable` | `{workspace_id}` | `IndexStatus` (`off`) — stops a running refresh and stops offering the index; the build is kept for when it is turned on again. Allowed whatever the policy. |
 | `index_refresh` | `{workspace_id, full?: boolean}` | `IndexStatus` — starts a refresh: only files whose size or mtime changed are read again; `full` rebuilds from nothing. Rejects `index_off` (not turned on), `index_busy` (`full` while one runs). |
-| `index_cancel` | `{workspace_id}` | `boolean` — stops the running (or waiting) refresh at its next checkpoint (nothing it did is kept); `false` when none runs. Never rejects. |
+| `index_cancel` | `{workspace_id}` | `boolean` — stops the running (or waiting) refresh at its next checkpoint, between files of the parse too (nothing it did is kept); `false` when none runs. Never rejects, and never waits behind an index being opened. |
 | `index_remove` | `{workspace_id, confirm: true}` | `null` — deletes the index (it can be built again). Rejects `confirmation_required` without `confirm: true`. Allowed whatever the policy. |
 
 Every command is async. Each folder's index has its own slot: turning it
@@ -423,7 +436,10 @@ off and removing it (`index_remove`, `workspace_remove`, the Doctor's
 `index.move_aside` and `index.rebuild`) hold that slot from closing the
 index to deleting its files, so no status read or turn reopens it in
 between, and a turn that still holds the closed index's tools is answered
-`index.closed` ("The workspace index was removed or turned off").
+`index.closed` ("The workspace index was removed or turned off"). A
+removal also drops the folder's entry from the host. A turn's change signal
+and `index_cancel` never take that slot, so neither waits behind an index
+being opened.
 
 Every command also rejects `workspace_unknown`; an index that cannot be
 opened rejects `index_refused` (its directory is a symlink, another user's

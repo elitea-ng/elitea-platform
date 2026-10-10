@@ -476,8 +476,16 @@ pub fn add_relations(
 /// `root` only makes the keys the parsers see the absolute paths they
 /// always saw (their cross-file resolution and the JavaScript import
 /// lookup use them), so a checkout parses byte for byte as before.
+///
+/// `stop` is asked before each file is read: once it answers `true` the
+/// remaining files are not parsed (they come back failed, and the caller
+/// discards the parse).
 #[must_use]
-pub fn parse_tree(root: &Path, files: &[(&str, &[u8])]) -> BTreeMap<String, ParseResult> {
+pub fn parse_tree(
+    root: &Path,
+    files: &[(&str, &[u8])],
+    stop: elitea_code_parsers::Stop<'_>,
+) -> BTreeMap<String, ParseResult> {
     let mut by_language: BTreeMap<&str, Vec<(&str, &[u8])>> = BTreeMap::new();
     for (path, bytes) in files {
         if let Some(language) = language_of(path) {
@@ -487,6 +495,9 @@ pub fn parse_tree(root: &Path, files: &[(&str, &[u8])]) -> BTreeMap<String, Pars
     let prefix = format!("{}/", root.display());
     let mut parsed = BTreeMap::new();
     for (language, paths) in by_language {
+        if stop() {
+            break;
+        }
         let Some(parser) = elitea_code_parsers::parser_for(language) else {
             continue;
         };
@@ -497,7 +508,7 @@ pub fn parse_tree(root: &Path, files: &[(&str, &[u8])]) -> BTreeMap<String, Pars
             contents.insert(key.clone(), bytes);
             absolute.push(key);
         }
-        let sources = elitea_code_parsers::Sources::Memory(&contents);
+        let sources = elitea_code_parsers::Sources::MemoryUntil(&contents, stop);
         for (absolute_path, result) in parser.parse_sources(&absolute, sources) {
             let relative = absolute_path
                 .strip_prefix(&prefix)

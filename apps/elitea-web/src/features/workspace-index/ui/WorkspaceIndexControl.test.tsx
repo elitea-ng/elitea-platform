@@ -181,6 +181,55 @@ describe('IndexSettingsDialog flows', () => {
   });
 });
 
+describe('IndexSettingsDialog under a policy that turns the index off', () => {
+  it('still offers Turn off and Remove for an index on this computer, below the reason', async () => {
+    const ipc = createFakeIndexIpc({ statuses: { w1: READY }, policyAllowed: false });
+    const user = userEvent.setup();
+    mount(ipc);
+    const dialog = await openDialog(user);
+    expect(within(dialog).getByTestId('index-policy-off')).toHaveTextContent('turned off by your organisation’s policy');
+    expect(within(dialog).queryByRole('button', { name: 'Turn on' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Rebuild' })).toBeNull();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Turn off' }));
+    expect(ipc.calls.disabled).toEqual(['w1']);
+    await user.click(await within(dialog).findByRole('button', { name: 'Remove index…' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    expect(ipc.calls.removed).toEqual(['w1']);
+    // Nothing on this computer any more: only Close is left.
+    await waitFor(() => expect(within(dialog).queryByRole('button', { name: 'Remove index…' })).toBeNull());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+});
+
+describe('a command\'s answer never replaces a newer status', () => {
+  it('keeps the status an event delivered while the command was in flight', async () => {
+    const fake = createFakeIndexIpc({ statuses: { w1: { ...READY, state: 'stale' } } });
+    let answer: (status: IndexStatus) => void = () => undefined;
+    // The refresh answers late, with what was true when it started.
+    const ipc: FakeIndexIpc = {
+      ...fake,
+      refresh: (workspaceId, full) => {
+        fake.calls.refreshes.push({ workspaceId, full: full === true });
+        return new Promise<IndexStatus>((resolve) => {
+          answer = resolve;
+        });
+      },
+    };
+    const user = userEvent.setup();
+    mount(ipc);
+    const dialog = await openDialog(user);
+    await waitFor(() => expect(fake.subscriberCount()).toBe(1));
+    await user.click(within(dialog).getByRole('button', { name: 'Refresh' }));
+    const ready = { ...OFF_STATUS, ...READY, on_disk: true };
+    act(() => fake.emit({ workspace_id: 'w1', phase: 'ready', message: null, status: ready }));
+    await waitFor(() => expect(chip()).toHaveTextContent(/Ready/));
+    await act(() => Promise.resolve(answer({ ...ready, state: 'building' })));
+    await waitFor(() => expect(chip()).toHaveTextContent(/Ready · 12(\.4)?K entities/));
+    expect(chip()).not.toHaveTextContent('Building');
+  });
+});
+
 describe('WorkspaceIndexControl without a host', () => {
   it('renders nothing', () => {
     const client = new QueryClient();

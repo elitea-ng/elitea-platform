@@ -20,9 +20,9 @@
 //! are withheld ([`IndexState::StalePolicy`]) until a rebuild under the
 //! current policy commits.
 //!
-//! A turn that changed files marks the index stale ([`IndexService::mark_changed`])
-//! and an incremental refresh follows a few seconds later, once changes
-//! stop coming ([`DEFAULT_REFRESH_DELAY`]).
+//! A turn that changed files marks the index stale
+//! ([`IndexService::mark_changed`]); the host schedules the refresh that
+//! follows, because only it knows the policy that refresh must run under.
 //!
 //! Once closed (the index removed, turned off, or reopened under another
 //! policy) a service writes, reports and answers nothing more.
@@ -46,7 +46,6 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
 use tokio::sync::Semaphore;
 
 const KEY: GraphKey = GraphKey::LOCAL;
@@ -56,9 +55,6 @@ const KEY: GraphKey = GraphKey::LOCAL;
 /// would take the whole machine. A refresh waits here (`queued`) before it
 /// lists anything; a cancel or a close ends the wait.
 static REFRESHES: Semaphore = Semaphore::const_new(1);
-
-/// How long after the last change a turn reported its index refreshes.
-pub const DEFAULT_REFRESH_DELAY: Duration = Duration::from_secs(3);
 
 /// The fingerprint of what decides which files an index holds: the
 /// workspace's `path_deny` (as a set), the largest file read, and the
@@ -114,6 +110,12 @@ pub struct IndexStatus {
     /// Files known to have changed since the last build.
     pub changed_files: u64,
     pub error: Option<String>,
+    /// The policy turns the index off (the host still lets the person turn
+    /// it off and remove it).
+    pub policy_off: bool,
+    /// An index exists on this computer (what turning it off and removing
+    /// it act on).
+    pub on_disk: bool,
 }
 
 impl IndexStatus {
@@ -129,6 +131,8 @@ impl IndexStatus {
             last_run: None,
             changed_files: 0,
             error: None,
+            policy_off: false,
+            on_disk: false,
         }
     }
 }
@@ -224,21 +228,16 @@ struct Inner {
     report: Option<RunReport>,
     /// The running refresh's stop flag.
     running: Option<StopSignal>,
-    /// The state before the running refresh began: what a cancelled one
-    /// goes back to.
+    /// The state, and the error, before the running refresh began: what a
+    /// cancelled one goes back to.
     before: IndexState,
+    error_before: Option<String>,
     /// `changed_files` when the running refresh began: changes reported
     /// during it may not be in what it reads.
     changed_at_start: u64,
     /// The build on disk is from another policy: the next refresh rebuilds
     /// from nothing, and nothing is served until it commits.
     policy_mismatch: bool,
-    /// Bumped by every [`IndexService::mark_changed`]: a debounced refresh
-    /// starts only when no later change came during its delay.
-    changes: u64,
-    /// The debounce of the refresh after a change; `None`: no automatic
-    /// refresh.
-    refresh_delay: Option<Duration>,
     closed: bool,
 }
 
@@ -338,10 +337,9 @@ impl IndexService {
                 report: None,
                 running: None,
                 before: state,
+                error_before: None,
                 changed_at_start: 0,
                 policy_mismatch,
-                changes: 0,
-                refresh_delay: Some(DEFAULT_REFRESH_DELAY),
                 closed: false,
             }),
         }))
@@ -375,12 +373,6 @@ impl IndexService {
         &self.policy
     }
 
-    /// Set the debounce of the refresh that follows a change
-    /// ([`Self::mark_changed`]); `None` turns it off.
-    pub fn set_refresh_delay(&self, delay: Option<Duration>) {
-        self.inner().refresh_delay = delay;
-    }
-
     fn status_of(inner: &Inner) -> IndexStatus {
         let (entities, relations) = inner.view.as_ref().map_or((0, 0), |view| {
             (
@@ -397,6 +389,8 @@ impl IndexService {
             last_run: inner.last_run.clone(),
             changed_files: inner.changed_files,
             error: inner.error.clone(),
+            policy_off: false,
+            on_disk: true,
         }
     }
 
@@ -467,15 +461,13 @@ impl IndexService {
     }
 
     /// Note that `files` files changed (a turn wrote them): a ready index
-    /// becomes stale, and an incremental refresh starts once no further
-    /// change has come for the refresh delay ([`DEFAULT_REFRESH_DELAY`]).
-    /// The refresh is scheduled on the current tokio runtime; outside one
-    /// only the state changes.
-    pub fn mark_changed(self: &Arc<Self>, files: u64) {
+    /// becomes stale until the next refresh (which the host schedules).
+    /// Never blocks on a refresh.
+    pub fn mark_changed(&self, files: u64) {
         if files == 0 {
             return;
         }
-        let scheduled = {
+        {
             let mut inner = self.inner();
             if inner.closed {
                 return;
@@ -484,37 +476,8 @@ impl IndexService {
             if inner.state == IndexState::Ready {
                 inner.state = IndexState::Stale;
             }
-            inner.changes = inner.changes.wrapping_add(1);
-            inner.refresh_delay.map(|delay| (inner.changes, delay))
-        };
+        }
         self.emit("stale", None);
-        if let Some((changes, delay)) = scheduled
-            && let Ok(runtime) = tokio::runtime::Handle::try_current()
-        {
-            let this = Arc::clone(self);
-            runtime.spawn(async move { this.refresh_after(changes, delay).await });
-        }
-    }
-
-    /// The debounced refresh of change `changes`: after `delay`, unless a
-    /// later change came (its own wait takes over) or the index closed;
-    /// when a refresh is already running, after it.
-    async fn refresh_after(self: Arc<Self>, changes: u64, delay: Duration) {
-        tokio::time::sleep(delay).await;
-        loop {
-            {
-                let inner = self.inner();
-                if inner.closed || inner.changes != changes {
-                    return;
-                }
-            }
-            match self.start_refresh(false) {
-                Err(error) if error.code == "index_busy" => {
-                    tokio::time::sleep(delay).await;
-                }
-                _ => return,
-            }
-        }
     }
 
     /// Whether a refresh runs (or waits its turn).
@@ -591,6 +554,8 @@ impl IndexService {
         let stop = StopSignal::default();
         inner.running = Some(stop.clone());
         inner.before = inner.state;
+        let fields = &mut *inner;
+        fields.error_before.clone_from(&fields.error);
         inner.changed_at_start = inner.changed_files;
         inner.state = IndexState::Building;
         inner.error = None;
@@ -663,7 +628,9 @@ impl IndexService {
                     "ready"
                 }
                 Err(_) if stop.is_requested() => {
-                    // The previous build stays, and so does where it was.
+                    // The previous build stays, and so does where it was:
+                    // its state and, after a failure, why it failed.
+                    inner.error = inner.error_before.take();
                     inner.state = match inner.before {
                         IndexState::Ready if inner.changed_files > inner.changed_at_start => {
                             IndexState::Stale
