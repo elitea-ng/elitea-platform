@@ -1,15 +1,18 @@
 //! The index's [`GraphStore`]: one owner-only SQLite file per workspace
 //! (`<app data>/workspaces/<id>/index/index.sqlite`).
 //!
-//! Schema version 1 (`PRAGMA user_version`; a newer one is refused, the app
-//! that wrote it knows it and this one does not):
+//! Schema version 2 (`PRAGMA user_version`; a newer one is refused, the app
+//! that wrote it knows it and this one does not; version 1 gains the
+//! `embedding_hash` column when it is opened):
 //!
 //! ```sql
 //! meta      (key TEXT PRIMARY KEY, value TEXT)            -- schema_version, revision_seq, setting:*,
 //!                                                           -- policy (the fingerprint of the last build's policy)
 //! graphs    (project_id, application_id, revision, attributes, metadata, schema)
 //! entities  (project_id, application_id, entity_id, ordinal UNIQUE per graph,
-//!            attributes, embedding BLOB NULL, attr_hash)
+//!            attributes, embedding BLOB NULL, embedding_hash TEXT NULL, attr_hash)
+//!                                                          -- embedding_hash: SHA-256 hex of the text the
+//!                                                          -- vector was embedded from; NULL = none recorded
 //! relations (project_id, application_id, source_id, target_id, ordinal, attributes, attr_hash)
 //! documents (project_id, application_id, source_name, key, version, mime, acl, restricted,
 //!            size, mtime_ns)                                -- size/mtime: the folder's stat cache
@@ -57,7 +60,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 /// The database's file name in its directory.
 pub const FILE_NAME: &str = "index.sqlite";
 
@@ -70,7 +73,7 @@ CREATE TABLE graphs (
 CREATE TABLE entities (
     project_id INTEGER NOT NULL, application_id INTEGER NOT NULL,
     entity_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
-    attributes TEXT NOT NULL, embedding BLOB, attr_hash BLOB NOT NULL,
+    attributes TEXT NOT NULL, embedding BLOB, embedding_hash TEXT, attr_hash BLOB NOT NULL,
     PRIMARY KEY (project_id, application_id, entity_id),
     UNIQUE (project_id, application_id, ordinal));
 CREATE TABLE relations (
@@ -215,6 +218,16 @@ fn migrate(conn: &Connection) -> Result<()> {
                 "BEGIN; {SCHEMA}
                  INSERT INTO meta (key, value) VALUES ('schema_version', '{SCHEMA_VERSION}');
                  INSERT INTO meta (key, value) VALUES ('revision_seq', '0');
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))?;
+            Ok(())
+        }
+        1 => {
+            // Version 2 records the hash of each vector's text.
+            conn.execute_batch(&format!(
+                "BEGIN;
+                 ALTER TABLE entities ADD COLUMN embedding_hash TEXT;
+                 UPDATE meta SET value = '{SCHEMA_VERSION}' WHERE key = 'schema_version';
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?;
             Ok(())
@@ -652,6 +665,8 @@ struct EntityRow {
     id: String,
     attributes: String,
     embedding: Option<Vec<u8>>,
+    /// The hash of the text the embedding was made from.
+    embedding_hash: Option<String>,
     hash: Vec<u8>,
 }
 
@@ -662,12 +677,16 @@ struct RelationRow {
     hash: Vec<u8>,
 }
 
-fn hash(attributes: &str, embedding: Option<&[u8]>) -> Vec<u8> {
+fn hash(attributes: &str, embedding: Option<&[u8]>, embedding_hash: Option<&str>) -> Vec<u8> {
     let mut digest = Sha256::new();
     digest.update(attributes.as_bytes());
     if let Some(embedding) = embedding {
         digest.update([0xff]);
         digest.update(embedding);
+    }
+    if let Some(embedding_hash) = embedding_hash {
+        digest.update([0xfe]);
+        digest.update(embedding_hash.as_bytes());
     }
     digest.finalize().to_vec()
 }
@@ -721,11 +740,17 @@ fn entity_rows(graph: &Graph) -> Result<Vec<EntityRow>> {
             }
         };
         let attributes = to_text(&Value::Object(attributes))?;
+        // A hash describes a vector; without one it has nothing to say.
+        let embedding_hash = embedding
+            .as_ref()
+            .and_then(|_| graph.embedding_hash(id))
+            .map(str::to_owned);
         rows.push(EntityRow {
-            hash: hash(&attributes, embedding.as_deref()),
+            hash: hash(&attributes, embedding.as_deref(), embedding_hash.as_deref()),
             id: id.to_owned(),
             attributes,
             embedding,
+            embedding_hash,
         });
     }
     Ok(rows)
@@ -736,7 +761,7 @@ fn relation_rows(graph: &Graph) -> Result<Vec<RelationRow>> {
     for (source, target, attributes) in graph.edges() {
         let attributes = to_text(&Value::Object(attributes.clone()))?;
         rows.push(RelationRow {
-            hash: hash(&attributes, None),
+            hash: hash(&attributes, None, None),
             source: source.to_owned(),
             target: target.to_owned(),
             attributes,
@@ -799,15 +824,17 @@ fn write_entities(conn: &Connection, key: GraphKey, entities: &[EntityRow]) -> R
         .unwrap_or(-1);
     let mut last = i64::MIN;
     let mut update = conn.prepare(
-        "UPDATE entities SET attributes = ?4, embedding = ?5, attr_hash = ?6
+        "UPDATE entities SET attributes = ?4, embedding = ?5, attr_hash = ?6, embedding_hash = ?7
           WHERE project_id = ?1 AND application_id = ?2 AND entity_id = ?3",
     )?;
     let mut place = conn.prepare(
-        "INSERT INTO entities (project_id, application_id, entity_id, ordinal, attributes, embedding, attr_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO entities (project_id, application_id, entity_id, ordinal, attributes, embedding,
+                               attr_hash, embedding_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (project_id, application_id, entity_id) DO UPDATE SET
              ordinal = excluded.ordinal, attributes = excluded.attributes,
-             embedding = excluded.embedding, attr_hash = excluded.attr_hash",
+             embedding = excluded.embedding, attr_hash = excluded.attr_hash,
+             embedding_hash = excluded.embedding_hash",
     )?;
     for row in entities {
         match old.get(&row.id) {
@@ -821,7 +848,8 @@ fn write_entities(conn: &Connection, key: GraphKey, entities: &[EntityRow]) -> R
                         row.id,
                         row.attributes,
                         row.embedding,
-                        row.hash
+                        row.hash,
+                        row.embedding_hash
                     ])?);
                 }
             }
@@ -837,7 +865,8 @@ fn write_entities(conn: &Connection, key: GraphKey, entities: &[EntityRow]) -> R
                     next,
                     row.attributes,
                     row.embedding,
-                    row.hash
+                    row.hash,
+                    row.embedding_hash
                 ])?);
             }
         }
@@ -1197,11 +1226,12 @@ fn load_read(conn: &mut Connection, key: GraphKey, vectors: bool) -> Result<Opti
         // asks the database whether there is one.
         let mut statement = transaction.prepare(if vectors {
             "SELECT entity_id, attributes, embedding,
-                    (embedding IS NOT NULL AND length(embedding) > 0) FROM entities
+                    (embedding IS NOT NULL AND length(embedding) > 0), embedding_hash
+               FROM entities
               WHERE project_id = ?1 AND application_id = ?2 ORDER BY ordinal"
         } else {
             "SELECT entity_id, attributes, NULL,
-                    (embedding IS NOT NULL AND length(embedding) > 0) FROM entities
+                    (embedding IS NOT NULL AND length(embedding) > 0), NULL FROM entities
               WHERE project_id = ?1 AND application_id = ?2 ORDER BY ordinal"
         })?;
         let rows = statement.query_map(params![key.project_id, key.application_id], |row| {
@@ -1210,10 +1240,14 @@ fn load_read(conn: &mut Connection, key: GraphKey, vectors: bool) -> Result<Opti
                 row.get::<_, String>(1)?,
                 row.get::<_, Option<Vec<u8>>>(2)?,
                 row.get::<_, bool>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?;
         for row in rows {
-            let (id, attributes, embedding, has_vector) = row?;
+            let (id, attributes, embedding, has_vector, embedding_hash) = row?;
+            if let Some(embedding_hash) = embedding_hash {
+                graph.set_embedding_hash(&id, embedding_hash);
+            }
             let mut attributes = parse_map(&attributes, "an entity")?;
             if let Some(embedding) = embedding {
                 attributes.insert("embedding".to_owned(), Value::from(decode(&embedding)));

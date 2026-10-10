@@ -546,6 +546,10 @@ async fn the_view_holds_no_vectors<S: GraphStore>(store: &S, key: GraphKey) {
     let mut graph = sample();
     graph.add_entity("blank", "Blank", "class", None, None);
     assert!(graph.set_embedding("blank", &[]));
+    // The hash of the text a vector was made from is kept with the vector;
+    // one recorded for an entity without a vector describes nothing.
+    graph.set_embedding_hash("alpha", "hash-alpha".to_owned());
+    graph.set_embedding_hash("mid", "stale".to_owned());
     let revision = ok(
         "complete",
         commit(store, key, &graph, "repo", &BTreeMap::new()).await,
@@ -575,6 +579,9 @@ async fn the_view_holds_no_vectors<S: GraphStore>(store: &S, key: GraphKey) {
         full.node("alpha").and_then(|node| node.get("embedding")),
         Some(&json!([0.25, -0.5, 1.0, 0.125]))
     );
+    assert_eq!(full.embedding_hash("alpha"), Some("hash-alpha"));
+    assert_eq!(full.embedding_hash("mid"), None, "no vector, no hash");
+    assert_eq!(full.embedding_hash("zeta"), None);
     assert!(
         !ok(
             "rank",

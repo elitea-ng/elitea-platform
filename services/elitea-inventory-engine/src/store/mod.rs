@@ -59,6 +59,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0004_entity_vectors.sql",
         include_str!("../../migrations/0004_entity_vectors.sql"),
     ),
+    (
+        "0005_entity_embedding_hash.sql",
+        include_str!("../../migrations/0005_entity_embedding_hash.sql"),
+    ),
 ];
 
 /// Rows per multi-row INSERT: 7 bound columns a row stay far below the 65535
@@ -204,13 +208,15 @@ fn ordinal(index: usize) -> Result<i32> {
         .map_err(|_| StoreError::Unstorable("a graph holds at most 2^31 rows".to_owned()))
 }
 
-/// An entity row: id, ordinal, attributes, citations, embedding.
+/// An entity row: id, ordinal, attributes, citations, embedding, and the
+/// hash of the text the embedding was made from.
 type EntityRow = (
     String,
     i32,
     Json<Value>,
     Option<Json<Value>>,
     Option<Vec<f64>>,
+    Option<String>,
 );
 /// A relation row: source, target, ordinal within the source, attributes.
 type RelationRow = (String, String, i32, Json<Value>);
@@ -241,12 +247,18 @@ fn rows(graph: &Graph) -> Result<(Vec<EntityRow>, Vec<RelationRow>)> {
                 )));
             }
         };
+        // A hash describes a vector; without one it has nothing to say.
+        let hash = embedding
+            .as_ref()
+            .and_then(|_| graph.embedding_hash(id))
+            .map(str::to_owned);
         entities.push((
             id.to_owned(),
             ordinal(index)?,
             Json(Value::Object(attributes)),
             citations.map(Json),
             embedding,
+            hash,
         ));
     }
     let mut position_in_source: std::collections::HashMap<&str, usize> =
@@ -339,7 +351,8 @@ async fn insert_entities(
     for batch in entities.chunks(BATCH_ROWS) {
         let mut insert = QueryBuilder::new(
             "INSERT INTO inventory_graph.entities
-                 (project_id, application_id, entity_id, ordinal, attributes, citations, embedding) ",
+                 (project_id, application_id, entity_id, ordinal, attributes, citations, embedding,
+                  embedding_text_hash) ",
         );
         insert.push_values(batch, |mut row, entity| {
             row.push_bind(key.project_id)
@@ -348,7 +361,8 @@ async fn insert_entities(
                 .push_bind(entity.1)
                 .push_bind(&entity.2)
                 .push_bind(&entity.3)
-                .push_bind(&entity.4);
+                .push_bind(&entity.4)
+                .push_bind(&entity.5);
         });
         insert
             .build()
@@ -466,7 +480,7 @@ async fn load_graph(pool: &PgPool, key: GraphKey, vectors: bool) -> Result<Optio
 
     // `embedded` is true for a non-empty vector: what `get_stats` counted.
     let entities = sqlx::query(if vectors {
-        "SELECT entity_id, attributes, citations, embedding,
+        "SELECT entity_id, attributes, citations, embedding, embedding_text_hash,
                 (embedding IS NOT NULL AND cardinality(embedding) > 0) AS embedded
            FROM inventory_graph.entities
           WHERE project_id = $1 AND application_id = $2
@@ -492,6 +506,9 @@ async fn load_graph(pool: &PgPool, key: GraphKey, vectors: bool) -> Result<Optio
             attributes.insert("embedding".to_owned(), Value::from(embedding));
         }
         let id: String = row.try_get("entity_id")?;
+        if vectors && let Some(hash) = row.try_get::<Option<String>, _>("embedding_text_hash")? {
+            graph.set_embedding_hash(&id, hash);
+        }
         if row.try_get::<bool, _>("embedded")? {
             embedded.push(id.clone());
         }

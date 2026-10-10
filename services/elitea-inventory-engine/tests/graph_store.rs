@@ -187,7 +187,9 @@ async fn database(name: &str) -> Option<PgPool> {
     let applied = store::migrate(&pool).await.expect("migrate");
     assert_eq!(
         applied,
-        ["0001", "0002", "0003", "0004"].map(str::to_owned).to_vec()
+        ["0001", "0002", "0003", "0004", "0005"]
+            .map(str::to_owned)
+            .to_vec()
     );
     Some(pool)
 }
@@ -341,7 +343,7 @@ async fn migrating_twice_applies_nothing_the_second_time() {
     .fetch_all(&pool)
     .await
     .expect("ledger");
-    assert_eq!(ledger, ["0001", "0002", "0003", "0004"]);
+    assert_eq!(ledger, ["0001", "0002", "0003", "0004", "0005"]);
 }
 
 /// The shared `GraphStore` contract (libs/rust/inventory-core
