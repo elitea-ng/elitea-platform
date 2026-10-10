@@ -29,6 +29,7 @@ use super::families::jira;
 use super::families::sql;
 use super::families::testio;
 use super::families::testrail;
+use super::families::xray_cloud;
 use super::families::{
     aha, artifact, azure, azure_search, bitbucket, carrier, elastic, figma, gcp, github, gitlab,
     gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
@@ -249,7 +250,7 @@ async fn materialize(
         let toolset = materialize_ado(reference.tool_type(), name, settings, policy)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
-    if matches!(reference.tool_type(), "testio" | "testrail") {
+    if matches!(reference.tool_type(), "testio" | "testrail" | "xray_cloud") {
         let toolset = materialize_test_management(reference.tool_type(), name, settings, policy)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
@@ -620,6 +621,16 @@ fn materialize_test_management(
             testrail::tools::TestRailToolsetErrorCode::UnsupportedSelection => {
                 unsupported_toolkit()
             }
+            _ => invalid_configuration(),
+        })?,
+        "xray_cloud" => xray_cloud::tools::build_xray_cloud_toolset(
+            name,
+            xray_cloud::config::XrayToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| match error.code() {
+            xray_cloud::tools::XrayToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
             _ => invalid_configuration(),
         })?,
         _ => return Err(unsupported_toolkit()),

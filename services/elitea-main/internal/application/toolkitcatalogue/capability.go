@@ -161,6 +161,7 @@ var rustNativeToolTypes = []string{
 	"sql",
 	"testio",
 	"testrail",
+	"xray_cloud",
 	"yagmail",
 	"zephyr",
 	"zephyr_enterprise",

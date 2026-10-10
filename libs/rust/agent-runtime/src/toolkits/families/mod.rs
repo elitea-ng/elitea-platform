@@ -44,6 +44,7 @@ pub(crate) mod sql;
 pub(crate) mod testio;
 pub(crate) mod testrail;
 pub(crate) mod vcs_text;
+pub(crate) mod xray_cloud;
 pub(crate) mod yagmail;
 pub(crate) mod zephyr;
 pub(crate) mod zephyr_enterprise;
