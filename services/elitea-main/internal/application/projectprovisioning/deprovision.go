@@ -42,6 +42,48 @@ var ErrTenantSchemaNotRemoved = errors.New("projectprovisioning: tenant schema w
 // route answers 500 with the per-step detail, so an operator sees the leak.
 var ErrArtifactsNotRemoved = errors.New("projectprovisioning: artifact buckets were not purged")
 
+// ErrIndexRunsActive reports a delete refused because the project still has an
+// index run that is not terminal (#1211). Nothing was changed. Dropping the
+// project's PgVector database under a running indexer would kill the run
+// mid-write, so the delete waits: stop or let the runs finish, then retry. It is
+// retryable by construction, and it is checked before any step runs so that a
+// refused delete leaves the project exactly as it was.
+var ErrIndexRunsActive = errors.New("projectprovisioning: project has active index runs; stop them or wait for them to finish, then retry the delete")
+
+// ErrVectorStoreNotDropped reports a delete that removed the project and could
+// not drop its PgVector database or role. The indexed data is still in
+// Postgres. A second delete answers 404 because the project is gone, so the
+// leftover is cleared with cmd/pgvector-orphans (#1211).
+var ErrVectorStoreNotDropped = errors.New("projectprovisioning: project vector store was not dropped")
+
+// activeIndexRunsSQL counts the execution_jobs in the states in which an index run can
+// still be writing vectors. QUARANTINED is terminal for this purpose: a
+// quarantined job is not executing, and counting it would make a project with
+// one stuck job undeletable.
+const activeIndexRunsSQL = `
+SELECT count(*) FROM elitea_runtime.execution_jobs
+WHERE resource_project_id = $1
+  AND capability_id = 'index.ingest.v1'
+  AND state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING')`
+
+// activeIndexRuns counts the project's non-terminal index runs. A deployment
+// whose runtime schema is not installed has no runs.
+func (p *Provisioner) activeIndexRuns(ctx context.Context, projectID int64) (int64, error) {
+	var present bool
+	if err := p.pool.QueryRow(ctx,
+		`SELECT to_regclass('elitea_runtime.execution_jobs') IS NOT NULL`).Scan(&present); err != nil {
+		return 0, err
+	}
+	if !present {
+		return 0, nil
+	}
+	var n int64
+	if err := p.pool.QueryRow(ctx, activeIndexRunsSQL, projectID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // Deprovision removes a project and everything provisioning created for it.
 //
 // TWO DELIBERATE DEVIATIONS from the reference:
@@ -113,6 +155,23 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1)
 		return Result{}, ErrProjectNotFound
 	}
 
+	// An explicit delete is the one caller allowed to drop the project's
+	// PgVector database (#1211). Refuse BEFORE touching anything while an index
+	// run is active: cancelling would be a side effect of a delete that then
+	// did not happen, and FORCE-dropping would kill the run mid-write.
+	if p.vectorStore != nil {
+		active, err := p.activeIndexRuns(ctx, projectID)
+		if err != nil {
+			return Result{}, fmt.Errorf("projectprovisioning: check index runs for project %d: %w", projectID, err)
+		}
+		if active > 0 {
+			p.logger.WarnContext(ctx, "project delete refused: index runs are active",
+				"project_id", projectID, "active_runs", active)
+			return Result{}, ErrIndexRunsActive
+		}
+	}
+	state.deleting = true
+
 	// removeSystemUser deletes by id, so the identity has to be resolved first.
 	// An absent row is not an error: a project provisioned before this step
 	// existed, or one whose system user was already removed, still deletes.
@@ -164,6 +223,11 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1),
 		p.logger.ErrorContext(ctx, "project deleted with artifact buckets left to purge",
 			"project_id", projectID, "live_buckets", live, "prefix", fmt.Sprintf("p/%d/", projectID))
 		return result, ErrArtifactsNotRemoved
+	}
+	if state.vectorStoreDropErr != nil {
+		p.logger.ErrorContext(ctx, "project deleted but its PgVector database or role was not dropped",
+			"project_id", projectID, "err", state.vectorStoreDropErr)
+		return result, ErrVectorStoreNotDropped
 	}
 	return result, nil
 }

@@ -154,7 +154,15 @@ type ProjectVaultBootstrapper interface {
 // createProjectVectorStore.
 type ProjectVectorStore interface {
 	ProvisionProjectVectorStore(ctx context.Context, projectID int64) error
+	// RemoveProjectVectorStore undoes what provisioning wrote to this platform
+	// (the configuration row). It never drops the PgVector database or role, so
+	// it is safe for the create-failure rollback.
 	RemoveProjectVectorStore(ctx context.Context, projectID int64) error
+	// DropProjectVectorStore irreversibly drops the project's PgVector database
+	// and login role (#1211). It is reached only from an explicit project
+	// delete (Deprovision), never from the create-failure rollback. It is
+	// idempotent and a no-op on a deployment with no PgVector bootstrap.
+	DropProjectVectorStore(ctx context.Context, projectID int64) error
 }
 
 // ProjectDefaultModelSeeder copies the platform default model into a new
@@ -383,7 +391,7 @@ func (p *Provisioner) compensate(ctx context.Context, state *provisionState, att
 			continue
 		}
 		status := StepStatus{Step: step.name, Initialized: true}
-		if err := step.remove(ctx, p, state); err != nil {
+		if err := step.removeFor(state)(ctx, p, state); err != nil {
 			status.setFailed(safeStepMessage(step.name))
 			p.logger.ErrorContext(ctx, "project provisioning compensation failed",
 				"step", step.name, "project_id", state.projectID, "err", err)
@@ -450,6 +458,13 @@ type provisionState struct {
 	request      Request
 	projectID    int64
 	systemUserID int64
+	// deleting is true only while Deprovision runs: an explicit, irreversible
+	// project delete. Provision never sets it, so the create-failure rollback
+	// cannot reach a step's destructive `deprovision` variant (#1211).
+	deleting bool
+	// vectorStoreDropErr records a failed PgVector drop during a delete so
+	// Deprovision can report it instead of answering 200 (#1211).
+	vectorStoreDropErr error
 }
 
 // projectIDString is the decimal project id, for the interfaces that take one.

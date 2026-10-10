@@ -156,8 +156,9 @@ func (s *ProjectVectorStore) ProvisionProjectVectorStore(ctx context.Context, pr
 // RemoveProjectVectorStore removes the project's `vectorstorage` configuration
 // row.
 //
-// It does NOT drop the PgVector role or database — see the step's own comment
-// in projectprovisioning for why that boundary is where it is.
+// It does NOT drop the PgVector role or database: it serves the create-failure
+// rollback too. An explicit delete follows it with DropProjectVectorStore (see
+// removeProjectVectorStore and deprovisionProjectVectorStore).
 //
 // IT NO LONGER REMOVES THE VAULT (#399). The project_secrets step owns the
 // vault, and removeProjectSecrets removes it. Both callers of this method reach
@@ -186,6 +187,41 @@ func (s *ProjectVectorStore) RemoveProjectVectorStore(ctx context.Context, proje
 	); err != nil {
 		return fmt.Errorf("delete project pgvector configuration: %w", err)
 	}
+	return nil
+}
+
+// DropProjectVectorStore drops the project's PgVector database and login role
+// (#1211). Callers: only an explicit project delete. The create-failure rollback
+// calls RemoveProjectVectorStore, which never reaches this.
+//
+// It is idempotent (a missing database or role is a no-op) and a no-op on a
+// deployment with no public elitea-pgvector configuration, which has nothing to
+// drop from.
+func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64) error {
+	if s == nil {
+		return errors.New("project vector store is not configured")
+	}
+	if projectID <= 0 {
+		return vectorstoreapp.ErrInvalidProjectPgvectorRequest
+	}
+	bootstrap, configured, err := s.resolveBootstrap(ctx)
+	if err != nil {
+		return err
+	}
+	if !configured {
+		return nil
+	}
+	databases, err := newCurrentProjectPgvectorDatabaseProvisioner(bootstrap)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrProjectVectorStoreBootstrap, err)
+	}
+	result, err := databases.Drop(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	s.logger.InfoContext(ctx, "dropped project vector store",
+		"project_id", projectID,
+		"database_dropped", result.DatabaseDropped, "role_dropped", result.RoleDropped)
 	return nil
 }
 

@@ -47,6 +47,23 @@ func newCurrentProjectPgvectorDatabaseProvisioner(
 	}, nil
 }
 
+// Drop removes the project's PgVector database and login role under the
+// bootstrap admin connection (#1211). Production always provisions in the
+// database-and-role mode, so that is the mode dropped.
+func (a *currentProjectPgvectorDatabaseProvisioner) Drop(
+	ctx context.Context,
+	projectID int64,
+) (pgvector.DropResult, error) {
+	if a == nil || a.provisioner == nil {
+		return pgvector.DropResult{}, pgvector.ErrInvalidConnector
+	}
+	return a.provisioner.Drop(ctx, pgvector.DropRequest{
+		ProjectID: projectID,
+		Admin:     a.admin,
+		Mode:      pgvector.ModeDatabaseRole,
+	})
+}
+
 func (*currentProjectPgvectorDatabaseProvisioner) NewProjectPassword() (string, error) {
 	return pgvector.NewProjectPassword()
 }

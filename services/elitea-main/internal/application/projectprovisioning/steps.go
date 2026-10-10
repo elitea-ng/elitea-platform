@@ -143,6 +143,20 @@ type step struct {
 	name   string
 	create func(ctx context.Context, p *Provisioner, state *provisionState) error
 	remove func(ctx context.Context, p *Provisioner, state *provisionState) error
+	// deprovision, when set, replaces remove for an explicit project delete.
+	// remove is what the create-failure rollback runs and must stay
+	// non-destructive for anything that may already hold user data; deprovision
+	// may additionally destroy it (#1211).
+	deprovision func(ctx context.Context, p *Provisioner, state *provisionState) error
+}
+
+// removeFor picks the undo that matches the caller's intent. Only Deprovision
+// sets state.deleting, so a rollback always gets the plain remove.
+func (s step) removeFor(state *provisionState) func(context.Context, *Provisioner, *provisionState) error {
+	if state != nil && state.deleting && s.deprovision != nil {
+		return s.deprovision
+	}
+	return s.remove
 }
 
 func createSteps() []step {
@@ -160,7 +174,7 @@ func createSteps() []step {
 		// constraint.
 		{name: StepProjectSecrets, create: createProjectSecrets, remove: removeProjectSecrets},
 		{name: StepArtifactBuckets, create: createArtifactBuckets, remove: removeArtifactBuckets},
-		{name: StepProjectPgvector, create: createProjectVectorStore, remove: removeProjectVectorStore},
+		{name: StepProjectPgvector, create: createProjectVectorStore, remove: removeProjectVectorStore, deprovision: deprovisionProjectVectorStore},
 		{name: StepProjectAdmin, create: createProjectAdmin, remove: removeProjectAdmin},
 	}
 }
@@ -1009,15 +1023,20 @@ func createProjectVectorStore(ctx context.Context, p *Provisioner, state *provis
 	return nil
 }
 
-// removeProjectVectorStore undoes what the step wrote to this platform.
+// removeProjectVectorStore is the create-failure ROLLBACK of the step.
 //
-// It removes the configuration row and the two vault entries. It does NOT drop
-// the PgVector role or database. That is deliberate and bounded:
-// internal/infra/pgvector has no drop path at all, pylon's own project delete
-// has no pgvector step either, and dropping a database that may already hold a
-// project's vectors is a destructive operation that belongs to an explicit
-// decision rather than to a compensation. The role and database are converged
-// idempotently, so a retry reuses them rather than leaking a second pair.
+// It removes the configuration row only (the project's vault goes with the
+// project_secrets step). It does NOT drop the PgVector role or database, and
+// that is deliberate for THIS path: a rollback is a compensation, not a
+// decision. The role and database are converged idempotently by the create
+// step, so a retry reuses them rather than leaking a second pair, and a failed
+// create must never destroy a database that may already hold a project's
+// vectors.
+//
+// An explicit project delete is a different intent and runs
+// deprovisionProjectVectorStore instead (#1211). The two are separate functions
+// selected by step.removeFor, and only Deprovision sets provisionState.deleting,
+// so the destructive drop is structurally unreachable from Provision's rollback.
 //
 // The compensation still leaves nothing behind on THIS side, which is what the
 // create path needs: no row an index run could resolve, and no vault entry
@@ -1028,6 +1047,30 @@ func removeProjectVectorStore(ctx context.Context, p *Provisioner, state *provis
 	}
 	if err := p.vectorStore.RemoveProjectVectorStore(ctx, state.projectID); err != nil {
 		return fmt.Errorf("remove project vector store: %w", err)
+	}
+	return nil
+}
+
+// deprovisionProjectVectorStore is the step's undo for an EXPLICIT project
+// delete (#1211). It does what the rollback does, then drops the project's
+// PgVector database and login role, so the indexed chunks (document text,
+// metadata, embeddings) do not outlive the project.
+//
+// The configuration row goes first. If the drop then fails, nothing resolves to
+// the half-deleted store, and the failure is surfaced by Deprovision as
+// ErrVectorStoreNotDropped rather than swallowed. Deprovision has already
+// refused to start while an index run for the project is active, so the drop
+// does not race a running indexer.
+func deprovisionProjectVectorStore(ctx context.Context, p *Provisioner, state *provisionState) error {
+	if err := removeProjectVectorStore(ctx, p, state); err != nil {
+		return err
+	}
+	if p.vectorStore == nil || state.projectID == 0 {
+		return nil
+	}
+	if err := p.vectorStore.DropProjectVectorStore(ctx, state.projectID); err != nil {
+		state.vectorStoreDropErr = err
+		return fmt.Errorf("drop project vector store: %w", err)
 	}
 	return nil
 }
