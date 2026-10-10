@@ -37,7 +37,9 @@
 //! allow of a compound command holds only when the command is not
 //! destructive, and on a machine that may run commands unconfined every
 //! command is asked. Compound commands and `git_commit` are never
-//! remembered.
+//! remembered, nor is any command on a machine that may run it
+//! unconfined: `approve_always` is not offered there and
+//! [`RulesEngine::remember`] refuses it.
 //!
 //! [`RuleApprovals`] exposes the engine as the runtime's
 //! [`ApprovalChannel`]: rule verdicts are answered inline, asks go on to the
@@ -700,7 +702,10 @@ impl RulesEngine {
     /// * a file tool: a glob the person confirmed, which must match every
     ///   path of the call (`None`: exactly the call's paths).
     ///
-    /// Compound commands and commits are never remembered.
+    /// Compound commands and commits are never remembered, and neither is
+    /// any command on a machine that may run it unconfined: every command
+    /// is asked there ([`Self::decide`]), so the choice would sit unused
+    /// and silently start applying if the sandbox were enforced later.
     ///
     /// # Errors
     ///
@@ -710,6 +715,13 @@ impl RulesEngine {
             return Err(ToolError::new(
                 ErrorCode::Denied,
                 "commits are asked every time",
+            ));
+        }
+        if call.tool == ToolKind::RunCommand && !self.confined {
+            return Err(ToolError::new(
+                ErrorCode::Denied,
+                "commands may run without a sandbox on this machine, so each one is asked; \
+                 \"always allow\" cannot be remembered for them",
             ));
         }
         let command = match call.command.as_deref().map(analyse) {
@@ -770,6 +782,21 @@ impl RulesEngine {
             sandbox: call.sandbox,
             network: call.network,
         })
+    }
+}
+
+impl RulesEngine {
+    /// Whether an "always allow" for `call` would be remembered
+    /// ([`Self::remember`] accepts it): not a commit, not a compound
+    /// command, and not a command on a machine that may run it unconfined.
+    #[must_use]
+    pub fn can_remember(&self, call: &ToolCall) -> bool {
+        call.tool != ToolKind::GitCommit
+            && (call.tool != ToolKind::RunCommand || self.confined)
+            && call
+                .command
+                .as_deref()
+                .is_none_or(|command| analyse(command).is_simple())
     }
 }
 
@@ -835,11 +862,7 @@ impl ApprovalChannel for RuleApprovals {
             Verdict::Allow => Ok(decided("approve", &decision)),
             Verdict::Deny => Ok(decided("reject", &decision)),
             Verdict::Ask => {
-                let rememberable = call.tool != ToolKind::GitCommit
-                    && call
-                        .command
-                        .as_deref()
-                        .is_none_or(|command| analyse(command).is_simple());
+                let rememberable = self.engine.can_remember(&call);
                 request.available_actions = if rememberable {
                     vec![
                         "approve".to_owned(),
@@ -1329,6 +1352,51 @@ mod tests {
             verdict(&engine, &shell("make")),
             (Verdict::Deny, Source::Workspace)
         );
+    }
+
+    /// Unconfined, "always allow" is neither offered nor stored for a
+    /// command (it would never apply); file changes still remember.
+    #[tokio::test]
+    async fn unenforced_sandboxes_do_not_offer_or_store_always_allow_for_commands() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let engine = Arc::new(engine.with_unenforced_commands(true));
+        assert!(!engine.can_remember(&shell("cargo build")));
+        let error = engine
+            .remember(&shell("cargo build"), Some("cargo"))
+            .expect_err("refused");
+        assert!(
+            error.message().contains("without a sandbox"),
+            "{}",
+            error.message()
+        );
+        assert!(engine.choices.list().is_empty(), "nothing stored");
+        assert!(engine.can_remember(&file(ToolKind::WriteFile, "a")));
+
+        let prompt = Arc::new(ScriptedPrompt {
+            answer: ApprovalOutcome::Decided {
+                action: super::APPROVE_ALWAYS.to_owned(),
+                value: json!({ "prefix": "cargo build" }),
+            },
+            seen: Mutex::new(Vec::new()),
+        });
+        let channel = RuleApprovals::new(engine.clone(), prompt.clone());
+        let answered = channel
+            .request(request(&shell("cargo build")))
+            .await
+            .expect("asked");
+        assert!(
+            matches!(answered, ApprovalOutcome::Decided { ref action, .. } if action == "approve"),
+            "approved once"
+        );
+        let seen = prompt.seen.lock().expect("lock").clone();
+        assert_eq!(seen.len(), 1);
+        assert!(
+            !seen[0]
+                .available_actions
+                .contains(&super::APPROVE_ALWAYS.to_owned()),
+            "not offered"
+        );
+        assert!(engine.choices.list().is_empty(), "nothing stored");
     }
 
     /// Policy, plan mode and workspace rules only tighten the defaults.

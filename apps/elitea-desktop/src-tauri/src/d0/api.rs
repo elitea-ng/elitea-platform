@@ -251,9 +251,9 @@ impl PlatformApi {
         }
     }
 
-    #[must_use]
-    pub fn http(&self) -> &reqwest::Client {
-        self.http.client()
+    /// The shared client (awaits its first build).
+    pub async fn http(&self) -> &reqwest::Client {
+        self.http.client().await
     }
 
     #[must_use]
@@ -295,6 +295,7 @@ impl PlatformApi {
         let mut request = self
             .http
             .client()
+            .await
             .request(method.clone(), format!("{}{path}", bearer.origin))
             .timeout(API_TIMEOUT)
             .bearer_auth(&bearer.token)

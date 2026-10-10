@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { fetchThemePreference, isThemeMode, saveThemePreference } from './themePreference';
+import { fetchThemePreference, isThemeMode, saveThemePreference, themeSyncState, unsyncedThemeChoice } from './themePreference';
 
 const BASE = '/api/v2';
 const URL = `${BASE}/social/author/theme`;
@@ -20,6 +20,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetGeneratedClient();
+  localStorage.clear();
 });
 
 describe('isThemeMode', () => {
@@ -81,5 +82,32 @@ describe('saveThemePreference', () => {
     }));
     await Promise.all([saveThemePreference('dark'), saveThemePreference('light')]);
     expect(order).toEqual(['dark', 'light']);
+  });
+
+  it('keeps a choice unsynced until its own PUT succeeds', async () => {
+    let fail = true;
+    server.use(http.put(URL, async ({ request }) => {
+      if (fail) return HttpResponse.json({ error: 'no' }, { status: 500 });
+      return HttpResponse.json(await request.json());
+    }));
+    const failed = saveThemePreference('light');
+    expect(unsyncedThemeChoice()).toBe('light');
+    expect(themeSyncState()).toMatchObject({ saving: true, busy: true });
+    await expect(failed).resolves.toBe(false);
+    expect(unsyncedThemeChoice()).toBe('light');
+    expect(themeSyncState()).toMatchObject({ saving: false, busy: true });
+    fail = false;
+    await expect(saveThemePreference('light')).resolves.toBe(true);
+    expect(unsyncedThemeChoice()).toBeUndefined();
+    expect(themeSyncState()).toMatchObject({ saving: false, busy: false });
+  });
+
+  it('does not let an older success clear a newer unsynced choice', async () => {
+    server.use(http.put(URL, async ({ request }) => {
+      const { theme_mode: mode } = (await request.json()) as { theme_mode: string };
+      return mode === 'dark' ? HttpResponse.json({ theme_mode: mode }) : HttpResponse.json({ error: 'no' }, { status: 500 });
+    }));
+    await Promise.all([saveThemePreference('dark'), saveThemePreference('light')]);
+    expect(unsyncedThemeChoice()).toBe('light');
   });
 });

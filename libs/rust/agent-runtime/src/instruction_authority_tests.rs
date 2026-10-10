@@ -102,3 +102,33 @@ fn activation_delta_rejects_another_run_or_catalog() {
         );
     }
 }
+
+#[test]
+fn check_skill_admits_exactly_what_the_plan_admits() {
+    let good = json!({"id":"skill:1","name":"review","revision":content_digest("Check."),"scope":"project:1","instructions":"Check."});
+    assert!(check_skill(&good).is_ok());
+    let mut bad = Vec::new();
+    for (key, value) in [
+        ("revision", json!(content_digest("Other."))),
+        ("revision", json!("")),
+        ("id", json!("")),
+        ("scope", json!("")),
+        ("instructions", json!("")),
+        ("name", json!("x".repeat(257))),
+    ] {
+        let mut skill = good.clone();
+        skill[key] = value;
+        bad.push(skill);
+    }
+    for key in ["id", "name", "revision", "scope", "instructions"] {
+        let mut skill = good.clone();
+        skill.as_object_mut().unwrap().remove(key);
+        bad.push(skill);
+    }
+    bad.push(json!("review"));
+    for skill in bad {
+        assert!(check_skill(&skill).is_err(), "{skill}");
+        let mut plan = InstructionPlan::default();
+        assert!(plan.add_skills(&[skill]).is_err());
+    }
+}

@@ -13,6 +13,8 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { clearNamespace } from '@/shared/lib/storage';
 import { server } from '@/test/setup';
 
+import { saveThemePreference, unsyncedThemeChoice } from '@/shared/api/themePreference';
+
 import ThemePreferenceSync, { REFRESH_INTERVAL_MS } from './ThemePreferenceSync';
 
 const BASE = '/api/v2';
@@ -138,6 +140,78 @@ describe('ThemePreferenceSync', () => {
     act(() => { window.dispatchEvent(new Event('focus')); });
     await waitFor(() => expect(current?.mode).toBe('dark'));
     expect(calls.reads).toBe(2);
+    now.mockRestore();
+  });
+
+  /** What `ThemeModeToggle` does on a click. */
+  function toggle(mode: 'system' | 'light' | 'dark'): void {
+    act(() => {
+      current?.setMode(mode);
+      void saveThemePreference(mode);
+    });
+  }
+
+  it('never lets a read overwrite a choice whose save failed; it retries the save', async () => {
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    let putFails = true;
+    const calls = { reads: 0, saves: [] as unknown[] };
+    server.use(
+      http.get(URL, () => {
+        calls.reads += 1;
+        return HttpResponse.json({ theme_mode: 'dark' });
+      }),
+      http.put(URL, async ({ request }) => {
+        const body = (await request.json()) as { theme_mode: unknown };
+        calls.saves.push(body.theme_mode);
+        return putFails ? HttpResponse.json({ error: 'no' }, { status: 500 }) : HttpResponse.json(body);
+      }),
+    );
+    renderSync();
+    await waitFor(() => expect(current?.mode).toBe('dark'));
+    toggle('light');
+    await waitFor(() => expect(calls.saves).toEqual(['light']));
+    await settle();
+    expect(unsyncedThemeChoice()).toBe('light');
+
+    // The server still says dark: the read does not apply it, it pushes light again.
+    clock += REFRESH_INTERVAL_MS;
+    putFails = false;
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(calls.saves).toEqual(['light', 'light']));
+    await settle();
+    expect(calls.reads).toBe(1);
+    expect(current?.mode).toBe('light');
+    expect(unsyncedThemeChoice()).toBeUndefined();
+    now.mockRestore();
+  });
+
+  it('discards a read that starts while a save is still out', async () => {
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const calls = { reads: 0, saves: [] as unknown[] };
+    server.use(
+      // The read answers at once, before the server has the save.
+      http.get(URL, () => {
+        calls.reads += 1;
+        return HttpResponse.json({ theme_mode: 'dark' });
+      }),
+      http.put(URL, async ({ request }) => {
+        const body = (await request.json()) as { theme_mode: unknown };
+        calls.saves.push(body.theme_mode);
+        await delay(150);
+        return HttpResponse.json(body);
+      }),
+    );
+    renderSync();
+    await waitFor(() => expect(current?.mode).toBe('dark'));
+    toggle('light');
+    clock += REFRESH_INTERVAL_MS;
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+    expect(current?.mode).toBe('light');
+    expect(calls.saves).toEqual(['light']);
+    expect(unsyncedThemeChoice()).toBeUndefined();
     now.mockRestore();
   });
 });

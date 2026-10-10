@@ -15,6 +15,10 @@
  * - On window focus (at most once per {@link REFRESH_INTERVAL_MS}) it reads
  *   again, which is how a change made on the other client shows up here.
  * - A local change made while a read is in flight wins over that read.
+ * - A local choice the server has not confirmed (`unsyncedThemeChoice`: its
+ *   PUT failed or is still out) is never overwritten by a read: the read is
+ *   skipped and the PUT retried instead, and a read that started while a
+ *   choice was unconfirmed discards its answer.
  *
  * The desktop's native window theme needs nothing here: `DesktopFrame`'s
  * `useNativeWindowTheme` already follows the MUI mode this sets.
@@ -26,11 +30,24 @@ import { useEffect, useRef } from 'react';
 
 import { useColorScheme } from '@mui/material/styles';
 
-import { fetchThemePreference, isThemeMode, saveThemePreference } from '@/shared/api/themePreference';
+import {
+  fetchThemePreference,
+  isThemeMode,
+  saveThemePreference,
+  themeSyncState,
+  type ThemeSyncState,
+  unsyncedThemeChoice,
+} from '@/shared/api/themePreference';
 import { DEFAULT_COLOR_SCHEME } from '@/shared/brand/constants';
 
 /** One focus-triggered read per half minute at most: a window switch fires both focus and visibilitychange. */
 export const REFRESH_INTERVAL_MS = 30_000;
+
+/** Whether a save was out when a read started, or one is out or was made since: the read's answer may be stale. */
+function savedMeanwhile(before: ThemeSyncState): boolean {
+  const after = themeSyncState();
+  return before.busy || after.busy || after.generation !== before.generation;
+}
 
 export default function ThemePreferenceSync(): null {
   const { mode, setMode } = useColorScheme();
@@ -54,11 +71,19 @@ export default function ThemePreferenceSync(): null {
     let lastRead = Date.now();
 
     const read = async (): Promise<void> => {
+      // An unconfirmed local choice: the server's value is stale. Push the
+      // choice again (unless its PUT is still out) instead of reading.
+      const unsynced = unsyncedThemeChoice();
+      if (unsynced !== undefined) {
+        if (!themeSyncState().saving) void saveThemePreference(unsynced);
+        return;
+      }
+      const before = themeSyncState();
       const changes = localChanges.current;
       const stored = await fetchThemePreference();
-      // A failed read, an unmounted sync, or a toggle that moved while the
-      // read was out: the local mode stands.
-      if (disposed || stored === undefined || localChanges.current !== changes) return;
+      // A failed read, an unmounted sync, a toggle that moved while the read
+      // was out, or a save that was out or made meanwhile: the local mode stands.
+      if (disposed || stored === undefined || localChanges.current !== changes || savedMeanwhile(before)) return;
       const local = modeRef.current;
       if (stored === null) {
         if (isThemeMode(local) && local !== DEFAULT_COLOR_SCHEME) void saveThemePreference(local);

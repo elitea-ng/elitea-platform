@@ -52,9 +52,9 @@ host's own calls use. It replaces `tauri-plugin-http`, which built a client
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `http_fetch` | one **binary** IPC body: a 4-byte big-endian length `n`, `n` bytes of JSON `{id, method, url, headers: [name, value][]}`, then the request body | `{status, statusText, headers: [name, value][], url, hasBody}`, the response head. The body stays with the host under `id` until it has been read to the end or cancelled. |
+| `http_fetch` | one **binary** IPC body: a 4-byte big-endian length `n`, `n` bytes of JSON `{id, method, url, headers: [name, value][]}`, then the request body | `{status, statusText, headers: [name, value][], url, hasBody}`, the response head. The body stays with the host under `id` until it has been read to the end, cancelled, or left unread too long (below). |
 | `http_read_body` | `{id}` | the next chunk as raw bytes (an `ArrayBuffer`); **zero bytes means the end**, and the id is then forgotten |
-| `http_cancel` | `{id}` | `null`. Aborts a pending `http_fetch`, or ends a body or stream; a pending read rejects with `aborted`. An unknown id is a no-op. |
+| `http_cancel` | `{id}` | `null`. Aborts a pending `http_fetch`, or ends a body or stream; a pending read rejects with `aborted`. An id the host has not seen yet is remembered for 30 s (at most 1024 ids), and an `http_fetch` with it is then refused with `aborted` before anything is sent: IPC calls can overtake each other. |
 
 `id` is chosen by the page, so an abort can name a request before its head
 arrives; an id still in flight is refused. The rules:
@@ -66,13 +66,29 @@ arrives; an id still in flight is refused. The rules:
 - the fetch spec's forbidden request headers (`Cookie`, `Host`, `Origin`,
   `Content-Length`, `Sec-*`, `Proxy-*`, …) are dropped; `Origin:
   tauri://localhost` is sent; there is no cookie jar;
-- a null-body status (101, 103, 204, 205, 304) has `hasBody: false` and
-  nothing to read;
+- a HEAD request and a null-body status (1xx, 204, 205, 304) have
+  `hasBody: false` and nothing to read; the host keeps nothing;
+- a request body is at most **160 MiB**: the largest single-request
+  upload the web app makes is an artifact (one multipart `POST`, whose
+  deployment default is 150 MiB), plus the multipart envelope. The page
+  refuses a larger body before buffering it where it can tell the size
+  (a `Blob`, `File`, buffer, string or `FormData`), the host before
+  parsing the frame (`body_too_large`); the frame's JSON half is at most
+  1 MiB;
+- the IPC's postMessage fallback (used only when its custom protocol is
+  unavailable) carries a binary body as one JSON number per byte; there a
+  frame is at most 1 MiB (`body_too_large`);
+- a response nobody reads for 60 s is dropped (a stream with a read
+  waiting on it is not idle, so SSE is unaffected), and with 256 entries
+  open the longest-unread response is dropped; a later read answers
+  `unknown_request`. The page also cancels a body it can no longer read
+  (its `Response` was garbage-collected) and a HEAD or null-body response
+  at once;
 - a page reload cancels everything the old page had in flight.
 
 Errors reject with `{code, message}`: `aborted` (the page maps it to an
-`AbortError`), `url_not_allowed`, `invalid_request`, `unknown_request`,
-`network` (mapped to a `TypeError`, as `fetch` throws).
+`AbortError`), `url_not_allowed`, `invalid_request`, `body_too_large`,
+`unknown_request`, `network` (mapped to a `TypeError`, as `fetch` throws).
 
 ## Workspaces (`src/local_commands.rs`, `src/workspaces.rs`)
 
@@ -126,7 +142,7 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `model_unresolved`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
 `workspace_project_mismatch`, `workspace_busy`, `skill_unknown`,
-`skill_too_large`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
+`skill_invalid`, `skill_too_large`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
 `not_found`, …).
 
 A turn is held to the session it started under (the connected origin and
@@ -166,17 +182,25 @@ resolved version (or equals a skill's frozen `id`), so the skill is read
 server-side, under the person's own permissions, with the definition.
 At most 5 names, each non-blank, at most 256 bytes and without control
 characters, else `invalid_request` before any request. A name the version
-has no skill with instructions for is refused with `skill_unknown`, and
-more than 64 KiB of picked skill text together with `skill_too_large`
-(refused, not cut); both after the definition is read and before the turn
-is started on the platform. The picked skills are appended to the agent's
-instructions, before the AGENTS.md section, as one `## Skill for this turn`
-section with one `<invoked_skill name="…">` block per skill, ending with
-`## End of skill instructions`; the name is escaped as an attribute value
-and the text is defused as AGENTS.md text is (below), for the
-`invoked_skill` and `agents_md` tags and the headings of both sections.
-Every attached skill also stays in the runtime's catalogue, for
+has no skill with instructions for is refused with `skill_unknown`; a
+picked skill whose frozen snapshot fails the runtime's own admission check
+(`instruction_authority::check_skill`: `id`, `scope` and `revision`
+present and within bounds, and `revision` the SHA-256 of the instructions)
+with `skill_invalid`; and more than 64 KiB of picked skill text together
+with `skill_too_large` (refused, not cut). All three after the definition
+is read and before the turn is started on the platform. The picked skills
+are appended to the agent's instructions, before the AGENTS.md section, as
+one `## Skill for this turn` section with one `<invoked_skill name="…">`
+block per skill, ending with `## End of skill instructions`; the name is
+escaped as an attribute value and the text is defused as AGENTS.md text is
+(below). Every attached skill also stays in the runtime's catalogue, for
 `load_skill`, as before.
+
+**Precedence.** The system instructions are in the order of their
+authority, and each framed section's preamble says so: the agent's own
+instructions first; then the picked skill, which they outrank and which
+outranks AGENTS.md; then AGENTS.md, which both outrank (a nested
+AGENTS.md is more specific than the root one); then the memory splice.
 
 **AGENTS.md.** At every turn start (plan mode included) the host reads the
 workspace's root `AGENTS.md` (name matched case-insensitively; an exact
@@ -186,15 +210,17 @@ first, deduplicated. Reads go through the confined workspace: a symlinked
 file or folder is not read and a `path_deny` match is refused. All files
 together are capped at 32 KiB; a cut file ends with a truncation note and
 files past the cap are skipped. They are appended to the agent's system
-instructions, after the agent's own instructions (which keep priority, as
-the section's header says) and before the memory splice, as one
-`## Project instructions (AGENTS.md)` section with one
+instructions, after the agent's own instructions and any picked skill
+(which outrank it, as the section's preamble says) and before the memory
+splice, as one `## Project instructions (AGENTS.md)` section with one
 `<agents_md path="…">` block per file. The path is escaped as an attribute
-value (`&`, `"`, `<`, `>` and control characters as entities); in the text,
-an opening or closing `agents_md` (or `invoked_skill`) tag (any case) gets a backslash after its
-`<` (`<\/agents_md>`) and a line that would read as the section's own start
-or end heading gets one in front, so no file can close its block, open
-another or end the section. Edits apply from the next turn.
+value (`&`, `"`, `<`, `>` and control characters as entities). In the
+text (AGENTS.md and skills alike) every `<` becomes `&lt;`, so no tag of
+any spelling (`< /agents_md>`, `</ invoked_skill>`, `<INVOKED_SKILL`)
+survives, and every line that starts with `#` after optional blanks gets a
+`\` in front, a line being ended by LF, CR, CR LF, VT, FF, NEL, U+2028 or
+U+2029; so no file can close its block, open another or start or end a
+section. Edits apply from the next turn.
 
 ```ts
 type FileChange = {
@@ -461,5 +487,8 @@ asks `agent_turn_status` and takes its `done` payload as the event.
 `message_ids` are the question's and the answer's message UUIDs, in that
 order, when committed. `approval_request.can_remember` is true when
 `allow_always` is remembered for this workspace (a simple command or a
-file change); otherwise `allow_always` answers once. Remote toolkit
+file change); otherwise `allow_always` answers once and the UI does not
+offer it. It is false for every `run_command` on a machine that may run
+commands unconfined (the OS sandbox cannot be enforced): every command is
+asked there, so a remembered choice would never apply. Remote toolkit
 confirmations (`confirmation_required`) never remember.

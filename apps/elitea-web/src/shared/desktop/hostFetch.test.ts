@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createHostFetch, encodeFetchFrame, type RawInvoke } from './hostFetch';
+import { createHostFetch, encodeFetchFrame, MAX_REQUEST_BODY_BYTES, type RawInvoke, type ReleaseRegistry } from './hostFetch';
 
 /** The host rejects with `{code, message}` (net.rs `FetchError`); an Error carrying both is that shape. */
 function refusal(code: string, message: string): Error {
@@ -143,5 +143,87 @@ describe('createHostFetch', () => {
     expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: 1\n\n');
     await reader.cancel();
     expect(h.cancels).toEqual([100]);
+  });
+
+  it('honours the input Request\'s own signal when the init has none', async () => {
+    const h = host(head());
+    const controller = new AbortController();
+    controller.abort();
+    const request = new Request('https://h.example/a', { signal: controller.signal });
+    await expect(createHostFetch(h.invoke)(request)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(h.invoke).not.toHaveBeenCalled();
+  });
+
+  it('cancels on an abort of the input Request\'s signal', async () => {
+    let release: ((value: unknown) => void) | undefined;
+    const cancels: unknown[] = [];
+    const invoke = vi.fn<RawInvoke>((command, args) => {
+      if (command === 'http_fetch') return new Promise((resolve) => (release = resolve));
+      if (command === 'http_cancel') {
+        cancels.push(args);
+        release?.(Promise.reject(refusal('aborted', 'the request was aborted')));
+      }
+      return Promise.resolve(null);
+    });
+    const controller = new AbortController();
+    const pending = createHostFetch(invoke, { firstId: 30 })(new Request('https://h.example/slow', { signal: controller.signal }));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('http_fetch', expect.anything()));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancels).toEqual([{ id: 31 }]);
+  });
+
+  it('refuses a body over the limit before buffering it when its size is known', async () => {
+    const h = host(head());
+    const fetch = createHostFetch(h.invoke, { maxBodyBytes: 4 });
+    const arrayBuffer = vi.spyOn(Request.prototype, 'arrayBuffer');
+    await expect(fetch('https://h.example/up', { method: 'POST', body: new Blob(['hello']) })).rejects.toBeInstanceOf(TypeError);
+    const form = new FormData();
+    form.append('f', new Blob(['hello']));
+    await expect(fetch('https://h.example/up', { method: 'POST', body: form })).rejects.toBeInstanceOf(TypeError);
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    arrayBuffer.mockRestore();
+    // A body whose size only buffering tells: refused after it, still before the host.
+    await expect(fetch(new Request('https://h.example/up', { method: 'POST', body: 'hello' }))).rejects.toThrow('larger than the desktop app can send');
+    await expect(fetch('https://h.example/up', { method: 'POST', body: 'ok' })).resolves.toBeInstanceOf(Response);
+    expect(h.sent.map((s) => s.body)).toEqual(['ok']);
+    expect(MAX_REQUEST_BODY_BYTES).toBe(160 * 1024 * 1024);
+  });
+
+  it('releases the host entry at once for a HEAD or null-body response', async () => {
+    const h = host(head({ hasBody: true }));
+    const fetch = createHostFetch(h.invoke, { firstId: 50 });
+    const response = await fetch('https://h.example/a', { method: 'HEAD' });
+    expect(response.body).toBeNull();
+    expect(h.cancels).toEqual([51]);
+    expect(h.reads).toEqual([]);
+  });
+
+  it('releases a body whose stream was collected unread, and not one read to its end', async () => {
+    // The first stream's eager first pull takes 'x' (a stream fills its queue on creation).
+    const h = host(head(), ['x', 'one']);
+    let collect: ((id: number) => void) | undefined;
+    const registered: { target: object; id: number; token: object }[] = [];
+    const unregistered: object[] = [];
+    const registry: ReleaseRegistry = {
+      register: (target, id, token) => registered.push({ target, id, token }),
+      unregister: (token) => unregistered.push(token),
+    };
+    const fetch = createHostFetch(h.invoke, {
+      firstId: 60,
+      createRegistry: (release) => {
+        collect = release;
+        return registry;
+      },
+    });
+    const unread = await fetch('https://h.example/a');
+    expect(registered[0]).toMatchObject({ id: 61, target: unread.body });
+    // The garbage collector found the stream unreachable:
+    collect?.(61);
+    expect(h.cancels).toEqual([61]);
+
+    const read = await fetch('https://h.example/b');
+    expect(await read.text()).toBe('one');
+    expect(unregistered).toContain(registered[1]?.token);
   });
 });

@@ -110,7 +110,7 @@ impl TokenEndpoint {
 
     /// The deployment's discovery document, on the same client and deadline.
     pub async fn discovery(&self, origin: &url::Url) -> Result<Discovery, HostError> {
-        crate::discovery::fetch_discovery(self.http.client(), self.timeout, origin).await
+        crate::discovery::fetch_discovery(self.http.client().await, self.timeout, origin).await
     }
 
     pub fn client_version(&self) -> &str {
@@ -155,6 +155,7 @@ impl TokenEndpoint {
         let sent = self
             .http
             .client()
+            .await
             .post(endpoint)
             .timeout(self.timeout)
             .header(CLIENT_VERSION_HEADER, &self.client_version)
@@ -172,6 +173,7 @@ impl TokenEndpoint {
         let Ok(response) = self
             .http
             .client()
+            .await
             .post(endpoint)
             .timeout(self.timeout)
             .header(CLIENT_VERSION_HEADER, &self.client_version)

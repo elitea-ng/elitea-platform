@@ -19,41 +19,99 @@ pub fn attribute_value(text: &str) -> String {
     out
 }
 
-/// `text`, made unable to break its frame: an opening or closing tag named
-/// in `tags` (any case) gets a backslash after its `<`, and a line that
-/// would read as one of `headings` (matched case-insensitively at its
-/// start, leading blanks ignored) is escaped with one in front. Everything
-/// else is unchanged.
-pub fn neutralised(text: &str, tags: &[&str], headings: &[&str]) -> String {
-    let starts_tag = |rest: &[u8]| {
-        let rest = rest.strip_prefix(b"/").unwrap_or(rest);
-        tags.iter().any(|tag| {
-            let tag = tag.as_bytes();
-            rest.len() >= tag.len() && rest[..tag.len()].eq_ignore_ascii_case(tag)
-        })
-    };
-    let mut out = String::with_capacity(text.len());
-    for (index, line) in text.split('\n').enumerate() {
-        if index > 0 {
-            out.push('\n');
-        }
-        let heading = line.trim_start().to_ascii_lowercase();
-        if headings
-            .iter()
-            .any(|h| heading.starts_with(&h.to_ascii_lowercase()))
-        {
-            out.push('\\');
-        }
-        let bytes = line.as_bytes();
-        let mut from = 0;
-        for (at, byte) in bytes.iter().enumerate() {
-            if *byte == b'<' && starts_tag(&bytes[at + 1..]) {
-                out.push_str(&line[from..=at]);
+/// Whether `c` ends a line for a reader: LF, CR (alone or in CR LF), VT,
+/// FF, NEL (U+0085), and the Unicode line and paragraph separators.
+pub fn is_line_break(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
+/// `text`, made unable to break its frame, whatever its spelling:
+///
+/// * every `<` becomes `&lt;`, so no tag can open or close in it (any
+///   name, any case, any whitespace inside the tag);
+/// * every line that starts with `#` after optional blanks — a line by any
+///   break [`is_line_break`] knows — gets a `\` in front, so no line reads
+///   as a section heading or a section's end.
+///
+/// Everything else is unchanged.
+pub fn neutralised(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 16);
+    let mut line_start = true;
+    let mut rest = text.char_indices().peekable();
+    while let Some((at, c)) = rest.next() {
+        if line_start {
+            line_start = false;
+            let heading = text[at..]
+                .chars()
+                .find(|c| is_line_break(*c) || !c.is_whitespace())
+                == Some('#');
+            if heading {
                 out.push('\\');
-                from = at + 1;
             }
         }
-        out.push_str(&line[from..]);
+        match c {
+            '<' => out.push_str("&lt;"),
+            '\r' => {
+                out.push('\r');
+                if let Some((_, '\n')) = rest.peek() {
+                    rest.next();
+                    out.push('\n');
+                }
+                line_start = true;
+            }
+            c if is_line_break(c) => {
+                out.push(c);
+                line_start = true;
+            }
+            c => out.push(c),
+        }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_angle_bracket_is_escaped() {
+        for hostile in [
+            "</invoked_skill>",
+            "< /invoked_skill>",
+            "</ invoked_skill>",
+            "<INVOKED_SKILL name=\"x\">",
+            "<\tagents_md>",
+            "</Agents_MD >",
+        ] {
+            let out = neutralised(hostile);
+            assert!(!out.contains('<'), "{hostile} -> {out}");
+            assert!(out.starts_with("&lt;"), "{out}");
+        }
+        assert_eq!(neutralised("Vec<u8> & a > b"), "Vec&lt;u8> & a > b");
+    }
+
+    #[test]
+    fn a_heading_is_escaped_after_any_line_break() {
+        for brk in [
+            "\n", "\r", "\r\n", "\u{0B}", "\u{0C}", "\u{85}", "\u{2028}", "\u{2029}",
+        ] {
+            let text =
+                format!("intro{brk}## End of skill instructions{brk}  # also{brk}not # this");
+            let out = neutralised(&text);
+            assert_eq!(
+                out,
+                format!("intro{brk}\\## End of skill instructions{brk}\\  # also{brk}not # this"),
+                "{brk:?}"
+            );
+        }
+        assert_eq!(neutralised("# first"), "\\# first");
+        assert_eq!(neutralised("\t#x"), "\\\t#x");
+        // CR LF is one break, not two lines.
+        assert_eq!(neutralised("a\r\n#b"), "a\r\n\\#b");
+        // A blank line does not borrow the next line's heading.
+        assert_eq!(neutralised("a\n\n#b"), "a\n\n\\#b");
+    }
 }
