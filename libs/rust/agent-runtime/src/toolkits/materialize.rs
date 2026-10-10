@@ -25,7 +25,7 @@ use super::families::artifact::ArtifactToolAuthority;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
 use super::families::{
-    artifact, azure, azure_search, bitbucket, elastic, gcp, github, gitlab, gitlab_org,
+    aha, artifact, azure, azure_search, bitbucket, elastic, gcp, github, gitlab, gitlab_org,
     google_places, keycloak, kubernetes, openapi, postman, rally, report_portal, salesforce,
     service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
 };
@@ -176,7 +176,8 @@ async fn materialize(
     }
     if matches!(
         reference.tool_type(),
-        "azure"
+        "aha"
+            | "azure"
             | "azure_search"
             | "bitbucket"
             | "elastic"
@@ -279,6 +280,15 @@ fn materialize_a_to_k(
     policy: &Arc<ToolAdmissionPolicy>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
     let toolset = match tool_type {
+        // No runtime host has an artifact-read grant plane, so Aha is built
+        // without one and serves every tool but attach_file.
+        "aha" => aha::tools::build_aha_toolset(
+            name,
+            aha::config::AhaToolkitConfig::parse(settings).map_err(|_| invalid_configuration())?,
+            policy,
+            None,
+        )
+        .map_err(|error| aha_toolset_materialization_error(error.code()))?,
         "azure" => azure::tools::build_azure_toolset(
             name,
             azure::config::AzureToolkitConfig::parse(settings)
@@ -458,8 +468,7 @@ fn materialize_p_to_z(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
-        // Aha needs a sealed artifact resolver. MCP and nested applications
-        // are rejected above by kind.
+        // MCP and nested applications are rejected above by kind.
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))
@@ -522,6 +531,18 @@ const fn openapi_materialization_error(
         openapi::config::OpenApiConfigErrorCode::InvalidConfiguration => invalid_configuration(),
         openapi::config::OpenApiConfigErrorCode::ResourceExhausted => resource_exhausted(),
         openapi::config::OpenApiConfigErrorCode::UnsupportedCapability => unsupported_toolkit(),
+    }
+}
+
+const fn aha_toolset_materialization_error(
+    code: aha::tools::AhaToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        aha::tools::AhaToolsetErrorCode::InvalidConfiguration
+        | aha::tools::AhaToolsetErrorCode::Client
+        | aha::tools::AhaToolsetErrorCode::InvalidDefinition => invalid_configuration(),
+        aha::tools::AhaToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        aha::tools::AhaToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
     }
 }
 

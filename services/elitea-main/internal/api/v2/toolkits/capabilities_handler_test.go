@@ -136,9 +136,7 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 	// A Zephyr REST family leaves this list when the Rust worker starts
 	// materializing it; the served check below then covers it.
 	want := []string{
-		"ado_boards", "ado_plans", "ado_repos", "ado_wiki", "aha", "bitbucket",
-		"confluence", "figma", "gitlab", "jira", "pptx", "qtest", "testio",
-		"testrail", "xray_cloud",
+		"ado_boards", "ado_plans", "ado_repos", "ado_wiki", "bitbucket", "confluence", "figma", "gitlab", "jira", "pptx", "qtest", "testio", "testrail", "xray_cloud",
 	}
 	sort.Strings(want)
 	got := append([]string(nil), body.HiddenToolkitTypes...)

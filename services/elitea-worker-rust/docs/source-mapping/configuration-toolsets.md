@@ -170,7 +170,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `testio` | `TestIOConfiguration` | `TestIOToolkit` | 15 | Yes | corresponding family paths | Deferred as an incoherent source contract: the check and official API require `Authorization: Token`, while runtime tools send `Bearer`; exploratory-test retrieval cannot receive its implementation-required product ID; and the two SDK write payloads do not map to the current provider create/confirmation operations without inventing product behavior |
 | `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Direct-node delegated 401 recovery has component proof in `delegated-auth-expiry.md`. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
 | `langfuse` | `LangfuseConfiguration` | No standard toolkit | 0 | Yes | `configurations/families/langfuse.rs` | Planned; observability support configuration |
-| `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 33 | Yes | `toolkits/families/aha/` | Capability-disabled complete family; all 25 reads, 6 writes, 1 delete and the effectful combined execute surface are retained, with artifact-backed attachment upload behind a claim-scoped verified temp-spool resolver |
+| `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 32 of 33 | Yes | `toolkits/families/aha/`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): all 25 reads, 5 writes, 1 delete and the effectful combined execute surface pass the SDK conformance gate and are served; `attach_file` is implemented behind a claim-scoped verified temp-spool resolver but omitted from the served set (`supported_tools.aha`) until an artifact-read grant plane exists |
 | `pgvector` | `PgVectorConfiguration` | No standalone toolkit | 0 | No | `configurations/families/pgvector.rs` | Planned; shared indexing/runtime dependency |
 
 The OpenAPI slice follows the current SDK business boundary without copying its
@@ -1734,6 +1734,22 @@ owner.
 | SDK `get_file_bytes_from_artifact` and `attach_file` | Elitea artifact retrieval followed by Aha multipart upload | `artifact.rs` binds immutable version/length/SHA-256, verifies a private bounded temp spool before dispatch and then streams the exact multipart attachment effect |
 | Main toolkit freezer/materializer and Python `EliteaSdkAgentAdapter` | Same frozen tool contract for application and ad-hoc execution | Rust fixtures consume the materialized nested shape; no environment/global credential fallback exists |
 | SDK Aha unit and credential-gated end-to-end suites | Route, schema, formatter and provider evidence | `aha_tests.rs` adds fourteen focused route/schema/model-metadata, adversarial bound, unknown-outcome, secret-isolation and artifact-authority tests |
+
+**Materialization (2026-10-09).** `materialize.rs` now dispatches `aha`
+(`materialize_a_to_k`) and the Rust capability snapshot lists it with
+`supported_tools.aha` naming 32 tools. `attach_file` is the one tool left out:
+the sealed resolver needs an artifact-read GRANT (immutable version, byte length
+and SHA-256 bound before dispatch), and no host provides one — the claim-bound
+platform reader (`PlatformWriter::read_artifact`) returns capped decoded text,
+not verified bytes. `build_aha_toolset` therefore takes an optional resolver;
+production passes none, the tool is not built, an explicit selection of it is
+dropped with one `agent_toolkit_tools_skipped` warning, and a selection of only
+`attach_file` skips the toolkit as unsupported. A defensive
+`AhaArtifactResolver::unavailable()` refuses every path as unauthorized if a call
+ever reached it. Empty selection serves the 32 tools. The SDK conformance gate
+(`every_tool_keeps_the_sdk_contract`) now checks the production profile, so the
+served set and `supported_tools.aha` are asserted equal; no schema drift and no
+exemption was needed.
 
 Production registration remains disabled pending authorized application/ad-hoc
 materialization, fixed-origin egress and live `/api/v1/me` proof, shared

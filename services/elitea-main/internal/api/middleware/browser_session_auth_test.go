@@ -92,7 +92,7 @@ func liveSession() browsersession.Session {
 	now := time.Now().UTC()
 	return browsersession.Session{
 		ID: "identifier", UserID: 7, Email: "owner@example.test",
-		Provider: browsersession.ProviderOIDC,
+		Provider:  browsersession.ProviderOIDC,
 		CreatedAt: now, LastSeenAt: now, ExpiresAt: now.Add(time.Hour),
 		IdleTimeout: time.Hour,
 	}

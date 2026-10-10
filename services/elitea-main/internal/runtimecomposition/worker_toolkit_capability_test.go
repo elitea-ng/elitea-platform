@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 29 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 29",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 30 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 30",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
