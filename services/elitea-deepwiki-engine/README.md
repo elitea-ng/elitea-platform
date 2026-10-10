@@ -36,7 +36,7 @@ are absent or meaningless. Generation is model-bound on both. The harness is
 ## The socket protocol
 
 The server is the shared crate `libs/rust/engine-sidecar` (ADR-0027): this
-engine's `runner::Runner` implements its `Engine` trait (the four tools in
+engine's `runner::Runner` implements its `Engine` trait (the six tools in
 `ENGINE_TOOLS`, and the `generate_wiki` publish hook), and the crate owns
 the protocol below.
 
@@ -48,7 +48,7 @@ POST /engine/invocations/{id}/stop   a cooperative stop → 202 {"stopped": bool
 GET  /engine/health                  {"status": "UP", "runner": …, "active": n}
 ```
 
-Tools: `generate_wiki`, `ask`, `deep_research`, `resolve_wiki`.
+Tools: `generate_wiki`, `ask`, `deep_research`, `resolve_wiki`, and the two index deletions `delete_wiki_index` (`wiki_id`) and `delete_project_wikis` (see [Deleting an index](#deleting-an-index)). Both read the project from the host's reserved `_elitea_project_id` argument and nothing else.
 
 The wire is the retired Python sidecar's wherever the host can see it:
 
@@ -688,7 +688,7 @@ replica must use the same number); set `statement_timeout`
 publishes take together); upsert the `wikis` row (`registry_from_result`'s
 fields; an absent field keeps the stored value), refuse an empty build,
 delete the wiki's live rows of THIS project, `INSERT … SELECT` nodes, edges and vectors,
-write both `wiki_bm25_*` branches, delete the build, commit. A reader sees
+write the `wiki_bm25_*` statistics of the `'fts'` branch, delete the build, commit. A reader sees
 the old index or the new one. After the commit the live tables are
 `ANALYZE`d one by one, best effort, each with a short `lock_timeout`
 (`…_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS`, default 5): a table that another
@@ -699,12 +699,20 @@ strict-parsed.
 `publish` takes `&mut self`: on an error the transaction rolled back, the
 build keeps its rows and its heartbeat, and the caller retries the publish
 (a timeout, a lost connection), stages more and retries, or calls
-`abandon`. After a success the build is gone. The BM25 statistics are `publish.py`'s: the `'bm25'` branch from
-Python `str.split()` tokens of the document text (tokenised in Rust while
-staging, because a PostgreSQL regular expression is not Python's
-whitespace), k1 1.5, b 0.75; the `'fts'` branch from the lexemes and
-position counts of the published tsvectors, k1 1.2, b 0.75; a document
-without tokens takes no `doc_idx`.
+`abandon`. After a success the build is gone. The BM25 statistics are the `'fts'` branch only:
+the lexemes and position counts of the published tsvectors, k1 1.2, b 0.75;
+a document without tokens takes no `doc_idx`. (The legacy standalone `'bm25'`
+branch, `str.split()` tokens with k1 1.5, was written on every publish and
+read only by the parity tool and the tests. It is no longer written or
+searched, and migration 0007 deletes its rows; the build space's
+`bm25_docs` / `bm25_postings` staging tables stay, empty, because a replica
+of the previous release may still write them during a rolling deploy.)
+
+The publish also records the embedding model and dimension on the `wikis`
+row (migration 0006, `embedding_model` / `embedding_dim`; NULL for a wiki
+published before it, or by a build that embedded nothing), so that `ask` can
+read the model from the wiki (ADR-0031 decision 6). `ask` still takes the
+model from its call arguments.
 
 **Reconciliation.** `ELITEA_DEEPWIKI_BUILD_OWNER` (default `HOSTNAME`, the
 pod name) is the owner a build is recorded under, together with the boot id
@@ -728,12 +736,39 @@ swept build cannot heartbeat, stage or publish.
 **Read path** (`storage::search`, `storage::adapter`). Ports of
 `PostgresBackend`'s searches with the same SQL — dense exact `<->` (no HNSW
 index), the folded `plainto_tsquery` FTS ranked by the `'fts'` statistics
-and negated, BM25 from the `'bm25'` statistics — and of `base.rrf_fuse`
+and negated — and of `base.rrf_fuse`
 (weights 0.4 / 0.6, k 60, pools of 30, stable on ties). `UnifiedDb` is
 `PostgresUnifiedDB`: `search_hybrid`, `get_node`, `get_nodes_by_ids`,
 `get_edges_from`, `get_edges_to`, `vec_available`, `get_meta`, with the
 legacy row shapes. Every multi-statement read runs in one `REPEATABLE READ
 READ ONLY` transaction.
+
+### Deleting an index
+
+Issue #1243, ADR-0031 phase D0. Before it nothing deleted a wiki's rows: the
+host's `delete_wiki` removed the artifact objects and the index stayed.
+`storage::delete` and the two tools in `runner::maintenance`:
+
+- `delete_wiki_index` deletes one `(project_id, wiki_id)`: the `wikis` row and
+  every row of `wiki_nodes`, `wiki_edges`, `wiki_node_embeddings` and
+  `wiki_bm25_*`, in ONE transaction that first takes the publish's per-wiki
+  advisory lock (`elitea_deepwiki.publish_wiki`). It queues behind a publish
+  of that wiki and a publish queues behind it, so the wiki ends whole or
+  absent, never half. Deleting a wiki that is not indexed succeeds with
+  `deleted: false`. A generation that is still running is not touched (its
+  build row is locked by a publish and deleting it would deadlock on the
+  advisory lock); the caller stops it, otherwise its publish brings the wiki
+  back.
+- `delete_project_wikis` deletes every wiki of the stamped project, one
+  transaction per wiki (a project can hold thousands, and one transaction
+  would hold as many advisory locks), then the project's unlocked builds. It
+  is idempotent: call it again after a failure.
+- `elitea-deepwiki-engine orphans --existing-projects FILE|- [--delete]`
+  lists the projects that have indexed wikis here and are not in the list of
+  existing projects the caller supplies (one id per line; the product
+  database is not readable from here). A dry run unless `--delete`. An empty
+  list is refused. For example:
+  `psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' | elitea-deepwiki-engine orphans --existing-projects -`.
 
 ### Tenancy: the index is scoped by project
 
@@ -805,9 +840,10 @@ reads no index (the candidates come from the caller's artifact bucket) and
 - **The `path_prefix` filter escapes `_` and `\`** as well as `%`.
 - **A NUL in text** is stored as U+FFFD. Python's publish failed on it in
   psycopg; the elitea-platform corpus has such a node (a PDF fixture).
-- **A `'bm25'` term over 1 kB gets no posting** (it still counts in its
-  document's length, so lengths and `avgdl` stay exact). The term is in
-  0001's B-tree keys, which cannot hold it; the corpus has a 108 kB token.
+- **A word over 2046 bytes gets no lexeme**, because PostgreSQL's parser
+  drops it from the tsvector, so it gets no `'fts'` posting either; the
+  corpus has a 108 kB token. (The legacy `'bm25'` branch counted it in the
+  document's length; that branch is gone.)
 - **The migrator holds an advisory lock** while it runs, so two replicas
   cannot apply one file twice. The ledger is unchanged.
 
@@ -821,7 +857,6 @@ than direct inserts:
 | Branch | Result |
 | --- | --- |
 | dense | exact: order (up to recorded ties) and L2 distances within 1e-6, 11/11 queries |
-| bm25 | exact: order and scores within 1e-6, 11/11; `doc_count` 20, `avgdl` 36.25, 279 terms, k1 1.5, b 0.75 |
 | fts | match set 11/11, no recorded ordering crossed, 0 inversions over the 4 discriminating queries |
 | fused | equals the frozen RRF over the components for 11/11; equals the recording for the 8 queries without a dense tie in the top 10 |
 

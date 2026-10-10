@@ -129,6 +129,13 @@ impl FixtureRunner {
             "ask" => ask(&arguments)?,
             "deep_research" => deep_research(&arguments)?,
             "resolve_wiki" => resolve_wiki(&arguments)?,
+            // The fixture holds no index, so there is nothing to delete.
+            "delete_wiki_index" => serde_json::json!({
+                "success": true,
+                "wiki_id": required(tool, &arguments, "wiki_id")?,
+                "deleted": false,
+            }),
+            "delete_project_wikis" => serde_json::json!({"success": true, "wikis": []}),
             other => {
                 return Err(EngineError::new(
                     ErrorType::Value,

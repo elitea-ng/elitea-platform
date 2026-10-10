@@ -36,6 +36,7 @@
 pub mod adapter;
 pub mod build;
 mod copy;
+pub mod delete;
 pub mod migrate;
 pub mod rows;
 pub mod scope;
