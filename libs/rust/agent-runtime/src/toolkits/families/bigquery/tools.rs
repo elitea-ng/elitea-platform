@@ -308,7 +308,7 @@ impl BigQueryToolKind {
     const fn action(self) -> &'static str {
         match self {
             Self::GetDocuments => {
-                "Read rows of the configured BigQuery table (project, dataset and table must be configured). ids keeps rows whose doc_id is in the list; filter is either an object of column: value equality pairs joined with AND, or one GoogleSQL WHERE condition without ';'. Returns a JSON array of row objects in column order; more than 1000 rows is refused, so narrow the filter."
+                "Read rows of the configured BigQuery table (project, dataset and table must be configured). ids keeps rows whose doc_id is in the list; filter is either an object of column: value equality pairs joined with AND, or one GoogleSQL WHERE condition over this table's columns (no ';', comments, subqueries or other statements). Returns a JSON array of row objects in column order; more than 1000 rows is refused, so narrow the filter."
             }
             Self::BatchSearch => {
                 "Nearest-neighbour search of the configured table's embedding column for each vector in embeddings (Euclidean distance, ascending score, at most k rows each). queries needs an embedding model this toolkit does not have and is refused; pass embeddings instead. filter is a column: value object (values compared as quoted text) or one WHERE condition. Returns a JSON array of result arrays."
@@ -402,7 +402,7 @@ impl BigQueryTool {
             "SELECT *, EUCLIDEAN_DISTANCE(embedding, @query_embedding) AS score\nFROM `{table_id}`\n"
         );
         if let Some(filter) = filter {
-            let _ = writeln!(sql, "WHERE {filter}");
+            let _ = writeln!(sql, "WHERE ({filter})");
         }
         let _ = write!(sql, "ORDER BY score ASC\nLIMIT {k}");
         self.rows(QueryJob {
@@ -566,7 +566,7 @@ impl BigQueryTool {
         };
         let rows = self
             .rows(QueryJob {
-                sql: format!("SELECT * FROM `{table_id}` WHERE {id_expr} AND {filter}"),
+                sql: format!("SELECT * FROM `{table_id}` WHERE {id_expr} AND ({filter})"),
                 parameters,
                 effect: false,
             })
@@ -764,10 +764,12 @@ impl BigQueryTool {
 /// The SDK's WHERE text: `_create_filters` (numbers and booleans bare,
 /// everything else quoted) or, for `batch_search`, every value quoted.
 ///
-/// Rust repairs two things the SDK leaves raw: a value is a properly escaped
-/// `GoogleSQL` string literal, so a quote in it cannot end the literal, and a
-/// condition cannot contain `;`, which would turn the read into a
-/// multi-statement script.
+/// Rust repairs what the SDK leaves raw. An object filter is built from
+/// validated column paths and properly escaped `GoogleSQL` string literals,
+/// so a quote in a value cannot end the literal. A string filter is still
+/// pasted as SQL text (the SDK contract), so it is screened by
+/// [`screen_raw_filter`] first; every caller then wraps the result in
+/// parentheses before splicing it after `AND` or `WHERE`.
 pub(in crate::toolkits) fn where_clause(
     filter: Option<&Value>,
     quote_all: bool,
@@ -779,12 +781,12 @@ pub(in crate::toolkits) fn where_clause(
             if text.len() > MAX_FILTER_BYTES {
                 return Err(resource_exhausted());
             }
-            if text.contains(';') || text.chars().any(|character| character == '\0') {
-                return Err(tool_error(
+            screen_raw_filter(text).map_err(|refusal| {
+                tool_error(
                     "bigquery.filter.invalid",
-                    "the filter must be one GoogleSQL condition without ';'",
-                ));
-            }
+                    format!("the filter was refused: {refusal}"),
+                )
+            })?;
             Ok(text.clone())
         }
         Some(Value::Object(fields)) if fields.is_empty() => Ok("TRUE".to_owned()),
@@ -823,6 +825,137 @@ pub(in crate::toolkits) fn where_clause(
         }
         Some(_) => Err(invalid_arguments()),
     }
+}
+
+/// Keywords a WHERE condition never needs and a prompt-injected filter uses
+/// to read another table, open a subquery or run another statement.
+const REFUSED_FILTER_KEYWORDS: [&str; 16] = [
+    "SELECT", "UNION", "WITH", "INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "DROP", "ALTER",
+    "CALL", "EXECUTE", "DECLARE", "EXPORT", "LOAD", "FROM",
+];
+
+/// Screens a caller-written `GoogleSQL` condition before it is pasted into a
+/// query.
+///
+/// This is a defence against prompt-injected filters, not a SQL parser: a
+/// small lexer skips string literals (`'..'`, `".."`, triple-quoted, with
+/// `r`/`b` prefixes and backslash escapes) and backtick identifiers, and
+/// outside them refuses `;`, comments (`--`, `#`, `/* */`), unbalanced
+/// parentheses (which could close the parentheses the caller is wrapped in)
+/// and the statement or subquery keywords in [`REFUSED_FILTER_KEYWORDS`] as
+/// whole words. A condition that passes can still be any boolean expression
+/// over the configured table's columns; it cannot name another table.
+fn screen_raw_filter(text: &str) -> Result<(), String> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let mut depth: usize = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        match byte {
+            0 => return Err("a NUL character".to_owned()),
+            b';' => return Err("';' outside a string literal".to_owned()),
+            b'#' => return Err("a '#' comment".to_owned()),
+            b'-' if bytes.get(index + 1) == Some(&b'-') => {
+                return Err("a '--' comment".to_owned());
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                return Err("a '/* */' comment".to_owned());
+            }
+            b'(' => {
+                depth += 1;
+                index += 1;
+            }
+            b')' => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| "an unbalanced ')'".to_owned())?;
+                index += 1;
+            }
+            b'\'' | b'"' => index = skip_quoted(bytes, index, false)?,
+            b'`' => index = skip_quoted(bytes, index, false)?,
+            byte if byte.is_ascii_alphanumeric() || byte == b'_' => {
+                let start = index;
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+                {
+                    index += 1;
+                }
+                let word = &text[start..index];
+                // A string-literal prefix: r'..', b"..", rb'..', br'..'.
+                if matches!(bytes.get(index), Some(b'\'' | b'"'))
+                    && word.len() <= 2
+                    && word
+                        .bytes()
+                        .all(|byte| matches!(byte, b'r' | b'R' | b'b' | b'B'))
+                {
+                    let raw = word.bytes().any(|byte| matches!(byte, b'r' | b'R'));
+                    index = skip_quoted(bytes, index, raw)?;
+                    continue;
+                }
+                // `1FROM` lexes as a number then a keyword in some dialects.
+                let bare = word.trim_start_matches(|character: char| {
+                    character.is_ascii_digit() || character == '.'
+                });
+                if let Some(keyword) = REFUSED_FILTER_KEYWORDS.iter().find(|keyword| {
+                    word.eq_ignore_ascii_case(keyword) || bare.eq_ignore_ascii_case(keyword)
+                }) {
+                    return Err(format!("the keyword {keyword} outside a string literal"));
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    if depth == 0 {
+        Ok(())
+    } else {
+        Err("an unbalanced '('".to_owned())
+    }
+}
+
+/// Skips the literal or quoted identifier opening at `start` and returns the
+/// index just past its closing quote.
+fn skip_quoted(bytes: &[u8], start: usize, raw: bool) -> Result<usize, String> {
+    let quote = bytes[start];
+    let triple = quote != b'`'
+        && bytes.get(start + 1) == Some(&quote)
+        && bytes.get(start + 2) == Some(&quote);
+    let mut index = start + if triple { 3 } else { 1 };
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'\\' {
+            if raw {
+                // Whether a raw literal's `\'` ends it is exactly the kind of
+                // lexer disagreement an injection would ride on: refuse it.
+                if bytes.get(index + 1) == Some(&quote) {
+                    return Err("a backslash before the closing quote of a raw string".to_owned());
+                }
+                index += 1;
+            } else {
+                index += 2;
+            }
+            continue;
+        }
+        if byte == quote {
+            if !triple {
+                return Ok(index + 1);
+            }
+            if bytes.get(index + 1) == Some(&quote) && bytes.get(index + 2) == Some(&quote) {
+                return Ok(index + 3);
+            }
+        }
+        if byte == 0 {
+            return Err("a NUL character".to_owned());
+        }
+        if !triple && quote != b'`' && matches!(byte, b'\n' | b'\r') {
+            return Err("a line break inside a single-line string literal".to_owned());
+        }
+        index += 1;
+    }
+    Err(if quote == b'`' {
+        "an unterminated quoted identifier".to_owned()
+    } else {
+        "an unterminated string literal".to_owned()
+    })
 }
 
 const fn python_bool(flag: bool) -> &'static str {
@@ -935,7 +1068,7 @@ fn filter_schema() -> Value {
             {"type": "null"}
         ],
         "default": null,
-        "description": "Filter as an object of column: value equality pairs (joined with AND) or one GoogleSQL WHERE condition without ';', for example \"category = 'news' AND year > 2020\"."
+        "description": "Filter as an object of column: value equality pairs (joined with AND) or one GoogleSQL WHERE condition over this table's columns (no ';', comments, subqueries or other statements), for example \"category = 'news' AND year > 2020\"."
     })
 }
 
@@ -1138,7 +1271,7 @@ fn vectors(arguments: &Map<String, Value>, name: &str) -> adk_core::Result<Vec<V
     values.iter().map(vector).collect()
 }
 
-fn tool_error(code: &'static str, message: &'static str) -> AdkError {
+fn tool_error(code: &'static str, message: impl Into<String>) -> AdkError {
     AdkError::new(
         ErrorComponent::Tool,
         ErrorCategory::InvalidInput,

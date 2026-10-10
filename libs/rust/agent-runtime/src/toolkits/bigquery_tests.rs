@@ -464,6 +464,52 @@ fn filters_follow_create_filters_and_cannot_escape_the_condition() {
     }
 }
 
+#[test]
+fn raw_filters_cannot_reach_another_table_or_statement() {
+    for (refused, reason) in [
+        ("FALSE UNION ALL SELECT * FROM `other.ds.t`", "UNION"),
+        ("doc_id IN (SELECT doc_id FROM `other.ds.t`)", "SELECT"),
+        ("EXISTS(select 1 from other.ds.t)", "SELECT"),
+        ("TRUE; DROP TABLE docs.chunks", "';'"),
+        ("TRUE -- trailing", "'--'"),
+        ("TRUE # trailing", "'#'"),
+        ("TRUE /* c */", "'/* */'"),
+        ("lang = 'en' ) OR ( TRUE", "unbalanced ')'"),
+        ("(lang = 'en'", "unbalanced '('"),
+        ("lang = 'unterminated", "unterminated string"),
+        ("lang = `col", "unterminated quoted identifier"),
+        ("lang = r'a\\' OR TRUE OR '", "raw string"),
+        ("lang = 'a\\\\' UNION SELECT 1", "UNION"),
+        ("x = 1 WiTh", "WITH"),
+        ("x = 1FROM", "FROM"),
+        ("x IN (1) AND y = ''' a ''' Delete", "DELETE"),
+    ] {
+        let error = where_clause(Some(&json!(refused)), false)
+            .expect_err(refused)
+            .to_string();
+        assert!(
+            error.contains("refused") && error.contains(reason),
+            "{refused}: {error}"
+        );
+    }
+    for allowed in [
+        "title = 'SELECT * FROM t; DROP TABLE x -- #'",
+        "title = \"union; with /* from */\"",
+        "title = r'C:\\from\\select'",
+        "title = '''multi\nline; FROM'''",
+        "title = b'delete'",
+        "title = 'it\\'s; select'",
+        "lang = 'a\\' UNION ALL SELECT 1 '",
+        "`select` = 1 AND (views > 3 OR lang IN ('en', 'de'))",
+        "from_date > '2020-01-01' AND selected = TRUE AND views - 1 > 0",
+    ] {
+        assert_eq!(
+            where_clause(Some(&json!(allowed)), false).expect(allowed),
+            allowed
+        );
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One ordered corpus proves every tool's SQL and output shape.
 async fn tools_build_the_sdk_sql_and_format_rows_like_json_dumps() {
@@ -486,7 +532,7 @@ async fn tools_build_the_sdk_sql_and_format_rows_like_json_dumps() {
     let (sql, parameters, effect) = api.jobs()[0].clone();
     assert_eq!(
         sql,
-        "SELECT * FROM `analytics-prod.docs.chunks` WHERE doc_id IN UNNEST(@ids) AND lang = 'en'"
+        "SELECT * FROM `analytics-prod.docs.chunks` WHERE doc_id IN UNNEST(@ids) AND (lang = 'en')"
     );
     assert_eq!(
         parameters,
@@ -508,7 +554,7 @@ async fn tools_build_the_sdk_sql_and_format_rows_like_json_dumps() {
     let (sql, parameters, _) = api.jobs()[1].clone();
     assert_eq!(
         sql,
-        "SELECT *, EUCLIDEAN_DISTANCE(embedding, @query_embedding) AS score\nFROM `analytics-prod.docs.chunks`\nWHERE views > 1\nORDER BY score ASC\nLIMIT 3"
+        "SELECT *, EUCLIDEAN_DISTANCE(embedding, @query_embedding) AS score\nFROM `analytics-prod.docs.chunks`\nWHERE (views > 1)\nORDER BY score ASC\nLIMIT 3"
     );
     assert_eq!(
         parameters[0]["parameterValue"]["arrayValues"],
@@ -613,7 +659,7 @@ async fn batch_search_and_missing_defaults_keep_the_sdk_messages() {
         result.as_str().expect("text").matches("\"doc_id\"").count(),
         2
     );
-    assert!(api.jobs()[0].0.contains("WHERE views = '3'"));
+    assert!(api.jobs()[0].0.contains("WHERE (views = '3')"));
 
     let unconfigured = test_raw_tools("warehouse", &TableDefaults::default(), &api_dyn);
     let error = call(&unconfigured, "get_documents", json!({}))
