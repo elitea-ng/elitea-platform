@@ -133,6 +133,7 @@ var pythonVerifiedImportKeys = []string{
 // runtime does not give — which is the same "wired nowhere" defect this
 // repository keeps finding.
 var rustNativeToolTypes = []string{
+	"ado_boards",
 	"artifact",
 	"azure",
 	"azure_search",

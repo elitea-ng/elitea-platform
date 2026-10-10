@@ -1,3 +1,5 @@
+pub(crate) mod ado;
+pub(crate) mod ado_boards;
 pub(crate) mod aha;
 // Public only to the worker's composition suites (`test-support`).
 #[cfg(any(test, feature = "test-support"))]

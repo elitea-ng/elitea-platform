@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 36 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 36",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 37 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 37",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -126,9 +126,9 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 		t.Errorf("pptx supported=%v reason=%q", supported, reason)
 	}
 	// UI-DC-1: the reason is a sentence for a person, with no internal terms.
-	if _, reason := rust.SupportsToolkitType("ado_boards", "ado_boards"); reason !=
-		"This deployment's agent worker does not support the ado_boards toolkit." {
-		t.Errorf("ado_boards reason = %q", reason)
+	if _, reason := rust.SupportsToolkitType("example_unported", "example_unported"); reason !=
+		"This deployment's agent worker does not support the example_unported toolkit." {
+		t.Errorf("example_unported reason = %q", reason)
 	}
 
 	// A nil projection supports everything: a deployment that has not stated

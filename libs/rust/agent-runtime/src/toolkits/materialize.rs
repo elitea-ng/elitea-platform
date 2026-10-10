@@ -243,6 +243,10 @@ async fn materialize(
     if let Some(toolset) = materialize_zephyr_rest(reference.tool_type(), name, settings, policy)? {
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
+    if reference.tool_type().starts_with("ado_") {
+        let toolset = materialize_ado(reference.tool_type(), name, settings, policy)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
     let toolset = materialize_p_to_z(reference.tool_type(), name, settings, policy)?;
     Ok((toolset, DelegatedAuthorizationCatalog::default()))
 }
@@ -279,6 +283,45 @@ fn materialize_zephyr_rest(
     }
     .map_err(|error| zephyr_rest_toolset_materialization_error(error.code()))?;
     Ok(Some(Arc::new(toolset)))
+}
+
+/// The Azure DevOps families, which share one client (`families::ado`).
+fn materialize_ado(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    use super::families::ado::config::AdoConfigErrorCode;
+    use super::families::ado_boards;
+    let config_error = |code: AdoConfigErrorCode| match code {
+        AdoConfigErrorCode::InvalidConfiguration => invalid_configuration(),
+        AdoConfigErrorCode::ResourceExhausted => resource_exhausted(),
+    };
+    let toolset = match tool_type {
+        "ado_boards" => ado_boards::tools::build_ado_boards_toolset(
+            name,
+            ado_boards::config::AdoBoardsToolkitConfig::parse(settings)
+                .map_err(|error| config_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| ado_toolset_materialization_error(error.code()))?,
+        _ => return Err(unsupported_toolkit()),
+    };
+    Ok(Arc::new(toolset))
+}
+
+const fn ado_toolset_materialization_error(
+    code: super::families::ado::toolset::AdoToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    use super::families::ado::toolset::AdoToolsetErrorCode;
+    match code {
+        AdoToolsetErrorCode::InvalidConfiguration
+        | AdoToolsetErrorCode::Client
+        | AdoToolsetErrorCode::InvalidDefinition => invalid_configuration(),
+        AdoToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        AdoToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+    }
 }
 
 fn materialize_a_to_k(

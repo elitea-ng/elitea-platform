@@ -132,7 +132,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `github` | `configurations/github.py::GithubConfiguration` | `tools/github::EliteAGitHubToolkit` | 44 | Yes | `toolkits/families/github/{config,client,code_search,commits,projects,pull_requests,workflow_runs,tools}.rs`; common configured-tool materializer | Partial read profile: strict anonymous/PAT/basic/App probe parsing plus twenty identity, branch, file, repository-navigation, issue, pull-request, commit, server-side code-search, workflow-status and Project V2 reads; a mixed explicit SDK selection keeps these reads and omits unsupported operations with one bounded warning; the other 24 tools, workflow-log archives, App installation auth, sensitive effects and indexing remain gates |
 | `ado_repos` | `configurations/ado.py::AdoConfiguration` | `tools/ado/repos::AzureDevOpsReposToolkit` | 22 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_repos/` | Planned as its own complete SDK family; 16 repository operations plus 6 inherited indexing tools |
 | `ado_plans` | `configurations/ado.py::AdoConfiguration` | `tools/ado/test_plan::AzureDevOpsPlansToolkit` | 18 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_plans/` | Planned as its own complete SDK family; 12 test-plan operations plus 6 inherited indexing tools |
-| `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 20 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_boards/` | Planned as its own complete SDK family; 14 work-item operations plus 6 inherited indexing tools |
+| `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 19 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_boards}/` | Partial native family: 11 of 13 work-item operations; `get_image_by_url` (vision LLM), `attach_file_to_work_item` (artifact storage) and the 6 indexing tools stay on the Python worker |
 | `ado_wiki` | `configurations/ado.py::AdoConfiguration` | `tools/ado/wiki::AzureDevOpsWikiToolkit` | 14 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_wiki/` | Planned as its own complete SDK family; 8 wiki operations plus 6 inherited indexing tools |
 | `gitlab` | `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab::EliteAGitlabToolkit` | 27 | Yes | `toolkits/families/gitlab/{config,client,tools}.rs`, shared `families/vcs_text.rs`; reuses `gitlab_org` transport, status/effect mapping, OLD/NEW editor and MR diff positions | Partial capability-disabled family (per-tool capability): all 21 non-index tools (10 reads, 9 writes, 2 deletes) keep SDK names, argument schemas, messages, protected-base-branch rules, the invocation-local active branch (moved by reads, as in the SDK) and first-page vs all-pages pagination. A selected index tool is omitted with a warning; the 6 index tools, non-UTF-8 document/image parsing, live check, exact-interrupt HITL and effect reconciliation remain gates |
 | `gitlab_org` | shared `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab_org::EliteAGitlabSpaceToolkit` | 17 | Yes | `toolkits/families/gitlab_org/{config,client,edit,diff,tools}.rs` | Capability-disabled complete family: 8 reads, 8 writes and 1 delete; dynamic-project authority, live check, HITL and effect reconciliation remain gates |
@@ -2612,6 +2612,68 @@ to a tool (with the file bytes as job input and the chart as job output) is
 new host plumbing; (3) the attachment bucket as an artifact authority, which
 exists (`ArtifactToolAuthority`) but is lent only to configured families.
 The row in "Special runtime toolsets" above keeps the long-term direction.
+
+### Azure DevOps Boards work item family
+
+`ado_boards` is the first of the four Azure DevOps families. The behaviour
+source is the worker-pinned SDK revision
+`b5113a129329b85d23c2d5c2bf55f18e307414ec`
+(`tools/ado/work_item/{__init__,ado_wrapper}.py`, `configurations/ado.py`);
+none of the worker's five SDK patches touches `tools/ado`. The SDK talks to
+Azure DevOps through `azure-devops` `WorkItemTrackingClient` v7.1, and Rust
+calls the same REST routes and route versions directly.
+
+The four ADO types share one authority, kept in `toolkits/families/ado/`:
+`config.rs` reads `ado_configuration.{organization_url,token}`, `project`,
+`limit` (default 5), `selected_tools` and the per-type optional settings;
+`client.rs` owns one HTTPS-only, redirect-free, retry-free, size-bounded
+transport and sends the PAT exactly as the SDK's
+`BasicAuthentication('', token)` does (`Authorization: Basic base64(":" +
+PAT)`, marked sensitive); `work_items.rs` holds the work item calls that
+`ado_plans` reuses; `format.rs` reproduces msrest `Model.as_dict()` key
+naming and Python `repr()` text; `toolset.rs` builds the ADK tools. An
+Azure DevOps Server collection URL is accepted as the SDK accepts it; plain
+HTTP is refused because the PAT travels as Basic credentials.
+
+Served tools, in SDK order, with their routes:
+
+| Tool | Route (api-version) | Result |
+| --- | --- | --- |
+| `search_work_items` | `POST {project}/_apis/wit/wiql?$top=` (7.1-preview.2), then `GET wit/workitems/{id}?fields=` per hit (7.1-preview.3) | `[{id, url, <field>: value or "N/A"}]`, `"No work items found."`; `limit` 0/absent uses the toolkit limit, `-1` omits `$top`; `System.Id`/`System.WorkItemType` are dropped from `fields` as in `_parse_work_items` |
+| `create_work_item` | `POST {project}/_apis/wit/workitems/${type}` JSON Patch | `{id, message}`; parse failures and HTTP 400 rule errors return the SDK texts (`Issues during attempt to parse work_item_json: ...`, `Error creating work item: <provider message>`) |
+| `update_work_item` | `PATCH {project}/_apis/wit/workitems/{id}` JSON Patch | `Work item (<id>) was updated.` |
+| `delete_work_item` | `DELETE {project}/_apis/wit/workitems/{id}` | `Work item <id> was successfully deleted.` |
+| `get_work_item` | `GET {project}/_apis/wit/workitems/{id}?fields=&asOf=&$expand=` | `{id, url, fields...}` plus msrest `relations` for `$expand` Relations/All |
+| `link_work_items` | `GET _apis/wit/workitemrelationtypes` once per toolset, `PATCH _apis/wit/workitems/{source}` (no project, as the SDK) | SDK link sentence, or the SDK's "Link type is incorrect ..." text with the `{name: referenceName}` map |
+| `get_relation_types` | `GET _apis/wit/workitemrelationtypes` (7.1-preview.2), cached | `{name: referenceName}` |
+| `get_comments` | `GET {project}/_apis/wit/workItems/{id}/comments` (7.1-preview.4): first page `$top=<limit>`, then continuation pages of 3 | msrest-shaped comment list truncated to `limit_total` |
+| `link_work_items_to_wiki_page` / `unlink_work_items_from_wiki_page` | `GET _apis/projects/{project}`, `GET wiki/wikis/{id}`, `GET wiki/wikis/{id}/pages?path=`, then one `PATCH` per work item | `vstfs:///Wiki/WikiPage/<quote(project/wiki/path)>` artifact links; the SDK's success/no-link/failure sentences with `json.dumps` failure maps |
+| `get_work_item_type_fields` | `GET {project}/_apis/wit/workitemtypes/{type}` (7.1-preview.2), cached per type | The SDK report byte for byte, including `Type: Unknown` (the v7.1 field model has no `type`) |
+
+Gaps and deliberate differences:
+
+- `get_image_by_url` describes an attachment with the toolkit's vision LLM,
+  and `attach_file_to_work_item` reads artifact storage. A configured toolkit
+  holds neither authority in this runtime, so both are unserved and listed
+  out of `supported_tools.ado_boards`; a selection naming only unserved tools
+  skips the toolkit.
+- `get_work_item(parse_attachments=true)` and `get_comments(process_images=true)`
+  return the work item or comments without image descriptions or parsed
+  attachment content, which is what the SDK returns when no LLM is
+  configured.
+- The SDK caches a failed field-definition read as empty until
+  `force_refresh`; Rust does not cache a failure.
+- A WIQL result above 200 work items returns a model-visible "narrow the
+  query" text instead of 200+ sequential reads.
+- Provider error bodies stay out of results except HTTP 400/422 messages on
+  work item create/update, which the SDK shows the model and which a caller
+  needs to supply missing required fields. Effects that fail after dispatch
+  (transport, 408, 429, 5xx) are `UnknownOutcome` and never retried.
+
+Proof: `toolkits/ado_boards_tests.rs` (configuration, WIQL/field reads,
+JSON Patch create, rule-error text, unknown outcome, relations, comment
+pagination, wiki artifact links, field report golden, selection/policy,
+argument validation, SDK conformance).
 
 ## Special runtime toolsets
 
