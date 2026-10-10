@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 30 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 30",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 31 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 31",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -121,9 +121,9 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 	if supported, reason := rust.SupportsToolkitType("mcp", ""); !supported {
 		t.Errorf("direct MCP runtime was refused: %s", reason)
 	}
-	if supported, reason := rust.SupportsToolkitType("jira", "jira"); supported ||
-		!strings.Contains(reason, "jira") {
-		t.Errorf("jira supported=%v reason=%q", supported, reason)
+	if supported, reason := rust.SupportsToolkitType("pptx", "pptx"); supported ||
+		!strings.Contains(reason, "pptx") {
+		t.Errorf("pptx supported=%v reason=%q", supported, reason)
 	}
 	// UI-DC-1: the reason is a sentence for a person, with no internal terms.
 	if _, reason := rust.SupportsToolkitType("ado_boards", "ado_boards"); reason !=

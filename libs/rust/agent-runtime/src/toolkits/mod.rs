@@ -79,6 +79,8 @@ mod google_places_tests;
 #[cfg(test)]
 mod invocation_tests;
 #[cfg(test)]
+mod jira_tests;
+#[cfg(test)]
 mod keycloak_tests;
 #[cfg(test)]
 mod kubernetes_tests;

@@ -22,6 +22,7 @@ use adk_core::Toolset;
 
 use super::DelegatedAuthorizationCatalog;
 use super::families::artifact::ArtifactToolAuthority;
+use super::families::jira;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
 use super::families::{
@@ -186,6 +187,7 @@ async fn materialize(
             | "gitlab"
             | "gitlab_org"
             | "google_places"
+            | "jira"
             | "keycloak"
             | "k8s"
     ) {
@@ -363,6 +365,13 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
+        "jira" => jira::tools::build_jira_toolset(
+            name,
+            jira::config::JiraToolkitConfig::parse(settings)
+                .map_err(|error| jira_config_materialization_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| jira_toolset_materialization_error(error.code()))?,
         "keycloak" => keycloak::tools::build_keycloak_toolset(
             name,
             keycloak::config::KeycloakToolkitConfig::parse(settings)
@@ -543,6 +552,29 @@ const fn aha_toolset_materialization_error(
         | aha::tools::AhaToolsetErrorCode::InvalidDefinition => invalid_configuration(),
         aha::tools::AhaToolsetErrorCode::ResourceExhausted => resource_exhausted(),
         aha::tools::AhaToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+    }
+}
+
+const fn jira_config_materialization_error(
+    code: jira::config::JiraConfigErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        jira::config::JiraConfigErrorCode::InvalidConfiguration => invalid_configuration(),
+        jira::config::JiraConfigErrorCode::ResourceExhausted => resource_exhausted(),
+        jira::config::JiraConfigErrorCode::UnsupportedCapability => unsupported_toolkit(),
+    }
+}
+
+const fn jira_toolset_materialization_error(
+    code: jira::tools::JiraToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        jira::tools::JiraToolsetErrorCode::InvalidConfiguration
+        | jira::tools::JiraToolsetErrorCode::Client
+        | jira::tools::JiraToolsetErrorCode::InvalidDefinition => invalid_configuration(),
+        jira::tools::JiraToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        jira::tools::JiraToolsetErrorCode::UnsupportedCapability
+        | jira::tools::JiraToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
     }
 }
 

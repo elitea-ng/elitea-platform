@@ -13,6 +13,7 @@ pub(crate) mod github;
 pub(crate) mod gitlab;
 pub(crate) mod gitlab_org;
 pub(crate) mod google_places;
+pub(crate) mod jira;
 pub(crate) mod keycloak;
 pub(crate) mod kubernetes;
 // Public only to the worker's composition suites (`test-support`).

@@ -139,7 +139,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `qtest` | `configurations/qtest.py::QtestConfiguration` | `tools/qtest::QtestToolkit` | 25 | Yes | `configurations/families/qtest.rs`; `toolkits/families/qtest/` | Planned |
 | `bitbucket` | `configurations/bitbucket.py::BitbucketConfiguration` | `tools/bitbucket::EliteABitbucketToolkit` | 22 | Yes | `toolkits/families/bitbucket/{config,client,tools}.rs`, shared `families/vcs_text.rs` and the `gitlab_org` OLD/NEW editor | Partial capability-disabled family (per-tool capability): all 16 non-index tools (8 reads, 7 writes, 1 delete) over Bitbucket Cloud REST 2.0 or Server REST 1.0 with a sensitive Basic credential, SDK names/schemas/messages and the invocation-local active branch. Several SDK paths that could never succeed are repaired rather than copied (Server PR commits/changes returned a generator repr, Server decline and inline comments raised `TypeError`, Server file listing indexed strings, Cloud PR reads leaked the client's `__dict__`, and an unset `cloud` never detected bitbucket.org). The 6 index tools, SDK 429 retry/backoff, live check, exact-interrupt HITL and effect reconciliation remain gates |
 | `confluence` | `configurations/confluence.py::ConfluenceConfiguration` | `tools/confluence::ConfluenceToolkit` | 25 | Yes | `configurations/families/confluence.rs`; `toolkits/families/confluence/` | Planned; shared Atlassian auth normalizer |
-| `jira` | `configurations/jira.py::JiraConfiguration` | `tools/jira::JiraToolkit` | 23 | Yes | `configurations/families/jira.rs`; `toolkits/families/jira/` | Planned; shared Atlassian auth normalizer |
+| `jira` | `configurations/jira.py::JiraConfiguration` | `tools/jira::JiraToolkit` | 12 of 23 | Yes | `toolkits/families/jira/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): the twelve REST tools; image-description, attachment-content and artifact-upload tools and the six index tools are not served (`supported_tools.jira`); see [Jira REST family](#jira-rest-family) |
 | `postman` | `configurations/postman.py::PostmanConfiguration` | `tools/postman::PostmanToolkit` | 31 | No | `toolkits/families/postman/` | Capability-disabled complete family: 8 reads, 19 writes, 3 deletes and 1 execute surface; management authority is fixed to the claimed Postman origin, while stored-request execution remains behind a separate sealed dynamic-egress authority |
 | `elastic` | None; cluster origin and optional encoded API key are inline toolkit settings | `tools/elastic::ElasticToolkit` | 1 | No | `toolkits/families/elastic/{config,client,tools}.rs` | Capability-disabled complete read family: one bounded Query DSL search against a fixed verified-TLS cluster; approved DNS/IP egress, authorized materialization and live read/load proof remain gates |
 | `keycloak` | None; authority and service-account credentials are inline toolkit settings | `tools/keycloak::KeycloakToolkit` | 1 | No | `toolkits/families/keycloak/{config,client,tools}.rs` | Capability-disabled complete family: one generic Admin REST execute surface retains reads, writes, deletes and actions inside one frozen HTTPS realm; exact-interrupt HITL, effect reconciliation, approved egress and live provider proof remain gates |
@@ -1758,6 +1758,65 @@ and reconciliation, and the real claim-scoped artifact resolver. Large tool
 results must retain one event owner and remain below the output-frame boundary;
 the Python worker's known duplicated 51,979-byte Aha result is a regression
 fixture rather than behavior to reproduce.
+
+### Jira REST family
+
+`jira` serves twelve of the SDK type's twenty-three tools. The baseline is the
+worker-pinned SDK revision `b5113a129329b85d23c2d5c2bf55f18e307414ec`
+(`elitea-sdk` 0.9.8; none of the five pinned patch commits touch Jira) and the
+`atlassian-python-api==4.0.7` client it drives. Tool names and argument schemas
+are the SDK's and pass the conformance gate with no exemption.
+
+Configuration. Main freezes the nested `jira_configuration` (`base_url`,
+`hosting`, `username`, `api_key`, `token`) and the toolkit settings (`cloud`,
+`api_version`, `limit`, `labels`, `additional_fields`, `custom_headers`,
+`verify_ssl`, `selected_tools`). Rust resolves cloud and the REST version
+exactly as `_hosting_to_cloud`/`_resolve_api_version` do: toolkit `cloud`
+wins, else hosting, else an `*.atlassian.net` host (host match, not
+substring); an explicit `2`/`3` wins, else cloud or an Atlassian host means v3.
+A `token` containing `JSESSIONID` is sent as cookies, any other token as
+Bearer, otherwise `username`+`api_key` as Basic. Deliberate differences: the
+origin must be HTTPS (plain HTTP and `verify_ssl: false` skip the toolkit as
+unsupported rather than disabling TLS checks); a custom header may not replace
+`Authorization`/`Cookie`, platform identity or framing headers; `limit` is
+clamped to 1000; blank list items are dropped.
+
+The SDK's `JiraClient` validates the credential with `GET /rest/api/{v}/myself`
+when it is built, because Jira answers an unauthenticated search with 200 and
+no issues. Rust probes once per toolset before the first operation and returns
+the SDK's own sentences (`Authentication failed: Invalid username or API
+key.`, `... Access forbidden.`, the v2/v3 Hosting hint on 404).
+
+| SDK tool | Route and behaviour kept | Rust differences |
+| --- | --- | --- |
+| `search_using_jql` | v3 `GET search/jql` with `nextPageToken`/`isLast`, v2 `GET search` with `startAt`; `maxResults=min(100, limit)`, `fields=*all`; `_parse_issues` projection plus additional fields; `No Jira issues found` / `Found N Jira issues:` | Total capped at 1000 and 50 pages (`limit: 0` means 1000); issue URLs are `{base}/browse/{key}` (the SDK concatenated without a slash) |
+| `create_issue` | `POST issue?updateHistory=false` with `fields`/`update`, the SDK's validation sentences, default labels after | A label failure after creation is appended as a warning instead of reporting the created issue as an error |
+| `update_issue`, `modify_labels` | `PUT /rest/api/2/issue/{key}` (the SDK client hardcodes v2), label add/remove operations, default labels after update | Default labels are applied only after a successful update |
+| `list_comments`, `add_comments` | `GET`/`POST issue/{key}/comment`; v3 comments are one ADF paragraph | — |
+| `list_projects` | Cloud pages `project/search`; Server reads `project` | `nextPage` is followed only on this toolkit's own REST root, at most 20 pages |
+| `set_issue_status` | `GET` transitions, case-insensitive target-status match, `POST` transition, default labels after | The SDK sent the `update` block as `fields` too; Rust sends `fields` and `update` as given, and names the available statuses when none matches |
+| `get_specific_field_info`, `get_remote_links` | `GET issue/{key}?fields=`, falling back to the non-null field list; `GET issue/{key}/remotelink` | — |
+| `link_issues` | `POST issueLink` with the link comment (ADF on v3) | — |
+| `execute_generic_rq` | Any path on the instance; `params` (outermost `{...}`) as query for GET, JSON body otherwise; search responses projected as `process_search_response`; `HTTP: {method} {url} -> {status} {reason} {body}` | The path must stay a plain path under the configured base (no scheme, `//`, query, fragment or dot segments); methods GET/HEAD/OPTIONS/POST/PUT/PATCH/DELETE |
+
+Results are text, as the SDK's are; where the SDK printed a Python `repr`, Rust
+prints compact JSON. A Jira 4xx is returned as the SDK-prefixed text with
+Jira's `errorMessages`/`errors` (bounded to 2 KiB); 401, 429, 5xx and transport
+failures are typed `AdkError`s, and any failure after an effect was sent is a
+nonretryable unknown outcome. Reads above 512 KiB are refused; effect
+confirmations are truncated instead.
+
+Not served, each listed in `supported_tools.jira` by omission and dropped with
+one `agent_toolkit_tools_skipped` warning when selected:
+`get_field_with_image_descriptions` and `get_comments_with_image_descriptions`
+(their default path is a vision-model call per image; toolkit families are
+given no model handle), `get_attachments_content` (the SDK's
+`process_content_by_type` document/OCR/LLM parser; `libs/rust/doc-extract`
+exists but is not linked into the runtime and has no image path),
+`add_file_to_issue_description` and `update_comment_with_file` (they upload
+artifact bytes; the host's artifact reader returns capped text, not verified
+bytes), and the six index tools. A selection with nothing served left skips
+the toolkit as unsupported; empty selection serves the twelve.
 
 ### Postman complete collection-management family
 
