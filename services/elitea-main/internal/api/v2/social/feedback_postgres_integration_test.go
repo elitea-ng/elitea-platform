@@ -466,8 +466,7 @@ CREATE SCHEMA centry;
 CREATE TABLE centry.project (
     id INTEGER PRIMARY KEY,
     suspended BOOLEAN NOT NULL DEFAULT FALSE,
-    create_success BOOLEAN NOT NULL DEFAULT TRUE,
-    deleting_at TIMESTAMPTZ
+    create_success BOOLEAN NOT NULL DEFAULT TRUE
 );
 -- The token principal reload joins the project binding (shared migration 0071).
 CREATE SCHEMA IF NOT EXISTS elitea_identity;

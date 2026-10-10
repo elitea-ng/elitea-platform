@@ -150,25 +150,3 @@ func seedProjectMembership(t *testing.T, pool *pgxpool.Pool, projectID, userID i
 		t.Fatalf("seed membership of %d in %d: %v", userID, projectID, err)
 	}
 }
-
-// A PERSONAL PROJECT THAT IS BEING DELETED IS NOT ANSWERED (#1211). The tombstone
-// (centry.project.deleting_at) says its vault, schema and vector store are on
-// their way out, so "" (no personal project yet) is the truthful answer, and it
-// is the one that makes provisioning repair the account.
-func TestATombstonedPersonalProjectIsNotAnswered(t *testing.T) {
-	pool := newPersonalProjectSocialPool(t)
-	userID := seedAuthorUser(t, pool, "doomed-personal@autotest.local", "Doomed")
-	projectID := seedProject(t, pool, personalproject.Name(userID), userID)
-	seedProjectMembership(t, pool, projectID, userID)
-
-	if got := readPersonalProjectID(t, pool, userID, "doomed-personal@autotest.local"); got != strconv.FormatInt(projectID, 10) {
-		t.Fatalf("premise: personal_project_id = %q, want %d", got, projectID)
-	}
-	if _, err := pool.Exec(context.Background(),
-		`UPDATE centry.project SET deleting_at = now() WHERE id = $1`, projectID); err != nil {
-		t.Fatal(err)
-	}
-	if got := readPersonalProjectID(t, pool, userID, "doomed-personal@autotest.local"); got != "" {
-		t.Fatalf("personal_project_id = %q for a project being deleted, want \"\"", got)
-	}
-}

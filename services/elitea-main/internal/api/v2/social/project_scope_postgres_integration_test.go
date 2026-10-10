@@ -27,7 +27,7 @@ func prepareProjectScopeDatabase(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `
 CREATE SCHEMA centry;
-CREATE TABLE centry.project (id integer PRIMARY KEY, create_success boolean NOT NULL DEFAULT true, suspended boolean NOT NULL DEFAULT false, deleting_at timestamptz);
+CREATE TABLE centry.project (id integer PRIMARY KEY, create_success boolean NOT NULL DEFAULT true, suspended boolean NOT NULL DEFAULT false);
 INSERT INTO centry.project (id) VALUES (7), (8);
 CREATE TABLE public.auth_core__user (id integer PRIMARY KEY, email text UNIQUE, name text, last_login timestamp, suspended boolean NOT NULL DEFAULT false);
 INSERT INTO public.auth_core__user (id, email, name) VALUES

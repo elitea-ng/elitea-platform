@@ -109,14 +109,9 @@ func (r *DBPersonalProjectResolver) PersonalProjectID(ctx context.Context, userI
 	// "" for every account with no test failing.
 	projectName := personalproject.NamePrefix + userID
 
-	// A project being deleted (centry.project.deleting_at, #1211) is gone as far
-	// as this lookup goes: it is not the caller's personal project, so the answer
-	// falls through to the no-named-project path, which asks the ensurer to repair
-	// or reprovision. Returning it would hand every request a project whose
-	// vector store, vault and schema are being removed.
 	var projectID int
 	err := r.pool.QueryRow(ctx,
-		`SELECT id FROM centry.project WHERE name = $1 AND deleting_at IS NULL LIMIT 1`, projectName,
+		`SELECT id FROM centry.project WHERE name = $1 LIMIT 1`, projectName,
 	).Scan(&projectID)
 
 	switch {

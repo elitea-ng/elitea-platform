@@ -461,8 +461,7 @@ func prepareCurrentAvatarDatabase(t *testing.T, pool *pgxpool.Pool) {
 CREATE SCHEMA centry;
 CREATE TABLE centry.project (
     id INTEGER PRIMARY KEY,
-    suspended BOOLEAN NOT NULL DEFAULT FALSE,
-    deleting_at TIMESTAMPTZ
+    suspended BOOLEAN NOT NULL DEFAULT FALSE
 );
 INSERT INTO centry.project (id, suspended) VALUES (7, FALSE);
 

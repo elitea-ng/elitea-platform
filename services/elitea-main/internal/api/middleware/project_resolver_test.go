@@ -202,28 +202,3 @@ func TestPersonalProjectID_NilPool(t *testing.T) {
 		t.Fatal("expected error for nil pool")
 	}
 }
-
-// A project being deleted (deleting_at set, #1211) must not resolve as the
-// caller's personal project: the query excludes it, so the answer falls through
-// to the no-named-project path. The fake models the database honouring the
-// filter: it only finds the row when the SQL does not exclude tombstones.
-func TestPersonalProjectID_TombstonedProjectIsGone(t *testing.T) {
-	tombstoned := true
-	r := newResolver(func(sql string, args ...any) pgx.Row {
-		switch {
-		case strings.Contains(sql, "FROM centry.project"):
-			if tombstoned && strings.Contains(sql, "deleting_at IS NULL") {
-				return fakeRow{err: pgx.ErrNoRows}
-			}
-			return fakeRow{vals: []any{77}}
-		case strings.Contains(sql, "FROM auth_core__user"):
-			return fakeRow{vals: []any{"person@example.test"}}
-		}
-		t.Fatalf("unexpected query: %s", sql)
-		return nil
-	})
-	id, err := r.PersonalProjectID(context.Background(), "5")
-	if err != nil || id != 0 {
-		t.Fatalf("got (%d,%v); the resolver returned a project that is being deleted", id, err)
-	}
-}

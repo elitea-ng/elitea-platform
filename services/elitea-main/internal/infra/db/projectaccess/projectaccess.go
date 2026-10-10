@@ -48,12 +48,9 @@ func Membership(projectParam, userParam int) string {
 }
 
 // ProjectExists returns a boolean SQL expression that is true when
-// centry.project holds a row for the project bound at projectParam that is not
-// being deleted. A tombstoned project (deleting_at, #1211) is on its way out:
-// its schema, vault and vector store are being removed, so a request-time
-// lookup treats it as not found (404) for members and administrators alike. A
-// member always implies a row, so without the tombstone term this would only
-// matter on the administrator branch, which admits every project id.
+// centry.project holds a row for the project bound at projectParam. A member
+// always implies existence, so it only matters on the administrator branch,
+// which admits every project id.
 func ProjectExists(projectParam int) string {
-	return fmt.Sprintf(`EXISTS (SELECT 1 FROM centry.project WHERE id = $%d AND deleting_at IS NULL)`, projectParam)
+	return fmt.Sprintf(`EXISTS (SELECT 1 FROM centry.project WHERE id = $%d)`, projectParam)
 }

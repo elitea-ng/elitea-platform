@@ -180,10 +180,5 @@ func newSocialFeedbackPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, string(feedbackSQL)); err != nil {
 		t.Fatalf("apply shared feedback migration: %v", err)
 	}
-	// The project-existence check reads the tombstone column of shared/0160,
-	// which this helper does not run either (#1211).
-	if _, err := pool.Exec(ctx, `ALTER TABLE centry.project ADD COLUMN IF NOT EXISTS deleting_at TIMESTAMPTZ`); err != nil {
-		t.Fatalf("add the project tombstone column: %v", err)
-	}
 	return pool
 }

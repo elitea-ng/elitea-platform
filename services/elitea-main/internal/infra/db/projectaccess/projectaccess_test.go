@@ -29,7 +29,7 @@ func TestMembershipBindsOnlyItsPlaceholdersAndNamesNoTenantSchema(t *testing.T) 
 }
 
 func TestProjectExistsReadsTheProjectTable(t *testing.T) {
-	if got, want := ProjectExists(2), "EXISTS (SELECT 1 FROM centry.project WHERE id = $2 AND deleting_at IS NULL)"; got != want {
+	if got, want := ProjectExists(2), "EXISTS (SELECT 1 FROM centry.project WHERE id = $2)"; got != want {
 		t.Fatalf("ProjectExists = %q, want %q", got, want)
 	}
 }
