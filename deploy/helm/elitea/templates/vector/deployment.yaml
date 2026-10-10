@@ -93,6 +93,10 @@ spec:
               value: {{ .Values.vector.collection.replicationFactor | toString | quote }}
             - name: ELITEA_VECTOR_COLLECTION_SHARD_NUMBER
               value: {{ .Values.vector.collection.shardNumber | toString | quote }}
+            # The hard bound on embedding spaces; empty means any space may
+            # be created (values.yaml: vector.allowedSpaces).
+            - name: ELITEA_VECTOR_ALLOWED_SPACES
+              value: {{ join "," (.Values.vector.allowedSpaces | default list) | quote }}
             {{- if and $external .Values.vector.qdrant.external.caSecretName }}
             # qdrant-client trusts the native roots only; rustls-native-certs
             # reads SSL_CERT_FILE, which then is the only trusted root.

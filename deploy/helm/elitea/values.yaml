@@ -3504,6 +3504,15 @@ vector:
     serverName: ""
     timeoutMs: 2000
 
+  # The embedding spaces ("<model-slug>:<dimension>") elitea-vector may
+  # create; a request for any other space is refused. THIS is the hard bound
+  # on how many Qdrant collections exist. RECOMMENDED IN PRODUCTION: list the
+  # models you run. Empty (the default) allows any space up to
+  # ELITEA_VECTOR_MAX_COLLECTIONS, which is only a soft cap: concurrent
+  # creators can overshoot it by their number.
+  # Example: ["text-embedding-3-small:1536", "bge-m3:1024"]
+  allowedSpaces: []
+
   collection:
     # Applied when elitea-vector creates a collection on demand. Keep it at or
     # below qdrant.internal.replicas: a factor above the node count leaves

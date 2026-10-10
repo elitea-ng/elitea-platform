@@ -1,8 +1,9 @@
 {{- if and .Values.vector.enabled .Values.networkPolicies.enabled }}
 {{- $np := .Values.networkPolicies }}
-# Ingress to elitea-vector: the agent worker pods (token callers) and
-# elitea-main (the administrator identity) on the gRPC port. The health port
-# admits only networkPolicies.probeFrom.
+# Ingress to elitea-vector: the agent worker pods (claim-token callers), the
+# DeepWiki and Inventory engine pods (callback-token callers, each when its
+# component is enabled) and elitea-main (the administrator identity) on the
+# gRPC port. The health port admits only networkPolicies.probeFrom.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -23,6 +24,12 @@ spec:
       from:
         {{- if .Values.worker.enabled }}
         {{- include "elitea.netpol.workerPeer" . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.deepwiki.enabled }}
+        {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "deepwiki") | nindent 8 }}
+        {{- end }}
+        {{- if .Values.inventory.enabled }}
+        {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "inventory") | nindent 8 }}
         {{- end }}
         {{- include "elitea.netpol.mainPeer" . | nindent 8 }}
     {{- with $np.probeFrom }}
