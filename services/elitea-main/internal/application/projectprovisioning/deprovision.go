@@ -12,6 +12,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // ErrProjectNotFound reports a delete for a project id that has no row.
@@ -42,35 +47,54 @@ var ErrTenantSchemaNotRemoved = errors.New("projectprovisioning: tenant schema w
 // route answers 500 with the per-step detail, so an operator sees the leak.
 var ErrArtifactsNotRemoved = errors.New("projectprovisioning: artifact buckets were not purged")
 
-// ErrIndexRunsActive reports a delete refused because the project still has an
-// index run that is not terminal (#1211). Nothing was changed. Dropping the
-// project's PgVector database under a running indexer would kill the run
-// mid-write, so the delete waits: stop or let the runs finish, then retry. It is
-// retryable by construction, and it is checked before any step runs so that a
+// ErrProjectWorkActive reports a delete refused because the project still has
+// work that is not terminal (#1211): an index run, an agent execution or a
+// toolkit call. All of it uses the project's PgVector database (checkpoints,
+// index tools), so dropping it under running work would kill that work
+// mid-write. The delete waits: stop or let the work finish, then retry. It is
+// retryable by construction, and the first check runs before any step so that a
 // refused delete leaves the project exactly as it was.
-var ErrIndexRunsActive = errors.New("projectprovisioning: project has active index runs; stop them or wait for them to finish, then retry the delete")
+var ErrProjectWorkActive = errors.New("projectprovisioning: project has active runs; stop them or wait for them to finish, then retry the delete")
 
 // ErrVectorStoreNotDropped reports a delete that removed the project and could
 // not drop its PgVector database or role. The indexed data is still in
 // Postgres. A second delete answers 404 because the project is gone, so the
-// leftover is cleared with cmd/pgvector-orphans (#1211).
+// leftover is cleared with cmd/pgvector-orphans (#1211). Result.VectorDatabase
+// names the database.
 var ErrVectorStoreNotDropped = errors.New("projectprovisioning: project vector store was not dropped")
 
-// activeIndexRunsSQL counts the execution_jobs in the states in which an index run can
-// still be writing vectors. QUARANTINED is terminal for this purpose: a
-// quarantined job is not executing, and counting it would make a project with
+// activeWorkSQL counts the project's execution_jobs in any non-terminal state,
+// whatever the capability. The state list is the shared definition in
+// domain/execution (the same states the admission-capacity predicate of
+// migration 0033 counts), not a copy. QUARANTINED is terminal for this purpose:
+// a quarantined job is not executing, and counting it would make a project with
 // one stuck job undeletable.
-const activeIndexRunsSQL = `
+var activeWorkSQL = `
 SELECT count(*) FROM elitea_runtime.execution_jobs
 WHERE resource_project_id = $1
-  AND capability_id = 'index.ingest.v1'
-  AND state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING')`
+  AND state IN (` + nonTerminalStatesSQL() + `)`
 
-// activeIndexRuns counts the project's non-terminal index runs. A deployment
-// whose runtime schema is not installed has no runs.
-func (p *Provisioner) activeIndexRuns(ctx context.Context, projectID int64) (int64, error) {
+func nonTerminalStatesSQL() string {
+	states := []execution.JobState{
+		execution.JobPending, execution.JobDispatched, execution.JobClaimed,
+		execution.JobRunning, execution.JobSettling,
+	}
+	quoted := make([]string, len(states))
+	for i, s := range states {
+		quoted[i] = "'" + string(s) + "'"
+	}
+	return strings.Join(quoted, ", ")
+}
+
+type queryRower interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// activeWork counts the project's non-terminal executions. A deployment whose
+// runtime schema is not installed has none.
+func activeWork(ctx context.Context, q queryRower, projectID int64) (int64, error) {
 	var present bool
-	if err := p.pool.QueryRow(ctx,
+	if err := q.QueryRow(ctx,
 		`SELECT to_regclass('elitea_runtime.execution_jobs') IS NOT NULL`).Scan(&present); err != nil {
 		return 0, err
 	}
@@ -78,7 +102,7 @@ func (p *Provisioner) activeIndexRuns(ctx context.Context, projectID int64) (int
 		return 0, nil
 	}
 	var n int64
-	if err := p.pool.QueryRow(ctx, activeIndexRunsSQL, projectID).Scan(&n); err != nil {
+	if err := q.QueryRow(ctx, activeWorkSQL, projectID).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
@@ -155,19 +179,20 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1)
 		return Result{}, ErrProjectNotFound
 	}
 
-	// An explicit delete is the one caller allowed to drop the project's
-	// PgVector database (#1211). Refuse BEFORE touching anything while an index
-	// run is active: cancelling would be a side effect of a delete that then
-	// did not happen, and FORCE-dropping would kill the run mid-write.
+	// Refuse BEFORE touching anything while any work is active: cancelling would
+	// be a side effect of a delete that then did not happen, and FORCE-dropping
+	// the database would kill the work mid-write. removeProjectModel repeats the
+	// count under a lock on the project row, which is the fence against work
+	// admitted after this point.
 	if p.vectorStore != nil {
-		active, err := p.activeIndexRuns(ctx, projectID)
+		active, err := activeWork(ctx, p.pool, projectID)
 		if err != nil {
-			return Result{}, fmt.Errorf("projectprovisioning: check index runs for project %d: %w", projectID, err)
+			return Result{}, fmt.Errorf("projectprovisioning: check active work for project %d: %w", projectID, err)
 		}
 		if active > 0 {
-			p.logger.WarnContext(ctx, "project delete refused: index runs are active",
+			p.logger.WarnContext(ctx, "project delete refused: work is active",
 				"project_id", projectID, "active_runs", active)
-			return Result{}, ErrIndexRunsActive
+			return Result{}, ErrProjectWorkActive
 		}
 	}
 	state.deleting = true
@@ -208,26 +233,53 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1),
 		return result, fmt.Errorf("projectprovisioning: verify project %d removal: %w", projectID, err)
 	}
 	if rowSurvived {
-		// The schema is still there too, because the drop is held back while
-		// the row is there. The project is unchanged and it stays usable.
+		// The schema and the PgVector database are still there too, because
+		// both drops are held back while the row is there. The project is
+		// unchanged and it stays usable.
+		if state.workActive {
+			return result, ErrProjectWorkActive
+		}
 		return result, ErrProjectNotRemoved
 	}
+
+	// The row is gone. From here every failure is reported, and none hides
+	// another: a retry answers 404 for a project whose row is gone, so whatever
+	// is not named in this return is invisible to the operator.
+	var failures []error
 	if schemaSurvived {
-		return result, ErrTenantSchemaNotRemoved
+		failures = append(failures, ErrTenantSchemaNotRemoved)
 	}
 	live, err := p.liveBucketCount(ctx, projectID)
-	if err != nil {
-		return result, fmt.Errorf("projectprovisioning: verify project %d removal: %w", projectID, err)
-	}
-	if live > 0 {
+	switch {
+	case err != nil:
+		failures = append(failures, fmt.Errorf("projectprovisioning: verify project %d removal: %w", projectID, err))
+	case live > 0:
 		p.logger.ErrorContext(ctx, "project deleted with artifact buckets left to purge",
 			"project_id", projectID, "live_buckets", live, "prefix", fmt.Sprintf("p/%d/", projectID))
-		return result, ErrArtifactsNotRemoved
+		failures = append(failures, ErrArtifactsNotRemoved)
 	}
-	if state.vectorStoreDropErr != nil {
-		p.logger.ErrorContext(ctx, "project deleted but its PgVector database or role was not dropped",
-			"project_id", projectID, "err", state.vectorStoreDropErr)
-		return result, ErrVectorStoreNotDropped
+
+	// The irreversible PgVector drop runs only now, with the row proved gone, so
+	// a failed row delete cannot leave a surviving project without its vectors.
+	// New work cannot be admitted for a deleted project: execution_jobs carries
+	// a foreign key to centry.project, and removeProjectModel held the row lock
+	// while it counted active work.
+	if p.vectorStore != nil {
+		database, dropErr := p.vectorStore.DropProjectVectorStore(ctx, projectID)
+		if dropErr == nil {
+			status := StepStatus{Step: StepProjectPgvectorDrop, Initialized: true}
+			status.setOK()
+			result.RollbackSteps = append(result.RollbackSteps, status)
+		} else {
+			p.logger.ErrorContext(ctx, "project deleted but its PgVector database or role was not dropped",
+				"project_id", projectID, "database", database, "err", dropErr)
+			result.VectorDatabase = database
+			status := StepStatus{Step: StepProjectPgvectorDrop, Initialized: true}
+			status.setFailed(safeStepMessage(StepProjectPgvectorDrop))
+			result.RollbackSteps = append(result.RollbackSteps, status)
+			failures = append(failures, fmt.Errorf("%w: database %q remains for pgvector-orphans: %w",
+				ErrVectorStoreNotDropped, database, dropErr))
+		}
 	}
-	return result, nil
+	return result, errors.Join(failures...)
 }

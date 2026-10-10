@@ -24,6 +24,7 @@ package projectprovisioning
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 )
 
@@ -45,9 +46,9 @@ func (s *stubVectorStore) RemoveProjectVectorStore(_ context.Context, projectID 
 	return nil
 }
 
-func (s *stubVectorStore) DropProjectVectorStore(_ context.Context, projectID int64) error {
+func (s *stubVectorStore) DropProjectVectorStore(_ context.Context, projectID int64) (string, error) {
 	s.dropped = append(s.dropped, projectID)
-	return s.dropErr
+	return "project_" + strconv.FormatInt(projectID, 10), s.dropErr
 }
 
 // TestWithVectorStoreIgnoresATypedNil: a nil pointer in a non-nil interface is

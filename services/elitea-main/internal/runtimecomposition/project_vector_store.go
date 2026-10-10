@@ -197,32 +197,33 @@ func (s *ProjectVectorStore) RemoveProjectVectorStore(ctx context.Context, proje
 // It is idempotent (a missing database or role is a no-op) and a no-op on a
 // deployment with no public elitea-pgvector configuration, which has nothing to
 // drop from.
-func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64) error {
+func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64) (string, error) {
 	if s == nil {
-		return errors.New("project vector store is not configured")
+		return "", errors.New("project vector store is not configured")
 	}
 	if projectID <= 0 {
-		return vectorstoreapp.ErrInvalidProjectPgvectorRequest
+		return "", vectorstoreapp.ErrInvalidProjectPgvectorRequest
 	}
+	database := pgvector.ProjectDatabaseName(projectID)
 	bootstrap, configured, err := s.resolveBootstrap(ctx)
 	if err != nil {
-		return err
+		return database, err
 	}
 	if !configured {
-		return nil
+		return "", nil
 	}
 	databases, err := newCurrentProjectPgvectorDatabaseProvisioner(bootstrap)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrProjectVectorStoreBootstrap, err)
+		return database, fmt.Errorf("%w: %s", ErrProjectVectorStoreBootstrap, err)
 	}
 	result, err := databases.Drop(ctx, projectID)
 	if err != nil {
-		return err
+		return database, err
 	}
 	s.logger.InfoContext(ctx, "dropped project vector store",
 		"project_id", projectID,
 		"database_dropped", result.DatabaseDropped, "role_dropped", result.RoleDropped)
-	return nil
+	return database, nil
 }
 
 // tenantConfigurationPresent reports whether the project's tenant configuration

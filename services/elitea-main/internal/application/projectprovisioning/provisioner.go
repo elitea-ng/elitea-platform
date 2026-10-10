@@ -112,6 +112,9 @@ type Result struct {
 	ProjectID     int64
 	Steps         []StepStatus
 	RollbackSteps []StepStatus
+	// VectorDatabase names the PgVector database a delete could not drop, for
+	// cmd/pgvector-orphans. It is empty unless ErrVectorStoreNotDropped.
+	VectorDatabase string
 }
 
 // ArtifactBootstrapper creates and removes a project's system buckets. It is
@@ -159,10 +162,12 @@ type ProjectVectorStore interface {
 	// it is safe for the create-failure rollback.
 	RemoveProjectVectorStore(ctx context.Context, projectID int64) error
 	// DropProjectVectorStore irreversibly drops the project's PgVector database
-	// and login role (#1211). It is reached only from an explicit project
-	// delete (Deprovision), never from the create-failure rollback. It is
-	// idempotent and a no-op on a deployment with no PgVector bootstrap.
-	DropProjectVectorStore(ctx context.Context, projectID int64) error
+	// and login role (#1211). It is reached only from Deprovision, after the
+	// project row is proved gone, never from the create-failure rollback. It is
+	// idempotent and a no-op on a deployment with no PgVector bootstrap. It
+	// returns the name of the database it was asked to drop (also on failure,
+	// so the caller can name the leftover), or "" when there is nothing to drop.
+	DropProjectVectorStore(ctx context.Context, projectID int64) (database string, err error)
 }
 
 // ProjectDefaultModelSeeder copies the platform default model into a new
@@ -391,7 +396,7 @@ func (p *Provisioner) compensate(ctx context.Context, state *provisionState, att
 			continue
 		}
 		status := StepStatus{Step: step.name, Initialized: true}
-		if err := step.removeFor(state)(ctx, p, state); err != nil {
+		if err := step.remove(ctx, p, state); err != nil {
 			status.setFailed(safeStepMessage(step.name))
 			p.logger.ErrorContext(ctx, "project provisioning compensation failed",
 				"step", step.name, "project_id", state.projectID, "err", err)
@@ -458,13 +463,13 @@ type provisionState struct {
 	request      Request
 	projectID    int64
 	systemUserID int64
-	// deleting is true only while Deprovision runs: an explicit, irreversible
-	// project delete. Provision never sets it, so the create-failure rollback
-	// cannot reach a step's destructive `deprovision` variant (#1211).
+	// deleting is true only while Deprovision runs an explicit project delete.
+	// Provision never sets it. removeProjectModel uses it to fence out new work
+	// before the row goes (#1211).
 	deleting bool
-	// vectorStoreDropErr records a failed PgVector drop during a delete so
-	// Deprovision can report it instead of answering 200 (#1211).
-	vectorStoreDropErr error
+	// workActive records that removeProjectModel found non-terminal work for the
+	// project under the row lock, so Deprovision can answer ErrProjectWorkActive.
+	workActive bool
 }
 
 // projectIDString is the decimal project id, for the interfaces that take one.
