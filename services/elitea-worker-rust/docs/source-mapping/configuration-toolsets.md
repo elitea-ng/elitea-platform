@@ -157,7 +157,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `zephyr_scale` | `configurations/zephyr.py::ZephyrConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_scale::ZephyrScaleToolkit` | 26 | Yes | future `toolkits/families/zephyr_scale/` | Planned after the shared indexing overlay; 20 business operations plus 6 inherited indexing tools |
 | `zephyr_squad` | None; credentials are inline toolkit settings | `tools/zephyr_squad::ZephyrSquadToolkit` | 15 | No | `toolkits/families/zephyr_squad/{config,client,tools}.rs` | Capability-disabled complete family: five bounded reads plus all eight writes and two deletes over fixed Squad Cloud JWT routes; authorized materialization, live credential proof, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `zephyr_enterprise` | `configurations/zephyr_enterprise.py::ZephyrEnterpriseConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_enterprise::ZephyrEnterpriseToolkit` | 11 | Yes | `toolkits/families/zephyr_enterprise/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all five business operations (three reads, two effects) over one bearer flex-REST client; the six inherited indexing tools are not served and the capability snapshot lists the family per tool |
-| `zephyr_essential` | `ZephyrEssentialConfiguration` | `ZephyrEssentialToolkit` | 51 | Yes | corresponding family paths | Planned; largest fixed catalog, no focused tests |
+| `zephyr_essential` | `configurations/zephyr_essential.py::ZephyrEssentialConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_essential::ZephyrEssentialToolkit` | 51 | Yes | `toolkits/families/zephyr_essential/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: 41 of the 45 business operations (24 reads, 17 effects); not served are the six indexing tools, the three automation-result uploads and the BDD ZIP download (see the family section) |
 | `figma` | `configurations/figma.py::FigmaConfiguration` | `tools/figma::FigmaToolkit` | 17 | Yes | corresponding family paths | Planned; content/artifact limits required |
 | `rally` | `configurations/rally.py::RallyConfiguration` | `tools/rally::RallyToolkit` | 8 | No | `toolkits/families/rally/{config,client,tools}.rs` | Capability-disabled complete family: six bounded WSAPI reads plus create/update, with lazy per-invocation API-key/Basic authority; authorized materialization, exact-interrupt HITL, live WSAPI proof and cancellation-safe effect reconciliation remain gates |
 | `sonar` | `configurations/sonar.py::SonarConfiguration` | `tools/code/sonar::SonarToolkit` | 1 | No | `toolkits/families/sonar/{config,client,tools}.rs` | Capability-disabled complete read family: one project-bound `/api/issues/search` request with bounded filters and raw JSON projection; authorized materialization and live Sonar TLS proof remain gates |
@@ -1190,6 +1190,70 @@ output text, add-steps version resolution and partial-effect handling,
 redaction, SDK schema gate) and `toolkits/zephyr_rest_tests.rs` (shared
 transport). Live provider proof, exact-interrupt HITL and durable effect
 reconciliation remain activation gates, as for the other families.
+
+### Zephyr Essential business family
+
+Zephyr Essential is the Zephyr Scale Cloud v2 REST API behind its own
+configuration type. The family serves 41 of the 45 business operations of the
+worker-pinned SDK revision `b5113a129329b85d23c2d5c2bf55f18e307414ec`, over
+the shared `zephyr_rest` bearer client described for Zephyr Enterprise. Main
+freezes `zephyr_essential_configuration` (`base_url`, redeemed `token`); a
+missing or empty `base_url` selects the SDK wrapper's default
+`https://prod-api.zephyr4jiracloud.com/v2`, and any base must be HTTPS.
+
+The operations are one table in `tools.rs` (name, SDK model title, verb, path
+segments, arguments, query mapping), so the SDK's `ZephyrEssentialAPI` routes
+are reviewable in one place: test cases (list, create, get, update, links,
+issue/web links, versions, test script, test steps), test cycles (list,
+create, get, update, links, issue/web links), test executions (list, create,
+get, update, test steps, update test steps, sync script, links, issue link),
+projects, folders (list, create, get, find by name), link deletion, the four
+issue-link reverse lookups and `healthcheck`. Optional filters become query
+parameters only when given (as `requests` drops `None`), in the SDK's order.
+GET tools are read-only; POST/PUT/DELETE are effects whose post-dispatch
+ambiguity is `UnknownOutcome`. Results are the provider JSON, its text, or
+`""` for an empty body, as the SDK's `_do_request` returns them;
+`list_test_cases` and `get_test_case_test_steps` return the page's `values`
+array as the SDK does.
+
+SDK special cases kept:
+
+- the three issue-link tools refuse a body without `issueId` before any
+  request, returning the SDK's exact guidance text (including the `issueKey`
+  lookup advice) as the tool result;
+- `create_folder` resolves `parentName` to `parentId` when no `parentId` is
+  given and returns the SDK's `Parent folder with name '...' not found.`
+  when the lookup fails; `parentName` stays in the body, as in the SDK;
+- `find_folder_by_name` matches names ignoring case and returns the folder
+  object or `null`.
+
+Deliberate differences: `find_folder_by_name` (and the parent lookup) walks
+the `/folders` pages (`maxResults=100`, `isLast`, at most 50 pages) where the
+SDK reads only the first page at the server's default size and so misses
+later folders; the parent lookup is scoped to the payload's `projectKey` and
+`folderType` when present, where the SDK searched every project. HTTP
+failures use the stable redacted taxonomy instead of the SDK's
+`Unexpected status code ...` text with the provider body.
+
+Not served, and absent from `supported_tools.zephyr_essential`:
+
+- the six indexing tools (no indexing in this runtime);
+- `create_custom_executions`, `create_cucumber_executions` and
+  `create_junit_executions`: the SDK passes its `files` argument, a path
+  string, to `requests` as `files=`, which raises before any request (a string
+  is not a 2-tuple list), so these tools cannot succeed in the SDK; serving
+  them needs a defined file source (for example an artifact) and multipart
+  upload, which is a new contract rather than a port;
+- `retrieve_bdd_test_cases`: the endpoint answers `application/zip`; the SDK
+  returns the archive decoded as text, which is not usable, and this runtime
+  has no ZIP reader to return the feature files instead.
+
+Proof: `toolkits/zephyr_essential_tests.rs` (configuration and default base,
+catalogue groups and unserved selection, the exact method/route/query/body of
+every table operation, `values` projection, issue-link guidance, folder
+lookup paging, parent resolution and not-found text, text/empty replies and
+argument refusal, SDK schema gate). Live provider proof, exact-interrupt HITL
+and durable effect reconciliation remain activation gates.
 
 ### ReportPortal complete read family
 

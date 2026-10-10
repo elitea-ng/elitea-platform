@@ -138,7 +138,7 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 	want := []string{
 		"ado_boards", "ado_plans", "ado_repos", "ado_wiki", "aha", "bitbucket",
 		"confluence", "figma", "gitlab", "jira", "pptx", "qtest", "testio",
-		"testrail", "xray_cloud", "zephyr_essential", "zephyr_scale",
+		"testrail", "xray_cloud", "zephyr_scale",
 	}
 	sort.Strings(want)
 	got := append([]string(nil), body.HiddenToolkitTypes...)
@@ -156,7 +156,7 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 	// Families the Rust worker DOES materialize must not appear hidden. The
 	// Zephyr REST families serve part of their SDK tools (no indexing), so
 	// they are supported per tool rather than hidden.
-	for _, served := range []string{"sql", "zephyr_enterprise"} {
+	for _, served := range []string{"sql", "zephyr_enterprise", "zephyr_essential"} {
 		if gotSet[served] {
 			t.Errorf("hidden_toolkit_types contains %q, which materialize.rs supports", served)
 		}

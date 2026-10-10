@@ -229,8 +229,39 @@ async fn materialize(
             materialized.delegated_authorization,
         ));
     }
+    if let Some(toolset) = materialize_zephyr_rest(reference.tool_type(), name, settings, policy)? {
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
     let toolset = materialize_p_to_z(reference.tool_type(), name, settings, policy)?;
     Ok((toolset, DelegatedAuthorizationCatalog::default()))
+}
+
+/// The bearer-token Zephyr REST families (shared `zephyr_rest` transport);
+/// `None` for any other type.
+fn materialize_zephyr_rest(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> Result<Option<Arc<dyn Toolset>>, ToolsetMaterializationError> {
+    use super::families::{zephyr_enterprise, zephyr_essential};
+    let toolset = match tool_type {
+        "zephyr_enterprise" => zephyr_enterprise::tools::build_zephyr_enterprise_toolset(
+            name,
+            zephyr_enterprise::config::ZephyrEnterpriseToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        ),
+        "zephyr_essential" => zephyr_essential::tools::build_zephyr_essential_toolset(
+            name,
+            zephyr_essential::config::ZephyrEssentialToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        ),
+        _ => return Ok(None),
+    }
+    .map_err(|error| zephyr_rest_toolset_materialization_error(error.code()))?;
+    Ok(Some(Arc::new(toolset)))
 }
 
 fn materialize_a_to_k(
@@ -386,17 +417,6 @@ fn materialize_p_to_z(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
-        "zephyr_enterprise" => {
-            super::families::zephyr_enterprise::tools::build_zephyr_enterprise_toolset(
-                name,
-                super::families::zephyr_enterprise::config::ZephyrEnterpriseToolkitConfig::parse(
-                    settings,
-                )
-                .map_err(|_| invalid_configuration())?,
-                policy,
-            )
-            .map_err(|error| zephyr_rest_toolset_materialization_error(error.code()))?
-        }
         "zephyr_squad" => zephyr_squad::tools::build_zephyr_squad_toolset(
             name,
             zephyr_squad::config::ZephyrSquadToolkitConfig::parse(settings)
