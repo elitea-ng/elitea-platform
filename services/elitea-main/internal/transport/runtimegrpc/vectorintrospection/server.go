@@ -33,11 +33,9 @@ import (
 
 	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -127,7 +125,7 @@ func NewServer(validator TokenValidator, facts CallbackFacts, claimTokens ClaimT
 
 // IntrospectToken answers whether request.Token is usable for vector access.
 func (s *Server) IntrospectToken(ctx context.Context, request *vectorv1.IntrospectTokenRequest) (*vectorv1.IntrospectTokenResponse, error) {
-	identity, err := peerIdentity(ctx)
+	identity, err := workloadauth.VerifiedPeerIdentity(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "A verified client certificate is required.")
 	}
@@ -233,29 +231,4 @@ func (s *Server) introspectCallbackToken(ctx context.Context, token string) (*ve
 		ExpiresAtUnix:  facts.ExpiresAt.Unix(),
 		AllowedSources: []vectorv1.Source{source},
 	}, nil
-}
-
-// peerIdentity is the canonical identity of the verified mTLS peer, by the
-// same rule the worker planes use (workloadauth).
-func peerIdentity(ctx context.Context) (string, error) {
-	info, ok := peer.FromContext(ctx)
-	if !ok || info == nil || info.AuthInfo == nil {
-		return "", errors.New("no peer")
-	}
-	var state credentials.TLSInfo
-	switch tlsInfo := info.AuthInfo.(type) {
-	case credentials.TLSInfo:
-		state = tlsInfo
-	case *credentials.TLSInfo:
-		if tlsInfo == nil {
-			return "", errors.New("no TLS peer")
-		}
-		state = *tlsInfo
-	default:
-		return "", errors.New("no TLS peer")
-	}
-	if len(state.State.VerifiedChains) == 0 || len(state.State.VerifiedChains[0]) == 0 {
-		return "", errors.New("unverified peer")
-	}
-	return workloadidentity.Certificate(state.State.VerifiedChains[0][0])
 }
