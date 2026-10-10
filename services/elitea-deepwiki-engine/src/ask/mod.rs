@@ -253,6 +253,23 @@ fn text(arguments: &Map<String, Value>, key: &str) -> String {
 /// list and failed at the first embedding call for such a `model_name`;
 /// this engine refuses them all at once, as its `generate_wiki` does.
 pub fn query_embedding_model(arguments: &Map<String, Value>) -> Result<String, EngineError> {
+    if let Some(model) = named_embedding_model(arguments)? {
+        return Ok(model);
+    }
+    tracing::warn!(
+        model = DEFAULT_EMBEDDING_MODEL,
+        "the query names no embedding_model; using the Python default"
+    );
+    Ok(DEFAULT_EMBEDDING_MODEL.to_owned())
+}
+
+/// The model the caller NAMED, or `None` when it named none (absent, `null`,
+/// blank, or an object without `model_name`).
+///
+/// # Errors
+///
+/// A `ValueError` for another shape, as [`query_embedding_model`].
+fn named_embedding_model(arguments: &Map<String, Value>) -> Result<Option<String>, EngineError> {
     let value = arguments.get("embedding_model").unwrap_or(&Value::Null);
     let blank = |text: &str| text.trim().is_empty();
     let missing = match value {
@@ -266,13 +283,70 @@ pub fn query_embedding_model(arguments: &Map<String, Value>) -> Result<String, E
         _ => false,
     };
     if missing {
-        tracing::warn!(
-            model = DEFAULT_EMBEDDING_MODEL,
-            "the query names no embedding_model; using the Python default"
-        );
-        return Ok(DEFAULT_EMBEDDING_MODEL.to_owned());
+        return Ok(None);
     }
-    crate::llm::embedding_model_name(value)
+    crate::llm::embedding_model_name(value).map(Some)
+}
+
+/// The embedding model `ask` / `deep_research` embeds the question with, for
+/// a wiki whose row records `stored` (migration 0006, ADR-0031 decision 6).
+///
+/// * The wiki recorded a model: that one. A question embedded with another
+///   model is not comparable to the wiki's vectors (another space, often
+///   another dimension), so a caller that names a DIFFERENT model is refused,
+///   naming both. A caller that names the same model, or none, is served.
+/// * The wiki recorded none (published before the column, or with no
+///   embeddings): the caller's model, or the default, as before.
+///
+/// # Errors
+///
+/// A `ValueError` for a malformed `embedding_model`, or for one that differs
+/// from the stored model.
+pub fn resolve_embedding_model(
+    stored: Option<&str>,
+    wiki_id: &str,
+    arguments: &Map<String, Value>,
+) -> Result<String, EngineError> {
+    let Some(stored) = stored.map(str::trim).filter(|model| !model.is_empty()) else {
+        return query_embedding_model(arguments);
+    };
+    match named_embedding_model(arguments)? {
+        Some(named) if named != stored => Err(EngineError::new(
+            ErrorType::Value,
+            format!(
+                "wiki '{wiki_id}' was indexed with the embedding model '{stored}', but this call names '{named}'. Its vectors are only comparable with '{stored}': omit embedding_model, or name '{stored}'."
+            ),
+        )),
+        _ => Ok(stored.to_owned()),
+    }
+}
+
+/// The model recorded on a wiki's row, `None` for a wiki that is not indexed
+/// or recorded none.
+///
+/// # Errors
+///
+/// A `RuntimeError` when the database refuses the read.
+pub async fn stored_embedding_model(
+    pool: &sqlx::PgPool,
+    project: crate::storage::ProjectScope,
+    wiki_id: &str,
+) -> Result<Option<String>, EngineError> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT embedding_model FROM wikis WHERE project_id = $1 AND wiki_id = $2",
+    )
+    .bind(project.id())
+    .bind(wiki_id)
+    .fetch_optional(pool)
+    .await
+    .map(Option::flatten)
+    .map_err(|error| {
+        tracing::error!(%error, "reading the wiki's embedding model failed");
+        EngineError::new(
+            ErrorType::Runtime,
+            "Reading the wiki's embedding model failed: the index database refused it",
+        )
+    })
 }
 
 /// `ask` / `deep_research` argument handling (`tool_operations.ask` and
@@ -621,10 +695,13 @@ pub async fn run_tool(
     let streaming = settings.streaming;
     let model_name = settings.model_name.clone();
     let anthropic = settings.provider == crate::llm::Provider::Anthropic;
+    // A malformed embedding_model is refused before the database is asked.
+    named_embedding_model(arguments)?;
+    let stored_model = stored_embedding_model(&deps.pool, project, &request.wiki_id).await?;
     let embedder = Embedder::Client(EmbeddingClient::new(
         deps.transport.clone(),
         settings.clone(),
-        query_embedding_model(arguments)?,
+        resolve_embedding_model(stored_model.as_deref(), &request.wiki_id, arguments)?,
         deps.embedding_options,
     ));
     let client = ChatClient::new(deps.transport.clone(), settings);
@@ -783,6 +860,45 @@ mod tests {
                 matches!(&refused, Err((ErrorType::Value, m)) if m.contains("embedding_model")),
                 "{malformed}: {refused:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_wiki_that_recorded_a_model_is_asked_with_it() {
+        let call = |stored: Option<&str>, named: Option<Value>| {
+            let mut arguments = Map::new();
+            if let Some(named) = named {
+                arguments.insert("embedding_model".to_owned(), named);
+            }
+            resolve_embedding_model(stored, "acme--w--main", &arguments)
+                .map_err(|e| (e.error_type, e.message))
+        };
+        // The stored model wins when the caller names none, the same one, or
+        // a blank one.
+        assert_eq!(call(Some("emb-1"), None).as_deref(), Ok("emb-1"));
+        assert_eq!(call(Some("emb-1"), Some(json!(""))).as_deref(), Ok("emb-1"));
+        assert_eq!(
+            call(Some("emb-1"), Some(json!(" emb-1 "))).as_deref(),
+            Ok("emb-1")
+        );
+        assert_eq!(
+            call(Some("emb-1"), Some(json!({"model_name": "emb-1"}))).as_deref(),
+            Ok("emb-1")
+        );
+        // A different model is refused, and the message names both.
+        let refused = call(Some("emb-1"), Some(json!("emb-2")));
+        assert!(
+            matches!(&refused, Err((ErrorType::Value, m))
+                if m.contains("'emb-1'") && m.contains("'emb-2'") && m.contains("acme--w--main")),
+            "{refused:?}"
+        );
+        // A malformed one is still refused as malformed.
+        assert!(call(Some("emb-1"), Some(json!(5))).is_err());
+        // No stored model (an older wiki, or one with no embeddings): the
+        // current behaviour, the caller's model or the default.
+        for stored in [None, Some(""), Some("  ")] {
+            assert_eq!(call(stored, Some(json!("emb-2"))).as_deref(), Ok("emb-2"));
+            assert_eq!(call(stored, None).as_deref(), Ok(DEFAULT_EMBEDDING_MODEL));
         }
     }
 

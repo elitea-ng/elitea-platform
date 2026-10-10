@@ -386,6 +386,61 @@ fn publish_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<PublishSett
     })
 }
 
+/// The settings the index-maintenance command line (`orphans`) shares with
+/// the server: the publish transaction's timeouts (a deletion moves a whole
+/// index, as a publish does) and the build staleness limit. Nothing else is
+/// read, so the command runs with only the database URL and these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaintenanceSettings {
+    /// `ELITEA_DEEPWIKI_PUBLISH_*`, as [`Settings::publish`].
+    pub publish: PublishSettings,
+    /// `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS`, as [`Settings::build_stale_after`].
+    pub build_stale_after: Duration,
+}
+
+impl MaintenanceSettings {
+    /// Read the settings through `lookup` (the process environment, or a
+    /// test's map), strictly: an unparsable value is an error, never a
+    /// fallback to the default.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] naming the variable.
+    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let raw = |name: &str| lookup(&format!("{ENV_PREFIX}{name}")).filter(|v| !v.is_empty());
+        Ok(Self {
+            publish: publish_settings(&raw)?,
+            build_stale_after: build_stale_after(&raw)?,
+        })
+    }
+
+    /// [`MaintenanceSettings::from_lookup`] over the process environment.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] naming the variable.
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+}
+
+/// `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS`, at least [`MIN_STALE_AFTER`].
+fn build_stale_after(raw: &impl Fn(&str) -> Option<String>) -> Result<Duration, ConfigError> {
+    let stale_after = positive_seconds(
+        raw,
+        "BUILD_STALE_SECONDS",
+        crate::storage::build::DEFAULT_STALE_AFTER,
+    )?;
+    if stale_after < MIN_STALE_AFTER {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}BUILD_STALE_SECONDS must be at least {} (a live build beats its heartbeat every tenth of it and must survive a few missed beats), got {}",
+            MIN_STALE_AFTER.as_secs(),
+            stale_after.as_secs_f64()
+        )));
+    }
+    Ok(stale_after)
+}
+
 /// The build owner: `ELITEA_DEEPWIKI_BUILD_OWNER`, else `HOSTNAME`. With a
 /// database, the shared default is refused.
 fn build_owner(
@@ -582,18 +637,7 @@ impl Settings {
             .filter(|url| !url.is_empty())
             .map(DatabaseUrl);
         let build_owner = build_owner(&raw, &lookup, database_url.is_some())?;
-        let build_stale_after = positive_seconds(
-            &raw,
-            "BUILD_STALE_SECONDS",
-            crate::storage::build::DEFAULT_STALE_AFTER,
-        )?;
-        if build_stale_after < MIN_STALE_AFTER {
-            return Err(ConfigError(format!(
-                "{ENV_PREFIX}BUILD_STALE_SECONDS must be at least {} (a live build beats its heartbeat every tenth of it and must survive a few missed beats), got {}",
-                MIN_STALE_AFTER.as_secs(),
-                build_stale_after.as_secs_f64()
-            )));
-        }
+        let build_stale_after = build_stale_after(&raw)?;
         let publish = publish_settings(&raw)?;
         let worker = worker_settings(&raw, cgroup_memory_max)?;
         let query_pool_size = bounded_count(
@@ -876,6 +920,48 @@ mod tests {
                 .map(|s| s.build_stale_after),
             Ok(Duration::from_mins(5))
         );
+    }
+
+    #[test]
+    fn the_maintenance_settings_are_the_servers_publish_and_staleness_settings() {
+        let lookup = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        assert_eq!(
+            MaintenanceSettings::from_lookup(lookup(&[])),
+            Ok(MaintenanceSettings {
+                publish: PublishSettings::default(),
+                build_stale_after: crate::storage::build::DEFAULT_STALE_AFTER,
+            })
+        );
+        let configured = MaintenanceSettings::from_lookup(lookup(&[
+            ("ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS", "3600"),
+            ("ELITEA_DEEPWIKI_PUBLISH_LOCK_TIMEOUT_SECONDS", "2.5"),
+            ("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "900"),
+        ]))
+        .expect("parse");
+        assert_eq!(
+            configured.publish.statement_timeout,
+            Duration::from_hours(1)
+        );
+        assert_eq!(configured.publish.lock_timeout, Duration::from_millis(2500));
+        assert_eq!(configured.build_stale_after, Duration::from_mins(15));
+        // The same strictness as the server: a bad value is an error.
+        for bad in [
+            ("ELITEA_DEEPWIKI_PUBLISH_SLOTS", "0"),
+            ("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "60"),
+        ] {
+            let pairs: &'static [(&str, &str)] = Box::leak(Box::new([bad]));
+            assert!(
+                MaintenanceSettings::from_lookup(lookup(pairs)).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

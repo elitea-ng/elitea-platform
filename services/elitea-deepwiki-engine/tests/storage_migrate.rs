@@ -75,11 +75,11 @@ fn the_checksums_are_the_ledger_values() {
         ),
         (
             "0006_wiki_embedding_model",
-            "a2d0bfc17ba879a91154b7278f84e529a93114442a31464b5b49bdcbe4c63967",
+            "85f96a1d833f4b0b8a0df67be6c3b1b4113d68a9e1c8518f875814c9c804cac6",
         ),
         (
             "0007_drop_bm25_branch_rows",
-            "c6d45971b76f84884dcc292f47870c02add8993e1b304fc937e7b7281f4d0430",
+            "67dee023fc4d7a0c9f3dec6fbb82e3a908ad3d30b6425735709434e59b02e1dd",
         ),
     ]
     .into_iter()
@@ -205,10 +205,12 @@ async fn the_ledger_is_written_once_and_guarded() {
 }
 
 /// 0006: the model a wiki was embedded with, nullable, unrecorded for a wiki
-/// that was published before it. 0007: the dead `'bm25'` branch's rows go,
-/// the `'fts'` branch's stay.
+/// that was published before it. 0007 is a no-op: the dead `'bm25'` branch's
+/// rows are removed by the engine's background cleanup in bounded batches
+/// (`storage::cleanup`), never by one unbatched `DELETE` in a migration.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_embedding_model_columns_exist_and_the_dead_branch_is_removed() {
+async fn the_embedding_model_columns_exist_and_the_migration_leaves_the_dead_branch_to_the_cleanup()
+{
     let Some(pool) = common::empty_database("migrate_model").await else {
         return;
     };
@@ -245,6 +247,29 @@ async fn the_embedding_model_columns_exist_and_the_dead_branch_is_removed() {
         migrate::apply_all(&pool).await.expect("0007"),
         ["0007".to_owned()]
     );
+    // Nothing was deleted by the migration: both branches are still there.
+    for table in [
+        "wiki_bm25_meta",
+        "wiki_bm25_docs",
+        "wiki_bm25_terms",
+        "wiki_bm25_postings",
+    ] {
+        let branches: Vec<String> =
+            sqlx::query_scalar(&format!("SELECT branch FROM {table} ORDER BY branch"))
+                .fetch_all(&pool)
+                .await
+                .expect("branches");
+        assert_eq!(branches, ["bm25", "fts"], "{table}");
+    }
+    // The engine's cleanup removes the dead branch and only that.
+    let pacing = elitea_deepwiki_engine::storage::cleanup::Pacing {
+        batch_pause: std::time::Duration::ZERO,
+        ..Default::default()
+    };
+    let removed = elitea_deepwiki_engine::storage::cleanup::run_pass(&pool, &pacing)
+        .await
+        .expect("cleanup");
+    assert_eq!(removed, 4);
     for table in [
         "wiki_bm25_meta",
         "wiki_bm25_docs",

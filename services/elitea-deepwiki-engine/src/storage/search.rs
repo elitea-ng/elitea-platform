@@ -54,7 +54,6 @@ pub struct Scores {
     pub fts_rank: Option<f64>,
     pub score_norm: Option<f64>,
     pub vec_distance: Option<f64>,
-    pub bm25_score: Option<f64>,
     pub combined_score: Option<f64>,
 }
 
@@ -67,7 +66,6 @@ impl Scores {
             ("fts_rank", self.fts_rank),
             ("score_norm", self.score_norm),
             ("vec_distance", self.vec_distance),
-            ("bm25_score", self.bm25_score),
             ("combined_score", self.combined_score),
         ]
         .into_iter()

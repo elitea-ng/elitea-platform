@@ -786,13 +786,14 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     )
     .await;
     assert!(edges > 0);
+    // One statistics branch ('fts'); the dead 'bm25' branch is not written.
     assert_eq!(
         count(
             &pool,
             "SELECT count(*) FROM wiki_bm25_meta WHERE wiki_id = 'acme--notes-service--main'"
         )
         .await,
-        2
+        1
     );
     assert_eq!(
         count(&pool, "SELECT count(*) FROM deepwiki_build.builds").await,

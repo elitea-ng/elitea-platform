@@ -19,6 +19,8 @@
 //!   methods and `storage/base.py`'s frozen weighted RRF.
 //! * [`adapter`] is the read surface `ask`, `deep_research` and
 //!   `resolve_wiki` use: a port of `storage/unified_db_adapter.py`.
+//! * [`cleanup`] removes the dead `'bm25'` statistics branch in the
+//!   background, in bounded statements (migration 0007 is a no-op).
 //! * [`text`] holds the tokenizer and the BM25 arithmetic both sides share.
 //! * [`topology`] is Phase 2's index over a build's staged rows.
 //! * [`scope`] is the tenancy key: every index row belongs to one
@@ -35,6 +37,7 @@
 
 pub mod adapter;
 pub mod build;
+pub mod cleanup;
 mod copy;
 pub mod delete;
 pub mod migrate;
@@ -66,6 +69,11 @@ pub enum StorageError {
     /// A build cannot be staged or published (`PublishError`).
     #[error("{0}")]
     Publish(String),
+    /// A deletion that cannot start or cannot finish (issue #1243): a stale
+    /// project listing, or a project that still holds wikis after the
+    /// rounds a deletion makes. The message says which and what remains.
+    #[error("{0}")]
+    Delete(String),
     /// A DSN that does not parse. The text is never part of the message:
     /// it can carry a password.
     #[error(

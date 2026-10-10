@@ -48,7 +48,7 @@ POST /engine/invocations/{id}/stop   a cooperative stop → 202 {"stopped": bool
 GET  /engine/health                  {"status": "UP", "runner": …, "active": n}
 ```
 
-Tools: `generate_wiki`, `ask`, `deep_research`, `resolve_wiki`, and the two index deletions `delete_wiki_index` (`wiki_id`) and `delete_project_wikis` (see [Deleting an index](#deleting-an-index)). Both read the project from the host's reserved `_elitea_project_id` argument and nothing else.
+Tools: `generate_wiki`, `ask`, `deep_research`, `resolve_wiki`, and the two index deletions `delete_wiki_index` (`wiki_id`) and `delete_project_wikis` (the host exposes the second only on its mTLS platform route, never as a toolkit tool; see [Deleting an index](#deleting-an-index)). Both read the project from the host's reserved `_elitea_project_id` argument and nothing else.
 
 The wire is the retired Python sidecar's wherever the host can see it:
 
@@ -704,7 +704,9 @@ the lexemes and position counts of the published tsvectors, k1 1.2, b 0.75;
 a document without tokens takes no `doc_idx`. (The legacy standalone `'bm25'`
 branch, `str.split()` tokens with k1 1.5, was written on every publish and
 read only by the parity tool and the tests. It is no longer written or
-searched, and migration 0007 deletes its rows; the build space's
+searched. Migration 0007 is a no-op; the engine removes its rows in the
+background (`storage::cleanup`: 10 000 rows per statement with a pause, at
+start and then hourly until two passes in a row find nothing). The build space's
 `bm25_docs` / `bm25_postings` staging tables stay, empty, because a replica
 of the previous release may still write them during a rolling deploy.)
 
@@ -761,14 +763,27 @@ host's `delete_wiki` removed the artifact objects and the index stayed.
   back.
 - `delete_project_wikis` deletes every wiki of the stamped project, one
   transaction per wiki (a project can hold thousands, and one transaction
-  would hold as many advisory locks), then the project's unlocked builds. It
-  is idempotent: call it again after a failure.
-- `elitea-deepwiki-engine orphans --existing-projects FILE|- [--delete]`
+  would hold as many advisory locks), listing again until none is left; if
+  the round cap is hit it fails naming how many wikis remain. It deletes only
+  builds whose heartbeat is stale (older than `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS`);
+  a live build belongs to a running generation, whose publish afterwards
+  recreates its wiki (publish is an upsert and the engine cannot know the
+  project is gone), so the caller stops a project's generations first.
+  Idempotent: call it again after a failure. The host reaches it through
+  `POST /internal/v1/projects/delete` (mTLS client certificate of elitea-main,
+  `ELITEA_DEEPWIKI_PLATFORM_CLIENTS`), not as a toolkit tool.
+- `elitea-deepwiki-engine orphans --existing-projects FILE|- [--listed-at T] [--delete --listed-at T [--allow-stale-list]]`
   lists the projects that have indexed wikis here and are not in the list of
   existing projects the caller supplies (one id per line; the product
   database is not readable from here). A dry run unless `--delete`. An empty
-  list is refused. For example:
-  `psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' | elitea-deepwiki-engine orphans --existing-projects -`.
+  list is refused. `--delete` needs `--listed-at` (RFC 3339: when the list was
+  taken), refuses a list older than 10 minutes unless `--allow-stale-list`,
+  and skips and prints every project with a wiki or build created or
+  published after that time (a project made after the list was taken looks
+  orphaned). It reads the server's `ELITEA_DEEPWIKI_PUBLISH_*` and
+  `BUILD_STALE_SECONDS`, and exits non-zero if any project could not be
+  cleared. For example:
+  `T=$(date -u +%Y-%m-%dT%H:%M:%SZ); psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' | elitea-deepwiki-engine orphans --existing-projects - --listed-at "$T" --delete`.
 
 ### Tenancy: the index is scoped by project
 

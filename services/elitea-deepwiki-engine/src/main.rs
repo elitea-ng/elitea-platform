@@ -16,7 +16,7 @@ use std::future::Future;
 use std::process::ExitCode;
 use std::time::Duration;
 
-const USAGE: &str = "usage: elitea-deepwiki-engine [serve | healthcheck | migrate | worker | orphans --existing-projects FILE|- [--delete] | --version]";
+const USAGE: &str = "usage: elitea-deepwiki-engine [serve | healthcheck | migrate | worker | orphans --existing-projects FILE|- [--listed-at RFC3339] [--delete --listed-at RFC3339 [--allow-stale-list]] | --version]";
 
 fn main() -> ExitCode {
     let command = std::env::args().nth(1);
@@ -172,34 +172,139 @@ fn parse_project_ids(text: &str) -> Result<std::collections::HashSet<i32>, Strin
     Ok(ids)
 }
 
-/// `orphans --existing-projects FILE|- [--delete]`: list the projects that
-/// have indexed wikis here and no longer exist (issue #1243). The existing
-/// ids come from the product database, which this service cannot read:
-///
-/// ```text
-/// psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' | elitea-deepwiki-engine orphans --existing-projects -
-/// ```
-///
-/// A dry run unless `--delete` is given. An empty id list is refused: it
-/// would call every project an orphan.
-async fn orphans(args: Vec<String>) -> ExitCode {
+/// The arguments of `orphans`.
+#[derive(Debug, PartialEq, Eq)]
+struct OrphanArgs {
+    source: String,
+    delete: bool,
+    listed_at: Option<String>,
+    allow_stale_list: bool,
+}
+
+/// Whether `text` is an RFC 3339 timestamp in the strict form
+/// `YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM)`. The database checks the
+/// calendar (month 13 is refused there); this checks the shape, so that a
+/// date like `yesterday` or `10/10/2026` that PostgreSQL would also read is
+/// refused before it is believed.
+fn is_rfc3339(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        bytes
+            .get(range)
+            .is_some_and(|b| b.iter().all(u8::is_ascii_digit))
+    };
+    let at = |index: usize, expected: u8| bytes.get(index) == Some(&expected);
+    if !(digits(0..4)
+        && at(4, b'-')
+        && digits(5..7)
+        && at(7, b'-')
+        && digits(8..10)
+        && at(10, b'T')
+        && digits(11..13)
+        && at(13, b':')
+        && digits(14..16)
+        && at(16, b':')
+        && digits(17..19))
+    {
+        return false;
+    }
+    let mut rest = 19;
+    if at(rest, b'.') {
+        let start = rest + 1;
+        let mut end = start;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+        if end == start {
+            return false;
+        }
+        rest = end;
+    }
+    match bytes.get(rest) {
+        Some(b'Z') => rest + 1 == bytes.len(),
+        Some(b'+' | b'-') => {
+            digits(rest + 1..rest + 3)
+                && at(rest + 3, b':')
+                && digits(rest + 4..rest + 6)
+                && rest + 6 == bytes.len()
+        }
+        _ => false,
+    }
+}
+
+fn parse_orphan_args(args: Vec<String>) -> Result<OrphanArgs, String> {
     let mut source = None;
     let mut delete = false;
+    let mut listed_at = None;
+    let mut allow_stale_list = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--existing-projects" => source = iter.next(),
             "--delete" => delete = true,
-            _ => {
-                eprintln!("{USAGE}");
-                return ExitCode::from(2);
-            }
+            "--listed-at" => listed_at = iter.next(),
+            "--allow-stale-list" => allow_stale_list = true,
+            _ => return Err(USAGE.to_owned()),
         }
     }
     let Some(source) = source else {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
+        return Err(USAGE.to_owned());
     };
+    if let Some(at) = &listed_at
+        && !is_rfc3339(at)
+    {
+        return Err(format!(
+            "--listed-at {at:?} is not an RFC 3339 time such as 2026-10-10T09:30:00Z"
+        ));
+    }
+    if delete && listed_at.is_none() {
+        return Err("--delete needs --listed-at <RFC3339>: the time the list of existing projects was taken. A project created after it is not in the list and would look orphaned; the command skips every project with a wiki or build newer than that time".to_owned());
+    }
+    if allow_stale_list && !delete {
+        return Err("--allow-stale-list only applies with --delete".to_owned());
+    }
+    Ok(OrphanArgs {
+        source,
+        delete,
+        listed_at,
+        allow_stale_list,
+    })
+}
+
+/// `orphans --existing-projects FILE|- [--listed-at T] [--delete --listed-at T [--allow-stale-list]]`:
+/// list the projects that have indexed wikis here and no longer exist (issue
+/// #1243). The existing ids come from the product database, which this
+/// service cannot read, and the time the list was taken is `T`:
+///
+/// ```text
+/// T=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+/// psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' | elitea-deepwiki-engine orphans --existing-projects - --listed-at "$T" --delete
+/// ```
+///
+/// A dry run unless `--delete` is given. An empty id list is refused: it
+/// would call every project an orphan. `--delete` needs `--listed-at`, refuses
+/// a list older than 10 minutes unless `--allow-stale-list`, and skips (and
+/// prints) every project with a wiki or build created or published after
+/// that time. The publish and staleness settings are the server's
+/// (`ELITEA_DEEPWIKI_PUBLISH_*`, `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS`).
+/// The exit code is non-zero if any project's deletion failed or did not
+/// finish.
+async fn orphans(args: Vec<String>) -> ExitCode {
+    let args = match parse_orphan_args(args) {
+        Ok(args) => args,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(2);
+        }
+    };
+    let settings = match elitea_deepwiki_engine::config::MaintenanceSettings::from_env() {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let source = &args.source;
     let text = if source == "-" {
         let mut text = String::new();
         match std::io::Read::read_to_string(&mut std::io::stdin(), &mut text) {
@@ -210,7 +315,7 @@ async fn orphans(args: Vec<String>) -> ExitCode {
             }
         }
     } else {
-        match std::fs::read_to_string(&source) {
+        match std::fs::read_to_string(source) {
             Ok(text) => text,
             Err(error) => {
                 eprintln!("cannot read {source}: {error}");
@@ -243,7 +348,7 @@ async fn orphans(args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let code = report_orphans(&pool, &existing, delete).await;
+    let code = report_orphans(&pool, &existing, &args, &settings).await;
     pool.close().await;
     code
 }
@@ -251,56 +356,81 @@ async fn orphans(args: Vec<String>) -> ExitCode {
 async fn report_orphans(
     pool: &sqlx::PgPool,
     existing: &std::collections::HashSet<i32>,
-    delete: bool,
+    args: &OrphanArgs,
+    settings: &elitea_deepwiki_engine::config::MaintenanceSettings,
 ) -> ExitCode {
-    let found = match storage::delete::orphans(pool, existing).await {
-        Ok(found) => found,
-        Err(error) => {
-            eprintln!("cannot list the orphans: {error}");
-            return ExitCode::FAILURE;
-        }
+    let options = storage::delete::SweepOptions {
+        listed_at: args.listed_at.as_deref(),
+        delete: args.delete,
+        allow_stale_list: args.allow_stale_list,
     };
-    if found.is_empty() {
+    let limits = storage::delete::ProjectLimits::new(settings.build_stale_after);
+    let outcome =
+        match storage::delete::sweep_orphans(pool, existing, &options, &settings.publish, &limits)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    if outcome.deleted.is_empty()
+        && outcome.would_delete.is_empty()
+        && outcome.skipped.is_empty()
+        && outcome.failed.is_empty()
+    {
         println!("no orphaned wiki index");
         return ExitCode::SUCCESS;
     }
-    println!("project_id\twikis\tlast_updated");
-    for project in &found {
+    println!("project_id\twikis\tlast_updated\tstatus");
+    for project in &outcome.would_delete {
         println!(
-            "{}\t{}\t{}",
+            "{}\t{}\t{}\twould delete",
             project.project_id, project.wikis, project.last_updated
         );
     }
-    if !delete {
+    for (project, reason) in &outcome.skipped {
         println!(
-            "dry run: {} orphaned project(s); pass --delete to remove their indexes",
-            found.len()
+            "{}\t{}\t{}\tSKIPPED: {reason}",
+            project.project_id, project.wikis, project.last_updated
         );
-        return ExitCode::SUCCESS;
     }
-    let settings = storage::build::PublishSettings::default();
-    let mut failed = false;
-    for project in found {
-        let Some(scope) = storage::ProjectScope::new(project.project_id) else {
-            continue;
-        };
-        match storage::delete::delete_project(pool, scope, &settings).await {
-            Ok(done) => println!(
-                "deleted project {}: {} wiki(s), {} node(s)",
-                project.project_id,
-                done.wikis.len(),
-                done.rows.nodes
-            ),
-            Err(error) => {
-                eprintln!("project {}: {error}", project.project_id);
-                failed = true;
-            }
-        }
+    for (project, done) in &outcome.deleted {
+        println!(
+            "{}\t{}\t{}\tdeleted {} wiki(s), {} node(s), {} stale build(s); {} live build(s) left to their run",
+            project.project_id,
+            project.wikis,
+            project.last_updated,
+            done.wikis.len(),
+            done.rows.nodes,
+            done.builds,
+            done.live_builds
+        );
     }
-    if failed {
-        ExitCode::FAILURE
-    } else {
+    for (project, error) in &outcome.failed {
+        eprintln!("project {}: {error}", project.project_id);
+    }
+    if !args.delete {
+        println!(
+            "dry run: {} orphaned project(s) would be deleted, {} skipped; pass --delete with --listed-at to remove their indexes",
+            outcome.would_delete.len(),
+            outcome.skipped.len()
+        );
+    } else if !outcome.skipped.is_empty() {
+        println!(
+            "{} project(s) skipped: a wiki or build newer than the list; run again with a fresh list",
+            outcome.skipped.len()
+        );
+    }
+    if outcome.failed.is_empty() {
         ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "{} project(s) were not deleted completely",
+            outcome.failed.len()
+        );
+        ExitCode::FAILURE
     }
 }
 
@@ -313,6 +443,12 @@ fn start_reconciler(settings: &Settings) {
     };
     match storage::lazy_pool(url.expose(), 2) {
         Ok(pool) => {
+            // The dead 'bm25' statistics branch, removed in bounded
+            // statements in the background (migration 0007 is a no-op).
+            tokio::spawn(storage::cleanup::run(
+                pool.clone(),
+                storage::cleanup::Pacing::default(),
+            ));
             let space = storage::build::BuildSpace::new(pool, settings.build_owner.clone())
                 .with_stale_after(settings.build_stale_after)
                 .with_publish_settings(settings.publish);
@@ -394,7 +530,73 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_project_ids;
+    use super::{is_rfc3339, parse_orphan_args, parse_project_ids};
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    #[test]
+    fn delete_needs_a_listing_time() {
+        let refused = parse_orphan_args(args(&["--existing-projects", "-", "--delete"]));
+        assert!(
+            matches!(&refused, Err(m) if m.contains("--listed-at")),
+            "{refused:?}"
+        );
+        let accepted = parse_orphan_args(args(&[
+            "--existing-projects",
+            "ids.txt",
+            "--delete",
+            "--listed-at",
+            "2026-10-10T09:30:00Z",
+        ]));
+        assert_eq!(
+            accepted.map(|a| (a.delete, a.listed_at, a.allow_stale_list)),
+            Ok((true, Some("2026-10-10T09:30:00Z".to_owned()), false))
+        );
+        // A dry run does not need one.
+        assert!(parse_orphan_args(args(&["--existing-projects", "-"])).is_ok());
+    }
+
+    #[test]
+    fn the_stale_override_is_only_for_a_deletion_and_the_time_is_rfc3339() {
+        let stale_dry =
+            parse_orphan_args(args(&["--existing-projects", "-", "--allow-stale-list"]));
+        assert!(stale_dry.is_err());
+        let stale = parse_orphan_args(args(&[
+            "--existing-projects",
+            "-",
+            "--delete",
+            "--listed-at",
+            "2026-10-10T09:30:00+02:00",
+            "--allow-stale-list",
+        ]));
+        assert!(matches!(stale, Ok(a) if a.allow_stale_list));
+        for bad in [
+            "yesterday",
+            "2026-10-10",
+            "2026-10-10 09:30:00",
+            "2026-10-10T09:30:00",
+            "2026-10-10T09:30:00+0200",
+            "10/10/2026",
+            "",
+        ] {
+            assert!(!is_rfc3339(bad), "{bad:?}");
+            assert!(
+                parse_orphan_args(args(&["--existing-projects", "-", "--listed-at", bad])).is_err(),
+                "{bad:?}"
+            );
+        }
+        for good in [
+            "2026-10-10T09:30:00Z",
+            "2026-10-10T09:30:00.123456Z",
+            "2026-10-10T09:30:00-05:00",
+        ] {
+            assert!(is_rfc3339(good), "{good:?}");
+        }
+        assert!(parse_orphan_args(args(&["--bogus"])).is_err());
+        assert!(parse_orphan_args(args(&[])).is_err());
+    }
 
     #[test]
     fn project_ids_parse_one_per_line() {

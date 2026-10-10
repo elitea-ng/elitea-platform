@@ -6,15 +6,23 @@ mod storage_common;
 
 use elitea_deepwiki_engine::runner::maintenance;
 use elitea_deepwiki_engine::storage::build::{Build, BuildSpace, PublishSettings, WikiRecord};
-use elitea_deepwiki_engine::storage::delete;
+use elitea_deepwiki_engine::storage::delete::{self, ProjectLimits, SweepOptions};
 use elitea_deepwiki_engine::storage::rows::{IndexEdge, IndexNode};
 use elitea_deepwiki_engine::storage::{PROJECT_ARG, WikiKey};
 use serde_json::{Value, json};
 use sqlx::postgres::PgPool;
 use std::collections::HashSet;
+use std::time::Duration;
 use storage_common as common;
 
 const DIM: usize = 3;
+
+/// The staleness limit the tests use (the sweep's default is 2 h).
+const STALE_AFTER: Duration = Duration::from_hours(1);
+
+fn limits() -> ProjectLimits {
+    ProjectLimits::new(STALE_AFTER)
+}
 
 /// Every table that holds a wiki's rows, with the filter column set.
 const TABLES: [&str; 7] = [
@@ -201,16 +209,51 @@ async fn deleting_a_project_removes_all_its_wikis_and_no_other_project() {
         publish(&space, &common::key_in(7, wiki), "alpha", 3).await;
     }
     publish(&space, &common::key_in(8, "w-a"), "beta", 3).await;
-    // An unfinished generation of the doomed project.
-    let _pending = stage(&space, &common::key_in(7, "w-d"), "alpha", 2).await;
+    // A generation of the doomed project that is still running: its
+    // heartbeat is live.
+    let running = stage(&space, &common::key_in(7, "w-d"), "alpha", 2).await;
 
-    let deleted = delete::delete_project(&pool, common::project(7), &PublishSettings::default())
-        .await
-        .expect("delete project");
+    let deleted = delete::delete_project(
+        &pool,
+        common::project(7),
+        &PublishSettings::default(),
+        &limits(),
+    )
+    .await
+    .expect("delete project");
 
     assert_eq!(deleted.wikis, ["w-a", "w-b", "w-c"]);
     assert_eq!(deleted.rows.nodes, 9);
-    assert_eq!(deleted.builds, 1);
+    // The running generation is left to its run.
+    assert_eq!(deleted.builds, 0);
+    assert_eq!(deleted.live_builds, 1);
+    let builds: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM deepwiki_build.builds WHERE project_id = 7")
+            .fetch_one(&pool)
+            .await
+            .expect("builds");
+    assert_eq!(builds, 1, "a live-heartbeat build survives the deletion");
+
+    // Its run stops beating (the replica went away): now it is stale, and
+    // the next deletion removes it.
+    drop(running);
+    sqlx::query(
+        "UPDATE deepwiki_build.builds SET heartbeat_at = now() - interval '3 hours' \
+         WHERE project_id = 7",
+    )
+    .execute(&pool)
+    .await
+    .expect("age the heartbeat");
+    let stale = delete::delete_project(
+        &pool,
+        common::project(7),
+        &PublishSettings::default(),
+        &limits(),
+    )
+    .await
+    .expect("delete the stale build");
+    assert!(stale.wikis.is_empty());
+    assert_eq!((stale.builds, stale.live_builds), (1, 0));
     for table in TABLES {
         let left: i64 = sqlx::query_scalar(&format!(
             "SELECT count(*) FROM {table} WHERE project_id = 7"
@@ -232,9 +275,14 @@ async fn deleting_a_project_removes_all_its_wikis_and_no_other_project() {
     );
 
     // Idempotent.
-    let again = delete::delete_project(&pool, common::project(7), &PublishSettings::default())
-        .await
-        .expect("again");
+    let again = delete::delete_project(
+        &pool,
+        common::project(7),
+        &PublishSettings::default(),
+        &limits(),
+    )
+    .await
+    .expect("again");
     assert!(again.wikis.is_empty());
 }
 
@@ -261,6 +309,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &arguments(3, &json!({"wiki_id": "w-a"})),
         &pool,
         &settings,
+        STALE_AFTER,
     )
     .await
     .expect("run");
@@ -272,6 +321,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &arguments(1, &json!({"wiki_id": "w-a"})),
         &pool,
         &settings,
+        STALE_AFTER,
     )
     .await
     .expect("run");
@@ -285,6 +335,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &arguments(1, &json!({})),
         &pool,
         &settings,
+        STALE_AFTER,
     )
     .await
     .expect("run");
@@ -296,8 +347,14 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         ("delete_wiki_index", json!({"wiki_id": "w-a"})),
         ("delete_project_wikis", json!({})),
     ] {
-        let refused =
-            maintenance::run(tool, args.as_object().expect("object"), &pool, &settings).await;
+        let refused = maintenance::run(
+            tool,
+            args.as_object().expect("object"),
+            &pool,
+            &settings,
+            STALE_AFTER,
+        )
+        .await;
         assert!(refused.is_err(), "{tool} without a project");
     }
     let nameless = maintenance::run(
@@ -305,6 +362,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &arguments(1, &json!({"wiki_id": "  "})),
         &pool,
         &settings,
+        STALE_AFTER,
     )
     .await;
     assert!(nameless.is_err());
@@ -366,4 +424,369 @@ async fn a_publish_records_the_model_and_a_later_one_without_replaces_it() {
     // The next publish replaces the vectors, so it replaces the model too.
     publish(&space, &key, "alpha", 2).await;
     assert_eq!(recorded(pool).await, (None, None));
+}
+
+/// `deleted` means ANY row was removed, with or without a `wikis` row: the
+/// `wiki_bm25_*` tables have no foreign key, so statistics can outlive it.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_stray_rows_with_no_wikis_row_is_a_deletion() {
+    let Some(pool) = common::fresh_database("delete_stray").await else {
+        return;
+    };
+    sqlx::raw_sql(
+        "INSERT INTO wiki_bm25_meta (project_id, wiki_id, branch, doc_count, avgdl, k1, b)
+             VALUES (1, 'stray', 'fts', 1, 1.0, 1.2, 0.75);",
+    )
+    .execute(&pool)
+    .await
+    .expect("a stray statistics row");
+    let settings = PublishSettings::default();
+    let key = common::key_in(1, "stray");
+    let first = delete::delete_wiki(&pool, &key, &settings)
+        .await
+        .expect("delete");
+    assert!(!first.existed, "there was no wikis row");
+    assert!(first.deleted(), "but a row was removed");
+    assert_eq!(first.rows.statistics, 1);
+
+    let out = maintenance::run(
+        "delete_wiki_index",
+        &arguments(1, &json!({"wiki_id": "stray"})),
+        &pool,
+        &settings,
+        STALE_AFTER,
+    )
+    .await
+    .expect("run");
+    assert_eq!(out["deleted"], false, "nothing is left now");
+    assert_eq!(out["rows"]["wikis"], 0);
+
+    sqlx::raw_sql(
+        "INSERT INTO wiki_bm25_meta (project_id, wiki_id, branch, doc_count, avgdl, k1, b)
+             VALUES (1, 'stray', 'fts', 1, 1.0, 1.2, 0.75);",
+    )
+    .execute(&pool)
+    .await
+    .expect("again");
+    let out = maintenance::run(
+        "delete_wiki_index",
+        &arguments(1, &json!({"wiki_id": "stray"})),
+        &pool,
+        &settings,
+        STALE_AFTER,
+    )
+    .await
+    .expect("run");
+    assert_eq!(out["deleted"], true);
+    assert_eq!(out["rows"]["statistics"], 1);
+    assert_eq!(out["rows"]["wikis"], 0);
+}
+
+/// `delete_project` loops until no wiki remains: more wikis than one round
+/// lists are all deleted, and a project that keeps refilling past the cap is
+/// an error naming how many remain.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_deletion_loops_until_empty_or_fails_naming_the_remainder() {
+    let Some(pool) = common::fresh_database("delete_cap").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "deleter");
+    for wiki in ["w-1", "w-2", "w-3", "w-4", "w-5"] {
+        publish(&space, &common::key_in(4, wiki), "alpha", 1).await;
+    }
+    let settings = PublishSettings::default();
+
+    // Two rounds of one wiki cannot clear five: an error that says 3 remain.
+    let capped = ProjectLimits {
+        stale_after: STALE_AFTER,
+        batch: 1,
+        max_rounds: 2,
+    };
+    let error = delete::delete_project(&pool, common::project(4), &settings, &capped)
+        .await
+        .expect_err("the cap was hit");
+    let message = error.to_string();
+    assert!(
+        message.contains("project 4") && message.contains("still holds 3 wiki(s)"),
+        "{message}"
+    );
+    assert_eq!(
+        delete::project_wikis(&pool, common::project(4))
+            .await
+            .expect("left")
+            .len(),
+        3
+    );
+
+    // A smaller batch than the project, with enough rounds: all of it.
+    let batched = ProjectLimits {
+        stale_after: STALE_AFTER,
+        batch: 2,
+        max_rounds: 10,
+    };
+    let done = delete::delete_project(&pool, common::project(4), &settings, &batched)
+        .await
+        .expect("finishes");
+    assert_eq!(done.wikis.len(), 3);
+    assert!(
+        delete::project_wikis(&pool, common::project(4))
+            .await
+            .expect("left")
+            .is_empty()
+    );
+    // The cap landing exactly on the last wiki is a success, not an error.
+    publish(&space, &common::key_in(4, "w-x"), "alpha", 1).await;
+    let exact = ProjectLimits {
+        stale_after: STALE_AFTER,
+        batch: 1,
+        max_rounds: 1,
+    };
+    let done = delete::delete_project(&pool, common::project(4), &settings, &exact)
+        .await
+        .expect("the last wiki fits the cap");
+    assert_eq!(done.wikis, ["w-x"]);
+}
+
+/// `ask` embeds with the model the wiki row recorded.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_stored_embedding_model_is_read_from_the_wiki_row() {
+    let Some(pool) = common::fresh_database("stored_model").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "asker");
+    let with_model = common::key_in(1, "w-model");
+    let without = common::key_in(1, "w-none");
+    stage(&space, &with_model, "alpha", 2)
+        .await
+        .publish(&WikiRecord {
+            embedding_model: Some("emb-1".into()),
+            ..WikiRecord::default()
+        })
+        .await
+        .expect("publish");
+    publish(&space, &without, "beta", 2).await;
+    let project = common::project(1);
+    let stored = |wiki: &str| {
+        let pool = pool.clone();
+        let wiki = wiki.to_owned();
+        async move {
+            elitea_deepwiki_engine::ask::stored_embedding_model(&pool, project, &wiki)
+                .await
+                .expect("read")
+        }
+    };
+    assert_eq!(stored("w-model").await.as_deref(), Some("emb-1"));
+    // An older wiki (NULL) and a wiki that is not indexed: nothing stored.
+    assert_eq!(stored("w-none").await, None);
+    assert_eq!(stored("w-missing").await, None);
+    // Another project's wiki of the same id is not read.
+    assert_eq!(
+        elitea_deepwiki_engine::ask::stored_embedding_model(&pool, common::project(2), "w-model")
+            .await
+            .expect("read"),
+        None
+    );
+}
+
+fn now_minus(minutes: i64) -> String {
+    format!("now() - interval '{minutes} minutes'")
+}
+
+/// The database's RFC 3339 rendering of `now() - minutes`.
+async fn listed_at(pool: &PgPool, minutes: i64) -> String {
+    sqlx::query_scalar(&format!(
+        "SELECT to_char(({}) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
+        now_minus(minutes)
+    ))
+    .fetch_one(pool)
+    .await
+    .expect("time")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stale_or_future_project_list_is_refused_for_a_deletion() {
+    let Some(pool) = common::fresh_database("orphan_fresh").await else {
+        return;
+    };
+    let fresh = listed_at(&pool, 1).await;
+    delete::check_listing_fresh(&pool, &fresh, false)
+        .await
+        .expect("a minute-old list is fresh");
+
+    let stale = listed_at(&pool, 11).await;
+    let refused = delete::check_listing_fresh(&pool, &stale, false)
+        .await
+        .expect_err("11 minutes is stale");
+    assert!(
+        refused.to_string().contains("--allow-stale-list"),
+        "{refused}"
+    );
+    delete::check_listing_fresh(&pool, &stale, true)
+        .await
+        .expect("--allow-stale-list accepts it");
+
+    let future = listed_at(&pool, -30).await;
+    let refused = delete::check_listing_fresh(&pool, &future, true)
+        .await
+        .expect_err("a list from the future is never accepted");
+    assert!(refused.to_string().contains("future"), "{refused}");
+
+    let nonsense = delete::check_listing_fresh(&pool, "2026-13-45T99:00:00Z", false)
+        .await
+        .expect_err("not a time");
+    assert!(
+        nonsense.to_string().contains("not a valid time"),
+        "{nonsense}"
+    );
+}
+
+/// A project created after the list was taken is not in it and looks like an
+/// orphan; the sweep skips it, prints it as skipped, and deletes the rest.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_orphan_sweep_skips_projects_with_activity_after_the_list() {
+    let Some(pool) = common::fresh_database("orphan_sweep").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "sweeper");
+    // Project 2: an old index of a deleted project.
+    publish(&space, &common::key_in(2, "w-old"), "alpha", 2).await;
+    sqlx::query(
+        "UPDATE wikis SET created_at = now() - interval '2 hours', \
+         updated_at = now() - interval '2 hours' WHERE project_id = 2",
+    )
+    .execute(&pool)
+    .await
+    .expect("age");
+    // Project 3: a wiki published after the list was taken.
+    publish(&space, &common::key_in(3, "w-new"), "beta", 2).await;
+    // Project 4: only a build started after the list (a first generation).
+    let _building = stage(&space, &common::key_in(4, "w-building"), "gamma", 1).await;
+    sqlx::query(
+        "INSERT INTO wikis (project_id, wiki_id, repo, branch, created_at, updated_at) \
+         VALUES (4, 'w-prior', 'r', 'main', now() - interval '2 hours', now() - interval '2 hours')",
+    )
+    .execute(&pool)
+    .await
+    .expect("an old wiki of project 4");
+
+    let existing: HashSet<i32> = [1].into_iter().collect();
+    let at = listed_at(&pool, 5).await;
+    let settings = PublishSettings::default();
+
+    // A dry run reports, deletes nothing, and marks the skips.
+    let dry = delete::sweep_orphans(
+        &pool,
+        &existing,
+        &SweepOptions {
+            listed_at: Some(&at),
+            delete: false,
+            allow_stale_list: false,
+        },
+        &settings,
+        &limits(),
+    )
+    .await
+    .expect("dry run");
+    assert_eq!(
+        dry.would_delete
+            .iter()
+            .map(|p| p.project_id)
+            .collect::<Vec<_>>(),
+        [2]
+    );
+    let skipped: Vec<i32> = dry.skipped.iter().map(|(p, _)| p.project_id).collect();
+    assert_eq!(skipped, [3, 4]);
+    assert!(dry.skipped[0].1.contains("w-new"), "{:?}", dry.skipped);
+    assert!(dry.skipped[1].1.contains("build"), "{:?}", dry.skipped);
+    assert!(populated(&rows(&pool, 2, "w-old").await));
+
+    // Deleting needs a listing time.
+    let missing = delete::sweep_orphans(
+        &pool,
+        &existing,
+        &SweepOptions {
+            listed_at: None,
+            delete: true,
+            allow_stale_list: false,
+        },
+        &settings,
+        &limits(),
+    )
+    .await
+    .expect_err("no listed-at");
+    assert!(missing.to_string().contains("--listed-at"), "{missing}");
+
+    let done = delete::sweep_orphans(
+        &pool,
+        &existing,
+        &SweepOptions {
+            listed_at: Some(&at),
+            delete: true,
+            allow_stale_list: false,
+        },
+        &settings,
+        &limits(),
+    )
+    .await
+    .expect("delete");
+    assert_eq!(done.deleted.len(), 1);
+    assert_eq!(done.deleted[0].0.project_id, 2);
+    assert!(done.failed.is_empty());
+    assert_eq!(done.skipped.len(), 2);
+    assert_eq!(rows(&pool, 2, "w-old").await, vec![0; TABLES.len()]);
+    assert!(populated(&rows(&pool, 3, "w-new").await));
+    assert!(
+        !delete::project_wikis(&pool, common::project(4))
+            .await
+            .expect("wikis")
+            .is_empty()
+    );
+}
+
+/// One project that cannot be cleared does not stop the others, and is
+/// reported in `failed`, which the command turns into a non-zero exit.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_orphan_sweep_reports_a_project_it_could_not_clear() {
+    let Some(pool) = common::fresh_database("orphan_fail").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "sweeper");
+    for wiki in ["w-1", "w-2", "w-3"] {
+        publish(&space, &common::key_in(2, wiki), "alpha", 1).await;
+    }
+    publish(&space, &common::key_in(3, "w-1"), "alpha", 1).await;
+    sqlx::query("UPDATE wikis SET created_at = now() - interval '2 hours', updated_at = now() - interval '2 hours'")
+        .execute(&pool)
+        .await
+        .expect("age");
+    let existing: HashSet<i32> = [1].into_iter().collect();
+    let at = listed_at(&pool, 1).await;
+    let capped = ProjectLimits {
+        stale_after: STALE_AFTER,
+        batch: 1,
+        max_rounds: 2,
+    };
+    let done = delete::sweep_orphans(
+        &pool,
+        &existing,
+        &SweepOptions {
+            listed_at: Some(&at),
+            delete: true,
+            allow_stale_list: false,
+        },
+        &PublishSettings::default(),
+        &capped,
+    )
+    .await
+    .expect("sweep");
+    assert_eq!(done.failed.len(), 1);
+    assert_eq!(done.failed[0].0.project_id, 2);
+    assert!(
+        done.failed[0].1.contains("still holds 1 wiki(s)"),
+        "{:?}",
+        done.failed
+    );
+    // The project that did fit was deleted.
+    assert_eq!(done.deleted.len(), 1);
+    assert_eq!(done.deleted[0].0.project_id, 3);
 }
