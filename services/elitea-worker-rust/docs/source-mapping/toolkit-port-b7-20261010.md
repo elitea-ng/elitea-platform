@@ -113,3 +113,30 @@ readable, or (b) the gate 7b direction, with the four tool names and schemas
 backed by Main's memories API through a claim-scoped host interface (the
 `artifact` family's lent authority is the pattern), plus a migration of
 existing LangGraph-store memories.
+
+## `vectorstore` (blocked: indexing)
+
+SDK: `runtime/toolkits/vectorstore.py::VectorStoreToolkit` over
+`runtime/tools/vectorstore.py::VectorStoreWrapper`, hidden in the catalogue.
+Settings `embedding_model`, `embedding_model_params`, `vectorstore_type`
+(PGVector, Chroma, Elastic, ...) and `vectorstore_params`. Construction builds a
+LangChain embeddings client and vector store, and the toolkit binds all four
+tools whatever `selected_tools` says (the filter is commented out):
+
+| Tool | SDK behavior |
+| --- | --- |
+| `indexDocuments` | Index a Python generator of LangChain `Document`s; a model cannot produce that argument |
+| `searchDocuments` | Embed the query, similarity search with `cut_off`, optional `extended_search` chunk types, metadata `filter`, PGVector full-text blend and reranking |
+| `stepbackSearch` | LLM step-back rewrite of the query from `messages`, then `searchDocuments` |
+| `stepbackSummary` | `stepbackSearch` plus an LLM summary of the hits |
+
+Why not in Rust: these are the index and index-search tools of the indexing
+layer, which this port excludes (`index_data`, `search_index`,
+`stepback_search_index` and `stepback_summary_index` are the same operations
+on the per-toolkit overlay). The agent runtime has no embeddings client, no
+vector store reader and no step-back pipeline, and `indexing.md` keeps
+indexing as the final gate. `indexDocuments` has no model-callable argument
+shape in any runtime.
+
+Unblock: the native indexing gate (`indexing.md`); the three search tools would
+then be thin bindings over its search service.
