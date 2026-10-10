@@ -25,9 +25,9 @@ use super::families::artifact::ArtifactToolAuthority;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
 use super::families::{
-    artifact, azure, azure_search, elastic, gcp, github, gitlab, gitlab_org, google_places,
-    keycloak, kubernetes, openapi, postman, rally, report_portal, salesforce, service_now,
-    sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
+    artifact, azure, azure_search, bitbucket, elastic, gcp, github, gitlab, gitlab_org,
+    google_places, keycloak, kubernetes, openapi, postman, rally, report_portal, salesforce,
+    service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
@@ -178,6 +178,7 @@ async fn materialize(
         reference.tool_type(),
         "azure"
             | "azure_search"
+            | "bitbucket"
             | "elastic"
             | "gcp"
             | "github"
@@ -292,6 +293,19 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
+        "bitbucket" => bitbucket::tools::build_bitbucket_toolset(
+            name,
+            bitbucket::config::BitbucketToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| {
+            if error.code() == bitbucket::tools::BitbucketToolsetErrorCode::UnsupportedSelection {
+                unsupported_toolkit()
+            } else {
+                invalid_configuration()
+            }
+        })?,
         "elastic" => elastic::tools::build_elastic_toolset(
             name,
             elastic::config::ElasticToolkitConfig::parse(settings)

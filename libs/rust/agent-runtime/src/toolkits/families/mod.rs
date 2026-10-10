@@ -6,6 +6,7 @@ pub mod artifact;
 pub(crate) mod artifact;
 pub(crate) mod azure;
 pub(crate) mod azure_search;
+pub(crate) mod bitbucket;
 pub(crate) mod elastic;
 pub(crate) mod gcp;
 pub(crate) mod github;

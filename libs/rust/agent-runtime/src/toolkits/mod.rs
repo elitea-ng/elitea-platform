@@ -61,6 +61,8 @@ mod azure_search_tests;
 #[cfg(test)]
 mod azure_tests;
 #[cfg(test)]
+mod bitbucket_tests;
+#[cfg(test)]
 mod direct_execution_tests;
 #[cfg(test)]
 mod elastic_tests;
