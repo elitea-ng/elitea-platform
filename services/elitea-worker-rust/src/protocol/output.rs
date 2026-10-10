@@ -11,12 +11,13 @@ use super::node_event::encode_current_node_event_json;
 use super::{
     ProtocolError,
     elitea::runtime::v1::{
-        AgentExecutionResultV1, DigestAlgorithmV1, DigestV1, ExecutionFenceV1, ExecutionIdentityV1,
-        ExecutionOutcomeV1, ExecutionOutputEventTypeV1, ExecutionOutputFrameV1, NodeEventV1,
-        RuntimeErrorCodeV1, RuntimeErrorV1, SettlementProposalV1, ToolkitAuthorizationRequiredV1,
-        ToolkitAvailableToolsResultV1, ToolkitCallToolCommandV1, ToolkitCallToolResultV1,
-        ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, ToolkitExecuteReadResultV1,
-        execution_output_frame_v1, worker_command_v1,
+        AgentExecutionResultV1, ConfigurationValidationResultV1, DigestAlgorithmV1, DigestV1,
+        ExecutionFenceV1, ExecutionIdentityV1, ExecutionOutcomeV1, ExecutionOutputEventTypeV1,
+        ExecutionOutputFrameV1, NodeEventV1, RuntimeErrorCodeV1, RuntimeErrorV1,
+        SettlementProposalV1, ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsResultV1,
+        ToolkitCallToolCommandV1, ToolkitCallToolResultV1, ToolkitCallToolStatusV1,
+        ToolkitCallToolSummaryV1, ToolkitExecuteReadResultV1, execution_output_frame_v1,
+        worker_command_v1,
     },
 };
 
@@ -91,6 +92,7 @@ pub(crate) enum ToolkitExecuteReadTerminalOutput {
     Result(Box<ToolkitExecuteReadResultV1>),
     CallTool(Box<ToolkitCallToolResultV1>),
     AvailableTools(Box<ToolkitAvailableToolsResultV1>),
+    ConfigurationValidation(Box<ConfigurationValidationResultV1>),
     Failure(RuntimeFailureKind),
 }
 
@@ -133,12 +135,7 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
             validate_toolkit_execute_read_result(verified, result)?;
             if !frame.terminal
                 || frame.event_type != ExecutionOutputEventTypeV1::ToolkitExecuteReadResult as i32
-                || frame.logical_output_id
-                    != format!(
-                        "{}:{}",
-                        verified.kind().output_prefix(),
-                        verified.command().execution_id
-                    )
+                || frame.logical_output_id != verified.logical_output_id()
             {
                 return Err(malformed_restored_output());
             }
@@ -162,16 +159,20 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
             )?;
             (result.encode_to_vec(), ExecutionOutcomeV1::Succeeded)
         }
+        Some(execution_output_frame_v1::Payload::ConfigurationValidation(result)) => {
+            validate_configuration_validation_result(verified, result)?;
+            validate_toolkit_terminal_shape(
+                verified,
+                frame,
+                ExecutionOutputEventTypeV1::ConfigurationValidationResult,
+            )?;
+            (result.encode_to_vec(), ExecutionOutcomeV1::Succeeded)
+        }
         Some(execution_output_frame_v1::Payload::RuntimeError(error)) => {
             let failure = canonical_runtime_failure(error).ok_or(malformed_restored_output())?;
             if !frame.terminal
                 || frame.event_type != ExecutionOutputEventTypeV1::RuntimeError as i32
-                || frame.logical_output_id
-                    != format!(
-                        "{}:{}",
-                        verified.kind().output_prefix(),
-                        verified.command().execution_id
-                    )
+                || frame.logical_output_id != verified.logical_output_id()
             {
                 return Err(malformed_restored_output());
             }
@@ -555,28 +556,22 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
                 ExecutionOutcomeV1::Succeeded,
             )
         }
-        ToolkitExecuteReadTerminalOutput::Failure(kind) => {
-            let error = runtime_error(kind);
-            let bytes = error.encode_to_vec();
+        ToolkitExecuteReadTerminalOutput::ConfigurationValidation(result) => {
+            validate_configuration_validation_result(verified, &result)?;
+            let bytes = result.encode_to_vec();
             (
-                ExecutionOutputEventTypeV1::RuntimeError,
-                execution_output_frame_v1::Payload::RuntimeError(error),
+                ExecutionOutputEventTypeV1::ConfigurationValidationResult,
+                execution_output_frame_v1::Payload::ConfigurationValidation(*result),
                 bytes,
-                if kind == RuntimeFailureKind::Cancelled {
-                    ExecutionOutcomeV1::Cancelled
-                } else {
-                    ExecutionOutcomeV1::Failed
-                },
+                // An invalid configuration is a successful validation.
+                ExecutionOutcomeV1::Succeeded,
             )
         }
+        ToolkitExecuteReadTerminalOutput::Failure(kind) => failure_terminal_parts(kind),
     };
     let payload_digest = sha256(&payload_bytes);
     let command = verified.command();
-    let logical_output_id = format!(
-        "{}:{}",
-        verified.kind().output_prefix(),
-        command.execution_id
-    );
+    let logical_output_id = verified.logical_output_id();
     let event_id = format!("{}:{sequence}", command.command_id);
     let frame = ExecutionOutputFrameV1 {
         output_schema_revision: OUTPUT_SCHEMA_REVISION.to_owned(),
@@ -615,6 +610,30 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
         ));
     }
     Ok(frame)
+}
+
+/// The event, payload, encoded payload and requested outcome of a registered
+/// safe failure terminal.
+fn failure_terminal_parts(
+    kind: RuntimeFailureKind,
+) -> (
+    ExecutionOutputEventTypeV1,
+    execution_output_frame_v1::Payload,
+    Vec<u8>,
+    ExecutionOutcomeV1,
+) {
+    let error = runtime_error(kind);
+    let bytes = error.encode_to_vec();
+    (
+        ExecutionOutputEventTypeV1::RuntimeError,
+        execution_output_frame_v1::Payload::RuntimeError(error),
+        bytes,
+        if kind == RuntimeFailureKind::Cancelled {
+            ExecutionOutcomeV1::Cancelled
+        } else {
+            ExecutionOutcomeV1::Failed
+        },
+    )
 }
 
 pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
@@ -1034,12 +1053,7 @@ fn validate_toolkit_terminal_shape(
 ) -> Result<(), ProtocolError> {
     if !frame.terminal
         || frame.event_type != event_type as i32
-        || frame.logical_output_id
-            != format!(
-                "{}:{}",
-                verified.kind().output_prefix(),
-                verified.command().execution_id
-            )
+        || frame.logical_output_id != verified.logical_output_id()
     {
         return Err(malformed_restored_output());
     }
@@ -1237,6 +1251,59 @@ fn validate_toolkit_available_tools_result(
         || !valid_sha256(artifact.digest.as_ref())
     {
         return Err(malformed_restored_output());
+    }
+    Ok(())
+}
+
+/// The result must restate the signed command's identity and bindings, and
+/// may carry only Main's closed issue vocabulary in its canonical order: Main
+/// refuses a frame that does not (`ValidationResult.Validate`).
+fn validate_configuration_validation_result(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    result: &ConfigurationValidationResultV1,
+) -> Result<(), ProtocolError> {
+    let command = verified.command();
+    let input = command
+        .input_bundle_ref
+        .as_ref()
+        .ok_or_else(malformed_restored_output)?;
+    let Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)) =
+        command.capability_command.as_ref()
+    else {
+        return Err(malformed_restored_output());
+    };
+    if result.configuration_revision_id != validation.configuration_revision_id
+        || result.configuration_type != validation.configuration_type
+        || result.catalog_revision != validation.catalog_revision
+        || result.catalog_digest != validation.catalog_digest
+        || result.schema_id != validation.schema_id
+        || result.schema_revision != validation.schema_revision
+        || result.schema_digest != validation.schema_digest
+        || result.input_bundle_id != input.input_bundle_id
+        || result.input_bundle_digest != input.digest
+        || result.settings_entry_id != validation.settings_entry_id
+        || !valid_toolkit_identity(&result.settings_entry_version)
+        || !valid_sha256(result.settings_content_digest.as_ref())
+        || result.valid != result.issues.is_empty()
+        || result.issues.len() > 64
+    {
+        return Err(malformed_restored_output());
+    }
+    let mut previous: Option<(&str, &str)> = None;
+    for issue in &result.issues {
+        let canonical = crate::validation::IssueCode::from_wire(&issue.code)
+            .ok_or_else(malformed_restored_output)?;
+        if issue.safe_message != canonical.safe_message()
+            || issue.json_pointer.len() > MAX_SAFE_STRING_BYTES
+        {
+            return Err(malformed_restored_output());
+        }
+        let key = (issue.json_pointer.as_str(), issue.code.as_str());
+        // Strictly increasing by (pointer, code): sorted and no duplicates.
+        if previous.is_some_and(|last| last >= key) {
+            return Err(malformed_restored_output());
+        }
+        previous = Some(key);
     }
     Ok(())
 }

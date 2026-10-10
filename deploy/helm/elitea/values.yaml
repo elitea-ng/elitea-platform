@@ -3750,6 +3750,20 @@ worker:
     # the one the nats-bootstrap chart creates for it. The standalone profile
     # runs agent AND index commands on ELITEA_RT_V1_AGENT, so one fleet serves
     # both.
+    #
+    # configuration.validate.v1 is NOT served by that fleet: elitea-main sends
+    # it on ELITEA_RT_V1_VALIDATE (main.runtime.commandStream), which it
+    # refuses to share with agent or index dispatch. Both workers implement it
+    # (the Rust one validates the 32 SDK configuration types with the same
+    # verdicts as the pinned SDK's pydantic models). This block binds ONE
+    # stream, so a deployment that wants validation needs a worker bound to
+    # natsStream ELITEA_RT_V1_VALIDATE and natsConsumer
+    # elitea-configuration-worker-v1: either this block pointed there (a
+    # validation-only fleet; render-worker.sh holds that shape for
+    # implementation rust) or a second worker Deployment, which is what
+    # deploy/docker-compose.standalone-rust-validate.yml does for the compose
+    # stack. Nothing dispatches a validation until
+    # env.ELITEA_CONFIGURATIONS_MUTATION_ENABLED is "true".
     natsUrl: ""
     natsStream: "ELITEA_RT_V1_AGENT"
     natsConsumer: "elitea-agent-worker-v1"

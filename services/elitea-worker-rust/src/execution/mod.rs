@@ -8,6 +8,7 @@ pub mod agent_lease;
 pub mod agent_preparation;
 mod checkpoint_recovery;
 pub(crate) mod command_delivery;
+mod configuration_validation;
 mod execution_delivery_processor;
 pub mod invocation_admission;
 mod invocation_supervisor;

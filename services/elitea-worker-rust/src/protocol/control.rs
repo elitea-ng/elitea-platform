@@ -411,6 +411,23 @@ impl AcceptedAgentClaim {
             && result.settings_content_digest.as_ref() == content.digest.as_ref()
     }
 
+    /// A validation result must name the very bundle, entry version and
+    /// content the claim admitted, not merely carry well-formed digests.
+    #[must_use]
+    pub(crate) fn matches_configuration_validation_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::ConfigurationValidationResultV1,
+    ) -> bool {
+        let Some(content) = self.request_entry.content.as_ref() else {
+            return false;
+        };
+        result.input_bundle_id == self.input_bundle_ref.input_bundle_id
+            && result.input_bundle_digest.as_ref() == self.input_bundle_ref.digest.as_ref()
+            && result.settings_entry_id == self.request_entry.entry_id
+            && result.settings_entry_version == self.request_entry.immutable_version
+            && result.settings_content_digest.as_ref() == content.digest.as_ref()
+    }
+
     /// Bind a validated terminal to the replacement claim without invocation.
     /// Only a claim created after the signed deadline can replace its outcome.
     pub(crate) fn toolkit_terminal_replacement(
@@ -1129,6 +1146,9 @@ impl AgentExecutionOutputAuthority {
             ToolkitExecuteReadTerminalOutput::AvailableTools(result) => self
                 .claim
                 .matches_toolkit_available_tools_result_binding(result),
+            ToolkitExecuteReadTerminalOutput::ConfigurationValidation(result) => self
+                .claim
+                .matches_configuration_validation_result_binding(result),
             ToolkitExecuteReadTerminalOutput::Failure(_) => true,
         };
         if !inputs_match {
@@ -3084,6 +3104,13 @@ fn validate_execution_request_entries(
                 MAX_TOOLKIT_JSON_INPUT_BYTES,
                 None,
             ),
+            Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)) => (
+                validation.settings_entry_id.as_str(),
+                "configuration.settings",
+                "application/json",
+                MAX_TOOLKIT_JSON_INPUT_BYTES,
+                None,
+            ),
             _ => {
                 return Err(ControlSemanticError::UnsupportedCapability(
                     "the worker command capability is not supported",
@@ -3243,6 +3270,12 @@ fn terminal_logical_output_id(command: &super::elitea::runtime::v1::WorkerComman
         }
         Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
             format!("toolkit-available-tools:{}", command.execution_id)
+        }
+        Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)) => {
+            format!(
+                "configuration-validation:{}",
+                validation.configuration_revision_id
+            )
         }
         _ => format!("agent-execution:{}", command.execution_id),
     }

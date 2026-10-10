@@ -1,0 +1,97 @@
+# Apply this overlay to serve configuration.validate.v1 from the Rust worker.
+#
+#   STANDALONE_WORKER=rust \
+#   STANDALONE_OVERLAY=deploy/docker-compose.standalone-rust-validate.yml \
+#   deploy/scripts/standalone-stack.sh up
+#
+# or, by hand:
+#
+#   docker compose \
+#     -f deploy/docker-compose.standalone-full.yml \
+#     -f deploy/docker-compose.standalone-rust-agent.yml \
+#     -f deploy/docker-compose.standalone-rust-validate.yml config
+#
+# ── Why a second worker, and why this overlay turns dispatch on ──────────────
+#
+# elitea-main dispatches a configuration-validation command on its own stream,
+# ELITEA_RT_V1_VALIDATE (ELITEA_RUNTIME_COMMAND_STREAM). runtimecomposition/
+# config.go refuses to share that stream with agent or index dispatch, and one
+# stream has one durable consumer, so the agent worker — which binds
+# ELITEA_RT_V1_AGENT — can never receive one. A worker per stream is the shape
+# the command bus defines (docs/runtime-command-bus.md); this overlay adds the
+# VALIDATE one, from the same Rust image as the agent worker.
+#
+# Nothing dispatches a validation in the base stack: the only caller is the
+# configuration write route composed by ELITEA_CONFIGURATIONS_MUTATION_ENABLED,
+# which the base stack leaves off (deploy/README.md, "Why
+# ELITEA_CONFIGURATIONS_MUTATION_ENABLED stays off"). That route is a different
+# request contract from the one apps/elitea-web sends today, so this overlay is
+# opt-in and is NOT part of STANDALONE_WORKER=rust. It is for exercising the
+# Rust validation path end to end, not a statement that the cutover is done.
+#
+# The worker needs the agent-state database like the agent worker does: the
+# Rust bootstrap opens it unconditionally (src/bootstrap.rs
+# `load_agentstate_options`) even when the bound stream never needs a
+# checkpoint, so it waits on the same migration.
+services:
+  elitea-main:
+    environment:
+      # Composes the write route that submits a configuration-validation job
+      # before it stores a configuration. Requires ELITEA_CONFIGURATIONS_ENABLED
+      # and the runtime plane, both already on in this stack.
+      ELITEA_CONFIGURATIONS_MUTATION_ENABLED: "true"
+
+  elitea-validate-worker:
+    image: ghcr.io/elitea-ng/elitea-worker-rust:standalone
+    build:
+      context: ..
+      dockerfile: services/elitea-worker-rust/Containerfile
+    command:
+      - serve
+      - --config
+      - /run/elitea/runtime.json
+      - --toolkit-security-config
+      - /run/elitea/toolkit-security.json
+    environment:
+      ELITEA_RUST_LOG: "info"
+      ELITEA_RUST_TRACE: "info"
+    volumes:
+      # The agent worker's document with the stream/durable pair of the
+      # VALIDATE route and its own connection name. The workload session and
+      # producer stay the agent worker's: runtime-session-init authorizes one
+      # certificate identity, and a second row would add nothing the claim
+      # fence does not already separate per command.
+      - ./runtime/worker-runtime.rust-validate.json:/run/elitea/runtime.json:ro
+      - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
+      - standalone_runtime_worker:/run/elitea-runtime:ro
+      # Its own private output spool: two processes must never share one.
+      - standalone_validate_worker_spool:/var/lib/elitea-worker/output-spool
+    depends_on:
+      runtime-material:
+        condition: service_completed_successfully
+      validate-worker-spool-init:
+        condition: service_completed_successfully
+      nats-bootstrap:
+        condition: service_completed_successfully
+      runtime-session-init:
+        condition: service_completed_successfully
+      elitea-agentstate-migrate:
+        condition: service_completed_successfully
+      elitea-main:
+        condition: service_healthy
+      platform-edge:
+        condition: service_started
+    restart: unless-stopped
+
+  validate-worker-spool-init:
+    image: docker.io/library/debian:trixie-slim
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - chown 10001:10001 /spool && chmod 700 /spool
+    volumes:
+      - standalone_validate_worker_spool:/spool
+    restart: "no"
+
+volumes:
+  # Private (0700, uid 10001), prepared by validate-worker-spool-init.
+  standalone_validate_worker_spool:

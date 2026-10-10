@@ -1,0 +1,962 @@
+{
+ "catalog_digest": "4a96e3ab8e3842ebf2645a851aeb12e3e2343f28e7d024c1a2960eb4ec254351",
+ "catalog_revision": "a78d3654f99d8ff89ca7233f20a66d676e564f79",
+ "schema_version": "elitea.worker-configuration-validation-rules.v1",
+ "types": [
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "organization_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "token",
+     "nullable": true,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "5d8338d29380c616c8f35f34d9c5c29150cc102faf116194b2ec6ea145e82b75",
+   "schema_id": "elitea.configuration.ado",
+   "section": "credentials",
+   "type": "ado"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "ce858075d623c07dd7479f520158c6e046982a60904cfbe5f9a92c28e1c5805e",
+   "schema_id": "elitea.configuration.aha",
+   "section": "credentials",
+   "type": "aha"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "endpoint",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "api_base",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": true,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "4de343f9fc9d76d61c3f1af63564a52b95204cf0da2fbffab2fa340827bbabfb",
+   "schema_id": "elitea.configuration.azure_search",
+   "section": "credentials",
+   "type": "azure_search"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "project",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "location",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "dataset",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "table",
+     "nullable": true,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "ceb579ebe506f791059c3d339dd93409b06f851ee1c6b77a368ee5e5fb3458b1",
+   "schema_id": "elitea.configuration.bigquery",
+   "section": "credentials",
+   "type": "bigquery"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "username",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "password",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "655005dfcd2d55eb25769db42666dd816dd54052fcc32290e82ba398698b85de",
+   "schema_id": "elitea.configuration.bitbucket",
+   "section": "credentials",
+   "type": "bitbucket"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "organization",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "private_token",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "9dff82a1428e7f7cfc6ceff68be10fd411755acd171d85729e3219f19dd5a93d",
+   "schema_id": "elitea.configuration.carrier",
+   "section": "credentials",
+   "type": "carrier"
+  },
+  {
+   "fields": [
+    {
+     "kind": "enum",
+     "name": "hosting",
+     "nullable": true,
+     "required": false,
+     "values": [
+      "Auto",
+      "Cloud",
+      "Server"
+     ]
+    },
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "username",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "token",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "6e5c2651eb07ee32773faf7ee56695b197db43670d5033b45afca71e1adf871c",
+   "schema_id": "elitea.configuration.confluence",
+   "section": "credentials",
+   "type": "confluence"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "aws_access_key_id",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "aws_secret_access_key",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "aws_session_token",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "aws_region",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "s3_path",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "table_path",
+     "nullable": true,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "e1aebe38ce80405019f0a060b7f44f3a44f665a46c9d956f82ddd899f2aafe0b",
+   "schema_id": "elitea.configuration.delta_lake",
+   "section": "credentials",
+   "type": "delta_lake"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "token",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "63e358be565b985348d2b18645edaa7d9130898a70755455cd46e418ac7ca2cf",
+   "schema_id": "elitea.configuration.figma",
+   "section": "credentials",
+   "type": "figma"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "app_id",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "app_private_key",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "access_token",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "username",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "password",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": "github_auth",
+   "schema_digest": "5773bcc0e808397bdb16edf1a4112952f5f2d1e297b6d5fac81bd3c0b31642b4",
+   "schema_id": "elitea.configuration.github",
+   "section": "credentials",
+   "type": "github"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "private_token",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "47aedf5a8e4c6028d89cf5e80fa769894100b31839f18152c349898dbad111e8",
+   "schema_id": "elitea.configuration.gitlab",
+   "section": "credentials",
+   "type": "gitlab"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "9a6981cd19f6cbe033526d86d22b0372a8fb3e8147496c14fd6244e37181f967",
+   "schema_id": "elitea.configuration.google_places",
+   "section": "credentials",
+   "type": "google_places"
+  },
+  {
+   "fields": [
+    {
+     "kind": "enum",
+     "name": "hosting",
+     "nullable": true,
+     "required": false,
+     "values": [
+      "Auto",
+      "Cloud",
+      "Server"
+     ]
+    },
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "username",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "token",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "eb9a4f055fda8b537ba95153d1f6db964aee44cb98c8a6355dcde9d6144e461a",
+   "schema_id": "elitea.configuration.jira",
+   "section": "credentials",
+   "type": "jira"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "public_key",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "secret_key",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "e939edb0e027b6995065c74191e263aafb8b57130aee7224a463501d53ace3e2",
+   "schema_id": "elitea.configuration.langfuse",
+   "section": "credentials",
+   "type": "langfuse"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "enum",
+     "name": "auth_type",
+     "nullable": true,
+     "required": false,
+     "values": [
+      "Basic",
+      "Bearer",
+      "Custom"
+     ]
+    },
+    {
+     "kind": "string",
+     "name": "custom_header_name",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "client_id",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "client_secret",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "token_url",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "scope",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "enum",
+     "name": "method",
+     "nullable": true,
+     "required": false,
+     "values": [
+      "default",
+      "Basic"
+     ]
+    },
+    {
+     "kind": "string",
+     "name": "oauth_discovery_endpoint",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "configuration_uuid",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": "openapi_auth",
+   "schema_digest": "1c43c41a5304c6f73c68deebd37ba70f8c2266a59dfd4f9d4fa20b819e7ab3f1",
+   "schema_id": "elitea.configuration.openapi",
+   "section": "credentials",
+   "type": "openapi"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "connection_string",
+     "nullable": false,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "bed2b8626511f8a0b65c152ec8bf3d41a5ed61b0f7962da17f4953af1d33b4f9",
+   "schema_id": "elitea.configuration.pgvector",
+   "section": "vectorstorage",
+   "type": "pgvector"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "workspace_id",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "9c855ebcff80cf927bc5b36801dabd85a1c1f11496b144232a7c7093ff7debc2",
+   "schema_id": "elitea.configuration.postman",
+   "section": "credentials",
+   "type": "postman"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "qtest_api_token",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "9db123f4347c43b5b03781b458b3c91066f245871877cb34a62618f309a44148",
+   "schema_id": "elitea.configuration.qtest",
+   "section": "credentials",
+   "type": "qtest"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "server",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "username",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "password",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "b90ed82f1b1a31b801e1a8df815a939a5e47c889b5370bd16268befd4fefd9cf",
+   "schema_id": "elitea.configuration.rally",
+   "section": "credentials",
+   "type": "rally"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "project",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "endpoint",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "bdb172dff43c84837e8a23cfff369cdce0fa9892565d03d93b84442f0038ff2a",
+   "schema_id": "elitea.configuration.report_portal",
+   "section": "credentials",
+   "type": "report_portal"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "client_id",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "client_secret",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "a608a83bf5423882cba613f25cbacb4731b003d24876e12c697cd313f6a3c80f",
+   "schema_id": "elitea.configuration.salesforce",
+   "section": "credentials",
+   "type": "salesforce"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "username",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "password",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "7e99490ceb056ca5599d6c3975f90d19e3119b590bf27c260df68d0049a31788",
+   "schema_id": "elitea.configuration.service_now",
+   "section": "credentials",
+   "type": "service_now"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "client_id",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "client_secret",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "site_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "oauth_discovery_endpoint",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string_list",
+     "name": "scopes",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "boolean",
+     "name": "auto_refresh_token",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "b4e2d97989b31b93aacaabaab5adeaebc7a4500c5aeeb16c3d32bbcaf4ed8907",
+   "schema_id": "elitea.configuration.sharepoint",
+   "section": "credentials",
+   "type": "sharepoint"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "name",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "slack_token",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "channel_id",
+     "nullable": true,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "e3262e470f7953a6ba58f84afc5921d8de5f607054d0eb21ccb49c70ff96fd82",
+   "schema_id": "elitea.configuration.slack",
+   "section": "credentials",
+   "type": "slack"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "sonar_token",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "f910ba7e1d068c3c9770e70c0e4bae673c38db6ecab8cfd644149db446b89760",
+   "schema_id": "elitea.configuration.sonar",
+   "section": "credentials",
+   "type": "sonar"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "host",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "integer",
+     "name": "port",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "username",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "password",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "dfc90a7362cf528823548c0eabfb768aa562fb86906e9170679d272ad2aed3d0",
+   "schema_id": "elitea.configuration.sql",
+   "section": "credentials",
+   "type": "sql"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "endpoint",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "api_key",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "297b046884dd0602c12067068a9bde83f7acfdd55e916834595dfec9a04b3543",
+   "schema_id": "elitea.configuration.testio",
+   "section": "credentials",
+   "type": "testio"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "email",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "password",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "566161d8d1e9226cc8d4bf85e45dc90434e8a7404d630e703a464d0fd7f10a20",
+   "schema_id": "elitea.configuration.testrail",
+   "section": "credentials",
+   "type": "testrail"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "client_id",
+     "nullable": true,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "client_secret",
+     "nullable": true,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "dc6eb673cf32cf79cc43375c6abd703df04697b947d85324d6907894b7757d5a",
+   "schema_id": "elitea.configuration.xray",
+   "section": "credentials",
+   "type": "xray"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "token",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "username",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "password",
+     "nullable": true,
+     "required": false
+    },
+    {
+     "kind": "string",
+     "name": "cookies",
+     "nullable": true,
+     "required": false
+    }
+   ],
+   "hook": null,
+   "schema_digest": "5b7a56728e996b8d6b0cdf9e11eadb4fe567b5d733c52e74790ed27a13da4ae8",
+   "schema_id": "elitea.configuration.zephyr",
+   "section": "credentials",
+   "type": "zephyr"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "token",
+     "nullable": true,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "9cdcf8d5788624dc2ef8727d24e7f656e721e3f6e17916efe0eeb95393d517b7",
+   "schema_id": "elitea.configuration.zephyr_enterprise",
+   "section": "credentials",
+   "type": "zephyr_enterprise"
+  },
+  {
+   "fields": [
+    {
+     "kind": "string",
+     "name": "base_url",
+     "nullable": false,
+     "required": true
+    },
+    {
+     "kind": "string",
+     "name": "token",
+     "nullable": false,
+     "required": true
+    }
+   ],
+   "hook": null,
+   "schema_digest": "c96092f1bee1e31042e325067a6b21adaa87290fbbbef34113e3694b4047bf68",
+   "schema_id": "elitea.configuration.zephyr_essential",
+   "section": "credentials",
+   "type": "zephyr_essential"
+  }
+ ]
+}
