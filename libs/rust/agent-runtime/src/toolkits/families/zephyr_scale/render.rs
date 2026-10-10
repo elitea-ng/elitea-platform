@@ -1,61 +1,33 @@
 //! The SDK's text renderings of provider objects.
 //!
 //! The Zephyr Scale wrapper builds its results with `str(...)`, f-strings
-//! and `json.dumps(..., indent=2)`. These functions reproduce those forms for
-//! JSON values. Object members are written in sorted key order, whatever
+//! and `json.dumps(..., indent=2)`. `str()`/`repr()` are the shared
+//! `python_repr`; these functions add the `json.dumps` form and the two
+//! `str()` shapes of a missing member and a library reply. Object members are written in sorted key order, whatever
 //! `serde_json` features a build unifies (see `crate::canonical`): the
 //! provider's own member order is the one difference from the SDK's text.
 
 use std::fmt::Write as _;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::toolkits::families::python_repr;
 use crate::toolkits::families::zephyr_rest::client::ZephyrReply;
 
-/// Python's `repr(value)` for a decoded JSON value (the shared
-/// `python_repr`, members in sorted key order).
-#[must_use]
-pub(in crate::toolkits) fn py_repr(value: &Value) -> String {
-    python_repr::repr(value)
-}
-
-/// Python's `str(value)` (and `f"{value}"`): a string is itself, anything
-/// else its `repr`.
-#[must_use]
-pub(in crate::toolkits) fn py_str(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        other => py_repr(other),
-    }
-}
-
 /// `f"{value}"` of a member read with `.get()`: a missing member is `None`.
 #[must_use]
 pub(in crate::toolkits) fn py_str_opt(value: Option<&Value>) -> String {
-    value.map_or_else(|| "None".to_owned(), py_str)
+    value.map_or_else(|| "None".to_owned(), python_repr::str_of)
 }
 
 /// `str(response)` of a library call: the JSON body's `str`, or `""`.
 #[must_use]
 pub(in crate::toolkits) fn reply_str(reply: &ZephyrReply) -> String {
     match reply {
-        ZephyrReply::Json(value) => py_str(value),
+        ZephyrReply::Json(value) => python_repr::str_of(value),
         ZephyrReply::Text(text) => text.clone(),
         ZephyrReply::Empty => String::new(),
     }
-}
-
-/// `str(list_of_strings)`.
-#[must_use]
-pub(in crate::toolkits) fn py_repr_str_list(items: &[String]) -> String {
-    python_repr::repr_str_list(items)
-}
-
-fn sorted(object: &Map<String, Value>) -> Vec<(&String, &Value)> {
-    let mut members = object.iter().collect::<Vec<_>>();
-    members.sort_by(|left, right| left.0.cmp(right.0));
-    members
 }
 
 /// One object whose members keep the caller's order, as a Python `dict`
@@ -124,7 +96,8 @@ fn write_json(out: &mut String, value: &Value, level: usize) {
         Value::Object(object) if object.is_empty() => out.push_str("{}"),
         Value::Object(object) => {
             out.push('{');
-            for (index, (key, item)) in sorted(object).into_iter().enumerate() {
+            for (index, (key, item)) in python_repr::sorted_members(object).into_iter().enumerate()
+            {
                 out.push_str(if index == 0 { "\n" } else { ",\n" });
                 indent(out, level + 1);
                 write_json_str(out, key);

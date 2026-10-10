@@ -8,11 +8,12 @@ use adk_core::Toolset;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
+use super::families::python_repr;
 use super::families::zephyr_rest::client::ZephyrRestResponse;
 use super::families::zephyr_rest::config::ZephyrRestConfigErrorCode;
 use super::families::zephyr_scale::client::ZephyrScaleClient;
 use super::families::zephyr_scale::config::{CLOUD_API, ZephyrScaleToolkitConfig};
-use super::families::zephyr_scale::render::{json_dumps_indent, py_repr};
+use super::families::zephyr_scale::render::json_dumps_indent;
 use super::families::zephyr_scale::tools::{test_build_with_client, test_catalog};
 use super::zephyr_rest_tests::{
     FixtureTransport, TOKEN, policy, readonly, rest_client, tool_context,
@@ -90,7 +91,7 @@ fn configuration_uses_only_the_token_against_the_cloud_api() {
 #[test]
 fn python_renderings_match_the_sdk_text() {
     assert_eq!(
-        py_repr(&json!({"b":[1, true, null], "a":"it's", "c":"say \"hi\"\n"})),
+        python_repr::repr(&json!({"b":[1, true, null], "a":"it's", "c":"say \"hi\"\n"})),
         r#"{'a': "it's", 'b': [1, True, None], 'c': 'say "hi"\n'}"#
     );
     assert_eq!(

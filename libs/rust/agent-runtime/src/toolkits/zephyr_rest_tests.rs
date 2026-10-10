@@ -379,3 +379,20 @@ fn two_clients_never_share_origin_or_token() {
         second.headers().get(reqwest::header::AUTHORIZATION)
     );
 }
+
+/// #1207 review round 2: every SDK use of `python_str` is an f-string or a
+/// `requests` query parameter — Python `str()` — so a non-scalar renders as
+/// `CPython` prints it, not as JSON.
+#[test]
+fn python_str_is_cpython_str() {
+    use super::families::zephyr_rest::client::python_str;
+    assert_eq!(python_str(None), "None");
+    assert_eq!(python_str(Some(&json!("step"))), "step");
+    assert_eq!(python_str(Some(&json!(false))), "False");
+    assert_eq!(python_str(Some(&json!(1e22))), "1e+22");
+    assert_eq!(python_str(Some(&json!(0.5))), "0.5");
+    assert_eq!(
+        python_str(Some(&json!({"step": "Open", "data": [1, null]}))),
+        "{'data': [1, None], 'step': 'Open'}"
+    );
+}

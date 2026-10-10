@@ -199,7 +199,7 @@ pub(in crate::toolkits) fn parse_tests(tests: &[Value]) -> Vec<Vec<String>> {
 pub(in crate::toolkits) fn parsed_tests_repr(tests: &[Value]) -> String {
     let rows = parse_tests(tests)
         .iter()
-        .map(|row| super::render::py_repr_str_list(row))
+        .map(|row| crate::toolkits::families::python_repr::repr_str_list(row))
         .collect::<Vec<_>>();
     format!("[{}]", rows.join(", "))
 }

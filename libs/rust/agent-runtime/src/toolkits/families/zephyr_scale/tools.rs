@@ -20,9 +20,8 @@ use crate::toolkits::policy::ToolAdmissionPolicy;
 use super::client::{FAMILY, Query, ZephyrScaleClient};
 use super::config::ZephyrScaleToolkitConfig;
 use super::folders::{FolderTree, find_by_name, parsed_tests_repr};
-use super::render::{
-    OrderedObject, json_dumps_indent, py_repr, py_repr_str_list, py_str, reply_str,
-};
+use super::render::{OrderedObject, json_dumps_indent, reply_str};
+use crate::toolkits::families::python_repr;
 
 const TOOLKIT_TYPE: &str = "zephyr_scale";
 const MAX_CASES_PER_BATCH: usize = 50;
@@ -606,7 +605,7 @@ async fn dispatch(
                 .paginated(&["testcases", key, "teststeps"], Vec::new())
                 .await
                 .map_err(adk)?;
-            let lines = steps.iter().map(py_str).collect::<Vec<_>>();
+            let lines = steps.iter().map(python_repr::str_of).collect::<Vec<_>>();
             text(format!("Extracted test steps: {}", lines.join("\n")))
         }
         ScaleTool::CreateTestCase => create_test_case(api, args).await,
@@ -645,7 +644,7 @@ async fn dispatch(
             let folders = api.paginated(&["folders"], params).await.map_err(adk)?;
             text(format!(
                 "Extracted folders: {}",
-                py_repr(&Value::Array(folders))
+                python_repr::repr(&Value::Array(folders))
             ))
         }
         ScaleTool::UpdateTestCase => update_test_case(api, args).await,
@@ -695,7 +694,7 @@ async fn dispatch(
                 .paginated(&["testcases", key, "versions"], params)
                 .await
                 .map_err(adk)?;
-            let lines = versions.iter().map(py_str).collect::<Vec<_>>();
+            let lines = versions.iter().map(python_repr::str_of).collect::<Vec<_>>();
             text(format!(
                 "Versions for test case `{key}`: {}",
                 lines.join("\n")
@@ -921,7 +920,7 @@ async fn create_test_cases(
         };
         results.push(Value::String(line));
     }
-    effect_text(py_repr(&Value::Array(results)))
+    effect_text(python_repr::repr(&Value::Array(results)))
 }
 
 /// The SDK's `add_test_steps`: one `POST testcases/{key}/teststeps`. Its
@@ -984,7 +983,7 @@ async fn update_test_steps(
         else {
             return text(format!(
                 "Step index {} is out of range. Valid range: 0-{last}",
-                py_str(index)
+                python_repr::str_of(index)
             ));
         };
         let Some(inline) = steps[position]
@@ -993,7 +992,7 @@ async fn update_test_steps(
         else {
             return text(format!(
                 "Step at index {} does not have an inline field",
-                py_str(index)
+                python_repr::str_of(index)
             ));
         };
         for field in ["description", "testData", "expectedResult"] {
@@ -1511,7 +1510,7 @@ async fn search_test_cases(
 fn search_message(request: &SearchRequest<'_>, count: usize) -> String {
     let mut message = format!("Found {count} test cases");
     let labels = request.labels.as_ref().map(|labels| {
-        py_repr_str_list(
+        python_repr::repr_str_list(
             &labels
                 .iter()
                 .map(|label| (*label).to_owned())
@@ -1574,7 +1573,7 @@ fn matches_case(
                 members.sort_by(|left, right| left.0.cmp(right.0));
                 members
                     .into_iter()
-                    .map(|(_, value)| py_repr(value))
+                    .map(|(_, value)| python_repr::repr(value))
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -1706,7 +1705,7 @@ fn python_order(left: &Value, right: &Value) -> Ordering {
             (Some(left), Some(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
             _ => rank(left)
                 .cmp(&rank(right))
-                .then_with(|| py_repr(left).cmp(&py_repr(right))),
+                .then_with(|| python_repr::repr(left).cmp(&python_repr::repr(right))),
         },
     }
 }

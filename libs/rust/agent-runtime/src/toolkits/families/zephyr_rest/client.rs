@@ -614,17 +614,15 @@ pub(in crate::toolkits) fn render(value: &Value) -> Result<String, ZephyrRestErr
     crate::canonical::to_string(value).map_err(|_| invalid_response())
 }
 
-/// Python's `f"{value}"` for a scalar read out of a provider object: strings
-/// as-is, `None`/`True`/`False` spelled the Python way, anything else as JSON.
+/// Python's `f"{value}"` (`str()`) of a value read out of a provider object
+/// or a tool argument: every SDK use is an f-string or a `requests` query
+/// parameter, both of which call `str()`, so a list, dict or float renders
+/// as `CPython` prints it (`python_repr::str_of`); a missing member is `None`.
 pub(in crate::toolkits) fn python_str(value: Option<&Value>) -> String {
-    match value {
-        None | Some(Value::Null) => "None".to_owned(),
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Bool(true)) => "True".to_owned(),
-        Some(Value::Bool(false)) => "False".to_owned(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(other) => crate::canonical::to_string(other).unwrap_or_default(),
-    }
+    value.map_or_else(
+        || "None".to_owned(),
+        crate::toolkits::families::python_repr::str_of,
+    )
 }
 
 /// A model-visible text result, refused when it would exceed the output bound.

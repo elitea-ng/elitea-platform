@@ -12,6 +12,7 @@ use regex::Regex;
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::python_repr;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -2601,16 +2602,11 @@ fn schema(kind: CarrierToolKind) -> Value {
 // Python-compatible projection helpers
 // ---------------------------------------------------------------------------
 
-/// `str(value)` for the JSON values Carrier returns; an absent value is
+/// `str(value)` for the JSON values Carrier returns (`python_repr::str_of`:
+/// lists, dicts and floats as `CPython` prints them); an absent value is
 /// Python's `None`.
 fn py_str(value: Option<&Value>) -> String {
-    match value {
-        None | Some(Value::Null) => "None".to_owned(),
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Bool(true)) => "True".to_owned(),
-        Some(Value::Bool(false)) => "False".to_owned(),
-        Some(other) => other.to_string(),
-    }
+    value.map_or_else(|| "None".to_owned(), python_repr::str_of)
 }
 
 /// `response.get(key, "")` rendered with `str`.
@@ -2632,7 +2628,7 @@ fn py_truthy(value: &Value) -> bool {
 
 /// `str(list_of_strings)`: `['a', 'b']`.
 fn py_list(values: &[String]) -> String {
-    crate::toolkits::families::python_repr::repr_str_list(values)
+    python_repr::repr_str_list(values)
 }
 
 fn keep_fields(source: &Value, fields: &[&str]) -> Map<String, Value> {
@@ -2754,4 +2750,33 @@ fn invalid_arguments() -> AdkError {
         "carrier.arguments.invalid",
         "the Carrier tool arguments are invalid",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::py_str;
+
+    /// #1207 review round 2: `str()` of a list, a dict or an exponent float
+    /// is `CPython`'s text, not JSON.
+    #[test]
+    fn py_str_matches_cpython_str() {
+        assert_eq!(py_str(None), "None");
+        assert_eq!(py_str(Some(&json!(null))), "None");
+        assert_eq!(py_str(Some(&json!("eu-west"))), "eu-west");
+        assert_eq!(py_str(Some(&json!(true))), "True");
+        assert_eq!(py_str(Some(&json!(3))), "3");
+        assert_eq!(py_str(Some(&json!(1.0))), "1.0");
+        assert_eq!(py_str(Some(&json!(1e16))), "1e+16");
+        assert_eq!(py_str(Some(&json!(2.5e-7))), "2.5e-07");
+        assert_eq!(
+            py_str(Some(&json!(["a", 1, null, false]))),
+            "['a', 1, None, False]"
+        );
+        assert_eq!(
+            py_str(Some(&json!({"b": "it's", "a": [1.5]}))),
+            "{'a': [1.5], 'b': \"it's\"}"
+        );
+    }
 }

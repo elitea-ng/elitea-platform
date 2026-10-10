@@ -76,7 +76,7 @@ fn write_value(output: &mut String, value: &Value) {
 }
 
 /// A map's members in key-byte order, as `crate::canonical` writes them.
-fn sorted_members(object: &Map<String, Value>) -> Vec<(&str, &Value)> {
+pub(in crate::toolkits) fn sorted_members(object: &Map<String, Value>) -> Vec<(&str, &Value)> {
     let mut members = object
         .iter()
         .map(|(key, value)| (key.as_str(), value))
