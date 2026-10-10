@@ -250,6 +250,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
     let credentials = Arc::new(StaticCredentials::new(server.origin.clone()));
     let host = Arc::new(
         AgentHost::new(HostDeps {
+            http: crate::net::SharedHttp::new("0.1.0"),
             credentials: credentials.clone(),
             client_version: "0.1.0".into(),
             policy: policy.clone(),

@@ -135,6 +135,8 @@ impl Llm for GatewayModel {
         let response = self
             .http
             .post(format!("{}{CHAT_COMPLETIONS_ROUTE}", bearer.origin))
+            // The whole call, stream included, as when the client carried it.
+            .timeout(super::api::API_TIMEOUT)
             .bearer_auth(&bearer.token)
             .header(PROJECT_HEADER, self.project_id.to_string())
             .header(EXECUTION_HEADER, &self.execution_id)

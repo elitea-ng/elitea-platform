@@ -9,7 +9,7 @@ apps/elitea-web  --vite build --mode desktop-->  apps/elitea-web/dist-desktop
                                                         |  bundled as assets
 apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
         |   credentials.json (refresh token)|
-        |   loopback sign-in listener       +-- HTTP plugin --> your deployment
+        |   loopback sign-in listener       +-- one pooled HTTPS client --> your deployment
         +-- system browser (RFC 8252)
 ```
 
@@ -184,14 +184,25 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   URL to send conversation data to another host.
 - The opener hands only `https` and loopback `http` URLs to the system browser.
 - The CSP allows scripts from `self` only. The webview reaches the deployment
-  through the HTTP plugin (a Rust-side request, so no CORS change is needed on
-  the deployment). `capabilities/default.json` grants that plugin no URL at
-  all; `src-tauri/src/http_scope.rs` adds a runtime capability scoped to the
-  connected deployment's origin (at launch for the stored one, and on every
-  connect). Runtime capabilities cannot be removed, so scopes accumulate per
-  process: an origin connected earlier stays reachable until the app
-  restarts. The bearer token is still attached only to the current origin
+  through the host's `http_fetch` command (`src-tauri/src/net.rs`, IPC.md
+  "Network"): a Rust-side request, so no CORS change is needed on the
+  deployment. It only reaches the connected deployment's origin (granted at
+  launch for the stored one, and on every connect; origins accumulate per
+  process, so one connected earlier stays reachable until the app restarts),
+  never follows a redirect, drops the fetch spec's forbidden headers and keeps
+  no cookies. The bearer token is still attached only to the current origin
   (checked in the webview's HTTP core and SSE client).
+- **One HTTP client.** Every host call (discovery, the token endpoint, the D0
+  platform and model calls) and every webview request share one pooled
+  `reqwest` client (keep-alive, HTTP/2). It is built once, on a background
+  thread at launch: building a client loads the TLS roots from the system
+  trust settings (85–470 ms, serialised across the process), which the HTTP
+  plugin used before did on every request, along with a new TCP + TLS
+  connection. Deadlines are per request (10 s token/discovery, 90 s platform
+  and model), never client-wide, so SSE streams stay open.
+- **Launch.** When a session is stored, the host starts the launch's token
+  refresh in its setup, while the window and the page load; the page's first
+  token request joins it, and the refresh token still rotates once.
 
 ### Diagnostics
 

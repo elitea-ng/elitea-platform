@@ -155,6 +155,8 @@ pub struct TurnStatus {
 
 /// What the host is built from.
 pub struct HostDeps {
+    /// The app's one HTTP client (src/net.rs).
+    pub http: crate::net::SharedHttp,
     pub credentials: Arc<dyn Credentials>,
     pub client_version: String,
     pub policy: Arc<dyn PolicySource>,
@@ -566,10 +568,11 @@ impl AgentHost {
     ///
     /// The HTTP client cannot be built.
     pub fn new(deps: HostDeps) -> Result<Self, TurnError> {
-        let api = Arc::new(PlatformApi::new(
+        let api = Arc::new(PlatformApi::shared(
+            deps.http.clone(),
             deps.credentials.clone(),
             &deps.client_version,
-        )?);
+        ));
         Ok(Self {
             deps,
             api,

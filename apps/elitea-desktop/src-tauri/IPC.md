@@ -43,6 +43,37 @@ upgrade `host_state` reports signed out, and the old device session is revoked
 from the web's Settings › Devices or idles out (README, "Upgrading from a
 keychain build").
 
+## Network (`src/net.rs`)
+
+The webview's `fetch` (`apps/elitea-web/src/shared/desktop/hostFetch.ts`).
+Every request goes out on the host's one pooled HTTP client, the same one the
+host's own calls use. It replaces `tauri-plugin-http`, which built a client
+(and loaded the TLS roots) for every request.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `http_fetch` | one **binary** IPC body: a 4-byte big-endian length `n`, `n` bytes of JSON `{id, method, url, headers: [name, value][]}`, then the request body | `{status, statusText, headers: [name, value][], url, hasBody}`, the response head. The body stays with the host under `id` until it has been read to the end or cancelled. |
+| `http_read_body` | `{id}` | the next chunk as raw bytes (an `ArrayBuffer`); **zero bytes means the end**, and the id is then forgotten |
+| `http_cancel` | `{id}` | `null`. Aborts a pending `http_fetch`, or ends a body or stream; a pending read rejects with `aborted`. An unknown id is a no-op. |
+
+`id` is chosen by the page, so an abort can name a request before its head
+arrives; an id still in flight is refused. The rules:
+
+- only `http`/`https` URLs on an origin the host granted (the stored
+  deployment at launch, then each `host_connect`), and no userinfo;
+  otherwise `url_not_allowed`, and nothing is sent;
+- redirects are never followed: a 3xx is returned as it is;
+- the fetch spec's forbidden request headers (`Cookie`, `Host`, `Origin`,
+  `Content-Length`, `Sec-*`, `Proxy-*`, …) are dropped; `Origin:
+  tauri://localhost` is sent; there is no cookie jar;
+- a null-body status (101, 103, 204, 205, 304) has `hasBody: false` and
+  nothing to read;
+- a page reload cancels everything the old page had in flight.
+
+Errors reject with `{code, message}`: `aborted` (the page maps it to an
+`AbortError`), `url_not_allowed`, `invalid_request`, `unknown_request`,
+`network` (mapped to a `TypeError`, as `fetch` throws).
+
 ## Workspaces (`src/local_commands.rs`, `src/workspaces.rs`)
 
 ```ts
