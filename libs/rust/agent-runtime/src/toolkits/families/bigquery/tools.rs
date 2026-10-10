@@ -871,8 +871,7 @@ fn screen_raw_filter(text: &str) -> Result<(), String> {
                     .ok_or_else(|| "an unbalanced ')'".to_owned())?;
                 index += 1;
             }
-            b'\'' | b'"' => index = skip_quoted(bytes, index, false)?,
-            b'`' => index = skip_quoted(bytes, index, false)?,
+            b'\'' | b'"' | b'`' => index = skip_quoted(bytes, index, false)?,
             byte if byte.is_ascii_alphanumeric() || byte == b'_' => {
                 let start = index;
                 while index < bytes.len()
