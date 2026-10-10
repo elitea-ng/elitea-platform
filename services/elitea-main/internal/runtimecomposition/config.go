@@ -92,6 +92,12 @@ type Config struct {
 	SigningKeyFile          string
 	VerificationKeyringFile string
 
+	// VectorIntrospectionClients are the client certificate identities
+	// admitted to elitea.vector.v1.TokenIntrospectionService on the control
+	// listener (ELITEA_VECTOR_INTROSPECTION_CLIENTS, ADR-0031). Empty leaves
+	// the service unregistered.
+	VectorIntrospectionClients []string
+
 	ControlAddress string
 	OutputAddress  string
 	ContentAddress string
@@ -127,6 +133,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		}
 		if value, _ := lookup("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED"); value != "" && value != "false" {
 			return Config{}, errors.New("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED requires ELITEA_RUNTIME_ENABLED=true")
+		}
+		if value, _ := lookup(VectorIntrospectionClientsEnv); strings.TrimSpace(value) != "" {
+			return Config{}, errors.New(VectorIntrospectionClientsEnv + " requires ELITEA_RUNTIME_ENABLED=true: the service is served on the runtime control listener")
 		}
 		return Config{}, nil
 	case "true":
@@ -252,6 +261,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if config.NATSMaterial, err = natsconn.FromEnv(runtimeNATSPrefix, func(name string) (string, bool) { return lookup(name) }); err != nil {
+		return Config{}, err
+	}
+	if config.VectorIntrospectionClients, err = vectorIntrospectionClients(lookup); err != nil {
 		return Config{}, err
 	}
 	if raw, ok := lookup("ELITEA_RUNTIME_SANDBOX_AUDIENCES"); ok && raw != "" {

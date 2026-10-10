@@ -1737,11 +1737,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ActorTokenIssuer:                 formGraph,
 			ProjectTokenValidator:            formGraph,
 			ProjectSystemTokenSource:         formGraph,
-			PermissionResolver:               legacyrbac.NewPostgresResolver(pool),
-			Logger:                           logger,
-			ObjectStore:                      objectStore,
-			ToolkitCatalogue:                 toolkitCatalogue,
-			WorkerToolkitCapability:          workerToolkitCapability,
+			// elitea-vector's token introspection (ADR-0031) reads callback
+			// grants over the main pool, where the minting facades write them.
+			CallbackTokenFacts:      dbrepos.NewCallbackTokenGrants(pool),
+			PermissionResolver:      legacyrbac.NewPostgresResolver(pool),
+			Logger:                  logger,
+			ObjectStore:             objectStore,
+			ToolkitCatalogue:        toolkitCatalogue,
+			WorkerToolkitCapability: workerToolkitCapability,
 			// pipeline.run.succeeded/failed — see
 			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
 			PipelineRuns: pipelineRunsRepo,
