@@ -45,6 +45,7 @@ func (s stubProvisioner) Provision(
 func (s stubProvisioner) Deprovision(
 	ctx context.Context,
 	projectID int64,
+	_ ...projectprovisioning.DeprovisionOption,
 ) (projectprovisioning.Result, error) {
 	return s.deprovision(ctx, projectID)
 }
@@ -455,6 +456,24 @@ func TestDeleteProjectAnswersConflictWhileWorkIsActive(t *testing.T) {
 	body := recorder.Body.String()
 	if !strings.Contains(body, "stop them or wait") || !strings.Contains(body, "retry") {
 		t.Fatalf("the 409 does not tell the caller to stop or wait and retry: %s", body)
+	}
+}
+
+// Another delete of the same project is running: 409, and a joined error that
+// carries the sentinel (the reconciler and the ensurer join other leftovers)
+// still maps to it.
+func TestDeleteProjectAnswersConflictWhileAnotherDeleteIsRunning(t *testing.T) {
+	for name, err := range map[string]error{
+		"plain":  projectprovisioning.ErrProjectDeletionInProgress,
+		"joined": errors.Join(projectprovisioning.ErrProjectDeletionInProgress, errors.New("other")),
+	} {
+		recorder := deleteWith(t, projectprovisioning.Result{}, err)
+		if recorder.Code != http.StatusConflict {
+			t.Fatalf("%s: status = %d, want 409; body=%s", name, recorder.Code, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), "deletion already in progress") {
+			t.Fatalf("%s: the 409 does not say so: %s", name, recorder.Body.String())
+		}
 	}
 }
 

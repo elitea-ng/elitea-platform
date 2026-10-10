@@ -216,6 +216,11 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, projectprovisioning.ErrProjectNotFound):
 		apierr.WriteStatus(w, http.StatusNotFound, "project not found")
 		return
+	case errors.Is(err, projectprovisioning.ErrProjectDeletionInProgress):
+		// Another delete of this project holds the per-project delete lock. This
+		// call changed nothing; the one that holds the lock is finishing the job.
+		apierr.WriteStatus(w, http.StatusConflict, "deletion already in progress")
+		return
 	case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
 		// The pre-walk refusal, and only that: Deprovision answers it before it
 		// changes anything, so "retry later" is true. A leftover found AFTER the

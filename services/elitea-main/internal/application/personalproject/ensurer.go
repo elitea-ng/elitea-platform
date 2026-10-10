@@ -72,7 +72,7 @@ import (
 // exactly that state by deleting and recreating.
 type Provisioner interface {
 	Provision(ctx context.Context, request projectprovisioning.Request) (projectprovisioning.Result, error)
-	Deprovision(ctx context.Context, projectID int64) (projectprovisioning.Result, error)
+	Deprovision(ctx context.Context, projectID int64, options ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error)
 }
 
 // AsyncEnsurer is the half of *Ensurer a request path holds: ask for the
@@ -634,7 +634,13 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 		if candidate.owned && (!candidate.created || candidate.deleting) {
 			e.logger.WarnContext(ctx, "removing an unfinished personal project before recreating it",
 				"user_id", userID, "project_id", candidate.id, "deleting", candidate.deleting)
-			if _, err := e.provisioner.Deprovision(ctx, candidate.id); err != nil {
+			// An owned personal project is removed here only because it is
+			// unfinished (create_success=false) or already tombstoned; nothing can
+			// be running in either, so the delete skips its active-work count
+			// (it still tombstones the project, so no work is admitted). Counting
+			// would refuse the repair on a stray job row and strand the user
+			// without a personal project. An explicit DELETE keeps the count.
+			if _, err := e.provisioner.Deprovision(ctx, candidate.id, projectprovisioning.SkipActiveWorkCheck()); err != nil {
 				switch {
 				case onlyVectorStoreNotDropped(err):
 					// The row is gone, which is all the repair needs. The
@@ -644,6 +650,11 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 					// bytes left behind fail the repair as they always did.
 					e.logger.WarnContext(ctx, "unfinished personal project removed, but its PgVector database was not dropped",
 						"user_id", userID, "project_id", candidate.id, "err", err)
+				case errors.Is(err, projectprovisioning.ErrProjectDeletionInProgress):
+					// Another delete of this project (a retry, the tombstone
+					// reconciler, an operator) is finishing it. Not a failure of
+					// the repair, and not something to race: ask again shortly.
+					return 0, fmt.Errorf("personalproject: unfinished project %d is already being deleted by another request; try again later: %w", candidate.id, err)
 				case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
 					return 0, fmt.Errorf("personalproject: cannot remove unfinished project %d yet: it still has active runs; retry once they finish: %w", candidate.id, err)
 				default:

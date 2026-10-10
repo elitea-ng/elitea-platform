@@ -28,7 +28,7 @@ type Handler struct {
 // this package does not depend on the provisioner's concrete constructor.
 type ProjectProvisioner interface {
 	Provision(ctx context.Context, request projectprovisioning.Request) (projectprovisioning.Result, error)
-	Deprovision(ctx context.Context, projectID int64) (projectprovisioning.Result, error)
+	Deprovision(ctx context.Context, projectID int64, options ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error)
 }
 
 // WithProvisioner supplies the project-create pipeline. Without it the create

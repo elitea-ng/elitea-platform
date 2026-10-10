@@ -10,14 +10,17 @@ package projectprovisioning
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
 )
 
 // ErrProjectNotFound reports a delete for a project id that has no row.
@@ -59,6 +62,26 @@ var ErrArtifactsNotRemoved = errors.New("projectprovisioning: artifact buckets w
 // route answers is true.
 var ErrProjectWorkActive = errors.New("projectprovisioning: project has active runs; stop them or wait for them to finish, then retry the delete")
 
+// ErrProjectDeletionInProgress reports a delete refused because another delete
+// of the same project is running right now, in this process or in another
+// replica (a client retry, a second operator, the tombstone reconciler). Deletes
+// of one project are serialized by a per-project session advisory lock; the
+// loser does not queue behind the winner, it is told to try again later. The
+// route answers 409 "deletion already in progress". Nothing was changed by the
+// refused call.
+var ErrProjectDeletionInProgress = errors.New("projectprovisioning: a delete of this project is already in progress; try again later")
+
+// deleteLockNamespace is the first half of the two-integer advisory lock key a
+// delete holds for its whole duration: ASCII "PDEL". The second half is the
+// project id (centry.project's key is an int4). It is deliberately NOT the
+// "ELIT" namespace infra/pgvector uses for its provision/drop lock: that lock is
+// taken on the PgVector bootstrap connection, possibly on the same server, and
+// Deprovision calls the drop WHILE it holds this one. A shared key would make
+// the drop wait for a lock its own caller holds (and only a session-level
+// advisory lock held by a different session blocks, so it would be a timeout,
+// not an error anyone could read). Distinct namespaces cannot collide.
+const deleteLockNamespace int32 = 0x5044454c
+
 // ErrVectorStoreNotDropped reports a delete that removed the project and could
 // not drop its PgVector database or role. The indexed data is still in
 // Postgres. A second delete answers 404 because the project is gone, so the
@@ -77,9 +100,15 @@ var vectorDropTimeout = 2 * time.Minute
 // copy of the same set), not a copy. QUARANTINED is terminal for this purpose: a
 // quarantined job is not executing, and counting it would make a project with
 // one stuck job undeletable.
+//
+// A job counts when the project is EITHER side of it: resource_project_id (whose
+// resources the job uses) or projection_project_id (where it projects its
+// results). That is exactly the pair the admission trigger of shared/0160
+// guards, so a job the trigger would have refused to admit is a job the fence
+// waits for.
 var activeWorkSQL = `
 SELECT count(*) FROM elitea_runtime.execution_jobs
-WHERE resource_project_id = $1
+WHERE (resource_project_id = $1 OR projection_project_id = $1)
   AND state IN (` + nonTerminalStatesSQL() + `)`
 
 func nonTerminalStatesSQL() string {
@@ -95,22 +124,106 @@ type queryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// activeWork counts the project's non-terminal executions. A deployment whose
-// runtime schema is not installed has none.
+// activeWork counts the project's non-terminal executions. The runtime schema is
+// part of the shared migration corpus (0030), and shared/0160 (which the
+// tombstone column comes from) needs the table for its trigger, so the table is
+// always there when this runs.
 func activeWork(ctx context.Context, q queryRower, projectID int64) (int64, error) {
-	var present bool
-	if err := q.QueryRow(ctx,
-		`SELECT to_regclass('elitea_runtime.execution_jobs') IS NOT NULL`).Scan(&present); err != nil {
-		return 0, err
-	}
-	if !present {
-		return 0, nil
-	}
 	var n int64
 	if err := q.QueryRow(ctx, activeWorkSQL, projectID).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
+}
+
+// DeprovisionOption adjusts one Deprovision call.
+type DeprovisionOption func(*deprovisionConfig)
+
+type deprovisionConfig struct {
+	skipActiveWork bool
+}
+
+// SkipActiveWorkCheck makes Deprovision tombstone the project without counting
+// its non-terminal work first. For the one caller that deletes a project it
+// knows cannot be running anything: the personal-project ensurer repairing a
+// project whose creation never finished (create_success=false). The tombstone
+// is still set, so no new work is admitted; only the "refuse while work is
+// active" step is skipped. An explicit DELETE request never passes it.
+func SkipActiveWorkCheck() DeprovisionOption {
+	return func(c *deprovisionConfig) { c.skipActiveWork = true }
+}
+
+// deletionState is what the fence records on the tombstone
+// (centry.project.deleting_state), together with deleting_at, because the walk
+// destroys what it is derived from. A retry reads it and never re-derives it:
+// by then the configuration row that says "this project had a vector store" is
+// gone, and asking again would turn a leaked database into "skipped".
+type deletionState struct {
+	HadVectorStore bool   `json:"had_vector_store"`
+	VectorDatabase string `json:"vector_database,omitempty"`
+}
+
+// cautiousDeletionState is the state assumed when none was recorded or it cannot
+// be read: the project had a store. The cautious answer reports a drop that
+// could not run instead of a silent skip.
+func cautiousDeletionState(projectID int64) deletionState {
+	return deletionState{HadVectorStore: true, VectorDatabase: pgvector.ProjectDatabaseName(projectID)}
+}
+
+// deriveDeletionState reads, from the live configuration, whether the project has
+// a vector store. It is only meaningful BEFORE the walk removes the configuration
+// row, which is why the fence calls it and records the answer.
+func (p *Provisioner) deriveDeletionState(ctx context.Context, projectID int64) deletionState {
+	if p.vectorStore == nil {
+		return deletionState{}
+	}
+	had, err := p.vectorStore.ProjectHasVectorStore(ctx, projectID)
+	if err != nil {
+		// Unknown is treated as "had one".
+		p.logger.WarnContext(ctx, "could not tell whether the project had a vector store",
+			"project_id", projectID, "err", err)
+		return cautiousDeletionState(projectID)
+	}
+	if !had {
+		return deletionState{}
+	}
+	return deletionState{HadVectorStore: true, VectorDatabase: pgvector.ProjectDatabaseName(projectID)}
+}
+
+// lockDelete takes the per-project delete lock: a SESSION advisory lock on a
+// connection held for the whole delete (a transaction-scoped lock would end
+// with the fence transaction, long before the walk). The attempt does not wait:
+// a delete already running makes this one ErrProjectDeletionInProgress. The
+// returned release must run when the delete is over; it unlocks, and discards
+// the connection if it cannot prove the lock is gone.
+func (p *Provisioner) lockDelete(ctx context.Context, projectID int64) (release func(), err error) {
+	connection, err := p.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("projectprovisioning: acquire delete lock connection for project %d: %w", projectID, err)
+	}
+	var locked bool
+	if err := connection.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock($1, $2)`, deleteLockNamespace, int32(projectID)).Scan(&locked); err != nil {
+		// The state of the lock is unknown: do not hand the connection back.
+		_ = connection.Conn().Close(context.WithoutCancel(ctx))
+		connection.Release()
+		return nil, fmt.Errorf("projectprovisioning: take delete lock for project %d: %w", projectID, err)
+	}
+	if !locked {
+		connection.Release()
+		return nil, ErrProjectDeletionInProgress
+	}
+	return func() {
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		var unlocked bool
+		if err := connection.QueryRow(unlockCtx,
+			`SELECT pg_advisory_unlock($1, $2)`, deleteLockNamespace, int32(projectID)).Scan(&unlocked); err != nil || !unlocked {
+			// Closing the session releases a session lock; the pool replaces it.
+			_ = connection.Conn().Close(unlockCtx)
+		}
+		connection.Release()
+	}, nil
 }
 
 // fenceDelete is the first thing an explicit delete does (#1211): it decides, in
@@ -134,47 +247,68 @@ func activeWork(ctx context.Context, q queryRower, projectID int64) (int64, erro
 // earlier attempt and nothing could have been admitted since, so it continues
 // the walk instead of counting again. A project with no row (a leftover schema
 // or bucket) has nothing to fence.
-func (p *Provisioner) fenceDelete(ctx context.Context, projectID int64) error {
+//
+// The fence also RECORDS the deletion state (deletionState) in the same UPDATE
+// that sets deleting_at. A retried delete returns the recorded state instead of
+// deriving it again. A project with no row has nothing recorded, and its state is
+// derived from whatever configuration is left.
+func (p *Provisioner) fenceDelete(ctx context.Context, projectID int64, skipActiveWork bool) (deletionState, error) {
 	transaction, err := p.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("projectprovisioning: begin delete fence for project %d: %w", projectID, err)
+		return deletionState{}, fmt.Errorf("projectprovisioning: begin delete fence for project %d: %w", projectID, err)
 	}
 	defer func() { _ = transaction.Rollback(context.WithoutCancel(ctx)) }()
 
-	var tombstone *time.Time
+	var (
+		tombstone *time.Time
+		recorded  []byte
+	)
 	err = transaction.QueryRow(ctx,
-		`SELECT deleting_at FROM centry.project WHERE id = $1 FOR UPDATE`, projectID).Scan(&tombstone)
+		`SELECT deleting_at, deleting_state FROM centry.project WHERE id = $1 FOR UPDATE`, projectID,
+	).Scan(&tombstone, &recorded)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return nil
+		return p.deriveDeletionState(ctx, projectID), nil
 	case err != nil:
-		return fmt.Errorf("projectprovisioning: lock project %d: %w", projectID, err)
+		return deletionState{}, fmt.Errorf("projectprovisioning: lock project %d: %w", projectID, err)
 	case tombstone != nil:
-		return nil
+		var state deletionState
+		if len(recorded) == 0 || json.Unmarshal(recorded, &state) != nil {
+			p.logger.WarnContext(ctx, "tombstoned project has no readable deletion state; assuming it had a vector store",
+				"project_id", projectID)
+			return cautiousDeletionState(projectID), nil
+		}
+		return state, nil
 	}
 
 	// Only a deployment with a vector store has a database that running work
 	// depends on. Without one the delete keeps its established behaviour (the
 	// project's job rows go with it), so there is nothing to wait for.
-	if p.vectorStore != nil {
+	if p.vectorStore != nil && !skipActiveWork {
 		active, err := activeWork(ctx, transaction, projectID)
 		if err != nil {
-			return fmt.Errorf("projectprovisioning: check active work for project %d: %w", projectID, err)
+			return deletionState{}, fmt.Errorf("projectprovisioning: check active work for project %d: %w", projectID, err)
 		}
 		if active > 0 {
 			p.logger.WarnContext(ctx, "project delete refused: work is active",
 				"project_id", projectID, "active_runs", active)
-			return ErrProjectWorkActive
+			return deletionState{}, ErrProjectWorkActive
 		}
 	}
+	state := p.deriveDeletionState(ctx, projectID)
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return deletionState{}, fmt.Errorf("projectprovisioning: encode deletion state for project %d: %w", projectID, err)
+	}
 	if _, err := transaction.Exec(ctx,
-		`UPDATE centry.project SET deleting_at = now() WHERE id = $1`, projectID); err != nil {
-		return fmt.Errorf("projectprovisioning: mark project %d deleting: %w", projectID, err)
+		`UPDATE centry.project SET deleting_at = now(), deleting_state = $2::jsonb WHERE id = $1`,
+		projectID, string(encoded)); err != nil {
+		return deletionState{}, fmt.Errorf("projectprovisioning: mark project %d deleting: %w", projectID, err)
 	}
 	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("projectprovisioning: commit delete fence for project %d: %w", projectID, err)
+		return deletionState{}, fmt.Errorf("projectprovisioning: commit delete fence for project %d: %w", projectID, err)
 	}
-	return nil
+	return state, nil
 }
 
 // Deprovision removes a project and everything provisioning created for it.
@@ -219,9 +353,18 @@ func (p *Provisioner) fenceDelete(ctx context.Context, projectID int64) error {
 //
 // Every row that references centry.project(id) goes in the same transaction as
 // the project row. See removeProjectModel and referencingDeletes.
-func (p *Provisioner) Deprovision(ctx context.Context, projectID int64) (Result, error) {
-	if projectID <= 0 {
+//
+// THE DELETE LOCK. Deprovision holds a per-project session advisory lock for its
+// whole duration, so two deletes of one project never walk together. The second
+// gets ErrProjectDeletionInProgress at once rather than racing the first through
+// the same destructive steps.
+func (p *Provisioner) Deprovision(ctx context.Context, projectID int64, options ...DeprovisionOption) (Result, error) {
+	if projectID <= 0 || projectID > math.MaxInt32 {
 		return Result{}, ErrProjectNotFound
+	}
+	var config deprovisionConfig
+	for _, option := range options {
+		option(&config)
 	}
 	// The vault is required here for the same reason Provision requires it: a
 	// delete that skipped the vault would leave rows keyed `project-<id>` with
@@ -229,6 +372,12 @@ func (p *Provisioner) Deprovision(ctx context.Context, projectID int64) (Result,
 	if p.pool == nil || p.vault == nil {
 		return Result{}, errors.New("projectprovisioning: provisioner is not configured")
 	}
+
+	release, err := p.lockDelete(ctx, projectID)
+	if err != nil {
+		return Result{}, err
+	}
+	defer release()
 
 	// A project is present when its row is there OR when its schema is there
 	// OR when it still has a live artifact bucket. The row alone would make
@@ -263,25 +412,18 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1)
 	// happen, and FORCE-dropping the database would kill the work mid-write.
 	// Everything below this line runs on a project that is already tombstoned, so
 	// a step that fails leaves the tombstone and a retry resumes here.
-	if err := p.fenceDelete(ctx, projectID); err != nil {
+	//
+	// Whether the project had a vector store comes back from the fence, which
+	// either derived it just now (before the walk removes the configuration row)
+	// or read what the first attempt recorded. The drop needs it to tell "nothing
+	// to drop" from "a database that cannot be dropped because the bootstrap is
+	// gone", and a retry must not re-derive it from a configuration the previous
+	// attempt already removed.
+	deletion, err := p.fenceDelete(ctx, projectID, config.skipActiveWork)
+	if err != nil {
 		return Result{}, err
 	}
-
-	// Whether the project had a vector store at all, read BEFORE the walk removes
-	// its configuration row. The drop needs it to tell "nothing to drop" from "a
-	// database that cannot be dropped because the bootstrap is gone".
-	hadVectorStore := true
-	if p.vectorStore != nil {
-		had, err := p.vectorStore.ProjectHasVectorStore(ctx, projectID)
-		if err != nil {
-			// Unknown is treated as "had one": the cautious answer reports a
-			// drop that could not run instead of a silent skip.
-			p.logger.WarnContext(ctx, "could not tell whether the project had a vector store",
-				"project_id", projectID, "err", err)
-		} else {
-			hadVectorStore = had
-		}
-	}
+	hadVectorStore := deletion.HadVectorStore
 
 	// removeSystemUser deletes by id, so the identity has to be resolved first.
 	// An absent row is not an error: a project provisioned before this step

@@ -261,8 +261,8 @@ type deprovisionOutcomeProvisioner struct {
 	outcome error
 }
 
-func (p deprovisionOutcomeProvisioner) Deprovision(ctx context.Context, projectID int64) (projectprovisioning.Result, error) {
-	result, err := p.Provisioner.Deprovision(ctx, projectID)
+func (p deprovisionOutcomeProvisioner) Deprovision(ctx context.Context, projectID int64, options ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error) {
+	result, err := p.Provisioner.Deprovision(ctx, projectID, options...)
 	if err != nil {
 		return result, err
 	}
@@ -418,7 +418,7 @@ func (activeWorkProvisioner) Provision(context.Context, projectprovisioning.Requ
 	panic("provision must not run while the repair is blocked")
 }
 
-func (activeWorkProvisioner) Deprovision(context.Context, int64) (projectprovisioning.Result, error) {
+func (activeWorkProvisioner) Deprovision(context.Context, int64, ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error) {
 	return projectprovisioning.Result{}, projectprovisioning.ErrProjectWorkActive
 }
 
@@ -592,6 +592,7 @@ func resolveAuthorPersonalProjectID(
 		    SELECT 1 AS priority, project.id AS id
 		    FROM centry.project AS project
 		    WHERE project.name = 'project_user_' || $1::integer::text
+		      AND project.deleting_at IS NULL
 		      AND EXISTS (
 		          SELECT 1
 		          FROM public.auth_core__project_user_role AS assignment

@@ -45,3 +45,16 @@ func TestActiveWorkCountsEveryCapabilityAndNoTerminalState(t *testing.T) {
 		}
 	}
 }
+
+// The fence counts both sides of a job, the pair the admission trigger of
+// shared/0160 guards (#1211).
+func TestActiveWorkCountsResourceAndProjectionProject(t *testing.T) {
+	for _, column := range []string{"resource_project_id = $1", "projection_project_id = $1"} {
+		if !strings.Contains(activeWorkSQL, column) {
+			t.Errorf("the active-work count does not look at %s:\n%s", column, activeWorkSQL)
+		}
+	}
+	if !strings.Contains(activeWorkSQL, "resource_project_id = $1 OR projection_project_id = $1") {
+		t.Errorf("the two project columns are not alternatives:\n%s", activeWorkSQL)
+	}
+}
