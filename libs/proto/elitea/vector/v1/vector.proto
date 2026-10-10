@@ -1,0 +1,310 @@
+syntax = "proto3";
+
+// elitea.vector.v1 is the contract of elitea-vector, the only client of the
+// platform's Qdrant (ADR-0031 decision 1).
+//
+// AUTHENTICATION. A caller sends one of these:
+//
+//   * gRPC metadata `authorization: Bearer <token>`, where the token is a
+//     short-lived, project-bound token minted by elitea-main (a worker claim
+//     token or an engine callback token). elitea-vector verifies it through
+//     elitea.vector.v1.TokenIntrospectionService and caches the answer until
+//     the token expires.
+//   * No token, over an mTLS connection whose client certificate identity is
+//     in elitea-vector's administrator list (elitea-main). This path admits
+//     only Delete, DropProject, Count and ListIndexes.
+//
+// Anything else is refused with UNAUTHENTICATED. elitea-vector fails closed
+// when elitea-main is unreachable.
+//
+// SCOPE. elitea-vector injects the verified project as a `must` condition
+// into every read, write, count and delete. A request can narrow that scope
+// with its own filter but never widen it. Each request has a `project_id`
+// field: a token caller can leave it 0; a non-zero value that differs from
+// the token's project is refused with PERMISSION_DENIED. An administrator
+// caller must set it.
+//
+// LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space,
+// named `emb_<model_slug>_<dimension>`. Points carry the payload keys
+// `project_id`, `source`, `namespace_id`, `generation` (optional),
+// `document_key`, `document_version`, `parent_id`, `chunk_id`, `chunk_type`,
+// `acl`, `text` and `metadata`. A point id is UUIDv5, under namespace_id, of
+// (project_id, source, generation, document_key, chunk_id), so writes are
+// idempotent and never overwrite another project's or another source's
+// points.
+
+package elitea.vector.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
+
+// VectorService is served by elitea-vector over mTLS.
+service VectorService {
+  // Upsert writes points into one namespace. The first message is a header;
+  // every later message is a batch. The stream is one unit of
+  // authentication and scope, not one transaction: batches already written
+  // stay written when a later batch fails.
+  rpc Upsert(stream UpsertRequest) returns (UpsertResponse);
+  // Delete removes points of one namespace: all of them, those of some
+  // documents, or those of some generations.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  // DropProject removes every point of one project, in every collection and
+  // for every source. Only an administrator caller can use it.
+  rpc DropProject(DropProjectRequest) returns (DropProjectResponse);
+  // Search is a dense nearest-neighbour search by cosine similarity.
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // HybridSearch fuses a dense search and a BM25 search over `text` by
+  // weighted reciprocal rank fusion.
+  rpc HybridSearch(HybridSearchRequest) returns (HybridSearchResponse);
+  // Count counts the points that match a scope and a filter.
+  rpc Count(CountRequest) returns (CountResponse);
+  // ListIndexes lists the namespaces of one project, per embedding space.
+  rpc ListIndexes(ListIndexesRequest) returns (ListIndexesResponse);
+}
+
+// Source names the consumer that owns a namespace (payload key `source`).
+enum Source {
+  SOURCE_UNSPECIFIED = 0;
+  // A toolkit index (ADR-0030); namespace_id is the index_registry UUID.
+  SOURCE_TOOLKIT_INDEX = 1;
+  // A DeepWiki wiki; namespace_id is UUIDv5 of (project, wiki id).
+  SOURCE_DEEPWIKI = 2;
+  // Reserved for Inventory (ADR-0031 decision 7). Refused in V0.
+  SOURCE_INVENTORY = 3;
+}
+
+// EmbeddingSpace selects the collection `emb_<model_slug>_<dimension>`.
+message EmbeddingSpace {
+  // model_slug matches ^[a-z0-9][a-z0-9-]{0,62}$. The caller makes the slug
+  // from the model name; elitea-vector does not change it.
+  string model_slug = 1;
+  // dimension is the vector length, 1 to 65536.
+  uint32 dimension = 2;
+}
+
+// Namespace is the unit every operation works in.
+message Namespace {
+  Source source = 1;
+  // namespace_id is a UUID in canonical, lower-case text form.
+  string namespace_id = 2;
+  // generation is a build id for consumers that publish whole builds
+  // atomically (ADR-0031 decision 3). Empty means "no generation".
+  string generation = 3;
+}
+
+// Point is one chunk to write. project_id, source, namespace_id and
+// generation come from the Upsert header, never from the point.
+message Point {
+  string document_key = 1;
+  string document_version = 2;
+  string parent_id = 3;
+  string chunk_id = 4;
+  string chunk_type = 5;
+  // acl is written now and filtered later (ADR-0028).
+  repeated string acl = 6;
+  // text is the chunk text. It feeds the BM25 index of HybridSearch.
+  string text = 7;
+  // metadata_json is a JSON object returned in search output. It is not
+  // indexed. Empty means {}.
+  string metadata_json = 8;
+  // vector has exactly the dimension of the header's embedding space.
+  repeated float vector = 9;
+}
+
+// UpsertHeader is the first message of an Upsert stream.
+message UpsertHeader {
+  int64 project_id = 1;
+  EmbeddingSpace space = 2;
+  Namespace namespace = 3;
+}
+
+// UpsertBatch is one group of points. A batch holds at most 512 points.
+message UpsertBatch {
+  repeated Point points = 1;
+}
+
+message UpsertRequest {
+  oneof message {
+    UpsertHeader header = 1;
+    UpsertBatch batch = 2;
+  }
+}
+
+message UpsertResponse {
+  // upserted is the number of points written.
+  uint64 upserted = 1;
+  // collection is the Qdrant collection the points went into.
+  string collection = 2;
+}
+
+// DocumentKeys selects the points of some documents.
+message DocumentKeys {
+  repeated string document_keys = 1;
+}
+
+// Generations selects the points of some generations.
+message Generations {
+  repeated string generations = 1;
+}
+
+// GenerationsExcept selects the points of every generation but one: the
+// lazy clean-up after a publish (ADR-0031 decision 3).
+message GenerationsExcept {
+  string keep = 1;
+}
+
+// WholeNamespace selects every point of the namespace.
+message WholeNamespace {}
+
+message DeleteRequest {
+  int64 project_id = 1;
+  // space is optional. Without it, the delete applies to every collection.
+  EmbeddingSpace space = 2;
+  // namespace.generation is ignored here; use the selector.
+  Namespace namespace = 3;
+  oneof selector {
+    WholeNamespace whole_namespace = 4;
+    DocumentKeys documents = 5;
+    Generations generations = 6;
+    GenerationsExcept generations_except = 7;
+  }
+}
+
+message DeleteResponse {
+  // collections is the number of collections the delete was applied to.
+  uint32 collections = 1;
+}
+
+message DropProjectRequest {
+  int64 project_id = 1;
+}
+
+message DropProjectResponse {
+  uint32 collections = 1;
+}
+
+// StringList is a list of keyword values.
+message StringList {
+  repeated string values = 1;
+}
+
+// Condition is one match on a payload key.
+//
+// key is one of `document_key`, `document_version`, `parent_id`, `chunk_id`,
+// `chunk_type`, `acl`, or `metadata.<path>` where <path> matches
+// ^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$. Every other key, `project_id`
+// included, is refused with INVALID_ARGUMENT.
+message Condition {
+  string key = 1;
+  oneof match {
+    string keyword = 2;
+    StringList any = 3;
+    int64 integer = 4;
+    bool boolean = 5;
+  }
+}
+
+// Filter narrows a scope. elitea-vector adds it to the injected scope; it
+// never replaces the scope.
+message Filter {
+  repeated Condition must = 1;
+  repeated Condition should = 2;
+  repeated Condition must_not = 3;
+}
+
+// Scope selects the namespaces a read works in.
+message Scope {
+  int64 project_id = 1;
+  Source source = 2;
+  // namespace_ids holds 1 to 64 UUIDs.
+  repeated string namespace_ids = 3;
+  // generation, when set, narrows the read to one generation.
+  string generation = 4;
+}
+
+message ScoredPoint {
+  // id is the point's UUID.
+  string id = 1;
+  float score = 2;
+  int64 project_id = 3;
+  Source source = 4;
+  string namespace_id = 5;
+  string generation = 6;
+  string document_key = 7;
+  string document_version = 8;
+  string parent_id = 9;
+  string chunk_id = 10;
+  string chunk_type = 11;
+  repeated string acl = 12;
+  string text = 13;
+  string metadata_json = 14;
+}
+
+message SearchRequest {
+  Scope scope = 1;
+  EmbeddingSpace space = 2;
+  // vector has exactly the collection's dimension.
+  repeated float vector = 3;
+  Filter filter = 4;
+  // limit is 1 to 1000.
+  uint32 limit = 5;
+  // score_threshold, when set, drops results with a lower cosine similarity.
+  optional float score_threshold = 6;
+}
+
+message SearchResponse {
+  repeated ScoredPoint points = 1;
+}
+
+message HybridSearchRequest {
+  Scope scope = 1;
+  EmbeddingSpace space = 2;
+  repeated float vector = 3;
+  // text is the BM25 query.
+  string text = 4;
+  Filter filter = 5;
+  uint32 limit = 6;
+  // dense_weight and text_weight weight the reciprocal ranks. Both zero
+  // means the ADR-0031 defaults: 0.7 dense, 0.3 text.
+  float dense_weight = 7;
+  float text_weight = 8;
+  // prefetch_limit is how many candidates each side returns before fusion.
+  // Zero means 4 x limit, at most 1000.
+  uint32 prefetch_limit = 9;
+  // score_threshold applies to the dense side only.
+  optional float score_threshold = 10;
+}
+
+message HybridSearchResponse {
+  // points are ordered by fused score; ScoredPoint.score is the fused score.
+  repeated ScoredPoint points = 1;
+}
+
+message CountRequest {
+  Scope scope = 1;
+  // space is optional. Without it, the count is summed over every
+  // collection.
+  EmbeddingSpace space = 2;
+  Filter filter = 3;
+}
+
+message CountResponse {
+  uint64 count = 1;
+}
+
+message ListIndexesRequest {
+  int64 project_id = 1;
+  // source, when set, narrows the list to one source.
+  Source source = 2;
+}
+
+message IndexInfo {
+  EmbeddingSpace space = 1;
+  string collection = 2;
+  Source source = 3;
+  string namespace_id = 4;
+  uint64 point_count = 5;
+}
+
+message ListIndexesResponse {
+  repeated IndexInfo indexes = 1;
+}

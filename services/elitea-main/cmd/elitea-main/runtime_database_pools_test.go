@@ -109,3 +109,55 @@ func TestRuntimeDatabaseTerminalEffectsPoolFailureClosesEveryPriorRole(t *testin
 		t.Fatalf("partial resources closed=%v, want=%v", closed, wantClosed)
 	}
 }
+
+// The seventh pool is opened on request, with its own bounded role, and is
+// closed with the others (first).
+func TestRuntimeDatabasePoolsOpenTheVectorIntrospectionPoolSeparately(t *testing.T) {
+	var specs []runtimePoolSpec
+	var closed []string
+	factory := func(_ context.Context, _ string, spec runtimePoolSpec) (runtimePoolResource, error) {
+		specs = append(specs, spec)
+		return runtimePoolResource{
+			pool:  new(pgxpool.Pool),
+			close: func() { closed = append(closed, spec.role) },
+		}, nil
+	}
+	limits := runtimecomposition.PhaseOneDatabasePoolLimits()
+	pools, err := openRuntimeDatabasePoolsWithFactory(context.Background(), "postgres://runtime-test", limits, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pools.VectorIntrospection != nil || len(specs) != 6 {
+		t.Fatalf("the seventh pool opened without being asked: %+v", specs)
+	}
+	if err := pools.openVectorIntrospection(context.Background(), "postgres://runtime-test", limits, factory); err != nil {
+		t.Fatal(err)
+	}
+	if want := (runtimePoolSpec{role: "vector-introspection", maxConns: 8}); specs[6] != want {
+		t.Fatalf("seventh pool spec = %+v, want %+v", specs[6], want)
+	}
+	for _, other := range []*pgxpool.Pool{pools.Admission, pools.Control, pools.Output, pools.Replay, pools.TerminalEffects, pools.Content} {
+		if other == pools.VectorIntrospection {
+			t.Fatal("the introspection pool shares capacity with another role")
+		}
+	}
+	if err := pools.openVectorIntrospection(context.Background(), "postgres://runtime-test", limits, factory); err == nil {
+		t.Fatal("a second introspection pool was opened")
+	}
+	pools.Close()
+	if closed[0] != "vector-introspection" || len(closed) != 7 {
+		t.Fatalf("closed roles = %v, want the introspection pool first of seven", closed)
+	}
+
+	failing := func(context.Context, string, runtimePoolSpec) (runtimePoolResource, error) {
+		return runtimePoolResource{}, errors.New("down")
+	}
+	other, err := openRuntimeDatabasePoolsWithFactory(context.Background(), "postgres://runtime-test", limits, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := other.openVectorIntrospection(context.Background(), "postgres://runtime-test", limits, failing); err == nil || other.VectorIntrospection != nil {
+		t.Fatalf("a failed open must leave no pool: %v", err)
+	}
+}

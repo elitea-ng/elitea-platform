@@ -1,0 +1,80 @@
+# syntax=docker/dockerfile:1.7
+#
+# elitea-vector (ADR-0031): the stateless gRPC facade that is the only Qdrant
+# client. One binary on a distroless base. No shell, no Python.
+#
+# Build from the repository root (the context must be the root: the build
+# script compiles libs/proto/elitea/vector/v1, and libs/rust holds a path
+# dependency):
+#   docker buildx bake elitea-vector
+#   podman build -f services/elitea-vector/Containerfile -t elitea-vector .
+#
+# Released as ghcr.io/elitea-ng/elitea-vector: docker-bake.hcl, publish.yml's
+# build / scan / publish-image matrices and IMAGES array, and
+# ci-image-scan.yml name it together, and scripts/ci/image-matrix.sh holds
+# them in step.
+
+# Debian 13 (trixie) throughout (#1094). The runtime keeps glibc and CA roots
+# and has NO system OpenSSL: every TLS hop (the gRPC listener, the client hop
+# to elitea-main, the Qdrant client) is rustls. libgcc_s comes from distroless
+# cc-debian13 with its package record and licence, as the engines' images do.
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
+FROM rust:1.97.1-trixie AS runtime-libraries
+COPY --from=runtime-cc /usr/lib/ /cc-lib/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /usr/share/doc/gcc-14-base/ /runtime-files/usr/share/doc/gcc-14-base/
+COPY --from=runtime-cc /usr/share/lintian/overrides/libgcc-s1 /runtime-files/usr/share/lintian/overrides/libgcc-s1
+RUN cd /cc-lib && \
+    set -- */libgcc_s.so.1 && test "$#" -eq 1 && test -f "$1" && \
+    mkdir -p /runtime-files/usr/lib && cp --parents "$1" /runtime-files/usr/lib && \
+    ln -s gcc-14-base /runtime-files/usr/share/doc/libgcc-s1
+
+FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
+COPY --from=runtime-libraries /runtime-files/ /
+
+FROM rust:1.97.1-trixie AS builder
+
+# `cargo auditable` embeds the dependency list trivy's `rustbinary` analyzer
+# reads; without it an image scan sees only the Debian base (see the
+# worker's Containerfile). Installed before any source is copied, so a
+# source change does not rebuild the tool.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-auditable --locked --version 0.7.5
+
+WORKDIR /src/services/elitea-vector
+# The repository layout is kept under /src: build.rs reads ../../libs/proto,
+# and the path dependency is under ../../libs/rust.
+COPY libs/proto /src/libs/proto
+COPY libs/rust /src/libs/rust
+COPY services/elitea-vector ./
+
+# /cargo-target is shared with every other build on the host, and cargo judges
+# a path crate fresh by mtime, so a context older than another checkout's build
+# would ship that build's binary. Touching /src under the lock recompiles the
+# local crates from this context while registry crates stay cached (see the
+# worker's Containerfile).
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/cargo-target,sharing=locked \
+    find /src -type f -exec touch {} + && \
+    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
+    cp /cargo-target/release/elitea-vector /usr/local/bin/elitea-vector
+
+# Resolve every library the binary needs against the runtime image, without
+# starting it: no system OpenSSL linked or shipped, CA roots present, and the
+# whole closure found inside the runtime root.
+RUN --mount=type=bind,from=runtime-base,source=/,target=/runtime-root,readonly \
+    sh /src/libs/rust/scripts/verify-runtime.sh /usr/local/bin/elitea-vector
+
+FROM runtime-base AS runtime
+
+COPY --from=builder /usr/local/bin/elitea-vector /usr/local/bin/elitea-vector
+
+# The probe is the binary itself (`elitea-vector healthcheck`, a GET of its
+# own /healthz), because distroless has no shell. Compose declares it; Helm
+# uses httpGet probes on the health port. An OCI image carries no HEALTHCHECK.
+USER 10001:10001
+EXPOSE 9470 9471
+ENTRYPOINT ["/usr/local/bin/elitea-vector"]
