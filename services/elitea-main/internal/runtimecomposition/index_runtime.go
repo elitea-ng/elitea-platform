@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"time"
 
+	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
@@ -26,18 +28,33 @@ const (
 	indexDeadlineTTL    = 24 * time.Hour
 )
 
+// currentIndexExactFinder is the one-index read the schedule inspector makes.
+// indexmetaapp.ExactService answers it from the project's pgvector database;
+// indexregistry.Service answers it from the registry.
+type currentIndexExactFinder interface {
+	FindSnapshot(
+		context.Context,
+		indexmetaapp.Request,
+		string,
+		indexingapp.CurrentToolkitSnapshot,
+	) (indexmetaapp.Item, bool, error)
+}
+
 type currentIndexRuntime struct {
-	start          *indexingapp.StartService
-	cancel         *indexingapp.CurrentIndexCancellationService
-	initializer    *indexingapp.DurableIndexMetaInitializer
-	materializer   *storage.CurrentConfigurationsMaterializer
-	indexMeta      *indexmetaapp.Service
-	indexDelete    *indexmetaapp.DeleteService
-	indexConfig    *indexmetaapp.ConfigurationService
+	start        *indexingapp.StartService
+	cancel       *indexingapp.CurrentIndexCancellationService
+	initializer  *indexingapp.DurableIndexMetaInitializer
+	materializer *storage.CurrentConfigurationsMaterializer
+	// indexMeta, indexDelete, indexConfig and exact are the python path's
+	// pgvector-backed services, or the registry service in rust mode. The
+	// routes and the schedule kernel see only these interfaces.
+	indexMeta      indexingapi.CurrentIndexMetaReader
+	indexDelete    indexingapi.CurrentIndexMetaDeleter
+	indexConfig    indexingapi.CurrentIndexConfigurationSaver
 	toolkits       indexingapp.CurrentToolkitReader
 	settings       indexingapp.CurrentToolkitSettingsValidator
 	inputs         *indexingapp.CurrentAuthoritativeInputResolver
-	exact          *indexmetaapp.ExactService
+	exact          currentIndexExactFinder
 	scheduleUpdate *indexscheduleapp.Service
 	scheduleDelete *indexscheduleapp.DeleteService
 	scheduleAction *currentIndexScheduleDueWork
@@ -73,12 +90,22 @@ func newCurrentIndexRuntime(
 	config Config,
 	policy repos.IndexIngestDispatchPolicy,
 	indexMetaWriter indexingapp.CurrentIndexMetaWriter,
+	registry *indexRegistryComposition,
 	reportInitializationFailure func(error),
 ) (*currentIndexRuntime, error) {
+	// ELITEA_INDEXING_RUNTIME picks exactly one metadata store for the whole
+	// runtime: the project's pgvector index_meta rows (python, the default) or
+	// the registry (rust). Each mode requires its own dependency and refuses the
+	// other's, so a half-composed runtime cannot start.
+	rustIndexing := config.IndexingRuntime == IndexingRuntimeRust
+	if (rustIndexing && (registry == nil || indexMetaWriter != nil)) ||
+		(!rustIndexing && (indexMetaWriter == nil || registry != nil)) {
+		return nil, errors.New("current index runtime metadata store does not match the indexing runtime")
+	}
 	if pool == nil || configurations == nil || configurations.rows == nil || configurations.scope == nil ||
 		configurations.unsecreter == nil || configurations.expander == nil || configurations.models == nil || configurations.vaultLoader == nil ||
 		!config.IndexIngestDispatchEnabled || configurations.publicProjectID <= 0 ||
-		indexMetaWriter == nil || reportInitializationFailure == nil {
+		reportInitializationFailure == nil {
 		return nil, errors.New("current index runtime dependencies are required")
 	}
 	vaults := configurations.vaultLoader
@@ -178,14 +205,22 @@ func newCurrentIndexRuntime(
 	if err != nil {
 		return nil, err
 	}
-	toolkitClaimer, err := newCurrentFrozenToolkitConfigurationClaimer(materializer)
-	if err != nil {
-		return nil, err
+	var indexMetaInitializer indexingapp.IndexMetaMaterializer
+	if rustIndexing {
+		// The registry row needs no frozen toolkit and no pgvector connection
+		// string: it is addressed by the admission identity alone.
+		indexMetaInitializer, err = indexingapp.NewRegistryIndexMetaInitializer(registry.repo)
+	} else {
+		var toolkitClaimer *currentFrozenToolkitConfigurationClaimer
+		toolkitClaimer, err = newCurrentFrozenToolkitConfigurationClaimer(materializer)
+		if err != nil {
+			return nil, err
+		}
+		indexMetaInitializer, err = indexingapp.NewCurrentIndexMetaInitializer(
+			durableIndexMetaFrozenToolkitClaimer{delegate: toolkitClaimer},
+			indexMetaWriter,
+		)
 	}
-	indexMetaInitializer, err := indexingapp.NewCurrentIndexMetaInitializer(
-		durableIndexMetaFrozenToolkitClaimer{delegate: toolkitClaimer},
-		indexMetaWriter,
-	)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +263,36 @@ func newCurrentIndexRuntime(
 	if err != nil {
 		return nil, err
 	}
+	runtime := &currentIndexRuntime{
+		start:        start,
+		cancel:       cancel,
+		initializer:  durableInitializer,
+		materializer: materializer,
+		toolkits:     toolkits,
+		settings:     settings,
+		inputs:       inputs,
+	}
+	if rustIndexing {
+		schedules, err := repos.NewCurrentIndexMetaScheduleRepository(pool)
+		if err != nil {
+			return nil, fmt.Errorf("construct current index metadata schedule repository: %w", err)
+		}
+		service, err := indexregistryapp.NewService(
+			toolkits,
+			indexMetaTimeouts,
+			registry.repo,
+			schedules,
+			registry.vectors,
+			registry.report,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("construct index registry service: %w", err)
+		}
+		runtime.indexMeta, runtime.indexDelete, runtime.indexConfig, runtime.exact =
+			service, service, service, service
+		return runtime, nil
+	}
+
 	indexMetaReader := pgvector.NewCurrentIndexMetaReader()
 	indexMeta, err := indexmetaapp.NewService(
 		toolkits,
@@ -265,19 +330,20 @@ func newCurrentIndexRuntime(
 		return nil, fmt.Errorf("construct current index configuration service: %w", err)
 	}
 
-	return &currentIndexRuntime{
-		start:        start,
-		cancel:       cancel,
-		initializer:  durableInitializer,
-		materializer: materializer,
-		indexMeta:    indexMeta,
-		indexDelete:  indexDelete,
-		indexConfig:  indexConfig,
-		toolkits:     toolkits,
-		settings:     settings,
-		inputs:       inputs,
-		exact:        exact,
-	}, nil
+	runtime.indexMeta, runtime.indexDelete, runtime.indexConfig, runtime.exact =
+		indexMeta, indexDelete, indexConfig, exact
+	return runtime, nil
+}
+
+// indexRegistryComposition is what the rust indexing runtime composes the
+// registry from. It is nil in python mode.
+type indexRegistryComposition struct {
+	repo *repos.IndexRegistryRepository
+	// vectors is the hook to elitea-vector's Delete (ADR-0031 decision 4).
+	vectors indexingapp.IndexVectorDeleter
+	// report receives failures that must not fail the user's request, such as a
+	// tombstone that could not be purged.
+	report func(error)
 }
 
 func newConfiguredCurrentIndexMetaDeleteService(
