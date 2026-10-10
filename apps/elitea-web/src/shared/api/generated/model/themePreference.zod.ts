@@ -40,24 +40,19 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { MemoryContextManagement } from "./memoryContextManagement.zod";
-import { MemorySummarization } from "./memorySummarization.zod";
 
-export const AuthorUpdateRequest = zod
+export const ThemePreference = zod
   .object({
-    name: zod.string().optional(),
-    description: zod.string().optional(),
-    avatar: zod.string().optional(),
-    personalization: zod
-      .unknown()
-      .nullish()
-      .describe("Arbitrary user-defined personalization payload."),
-    default_context_management: MemoryContextManagement.optional(),
-    default_summarization: MemorySummarization.optional(),
+    theme_mode: zod
+      .string()
+      .nullable()
+      .describe(
+        "One of `system`, `light` or `dark` (the web app's colour-scheme modes; deliberately not an `enum` here, whose `system` member would collide with BucketType's generated constant). On a read, null means the user has never chosen one, and a client keeps its own local choice. A write must send one of the three values; null or anything else is a 400.\n",
+      ),
   })
   .describe(
-    "NOTE(W2): decoded into map[string]any (internal/api/v2/social/handler.go, UpdateAuthor); every property is optional, and any key not listed here is silently ignored. A missing name/description/avatar upserts as an empty string, and a missing personalization stores JSON null — but a missing default_context_management or default_summarization KEEPS whatever is stored, because Settings > AI Personality and Settings > Memory are two pages saving one record and the personality page sends no context settings at all. Either block may also arrive nested inside personalization, which is where apps/elitea-web put them while this endpoint still dropped every other top-level key; the top-level placement wins, and a nested one is rewritten into the columns. `personalization.theme_mode` is the one key this endpoint never writes: it belongs to PUT /social/author/theme, so any value sent here is dropped and the stored one is carried forward, even when personalization itself is absent.\n",
+    "The caller's colour-theme preference, shared by the web app and the desktop app, which run on different origins and so share no browser storage. Stored in centry.social_users.personalization under `theme_mode` (internal/api/v2/social/theme.go).\n",
   );
 
-export type AuthorUpdateRequest = zod.input<typeof AuthorUpdateRequest>;
-export type AuthorUpdateRequestOutput = zod.output<typeof AuthorUpdateRequest>;
+export type ThemePreference = zod.input<typeof ThemePreference>;
+export type ThemePreferenceOutput = zod.output<typeof ThemePreference>;

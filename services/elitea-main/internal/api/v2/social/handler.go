@@ -108,6 +108,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/author", h.GetAuthor)
 	r.Put("/author/", h.UpdateAuthor)
 	r.Put("/author", h.UpdateAuthor)
+	r.Get("/author/theme", h.GetThemePreference)
+	r.Put("/author/theme", h.UpdateThemePreference)
 	r.Group(func(r chi.Router) {
 		if h.projectAccess != nil {
 			r.Use(apimw.RequireProjectAccessWith(h.projectAccess))
@@ -566,6 +568,14 @@ func (h *Handler) UpdateAuthor(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// The theme mode is owned by `PUT /social/author/theme` (theme.go). The
+	// profile form's body was built from a read that may predate the last
+	// toggle, so whatever it carries for the key is dropped here and the
+	// STORED value is carried forward by the upsert below.
+	if personalization, isObject := body["personalization"].(map[string]any); isObject {
+		delete(personalization, themeModeKey)
+	}
+
 	contextManagement, summarization, fieldErr := memoryDefaultsFromBody(body)
 	if fieldErr != nil {
 		writeFieldError(w, fieldErr)
@@ -581,7 +591,8 @@ func (h *Handler) UpdateAuthor(w http.ResponseWriter, r *http.Request) {
 	// page's payload carries no context settings at all. `personalization`,
 	// `title`, `description` and `avatar` keep their prior replace-outright
 	// behaviour — the SPA carries those forward itself
-	// (apps/elitea-web .../settingsProfileForm.ts `buildAuthorUpdate`).
+	// (apps/elitea-web .../settingsProfileForm.ts `buildAuthorUpdate`) — except
+	// `personalization.theme_mode`, which is kept from the row (see above).
 	_, err := h.pool.Exec(ctx, `
 		INSERT INTO centry.social_users (user_id, title, description, avatar, personalization,
 			default_context_management, default_summarization)
@@ -591,7 +602,14 @@ func (h *Handler) UpdateAuthor(w http.ResponseWriter, r *http.Request) {
 			title = EXCLUDED.title,
 			description = EXCLUDED.description,
 			avatar = EXCLUDED.avatar,
-			personalization = EXCLUDED.personalization,
+			personalization = CASE
+				WHEN jsonb_typeof(social_users.personalization) = 'object'
+					AND social_users.personalization ? 'theme_mode'
+				THEN (CASE WHEN jsonb_typeof(EXCLUDED.personalization) = 'object'
+						THEN EXCLUDED.personalization ELSE '{}'::jsonb END)
+					|| jsonb_build_object('theme_mode', social_users.personalization->'theme_mode')
+				ELSE EXCLUDED.personalization
+			END,
 			default_context_management = COALESCE(EXCLUDED.default_context_management,
 				social_users.default_context_management),
 			default_summarization = COALESCE(EXCLUDED.default_summarization,

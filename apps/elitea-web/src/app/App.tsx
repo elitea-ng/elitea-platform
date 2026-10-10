@@ -1,5 +1,5 @@
 import { RouterProvider } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { getConfig, MissingEnvPage } from '@/shared/config';
 import { configureGeneratedClient } from '@/shared/api/generated/mutator';
@@ -21,6 +21,13 @@ import { sessionAuthContext, useSessionStore } from './session-store';
  * unthrottled re-check would issue a burst on every window change.
  */
 const SESSION_RECHECK_INTERVAL_MS = 60_000;
+
+/**
+ * Applies the signed-in user's server-stored theme, so the web app and the
+ * desktop app agree (`./ThemePreferenceSync`). A lazy chunk: it and its API
+ * module stay out of the initial bundle, and nothing loads before sign-in.
+ */
+const ThemePreferenceSync = lazy(() => import('./ThemePreferenceSync'));
 
 /**
  * App shell (spec §9.3 units F1/F3/R1/R2).
@@ -68,6 +75,7 @@ export function App() {
   const config = getConfig();
   const [router] = useState(() => createAppRouter());
   const fetchSession = useSessionStore((state) => state.fetchSession);
+  const sessionUserId = useSessionStore((state) => state.user?.id);
   /**
    * The live-channel health store the sidebar connection dot reads (SSE
    * subscriptions report into it; see shared/api/sse/realtimeStatus.ts).
@@ -255,6 +263,11 @@ export function App() {
 
   return (
     <AppProviders>
+      {sessionUserId !== undefined && (
+        <Suspense fallback={null}>
+          <ThemePreferenceSync key={sessionUserId} />
+        </Suspense>
+      )}
       <RealtimeStatusContext.Provider value={realtimeStatus}>
         <RouterProvider router={router} context={{ auth: sessionAuthContext }} />
       </RealtimeStatusContext.Provider>

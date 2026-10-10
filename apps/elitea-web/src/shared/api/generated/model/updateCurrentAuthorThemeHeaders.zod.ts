@@ -40,24 +40,14 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { MemoryContextManagement } from "./memoryContextManagement.zod";
-import { MemorySummarization } from "./memorySummarization.zod";
 
-export const AuthorUpdateRequest = zod
-  .object({
-    name: zod.string().optional(),
-    description: zod.string().optional(),
-    avatar: zod.string().optional(),
-    personalization: zod
-      .unknown()
-      .nullish()
-      .describe("Arbitrary user-defined personalization payload."),
-    default_context_management: MemoryContextManagement.optional(),
-    default_summarization: MemorySummarization.optional(),
-  })
-  .describe(
-    "NOTE(W2): decoded into map[string]any (internal/api/v2/social/handler.go, UpdateAuthor); every property is optional, and any key not listed here is silently ignored. A missing name/description/avatar upserts as an empty string, and a missing personalization stores JSON null — but a missing default_context_management or default_summarization KEEPS whatever is stored, because Settings > AI Personality and Settings > Memory are two pages saving one record and the personality page sends no context settings at all. Either block may also arrive nested inside personalization, which is where apps/elitea-web put them while this endpoint still dropped every other top-level key; the top-level placement wins, and a nested one is rewritten into the columns. `personalization.theme_mode` is the one key this endpoint never writes: it belongs to PUT /social/author/theme, so any value sent here is dropped and the stored one is carried forward, even when personalization itself is absent.\n",
-  );
+export const UpdateCurrentAuthorThemeHeaders = zod.object({
+  "X-Client-Version": zod.string().optional(),
+});
 
-export type AuthorUpdateRequest = zod.input<typeof AuthorUpdateRequest>;
-export type AuthorUpdateRequestOutput = zod.output<typeof AuthorUpdateRequest>;
+export type UpdateCurrentAuthorThemeHeaders = zod.input<
+  typeof UpdateCurrentAuthorThemeHeaders
+>;
+export type UpdateCurrentAuthorThemeHeadersOutput = zod.output<
+  typeof UpdateCurrentAuthorThemeHeaders
+>;
