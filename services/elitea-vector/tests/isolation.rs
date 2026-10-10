@@ -1757,3 +1757,81 @@ async fn a_token_revoked_mid_stream_is_refused_at_the_next_batch() {
         "the refused batch wrote nothing"
     );
 }
+
+/// `ListIndexes` and a space-less `Count` fan out over every collection
+/// concurrently; the answer stays sorted and complete.
+#[tokio::test]
+async fn fan_out_over_collections_is_complete_and_sorted() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    let other = pb::EmbeddingSpace {
+        model_slug: format!("{}-b", h.slug),
+        dimension: DIMENSION,
+    };
+    let second_namespace = "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5";
+    let points = || {
+        vec![
+            Harness::point("doc-1", "alpha shared secret", [1.0, 0.0, 0.0, 0.0]),
+            Harness::point("doc-2", "alpha other words", [0.0, 1.0, 0.0, 0.0]),
+        ]
+    };
+    h.upsert(TOKEN_A, 0, Harness::namespace(NAMESPACE_A), points())
+        .await
+        .expect("first space");
+    h.upsert_in(
+        TOKEN_A,
+        0,
+        other.clone(),
+        Harness::namespace(second_namespace),
+        points(),
+    )
+    .await
+    .expect("second space");
+    h.upsert_in(TOKEN_A, 0, other, Harness::namespace(NAMESPACE_A), points())
+        .await
+        .expect("second space, first namespace");
+
+    let slug = h.slug.clone();
+    let indexes: Vec<_> = h
+        .worker
+        .list_indexes(with_token(TOKEN_A, pb::ListIndexesRequest::default()))
+        .await
+        .expect("list")
+        .into_inner()
+        .indexes
+        .into_iter()
+        .filter(|index| index.collection.contains(&slug))
+        .collect();
+    assert_eq!(indexes.len(), 3, "{indexes:?}");
+    let keys: Vec<_> = indexes
+        .iter()
+        .map(|index| {
+            (
+                index.collection.clone(),
+                index.source,
+                index.namespace_id.clone(),
+            )
+        })
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted, "ListIndexes is sorted");
+    assert!(indexes.iter().all(|index| index.point_count == 2));
+
+    // Without a space, Count adds up every collection (this test's two, at
+    // least; other tests' collections hold other projects' points only).
+    let counted = h
+        .worker
+        .count(with_token(
+            TOKEN_A,
+            pb::CountRequest {
+                scope: Some(Harness::scope(&[NAMESPACE_A, second_namespace])),
+                ..pb::CountRequest::default()
+            },
+        ))
+        .await
+        .expect("count")
+        .into_inner()
+        .count;
+    assert!(counted >= 6, "{counted}");
+}

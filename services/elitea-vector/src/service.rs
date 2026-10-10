@@ -25,6 +25,7 @@ use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::auth::{Authenticator, Caller};
+use crate::fanout::fan_out;
 use crate::layout::{self, BM25_MODEL, BM25_VECTOR, DENSE_VECTOR, Space, key};
 use crate::pb;
 use crate::scope::{self, Scope};
@@ -417,20 +418,24 @@ impl pb::vector_service_server::VectorService for VectorService {
             .map(|space| Space::from_proto(Some(space)))
             .transpose()?;
         let filter = scope.filter(narrowing);
-        let mut total: u64 = 0;
-        for collection in self.store.targets(space.as_ref()).await? {
-            let counted = self
-                .store
-                .client()
-                .count(
-                    CountPointsBuilder::new(collection)
-                        .filter(filter.clone())
-                        .exact(true),
-                )
-                .await
-                .map_err(|error| unavailable("count", &error))?;
-            total += counted.result.map_or(0, |result| result.count);
-        }
+        let counts = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
+            let filter = filter.clone();
+            async move {
+                let counted = self
+                    .store
+                    .client()
+                    .count(
+                        CountPointsBuilder::new(collection)
+                            .filter(filter)
+                            .exact(true),
+                    )
+                    .await
+                    .map_err(|error| unavailable("count", &error))?;
+                Ok(counted.result.map_or(0, |result| result.count))
+            }
+        })
+        .await?;
+        let total: u64 = counts.into_iter().sum();
         Ok(Response::new(pb::CountResponse { count: total }))
     }
 
@@ -452,11 +457,22 @@ impl pb::vector_service_server::VectorService for VectorService {
             caller.require_source(request.source)?;
             vec![layout::source_keyword(request.source)?]
         };
-        let mut indexes = Vec::new();
-        for (collection, space) in self.store.collections().await? {
-            for source in &sources {
+        let queries: Vec<(String, Space, String)> = self
+            .store
+            .collections()
+            .await?
+            .into_iter()
+            .flat_map(|(collection, space)| {
+                sources
+                    .iter()
+                    .map(move |source| (collection.clone(), space.clone(), (*source).to_owned()))
+            })
+            .collect();
+        let found = fan_out(
+            queries,
+            |(collection, space, source): (String, Space, String)| async move {
                 let facet = FacetCountsBuilder::new(&collection, key::NAMESPACE_ID)
-                    .filter(Scope::project(project_id).source(source).filter(None))
+                    .filter(Scope::project(project_id).source(&source).filter(None))
                     .limit(MAX_LISTED_NAMESPACES)
                     .exact(true);
                 let response = self
@@ -465,6 +481,7 @@ impl pb::vector_service_server::VectorService for VectorService {
                     .facet(facet)
                     .await
                     .map_err(|error| unavailable("facet", &error))?;
+                let mut indexes = Vec::new();
                 for hit in response.hits {
                     let Some(qdrant_client::qdrant::facet_value::Variant::StringValue(
                         namespace_id,
@@ -475,13 +492,24 @@ impl pb::vector_service_server::VectorService for VectorService {
                     indexes.push(pb::IndexInfo {
                         space: Some(space.to_proto()),
                         collection: collection.clone(),
-                        source: layout::source_from_keyword(source) as i32,
+                        source: layout::source_from_keyword(&source) as i32,
                         namespace_id,
                         point_count: hit.count,
                     });
                 }
-            }
-        }
+                Ok(indexes)
+            },
+        )
+        .await?;
+        let mut indexes: Vec<pb::IndexInfo> = found.into_iter().flatten().collect();
+        // Completion order is not deterministic; the answer is.
+        indexes.sort_by(|left, right| {
+            (&left.collection, left.source, &left.namespace_id).cmp(&(
+                &right.collection,
+                right.source,
+                &right.namespace_id,
+            ))
+        });
         Ok(Response::new(pb::ListIndexesResponse { indexes }))
     }
 }

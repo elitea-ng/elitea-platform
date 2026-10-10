@@ -508,6 +508,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "elitea-engine-sidecar",
+ "futures-util",
  "moka",
  "prost",
  "protoc-bin-vendored",

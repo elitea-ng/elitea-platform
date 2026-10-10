@@ -13,6 +13,8 @@ async-trait = "=0.1.92"
 # Process tracing and OTLP span export, shared with the engines.
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 # The introspection cache: a bounded LRU with single-flight misses.
+# Bounded-concurrency fan-out over collections (`buffer_unordered`).
+futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 moka = { version = "=0.12.16", default-features = false, features = ["future"] }
 prost = "=0.14.4"
 # The Qdrant gRPC client, matched to the server (qdrant/qdrant:v1.19.2).

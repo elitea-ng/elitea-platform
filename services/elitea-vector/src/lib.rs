@@ -9,6 +9,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod fanout;
 pub mod health;
 pub mod identity;
 pub mod layout;
