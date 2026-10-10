@@ -164,14 +164,10 @@ const (
 // (execution_jobs_active_capability_idx) carries a SQL copy of this list. It is
 // checksum-immutable and is deliberately not generated from here; a state added
 // to this list needs a new migration beside it, and TestEveryJobStateIsClassified
-// fails until the new constant is classified.
+// fails until the new constant is classified (the test holds the terminal
+// complement itself).
 func NonTerminalJobStates() []JobState {
 	return []JobState{JobPending, JobDispatched, JobClaimed, JobRunning, JobSettling}
-}
-
-// TerminalJobStates is the complement of NonTerminalJobStates.
-func TerminalJobStates() []JobState {
-	return []JobState{JobSucceeded, JobFailed, JobCancelled, JobQuarantined}
 }
 
 func (s JobState) Valid() bool {

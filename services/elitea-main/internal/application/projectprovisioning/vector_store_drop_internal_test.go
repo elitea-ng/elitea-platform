@@ -54,7 +54,7 @@ func TestActiveWorkCountsEveryCapabilityBothSidesAndTheSharedStates(t *testing.T
 	if got := nonTerminalStates(); !slices.Equal(got, want) {
 		t.Fatalf("nonTerminalStates() = %v, want %v", got, want)
 	}
-	for _, state := range execution.TerminalJobStates() {
+	for _, state := range []execution.JobState{execution.JobSucceeded, execution.JobFailed, execution.JobCancelled, execution.JobQuarantined} {
 		if slices.Contains(nonTerminalStates(), string(state)) {
 			t.Errorf("terminal state %s is counted as active work", state)
 		}
