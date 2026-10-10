@@ -1724,8 +1724,9 @@ impl AgentHost {
 
 /// The Doctor's repairs go through the host's own paths: a workspace leaves
 /// the list as `workspace_remove` removes it (refused while a turn runs in
-/// it; its session, kept turns and thread history go), and a local sign-out
-/// forgets every turn as `host_sign_out` does.
+/// it; its session, kept turns and thread history go), a local sign-out
+/// forgets every turn as `host_sign_out` does, and an index is closed before
+/// its files move and turned on again (`index_enable`) after a rebuild.
 impl crate::doctor::DoctorHooks for AgentHost {
     fn remove_workspace(&self, workspace_id: &str) -> Result<(), String> {
         Self::remove_workspace(self, workspace_id).map_err(|error| error.message)
@@ -1733,6 +1734,22 @@ impl crate::doctor::DoctorHooks for AgentHost {
 
     fn signed_out(&self) {
         self.forget_identity();
+    }
+
+    fn close_index(&self, workspace_id: &str) {
+        if let Some(index) = &self.deps.index {
+            index.forget(workspace_id);
+        }
+    }
+
+    fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
+        match &self.deps.index {
+            Some(index) => index
+                .enable(workspace_id)
+                .map(|_| ())
+                .map_err(|error| error.message),
+            None => Err("the local index is not available".into()),
+        }
     }
 }
 

@@ -211,7 +211,9 @@ Troubleshoot** open the Doctor (`src-tauri/src/doctor.rs`). It checks the
 stored sign-in (`credentials.json`: regular file, yours, `0600`, parses), the
 settings, data and logs folders (`0700`, yours, writable), the thread history
 (opens, `PRAGMA integrity_check`, schema version), `workspaces.json` (parses;
-every folder still there), the deployment (reachable, discovery valid), the
+every folder still there), each workspace's local code index (owner-only,
+`PRAGMA quick_check`, schema version; rebuilt from the folder when damaged, once
+confirmed), the deployment (reachable, discovery valid), the
 session (a refresh works), the client policy's `local_work.allowed` (and how
 an administrator turns it on) and the sign-outs still waiting to reach the
 server. Each problem it can repair has a **Fix** button: restrict a file to

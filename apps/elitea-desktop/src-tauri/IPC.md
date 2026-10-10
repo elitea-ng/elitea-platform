@@ -433,6 +433,7 @@ of these names (it gets a `_2` suffix), whether or not the index is on.
 ```ts
 type Check = {
   id: string;            // credentials, dir.config, dir.data, dir.logs, history, workspaces,
+                         // index.<workspace id> (one per workspace with a local index),
                          // deployment, session, local_work, pending_revokes
   title: string;
   status: "ok" | "warn" | "fail";
@@ -440,6 +441,8 @@ type Check = {
   fix_id?: string;       // credentials.tighten | credentials.move_aside | dir.tighten.{config,data,logs}
                          // | history.tighten | history.move_aside | workspaces.drop_missing
                          // | workspaces.move_aside | revokes.retry
+                         // | index.tighten:<workspace id> | index.move_aside:<workspace id>
+                         // | index.rebuild:<workspace id>
   fix_label?: string;
   fix_confirm?: string;  // what the repair deletes; ask before passing `confirm: true`
 };
@@ -460,6 +463,15 @@ does (cached token and unsaved session forgotten, every turn cancelled and
 forgotten, the webview's data cleared and `signed_out` sent on
 `app://command`); the moved file is not trusted, so it is never read and its
 session is not revoked on the server (the message says so).
+
+A workspace's local index (its directory, `index.sqlite`, `-wal` and `-shm`:
+owner-only, not a symlink; `PRAGMA quick_check`; schema version) is checked
+when the workspace has one: `index.tighten` restricts it to you,
+`index.move_aside` closes it and moves its directory aside (it is off until
+turned on again), `index.rebuild` (only with `confirm`) closes it, deletes it
+and turns it on again so it is built from nothing. One written by a newer app
+asks for an update and has no repair. The workspace id after the `:` must
+name a workspace in the list.
 
 ```ts
 type AppPlatform = {
