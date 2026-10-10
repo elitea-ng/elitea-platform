@@ -59,10 +59,10 @@ func TestImportDefaultsToTheBucketsGraphJSON(t *testing.T) {
 // tools must still round-trip it; past MaxGraphImportBytes is refused.
 func TestImportReadsAGraphLargerThanAnArtifactRead(t *testing.T) {
 	h := importHarness(t)
-	big := `{"nodes": [{"id": "x", "pad": "` + strings.Repeat("0", 40<<20) + `"}]}`
+	big := `{"nodes": [{"id": "x", "pad": "` + strings.Repeat("0", 33<<20) + `"}]}`
 	h.uploads.objects["graphs/graph.json"] = []byte(big)
 	if _, err := h.invoke("inventory", "inventory", run.ImportTool, read(map[string]any{"llm_settings": llmSettings()})); err != nil {
-		t.Fatalf("a 40 MiB graph was refused: %v", err)
+		t.Fatalf("a 33 MiB graph was refused: %v", err)
 	}
 	params, _ := h.lastArgs["params"].(map[string]any)
 	if document, _ := params[run.GraphDocumentParam].(string); len(document) != len(big) {

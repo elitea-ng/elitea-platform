@@ -218,7 +218,9 @@ func (h *harness) invoke(family, toolkit, tool string, request map[string]any) (
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	// Generous: only a hang waits this long, and the tens-of-MiB import cases
+	// take several seconds under -race on a shared CI runner.
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		body, err := manager.Poll(ctx, toolkit, tool, invocation.ID)
 		if err != nil {
