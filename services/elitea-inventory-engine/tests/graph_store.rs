@@ -343,3 +343,41 @@ async fn migrating_twice_applies_nothing_the_second_time() {
     .expect("ledger");
     assert_eq!(ledger, ["0001", "0002", "0003", "0004"]);
 }
+
+/// The shared `GraphStore` contract (libs/rust/inventory-core
+/// `store_conformance`), which the desktop's SQLite store runs too: two
+/// stores that pass it answer the retrieval tools alike.
+#[tokio::test]
+async fn the_postgresql_store_passes_the_graph_store_conformance_suite() {
+    let Some(pool) = database("conformance").await else {
+        return;
+    };
+    elitea_inventory_core::store_conformance::run(&store::PgGraphStore::new(pool)).await;
+}
+
+/// The view cache over the PostgreSQL store: no graph, no view; a view is
+/// reused while the revision stands and reloaded once it moves.
+#[tokio::test]
+async fn the_view_cache_reloads_when_the_revision_moves() {
+    let Some(pool) = database("view_cache").await else {
+        return;
+    };
+    let key = key(1, 1);
+    let views =
+        elitea_inventory_engine::retrieval::ViewCache::new(store::PgGraphStore::new(pool.clone()));
+    assert!(views.view(key).await.expect("view").is_none());
+    let graph = replay();
+    let first = store::save(&pool, key, &graph).await.expect("save");
+    let view = views.view(key).await.expect("view").expect("a graph");
+    assert_eq!(view.revision, first);
+    let again = views.view(key).await.expect("view").expect("a graph");
+    assert!(
+        std::sync::Arc::ptr_eq(&view, &again),
+        "reused while current"
+    );
+    let second = store::save(&pool, key, &graph).await.expect("save");
+    let fresh = views.view(key).await.expect("view").expect("a graph");
+    assert_eq!(fresh.revision, second);
+    assert!(store::delete(&pool, key).await.expect("delete"));
+    assert!(views.view(key).await.expect("view").is_none());
+}

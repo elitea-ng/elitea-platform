@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# `store_conformance`, the suite every `GraphStore` runs against itself (the
+# engine's PostgreSQL store, the desktop's SQLite store).
+test-support = []
+
 [dependencies]
 elitea-code-parsers = { path = "../code-parsers" }
 elitea-content-source = { path = "../content-source" }

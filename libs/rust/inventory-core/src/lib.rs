@@ -8,7 +8,8 @@
 //! * [`retrieval`] — the read tools over a loaded graph;
 //! * [`extract`] — the type tables and normalisers the model stage shares;
 //! * [`embed`] — the texts entities and queries are embedded from;
-//! * [`store`] — the data a graph store keeps beside the graph.
+//! * [`store`] — the `GraphStore` contract and the data a store keeps
+//!   beside the graph (and, with `test-support`, `store_conformance`).
 //!
 //! Built alone, this crate links `serde_json` without `preserve_order` (the
 //! desktop host must, ADR-0029 decision 2): a JSON map then keeps its keys
@@ -24,3 +25,5 @@ pub mod ingest;
 pub mod map;
 pub mod retrieval;
 pub mod store;
+#[cfg(feature = "test-support")]
+pub mod store_conformance;

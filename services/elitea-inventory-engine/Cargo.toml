@@ -73,6 +73,9 @@ documents = ["elitea-doc-extract/documents"]
 loopback-git-http = ["elitea-repo-ingest/loopback-git-http"]
 
 [dev-dependencies]
+# The shared GraphStore conformance suite, run against the PostgreSQL store
+# (tests/graph_store.rs).
+elitea-inventory-core = { path = "../../libs/rust/inventory-core", features = ["test-support"] }
 # The ingestion tests' local smart-HTTP git server (`git http-backend`).
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "=1.53.2", features = ["test-util"] }
