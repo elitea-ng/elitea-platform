@@ -1,10 +1,15 @@
 package pgvector
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestParseProjectNamesAcceptOnlyCanonicalProjectNames(t *testing.T) {
@@ -41,8 +46,8 @@ func dropAdmin() AdminConnection {
 func TestDropDatabaseRoleDropsDatabaseThenRole(t *testing.T) {
 	t.Parallel()
 
-	// lock, database exists, role exists, admin is NOT a member of the role.
-	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}, {value: true}, {value: false}}}
+	// database exists, role exists, admin is NOT a member of the role.
+	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}, {value: false}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
@@ -53,16 +58,18 @@ func TestDropDatabaseRoleDropsDatabaseThenRole(t *testing.T) {
 	if !result.DatabaseDropped || !result.RoleDropped {
 		t.Fatalf("result = %+v", result)
 	}
-	if call := admin.queryCalls[0]; call.statement != tryProjectLockSQL ||
-		len(call.args) != 2 || call.args[0] != projectLockNamespace || call.args[1] != int32(42) {
-		t.Fatalf("lock query = %#v", call)
+	if args := admin.execArgs[1]; len(args) != 2 || args[0] != projectLockNamespace || args[1] != int32(42) {
+		t.Fatalf("lock args = %#v", args)
 	}
-	assertQuery(t, admin, 1, databaseExistsSQL, "project_42")
-	assertQuery(t, admin, 2, roleExistsSQL, "project_42_user")
-	assertQuery(t, admin, 3, roleMemberSQL, "project_42_user")
+	assertQuery(t, admin, 0, databaseExistsSQL, "project_42")
+	assertQuery(t, admin, 1, roleExistsSQL, "project_42_user")
+	assertQuery(t, admin, 2, roleMemberSQL, "project_42_user")
 	// The managed-Postgres order (#1211): lock the role out, become a member so
 	// FORCE may terminate its sessions, close the door, then drop.
 	assertStatements(t, admin.execStatements, []string{
+		"SET lock_timeout = 30000",
+		acquireProjectLockSQL,
+		"RESET lock_timeout",
 		`ALTER ROLE "project_42_user" NOLOGIN`,
 		`GRANT "project_42_user" TO CURRENT_USER`,
 		`REVOKE CONNECT ON DATABASE "project_42" FROM PUBLIC, "project_42_user"`,
@@ -77,14 +84,14 @@ func TestDropDatabaseRoleDropsDatabaseThenRole(t *testing.T) {
 func TestDropSkipsTheGrantWhenTheAdminIsAlreadyAMember(t *testing.T) {
 	t.Parallel()
 
-	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}, {value: true}, {value: true}}}
+	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}, {value: true}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
 	if _, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()}); err != nil {
 		t.Fatalf("Drop() = %v", err)
 	}
-	assertStatements(t, admin.execStatements, []string{
+	assertStatements(t, admin.execStatements[3:], []string{
 		`ALTER ROLE "project_42_user" NOLOGIN`,
 		`REVOKE CONNECT ON DATABASE "project_42" FROM PUBLIC, "project_42_user"`,
 		`DROP DATABASE "project_42" WITH (FORCE)`,
@@ -97,8 +104,8 @@ func TestDropToleratesAGrantThatRacedAndStopsOnAGrantThatFailed(t *testing.T) {
 
 	// The grant errors but a recheck finds the admin a member: tolerated.
 	admin := &scriptedConnection{
-		queryResults: []queryResult{{value: true}, {value: true}, {value: true}, {value: false}, {value: true}},
-		execErrors:   map[int]error{1: errors.New("role is already a member")},
+		queryResults: []queryResult{{value: true}, {value: true}, {value: false}, {value: true}},
+		execErrors:   map[int]error{4: errors.New("role is already a member")},
 	}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
@@ -108,8 +115,8 @@ func TestDropToleratesAGrantThatRacedAndStopsOnAGrantThatFailed(t *testing.T) {
 
 	// The grant errors and the admin is still not a member: the drop must not run.
 	admin = &scriptedConnection{
-		queryResults: []queryResult{{value: true}, {value: true}, {value: true}, {value: false}, {value: false}},
-		execErrors:   map[int]error{1: errors.New("permission denied")},
+		queryResults: []queryResult{{value: true}, {value: true}, {value: false}, {value: false}},
+		execErrors:   map[int]error{4: errors.New("permission denied")},
 	}
 	connector = &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ = NewProvisioner(connector)
@@ -126,7 +133,7 @@ func TestDropToleratesAGrantThatRacedAndStopsOnAGrantThatFailed(t *testing.T) {
 func TestDropIsANoOpWhenDatabaseAndRoleAreMissing(t *testing.T) {
 	t.Parallel()
 
-	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: false}, {value: false}}}
+	admin := &scriptedConnection{queryResults: []queryResult{{value: false}, {value: false}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
@@ -137,13 +144,13 @@ func TestDropIsANoOpWhenDatabaseAndRoleAreMissing(t *testing.T) {
 	if result != (DropResult{}) {
 		t.Fatalf("result = %+v, want nothing dropped", result)
 	}
-	assertStatements(t, admin.execStatements, nil)
+	assertStatements(t, admin.execStatements[3:], nil)
 }
 
 func TestDropSchemaModeDropsOnlyTheProjectSchemaAndNoRole(t *testing.T) {
 	t.Parallel()
 
-	admin := &scriptedConnection{queryResults: []queryResult{{value: true}, {value: true}}}
+	admin := &scriptedConnection{queryResults: []queryResult{{value: true}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
@@ -154,8 +161,8 @@ func TestDropSchemaModeDropsOnlyTheProjectSchemaAndNoRole(t *testing.T) {
 	if !result.SchemaDropped || result.DatabaseDropped || result.RoleDropped {
 		t.Fatalf("result = %+v", result)
 	}
-	assertQuery(t, admin, 1, schemaExistsSQL, "project_9")
-	assertStatements(t, admin.execStatements, []string{`DROP SCHEMA "project_9" CASCADE`})
+	assertQuery(t, admin, 0, schemaExistsSQL, "project_9")
+	assertStatements(t, admin.execStatements[3:], []string{`DROP SCHEMA "project_9" CASCADE`})
 }
 
 func TestDropRefusesNamesThatAreNotTheProjectsOwn(t *testing.T) {
@@ -207,51 +214,75 @@ func TestDropSQLQuotesIdentifiers(t *testing.T) {
 	}
 }
 
-func TestDropWaitsBrieflyForTheProjectLockAndThenSucceeds(t *testing.T) {
-	shrinkLockWait(t, 2*time.Second)
+// The lock wait is the blocking pg_advisory_lock under a session lock_timeout:
+// SQLSTATE 55P03 (lock_not_available) is ErrDropLockTimeout, nothing is
+// dropped, and the session is closed.
+func TestDropMapsALockTimeoutToErrDropLockTimeout(t *testing.T) {
+	t.Parallel()
 
-	admin := &scriptedConnection{queryResults: []queryResult{
-		{value: false}, {value: false}, {value: true}, {value: false}, {value: false}}}
+	admin := &scriptedConnection{execErrors: map[int]error{
+		1: &pgconn.PgError{Code: "55P03", Message: "canceling statement due to lock timeout"}}}
 	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
 	provisioner, _ := NewProvisioner(connector)
 
-	if _, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()}); err != nil {
-		t.Fatalf("Drop() = %v", err)
-	}
-	if got := len(admin.queryCalls); got != 5 {
-		t.Fatalf("queries = %d, want 3 lock attempts then the 2 existence checks", got)
-	}
-}
-
-func TestDropGivesUpWhenTheProjectLockIsNeverFreed(t *testing.T) {
-	shrinkLockWait(t, 50*time.Millisecond)
-
-	results := make([]queryResult, 200)
-	admin := &scriptedConnection{queryResults: results}
-	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
-	provisioner, _ := NewProvisioner(connector)
-
-	// A background context with no deadline: the wait must be bounded by the
-	// drop's own timeout, the way Deprovision's context.WithoutCancel is.
-	started := time.Now()
 	_, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()})
 	if !errors.Is(err, ErrDropLockTimeout) {
 		t.Fatalf("Drop() = %v, want ErrDropLockTimeout", err)
 	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("Drop() waited %s", elapsed)
-	}
-	if len(admin.execStatements) != 0 {
-		t.Fatalf("a timed-out drop executed %v", admin.execStatements)
+	assertStatements(t, admin.execStatements, []string{"SET lock_timeout = 30000", acquireProjectLockSQL})
+	if len(admin.queryCalls) != 0 {
+		t.Fatalf("a timed-out drop ran queries: %v", admin.queryCalls)
 	}
 	if admin.closeCalls != 1 {
 		t.Fatalf("close calls = %d, want the session closed", admin.closeCalls)
 	}
+
+	// Any other lock failure is an ordinary provisioning error, not a timeout.
+	admin = &scriptedConnection{execErrors: map[int]error{1: &pgconn.PgError{Code: "57014"}}}
+	connector = &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
+	provisioner, _ = NewProvisioner(connector)
+	if _, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()}); errors.Is(err, ErrDropLockTimeout) || !errors.Is(err, ErrProvisioning) {
+		t.Fatalf("Drop() with a cancelled lock = %v, want ErrProvisioning", err)
+	}
 }
 
-func shrinkLockWait(t *testing.T, timeout time.Duration) {
-	t.Helper()
-	oldTimeout, oldInitial, oldMax := dropLockTimeout, dropLockPollInitial, dropLockPollMax
-	dropLockTimeout, dropLockPollInitial, dropLockPollMax = timeout, 5*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { dropLockTimeout, dropLockPollInitial, dropLockPollMax = oldTimeout, oldInitial, oldMax })
+func TestSetLockTimeoutSQLRendersMilliseconds(t *testing.T) {
+	t.Parallel()
+
+	for timeout, want := range map[time.Duration]string{
+		30 * time.Second:        "SET lock_timeout = 30000",
+		1500 * time.Millisecond: "SET lock_timeout = 1500",
+		time.Microsecond:        "SET lock_timeout = 1",
+	} {
+		if got := setLockTimeoutSQL(timeout); got != want {
+			t.Errorf("setLockTimeoutSQL(%v) = %q, want %q", timeout, got, want)
+		}
+	}
+}
+
+// Both drops succeeded and only the close failed: the result stands, and the
+// close error is logged, not returned.
+func TestDropReturnsTheResultWhenOnlyTheCloseFails(t *testing.T) {
+	admin := &scriptedConnection{
+		queryResults: []queryResult{{value: true}, {value: true}, {value: true}},
+		closeErr:     errors.New("connection reset"),
+	}
+	connector := &scriptedConnector{connections: map[string][]Connection{"vectors": {admin}}}
+	provisioner, _ := NewProvisioner(connector)
+
+	var logged bytes.Buffer
+	previous := dropLogger
+	dropLogger = func() *slog.Logger { return slog.New(slog.NewTextHandler(&logged, nil)) }
+	t.Cleanup(func() { dropLogger = previous })
+
+	result, err := provisioner.Drop(context.Background(), DropRequest{ProjectID: 42, Admin: dropAdmin()})
+	if err != nil {
+		t.Fatalf("Drop() = %v, want the close failure tolerated", err)
+	}
+	if !result.DatabaseDropped || !result.RoleDropped {
+		t.Fatalf("result = %+v, want both dropped", result)
+	}
+	if !strings.Contains(logged.String(), "did not close cleanly") {
+		t.Fatalf("the close failure was not logged: %q", logged.String())
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strconv"
 	"time"
@@ -114,7 +115,7 @@ func (p *Provisioner) Drop(ctx context.Context, request DropRequest) (DropResult
 	if err != nil {
 		return DropResult{}, err
 	}
-	if err := acquireProjectLockBounded(ctx, admin, request.ProjectID); err != nil {
+	if err := acquireProjectLockWithTimeout(ctx, admin, request.ProjectID); err != nil {
 		closeBestEffort(ctx, admin)
 		return DropResult{}, err
 	}
@@ -165,12 +166,20 @@ func (p *Provisioner) Drop(ctx context.Context, request DropRequest) (DropResult
 			result.RoleDropped = true
 		}
 	}
-	// Closing the admin session releases the advisory lock.
+	// Closing the admin session releases the advisory lock. Both drops have
+	// already happened, so a close that fails does not undo anything: the result
+	// is returned and the close error is only logged. (The server ends the
+	// session, and with it the lock, when the connection goes away.)
 	if err := closeOwned(ctx, admin); err != nil {
-		return DropResult{}, err
+		dropLogger().WarnContext(ctx, "pgvector: the admin session did not close cleanly after the drop",
+			"project_id", request.ProjectID, "err", err)
 	}
 	return result, nil
 }
+
+// dropLogger is where Drop reports a non-fatal close failure. A variable so a
+// test can capture it.
+var dropLogger = slog.Default
 
 // prepareForcedDrop makes DROP DATABASE ... WITH (FORCE) work for an admin that
 // is not a superuser (managed Postgres: RDS, Cloud SQL, Azure).
@@ -213,56 +222,68 @@ func prepareForcedDrop(ctx context.Context, connection Connection, database, rol
 	return exec(ctx, connection, "revoke project database connect", revokeConnectSQL(database, role))
 }
 
-// Lock-wait bounds for Drop. The wait is independent of the request context:
-// Deprovision runs the drop under context.WithoutCancel with its own bound, so
-// without a deadline here a provision holding the same project's lock would
-// block the delete for the whole of that bound. Variables, not constants, so a
-// test can shrink them.
-var (
-	dropLockTimeout     = 30 * time.Second
-	dropLockPollInitial = 50 * time.Millisecond
-	dropLockPollMax     = 1 * time.Second
-)
+// dropLockTimeout bounds Drop's wait for the per-project advisory lock. The
+// wait is independent of the request context: Deprovision runs the drop under
+// context.WithoutCancel with its own bound, so without a deadline here a
+// provision holding the same project's lock would block the delete for the
+// whole of that bound. A variable, not a constant, so a test can shrink it.
+var dropLockTimeout = 30 * time.Second
 
 // ErrDropLockTimeout means the per-project advisory lock stayed held by another
 // session for the whole bounded wait. Nothing was dropped.
 var ErrDropLockTimeout = errors.New("pgvector: timed out waiting for the project advisory lock")
 
-// acquireProjectLockBounded takes the same advisory lock as Provision, but with
-// pg_try_advisory_lock in a bounded retry loop instead of blocking.
-func acquireProjectLockBounded(ctx context.Context, connection Connection, projectID int64) error {
-	deadline := time.Now().Add(dropLockTimeout)
-	delay := dropLockPollInitial
-	for {
-		// The query itself is not bounded by the request context's absence:
-		// it returns immediately either way.
-		got, err := queryBool(ctx, connection, "try project advisory lock",
-			tryProjectLockSQL, projectLockNamespace, int32(projectID))
-		if err != nil {
-			return err
-		}
-		if got {
-			return nil
-		}
-		if time.Now().Add(delay).After(deadline) {
+// lockNotAvailable is SQLSTATE 55P03, what a lock wait cut off by lock_timeout
+// raises.
+const lockNotAvailable = "55P03"
+
+// acquireProjectLockWithTimeout takes the same advisory lock as Provision with
+// the same blocking pg_advisory_lock, bounded by the session's lock_timeout
+// rather than by a poll loop: the server wakes the waiter the moment the lock is
+// free, and raises 55P03 when the timeout passes first, which maps to
+// ErrDropLockTimeout. lock_timeout is reset afterwards, so it bounds only this
+// wait and not the drop statements.
+func acquireProjectLockWithTimeout(ctx context.Context, connection Connection, projectID int64) error {
+	if err := exec(ctx, connection, "set lock timeout", setLockTimeoutSQL(dropLockTimeout)); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := connection.Exec(ctx, acquireProjectLockSQL, projectLockNamespace, int32(projectID)); err != nil {
+		var pgErr interface{ SQLState() string }
+		if errors.As(err, &pgErr) && pgErr.SQLState() == lockNotAvailable {
 			return ErrDropLockTimeout
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-		if delay *= 2; delay > dropLockPollMax {
-			delay = dropLockPollMax
-		}
+		return operationError(ctx, "acquire project advisory lock", err)
 	}
+	return exec(ctx, connection, "reset lock timeout", resetLockTimeoutSQL)
 }
 
+// setLockTimeoutSQL renders SET lock_timeout. SET takes no bind parameters; the
+// value is an integer number of milliseconds, never caller input.
+func setLockTimeoutSQL(timeout time.Duration) string {
+	milliseconds := max(timeout.Milliseconds(), 1)
+	return "SET lock_timeout = " + strconv.FormatInt(milliseconds, 10)
+}
+
+const resetLockTimeoutSQL = "RESET lock_timeout"
+
 func validateDropRequest(request DropRequest) (database string, role string, err error) {
-	if request.ProjectID <= 0 || request.ProjectID > math.MaxInt32 ||
-		(request.Mode != ModeDatabaseRole && request.Mode != ModeSchema) ||
-		!validPostgresName(request.Admin.Database) {
-		return "", "", ErrInvalidRequest
+	if request.ProjectID <= 0 || request.ProjectID > math.MaxInt32 {
+		return "", "", fmt.Errorf("%w: project id out of range", ErrInvalidRequest)
+	}
+	if request.Mode != ModeDatabaseRole && request.Mode != ModeSchema {
+		return "", "", fmt.Errorf("%w: unknown mode", ErrInvalidRequest)
+	}
+	// The drop runs from the admin database, so it has to be named: an empty
+	// name would make the connector refuse with no hint. Callers that take a
+	// server URL (cmd/pgvector-orphans) fall back to `postgres` before this.
+	if request.Admin.Database == "" {
+		return "", "", fmt.Errorf("%w: the admin connection names no database", ErrInvalidRequest)
+	}
+	if !validPostgresName(request.Admin.Database) {
+		return "", "", fmt.Errorf("%w: the admin database name is not valid", ErrInvalidRequest)
 	}
 	database = ProjectDatabaseName(request.ProjectID)
 	role = ProjectRoleName(request.ProjectID)
