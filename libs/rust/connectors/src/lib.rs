@@ -15,7 +15,8 @@
 //!   transport that applies it to every request.
 //! * per provider (feature `providers`): its configuration (secrets
 //!   zeroized), its errors (data-free), its wire layer and its request
-//!   building and authentication — [`ado`], [`bitbucket`], [`github`], [`gitlab`].
+//!   building and authentication — [`ado`], [`bitbucket`], [`github`], [`gitlab`];
+//!   and [`artifact`], the platform's own object API.
 //! * `ContentSource` connectors over those clients (feature
 //!   `content-source`): [`source`] holds what they share (egress guard,
 //!   bounded 429 backoff, listing and fetch caps); each provider module holds
@@ -27,6 +28,8 @@
 #[cfg(feature = "providers")]
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
 pub mod ado;
+#[cfg(feature = "providers")]
+pub mod artifact;
 pub mod base_url;
 #[cfg(feature = "providers")]
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
