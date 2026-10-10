@@ -400,6 +400,12 @@ type RouterConfig struct {
 	// which imports this layer. Unassigned, a created project has no vector
 	// store and cannot index — see createProjectVectorStore.
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
+	// OnProjectProvisioner, when set, is called once with the one shared project
+	// provisioner, after it is built. The process uses it to start the
+	// tombstone reconciler (#1211) over the same provisioner the routes delete
+	// with, instead of building a second one (see newProjectProvisioner). It is
+	// not called when the composition has no pool and so no provisioner.
+	OnProjectProvisioner func(*projectprovisioning.Provisioner)
 	// PlatformModelDefaults is the platform default model service (#6826). It
 	// backs /api/v2/admin/gateway/default_model, the default_usage count a
 	// platform-model delete reads, the release of stored defaults after a
@@ -1181,6 +1187,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// switches project creation, the support assistant and personal-project
 	// provisioning off together and reports nothing.
 	projectProvisioner, projectProvisionerOK := newProjectProvisioner(cfg)
+	if projectProvisionerOK && cfg.OnProjectProvisioner != nil {
+		cfg.OnProjectProvisioner(projectProvisioner)
+	}
 	// The personal-project ensurer over that one provisioner. Nil when the
 	// composition has no pool, which every consumer tolerates.
 	var personalProjects *personalproject.Ensurer
