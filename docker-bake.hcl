@@ -149,6 +149,22 @@ target "elitea-inventory-engine" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
+# elitea-vector (ADR-0031): the stateless gRPC facade that is the only Qdrant
+# client. One binary on distroless base-nossl-debian13 plus libgcc_s, built
+# with cargo-auditable. Repo-root context: the Containerfile COPYs
+# services/elitea-vector, libs/proto (its build script compiles
+# elitea.vector.v1) and libs/rust (a path dependency).
+#
+# Not in `group "default"`, like the engines: it compiles from source.
+target "elitea-vector" {
+  context    = "."
+  dockerfile = "services/elitea-vector/Containerfile"
+  tags       = ["${REGISTRY}/elitea-vector:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-vector"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-vector"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 # Standalone module that needs Go 1.26.4 or above (bifrost/core); its go.mod
 # asks for the go1.26.9 security floor. The Containerfile pins
 # golang:1.26 internally, so the correct toolchain is used regardless of the

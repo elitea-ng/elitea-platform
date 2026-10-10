@@ -21,6 +21,16 @@ impl AuthorizedToolkitExecution {
         &self.execution
     }
 
+    /// The elitea-vector token of the authorized claim (ADR-0031): the handle
+    /// a toolkit's vector-index client uses. `None` when Main minted none.
+    #[allow(
+        dead_code,
+        reason = "The vector-index client (ADR-0030) is its consumer."
+    )]
+    pub(crate) fn vector_token(&self) -> Option<&super::super::vector_token::VectorClaimToken> {
+        self.execution.vector_token()
+    }
+
     pub(crate) fn into_output_authority(self) -> AgentExecutionOutputAuthority {
         self.execution.into_output_authority()
     }

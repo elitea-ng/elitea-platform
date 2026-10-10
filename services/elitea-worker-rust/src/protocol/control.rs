@@ -56,6 +56,7 @@ use super::output::{
     build_agent_terminal_output_frame, build_node_event_output_frame,
     build_toolkit_execute_read_terminal_output_frame,
 };
+use super::vector_token::VectorClaimToken;
 use crate::agents::result::BoundAgentExecutionResult;
 use crate::transport::output_grpc::{
     FrameBoundProgressRejection, ProgressRejectionWinner, progress_frame_sha256,
@@ -250,9 +251,19 @@ pub struct AcceptedAgentClaim {
     input_bundle: ExecutionInputBundleV1,
     request_entry: ExecutionInputEntryV1,
     arguments_entry: Option<ExecutionInputEntryV1>,
+    /// The elitea-vector bearer Main minted for this claim, if any.
+    vector_token: Option<VectorClaimToken>,
 }
 
 impl AcceptedAgentClaim {
+    /// The elitea-vector token of this claim, for toolkit and agent code
+    /// running under it. `None` when Main minted none (a capability that
+    /// does not use vectors, or no vector deployment).
+    #[must_use]
+    pub(crate) const fn vector_token(&self) -> Option<&VectorClaimToken> {
+        self.vector_token.as_ref()
+    }
+
     #[must_use]
     fn input_entry(&self, entry_id: &str) -> Option<&ExecutionInputEntryV1> {
         if self.request_entry.entry_id == entry_id {
@@ -469,6 +480,8 @@ impl AcceptedAgentClaim {
             input_bundle: _,
             request_entry: _,
             arguments_entry: _,
+            // Output replay needs no vector access; the bearer is erased here.
+            vector_token: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -875,6 +888,7 @@ pub(crate) struct ClaimBoundRuntimeContextAuthority {
     claim_id: String,
     fence_token: Zeroizing<Vec<u8>>,
     resource_project_id: String,
+    vector_token: Option<VectorClaimToken>,
 }
 
 /// Opaque authority for one claim-fenced ADK session writer.
@@ -942,7 +956,19 @@ impl ClaimBoundRuntimeContextAuthority {
             claim_id: claim.claim_id.clone(),
             fence_token: Zeroizing::new(claim.fence.fence_token.clone()),
             resource_project_id: claim.identity.resource_project_id.clone(),
+            vector_token: claim.vector_token.as_ref().map(VectorClaimToken::duplicate),
         }
+    }
+
+    /// The elitea-vector token of the claim this authority was derived
+    /// from, for the agent's toolkits.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "The vector-index client (ADR-0030) is its consumer."
+    )]
+    pub(crate) const fn vector_token(&self) -> Option<&VectorClaimToken> {
+        self.vector_token.as_ref()
     }
 
     #[must_use]
@@ -996,6 +1022,12 @@ impl ClaimBoundSessionAuthority {
 }
 
 impl LeaseMonitoredAgentExecution {
+    /// The elitea-vector token of the claim, for the toolkit run under it.
+    #[must_use]
+    pub(crate) const fn vector_token(&self) -> Option<&VectorClaimToken> {
+        self.claim.vector_token()
+    }
+
     #[must_use]
     pub const fn input_bundle_ref(&self) -> &ExecutionInputBundleReferenceV1 {
         self.claim.input_bundle_ref()
@@ -1484,6 +1516,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             input_bundle_ref: ExecutionInputBundleReferenceV1::default(),
             input_bundle: ExecutionInputBundleV1::default(),
             arguments_entry: None,
+            vector_token: None,
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -1503,6 +1536,7 @@ pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthor
         claim_id: "claim-1".to_owned(),
         fence_token: Zeroizing::new(vec![b'f'; 32]),
         resource_project_id: "17".to_owned(),
+        vector_token: None,
     }
 }
 
@@ -2802,6 +2836,7 @@ fn parse_input_claim_binding(
         input_bundle,
         request_entry,
         arguments_entry,
+        vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
     })
 }
 

@@ -1391,7 +1391,9 @@ dependencies = [
 name = "elitea-doc-extract"
 version = "0.1.0"
 dependencies = [
+ "chardetng",
  "elitea-content-source",
+ "encoding_rs",
  "tokio",
  "xberg",
 ]

@@ -87,6 +87,29 @@ message ClaimReceiptV1 {
   // Exact strict JSON owned by node-recovery-v1.md, never caller metadata.
   bytes node_recovery_receipt_json = 16;
   reserved 13 to 15;
+  // A bearer for elitea-vector, minted for this claim (ADR-0031 decision 1).
+  // Carried only by ACCEPTED, RECOVER_AGENT_MODEL_CHECKPOINT and
+  // RECOVER_NODE_VISIT receipts of a capability that may use vectors, and
+  // only where Main serves vector token introspection. Absent otherwise.
+  VectorClaimTokenV1 vector_token = 17;
+}
+
+// VectorClaimTokenV1 is a short-lived bearer bound to one claim: its
+// execution, the execution's resource project and actor, and the vector
+// sources it may read and write. Main stores only its SHA-256. Introspection
+// answers it inactive as soon as the claim is released (settled, aborted or
+// taken over), its lease lapses, the execution is settling or terminal, or
+// its desired state is no longer RUNNING. The worker keeps it in memory
+// only; it never logs or spools it, and sends it only to elitea-vector.
+message VectorClaimTokenV1 {
+  // The bearer string: "elvc_" followed by 43 base64url characters.
+  string bearer = 1;
+  // The latest instant it can be valid: the command deadline, capped.
+  int64 expires_at_unix_millis = 2;
+  // The vector sources it is admitted for, by payload keyword
+  // ("toolkit_index").
+  repeated string allowed_sources = 3;
+  reserved 4 to 15;
 }
 
 message ClaimCommandResponseV1 {
