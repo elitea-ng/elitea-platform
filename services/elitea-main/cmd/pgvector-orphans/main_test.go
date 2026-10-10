@@ -19,11 +19,15 @@ import (
 func TestComputeOrphansKeepsOnlyExactProjectNamesWithoutARow(t *testing.T) {
 	t.Parallel()
 
-	got := computeOrphans(
+	got, owned := computeOrphans(
 		map[int64]struct{}{1: {}},
+		nil,
 		[]string{"project_1", "project_2", "project_007", "postgres", "project_3", "project_2_user", "project_abc"},
 		[]string{"project_1_user", "project_2_user", "project_4_user", "project_5", "project_3_users", "postgres"},
 	)
+	if len(owned) != 0 {
+		t.Fatalf("journal-owned ids without a journal: %v", owned)
+	}
 	want := "2:project_2,project_2_user;3:project_3;4:project_4_user"
 	var parts []string
 	for _, o := range got {
@@ -34,10 +38,32 @@ func TestComputeOrphansKeepsOnlyExactProjectNamesWithoutARow(t *testing.T) {
 	}
 }
 
+// An id whose delete still has cleanup pending in the journal is the journal's
+// to drop: it is reported apart and never offered as an orphan.
+func TestComputeOrphansLeavesJournalOwnedIDsToTheJournal(t *testing.T) {
+	t.Parallel()
+
+	orphans, owned := computeOrphans(
+		map[int64]struct{}{1: {}},
+		map[int64]struct{}{3: {}},
+		[]string{"project_1", "project_2", "project_3"},
+		[]string{"project_2_user", "project_3_user"},
+	)
+	if len(orphans) != 1 || orphans[0].ProjectID != 2 {
+		t.Fatalf("orphans = %+v, want only project 2", orphans)
+	}
+	if len(owned) != 1 || owned[0] != 3 {
+		t.Fatalf("journal-owned = %v, want [3]", owned)
+	}
+	if _, err := selectConfirmed(orphans, []string{"project_3", "project_3_user"}); err == nil {
+		t.Fatal("a journal-owned id could be confirmed for a drop")
+	}
+}
+
 func TestSelectConfirmed(t *testing.T) {
 	t.Parallel()
 
-	orphans := computeOrphans(nil, []string{"project_2", "project_3"}, []string{"project_2_user"})
+	orphans, _ := computeOrphans(nil, nil, []string{"project_2", "project_3"}, []string{"project_2_user"})
 
 	if _, err := selectConfirmed(orphans, nil); err == nil {
 		t.Error("--drop without --confirm was accepted")
@@ -260,6 +286,9 @@ func TestRedactMapsKnownSentinelsAndKeepsTheSQLState(t *testing.T) {
 		"parse admin URL":    {errParseAdminURL, "cannot parse --pgvector-url"},
 		"connect platform":   {errConnectPlatform, "cannot connect to the platform database"},
 		"connect admin":      {errConnectAdmin, "cannot connect to the PgVector admin database"},
+		"invalid request":    {fmt.Errorf("%w: the admin connection names no database", pgvector.ErrInvalidRequest), "check that --pgvector-url names the admin database"},
+		"invalid connector":  {pgvector.ErrInvalidConnector, "the PgVector admin connection is not usable"},
+		"provisioning":       {fmt.Errorf("%w: drop project database", pgvector.ErrProvisioning), "a statement on the PgVector server failed"},
 		"raw postgres error": {fmt.Errorf("exec: %w", &pgconn.PgError{Code: "42501", Message: `permission denied for database "project_7"`}), "postgres error 42501"},
 		"unknown":            {errors.New("dial tcp 10.1.2.3:5432: password=hunter2"), "operation failed"},
 		"context deadline":   {context.DeadlineExceeded, "context deadline exceeded"},
@@ -314,6 +343,130 @@ func TestRunNamesTheFailingConnectionWithoutEchoingTheURL(t *testing.T) {
 			if strings.Contains(errOut.String()+out.String(), leak) {
 				t.Errorf("%s: output leaks %q: %s%s", name, leak, errOut.String(), out.String())
 			}
+		}
+	}
+}
+
+// TestRunRechecksEachIDBeforeItsDropAndLeavesTheJournalItsIDs is the drop-time
+// safety net (#1211): the listing is old by the time a drop runs. An id that
+// has a project row by then, or whose delete has cleanup pending in the
+// journal, is skipped; an id the journal owned at listing time is never offered
+// at all; the rest is dropped. The admin URL names no database, so the tool
+// connects to `postgres`.
+func TestRunRechecksEachIDBeforeItsDropAndLeavesTheJournalItsIDs(t *testing.T) {
+	url := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set ELITEA_TEST_DATABASE_URL to run the orphan command against Postgres")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	admin, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(context.Background()) }()
+
+	base := int64(1_700_000_000 + time.Now().UnixNano()%90_000_000)
+	recreated, journalLate, journalOwned, dropped := base, base+1, base+2, base+3
+	ids := []int64{recreated, journalLate, journalOwned, dropped}
+	platformDB := fmt.Sprintf("orphans_recheck_%d", base)
+	statements := []string{fmt.Sprintf(`CREATE DATABASE %s`, pgx.Identifier{platformDB}.Sanitize())}
+	for _, id := range ids {
+		statements = append(statements,
+			fmt.Sprintf(`CREATE ROLE %s`, pgx.Identifier{fmt.Sprintf("project_%d_user", id)}.Sanitize()),
+			fmt.Sprintf(`CREATE DATABASE %s`, pgx.Identifier{fmt.Sprintf("project_%d", id)}.Sanitize()))
+	}
+	for _, s := range statements {
+		if _, err := admin.Exec(ctx, s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+	t.Cleanup(func() {
+		c := context.Background()
+		for _, id := range ids {
+			_, _ = admin.Exec(c, fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, pgx.Identifier{fmt.Sprintf("project_%d", id)}.Sanitize()))
+			_, _ = admin.Exec(c, fmt.Sprintf(`DROP ROLE IF EXISTS %s`, pgx.Identifier{fmt.Sprintf("project_%d_user", id)}.Sanitize()))
+		}
+		_, _ = admin.Exec(c, fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, pgx.Identifier{platformDB}.Sanitize()))
+	})
+
+	cfg, _ := pgx.ParseConfig(url)
+	cfg.Database = platformDB
+	platform, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = platform.Close(context.Background()) }()
+	if _, err := platform.Exec(ctx, `
+CREATE SCHEMA centry;
+CREATE TABLE centry.project (id integer PRIMARY KEY);
+CREATE TABLE centry.project_deletions (project_id bigint PRIMARY KEY, completed_at timestamptz);
+INSERT INTO centry.project (id) VALUES (1), (2);`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := platform.Exec(ctx,
+		`INSERT INTO centry.project_deletions (project_id, completed_at) VALUES ($1, NULL), (1, now())`, journalOwned); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeDrop = func(o orphan) {
+		var statement string
+		switch o.ProjectID {
+		case recreated:
+			statement = `INSERT INTO centry.project (id) VALUES ($1)`
+		case journalLate:
+			statement = `INSERT INTO centry.project_deletions (project_id) VALUES ($1)`
+		default:
+			return
+		}
+		if _, err := platform.Exec(ctx, statement, o.ProjectID); err != nil {
+			t.Errorf("hook for %d: %v", o.ProjectID, err)
+		}
+	}
+	t.Cleanup(func() { beforeDrop = func(orphan) {} })
+
+	adminURL := strings.TrimSuffix(url, "/postgres")
+	if adminURL == url {
+		t.Skip("ELITEA_TEST_DATABASE_URL does not end in /postgres; cannot build a URL with no database")
+	}
+	platformURL := adminURL + "/" + platformDB
+	lookup := func(string) (string, bool) { return "", false }
+
+	var out, errOut bytes.Buffer
+	if code := run(ctx, []string{"--pgvector-url", adminURL, "--database-url", platformURL}, lookup, &out, &errOut); code != exitOK {
+		t.Fatalf("dry run: exit %d, err %q", code, errOut.String())
+	}
+	if strings.Contains(out.String(), fmt.Sprintf("project_%d,", journalOwned)) ||
+		!strings.Contains(out.String(), fmt.Sprintf("cleanup journal (not orphans): [%d]", journalOwned)) {
+		t.Fatalf("the journal-owned id is offered as an orphan or not reported apart:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "admin database postgres") {
+		t.Fatalf("an admin URL with no database did not fall back to postgres:\n%s", out.String())
+	}
+
+	var confirm []string
+	for _, id := range []int64{recreated, journalLate, dropped} {
+		confirm = append(confirm, fmt.Sprintf("project_%d", id), fmt.Sprintf("project_%d_user", id))
+	}
+	out.Reset()
+	errOut.Reset()
+	args := []string{"--pgvector-url", adminURL, "--database-url", platformURL,
+		"--drop", "--force-fraction", "--confirm", strings.Join(confirm, ",")}
+	if code := run(ctx, args, lookup, &out, &errOut); code != exitOK {
+		t.Fatalf("drop: exit %d, out %q, err %q", code, out.String(), errOut.String())
+	}
+	for id, wantKept := range map[int64]bool{recreated: true, journalLate: true, journalOwned: true, dropped: false} {
+		d, r := existsOnServer(ctx, t, admin, fmt.Sprintf("project_%d", id), fmt.Sprintf("project_%d_user", id))
+		if d != wantKept || r != wantKept {
+			t.Errorf("project %d: database=%v role=%v, want kept=%v\n%s", id, d, r, wantKept, out.String())
+		}
+	}
+	for _, want := range []string{
+		fmt.Sprintf("project %d: skipped, it has a centry.project row now", recreated),
+		fmt.Sprintf("project %d: skipped, its delete has cleanup pending", journalLate),
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
 	}
 }

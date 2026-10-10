@@ -14,10 +14,14 @@
 //	pgvector-orphans --pgvector-url <admin-url> --database-url <platform-url>
 //	pgvector-orphans ... --drop --confirm project_12,project_12_user,project_13
 //
-// The URLs default to PGVECTOR_ADMIN_URL and DATABASE_URL. A name is an orphan
-// only if it is EXACTLY project_<id> or project_<id>_user for a canonical
-// positive int4 id with no row in centry.project; nothing else on the server is
-// ever listed or touched.
+// The URLs default to PGVECTOR_ADMIN_URL and DATABASE_URL. An admin URL that
+// names no database connects to `postgres`. A name is an orphan only if it is
+// EXACTLY project_<id> or project_<id>_user for a canonical positive int4 id
+// with no row in centry.project and no incomplete row in the project-delete
+// cleanup journal (centry.project_deletions): a deleted project whose cleanup is
+// still pending belongs to the journal, which drops its database itself. Nothing
+// else on the server is ever listed or touched. Each id is checked again,
+// against both tables, immediately before its drop.
 //
 // SHARED-SERVER RISK. "No row in centry.project" is judged against the one
 // platform database named by --database-url. If that URL points at the wrong
@@ -129,15 +133,27 @@ func run(
 		say(stderr, "%v\n", redact(errParseAdminURL))
 		return exitInvalidUsage
 	}
+	if adminConfig.Database == "" {
+		// A server URL with no database: connect where every server has one.
+		// The drop runs from this database, so it is never a project_<id>.
+		adminConfig.Database = defaultAdminDatabase
+	}
 	if *maxFraction < 0 || *maxFraction > 1 {
 		sayln(stderr, "--max-orphan-fraction must be between 0 and 1")
 		return exitInvalidUsage
 	}
-	report, err := findOrphans(ctx, adminConfig, *databaseURL)
+	platform, err := connectPlatform(ctx, *databaseURL)
 	if err != nil {
 		say(stderr, "list orphans: %v\n", redact(err))
 		return exitFailure
 	}
+	defer func() { _ = platform.Close(context.Background()) }()
+	report, err := findOrphans(ctx, platform, adminConfig)
+	if err != nil {
+		say(stderr, "list orphans: %v\n", redact(err))
+		return exitFailure
+	}
+	report.PlatformURLDatabase = platform.Config().Database
 	orphans := report.Orphans
 
 	printHeader(stdout, report)
@@ -180,6 +196,18 @@ func run(
 	admin := pgvector.AdminConnection{Database: adminConfig.Database}
 	failed := 0
 	for _, o := range selected {
+		beforeDrop(o)
+		// The listing is minutes old by now. A project created since (its id
+		// reused by nothing, but an operator can restore a row) or a delete
+		// whose cleanup journal now owns the id must not be dropped from here.
+		if reason, err := stillOrphaned(ctx, platform, o.ProjectID); err != nil {
+			failed++
+			say(stderr, "project %d: not dropped, the re-check failed: %v\n", o.ProjectID, redact(err))
+			continue
+		} else if reason != "" {
+			say(stdout, "project %d: skipped, %s\n", o.ProjectID, reason)
+			continue
+		}
 		// Database/Role echo the exact confirmed names; Drop re-derives and
 		// refuses a mismatch.
 		result, err := provisioner.Drop(ctx, pgvector.DropRequest{
@@ -227,6 +255,13 @@ var (
 		"If it is really right, re-run with --force-fraction")
 )
 
+// defaultAdminDatabase is the database an admin URL with none connects to.
+const defaultAdminDatabase = "postgres"
+
+// beforeDrop runs before each drop's re-check. A test hook: production leaves it
+// empty.
+var beforeDrop = func(orphan) {}
+
 // safeMessages maps the sentinels this command can receive to the text shown
 // for them. A sentinel is matched with errors.Is, so a wrapped one still maps.
 var safeMessages = []struct {
@@ -241,6 +276,9 @@ var safeMessages = []struct {
 	{errOrphanFraction, errOrphanFraction.Error()},
 	{pgvector.ErrDropLockTimeout, "timed out waiting for the project's PgVector advisory lock; a provision or another drop holds it, retry later"},
 	{pgvector.ErrInvalidDropTarget, "refusing to drop a name that is not the project's own database or role"},
+	{pgvector.ErrInvalidRequest, "invalid drop request: check that --pgvector-url names the admin database and the id is a project id"},
+	{pgvector.ErrInvalidConnector, "the PgVector admin connection is not usable"},
+	{pgvector.ErrProvisioning, "a statement on the PgVector server failed; see the server log"},
 }
 
 // redact turns an error into text that is safe to print: a connection string
@@ -276,10 +314,14 @@ const defaultMaxOrphanFraction = 0.2
 type report struct {
 	PlatformURLDatabase string // the database name in --database-url
 	CurrentDatabase     string // current_database() on that connection
-	ProjectCount        int
-	MinProjectID        int64
-	MaxProjectID        int64
-	Orphans             []orphan
+	AdminDatabase       string // the database the PgVector admin connects to
+	// JournalOwned are project ids with a project_* name and an incomplete
+	// cleanup-journal row: their delete drops them, so they are not orphans.
+	JournalOwned []int64
+	ProjectCount int
+	MinProjectID int64
+	MaxProjectID int64
+	Orphans      []orphan
 	// ServerProjects is the number of distinct project ids that own a project_*
 	// database or role on the PgVector server, live or orphaned.
 	ServerProjects int
@@ -296,22 +338,69 @@ func (r report) orphanFraction() float64 {
 func printHeader(w io.Writer, r report) {
 	say(w, "platform database: %s (current_database() = %s)\n", r.PlatformURLDatabase, r.CurrentDatabase)
 	say(w, "centry.project: %d project(s), id range %d..%d\n", r.ProjectCount, r.MinProjectID, r.MaxProjectID)
-	say(w, "pgvector server: %d project id(s) with a project_* database or role; %d orphaned (%.0f%%)\n",
-		r.ServerProjects, len(r.Orphans), r.orphanFraction()*100)
+	say(w, "pgvector server: admin database %s; %d project id(s) with a project_* database or role; %d orphaned (%.0f%%)\n",
+		r.AdminDatabase, r.ServerProjects, len(r.Orphans), r.orphanFraction()*100)
+	if len(r.JournalOwned) > 0 {
+		say(w, "left to the project-delete cleanup journal (not orphans): %v\n", r.JournalOwned)
+	}
 }
 
-func findOrphans(ctx context.Context, adminConfig *pgx.ConnConfig, databaseURL string) (report, error) {
-	var rep report
+// connectPlatform opens the platform database connection the listing and the
+// pre-drop re-checks read.
+func connectPlatform(ctx context.Context, databaseURL string) (*pgx.Conn, error) {
 	platformConfig, err := pgx.ParseConfig(mustNormalize(databaseURL))
 	if err != nil {
-		return rep, errParsePlatformURL
+		return nil, errParsePlatformURL
 	}
-	rep.PlatformURLDatabase = platformConfig.Database
 	platform, err := pgx.ConnectConfig(ctx, platformConfig)
 	if err != nil {
-		return rep, errConnectPlatform
+		return nil, errConnectPlatform
 	}
-	defer func() { _ = platform.Close(context.Background()) }()
+	return platform, nil
+}
+
+// journalPresent reports whether the platform database has the project-delete
+// cleanup journal (shared/0160). An older platform has none, and then no id is
+// journal-owned.
+func journalPresent(ctx context.Context, platform *pgx.Conn) (bool, error) {
+	var present bool
+	err := platform.QueryRow(ctx, `SELECT to_regclass('centry.project_deletions') IS NOT NULL`).Scan(&present)
+	return present, err
+}
+
+// stillOrphaned re-checks one id against the platform database right before
+// its drop. It answers "" when the id is still an orphan, or why it is not.
+func stillOrphaned(ctx context.Context, platform *pgx.Conn, projectID int64) (string, error) {
+	var hasRow bool
+	if err := platform.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1)`, projectID).Scan(&hasRow); err != nil {
+		return "", err
+	}
+	if hasRow {
+		return "it has a centry.project row now", nil
+	}
+	journal, err := journalPresent(ctx, platform)
+	if err != nil {
+		return "", err
+	}
+	if !journal {
+		return "", nil
+	}
+	var pending bool
+	if err := platform.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM centry.project_deletions WHERE project_id = $1 AND completed_at IS NULL)`,
+		projectID).Scan(&pending); err != nil {
+		return "", err
+	}
+	if pending {
+		return "its delete has cleanup pending in centry.project_deletions, which drops it", nil
+	}
+	return "", nil
+}
+
+func findOrphans(ctx context.Context, platform *pgx.Conn, adminConfig *pgx.ConnConfig) (report, error) {
+	var rep report
+	rep.AdminDatabase = adminConfig.Database
 	if err := platform.QueryRow(ctx, `SELECT current_database()`).Scan(&rep.CurrentDatabase); err != nil {
 		return rep, err
 	}
@@ -339,6 +428,24 @@ func findOrphans(ctx context.Context, adminConfig *pgx.ConnConfig, databaseURL s
 	}
 	rep.ProjectCount = len(projects)
 
+	// Ids whose delete is still cleaning up belong to the cleanup journal.
+	journalOwned := map[int64]struct{}{}
+	if present, err := journalPresent(ctx, platform); err != nil {
+		return rep, err
+	} else if present {
+		pending, err := platform.Query(ctx, `SELECT project_id FROM centry.project_deletions WHERE completed_at IS NULL`)
+		if err != nil {
+			return rep, err
+		}
+		ids, err := pgx.CollectRows(pending, pgx.RowTo[int64])
+		if err != nil {
+			return rep, err
+		}
+		for _, id := range ids {
+			journalOwned[id] = struct{}{}
+		}
+	}
+
 	admin, err := pgx.ConnectConfig(ctx, adminConfig)
 	if err != nil {
 		return rep, errConnectAdmin
@@ -352,7 +459,7 @@ func findOrphans(ctx context.Context, adminConfig *pgx.ConnConfig, databaseURL s
 	if err != nil {
 		return rep, err
 	}
-	rep.Orphans = computeOrphans(projects, databases, roles)
+	rep.Orphans, rep.JournalOwned = computeOrphans(projects, journalOwned, databases, roles)
 	rep.ServerProjects = serverProjectCount(databases, roles)
 	return rep, nil
 }
@@ -392,35 +499,47 @@ func queryNames(ctx context.Context, conn *pgx.Conn, query string) ([]string, er
 }
 
 // computeOrphans keeps only names that are exactly project_<id> /
-// project_<id>_user for a canonical id that has no project row.
-func computeOrphans(projects map[int64]struct{}, databases, roles []string) []orphan {
+// project_<id>_user for a canonical id that has no project row. Ids the cleanup
+// journal owns are returned apart (journalOwned), never as orphans.
+func computeOrphans(projects, journal map[int64]struct{}, databases, roles []string) (orphans []orphan, journalOwned []int64) {
 	byID := map[int64]*orphan{}
+	owned := map[int64]struct{}{}
 	entry := func(id int64) *orphan {
 		if byID[id] == nil {
 			byID[id] = &orphan{ProjectID: id}
 		}
 		return byID[id]
 	}
+	consider := func(id int64) bool {
+		if _, live := projects[id]; live {
+			return false
+		}
+		if _, pending := journal[id]; pending {
+			owned[id] = struct{}{}
+			return false
+		}
+		return true
+	}
 	for _, name := range databases {
-		if id, ok := pgvector.ParseProjectDatabaseName(name); ok {
-			if _, live := projects[id]; !live {
-				entry(id).Database = name
-			}
+		if id, ok := pgvector.ParseProjectDatabaseName(name); ok && consider(id) {
+			entry(id).Database = name
 		}
 	}
 	for _, name := range roles {
-		if id, ok := pgvector.ParseProjectRoleName(name); ok {
-			if _, live := projects[id]; !live {
-				entry(id).Role = name
-			}
+		if id, ok := pgvector.ParseProjectRoleName(name); ok && consider(id) {
+			entry(id).Role = name
 		}
 	}
-	result := make([]orphan, 0, len(byID))
+	orphans = make([]orphan, 0, len(byID))
 	for _, o := range byID {
-		result = append(result, *o)
+		orphans = append(orphans, *o)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ProjectID < result[j].ProjectID })
-	return result
+	sort.Slice(orphans, func(i, j int) bool { return orphans[i].ProjectID < orphans[j].ProjectID })
+	for id := range owned {
+		journalOwned = append(journalOwned, id)
+	}
+	sort.Slice(journalOwned, func(i, j int) bool { return journalOwned[i] < journalOwned[j] })
+	return orphans, journalOwned
 }
 
 // selectConfirmed returns the orphans whose every name was confirmed. Any
