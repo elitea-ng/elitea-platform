@@ -212,9 +212,11 @@ pub(crate) fn markdown(text: &str, settings: &Markdown<'_>) -> Result<Vec<Chunk>
             .map(|(_, text)| text.as_str())
             .collect::<Vec<_>>()
             .join("; ");
-        let (parts, method) = if tokens::count(&piece.content)? > settings.max_tokens {
-            let parts = tokens::split(
-                &piece.content,
+        // Encoded once: the ids count the piece and, if it is over, split it.
+        let ids = tokens::encode(&piece.content, Encoding::Cl100k)?;
+        let (parts, method) = if ids.len() > settings.max_tokens {
+            let parts = tokens::split_ids(
+                &ids,
                 Encoding::Cl100k,
                 settings.max_tokens,
                 settings.token_overlap,

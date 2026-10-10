@@ -7,6 +7,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The one extension table (kind and media type), shared with the engines.
+elitea-content-source = { path = "../content-source" }
 # The tree-sitter grammars (`grammar_for`), shared with the Inventory engine
 # so a method boundary is the same tree whoever asks.
 elitea-code-parsers = { path = "../code-parsers" }

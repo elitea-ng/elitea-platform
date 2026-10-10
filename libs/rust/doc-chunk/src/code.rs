@@ -46,7 +46,7 @@ fn language_of(extension: &str) -> Option<Language> {
         ".js" | ".jsx" | ".mjs" | ".cjs" => ("javascript", Some("javascript")),
         ".ts" | ".tsx" => ("typescript", Some("typescript")),
         ".java" => ("java", Some("java")),
-        ".kt" => ("kotlin", Some("kotlin")),
+        ".kt" | ".kts" => ("kotlin", Some("kotlin")),
         ".rs" => ("rust", Some("rust")),
         ".go" => ("go", Some("go")),
         ".cpp" => ("cpp", Some("cpp")),
@@ -146,21 +146,33 @@ fn splitter_config(size: usize, overlap: usize) -> ChunkConfig<text_splitter::Ch
         .unwrap_or_else(|_| ChunkConfig::new(size))
 }
 
-/// `piece` split at the character size, along the syntax where the grammar
-/// allows.
-fn split_piece(piece: &str, grammar: &tree_sitter::Language, settings: &Code) -> Vec<String> {
-    let config = || splitter_config(settings.chunk_size, settings.chunk_overlap);
-    let parts: Vec<String> = match CodeSplitter::new(grammar.clone(), config()) {
-        Ok(splitter) => splitter.chunks(piece).map(str::to_owned).collect(),
-        Err(_) => TextSplitter::new(config())
-            .chunks(piece)
-            .map(str::to_owned)
-            .collect(),
-    };
-    if parts.is_empty() {
-        vec![piece.to_owned()]
-    } else {
-        parts
+/// The splitter of one file, built once: along the syntax when the grammar
+/// allows, else by text.
+enum Splitter {
+    Code(CodeSplitter<text_splitter::Characters>),
+    Text(TextSplitter<text_splitter::Characters>),
+}
+
+impl Splitter {
+    fn new(grammar: &tree_sitter::Language, settings: &Code) -> Self {
+        let config = || splitter_config(settings.chunk_size, settings.chunk_overlap);
+        match CodeSplitter::new(grammar.clone(), config()) {
+            Ok(splitter) => Self::Code(splitter),
+            Err(_) => Self::Text(TextSplitter::new(config())),
+        }
+    }
+
+    /// `piece` split at the character size.
+    fn split(&self, piece: &str) -> Vec<String> {
+        let parts: Vec<String> = match self {
+            Self::Code(splitter) => splitter.chunks(piece).map(str::to_owned).collect(),
+            Self::Text(splitter) => splitter.chunks(piece).map(str::to_owned).collect(),
+        };
+        if parts.is_empty() {
+            vec![piece.to_owned()]
+        } else {
+            parts
+        }
     }
 }
 
@@ -210,10 +222,11 @@ pub(crate) fn code(text: &str, extension: &str, settings: &Code) -> Result<Vec<C
         });
     }
 
+    let splitter = Splitter::new(&grammar, settings);
     let mut chunks = Vec::new();
     for method in methods {
         let name = method.name.as_deref().unwrap_or("unknown");
-        for part in split_piece(&method.text, &grammar, settings) {
+        for part in splitter.split(&method.text) {
             let id = chunks.len() + 1;
             chunks.push(Chunk::new(part, id, "code", name).with("language", label));
         }

@@ -159,8 +159,19 @@ fn golden_json() {
     let small = config(&json!({"max_tokens": 160}));
     let chunks = run(&text, "config.json", &small);
     golden("config_json_160", &chunks);
-    // The pieces are Python-style dumps: ", " and ": " separators, ASCII.
-    assert!(chunks.iter().all(|c| c.text.is_ascii()));
+    // The pieces of keys are Python-style dumps: ", " and ": " separators,
+    // ASCII. The one string too long for a chunk is raw text, with its path.
+    assert!(
+        chunks
+            .iter()
+            .filter(|c| !c.metadata.contains_key("json_path"))
+            .all(|c| c.text.is_ascii())
+    );
+    assert!(
+        chunks
+            .iter()
+            .any(|c| c.metadata.get("json_path").is_some_and(|p| p == "/notes"))
+    );
     assert!(chunks.iter().any(|c| c.text.contains("\"path\": ")));
 }
 
@@ -325,15 +336,32 @@ fn json_chunks_are_valid_bounded_and_keep_every_value() {
         let c = config(&json!({"max_tokens": max}));
         let chunks = run(&text, "config.json", &c);
         let mut got = Vec::new();
+        let mut pieces: Vec<&str> = Vec::new();
         for chunk in &chunks {
             if chunks.len() > 1 {
-                // A chunk is over the limit only by the one value that does
-                // not fit anywhere smaller.
-                assert!(chunk.text.len() <= max + 130, "{max}: {}", chunk.text.len());
+                // No chunk is over the limit, the one long string included.
+                assert!(chunk.text.chars().count() <= max, "{max}: {}", chunk.text);
+            }
+            if let Some(path) = chunk.metadata.get("json_path") {
+                // A piece of a string too long for any chunk: raw text, with
+                // the pointer of the value it was cut from.
+                assert_eq!(path, "/notes", "{max}");
+                pieces.push(&chunk.text);
+                continue;
             }
             let parsed: Value = serde_json::from_str(&chunk.text)
                 .unwrap_or_else(|e| panic!("{max}: {e}: {}", chunk.text));
             leaves(&parsed, &mut got);
+        }
+        if !pieces.is_empty() {
+            let notes = original["notes"].as_str().unwrap_or_default();
+            let joined = pieces.join(" ");
+            assert_eq!(
+                joined.split_whitespace().collect::<Vec<_>>(),
+                notes.split_whitespace().collect::<Vec<_>>(),
+                "{max}"
+            );
+            got.push(Value::String(notes.to_owned()).to_string());
         }
         got.sort();
         assert_eq!(got, want, "max {max}");

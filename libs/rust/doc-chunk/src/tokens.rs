@@ -32,6 +32,7 @@ fn bpe(encoding: Encoding) -> Result<&'static CoreBPE, ChunkError> {
 
 /// Tokens in `text`, special-token spellings counted as text
 /// (`disallowed_special=()` in the SDK's `tiktoken_length`).
+#[cfg(test)]
 pub(crate) fn count(text: &str) -> Result<usize, ChunkError> {
     Ok(bpe(Encoding::Cl100k)?.encode_ordinary(text).len())
 }
@@ -60,6 +61,11 @@ pub(crate) fn windows(length: usize, size: usize, overlap: usize) -> Vec<Range<u
     out
 }
 
+/// `text`'s token ids, special-token spellings counted as text.
+pub(crate) fn encode(text: &str, encoding: Encoding) -> Result<Vec<u32>, ChunkError> {
+    Ok(bpe(encoding)?.encode_ordinary(text))
+}
+
 /// `text` cut into token windows. Empty text gives no window. A window that
 /// cuts through a multi-byte character decodes with a replacement character,
 /// as Python's `decode(errors="replace")` does.
@@ -72,8 +78,21 @@ pub(crate) fn split(
     if text.is_empty() {
         return Ok(Vec::new());
     }
+    split_ids(&encode(text, encoding)?, encoding, size, overlap)
+}
+
+/// The windows over ids already encoded (so a caller that counted them does
+/// not encode the text again).
+pub(crate) fn split_ids(
+    ids: &[u32],
+    encoding: Encoding,
+    size: usize,
+    overlap: usize,
+) -> Result<Vec<String>, ChunkError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let bpe = bpe(encoding)?;
-    let ids = bpe.encode_ordinary(text);
     let mut out = Vec::new();
     for window in windows(ids.len(), size, overlap) {
         let bytes = bpe

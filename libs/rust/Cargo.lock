@@ -1609,6 +1609,7 @@ name = "elitea-doc-chunk"
 version = "0.1.0"
 dependencies = [
  "elitea-code-parsers",
+ "elitea-content-source",
  "serde",
  "serde_json",
  "text-splitter",
