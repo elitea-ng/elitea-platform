@@ -15,10 +15,10 @@ use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use super::config::{GitHubAuthKind, GitHubToolkitConfig};
+use crate::git_id::valid_git_object_id;
 use crate::reqwest_adapter::ClientPolicy;
 use crate::transport::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue,
-    RETRY_AFTER,
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
 };
 use crate::transport::{Method, Request, StatusCode, Transport, TransportError, Url};
 
@@ -320,26 +320,14 @@ impl GitHubRest {
             .await
             .map_err(map_transport_error)?;
         map_status(response.status(), response.headers())?;
-        if response
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > max_response_bytes)
-        {
+        if response.declares_more_than(max_response_bytes) {
             return Err(resource_exhausted());
         }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(map_transport_error)? {
-            let next = body
-                .len()
-                .checked_add(chunk.len())
-                .ok_or_else(resource_exhausted)?;
-            if next > max_response_bytes {
-                return Err(resource_exhausted());
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = response
+            .bytes_within(max_response_bytes)
+            .await
+            .map_err(map_transport_error)?
+            .ok_or_else(resource_exhausted)?;
         serde_json::from_slice(&body).map_err(|_| invalid_response())
     }
 
@@ -357,36 +345,48 @@ impl GitHubRest {
                 MAX_RESPONSE_BYTES,
             )
             .await;
-        let response = match branch {
-            Ok(response) => response,
-            Err(error) if error.code() == GitHubClientErrorCode::NotFound => {
+        let (response, from_branch) = match branch {
+            Ok(response) => (response, true),
+            Err(error) if error.code() == GitHubClientErrorCode::NotFound => (
                 self.get_json(
                     GitHubRequestKind::Repository,
                     &["repos", owner, repository, "commits", reference],
                     &[],
                     MAX_RESPONSE_BYTES,
                 )
-                .await?
-            }
+                .await?,
+                false,
+            ),
             Err(error) => return Err(error),
         };
-        project_tree_sha(&response)
+        if from_branch {
+            project_tree_sha(&response)
+        } else {
+            project_commit_tree_sha(&response)
+        }
     }
 }
 
-/// The tree sha of a branch or commit response.
+/// The tree sha of a `branches/{b}` response (`commit.commit.tree.sha`: the
+/// branch object nests the commit object once).
 pub fn project_tree_sha(value: &Value) -> Result<String, GitHubClientError> {
-    let sha = value
-        .get("commit")
-        .and_then(|commit| commit.get("commit"))
+    tree_sha_of(value.get("commit").and_then(|commit| commit.get("commit")))
+}
+
+/// The tree sha of a `commits/{ref}` response (`commit.tree.sha`: the answer
+/// is the commit object itself), which is how a tag or a sha resolves.
+pub fn project_commit_tree_sha(value: &Value) -> Result<String, GitHubClientError> {
+    tree_sha_of(value.get("commit"))
+}
+
+fn tree_sha_of(commit: Option<&Value>) -> Result<String, GitHubClientError> {
+    commit
         .and_then(|commit| commit.get("tree"))
         .and_then(|tree| tree.get("sha"))
         .and_then(Value::as_str)
-        .filter(|sha| {
-            matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
-        .ok_or_else(invalid_response)?;
-    Ok(sha.to_ascii_lowercase())
+        .filter(|sha| valid_git_object_id(sha))
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(invalid_response)
 }
 
 /// `owner/repository`, each segment GitHub's characters.

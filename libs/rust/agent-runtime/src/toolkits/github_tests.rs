@@ -24,6 +24,8 @@ use super::families::github::code_search::{
 use super::families::github::commits::{
     test_project_commit_changes, test_project_commit_comparison, test_project_commit_list,
 };
+use elitea_connectors::github::client::{project_commit_tree_sha, project_tree_sha};
+
 use super::families::github::config::{GitHubAuthKind, GitHubToolkitConfig};
 use super::families::github::projects::{test_project_project_issues, test_project_query_payload};
 use super::families::github::pull_requests::{
@@ -441,6 +443,131 @@ fn response_projection_is_bounded_and_omits_unknown_or_null_fields() {
         }))
         .expect("branch tree SHA"),
         "a".repeat(40)
+    );
+}
+
+/// Answers the GitHub routes `list_files_in_*_branch` walks, recording the
+/// paths it was asked for.
+struct RefTransport {
+    reference: String,
+    via_branches: bool,
+    seen: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl elitea_connectors::transport::Transport for RefTransport {
+    async fn execute(
+        &self,
+        request: elitea_connectors::transport::Request,
+    ) -> Result<elitea_connectors::transport::Response, elitea_connectors::transport::TransportError>
+    {
+        use elitea_connectors::transport::{Response, StatusCode as Status};
+        let path = request.url().path().to_owned();
+        self.seen.lock().expect("seen").push(path.clone());
+        let tree = "1".repeat(40);
+        let repo = "/api/v3/repos/EliteaAI/elitea-platform";
+        let reference = &self.reference;
+        let answer = if path == format!("{repo}/branches/{reference}") {
+            if self.via_branches {
+                Some(json!({"commit": {"sha": "c", "commit": {"tree": {"sha": tree}}}}))
+            } else {
+                None
+            }
+        } else if path == format!("{repo}/commits/{reference}") && !self.via_branches {
+            Some(json!({"sha": "c", "commit": {"tree": {"sha": tree}}}))
+        } else if path == format!("{repo}/git/trees/{tree}") {
+            Some(json!({"truncated": false, "tree": [
+                {"path": "README.md", "type": "blob"},
+                {"path": "src", "type": "tree"},
+                {"path": "src/lib.rs", "type": "blob"},
+            ]}))
+        } else {
+            panic!("unexpected request {path}");
+        };
+        let (status, body) = match answer {
+            Some(body) => (Status::OK, body.to_string()),
+            None => (Status::NOT_FOUND, String::new()),
+        };
+        Ok(Response::from_bytes(
+            status,
+            HeaderMap::new(),
+            body.into_bytes(),
+        ))
+    }
+}
+
+/// Issue #1247: a tag or a sha resolves through `commits/{ref}`, whose answer
+/// is the commit object itself (`commit.tree.sha`), not the branch object's
+/// nested `commit.commit.tree.sha`. A branch, a tag and a sha all list, through
+/// the tool and the client alike.
+#[tokio::test]
+async fn listing_files_on_a_branch_a_tag_and_a_sha_resolves_the_tree() {
+    for (reference, via_branches) in [
+        ("main", true),
+        ("v1.0", false),
+        ("9999999999999999999999999999999999999999", false),
+    ] {
+        let mut settings = settings(
+            &json!({
+                "base_url": "https://github.example.test/api/v3/",
+                "access_token": "fixture-token"
+            }),
+            &["list_files_in_bot_branch"],
+        );
+        settings.insert("active_branch".to_owned(), json!(reference));
+        let config = GitHubToolkitConfig::parse(&settings).expect("config");
+        let transport = Arc::new(RefTransport {
+            reference: reference.to_owned(),
+            via_branches,
+            seen: Mutex::new(Vec::new()),
+        });
+        let client = GitHubClient::test_with_transport(config, transport.clone()).expect("client");
+        let api: Arc<dyn GitHubApi> = Arc::new(client);
+        let listed = api
+            .list_repository_files(GitHubFileScope::ActiveBranch, None)
+            .await
+            .unwrap_or_else(|error| panic!("{reference}: {error}"));
+        assert_eq!(listed, json!(["README.md", "src/lib.rs"]), "{reference}");
+
+        let toolset = test_build_with_api(
+            "team-github",
+            "EliteaAI/elitea-platform",
+            &["list_files_in_bot_branch".to_owned()],
+            &policy(&[]),
+            &api,
+        )
+        .expect("toolset");
+        let readonly: Arc<dyn ReadonlyContext> = context();
+        let tools = toolset.tools(readonly).await.expect("tools");
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name() == "list_files_in_bot_branch")
+            .expect("listing tool");
+        tool.execute(context(), json!({}))
+            .await
+            .unwrap_or_else(|error| panic!("{reference}: tool: {error}"));
+        let seen = transport.seen.lock().expect("seen");
+        assert_eq!(
+            seen.iter()
+                .filter(|path| path.contains("/commits/"))
+                .count(),
+            if via_branches { 0 } else { 2 },
+            "{seen:?}"
+        );
+    }
+}
+
+#[test]
+fn commit_object_tree_shapes_are_told_apart() {
+    let tree = "b".repeat(40);
+    let commit = json!({"sha": "c", "commit": {"tree": {"sha": tree}}});
+    let branch = json!({"commit": {"commit": {"tree": {"sha": tree}}}});
+    assert_eq!(project_commit_tree_sha(&commit).expect("commit"), tree);
+    assert_eq!(project_tree_sha(&branch).expect("branch"), tree);
+    assert!(project_tree_sha(&commit).is_err(), "not a branch answer");
+    assert!(
+        project_commit_tree_sha(&branch).is_err(),
+        "not a commit answer"
     );
 }
 

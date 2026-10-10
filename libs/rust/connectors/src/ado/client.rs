@@ -3,9 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::reqwest_adapter::ClientPolicy;
-use crate::transport::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, ETAG, HeaderValue, IF_MATCH,
-};
+use crate::transport::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderValue, IF_MATCH};
 use crate::transport::{Method, Request, StatusCode, Transport, TransportError, Url};
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -219,13 +217,7 @@ impl AdoTransport for HttpAdoTransport {
             .execute(request)
             .await
             .map_err(|source| map_transport_error(source, effect))?;
-        if response
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
-        {
+        if response.declares_more_than(MAX_RESPONSE_BYTES) {
             return Err(response_bound_failure(effect));
         }
         let json_content_type = response
@@ -240,17 +232,11 @@ impl AdoTransport for HttpAdoTransport {
             .and_then(|value| value.to_str().ok())
             .filter(|value| value.len() <= MAX_ETAG_BYTES)
             .map(Into::into);
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
+        let bytes = response
+            .bytes_within(MAX_RESPONSE_BYTES)
             .await
             .map_err(|source| map_transport_error(source, effect))?
-        {
-            if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                return Err(response_bound_failure(effect));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+            .ok_or_else(|| response_bound_failure(effect))?;
         let status = response.status();
         let body = if bytes.is_empty() {
             AdoBody::Empty

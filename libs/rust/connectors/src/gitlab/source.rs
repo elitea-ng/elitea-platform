@@ -18,7 +18,8 @@ use super::config::GitLabToolkitConfig;
 use super::wire::{parse_next_page, project_request};
 use crate::egress::HostAllowlist;
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of, valid_key,
+    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of,
+    valid_git_object_id, valid_key, web_url,
 };
 use crate::transport::header::ACCEPT;
 use crate::transport::{HeaderValue, Method, Request, Transport};
@@ -113,7 +114,7 @@ impl GitLabSource {
                 if kind != "blob" || text("mode") == Some(SYMLINK_MODE) {
                     continue;
                 }
-                if !valid_key(path) || !valid_blob_id(id) {
+                if !valid_key(path) || !valid_git_object_id(id) {
                     return Err(Failure::InvalidResponse(
                         "a tree entry has an unsafe path or id",
                     ));
@@ -132,14 +133,13 @@ impl GitLabSource {
     }
 
     async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
-        if let Some(listing) = self.cache.get().await {
-            return Ok(listing);
-        }
-        self.list().await?;
         self.cache
-            .get()
+            .get_or_list(|| async {
+                self.listing()
+                    .await
+                    .map_err(|failure| failure.into_source_error(PROVIDER, None))
+            })
             .await
-            .ok_or_else(|| SourceError::Unavailable(format!("{PROVIDER}: the listing is empty")))
     }
 
     fn uri(&self, key: &str) -> Option<String> {
@@ -147,13 +147,13 @@ impl GitLabSource {
         if project.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
         }
-        let base = self.config.base_url().as_str().trim_end_matches('/');
-        Some(format!("{base}/{project}/-/blob/{}/{key}", self.branch))
+        let segments = project
+            .split('/')
+            .chain(["-", "blob"])
+            .chain(self.branch.split('/'))
+            .chain(key.split('/'));
+        web_url(self.config.base_url(), segments).map(String::from)
     }
-}
-
-fn valid_blob_id(id: &str) -> bool {
-    matches!(id.len(), 40 | 64) && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 impl ContentSource for GitLabSource {
@@ -221,6 +221,18 @@ mod tests {
     }
 
     const TREE: &str = "/api/v4/projects/group%2Fproject/repository/tree";
+
+    #[test]
+    fn document_uris_encode_paths_and_branches() {
+        let transport = Scripted::new(|_, _| panic!("no request"));
+        let source = GitLabSource::new(config(), allow(), transport)
+            .expect("source")
+            .with_branch("release/a b");
+        assert_eq!(
+            source.uri("a b/c&d#e%f.md").as_deref(),
+            Some("https://gitlab.example/group/project/-/blob/release/a%20b/a%20b/c&d%23e%25f.md")
+        );
+    }
 
     #[tokio::test]
     async fn pages_follow_the_next_page_cursor_and_blob_ids_are_versions() {

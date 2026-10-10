@@ -1,10 +1,12 @@
 //! One Bitbucket repository branch as a `ContentSource` (ADR-0030
 //! decision 3), on Bitbucket Server / Data Center or Bitbucket Cloud.
 //!
-//! * **Server.** `browse/{dir}?at={branch}` one directory at a time, paged
+//! * **Server.** The branch resolves to its head commit (`commits?until=`),
+//!   and `browse/{dir}?at={commit}` is read one directory at a time, paged
 //!   by `start` / `nextPageStart` until `isLastPage`. Each file carries its
 //!   blob id (`contentId`) and size: the version is the blob id. Fetch is
-//!   `raw/{path}?at={branch}`.
+//!   `raw/{path}?at={commit}` at the listed commit, so the bytes are the
+//!   listed version even if the branch has moved since.
 //! * **Cloud.** The branch resolves to its head commit, and `src/{commit}/
 //!   {dir}/` is read one directory at a time, following the `next` link —
 //!   which must stay on this repository's API resource and pass the egress
@@ -38,9 +40,6 @@ pub struct BitbucketSource {
     rest: BitbucketRest,
     http: SourceHttp,
     branch: String,
-    /// Cloud: the commit the last listing read (its version, and the
-    /// revision a fetch reads).
-    commit: tokio::sync::Mutex<Option<String>>,
     cache: ListingCache,
 }
 
@@ -65,7 +64,6 @@ impl BitbucketSource {
             rest: BitbucketRest::new(config, http.transport()),
             http,
             branch,
-            commit: tokio::sync::Mutex::new(None),
             cache: ListingCache::default(),
         })
     }
@@ -105,7 +103,16 @@ impl BitbucketSource {
             .map_err(|error| Failure::Client(error.to_string()))
     }
 
+    async fn listing(&self) -> Result<Vec<Listed>, Failure> {
+        if self.cloud() {
+            self.cloud_listing().await
+        } else {
+            self.server_listing().await
+        }
+    }
+
     async fn server_listing(&self) -> Result<Vec<Listed>, Failure> {
+        let commit = self.server_commit().await?;
         let mut listed = Vec::new();
         let mut pending = VecDeque::from([String::new()]);
         let mut pages = 0;
@@ -119,7 +126,7 @@ impl BitbucketSource {
                 let request = self.get(
                     self.url(&suffix)?,
                     &[
-                        ("at", self.branch.as_str()),
+                        ("at", commit.as_str()),
                         ("limit", SERVER_PAGE_SIZE),
                         ("start", start.as_str()),
                     ],
@@ -158,7 +165,7 @@ impl BitbucketSource {
                                 .ok_or(Failure::InvalidResponse("a file entry has no blob id"))?;
                             let size = child.get("size").and_then(Value::as_u64).unwrap_or(0);
                             let blob = blob.to_ascii_lowercase();
-                            listed.push(Listed::new(key, blob.clone(), size, blob));
+                            listed.push(Listed::new(key, blob, size, commit.clone()));
                             self.http.check_count(listed.len())?;
                         }
                         // Submodules (and anything newer) are not documents.
@@ -181,12 +188,28 @@ impl BitbucketSource {
     }
 
     async fn cloud_commit(&self) -> Result<String, Failure> {
-        let request = self.get(self.url(&["refs", "branches", &self.branch])?, &[])?;
+        self.rest
+            .branch_hash(&self.branch)
+            .await
+            .map(|hash| hash.to_ascii_lowercase())
+            .map_err(|error| Failure::Client(error.to_string()))
+    }
+
+    /// Server: the commit the branch (or tag, or sha) points at now. Every
+    /// file of the listing is then read at this commit, so a branch that
+    /// moves afterwards cannot change what a fetch returns.
+    async fn server_commit(&self) -> Result<String, Failure> {
+        let request = self.get(
+            self.url(&["commits"])?,
+            &[("until", self.branch.as_str()), ("limit", "1")],
+        )?;
         let (_, body) = self.http.json(request).await?;
-        body.get("target")
-            .and_then(|target| target.get("hash"))
+        body.get("values")
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .and_then(|commit| commit.get("id"))
             .and_then(Value::as_str)
-            .filter(|hash| valid_hash(hash))
+            .filter(|id| valid_hash(id))
             .map(str::to_ascii_lowercase)
             .ok_or(Failure::InvalidResponse(
                 "the branch answer has no head commit",
@@ -257,30 +280,26 @@ impl BitbucketSource {
                 };
             }
         }
-        *self.commit.lock().await = Some(commit);
         Ok(listed)
     }
 
     async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
-        if let Some(listing) = self.cache.get().await {
-            return Ok(listing);
-        }
-        self.list().await?;
         self.cache
-            .get()
+            .get_or_list(|| async {
+                self.listing()
+                    .await
+                    .map_err(|failure| failure.into_source_error(PROVIDER, None))
+            })
             .await
-            .ok_or_else(|| SourceError::Unavailable(format!("{PROVIDER}: the listing is empty")))
     }
 }
 
 impl ContentSource for BitbucketSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        let listing = if self.cloud() {
-            self.cloud_listing().await
-        } else {
-            self.server_listing().await
-        }
-        .map_err(|failure| failure.into_source_error(PROVIDER, None))?;
+        let listing = self
+            .listing()
+            .await
+            .map_err(|failure| failure.into_source_error(PROVIDER, None))?;
         Ok(self.cache.store(listing).await)
     }
 
@@ -301,9 +320,10 @@ impl ContentSource for BitbucketSource {
         } else {
             let mut suffix = vec!["raw"];
             suffix.extend(&segments);
+            // The commit the listing resolved, not the branch as it is now.
             self.get(
                 self.url(&suffix).map_err(failed)?,
-                &[("at", self.branch.as_str())],
+                &[("at", listed.handle.as_str())],
             )
         }
         .map_err(failed)?;
@@ -314,10 +334,13 @@ impl ContentSource for BitbucketSource {
         let mut reference = listed.reference.clone();
         reference.size = bytes.len() as u64;
         let mut metadata = Map::new();
-        metadata.insert(
-            if self.cloud() { "commit" } else { "blob_id" }.to_owned(),
-            Value::String(listed.handle.clone()),
-        );
+        metadata.insert("commit".to_owned(), Value::String(listed.handle.clone()));
+        if !self.cloud() {
+            metadata.insert(
+                "blob_id".to_owned(),
+                Value::String(listed.reference.version.clone()),
+            );
+        }
         metadata.insert("branch".to_owned(), Value::String(self.branch.clone()));
         Ok(Document {
             title: title_of(key),
@@ -363,8 +386,16 @@ mod tests {
     async fn server_walks_directories_and_pages_with_blob_ids_as_versions() {
         let transport = Scripted::new(|request, _| {
             let path = request.url().path();
-            assert_eq!(query(request, "at").as_deref(), Some("main"));
             let base = "/context/rest/api/1.0/projects/PRJ/repos/repo";
+            if path.strip_prefix(base) == Some("/commits") {
+                assert_eq!(query(request, "until").as_deref(), Some("main"));
+                return Reply::json(&json!({"values": [{"id": HEAD}]}));
+            }
+            assert_eq!(
+                query(request, "at").as_deref(),
+                Some(HEAD),
+                "every read is pinned to the resolved commit"
+            );
             match (path.strip_prefix(base), query(request, "start").as_deref()) {
                 (Some("/browse"), Some("0")) => Reply::json(&json!({"children": {
                     "isLastPage": false, "nextPageStart": 1,
@@ -404,6 +435,50 @@ mod tests {
             .cloned()
             .expect("credential");
         assert!(authorization.is_sensitive());
+    }
+
+    #[tokio::test]
+    async fn server_fetch_reads_the_listed_commit_after_the_branch_moves() {
+        const MOVED: &str = "dddddddddddddddddddddddddddddddddddddddd";
+        let head = Arc::new(std::sync::Mutex::new(HEAD.to_owned()));
+        let current = Arc::clone(&head);
+        let transport = Scripted::new(move |request, _| {
+            let base = "/context/rest/api/1.0/projects/PRJ/repos/repo";
+            let path = request.url().path().strip_prefix(base).expect("repo path");
+            let now = current.lock().expect("head").clone();
+            match path {
+                "/commits" => Reply::json(&json!({"values": [{"id": now}]})),
+                "/browse" => {
+                    assert_eq!(query(request, "at").as_deref(), Some(HEAD));
+                    Reply::json(&json!({"children": {
+                        "isLastPage": true, "values": [file("a.md", BLOB_A, 5)],
+                    }}))
+                }
+                "/raw/a.md" => match query(request, "at").as_deref() {
+                    Some(HEAD) => Reply::bytes(b"listed"),
+                    Some(MOVED) => Reply::bytes(b"moved!"),
+                    other => panic!("unexpected revision {other:?}"),
+                },
+                other => panic!("unexpected request {other}"),
+            }
+        });
+        let source = BitbucketSource::new(
+            config("server"),
+            HostAllowlist::parse(Some("bitbucket.example")),
+            transport.clone(),
+        )
+        .expect("source");
+        let listed = source.list().await.expect("listing");
+        assert_eq!(listed[0].version, BLOB_A);
+        *head.lock().expect("head") = MOVED.to_owned();
+        let document = source.fetch("a.md").await.expect("document");
+        assert_eq!(
+            document.bytes, b"listed",
+            "the listed version, not the new head"
+        );
+        assert_eq!(document.reference.version, BLOB_A);
+        assert_eq!(document.metadata["commit"], HEAD);
+        assert_eq!(document.metadata["blob_id"], BLOB_A);
     }
 
     #[tokio::test]

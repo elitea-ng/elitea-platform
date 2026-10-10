@@ -195,14 +195,13 @@ impl ArtifactSource {
     }
 
     async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
-        if let Some(listing) = self.cache.get().await {
-            return Ok(listing);
-        }
-        self.list().await?;
         self.cache
-            .get()
+            .get_or_list(|| async {
+                self.listing()
+                    .await
+                    .map_err(|failure| failure.into_source_error(PROVIDER, None))
+            })
             .await
-            .ok_or_else(|| SourceError::Unavailable(format!("{PROVIDER}: the listing is empty")))
     }
 }
 

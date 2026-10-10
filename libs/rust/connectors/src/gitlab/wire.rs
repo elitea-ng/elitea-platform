@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 use super::config::GitLabToolkitConfig;
 use super::org_config::GitLabOrgToolkitConfig;
 use crate::reqwest_adapter::ClientPolicy;
-use crate::transport::header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, HeaderName, HeaderValue};
+use crate::transport::header::{ACCEPT, CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::transport::{Method, Request, StatusCode, Transport, TransportError, Url};
 
 const PRIVATE_TOKEN: HeaderName = HeaderName::from_static("private-token");
@@ -173,13 +173,7 @@ impl GitLabOrgTransport for HttpGitLabTransport {
             .execute(request)
             .await
             .map_err(|source| map_transport_error(source, effect))?;
-        if response
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
-        {
+        if response.declares_more_than(MAX_RESPONSE_BYTES) {
             return Err(response_bound_failure(effect));
         }
         let json_content_type = response
@@ -189,21 +183,11 @@ impl GitLabOrgTransport for HttpGitLabTransport {
             .and_then(|value| value.split(';').next())
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
         let next_page = parse_next_page(response.headers().get("x-next-page"), effect)?;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
+        let bytes = response
+            .bytes_within(MAX_RESPONSE_BYTES)
             .await
             .map_err(|source| map_transport_error(source, effect))?
-        {
-            let next = bytes
-                .len()
-                .checked_add(chunk.len())
-                .ok_or_else(|| response_bound_failure(effect))?;
-            if next > MAX_RESPONSE_BYTES {
-                return Err(response_bound_failure(effect));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+            .ok_or_else(|| response_bound_failure(effect))?;
         let body = if bytes.is_empty() {
             None
         } else if json_content_type {

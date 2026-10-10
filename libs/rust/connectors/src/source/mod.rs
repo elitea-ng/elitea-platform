@@ -13,6 +13,7 @@
 pub(crate) mod fixture;
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use tokio::sync::Mutex;
 
 use crate::egress::{EgressGuard, HostAllowlist};
 use crate::transport::header::RETRY_AFTER;
-use crate::transport::{HeaderMap, Request, Response, StatusCode, Transport, TransportError};
+use crate::transport::{HeaderMap, Request, Response, StatusCode, Transport, TransportError, Url};
 
 /// The default cap on one fetched document (ADR-0030: a separate, larger
 /// cap than a tool read).
@@ -407,26 +408,58 @@ impl Listed {
 /// The last listing, by key, so a fetch reads the version it was listed
 /// with (and a fetch before any listing lists once).
 #[derive(Default)]
-pub struct ListingCache(Mutex<Option<Arc<BTreeMap<String, Listed>>>>);
+pub struct ListingCache {
+    listing: Mutex<Option<Arc<BTreeMap<String, Listed>>>>,
+    /// Held while a first listing runs, so concurrent callers share it.
+    flight: Mutex<()>,
+}
 
 impl ListingCache {
     /// Remember `listing` and hand back its references in key order.
     pub async fn store(&self, listing: Vec<Listed>) -> Vec<DocumentRef> {
-        let map: BTreeMap<String, Listed> = listing
-            .into_iter()
-            .map(|listed| (listed.reference.key.clone(), listed))
-            .collect();
-        let references = map
-            .values()
+        let map = self.remember(listing).await;
+        map.values()
             .map(|listed| listed.reference.clone())
-            .collect();
-        *self.0.lock().await = Some(Arc::new(map));
-        references
+            .collect()
+    }
+
+    async fn remember(&self, listing: Vec<Listed>) -> Arc<BTreeMap<String, Listed>> {
+        let map = Arc::new(
+            listing
+                .into_iter()
+                .map(|listed| (listed.reference.key.clone(), listed))
+                .collect::<BTreeMap<_, _>>(),
+        );
+        *self.listing.lock().await = Some(Arc::clone(&map));
+        map
+    }
+
+    /// The remembered listing, or the result of `list` run once: callers
+    /// that arrive while it runs wait for it and share its listing. A failed
+    /// listing is not remembered, so the next call lists again.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `list` fails with (to the caller that ran it; a waiter then
+    /// runs its own).
+    pub async fn get_or_list<E, F, Fut>(&self, list: F) -> Result<Arc<BTreeMap<String, Listed>>, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<Listed>, E>>,
+    {
+        if let Some(listing) = self.get().await {
+            return Ok(listing);
+        }
+        let _flight = self.flight.lock().await;
+        if let Some(listing) = self.get().await {
+            return Ok(listing);
+        }
+        Ok(self.remember(list().await?).await)
     }
 
     /// The remembered listing, if there is one.
     pub async fn get(&self) -> Option<Arc<BTreeMap<String, Listed>>> {
-        self.0.lock().await.clone()
+        self.listing.lock().await.clone()
     }
 }
 
@@ -446,6 +479,21 @@ pub fn valid_key(key: &str) -> bool {
             .split('/')
             .all(|segment| !matches!(segment, "" | "." | ".."))
 }
+
+/// `base` with `segments` appended to its path, each percent-encoded, so a
+/// path or branch holding `#`, `?`, `%` or a space cannot change the URL's
+/// shape. `None` when `base` cannot carry a path.
+#[must_use]
+pub fn web_url<'a>(base: &Url, segments: impl IntoIterator<Item = &'a str>) -> Option<Url> {
+    let mut url = base.clone();
+    url.path_segments_mut()
+        .ok()?
+        .pop_if_empty()
+        .extend(segments);
+    Some(url)
+}
+
+pub use crate::git_id::valid_git_object_id;
 
 #[cfg(test)]
 mod tests {
@@ -496,6 +544,76 @@ mod tests {
         assert!(valid_key("docs/a.md"));
         for key in ["", "/a", "a/", "a//b", "a/../b", "./a", "a\\b", "a\0b"] {
             assert!(!valid_key(key), "{key:?}");
+        }
+    }
+
+    fn one(key: &str) -> Vec<Listed> {
+        vec![Listed::new(
+            key.to_owned(),
+            "v".to_owned(),
+            1,
+            "h".to_owned(),
+        )]
+    }
+
+    #[tokio::test]
+    async fn concurrent_callers_share_one_listing() {
+        let cache = ListingCache::default();
+        let runs = std::sync::atomic::AtomicUsize::new(0);
+        let list = || async {
+            runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            Ok::<_, ()>(one("a.md"))
+        };
+        let (a, b, c, d) = tokio::join!(
+            cache.get_or_list(list),
+            cache.get_or_list(list),
+            cache.get_or_list(list),
+            cache.get_or_list(list),
+        );
+        for listing in [a, b, c, d] {
+            assert!(listing.expect("listing").contains_key("a.md"));
+        }
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_listing_is_not_cached() {
+        let cache = ListingCache::default();
+        assert_eq!(
+            cache
+                .get_or_list(|| async { Err::<Vec<Listed>, _>("down") })
+                .await
+                .err(),
+            Some("down")
+        );
+        assert!(cache.get().await.is_none());
+        let listing = cache
+            .get_or_list(|| async { Ok::<_, &str>(one("a.md")) })
+            .await
+            .expect("the next call retries");
+        assert!(listing.contains_key("a.md"));
+    }
+
+    #[test]
+    fn urls_encode_every_segment() {
+        let base = Url::parse("https://host/prefix/").expect("url");
+        let url = web_url(&base, ["a b", "c#d", "e%f", "g?h"]).expect("url");
+        assert_eq!(url.as_str(), "https://host/prefix/a%20b/c%23d/e%25f/g%3Fh");
+    }
+
+    #[test]
+    fn git_object_ids_are_full_hex() {
+        assert!(valid_git_object_id(&"a".repeat(40)));
+        assert!(valid_git_object_id(&"A".repeat(64)));
+        for id in [
+            "",
+            "abc1234",
+            &"g".repeat(40),
+            &"a".repeat(41),
+            &"a".repeat(39),
+        ] {
+            assert!(!valid_git_object_id(id), "{id:?}");
         }
     }
 

@@ -23,10 +23,11 @@ use super::config::AdoConnection;
 use super::repos::{AdoReposToolkitConfig, AdoRepository};
 use crate::egress::HostAllowlist;
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of, valid_key,
+    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of,
+    valid_git_object_id, valid_key, web_url,
 };
 use crate::transport::header::ACCEPT;
-use crate::transport::{HeaderValue, Request, Transport};
+use crate::transport::{HeaderValue, Request, Transport, Url};
 
 const PROVIDER: &str = "Azure DevOps";
 const GIT_API: &str = "7.1";
@@ -118,7 +119,7 @@ impl AdoReposSource {
             .unwrap_or(&body);
         item.get("objectId")
             .and_then(Value::as_str)
-            .filter(|id| valid_object_id(id))
+            .filter(|id| valid_git_object_id(id))
             .map(str::to_ascii_lowercase)
             .ok_or(Failure::InvalidResponse("the root item has no tree id"))
     }
@@ -161,7 +162,7 @@ impl AdoReposSource {
                     continue;
                 }
                 let path = path.trim_start_matches('/');
-                if !valid_key(path) || !valid_object_id(id) {
+                if !valid_key(path) || !valid_git_object_id(id) {
                     return Err(Failure::InvalidResponse(
                         "a tree entry has an unsafe path or id",
                     ));
@@ -183,20 +184,33 @@ impl AdoReposSource {
         }
     }
 
-    async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
-        if let Some(listing) = self.cache.get().await {
-            return Ok(listing);
-        }
-        self.list().await?;
-        self.cache
-            .get()
-            .await
-            .ok_or_else(|| SourceError::Unavailable(format!("{PROVIDER}: the listing is empty")))
+    /// Where a reader opens the file: the repository's `_git` page at the
+    /// path and branch, each encoded.
+    fn uri(&self, key: &str) -> Option<String> {
+        let organization = Url::parse(self.client.organization_text()).ok()?;
+        let mut url = web_url(
+            &organization,
+            [
+                self.client.project(),
+                "_git",
+                self.repository.repository_id.as_ref(),
+            ],
+        )?;
+        url.query_pairs_mut()
+            .append_pair("path", &format!("/{key}"))
+            .append_pair("version", &format!("GB{}", self.branch));
+        Some(url.into())
     }
-}
 
-fn valid_object_id(id: &str) -> bool {
-    matches!(id.len(), 40 | 64) && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
+        self.cache
+            .get_or_list(|| async {
+                self.listing()
+                    .await
+                    .map_err(|failure| failure.into_source_error(PROVIDER, None))
+            })
+            .await
+    }
 }
 
 impl ContentSource for AdoReposSource {
@@ -240,16 +254,10 @@ impl ContentSource for AdoReposSource {
             "repository".to_owned(),
             Value::String(self.repository.repository_id.to_string()),
         );
-        let uri = format!(
-            "{}/{}/_git/{}?path=/{key}&version=GB{}",
-            self.client.organization_text(),
-            self.client.project(),
-            self.repository.repository_id,
-            self.branch
-        );
+        let uri = self.uri(key);
         Ok(Document {
             title: title_of(key),
-            uri: Some(uri),
+            uri,
             reference,
             bytes,
             metadata,
@@ -286,6 +294,20 @@ mod tests {
 
     fn entry(path: &str, kind: &str, id: &str, size: u64) -> Value {
         json!({"relativePath": path, "gitObjectType": kind, "objectId": id, "size": size, "mode": "100644"})
+    }
+
+    #[test]
+    fn document_uris_encode_paths_and_branches() {
+        let transport = Scripted::new(|_, _| panic!("no request"));
+        let source = AdoReposSource::new(config(), allow(), transport)
+            .expect("source")
+            .with_branch("release&1 #2");
+        assert_eq!(
+            source.uri("a b/c&d#e%f.md").as_deref(),
+            Some(
+                "https://dev.azure.com/contoso/Fabrikam/_git/web?path=%2Fa+b%2Fc%26d%23e%25f.md&version=GBrelease%261+%232"
+            )
+        );
     }
 
     #[tokio::test]
@@ -336,7 +358,9 @@ mod tests {
         assert_eq!(document.bytes, b"fn x() {}");
         assert_eq!(
             document.uri.as_deref(),
-            Some("https://dev.azure.com/contoso/Fabrikam/_git/web?path=/src/lib.rs&version=GBmain")
+            Some(
+                "https://dev.azure.com/contoso/Fabrikam/_git/web?path=%2Fsrc%2Flib.rs&version=GBmain"
+            )
         );
         let blob = transport.requests().pop().expect("blob request");
         assert_eq!(

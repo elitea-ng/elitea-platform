@@ -1170,6 +1170,17 @@ fn validate_response_path(value: &str) -> Result<(), GitHubClientError> {
 
 #[cfg(test)]
 impl GitHubClient {
+    /// A client over `transport` (a recorded fixture) instead of the
+    /// worker's.
+    pub(in crate::toolkits) fn test_with_transport(
+        config: GitHubToolkitConfig,
+        transport: std::sync::Arc<dyn elitea_connectors::transport::Transport>,
+    ) -> Result<Self, GitHubClientError> {
+        Ok(Self {
+            rest: GitHubRest::new(config, transport)?,
+        })
+    }
+
     pub(in crate::toolkits) fn test_request(
         &self,
         kind: GitHubRequestKind,

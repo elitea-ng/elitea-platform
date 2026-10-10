@@ -11,21 +11,25 @@
 //!   it is requested.
 //! * Symbolic links and submodules are not documents.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
 use serde_json::{Map, Value};
 
-use super::client::{GitHubRequestKind, GitHubRest, REQUEST_TIMEOUT, validate_repository};
-use super::config::GitHubToolkitConfig;
+use super::client::{
+    GitHubRequestKind, GitHubRest, REQUEST_TIMEOUT, project_commit_tree_sha, project_tree_sha,
+    unsupported_authentication, validate_repository,
+};
+use super::config::{GitHubAuthKind, GitHubToolkitConfig};
 use crate::egress::HostAllowlist;
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of, valid_key,
+    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of,
+    valid_git_object_id, valid_key, web_url,
 };
 use crate::transport::header::ACCEPT;
-use crate::transport::{HeaderValue, Request, StatusCode, Transport};
+use crate::transport::{HeaderValue, Request, StatusCode, Transport, Url};
 
 const PROVIDER: &str = "GitHub";
 const RAW_ACCEPT: &str = "application/vnd.github.raw+json";
@@ -63,6 +67,15 @@ impl GitHubSource {
             .map_err(|error| {
                 Failure::Client(error.to_string()).into_source_error(PROVIDER, None)
             })?;
+        // Repository requests refuse App auth (only the probe signs a JWT),
+        // so refuse it here rather than fail every request later.
+        if config.auth_kind() == GitHubAuthKind::App {
+            return Err(Failure::Client(format!(
+                "the credential cannot be used: {}",
+                unsupported_authentication()
+            ))
+            .into_source_error(PROVIDER, None));
+        }
         let branch = config.active_branch().to_owned();
         let rest = GitHubRest::new(config, http.transport()).map_err(|error| {
             Failure::Client(error.to_string()).into_source_error(PROVIDER, None)
@@ -115,31 +128,20 @@ impl GitHubSource {
         Ok(self.http.json(request).await?.1)
     }
 
-    /// The branch's (or ref's) root tree sha.
+    /// The branch's (or tag's, or sha's) root tree sha, parsed by the
+    /// client's helpers: `branches/{b}` and `commits/{ref}` nest the commit
+    /// differently.
     async fn tree_sha(&self) -> Result<String, Failure> {
         let branch = self.branch.as_str();
-        let value = match self.get(&["branches", branch], &[]).await {
-            Ok(value) => value,
+        let no_tree = Failure::InvalidResponse("the branch answer has no tree sha");
+        match self.get(&["branches", branch], &[]).await {
+            Ok(value) => project_tree_sha(&value).map_err(|_| no_tree),
             Err(Failure::Status(StatusCode::NOT_FOUND)) => {
-                self.get(&["commits", branch], &[]).await?
+                let value = self.get(&["commits", branch], &[]).await?;
+                project_commit_tree_sha(&value).map_err(|_| no_tree)
             }
-            Err(failure) => return Err(failure),
-        };
-        // `branches/{b}` nests the commit once more than `commits/{ref}`.
-        let commit = value
-            .get("commit")
-            .ok_or(Failure::InvalidResponse("the branch answer has no commit"))?;
-        let tree = commit
-            .get("commit")
-            .and_then(|inner| inner.get("tree"))
-            .or_else(|| commit.get("tree"));
-        tree.and_then(|tree| tree.get("sha"))
-            .and_then(Value::as_str)
-            .filter(|sha| valid_sha(sha))
-            .map(str::to_ascii_lowercase)
-            .ok_or(Failure::InvalidResponse(
-                "the branch answer has no tree sha",
-            ))
+            Err(failure) => Err(failure),
+        }
     }
 
     async fn listing(&self) -> Result<Vec<Listed>, Failure> {
@@ -175,15 +177,14 @@ impl GitHubSource {
         Ok(listed)
     }
 
-    async fn listed(&self) -> Result<Arc<std::collections::BTreeMap<String, Listed>>, SourceError> {
-        if let Some(listing) = self.cache.get().await {
-            return Ok(listing);
-        }
-        self.list().await?;
+    async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
         self.cache
-            .get()
+            .get_or_list(|| async {
+                self.listing()
+                    .await
+                    .map_err(|failure| failure.into_source_error(PROVIDER, None))
+            })
             .await
-            .ok_or_else(|| SourceError::Unavailable(format!("{PROVIDER}: the listing is empty")))
     }
 
     /// Where a reader opens the file, for github.com and GitHub Enterprise
@@ -192,19 +193,18 @@ impl GitHubSource {
         let base = self.rest.config().base_url();
         let host = base.host_str()?;
         let web = match (host, base.path().trim_end_matches('/')) {
-            ("api.github.com", "") => "https://github.com".to_owned(),
-            (_, "/api/v3") => format!("{}://{}", base.scheme(), base.authority()),
+            ("api.github.com", "") => Url::parse("https://github.com").ok()?,
+            (_, "/api/v3") => {
+                Url::parse(&format!("{}://{}", base.scheme(), base.authority())).ok()?
+            }
             _ => return None,
         };
-        Some(format!(
-            "{web}/{}/{}/blob/{}/{key}",
-            self.owner, self.repository, self.branch
-        ))
+        let segments = [self.owner.as_str(), self.repository.as_str(), "blob"]
+            .into_iter()
+            .chain(self.branch.split('/'))
+            .chain(key.split('/'));
+        web_url(&web, segments).map(String::from)
     }
-}
-
-fn valid_sha(sha: &str) -> bool {
-    matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn truncated(tree: &Value) -> Result<bool, Failure> {
@@ -239,7 +239,7 @@ fn collect(
         } else {
             format!("{prefix}/{path}")
         };
-        if !valid_key(&key) || !valid_sha(sha) {
+        if !valid_key(&key) || !valid_git_object_id(sha) {
             return Err(Failure::InvalidResponse(
                 "a tree entry has an unsafe path or sha",
             ));
@@ -447,6 +447,119 @@ mod tests {
             .expect("source")
             .with_branch("v1.0");
         assert_eq!(source.list().await.expect("listing"), []);
+    }
+
+    /// A branch, a tag and a sha all list: `branches/{b}` answers the first,
+    /// the `commits/{ref}` fallback (a plain commit object) the others.
+    #[tokio::test]
+    async fn a_branch_a_tag_and_a_sha_all_resolve_to_their_tree() {
+        const SHA: &str = "9999999999999999999999999999999999999999";
+        for (reference, via_branches) in [("main", true), ("v1.0", false), (SHA, false)] {
+            let transport = Scripted::new(move |request, _| {
+                let branches = format!("/repos/EliteaAI/demo/branches/{reference}");
+                let commits = format!("/repos/EliteaAI/demo/commits/{reference}");
+                match request.url().path() {
+                    path if path == branches && via_branches => Reply::json(&branch()),
+                    path if path == branches => Reply::status(StatusCode::NOT_FOUND),
+                    path if path == commits && !via_branches => {
+                        Reply::json(&json!({"sha": "c", "commit": {"tree": {"sha": TREE}}}))
+                    }
+                    "/repos/EliteaAI/demo/git/trees/1111111111111111111111111111111111111111" => {
+                        Reply::json(&json!({"tree": [entry("a.md", "blob", README, Some(1))]}))
+                    }
+                    other => panic!("unexpected request {other} for {reference}"),
+                }
+            });
+            let source = GitHubSource::new(config(), allow(), transport)
+                .expect("source")
+                .with_branch(reference);
+            let listed = source.list().await.expect(reference);
+            assert_eq!(listed.len(), 1, "{reference}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_github_app_credential_is_refused_up_front() {
+        let settings = json!({
+            "github_configuration": {
+                "base_url": "https://api.github.com",
+                "app_id": "42",
+                "app_private_key": "not used before the refusal",
+            },
+            "repository": "EliteaAI/demo",
+            "active_branch": "main",
+            "base_branch": "main",
+            "selected_tools": ["read_file"],
+        });
+        let config =
+            GitHubToolkitConfig::parse(settings.as_object().expect("settings")).expect("config");
+        assert_eq!(config.auth_kind(), GitHubAuthKind::App);
+        let transport = Scripted::new(|_, _| panic!("no request may be sent"));
+        let refused = GitHubSource::new(config, allow(), transport.clone())
+            .err()
+            .expect("refused");
+        assert!(
+            refused.to_string().contains("credential cannot be used"),
+            "{refused}"
+        );
+        assert!(transport.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_fetches_share_one_listing() {
+        let transport = Scripted::new(|request, _| match request.url().path() {
+            "/repos/EliteaAI/demo/branches/main" => Reply::json(&branch()),
+            "/repos/EliteaAI/demo/git/trees/1111111111111111111111111111111111111111" => {
+                Reply::json(&json!({"tree": [entry("README.md", "blob", README, Some(5))]}))
+            }
+            "/repos/EliteaAI/demo/git/blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" => {
+                Reply::bytes(b"# hi\n")
+            }
+            other => panic!("unexpected request {other}"),
+        });
+        let source = GitHubSource::new(config(), allow(), transport.clone()).expect("source");
+        let fetches = tokio::join!(
+            source.fetch("README.md"),
+            source.fetch("README.md"),
+            source.fetch("README.md"),
+            source.fetch("README.md"),
+            source.fetch("README.md"),
+            source.fetch("README.md"),
+        );
+        for document in [
+            fetches.0, fetches.1, fetches.2, fetches.3, fetches.4, fetches.5,
+        ] {
+            document.expect("document");
+        }
+        let seen = transport.seen();
+        let listings = seen
+            .iter()
+            .filter(|seen| seen.contains("/branches/"))
+            .count();
+        assert_eq!(listings, 1, "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn document_uris_encode_paths_and_branches() {
+        let transport = Scripted::new(|request, _| match request.url().path() {
+            "/repos/EliteaAI/demo/branches/release%2Fa%20b" => Reply::json(&branch()),
+            "/repos/EliteaAI/demo/git/trees/1111111111111111111111111111111111111111" => {
+                Reply::json(&json!({"tree": [entry("a b/c&d#e%f.md", "blob", README, Some(1))]}))
+            }
+            "/repos/EliteaAI/demo/git/blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" => {
+                Reply::bytes(b"x")
+            }
+            other => panic!("unexpected request {other}"),
+        });
+        let source = GitHubSource::new(config(), allow(), transport)
+            .expect("source")
+            .with_branch("release/a b");
+        source.list().await.expect("listing");
+        let document = source.fetch("a b/c&d#e%f.md").await.expect("document");
+        assert_eq!(
+            document.uri.as_deref(),
+            Some("https://github.com/EliteaAI/demo/blob/release/a%20b/a%20b/c&d%23e%25f.md")
+        );
     }
 
     #[tokio::test]

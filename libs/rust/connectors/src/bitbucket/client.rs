@@ -19,9 +19,7 @@ use zeroize::Zeroizing;
 
 use super::config::{BitbucketHosting, BitbucketToolkitConfig};
 use crate::reqwest_adapter::ClientPolicy;
-use crate::transport::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue, LOCATION,
-};
+use crate::transport::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue, LOCATION};
 use crate::transport::{Method, Request, StatusCode, Transport, TransportError, Url};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -198,13 +196,7 @@ impl BitbucketTransport for HttpBitbucketTransport {
             .execute(request)
             .await
             .map_err(|source| map_transport_error(source, effect))?;
-        if response
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
-        {
+        if response.declares_more_than(MAX_RESPONSE_BYTES) {
             return Err(response_failure(effect, resource_exhausted()));
         }
         let json_content_type = response
@@ -218,17 +210,11 @@ impl BitbucketTransport for HttpBitbucketTransport {
             .get(LOCATION)
             .and_then(|value| value.to_str().ok())
             .map(ToOwned::to_owned);
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
+        let bytes = response
+            .bytes_within(MAX_RESPONSE_BYTES)
             .await
             .map_err(|source| map_transport_error(source, effect))?
-        {
-            if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                return Err(response_failure(effect, resource_exhausted()));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+            .ok_or_else(|| response_failure(effect, resource_exhausted()))?;
         let json = if json_content_type && !bytes.is_empty() {
             serde_json::from_slice(&bytes).ok()
         } else {
@@ -536,7 +522,6 @@ pub fn push_values(output: &mut Vec<Value>, body: &Value) -> Result<(), Bitbucke
     Ok(())
 }
 
-/// A repository-relative file path as URL path segments.
 /// A commit hash Bitbucket may answer with (7–64 hex digits).
 #[must_use]
 pub fn valid_hash(value: &str) -> bool {

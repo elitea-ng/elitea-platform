@@ -35,6 +35,7 @@ pub mod base_url;
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
 pub mod bitbucket;
 pub mod egress;
+mod git_id;
 #[cfg(feature = "providers")]
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
 pub mod github;
