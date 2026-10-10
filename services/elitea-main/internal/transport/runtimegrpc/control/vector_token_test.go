@@ -1,10 +1,17 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
@@ -94,57 +101,96 @@ func TestClaimCommandCarriesNoVectorTokenWhenNoneIsMinted(t *testing.T) {
 	}
 }
 
-// A failed mint releases the claim with the bounded input-resolution retry;
-// a claim that is no longer live is only reported stale.
-func TestClaimCommandAbortsTheClaimWhenTheVectorTokenCannotBeMinted(t *testing.T) {
-	tests := []struct {
-		name          string
-		attempt       uint64
-		err           error
-		wantAbort     executionapp.ClaimAbortDisposition
-		wantCode      runtimev1.RuntimeErrorCodeV1
-		wantRetryable bool
-		wantCalls     []string
-	}{
-		{
-			name: "transient", attempt: 1, err: errors.New("database down"),
-			wantAbort: executionapp.ClaimAbortInputResolutionRetry,
-			wantCode:  runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, wantRetryable: true,
-			wantCalls: []string{"authorize-peer", "verify-command", "claim", "resolve-reference-manifest", "mint-vector-token", "abort-claim"},
-		},
-		{
-			name: "exhausted", attempt: maxInputResolutionClaimAttempts, err: errors.New("database down"),
-			wantAbort: executionapp.ClaimAbortInputResolutionExhausted,
-			wantCode:  runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, wantRetryable: false,
-			wantCalls: []string{"authorize-peer", "verify-command", "claim", "resolve-reference-manifest", "mint-vector-token", "abort-claim"},
-		},
-		{
-			name: "stale", attempt: 1, err: runtimedomain.ErrStaleFence,
-			wantCode:  runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE,
-			wantCalls: []string{"authorize-peer", "verify-command", "claim", "resolve-reference-manifest", "mint-vector-token"},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+// A failed mint degrades: the claim is delivered without a vector token, the
+// failure is logged at warn and counted, and neither the claim nor the
+// input-resolution retry budget is touched. Only a claim that is no longer
+// live is rejected, as stale.
+func TestClaimCommandDeliversWithoutAVectorTokenWhenTheMintFails(t *testing.T) {
+	for _, attempt := range []uint64{1, maxInputResolutionClaimAttempts, maxInputResolutionClaimAttempts + 5} {
+		t.Run(fmt.Sprintf("attempt %d", attempt), func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+
+			reader := sdkmetric.NewManualReader()
 			calls := []string{}
 			lease := validLease()
-			lease.Fence.ClaimAttempt = test.attempt
-			var aborted executionapp.ClaimAbortDisposition
-			server := vectorTokenServer(t, &calls, lease, vectorTokenIssuerStub{calls: &calls, err: test.err}, &aborted)
+			lease.Fence.ClaimAttempt = attempt
+			config := testControlServerConfig()
+			config.VectorTokens = vectorTokenIssuerStub{calls: &calls, err: errors.New("database down")}
+			config.Meter = sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")
+			server, err := NewServer(
+				config,
+				workloadAuthorizerStub{calls: &calls},
+				verifierSpy{calls: &calls, verifier: newTestVerifier(t)},
+				claimControllerStub{calls: &calls, lease: lease, abortDisposition: new(executionapp.ClaimAbortDisposition)},
+				inputResolverStub{calls: &calls, manifest: validManifest()},
+				&settlementControllerStub{calls: &calls},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
 			response, err := server.ClaimCommand(context.Background(), claimRequestForManifest(t, validManifest()))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if response.GetReceipt() != nil || response.GetRejection().GetCode() != test.wantCode ||
-				response.GetRejection().GetRetryable() != test.wantRetryable {
-				t.Fatalf("unexpected response %v", response)
+			if response.GetRejection() != nil ||
+				response.GetReceipt().GetDisposition() != runtimev1.ClaimDispositionV1_CLAIM_DISPOSITION_V1_ACCEPTED {
+				t.Fatalf("the claim must proceed, got %v", response)
 			}
-			if aborted != test.wantAbort {
-				t.Fatalf("abort disposition: got %q want %q", aborted, test.wantAbort)
+			if response.GetReceipt().GetVectorToken() != nil {
+				t.Fatalf("receipt token = %v, want none", response.GetReceipt().GetVectorToken())
 			}
-			if !reflect.DeepEqual(calls, test.wantCalls) {
-				t.Fatalf("calls: got %v want %v", calls, test.wantCalls)
+			if response.GetReceipt().GetInputBundle() == nil {
+				t.Fatal("the receipt must still carry the input bundle")
+			}
+			wantCalls := []string{"authorize-peer", "verify-command", "claim", "resolve-reference-manifest", "mint-vector-token"}
+			if !reflect.DeepEqual(calls, wantCalls) {
+				t.Fatalf("calls: got %v want %v (no abort, no retry budget spent)", calls, wantCalls)
+			}
+			if got := mintFailureCount(t, reader); got != 1 {
+				t.Fatalf("mint failure counter = %d, want 1", got)
+			}
+			output := logs.String()
+			if !strings.Contains(output, "level=WARN") || !strings.Contains(output, "vector claim token not minted") {
+				t.Fatalf("expected a warn log, got %q", output)
 			}
 		})
 	}
+}
+
+// A claim that is no longer live cannot be delivered, mint failure or not.
+func TestClaimCommandRejectsAStaleClaimWhenTheVectorTokenIsMinted(t *testing.T) {
+	calls := []string{}
+	server := vectorTokenServer(t, &calls, validLease(), vectorTokenIssuerStub{calls: &calls, err: runtimedomain.ErrStaleFence}, nil)
+	response, err := server.ClaimCommand(context.Background(), claimRequestForManifest(t, validManifest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetReceipt() != nil ||
+		response.GetRejection().GetCode() != runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE {
+		t.Fatalf("unexpected response %v", response)
+	}
+}
+
+func mintFailureCount(t *testing.T, reader sdkmetric.Reader) int64 {
+	t.Helper()
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != "elitea.runtime.vector_token.mint_failures" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok || len(sum.DataPoints) != 1 {
+				t.Fatalf("unexpected metric data %v", m.Data)
+			}
+			return sum.DataPoints[0].Value
+		}
+	}
+	return 0
 }
