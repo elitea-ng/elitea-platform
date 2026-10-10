@@ -2523,6 +2523,45 @@ worker's nor the desktop host's Cargo lock carries (the libs workspace has
 `zip` only transitively through `calamine`). The capability snapshot lists
 the fifteen served tools, so elitea-main marks the three unavailable.
 
+### Toolkit types that cannot be ported as configured families yet
+
+Each type below was surveyed at the worker-pinned SDK revision
+`b5113a129329b85d23c2d5c2bf55f18e307414ec` (plus its pinned patches) and is
+NOT dispatched by `materialize.rs`, so the Rust worker keeps skipping it with
+`agent_toolkit_skipped` and the capability snapshot does not list it. None is
+a missing HTTP client: every one needs an authority a configured family is
+never given. `materialize.rs` builds a family from frozen settings alone (plus
+the claim-lent `ArtifactToolAuthority` for `artifact`); no family receives a
+model (`host::ModelTransport` is bound once, for the agent itself) or the
+code sandbox (`host::CodeSandbox` reaches only pipeline code nodes). Porting a
+schema without that authority would ship tools that cannot do what their SDK
+twins do, so nothing is faked.
+
+#### `pptx` (blocked)
+
+`pptx` is a configured toolkit (`bucket_name` plus the agent's `llm`, which
+the SDK injects into the settings) with two tools, both LLM-driven:
+
+- `fill_template(file_name, output_file_name, content_description,
+  pdf_file_name?, batch_size?)` downloads the template, collects every
+  placeholder text frame, asks the model for structured content in batches
+  of `batch_size` (with each slide's PDF page rendered by PyMuPDF as an image
+  when `pdf_file_name` is given), rewrites the runs keeping their formatting,
+  and uploads the result.
+- `translate_presentation(file_name, output_file_name, target_language)`
+  unzips the deck, asks the model to translate every text run and SmartArt
+  diagram node in batches, re-zips and uploads it.
+
+Blocked on: (1) a model authority lent to a configured family, which no
+family has; (2) OOXML read/write: the worker lock carries no `zip` or
+`quick-xml` (the libs workspace has `zip` only through `calamine`), so
+adding them grows the worker and desktop dependency graphs; (3) PDF page
+rendering for `pdf_file_name`, for which nothing in the Rust tree is a
+PyMuPDF equivalent. The artifact half (`ArtifactToolAuthority` read/write)
+already exists. A port is a host change first: lend a bound model (for
+example a `ToolModelAuthority` beside `ArtifactToolAuthority` through
+`materialize_configured_toolsets_with_artifact_authority`), then the family.
+
 ## Special runtime toolsets
 
 | Python source | Behavior | Rust target | Status / deviation |
