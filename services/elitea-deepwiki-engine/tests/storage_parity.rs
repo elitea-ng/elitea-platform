@@ -8,7 +8,6 @@
 //! | branch | assertion |
 //! | --- | --- |
 //! | dense | exact: same order (up to recorded ties), same L2 distances |
-//! | bm25 | exact: same order, same scores; corpus statistics equal |
 //! | fts | same match set; order within the recorded tie groups; legacy sign |
 //! | fused | recomputed from the components; equal to the recording when the components agree and no dense tie reaches the top k |
 
@@ -100,57 +99,26 @@ async fn dense_ranking_is_exact() {
     }
 }
 
+/// The legacy standalone `'bm25'` branch is gone (ADR-0031 phase D0): a
+/// publish writes the `'fts'` statistics only.
 #[tokio::test(flavor = "multi_thread")]
-async fn bm25_ranking_is_exact() {
-    let Some((_pool, reader)) = published("parity_bm25").await else {
+async fn only_the_fts_statistics_branch_is_written() {
+    let Some((pool, reader)) = published("parity_branches").await else {
         return;
     };
-    for (slug, fixture) in common::queries() {
-        let (expected_ids, expected) = recorded(&fixture, "bm25", "bm25_score");
-        let query = fixture["query"].as_str().expect("query");
-        let hits = reader
-            .search_bm25(query, expected_ids.len().max(1))
-            .await
-            .expect("bm25");
-        let scores: Vec<f64> = hits
-            .iter()
-            .map(|h| h.scores.bm25_score.expect("score"))
-            .collect();
-        common::assert_rankings_agree(
-            &ids(&hits),
-            &scores,
-            &expected_ids,
-            &expected,
-            TOLERANCE,
-            &format!("bm25/{slug}"),
-        );
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn bm25_statistics_match_the_recorded_index() {
-    let Some((pool, reader)) = published("parity_bm25_stats").await else {
-        return;
-    };
-    let recorded = &common::load("index_stats.json")["stats"]["bm25"];
     let stats = reader.stats().await.expect("stats");
-    let (_, branch) = stats
-        .branches
-        .iter()
-        .find(|(name, _)| name == "bm25")
-        .expect("the bm25 branch");
-    assert_eq!(Some(branch.doc_count), recorded["doc_count"].as_i64());
-    assert!((branch.avgdl - recorded["avgdl"].as_f64().expect("avgdl")).abs() < 1e-9);
-    assert_eq!(Some(branch.k1), recorded["k1"].as_f64());
-    assert_eq!(Some(branch.b), recorded["b"].as_f64());
-    let terms: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM wiki_bm25_terms WHERE wiki_id = $1 AND branch = 'bm25'",
+    let names: Vec<&str> = stats.branches.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["fts"]);
+    let dead: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM wiki_bm25_docs WHERE branch = 'bm25') \
+              + (SELECT count(*) FROM wiki_bm25_postings WHERE branch = 'bm25') \
+              + (SELECT count(*) FROM wiki_bm25_terms WHERE branch = 'bm25') \
+              + (SELECT count(*) FROM wiki_bm25_meta WHERE branch = 'bm25')",
     )
-    .bind(WIKI)
     .fetch_one(&pool)
     .await
-    .expect("terms");
-    assert_eq!(Some(terms), recorded["term_count"].as_i64());
+    .expect("count");
+    assert_eq!(dead, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

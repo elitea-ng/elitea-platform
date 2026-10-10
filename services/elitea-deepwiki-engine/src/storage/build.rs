@@ -20,7 +20,7 @@
 //! 6. delete the wiki's live rows of THIS project: `wiki_bm25_*`,
 //!    embeddings, edges, nodes (rows of other projects are not touched);
 //! 7. `INSERT ... SELECT` the staged nodes, edges and embeddings;
-//! 8. write the `wiki_bm25_*` statistics of both branches;
+//! 8. write the `wiki_bm25_*` statistics of the `'fts'` branch;
 //! 9. delete the build row, which cascades to every staged row.
 //!
 //! After the commit, the live tables are `ANALYZE`d, best effort: one
@@ -34,21 +34,16 @@
 //! commit. `storage/publish.py` had no such guarantee (it committed every
 //! batch of 500 nodes).
 //!
-//! The BM25 statistics are `publish.py`'s, computed the same way:
-//!
-//! * `'bm25'`: the whitespace tokens of each node's document text, k1 1.5,
-//!   b 0.75. Tokenised in Rust while staging (Python's `str.split()` rules,
-//!   which a PostgreSQL regular expression cannot be trusted to match),
-//!   turned into statistics in SQL.
-//! * `'fts'`: the lexemes of the published `fts` column with their position
-//!   counts, k1 1.2, b 0.75, read back out of the stored tsvectors as
-//!   `PostgresBackend._rebuild_fts_statistics` does, so the statistics
-//!   describe exactly what `plainto_tsquery` matches.
-//!
-//! In both, a document with no token takes no `doc_idx` (the legacy skip
-//! rule), `doc_idx` follows the legacy order (graph order for `'bm25'`,
-//! `ORDER BY node_id` for `'fts'`), and `avgdl` is `total / doc_count`, or
-//! 1.0 for an empty corpus.
+//! The BM25 statistics are the `'fts'` branch only: the lexemes of the
+//! published `fts` column with their position counts, k1 1.2, b 0.75, read
+//! back out of the stored tsvectors as
+//! `PostgresBackend._rebuild_fts_statistics` does, so the statistics
+//! describe exactly what `plainto_tsquery` matches. A document with no
+//! lexeme takes no `doc_idx` (the legacy skip rule), `doc_idx` follows
+//! `ORDER BY node_id`, and `avgdl` is `total / doc_count`, or 1.0 for an
+//! empty corpus. (The legacy standalone `'bm25'` branch, whitespace tokens
+//! tokenised while staging, had no reader outside the parity tool and the
+//! tests; it is no longer written, and migration 0007 deletes its rows.)
 //!
 //! Abandoned builds: [`BuildSpace::reconcile_owner`] at startup deletes the
 //! builds of this process's owner that an EARLIER run of it opened (each
@@ -62,9 +57,8 @@
 use crate::graph::{CodeGraph, edge_row, node_row};
 use crate::storage::copy::CopyWriter;
 use crate::storage::rows::{IndexEdge, IndexNode, collapse_edges};
-use crate::storage::text::{self, BM25_B, BM25_K1, BRANCH_BM25, BRANCH_FTS, FTS_B, FTS_K1};
+use crate::storage::text::{BRANCH_FTS, FTS_B, FTS_K1};
 use crate::storage::{Result, StorageError, WikiKey};
-use indexmap::IndexMap;
 use serde_json::Value;
 use sqlx::Connection;
 use sqlx::postgres::{PgConnection, PgPool};
@@ -208,8 +202,6 @@ pub struct BuildSpace {
 pub struct StageCounts {
     pub nodes: u64,
     pub edges: u64,
-    pub bm25_documents: u64,
-    pub bm25_postings: u64,
 }
 
 /// Row counts a publish wrote into the live tables.
@@ -218,7 +210,6 @@ pub struct PublishCounts {
     pub nodes: u64,
     pub edges: u64,
     pub embeddings: u64,
-    pub bm25_documents: u64,
     pub fts_documents: u64,
     /// Every live table was `ANALYZE`d after the commit. `false` when one
     /// was skipped (another `ANALYZE` or a vacuum held it); autovacuum
@@ -245,6 +236,13 @@ pub struct WikiRecord {
     pub canonical_repo_identifier: Option<String>,
     pub analysis_key: Option<String>,
     pub wiki_version_id: Option<String>,
+    /// The embedding model the build's vectors were made with, and the
+    /// dimension the model client's first response established (migration
+    /// 0006). Unlike the fields above, `None` is written as NULL: the
+    /// publish replaces the wiki's embeddings, so a stored model would
+    /// describe vectors that are gone.
+    pub embedding_model: Option<String>,
+    pub embedding_dim: Option<i32>,
 }
 
 impl WikiRecord {
@@ -287,6 +285,9 @@ impl WikiRecord {
             analysis_key: text("analysis_key"),
             wiki_version_id: text("wiki_version_id"),
             folder_path: text("wiki_id").map(|id| format!("{id}/")),
+            // Set by the publisher from the model client, not by the result.
+            embedding_model: None,
+            embedding_dim: None,
         }
     }
 }
@@ -368,7 +369,6 @@ impl BuildSpace {
             pool: self.pool.clone(),
             id: build_id,
             key: key.clone(),
-            next_ord: 0,
             publish: self.publish,
             beat_every,
             beat: Some(beat),
@@ -497,8 +497,6 @@ pub struct Build {
     id: String,
     /// The project and wiki the build publishes into.
     key: WikiKey,
-    /// The graph position of the next staged node (`bm25_docs.ord`).
-    next_ord: i64,
     publish: PublishSettings,
     beat_every: Duration,
     /// `None` while a publish runs and after a publish succeeded.
@@ -554,22 +552,16 @@ const NODE_COPY: &str = "COPY deepwiki_build.wiki_nodes (build_id, node_id, rel_
      language, start_line, end_line, symbol_name, symbol_type, parent_symbol, source_text, \
      docstring, signature, chunk_type, macro_cluster, micro_cluster, is_architectural, is_doc, \
      is_test) FROM STDIN";
-const BM25_DOCS_COPY: &str =
-    "COPY deepwiki_build.bm25_docs (build_id, node_id, ord, length) FROM STDIN";
-const BM25_POSTINGS_COPY: &str =
-    "COPY deepwiki_build.bm25_postings (build_id, node_id, term, tf) FROM STDIN";
 const EDGE_COPY: &str = "COPY deepwiki_build.wiki_edges (build_id, source_id, target_id, \
      rel_type, edge_class, weight) FROM STDIN";
 const EMBEDDING_COPY: &str =
     "COPY deepwiki_build.wiki_node_embeddings (build_id, node_id, embedding) FROM STDIN";
 
 /// The staged tables, `ANALYZE`d before a publish reads them.
-const STAGING_TABLES: [&str; 5] = [
+const STAGING_TABLES: [&str; 3] = [
     "deepwiki_build.wiki_nodes",
     "deepwiki_build.wiki_edges",
     "deepwiki_build.wiki_node_embeddings",
-    "deepwiki_build.bm25_docs",
-    "deepwiki_build.bm25_postings",
 ];
 
 /// The live tables, `ANALYZE`d after a publish commits.
@@ -582,15 +574,6 @@ pub const LIVE_TABLES: [&str; 7] = [
     "wiki_bm25_terms",
     "wiki_bm25_postings",
 ];
-
-/// One staged node's BM25 input: its graph position, token count and
-/// term frequencies (first-seen order, as a Python `Counter`).
-struct Bm25Doc {
-    node_id: String,
-    ord: i64,
-    length: i64,
-    terms: IndexMap<String, i64>,
-}
 
 impl Build {
     /// The build's id.
@@ -651,7 +634,7 @@ impl Build {
         Ok(counts)
     }
 
-    /// Stage nodes, and their BM25 input. Node ids must be new to this
+    /// Stage nodes. Node ids must be new to this
     /// build (the primary key refuses a repeat).
     ///
     /// # Errors
@@ -668,45 +651,11 @@ impl Build {
         let mut iter = nodes.into_iter().peekable();
         while iter.peek().is_some() {
             let round: Vec<IndexNode> = iter.by_ref().take(NODES_PER_ROUND).collect();
-            let docs = self.bm25_docs(&round);
             let mut transaction = connection.begin().await?;
             counts.nodes += copy_nodes(&mut transaction, &self.id, &round).await?;
-            let (documents, postings) = copy_bm25(&mut transaction, &self.id, &docs).await?;
-            counts.bm25_documents += documents;
-            counts.bm25_postings += postings;
             transaction.commit().await?;
         }
         Ok(counts)
-    }
-
-    /// Tokenise a round of nodes for the `'bm25'` branch
-    /// (`build_bm25` → `whitespace_tokens(_document_text(node))`).
-    fn bm25_docs(&mut self, nodes: &[IndexNode]) -> Vec<Bm25Doc> {
-        let mut docs = Vec::with_capacity(nodes.len());
-        for node in nodes {
-            let ord = self.next_ord;
-            self.next_ord += 1;
-            let document = text::document_text(node);
-            let mut terms: IndexMap<String, i64> = IndexMap::new();
-            let mut length = 0_i64;
-            for token in text::whitespace_tokens(&document) {
-                length += 1;
-                if token.len() <= text::MAX_TERM_BYTES {
-                    *terms.entry(token.to_owned()).or_insert(0) += 1;
-                }
-            }
-            // The legacy skip rule: a document with no token takes no
-            // doc_idx, so it is not staged at all.
-            if length > 0 {
-                docs.push(Bm25Doc {
-                    node_id: node.node_id.clone(),
-                    ord,
-                    length,
-                    terms,
-                });
-            }
-        }
-        docs
     }
 
     /// Stage edges as given (call [`collapse_edges`] first; the primary key
@@ -947,7 +896,7 @@ impl Build {
             )));
         }
 
-        delete_live(&mut tx, key).await?;
+        let _replaced = delete_live(&mut tx, key).await?;
 
         let nodes = sqlx::query(
             "INSERT INTO wiki_nodes (project_id, wiki_id, node_id, rel_path, file_name, language, \
@@ -993,7 +942,6 @@ impl Build {
         // inserted in key order, so the B-trees fill in order instead of at
         // random (measured on elitea-platform: 5.1M postings, 137 s
         // unsorted); the sorts get `work_mem` for that.
-        let bm25_documents = write_bm25_branch(&mut tx, key, build).await?;
         let fts_documents = write_fts_branch(&mut tx, key).await?;
 
         sqlx::query("DELETE FROM deepwiki_build.builds WHERE build_id = $1")
@@ -1016,7 +964,6 @@ impl Build {
             nodes,
             edges,
             embeddings,
-            bm25_documents,
             fts_documents,
             statistics_refreshed,
         })
@@ -1025,23 +972,65 @@ impl Build {
 
 /// Delete the live index rows of one project's wiki, and only those:
 /// each project keeps its own index of the same wiki id.
-async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<()> {
-    for statement in [
-        "DELETE FROM wiki_bm25_postings WHERE project_id = $1 AND wiki_id = $2",
-        "DELETE FROM wiki_bm25_terms WHERE project_id = $1 AND wiki_id = $2",
-        "DELETE FROM wiki_bm25_docs WHERE project_id = $1 AND wiki_id = $2",
-        "DELETE FROM wiki_bm25_meta WHERE project_id = $1 AND wiki_id = $2",
-        "DELETE FROM wiki_node_embeddings WHERE project_id = $1 AND wiki_id = $2",
-        "DELETE FROM wiki_edges WHERE project_id = $1 AND wiki_id = $2",
-        "DELETE FROM wiki_nodes WHERE project_id = $1 AND wiki_id = $2",
+///
+/// Shared with the wiki deletion ([`crate::storage::delete`]), which runs it
+/// under the same [`PUBLISH_WIKI_LOCK`] and returns what it removed.
+pub(crate) async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<LiveRows> {
+    let mut removed = LiveRows::default();
+    for (table, statement) in [
+        (
+            "statistics",
+            "DELETE FROM wiki_bm25_postings WHERE project_id = $1 AND wiki_id = $2",
+        ),
+        (
+            "statistics",
+            "DELETE FROM wiki_bm25_terms WHERE project_id = $1 AND wiki_id = $2",
+        ),
+        (
+            "statistics",
+            "DELETE FROM wiki_bm25_docs WHERE project_id = $1 AND wiki_id = $2",
+        ),
+        (
+            "statistics",
+            "DELETE FROM wiki_bm25_meta WHERE project_id = $1 AND wiki_id = $2",
+        ),
+        (
+            "embeddings",
+            "DELETE FROM wiki_node_embeddings WHERE project_id = $1 AND wiki_id = $2",
+        ),
+        (
+            "edges",
+            "DELETE FROM wiki_edges WHERE project_id = $1 AND wiki_id = $2",
+        ),
+        (
+            "nodes",
+            "DELETE FROM wiki_nodes WHERE project_id = $1 AND wiki_id = $2",
+        ),
     ] {
-        sqlx::query(statement)
+        let done = sqlx::query(statement)
             .bind(key.project_id())
             .bind(key.wiki_id())
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
+        match table {
+            "statistics" => removed.statistics += done,
+            "embeddings" => removed.embeddings += done,
+            "edges" => removed.edges += done,
+            _ => removed.nodes += done,
+        }
     }
-    Ok(())
+    Ok(removed)
+}
+
+/// The live rows [`delete_live`] removed, by kind.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveRows {
+    pub nodes: u64,
+    pub edges: u64,
+    pub embeddings: u64,
+    /// Rows of the four `wiki_bm25_*` tables together.
+    pub statistics: u64,
 }
 
 /// The publish transaction's first steps: set the publish settings, lock
@@ -1095,7 +1084,10 @@ async fn enter_publish(
 
 /// `set_config(name, value, true)` for each pair: `SET LOCAL` with bound
 /// values.
-async fn apply_settings(tx: &mut PgConnection, settings: &[(&'static str, String)]) -> Result<()> {
+pub(crate) async fn apply_settings(
+    tx: &mut PgConnection,
+    settings: &[(&'static str, String)],
+) -> Result<()> {
     for (name, value) in settings {
         sqlx::query("SELECT set_config($1, $2, true)")
             .bind(name)
@@ -1199,8 +1191,6 @@ fn add(a: StageCounts, b: StageCounts) -> StageCounts {
     StageCounts {
         nodes: a.nodes + b.nodes,
         edges: a.edges + b.edges,
-        bm25_documents: a.bm25_documents + b.bm25_documents,
-        bm25_postings: a.bm25_postings + b.bm25_postings,
     }
 }
 
@@ -1267,35 +1257,6 @@ async fn copy_nodes(
     writer.finish().await
 }
 
-async fn copy_bm25(
-    connection: &mut PgConnection,
-    build: &str,
-    docs: &[Bm25Doc],
-) -> Result<(u64, u64)> {
-    let mut writer = CopyWriter::start(&mut *connection, BM25_DOCS_COPY).await?;
-    for doc in docs {
-        writer.text(build);
-        writer.text(&doc.node_id);
-        writer.int(doc.ord);
-        writer.int(doc.length);
-        writer.end_row().await?;
-    }
-    let documents = writer.finish().await?;
-
-    let mut writer = CopyWriter::start(&mut *connection, BM25_POSTINGS_COPY).await?;
-    for doc in docs {
-        for (term, tf) in &doc.terms {
-            writer.text(build);
-            writer.text(&doc.node_id);
-            writer.text(term);
-            writer.int(*tf);
-            writer.end_row().await?;
-        }
-    }
-    let postings = writer.finish().await?;
-    Ok((documents, postings))
-}
-
 /// Insert or update the `wikis` row: `_ensure_wiki_row` then
 /// `_update_registry`, in one static statement. A supplied field replaces
 /// the stored one; an absent one keeps it (or takes the column default on a
@@ -1304,10 +1265,10 @@ async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) 
     sqlx::query(
         "INSERT INTO wikis (project_id, wiki_id, repo, branch, provider, host, display_name, \
              description, folder_path, commit_hash, canonical_repo_identifier, analysis_key, \
-             wiki_version_id, updated_at) \
+             wiki_version_id, embedding_model, embedding_dim, updated_at) \
          VALUES ($13, $1, COALESCE($2, $1), COALESCE($3, 'main'), COALESCE($4, 'github'), \
              COALESCE($5, 'github.com'), COALESCE($6, ''), COALESCE($7, ''), COALESCE($8, ''), \
-             $9, $10, $11, $12, now()) \
+             $9, $10, $11, $12, $14, $15, now()) \
          ON CONFLICT (project_id, wiki_id) DO UPDATE SET \
              repo = COALESCE($2, wikis.repo), \
              branch = COALESCE($3, wikis.branch), \
@@ -1320,6 +1281,8 @@ async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) 
              canonical_repo_identifier = COALESCE($10, wikis.canonical_repo_identifier), \
              analysis_key = COALESCE($11, wikis.analysis_key), \
              wiki_version_id = COALESCE($12, wikis.wiki_version_id), \
+             embedding_model = $14, \
+             embedding_dim = $15, \
              updated_at = now()",
     )
     .bind(key.wiki_id())
@@ -1335,6 +1298,8 @@ async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) 
     .bind(record.analysis_key.as_deref())
     .bind(record.wiki_version_id.as_deref())
     .bind(key.project_id())
+    .bind(record.embedding_model.as_deref())
+    .bind(record.embedding_dim)
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -1379,39 +1344,6 @@ async fn write_terms_and_meta(
     .fetch_one(&mut *tx)
     .await?;
     Ok(u64::try_from(documents).unwrap_or_default())
-}
-
-/// The `'bm25'` branch, from the staged tokens.
-async fn write_bm25_branch(tx: &mut PgConnection, key: &WikiKey, build: &str) -> Result<u64> {
-    let wiki = key.wiki_id();
-    sqlx::query(
-        "INSERT INTO wiki_bm25_docs (project_id, wiki_id, branch, doc_idx, node_id, length) \
-         SELECT $4, $1, $2, (row_number() OVER (ORDER BY ord) - 1)::integer, node_id, length \
-         FROM deepwiki_build.bm25_docs WHERE build_id = $3",
-    )
-    .bind(wiki)
-    .bind(BRANCH_BM25)
-    .bind(build)
-    .bind(key.project_id())
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO wiki_bm25_postings (project_id, wiki_id, branch, term, doc_idx, tf) \
-         SELECT $4, $1, $2, p.term, d.doc_idx, p.tf \
-         FROM deepwiki_build.bm25_postings p \
-         JOIN wiki_bm25_docs d \
-           ON d.project_id = $4 AND d.wiki_id = $1 AND d.branch = $2 \
-          AND d.node_id = p.node_id \
-         WHERE p.build_id = $3 \
-         ORDER BY p.term, d.doc_idx",
-    )
-    .bind(wiki)
-    .bind(BRANCH_BM25)
-    .bind(build)
-    .bind(key.project_id())
-    .execute(&mut *tx)
-    .await?;
-    write_terms_and_meta(tx, key, BRANCH_BM25, BM25_K1, BM25_B).await
 }
 
 /// The `'fts'` branch, from the published tsvectors
@@ -1488,6 +1420,8 @@ mod tests {
                 canonical_repo_identifier: Some("acme/notes:main:abc1234".into()),
                 analysis_key: Some("k".into()),
                 wiki_version_id: None,
+                embedding_model: None,
+                embedding_dim: None,
             }
         );
         let bare = WikiRecord::from_result(&json!({"provider_type": "bitbucket"}));

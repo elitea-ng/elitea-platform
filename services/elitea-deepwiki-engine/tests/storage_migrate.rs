@@ -73,6 +73,14 @@ fn the_checksums_are_the_ledger_values() {
             "0005_project_scope",
             "fe71faa1fc925a050ad73b5d3b7313e1cc8ca926d1218fe476ae950bd3a7cac7",
         ),
+        (
+            "0006_wiki_embedding_model",
+            "a2d0bfc17ba879a91154b7278f84e529a93114442a31464b5b49bdcbe4c63967",
+        ),
+        (
+            "0007_drop_bm25_branch_rows",
+            "c6d45971b76f84884dcc292f47870c02add8993e1b304fc937e7b7281f4d0430",
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -196,6 +204,62 @@ async fn the_ledger_is_written_once_and_guarded() {
     assert_eq!((recorded, created), (0, None));
 }
 
+/// 0006: the model a wiki was embedded with, nullable, unrecorded for a wiki
+/// that was published before it. 0007: the dead `'bm25'` branch's rows go,
+/// the `'fts'` branch's stay.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_embedding_model_columns_exist_and_the_dead_branch_is_removed() {
+    let Some(pool) = common::empty_database("migrate_model").await else {
+        return;
+    };
+    let all = migrate::embedded().expect("valid");
+    let (before, after) = all.split_at(6);
+    assert_eq!(after[0].name, "drop_bm25_branch_rows");
+    migrate::apply(&pool, before).await.expect("0001-0006");
+    for (column, kind) in [("embedding_model", "text"), ("embedding_dim", "integer")] {
+        let found: Option<(String, String)> = sqlx::query_as(
+            "SELECT data_type::text, is_nullable::text FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = 'wikis' AND column_name = $1",
+        )
+        .bind(column)
+        .fetch_optional(&pool)
+        .await
+        .expect("catalog");
+        assert_eq!(found, Some((kind.to_owned(), "YES".to_owned())), "{column}");
+    }
+    sqlx::raw_sql(
+        "INSERT INTO wikis (project_id, wiki_id, repo, branch) VALUES (1, 'w', 'r', 'main');
+         INSERT INTO wiki_bm25_meta (project_id, wiki_id, branch, doc_count, avgdl, k1, b)
+             VALUES (1, 'w', 'bm25', 1, 1.0, 1.5, 0.75), (1, 'w', 'fts', 1, 1.0, 1.2, 0.75);
+         INSERT INTO wiki_bm25_docs (project_id, wiki_id, branch, doc_idx, node_id, length)
+             VALUES (1, 'w', 'bm25', 0, 'n', 1), (1, 'w', 'fts', 0, 'n', 1);
+         INSERT INTO wiki_bm25_terms (project_id, wiki_id, branch, term, df)
+             VALUES (1, 'w', 'bm25', 't', 1), (1, 'w', 'fts', 't', 1);
+         INSERT INTO wiki_bm25_postings (project_id, wiki_id, branch, term, doc_idx, tf)
+             VALUES (1, 'w', 'bm25', 't', 0, 1), (1, 'w', 'fts', 't', 0, 1);",
+    )
+    .execute(&pool)
+    .await
+    .expect("a wiki published before 0007");
+    assert_eq!(
+        migrate::apply_all(&pool).await.expect("0007"),
+        ["0007".to_owned()]
+    );
+    for table in [
+        "wiki_bm25_meta",
+        "wiki_bm25_docs",
+        "wiki_bm25_terms",
+        "wiki_bm25_postings",
+    ] {
+        let branches: Vec<String> =
+            sqlx::query_scalar(&format!("SELECT branch FROM {table} ORDER BY branch"))
+                .fetch_all(&pool)
+                .await
+                .expect("branches");
+        assert_eq!(branches, ["fts"], "{table}");
+    }
+}
+
 /// 0005 on a database that holds an index from before it: the rows cannot
 /// be attributed to a project, so they are deleted (with every build in
 /// progress), and the next generation rebuilds the index.
@@ -221,8 +285,8 @@ async fn the_project_scope_migration_deletes_the_unattributable_index() {
     .expect("a pre-0005 index");
 
     assert_eq!(
-        migrate::apply_all(&pool).await.expect("0005"),
-        ["0005".to_owned()]
+        migrate::apply_all(&pool).await.expect("0005-0007"),
+        ["0005".to_owned(), "0006".to_owned(), "0007".to_owned()]
     );
     for table in [
         "wikis",

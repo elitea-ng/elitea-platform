@@ -6,7 +6,6 @@
 //! | branch | score field | parity |
 //! | --- | --- | --- |
 //! | dense | `vec_distance` (L2, lower is better) | exact: an exact scan, no HNSW index |
-//! | bm25 | `bm25_score` (higher is better) | exact: `wiki_bm25_*` 'bm25', k1 1.5, b 0.75 |
 //! | fts | `fts_rank` (negated, lower is better), `score_norm` | match set and order: `plainto_tsquery` over the folded text, ranked by 'fts' statistics |
 //! | fused | `combined_score` (higher is better) | the frozen weighted RRF over fts + dense |
 //!
@@ -26,7 +25,7 @@
 //! autocommit statements; a publish between two of them could mix two
 //! indexes in one answer.
 
-use crate::storage::text::{self, BRANCH_BM25, BRANCH_FTS};
+use crate::storage::text::{self, BRANCH_FTS};
 use crate::storage::{Result, WikiKey};
 use indexmap::IndexMap;
 use sqlx::Row;
@@ -251,18 +250,6 @@ impl IndexReader {
     pub async fn search_dense(&self, embedding: &[f64], k: usize) -> Result<Vec<Hit>> {
         let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
         let hits = search_dense(&mut tx, &self.key, embedding, k).await?;
-        tx.commit().await?;
-        Ok(hits)
-    }
-
-    /// Standalone BM25: hits carry `bm25_score`.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::storage::StorageError::Database`].
-    pub async fn search_bm25(&self, query: &str, k: usize) -> Result<Vec<Hit>> {
-        let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_bm25(&mut tx, &self.key, query, k).await?;
         tx.commit().await?;
         Ok(hits)
     }
@@ -571,33 +558,6 @@ pub(crate) async fn search_dense(
         ));
     }
     hits(tx, key, scored).await
-}
-
-/// `PostgresBackend.search_bm25`.
-pub(crate) async fn search_bm25(
-    tx: &mut PgConnection,
-    key: &WikiKey,
-    query: &str,
-    k: usize,
-) -> Result<Vec<Hit>> {
-    let terms: Vec<String> = text::whitespace_tokens(query).map(str::to_owned).collect();
-    let scores = bm25_scores(tx, key, BRANCH_BM25, &terms).await?;
-    let mut ordered: Vec<(String, f64)> = scores.into_iter().collect();
-    ordered.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    ordered.truncate(k);
-    let ranked = ordered
-        .into_iter()
-        .map(|(node_id, score)| {
-            (
-                node_id,
-                Scores {
-                    bm25_score: Some(score),
-                    ..Scores::default()
-                },
-            )
-        })
-        .collect();
-    hits(tx, key, ranked).await
 }
 
 /// `PostgresBackend.search_hybrid`.
