@@ -126,7 +126,7 @@ func run(
 
 	adminConfig, err := pgx.ParseConfig(mustNormalize(*pgvectorURL))
 	if err != nil {
-		sayln(stderr, "pgvector admin URL is not a valid PostgreSQL URL")
+		say(stderr, "%v\n", redact(errParseAdminURL))
 		return exitInvalidUsage
 	}
 	if *maxFraction < 0 || *maxFraction > 1 {
@@ -142,7 +142,7 @@ func run(
 
 	printHeader(stdout, report)
 	if report.ProjectCount == 0 {
-		sayln(stderr, "refusing to run: the platform database has no projects, so every project_<id> database would look orphaned. Check --database-url.")
+		say(stderr, "%v\n", redact(errNoProjects))
 		return exitFailure
 	}
 	printOrphans(stdout, orphans)
@@ -154,9 +154,7 @@ func run(
 	}
 
 	if fraction := report.orphanFraction(); fraction > *maxFraction && !*forceFraction {
-		say(stderr, "refusing to drop: %.0f%% of the project_<id> databases on this server are orphans (limit %.0f%%). "+
-			"That usually means a wrong --database-url or a PgVector server shared with another platform. "+
-			"If it is really right, re-run with --force-fraction.\n", fraction*100, *maxFraction*100)
+		say(stderr, "%v (%.0f%% are orphans, limit %.0f%%)\n", redact(errOrphanFraction), fraction*100, *maxFraction*100)
 		return exitInvalidUsage
 	}
 
@@ -215,8 +213,53 @@ func mustNormalize(raw string) string {
 	return raw
 }
 
-// redact keeps a connection string, which could carry a password, out of output.
+// The refusals and failures this command reports. Each message is fixed text:
+// none carries a URL, a host or a credential, so redact can pass them on.
+var (
+	errParsePlatformURL = errors.New("cannot parse --database-url")
+	errParseAdminURL    = errors.New("cannot parse --pgvector-url")
+	errConnectPlatform  = errors.New("cannot connect to the platform database")
+	errConnectAdmin     = errors.New("cannot connect to the PgVector admin database")
+	errNoProjects       = errors.New("refusing to run: the platform database has no projects, so every project_<id> database " +
+		"would look orphaned; check --database-url")
+	errOrphanFraction = errors.New("refusing to drop: too large a share of the project_<id> databases on this server are " +
+		"orphans. That usually means a wrong --database-url or a PgVector server shared with another platform. " +
+		"If it is really right, re-run with --force-fraction")
+)
+
+// safeMessages maps the sentinels this command can receive to the text shown
+// for them. A sentinel is matched with errors.Is, so a wrapped one still maps.
+var safeMessages = []struct {
+	target error
+	text   string
+}{
+	{errParsePlatformURL, errParsePlatformURL.Error()},
+	{errParseAdminURL, errParseAdminURL.Error()},
+	{errConnectPlatform, errConnectPlatform.Error()},
+	{errConnectAdmin, errConnectAdmin.Error()},
+	{errNoProjects, errNoProjects.Error()},
+	{errOrphanFraction, errOrphanFraction.Error()},
+	{pgvector.ErrDropLockTimeout, "timed out waiting for the project's PgVector advisory lock; a provision or another drop holds it, retry later"},
+	{pgvector.ErrInvalidDropTarget, "refusing to drop a name that is not the project's own database or role"},
+}
+
+// redact turns an error into text that is safe to print: a connection string
+// could carry a password, and the driver's errors repeat it.
+//
+//   - a known sentinel maps to its fixed message;
+//   - a context error is printed as it is (it carries nothing);
+//   - a raw Postgres error is reduced to its SQLSTATE, so the operator can look
+//     the code up without the message, which can quote an identifier or a host;
+//   - anything else is "operation failed".
 func redact(err error) error {
+	if err == nil {
+		return nil
+	}
+	for _, known := range safeMessages {
+		if errors.Is(err, known.target) {
+			return errors.New(known.text)
+		}
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
@@ -261,12 +304,12 @@ func findOrphans(ctx context.Context, adminConfig *pgx.ConnConfig, databaseURL s
 	var rep report
 	platformConfig, err := pgx.ParseConfig(mustNormalize(databaseURL))
 	if err != nil {
-		return rep, errors.New("platform database URL is not a valid PostgreSQL URL")
+		return rep, errParsePlatformURL
 	}
 	rep.PlatformURLDatabase = platformConfig.Database
 	platform, err := pgx.ConnectConfig(ctx, platformConfig)
 	if err != nil {
-		return rep, errors.New("connect to platform database")
+		return rep, errConnectPlatform
 	}
 	defer func() { _ = platform.Close(context.Background()) }()
 	if err := platform.QueryRow(ctx, `SELECT current_database()`).Scan(&rep.CurrentDatabase); err != nil {
@@ -298,7 +341,7 @@ func findOrphans(ctx context.Context, adminConfig *pgx.ConnConfig, databaseURL s
 
 	admin, err := pgx.ConnectConfig(ctx, adminConfig)
 	if err != nil {
-		return rep, errors.New("connect to pgvector admin database")
+		return rep, errConnectAdmin
 	}
 	defer func() { _ = admin.Close(context.Background()) }()
 	databases, err := queryNames(ctx, admin, `SELECT datname FROM pg_catalog.pg_database WHERE datname LIKE 'project\_%'`)

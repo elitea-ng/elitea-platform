@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
 )
 
 func TestComputeOrphansKeepsOnlyExactProjectNamesWithoutARow(t *testing.T) {
@@ -235,5 +239,81 @@ func TestRunAgainstPostgres(t *testing.T) {
 	}
 	if d, r := exists(); d || r {
 		t.Fatalf("after the confirmed drop: database=%v role=%v", d, r)
+	}
+}
+
+// redact: every sentinel maps to its fixed text, wrapped or not; a raw Postgres
+// error is reduced to its SQLSTATE; nothing else leaks.
+func TestRedactMapsKnownSentinelsAndKeepsTheSQLState(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"lock timeout":       {pgvector.ErrDropLockTimeout, "timed out waiting for the project's PgVector advisory lock"},
+		"wrapped lock":       {fmt.Errorf("drop: %w", pgvector.ErrDropLockTimeout), "timed out waiting for the project's PgVector advisory lock"},
+		"invalid target":     {fmt.Errorf("%w: role", pgvector.ErrInvalidDropTarget), "refusing to drop a name that is not the project's own"},
+		"no projects":        {errNoProjects, "the platform database has no projects"},
+		"orphan fraction":    {errOrphanFraction, "--force-fraction"},
+		"parse platform URL": {errParsePlatformURL, "cannot parse --database-url"},
+		"parse admin URL":    {errParseAdminURL, "cannot parse --pgvector-url"},
+		"connect platform":   {errConnectPlatform, "cannot connect to the platform database"},
+		"connect admin":      {errConnectAdmin, "cannot connect to the PgVector admin database"},
+		"raw postgres error": {fmt.Errorf("exec: %w", &pgconn.PgError{Code: "42501", Message: `permission denied for database "project_7"`}), "postgres error 42501"},
+		"unknown":            {errors.New("dial tcp 10.1.2.3:5432: password=hunter2"), "operation failed"},
+		"context deadline":   {context.DeadlineExceeded, "context deadline exceeded"},
+	} {
+		got := redact(tc.err).Error()
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: redact = %q, want it to contain %q", name, got, tc.want)
+		}
+		for _, leak := range []string{"hunter2", "10.1.2.3", "project_7", "permission denied"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("%s: redact leaks %q: %q", name, leak, got)
+			}
+		}
+	}
+	if redact(nil) != nil {
+		t.Error("redact(nil) must be nil")
+	}
+}
+
+// A run against URLs that cannot be parsed or reached names which one, and
+// never prints either URL or its credentials.
+func TestRunNamesTheFailingConnectionWithoutEchoingTheURL(t *testing.T) {
+	t.Parallel()
+
+	lookup := func(string) (string, bool) { return "", false }
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"admin URL unparsable": {
+			[]string{"--pgvector-url", "postgres://admin:hunter2@[bad", "--database-url", "postgres://u:hunter2@127.0.0.1:1/db"},
+			"cannot parse --pgvector-url",
+		},
+		"platform URL unparsable": {
+			[]string{"--pgvector-url", "postgres://admin:hunter2@127.0.0.1:1/db", "--database-url", "postgres://u:hunter2@[bad"},
+			"cannot parse --database-url",
+		},
+		"platform unreachable": {
+			[]string{"--pgvector-url", "postgres://admin:hunter2@127.0.0.1:1/db", "--database-url", "postgres://u:hunter2@127.0.0.1:1/db"},
+			"cannot connect to the platform database",
+		},
+	} {
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), tc.args, lookup, &out, &errOut)
+		if code == exitOK {
+			t.Errorf("%s: exit = %d", name, code)
+		}
+		if !strings.Contains(errOut.String(), tc.want) {
+			t.Errorf("%s: stderr = %q, want %q", name, errOut.String(), tc.want)
+		}
+		for _, leak := range []string{"hunter2", "127.0.0.1", "[bad"} {
+			if strings.Contains(errOut.String()+out.String(), leak) {
+				t.Errorf("%s: output leaks %q: %s%s", name, leak, errOut.String(), out.String())
+			}
+		}
 	}
 }
