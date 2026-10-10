@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 33 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 33",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 34 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 34",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -243,6 +243,19 @@ func TestRustCapabilitySnapshotMatchesTheRustSource(t *testing.T) {
 		t.Fatal("direct MCP materialization is absent; review the runtime capability")
 	}
 	found["mcp"] = struct{}{}
+	// mcp_config (the saved pre-built MCP definition Main resolves to an HTTP
+	// endpoint at claim time) is classified as MCP by the snapshot and served
+	// by the same direct MCP branch.
+	snapshot, err := os.ReadFile(filepath.Join(
+		root, "libs", "rust", "agent-runtime", "src", "toolkits", "snapshot.rs",
+	))
+	if err != nil {
+		t.Fatalf("read snapshot.rs: %v", err)
+	}
+	if !strings.Contains(string(snapshot), `matches!(tool_type, "mcp" | "mcp_config")`) {
+		t.Fatal("snapshot.rs no longer classifies mcp_config as MCP; review the runtime capability")
+	}
+	found["mcp_config"] = struct{}{}
 	if len(found) < 20 {
 		t.Fatalf("extracted only %d families from materialize.rs; the extraction "+
 			"stopped matching, so this test would prove nothing", len(found))
