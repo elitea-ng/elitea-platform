@@ -14,7 +14,7 @@ use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::client::{FigmaClient, FigmaClientError};
 use super::config::{FigmaConfigError, FigmaToolkitConfig};
-use super::output::{controls, render};
+use super::output::{controls, render_blocking};
 use super::tokens::{BatchResult, batch_output, design_tokens};
 
 const GET_FILE_NODES: &str = "get_file_nodes";
@@ -530,7 +530,7 @@ async fn rest_tool(
         }
     }
     .map_err(FigmaClientError::into_adk)?;
-    Ok(match render(&result, &controls) {
+    Ok(match render_blocking(result, controls).await {
         Ok(text) => Value::String(text),
         Err(message) => sdk_error(kind, &message),
     })

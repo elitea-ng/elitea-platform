@@ -11,6 +11,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -25,6 +26,31 @@ const MAX_REGEXP_BYTES: usize = 4 * 1_024;
 const MAX_FIELDS: usize = 256;
 /// fancy-regex's own default, stated so the bound is visible here.
 const REGEXP_BACKTRACK_LIMIT: usize = 1_000_000;
+
+/// The overall budget for one caller-supplied `regexp` pass. The backtrack
+/// limit bounds one match attempt; this bounds the whole pass, which would
+/// otherwise grow with the number of match positions in a multi-MB file.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RegexpBudget {
+    /// The serialized text a regexp may scan, in bytes.
+    pub(super) max_input_bytes: usize,
+    /// Matches one pass may remove.
+    pub(super) max_matches: usize,
+    /// Wall-clock time one pass may take, checked between matches.
+    pub(super) deadline: Duration,
+}
+
+impl RegexpBudget {
+    pub(super) const DEFAULT: Self = Self {
+        max_input_bytes: 16 * 1_024 * 1_024,
+        max_matches: 100_000,
+        deadline: Duration::from_secs(2),
+    };
+}
+
+/// How long the async caller waits for the blocking render beyond the regexp
+/// deadline (serialization and reduction of a large file) before it answers.
+const RENDER_GRACE: Duration = Duration::from_secs(10);
 
 /// The resolved controls for one call.
 pub(super) struct OutputControls {
@@ -125,9 +151,39 @@ pub(super) fn controls(
     })
 }
 
+/// [`render`] off the async executor: serializing a multi-MB file and
+/// running a caller-supplied regexp over it are CPU-bound, so they run on
+/// the blocking pool under [`RegexpBudget::DEFAULT`] and an overall timeout.
+pub(super) async fn render_blocking(
+    result: Value,
+    controls: OutputControls,
+) -> Result<String, String> {
+    render_blocking_with(result, controls, RegexpBudget::DEFAULT).await
+}
+
+pub(super) async fn render_blocking_with(
+    result: Value,
+    controls: OutputControls,
+    budget: RegexpBudget,
+) -> Result<String, String> {
+    let task = tokio::task::spawn_blocking(move || render_with(&result, &controls, budget));
+    match tokio::time::timeout(budget.deadline + RENDER_GRACE, task).await {
+        Ok(Ok(rendered)) => rendered,
+        Ok(Err(_)) => Err("the output could not be rendered".to_owned()),
+        // The blocking pass stops itself at its own deadline; this only
+        // stops waiting for it.
+        Err(_) => Err("rendering the output exceeded the approved time".to_owned()),
+    }
+}
+
 /// The SDK wrapper's answer for one result. `Err` carries the wrapper's
-/// failure text (a regular expression that exhausts its backtracking budget).
-pub(super) fn render(result: &Value, controls: &OutputControls) -> Result<String, String> {
+/// failure text (a regular expression that exhausts its backtracking budget
+/// or the overall [`RegexpBudget`]).
+fn render_with(
+    result: &Value,
+    controls: &OutputControls,
+    budget: RegexpBudget,
+) -> Result<String, String> {
     if !truthy(result) {
         return Ok(
             "Response result is empty. Check your input parameters or credentials".to_owned(),
@@ -136,13 +192,13 @@ pub(super) fn render(result: &Value, controls: &OutputControls) -> Result<String
     let serialized = py_dumps(result);
     if !matches!(result, Value::Object(_) | Value::Array(_)) {
         let text = match &controls.regexp {
-            Some(regexp) => fix_trailing_commas(&strip(regexp, &serialized)?),
+            Some(regexp) => fix_trailing_commas(&strip(regexp, &serialized, budget)?),
             None => serialized,
         };
         return Ok(truncate_chars(&text, controls.limit));
     }
     let text = match &controls.regexp {
-        Some(regexp) => fix_trailing_commas(&strip(regexp, &serialized)?),
+        Some(regexp) => fix_trailing_commas(&strip(regexp, &serialized, budget)?),
         None => serialized,
     };
     if text.chars().count() <= controls.limit {
@@ -215,11 +271,48 @@ fn reduce(
     }
 }
 
-fn strip(regexp: &fancy_regex::Regex, text: &str) -> Result<String, String> {
-    regexp
-        .try_replacen(text, 0, fancy_regex::NoExpand(""))
-        .map(std::borrow::Cow::into_owned)
-        .map_err(|error| error.to_string())
+/// `re.sub(regexp, "", text)` under `budget`: the text scanned, the number
+/// of matches removed and the wall-clock time are all bounded, and running
+/// over any of them is an error naming the bound (never a partial strip).
+pub(super) fn strip(
+    regexp: &fancy_regex::Regex,
+    text: &str,
+    budget: RegexpBudget,
+) -> Result<String, String> {
+    if text.len() > budget.max_input_bytes {
+        return Err(format!(
+            "the output is {} bytes, over the {} bytes a regexp may scan; narrow the request or omit regexp",
+            text.len(),
+            budget.max_input_bytes
+        ));
+    }
+    let started = Instant::now();
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    let mut removed = 0_usize;
+    for found in regexp.find_iter(text) {
+        let found = found.map_err(|error| error.to_string())?;
+        // An empty match removes nothing; the deadline still bounds them.
+        if !found.as_str().is_empty() {
+            removed += 1;
+        }
+        if removed > budget.max_matches {
+            return Err(format!(
+                "the regexp matched more than {} times; make it more specific",
+                budget.max_matches
+            ));
+        }
+        if started.elapsed() > budget.deadline {
+            return Err(format!(
+                "the regexp ran longer than the approved {} ms; make it more specific",
+                budget.deadline.as_millis()
+            ));
+        }
+        out.push_str(&text[last..found.start()]);
+        last = found.end();
+    }
+    out.push_str(&text[last..]);
+    Ok(out)
 }
 
 /// The SDK's `fix_trailing_commas` after a regexp removed list items.
@@ -326,4 +419,73 @@ fn write_py_string(out: &mut String, text: &str) {
         }
     }
     out.push('"');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pattern(text: &str) -> fancy_regex::Regex {
+        fancy_regex::Regex::new(text).expect("test pattern")
+    }
+
+    #[test]
+    fn strip_removes_every_match_like_re_sub() {
+        let budget = RegexpBudget::DEFAULT;
+        assert_eq!(strip(&pattern("b+"), "abbcb", budget).as_deref(), Ok("ac"));
+        assert_eq!(strip(&pattern("x*"), "abc", budget).as_deref(), Ok("abc"));
+        assert_eq!(
+            strip(&pattern("\"a\"(?=,)"), "[\"a\",\"a\"]", budget).as_deref(),
+            Ok("[,\"a\"]")
+        );
+    }
+
+    #[test]
+    fn strip_refuses_a_pass_over_its_budget() {
+        let small = RegexpBudget {
+            max_input_bytes: 8,
+            max_matches: 2,
+            deadline: Duration::from_secs(5),
+        };
+        let error = strip(&pattern("a"), "aaaaaaaaa", small).expect_err("input cap");
+        assert!(error.contains("over the 8 bytes"), "{error}");
+        let error = strip(&pattern("a"), "aaa", small).expect_err("match cap");
+        assert!(error.contains("more than 2 times"), "{error}");
+        assert_eq!(strip(&pattern("a"), "aab", small).as_deref(), Ok("b"));
+        let expired = RegexpBudget {
+            deadline: Duration::ZERO,
+            ..RegexpBudget::DEFAULT
+        };
+        std::thread::sleep(Duration::from_millis(2));
+        let error = strip(&pattern("a"), "aa", expired).expect_err("deadline");
+        assert!(error.contains("ran longer"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn render_runs_off_the_executor_and_reports_the_budget() {
+        let config = super::super::config::FigmaToolkitConfig::parse(
+            serde_json::json!({"figma_configuration": {"token": "figma-test-token"}})
+                .as_object()
+                .expect("object"),
+        )
+        .expect("config");
+        let extra = serde_json::json!({"regexp": "a", "limit": 1_000_000});
+        let capped = controls(extra.as_object(), &config).expect("controls");
+        let small = RegexpBudget {
+            max_input_bytes: 1_024,
+            max_matches: 3,
+            deadline: Duration::from_secs(5),
+        };
+        let error = render_blocking_with(serde_json::json!(["aaaa"]), capped, small)
+            .await
+            .expect_err("match cap");
+        assert!(error.contains("more than 3 times"), "{error}");
+        let unbounded = controls(extra.as_object(), &config).expect("controls");
+        assert_eq!(
+            render_blocking(serde_json::json!(["ab"]), unbounded)
+                .await
+                .as_deref(),
+            Ok("[\"b\"]")
+        );
+    }
 }
