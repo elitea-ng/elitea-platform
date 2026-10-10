@@ -12,6 +12,13 @@ documents = ["dep:xberg", "dep:tokio"]
 
 [dependencies]
 elitea-content-source = { path = "../content-source" }
+# Legacy text encodings (ADR-0030 decision 4): sniffed with chardetng, decoded
+# with encoding_rs. Both are already locked through xberg.
+chardetng = "1.0.0"
+encoding_rs = "0.8.42"
+# HTML to markdown, as the SDK's `markdownify` does. Defaults off: no metadata
+# pass, no image codecs. The version agent-runtime locks.
+html-to-markdown-rs = { version = "3.17.2", default-features = false }
 tokio = { version = "1.53.1", features = ["rt"], optional = true }
 # Pinned exactly, like the grammars (libs/rust/README.md): extraction output
 # is a function of the version, and the crate moves fast. Only the formats
