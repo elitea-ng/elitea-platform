@@ -74,6 +74,13 @@
 {{- fail (printf "worker.implementation must be \"python\" or \"rust\", got %q. It is not a free-form label: it selects the image, the argument list and the environment, and every value other than these two would silently render the Python shape — a Rust image started with the Python argument list exits immediately with worker_serve.invalid_configuration, which reads as a crash-looping worker rather than as a typo in a values file." .Values.worker.implementation) }}
 {{- end }}
 
+{{- if not (has (default "python" .Values.worker.indexingRuntime) (list "python" "rust")) }}
+{{- fail (printf "worker.indexingRuntime must be \"python\" or \"rust\", got %q. It selects where elitea-main keeps index metadata; elitea-main refuses any other value at startup, so a typo here is a crash-looping main, not a silent default." .Values.worker.indexingRuntime) }}
+{{- end }}
+{{- if and (eq (default "python" .Values.worker.indexingRuntime) "rust") (not (and .Values.worker.enabled (eq .Values.worker.implementation "rust"))) }}
+{{- fail "worker.indexingRuntime=rust needs worker.enabled=true and worker.implementation=rust. Indexes written under the Rust runtime live in the vector store that only the Rust worker searches (ADR-0031); with the Python worker the index tab would list indexes no agent can search." }}
+{{- end }}
+
 {{- /*
   Guarded, and this one is easy to get wrong from a values file that predates
   the Rust worker: the log levels are only read when `implementation: rust`,
