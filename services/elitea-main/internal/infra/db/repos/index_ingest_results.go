@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -55,6 +56,71 @@ type IndexIngestResultsRepository struct {
 	projects projectStore
 	policy   IndexIngestOutputPolicy
 	activity currentIndexActivityProjector
+	// registry applies each result to elitea_runtime.index_registry in the
+	// projecting transaction (ELITEA_INDEXING_RUNTIME=rust). Off, the Python
+	// SDK writes its own index_meta row and nothing here changes.
+	registry bool
+}
+
+// WithIndexRegistry makes the repository apply every terminal index result to
+// the index registry, in the transaction that projects and settles it
+// (ADR-0030 decision 2: the worker reports, Main records). It returns the
+// repository so the composition root can chain it.
+func (r *IndexIngestResultsRepository) WithIndexRegistry() *IndexIngestResultsRepository {
+	if r != nil {
+		r.registry = true
+	}
+	return r
+}
+
+// registryResultSummary is the summary the registry applies. A result carried
+// by an artifact has no counts; it still completes the run.
+func registryResultSummary(result outputapp.IndexIngestResult) outputapp.IndexIngestSummary {
+	if result.ResultSummary != (outputapp.IndexIngestSummary{}) {
+		return result.ResultSummary
+	}
+	return outputapp.IndexIngestSummary{
+		Status:        outputapp.IndexIngestStatusOK,
+		Message:       "Indexing completed successfully.",
+		TerminalState: outputapp.IndexIngestTerminalCompleted,
+	}
+}
+
+// applyIndexRegistry records the run's result and returns the summary the
+// notification and activity projections should carry: the worker's own, unless
+// the registry turned the result into a failure because its embedding space
+// differs from the index's. Those two must say the run failed, not that it
+// completed.
+func (r *IndexIngestResultsRepository) applyIndexRegistry(
+	ctx context.Context,
+	tx sqlExecutor,
+	record outputRecord,
+	result outputapp.IndexIngestResult,
+) (outputapp.IndexIngestSummary, error) {
+	summary := result.ResultSummary
+	if !r.registry {
+		return summary, nil
+	}
+	if record.ResourceProjectID <= 0 || record.ResourceProjectID > math.MaxInt32 {
+		return summary, outputapp.ErrInvalidIndexIngestOutput
+	}
+	outcome, err := ApplyIndexResult(ctx, tx, int32(record.ResourceProjectID), indexregistryapp.Result{
+		ExecutionID: record.ExecutionID,
+		Generation:  record.Generation,
+		OccurredAt:  record.OccurredAt,
+		Summary:     registryResultSummary(result),
+	})
+	if err != nil {
+		return summary, err
+	}
+	if outcome.Mismatch == nil {
+		return summary, nil
+	}
+	return outputapp.IndexIngestSummary{
+		Status:        outputapp.IndexIngestStatusError,
+		Message:       outcome.Mismatch.Error(),
+		TerminalState: outputapp.IndexIngestTerminalFailed,
+	}, nil
 }
 
 func NewIndexIngestResultsRepository(pool *pgxpool.Pool, policy IndexIngestOutputPolicy) (*IndexIngestResultsRepository, error) {
@@ -402,15 +468,19 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 				return indexProjectionError(err)
 			}
 		}
+		resultSummary, err := r.applyIndexRegistry(ctx, tx, record, projection.Frame.Result)
+		if err != nil {
+			return indexProjectionError(err)
+		}
 		cursor, err := appendReplayEvent(ctx, tx, record, replayEventIndexIngest, browserData)
 		if err != nil {
 			return err
 		}
 		message := "Indexing completed successfully."
 		isError := false
-		if projection.Frame.Result.ResultSummary != (outputapp.IndexIngestSummary{}) {
-			message = projection.Frame.Result.ResultSummary.Message
-			isError = projection.Frame.Result.ResultSummary.Status == outputapp.IndexIngestStatusError
+		if resultSummary != (outputapp.IndexIngestSummary{}) {
+			message = resultSummary.Message
+			isError = resultSummary.Status == outputapp.IndexIngestStatusError
 		}
 		if err := r.activity.projectTerminal(ctx, tx, projectID, currentIndexActivityTerminal{
 			ExecutionID: record.ExecutionID,
@@ -425,7 +495,7 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 			ctx,
 			tx,
 			record,
-			projection.Frame.Result.ResultSummary,
+			resultSummary,
 		); err != nil {
 			return indexProjectionError(err)
 		}
