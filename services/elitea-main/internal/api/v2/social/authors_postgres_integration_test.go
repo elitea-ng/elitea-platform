@@ -293,7 +293,8 @@ func prepareCurrentAuthorsDatabase(t *testing.T, pool *pgxpool.Pool) {
 CREATE SCHEMA centry;
 CREATE TABLE centry.project (
     id INTEGER PRIMARY KEY,
-    suspended BOOLEAN NOT NULL DEFAULT FALSE
+    suspended BOOLEAN NOT NULL DEFAULT FALSE,
+    deleting_at TIMESTAMPTZ
 );
 INSERT INTO centry.project (id, suspended) VALUES
     (7, FALSE),

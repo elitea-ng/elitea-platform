@@ -520,6 +520,7 @@ func (h *Handler) resolvePersonalProjectID(ctx context.Context, userID string) s
 		    SELECT 1 AS priority, project.id AS id
 		    FROM centry.project AS project
 		    WHERE project.name = $2
+		      AND project.deleting_at IS NULL
 		      AND EXISTS (
 		          SELECT 1
 		          FROM public.auth_core__project_user_role AS assignment
