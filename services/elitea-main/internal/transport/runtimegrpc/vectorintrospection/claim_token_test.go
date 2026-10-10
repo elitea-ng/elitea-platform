@@ -118,3 +118,22 @@ func TestClaimTokenIssuerFailsWithoutEntropy(t *testing.T) {
 		t.Fatal("nil store accepted")
 	}
 }
+
+// The pre-filter admits exactly the capabilities the mint is asked for, and
+// nothing else.
+func TestClaimTokenIssuerQualifiesOnlyItsCapabilities(t *testing.T) {
+	issuer, err := NewClaimTokenIssuer(&recordingStore{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range claimTokenCapabilities {
+		if !issuer.QualifiesForVectorClaimToken(capability) {
+			t.Fatalf("%s should qualify", capability)
+		}
+	}
+	for _, capability := range []string{"", "configuration.validate.v1", "toolkit.available_tools.v1", "index.ingest.v2"} {
+		if issuer.QualifiesForVectorClaimToken(capability) {
+			t.Fatalf("%q should not qualify", capability)
+		}
+	}
+}

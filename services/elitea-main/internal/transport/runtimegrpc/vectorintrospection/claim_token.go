@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -42,6 +43,14 @@ var claimTokenCapabilities = []string{
 	executiondomain.ToolkitCallToolCapability,
 	executiondomain.AgentApplicationCapability,
 	executiondomain.AgentAdhocCapability,
+}
+
+// QualifiesForVectorClaimToken reports whether an execution of capabilityID
+// can get a worker claim token: the capability is one of
+// claimTokenCapabilities. The mint repeats this check in SQL, which stays
+// the authority; this only spares the round trip for every other capability.
+func (i *ClaimTokenIssuer) QualifiesForVectorClaimToken(capabilityID string) bool {
+	return slices.Contains(claimTokenCapabilities, capabilityID)
 }
 
 // claimTokenSources is what a worker claim token may read and write.

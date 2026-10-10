@@ -55,6 +55,11 @@ type ClaimInputResolver interface {
 // error for an execution that gets no token, and runtimedomain.ErrStaleFence
 // when the claim is no longer live.
 type VectorTokenIssuer interface {
+	// QualifiesForVectorClaimToken reports whether an execution of
+	// capabilityID can get a token, so the claim path skips the mint's
+	// database round trip for every other capability. It is a pre-filter
+	// only: the mint's SQL stays the authority.
+	QualifiesForVectorClaimToken(capabilityID string) bool
 	IssueVectorClaimToken(ctx context.Context, fence runtimedomain.Fence) (*runtimev1.VectorClaimTokenV1, error)
 }
 
@@ -212,7 +217,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The immutable input manifest does not match the admitted command.", false), nil
 	}
 
-	if s.config.VectorTokens != nil {
+	if s.config.VectorTokens != nil && s.config.VectorTokens.QualifiesForVectorClaimToken(command.GetCapabilityId()) {
 		// Minted last, after every check that can abort the claim, so a
 		// refused claim leaves no token row behind it. The token dies with
 		// the claim (vectorintrospection), so a lost response needs no

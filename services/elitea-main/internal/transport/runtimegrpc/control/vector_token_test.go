@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,10 +20,17 @@ import (
 )
 
 type vectorTokenIssuerStub struct {
-	calls  *[]string
-	fences *[]runtimedomain.Fence
-	token  *runtimev1.VectorClaimTokenV1
-	err    error
+	// qualifies, when set, answers QualifiesForVectorClaimToken; nil admits
+	// every capability.
+	qualifies func(capabilityID string) bool
+	calls     *[]string
+	fences    *[]runtimedomain.Fence
+	token     *runtimev1.VectorClaimTokenV1
+	err       error
+}
+
+func (s vectorTokenIssuerStub) QualifiesForVectorClaimToken(capabilityID string) bool {
+	return s.qualifies == nil || s.qualifies(capabilityID)
 }
 
 func (s vectorTokenIssuerStub) IssueVectorClaimToken(_ context.Context, fence runtimedomain.Fence) (*runtimev1.VectorClaimTokenV1, error) {
@@ -98,6 +106,37 @@ func TestClaimCommandCarriesNoVectorTokenWhenNoneIsMinted(t *testing.T) {
 				t.Fatalf("unexpected response %v", response)
 			}
 		})
+	}
+}
+
+// A capability that cannot get a token never reaches the mint: no repository
+// call, no round trip. The claim is delivered without a token, and the
+// capability the gate saw is the command's own.
+func TestClaimCommandMakesNoMintCallForANonQualifyingCapability(t *testing.T) {
+	calls := []string{}
+	seen := []string{}
+	issuer := vectorTokenIssuerStub{
+		calls: &calls,
+		token: &runtimev1.VectorClaimTokenV1{Bearer: "elvc_token"},
+		qualifies: func(capabilityID string) bool {
+			seen = append(seen, capabilityID)
+			return false
+		},
+	}
+	server := vectorTokenServer(t, &calls, validLease(), issuer, nil)
+	request := claimRequestForManifest(t, validManifest())
+	response, err := server.ClaimCommand(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetRejection() != nil || response.GetReceipt().GetVectorToken() != nil {
+		t.Fatalf("unexpected response %v", response)
+	}
+	if slices.Contains(calls, "mint-vector-token") {
+		t.Fatalf("a non-qualifying capability reached the mint: %v", calls)
+	}
+	if len(seen) != 1 || seen[0] == "" {
+		t.Fatalf("the gate saw capabilities %q, want the command's one", seen)
 	}
 }
 
