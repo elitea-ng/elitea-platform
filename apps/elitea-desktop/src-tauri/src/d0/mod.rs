@@ -18,16 +18,20 @@
 //! * [`recorder`] — what the commit and the changed-files card report;
 //! * [`events`] — the `agent://event` stream;
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
+//! * [`skills`] — a skill picked with "/", applied to one turn;
+//! * [`framing`] — framing text the instructions carry but do not author;
 //! * [`turn`] — the assembler and the host's turn table.
 
 pub mod api;
 pub mod approvals;
 pub mod definition;
 pub mod events;
+pub mod framing;
 pub mod mentions;
 pub mod model;
 pub mod recorder;
 pub mod remote_tools;
+pub mod skills;
 pub mod tools;
 pub mod turn;
 

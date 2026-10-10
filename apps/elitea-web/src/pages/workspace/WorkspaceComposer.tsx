@@ -7,7 +7,10 @@
  *   (`workspace_files`) and inserts the picked one as an `@path` token; the
  *   picked paths still in the text go to the host as the turn's `mentions`.
  * - "/" as the first word lists the local commands (`/new`, `/plan`, …);
- *   picking one clears it from the input and hands it to the page.
+ *   picking one clears it from the input and hands it to the page. Below
+ *   them, in their own section, the selected agent's skills: picking one
+ *   inserts `/<skill name>`, and a message that still starts with it is
+ *   sent with that skill (`skills`), which the host applies to the turn.
  *
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
@@ -27,7 +30,7 @@ import type { Theme } from '@mui/material/styles';
 import Switch from '@mui/material/Switch';
 
 import { NewChatInput } from '@/features/chat-input';
-import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
+import { composer, SuggestionMenu, type ComposerSkill, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
@@ -53,8 +56,10 @@ export interface WorkspaceComposerProps {
   busy: boolean;
   planMode: boolean;
   onPlanModeChange: (planMode: boolean) => void;
-  /** Resolves `true` once the turn started (the input is then cleared). */
-  onSend: (prompt: string, mentions: string[]) => Promise<boolean>;
+  /** The selected agent's skills, offered after the commands in the "/" menu. */
+  skills: readonly ComposerSkill[];
+  /** Resolves `true` once the turn started (the input is then cleared). `skills`: the skill names the message invokes. */
+  onSend: (prompt: string, mentions: string[], skills: string[]) => Promise<boolean>;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
 }
@@ -79,7 +84,7 @@ function sendButtonSx(theme: Theme) {
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
-  const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, onSend, onStop, onCommand } = props;
+  const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, onSend, onStop, onCommand } = props;
   const inputRef = useRef<ComposerHandle>(null);
   const [token, setToken] = useState<Token>(null);
   const [dismissed, setDismissed] = useState<Token>(null);
@@ -97,8 +102,20 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   });
 
   const commands = useMemo(() => (open?.kind === 'command' ? composer.matchingCommands(open.query) : []), [open]);
+  const skillMatches = useMemo(() => (open?.kind === 'command' ? composer.matchingSkills(skills, open.query) : []), [open, skills]);
   const items: SuggestionItem[] = useMemo(() => {
-    if (open?.kind === 'command') return commands.map((c) => ({ key: c.id, label: c.name, description: c.description }));
+    if (open?.kind === 'command') {
+      const section = t('workspace.composer.skills', 'Skills');
+      return [
+        ...commands.map((c) => ({ key: c.id, label: c.name, description: c.description })),
+        ...skillMatches.map((s) => ({
+          key: `skill:${s.id}`,
+          label: composer.skillToken(s),
+          section,
+          ...(s.description !== undefined ? { description: s.description } : {}),
+        })),
+      ];
+    }
     if (open?.kind === 'file') {
       return (files.data ?? []).map((f) => ({
         key: `${f.kind}:${f.path}`,
@@ -107,7 +124,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       }));
     }
     return [];
-  }, [open, commands, files.data]);
+  }, [open, commands, skillMatches, files.data]);
   const menuOpen = open !== null && items.length > 0;
   const highlighted = Math.min(activeIndex, Math.max(items.length - 1, 0));
 
@@ -123,7 +140,14 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     const handle = inputRef.current;
     if (open.kind === 'command') {
       const command = commands[index];
-      if (command === undefined) return;
+      if (command === undefined) {
+        // A skill: the message starts with it, and the caret goes on after it.
+        const skill = skillMatches[index - commands.length];
+        if (skill === undefined) return;
+        handle?.replaceRange(open.start, open.end, `${composer.skillToken(skill)} `);
+        setToken(null);
+        return;
+      }
       // Without moving the caret: replaceRange would focus the input again,
       // and a command (`/agent`) may move the focus elsewhere.
       const content = handle?.getInputContent() ?? '';
@@ -167,7 +191,8 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
 
   const send = (question: string): void => {
     const mentions = composer.referencedPaths(question, picked);
-    void onSend(question, mentions).then((sent) => {
+    const skill = composer.invokedSkill(question, skills);
+    void onSend(question, mentions, skill === null ? [] : [skill.name]).then((sent) => {
       if (!sent) return;
       inputRef.current?.reset();
       setPicked([]);
@@ -191,7 +216,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         ref={inputRef}
         state={{ isStreaming: busy, disabledSend: !canSend }}
         content={{
-          placeholder: t('workspace.composer.placeholder', 'What should the agent do? Type @ to add a file, / for commands'),
+          placeholder: t('workspace.composer.placeholder', 'What should the agent do? Type @ to add a file, / for commands and skills'),
           clearInputAfterSubmit: false,
           tooltipOfSendButton: t('workspace.send', 'Send'),
         }}

@@ -51,10 +51,12 @@ use super::api::{ApiError, Credentials, LocalTurnStarted, PinnedCredentials, Pla
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::definition::{self, Admitted};
 use super::events::{EventEmitter, Phase, TurnEvents};
+use super::framing::{self, attribute_value};
 use super::mentions;
 use super::model::GatewayTransport;
 use super::recorder::{FileChange, Recorder};
 use super::remote_tools::{RemoteContext, RemoteToolProvider, RetryPolicy};
+use super::skills::{self, InvokedSkill};
 use super::tools::{ObservedToolset, ToolObserver};
 use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, TurnTap};
 use crate::workspaces::{Workspace, WorkspaceStore};
@@ -129,6 +131,9 @@ pub struct TurnRequest {
     /// Workspace-relative paths the person referenced with "@" (checked,
     /// then listed under the prompt; contents are never inlined).
     pub mentions: Vec<String>,
+    /// Skills the person picked with "/" (names, or frozen ids, of the
+    /// agent version's own skills), applied to this turn up front.
+    pub skills: Vec<String>,
 }
 
 /// `agent_turn_start`'s answer.
@@ -453,60 +458,26 @@ pub struct AgentHost {
 }
 
 /// The tag one AGENTS.md file is framed in.
-const AGENTS_MD_TAG: &str = "agents_md";
+pub(super) const AGENTS_MD_TAG: &str = "agents_md";
+/// How the line that opens the AGENTS.md section starts.
+pub(super) const PROJECT_INSTRUCTIONS: &str = "## Project instructions";
 /// The line that ends the AGENTS.md section.
-const END_OF_PROJECT_INSTRUCTIONS: &str = "## End of project instructions";
+pub(super) const END_OF_PROJECT_INSTRUCTIONS: &str = "## End of project instructions";
 
-/// `text` as an attribute value inside `"…"`: the markup characters and
-/// every control character (a file name may hold a newline) escaped.
-fn attribute_value(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            c if c.is_control() => out.push_str(&format!("&#x{:x};", u32::from(c))),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-/// A workspace file's text, made unable to break its frame: an opening
-/// or closing `agents_md` tag (any case) gets a backslash after its `<`,
-/// and a line that would read as the section's own headings (its start or
-/// its end) is escaped with one in front. Everything else is unchanged.
+/// A workspace file's text, made unable to break its frame: neither its
+/// own block's tag nor a picked skill's (any case) opens or closes, and no
+/// line reads as the section's own start or end, or a skill section's.
 fn neutralised(text: &str) -> String {
-    let tag = AGENTS_MD_TAG.as_bytes();
-    let starts_tag = |rest: &[u8]| {
-        let rest = rest.strip_prefix(b"/").unwrap_or(rest);
-        rest.len() >= tag.len() && rest[..tag.len()].eq_ignore_ascii_case(tag)
-    };
-    let mut out = String::with_capacity(text.len());
-    for (index, line) in text.split('\n').enumerate() {
-        if index > 0 {
-            out.push('\n');
-        }
-        let heading = line.trim_start().to_ascii_lowercase();
-        if heading.starts_with(&END_OF_PROJECT_INSTRUCTIONS.to_ascii_lowercase())
-            || heading.starts_with("## project instructions")
-        {
-            out.push('\\');
-        }
-        let bytes = line.as_bytes();
-        let mut from = 0;
-        for (at, byte) in bytes.iter().enumerate() {
-            if *byte == b'<' && starts_tag(&bytes[at + 1..]) {
-                out.push_str(&line[from..=at]);
-                out.push('\\');
-                from = at + 1;
-            }
-        }
-        out.push_str(&line[from..]);
-    }
-    out
+    framing::neutralised(
+        text,
+        &[AGENTS_MD_TAG, skills::SKILL_TAG],
+        &[
+            PROJECT_INSTRUCTIONS,
+            END_OF_PROJECT_INSTRUCTIONS,
+            skills::SKILLS_HEADING,
+            skills::END_OF_SKILLS,
+        ],
+    )
 }
 
 /// The agent's instructions, then the workspace's AGENTS.md files as one
@@ -872,6 +843,7 @@ impl AgentHost {
         if request.prompt.trim().is_empty() {
             return Err(TurnError::new("invalid_request", "The message is empty."));
         }
+        skills::check(&request.skills)?;
         // Checked first, so a refusal costs no request; again under the claim.
         let bound = self.bound_workspace(request)?;
         let policy = self.policy()?;
@@ -910,6 +882,9 @@ impl AgentHost {
         let local_names: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
         let admitted = definition::admit(&resolved, &local_names)
             .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
+        // A picked skill must be one of this version's own, as the platform
+        // answered it to this person: refused here, before the turn starts.
+        let invoked = skills::resolve(&request.skills, &admitted.version_details)?;
         let answering = api
             .answering_participant(
                 request.project_id,
@@ -949,6 +924,7 @@ impl AgentHost {
             conversation_uuid: answering.conversation_uuid,
             tap,
             project,
+            invoked,
             request: request.clone(),
             events: events.clone(),
             workspace: workspace_session,
@@ -969,6 +945,7 @@ impl AgentHost {
         let Prepared {
             tap,
             project,
+            invoked,
             request,
             events,
             workspace,
@@ -991,7 +968,8 @@ impl AgentHost {
 
         let sink = Arc::new(TurnSink::default());
         let run = self.run_agent(
-            &request, &events, &workspace, &admitted, &project, &started, &recorder, &sink, &api,
+            &request, &events, &workspace, &admitted, &project, &invoked, &started, &recorder,
+            &sink, &api,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -1129,6 +1107,7 @@ impl AgentHost {
         workspace: &Arc<WorkspaceSession>,
         admitted: &Admitted,
         project: &ProjectInstructions,
+        invoked: &[InvokedSkill],
         started: &LocalTurnStarted,
         recorder: &Arc<Recorder>,
         sink: &Arc<TurnSink>,
@@ -1148,7 +1127,10 @@ impl AgentHost {
                 model_project_id: check_project_id(request.project_id)?,
                 model_name: admitted.model.model_name.clone(),
                 system_instruction: splice_memory(
-                    &with_project_instructions(&admitted.instructions, project),
+                    &with_project_instructions(
+                        &skills::with_invoked_skills(&admitted.instructions, invoked),
+                        project,
+                    ),
                     &started.memory_recall.text,
                 ),
                 max_tokens: admitted.model.max_tokens,
@@ -1691,6 +1673,8 @@ struct Prepared {
     tap: Arc<TurnTap>,
     /// The workspace's AGENTS.md files, read at the start.
     project: ProjectInstructions,
+    /// The skills the person picked for this turn, resolved.
+    invoked: Vec<InvokedSkill>,
     request: TurnRequest,
     events: Arc<TurnEvents>,
     workspace: Arc<WorkspaceSession>,

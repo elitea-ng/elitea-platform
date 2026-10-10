@@ -467,6 +467,7 @@ pub async fn agent_turn_start(
     prompt: String,
     plan_mode: bool,
     mentions: Option<Vec<String>>,
+    skills: Option<Vec<String>>,
 ) -> Result<TurnStarted, IpcError> {
     Ok(state
         .agents
@@ -479,6 +480,7 @@ pub async fn agent_turn_start(
             prompt,
             plan_mode,
             mentions: mentions.unwrap_or_default(),
+            skills: skills.unwrap_or_default(),
         })
         .await?)
 }

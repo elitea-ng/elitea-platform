@@ -33,6 +33,7 @@ import { AgentPickers, NoAgents } from './AgentPickers';
 import { COLUMN, EarlierTurns, Exchanges, firstError, FolderTitle, OpenInChat, PanelToggle, SessionNotices, ThreadIntro } from './sessionParts';
 import { SessionPanel } from './SessionPanel';
 import { UnboundFolder } from './UnboundFolder';
+import { useAgentSkills } from './useAgentSkills';
 import { useStickToBottom } from './useStickToBottom';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
 import { WorkspaceComposer } from './WorkspaceComposer';
@@ -87,6 +88,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
   const session = useThreadSession(props);
   const { turn, commands, raw } = session;
+  const skills = useAgentSkills(projectId, raw.versionId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const appIpc = useAppIpc();
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
@@ -135,7 +137,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
             busy={turn.busy}
             planMode={commands.planMode}
             onPlanModeChange={commands.setPlanMode}
-            onSend={(prompt, mentions) => session.send(prompt, commands.planMode, mentions)}
+            skills={skills}
+            onSend={(prompt, mentions, picked) => session.send(prompt, commands.planMode, mentions, picked)}
             onStop={() => void turn.cancel()}
             onCommand={session.run}
           />

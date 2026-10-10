@@ -70,7 +70,7 @@ inside the folder.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[]}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[]}` | `{turn_id, execution_id}` |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
@@ -94,8 +94,8 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `platform_mcp_unsupported`, `unknown_tool_kind`, `toolkit_ref_missing`,
 `model_unresolved`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
-`workspace_project_mismatch`, `workspace_busy`,
-`invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
+`workspace_project_mismatch`, `workspace_busy`, `skill_unknown`,
+`skill_too_large`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
 `not_found`, …).
 
 A turn is held to the session it started under (the connected origin and
@@ -126,6 +126,27 @@ Files the user referenced:
 and that message is what the turn starts, runs and commits with. File
 contents are never inlined: the agent reads them with its own tools.
 
+**Skills.** `skills` are skills the person picked in the composer's "/"
+menu, by name (the UI sends the skill its message starts with as
+`/<name>`; the prompt itself is sent as typed). Only the agent version's
+own skills can be picked, as with the web chat's `~skill`: each name is
+matched, ignoring case and surrounding blanks, against the `skills` of the
+resolved version (or equals a skill's frozen `id`), so the skill is read
+server-side, under the person's own permissions, with the definition.
+At most 5 names, each non-blank, at most 256 bytes and without control
+characters, else `invalid_request` before any request. A name the version
+has no skill with instructions for is refused with `skill_unknown`, and
+more than 64 KiB of picked skill text together with `skill_too_large`
+(refused, not cut); both after the definition is read and before the turn
+is started on the platform. The picked skills are appended to the agent's
+instructions, before the AGENTS.md section, as one `## Skill for this turn`
+section with one `<invoked_skill name="…">` block per skill, ending with
+`## End of skill instructions`; the name is escaped as an attribute value
+and the text is defused as AGENTS.md text is (below), for the
+`invoked_skill` and `agents_md` tags and the headings of both sections.
+Every attached skill also stays in the runtime's catalogue, for
+`load_skill`, as before.
+
 **AGENTS.md.** At every turn start (plan mode included) the host reads the
 workspace's root `AGENTS.md` (name matched case-insensitively; an exact
 `AGENTS.md` wins over another spelling in the same folder) and, for each
@@ -139,7 +160,7 @@ the section's header says) and before the memory splice, as one
 `## Project instructions (AGENTS.md)` section with one
 `<agents_md path="…">` block per file. The path is escaped as an attribute
 value (`&`, `"`, `<`, `>` and control characters as entities); in the text,
-an opening or closing `agents_md` tag (any case) gets a backslash after its
+an opening or closing `agents_md` (or `invoked_skill`) tag (any case) gets a backslash after its
 `<` (`<\/agents_md>`) and a line that would read as the section's own start
 or end heading gets one in front, so no file can close its block, open
 another or end the section. Edits apply from the next turn.
