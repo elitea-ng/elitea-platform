@@ -18,6 +18,17 @@
 // only if it is EXACTLY project_<id> or project_<id>_user for a canonical
 // positive int4 id with no row in centry.project; nothing else on the server is
 // ever listed or touched.
+//
+// SHARED-SERVER RISK. "No row in centry.project" is judged against the one
+// platform database named by --database-url. If that URL points at the wrong
+// database, or the PgVector server is SHARED with another platform or
+// environment, every project_<id> database that belongs to someone else looks
+// like an orphan, and --drop would destroy it irreversibly. So the tool prints
+// the platform database it is reading (with current_database()) and its project
+// count and id range before listing; refuses to run against a platform database
+// with zero projects; and refuses --drop when the orphan fraction exceeds
+// --max-orphan-fraction (default 0.2) unless --force-fraction is given. Read the
+// header lines, and check them against the environment you mean to clean.
 package main
 
 import (
@@ -80,6 +91,18 @@ func run(
 	databaseURL := flags.String("database-url", "", "platform database URL, to read centry.project (default $DATABASE_URL)")
 	drop := flags.Bool("drop", false, "drop the orphans named by --confirm (default: dry run)")
 	confirm := flags.String("confirm", "", "comma-separated exact names to drop; must list every name of every orphan to be dropped")
+	maxFraction := flags.Float64("max-orphan-fraction", defaultMaxOrphanFraction,
+		"refuse --drop when orphans are more than this fraction of all project_<id> databases on the server: "+
+			"a high fraction means a wrong --database-url or a PgVector server shared with another platform")
+	forceFraction := flags.Bool("force-fraction", false, "allow --drop although the orphan fraction exceeds --max-orphan-fraction")
+	flags.Usage = func() {
+		sayln(stderr, "usage: pgvector-orphans --pgvector-url URL --database-url URL [--drop --confirm NAMES]")
+		sayln(stderr, "\nWARNING: orphans are judged against ONE platform database. If --database-url is wrong, or the")
+		sayln(stderr, "PgVector server is shared with another platform, other deployments' project_<id> databases look")
+		sayln(stderr, "like orphans and --drop destroys them irreversibly. Check the header the tool prints first.")
+		sayln(stderr)
+		flags.PrintDefaults()
+	}
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return exitInvalidUsage
 	}
@@ -106,18 +129,35 @@ func run(
 		sayln(stderr, "pgvector admin URL is not a valid PostgreSQL URL")
 		return exitInvalidUsage
 	}
-	orphans, err := findOrphans(ctx, adminConfig, *databaseURL)
+	if *maxFraction < 0 || *maxFraction > 1 {
+		sayln(stderr, "--max-orphan-fraction must be between 0 and 1")
+		return exitInvalidUsage
+	}
+	report, err := findOrphans(ctx, adminConfig, *databaseURL)
 	if err != nil {
 		say(stderr, "list orphans: %v\n", redact(err))
 		return exitFailure
 	}
+	orphans := report.Orphans
 
+	printHeader(stdout, report)
+	if report.ProjectCount == 0 {
+		sayln(stderr, "refusing to run: the platform database has no projects, so every project_<id> database would look orphaned. Check --database-url.")
+		return exitFailure
+	}
 	printOrphans(stdout, orphans)
 	if !*drop {
 		if len(orphans) > 0 {
 			sayln(stdout, "\ndry run: nothing was dropped. To drop, re-run with --drop --confirm <the exact names above, comma-separated>.")
 		}
 		return exitOK
+	}
+
+	if fraction := report.orphanFraction(); fraction > *maxFraction && !*forceFraction {
+		say(stderr, "refusing to drop: %.0f%% of the project_<id> databases on this server are orphans (limit %.0f%%). "+
+			"That usually means a wrong --database-url or a PgVector server shared with another platform. "+
+			"If it is really right, re-run with --force-fraction.\n", fraction*100, *maxFraction*100)
+		return exitInvalidUsage
 	}
 
 	selected, err := selectConfirmed(orphans, splitNames(*confirm))
@@ -187,43 +227,108 @@ func redact(err error) error {
 	return errors.New("operation failed")
 }
 
-func findOrphans(ctx context.Context, adminConfig *pgx.ConnConfig, databaseURL string) ([]orphan, error) {
-	platform, err := pgx.Connect(ctx, databaseURL)
+const defaultMaxOrphanFraction = 0.2
+
+// report is what one run learned about the platform database and the server.
+type report struct {
+	PlatformURLDatabase string // the database name in --database-url
+	CurrentDatabase     string // current_database() on that connection
+	ProjectCount        int
+	MinProjectID        int64
+	MaxProjectID        int64
+	Orphans             []orphan
+	// ServerProjects is the number of distinct project ids that own a project_*
+	// database or role on the PgVector server, live or orphaned.
+	ServerProjects int
+}
+
+// orphanFraction is orphans over every project id found on the server.
+func (r report) orphanFraction() float64 {
+	if r.ServerProjects == 0 {
+		return 0
+	}
+	return float64(len(r.Orphans)) / float64(r.ServerProjects)
+}
+
+func printHeader(w io.Writer, r report) {
+	say(w, "platform database: %s (current_database() = %s)\n", r.PlatformURLDatabase, r.CurrentDatabase)
+	say(w, "centry.project: %d project(s), id range %d..%d\n", r.ProjectCount, r.MinProjectID, r.MaxProjectID)
+	say(w, "pgvector server: %d project id(s) with a project_* database or role; %d orphaned (%.0f%%)\n",
+		r.ServerProjects, len(r.Orphans), r.orphanFraction()*100)
+}
+
+func findOrphans(ctx context.Context, adminConfig *pgx.ConnConfig, databaseURL string) (report, error) {
+	var rep report
+	platformConfig, err := pgx.ParseConfig(mustNormalize(databaseURL))
 	if err != nil {
-		return nil, errors.New("connect to platform database")
+		return rep, errors.New("platform database URL is not a valid PostgreSQL URL")
+	}
+	rep.PlatformURLDatabase = platformConfig.Database
+	platform, err := pgx.ConnectConfig(ctx, platformConfig)
+	if err != nil {
+		return rep, errors.New("connect to platform database")
 	}
 	defer func() { _ = platform.Close(context.Background()) }()
+	if err := platform.QueryRow(ctx, `SELECT current_database()`).Scan(&rep.CurrentDatabase); err != nil {
+		return rep, err
+	}
 	rows, err := platform.Query(ctx, `SELECT id FROM centry.project`)
 	if err != nil {
-		return nil, err
+		return rep, err
 	}
 	projects := map[int64]struct{}{}
 	for rows.Next() {
 		var id int32
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return nil, err
+			return rep, err
 		}
 		projects[int64(id)] = struct{}{}
+		if len(projects) == 1 || int64(id) < rep.MinProjectID {
+			rep.MinProjectID = int64(id)
+		}
+		if int64(id) > rep.MaxProjectID {
+			rep.MaxProjectID = int64(id)
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return rep, err
 	}
+	rep.ProjectCount = len(projects)
 
 	admin, err := pgx.ConnectConfig(ctx, adminConfig)
 	if err != nil {
-		return nil, errors.New("connect to pgvector admin database")
+		return rep, errors.New("connect to pgvector admin database")
 	}
 	defer func() { _ = admin.Close(context.Background()) }()
 	databases, err := queryNames(ctx, admin, `SELECT datname FROM pg_catalog.pg_database WHERE datname LIKE 'project\_%'`)
 	if err != nil {
-		return nil, err
+		return rep, err
 	}
 	roles, err := queryNames(ctx, admin, `SELECT rolname FROM pg_catalog.pg_roles WHERE rolname LIKE 'project\_%'`)
 	if err != nil {
-		return nil, err
+		return rep, err
 	}
-	return computeOrphans(projects, databases, roles), nil
+	rep.Orphans = computeOrphans(projects, databases, roles)
+	rep.ServerProjects = serverProjectCount(databases, roles)
+	return rep, nil
+}
+
+// serverProjectCount is the number of distinct canonical project ids named by
+// the project_* databases and roles, whether or not the project has a row.
+func serverProjectCount(databases, roles []string) int {
+	ids := map[int64]struct{}{}
+	for _, name := range databases {
+		if id, ok := pgvector.ParseProjectDatabaseName(name); ok {
+			ids[id] = struct{}{}
+		}
+	}
+	for _, name := range roles {
+		if id, ok := pgvector.ParseProjectRoleName(name); ok {
+			ids[id] = struct{}{}
+		}
+	}
+	return len(ids)
 }
 
 func queryNames(ctx context.Context, conn *pgx.Conn, query string) ([]string, error) {
