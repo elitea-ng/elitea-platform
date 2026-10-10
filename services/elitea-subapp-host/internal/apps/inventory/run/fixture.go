@@ -290,6 +290,10 @@ func fixtureHandlers() map[string]fixtureFunc {
 		"run_ingestion":          fixtureRunIngestion,
 		"remove_source_entities": fixtureRemoveSourceEntities,
 
+		// ── the platform's deletes (admin.go) ──────────────────────────────
+		DeleteGraphTool:         fixtureNothingToDelete,
+		DeleteProjectGraphsTool: fixtureNothingToDelete,
+
 		// ── graph management ───────────────────────────────────────────────
 		"list_ingested_sources": fixtureListIngestedSources,
 		"list_graphs":           fixtureListGraphs,
@@ -381,6 +385,14 @@ func fixtureRemoveSourceEntities(_, _ string, params Params) map[string]any {
 	return fixtureAnswer(params, map[string]any{
 		"source": label, "removed_entities": removed,
 	}, fmt.Sprintf("Removed %d entities contributed by %s.", removed, label))
+}
+
+// fixtureNothingToDelete answers the platform's graph deletes: the fixture
+// holds one canned graph and no store, so there is nothing of a toolkit's or
+// a project's to remove, and it says so rather than pretending to delete.
+func fixtureNothingToDelete(_, _ string, params Params) map[string]any {
+	return fixtureAnswer(params, map[string]any{"deleted": false},
+		"The fixture runner holds no graph store, so there is nothing to delete.")
 }
 
 func fixtureListIngestedSources(_, _ string, params Params) map[string]any {

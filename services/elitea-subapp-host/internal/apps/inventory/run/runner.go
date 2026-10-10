@@ -147,6 +147,14 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 			call.Tool)
 	}
 
+	if family == AdminFamily {
+		// The platform's own calls (admin.go): refused before the engine is
+		// reached unless the identity is the platform's.
+		if err := CheckAdmin(call.Tool, call.Identity, identity.ApplicationID); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := tc.Checkpoint(); err != nil {
 		return nil, err
 	}
