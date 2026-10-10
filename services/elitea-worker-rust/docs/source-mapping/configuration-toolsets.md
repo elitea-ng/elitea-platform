@@ -2591,6 +2591,28 @@ elitea-main already models the gap: `nativeWorkerGatedToolkitTypes` hides
 `imagegen` on a Rust-worker deployment, and the `image_generation` internal
 tool reports `rustAvailable: false`.
 
+#### `data_analysis` (blocked)
+
+`data_analysis` is an internal tool (the chat "Data Analysis" toggle), not a
+configured family: its `bucket_name` is the conversation attachment bucket
+injected at run time, and the Rust worker already recognizes and skips it
+with `agent_internal_tool_skipped` (`agents/internal_tools.rs`). Its one
+tool, `pandas_analyze_data(query, filename)`, loads the file into a pandas
+DataFrame (CSV, Excel via calamine, Parquet, JSON, XML, HDF5, Feather,
+pickle), asks the agent's LLM to write pandas code for the query (retrying up
+to five times with the traceback), runs that code in the SDK's restricted
+in-process executor, and saves any matplotlib chart as `chart_<uuid>.png` in
+the bucket, answering the text result or the chart links.
+
+Blocked on three authorities at once: (1) a model for code generation, which
+no tool is lent; (2) an isolated Python runtime with pandas and matplotlib:
+the Rust worker's only one is the Pyodide code-runner behind
+`host::CodeSandbox`, reached today only by pipeline code nodes, so lending it
+to a tool (with the file bytes as job input and the chart as job output) is
+new host plumbing; (3) the attachment bucket as an artifact authority, which
+exists (`ArtifactToolAuthority`) but is lent only to configured families.
+The row in "Special runtime toolsets" above keeps the long-term direction.
+
 ## Special runtime toolsets
 
 | Python source | Behavior | Rust target | Status / deviation |
@@ -2602,7 +2624,7 @@ tool reports `rustAvailable: false`.
 | SDK `runtime/toolkits/artifact.py` | 16 artifact tools and indexing coupling | `src/toolkits/artifact.rs` | Planned; artifact service boundary required |
 | SDK `tools/memory` and `runtime/toolkits/vectorstore.py` | Four memory and four vectorstore tools | `src/toolkits/{memory,vectorstore}.rs` | Memory blocked pending the gate 7b ownership decision; vectorstore blocked on the native indexing gate (both in `toolkit-port-b7-20261010.md`) |
 | SDK `runtime/tools/sandbox.py` | Two Pyodide variants | External sandbox client | Intentional deviation: library abstraction is not a sandbox. Blocked as a toolkit (`toolkit-port-b7-20261010.md`): the SDK binds no tool for a configured `sandbox` type, and the Rust code runner has no Main grant path or lent authority for model-initiated jobs |
-| SDK `runtime/tools/data_analysis.py` | Generated data analysis over artifacts and pandas-shaped tabular operations | External sandbox/artifact boundary with Polars as the likely native data-frame engine | Planned after attachment/artifact grants and isolation design; neither pandas byte-for-byte behavior nor in-process arbitrary Python execution is implied |
+| SDK `runtime/tools/data_analysis.py` | Generated data analysis over artifacts and pandas-shaped tabular operations | External sandbox/artifact boundary with Polars as the likely native data-frame engine | Blocked (surveyed 2026-10-10, see "Toolkit types that cannot be ported as configured families yet"): needs a tool-lent model, the `CodeSandbox` lent to a tool and the attachment-bucket artifact authority together; neither pandas byte-for-byte behavior nor in-process arbitrary Python execution is implied |
 | SDK `community/inventory` | Dynamic retrieval/ingestion registry | `src/toolkits/inventory.rs` | Planned; current 14-schema versus 9-default drift must be resolved |
 
 ## Safe implementation ownership
