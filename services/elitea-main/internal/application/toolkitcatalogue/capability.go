@@ -151,6 +151,7 @@ var rustNativeToolTypes = []string{
 	"keycloak",
 	"openapi",
 	"postman",
+	"qtest",
 	"rally",
 	"report_portal",
 	"salesforce",

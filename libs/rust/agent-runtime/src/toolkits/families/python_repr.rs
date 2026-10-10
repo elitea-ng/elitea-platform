@@ -148,6 +148,108 @@ fn write_str(output: &mut String, value: &str) {
     output.push(quote);
 }
 
+/// A Python value built in the SDK's insertion order: a JSON leaf, or a
+/// list/dict whose members keep the order the SDK code wrote them in.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::toolkits) enum PyValue {
+    Json(Value),
+    List(Vec<PyValue>),
+    Dict(Vec<(String, PyValue)>),
+}
+
+impl PyValue {
+    /// A string leaf.
+    pub(in crate::toolkits) fn text(value: impl Into<String>) -> Self {
+        Self::Json(Value::String(value.into()))
+    }
+
+    /// `repr(value)` in insertion order.
+    pub(in crate::toolkits) fn repr(&self) -> String {
+        let mut output = String::new();
+        self.write(&mut output);
+        output
+    }
+
+    fn write(&self, output: &mut String) {
+        match self {
+            Self::Json(value) => write_value(output, value),
+            Self::List(items) => {
+                output.push('[');
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        output.push_str(", ");
+                    }
+                    item.write(output);
+                }
+                output.push(']');
+            }
+            Self::Dict(members) => {
+                output.push('{');
+                for (index, (key, value)) in members.iter().enumerate() {
+                    if index > 0 {
+                        output.push_str(", ");
+                    }
+                    write_str(output, key);
+                    output.push_str(": ");
+                    value.write(output);
+                }
+                output.push('}');
+            }
+        }
+    }
+
+    /// The JSON `json.dumps` of this value describes (member order is the
+    /// map's own).
+    pub(in crate::toolkits) fn to_json(&self) -> Value {
+        match self {
+            Self::Json(value) => value.clone(),
+            Self::List(items) => Value::Array(items.iter().map(Self::to_json).collect()),
+            Self::Dict(members) => Value::Object(
+                members
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.to_json()))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// `dict.get(key)` on a dict built in order.
+    pub(in crate::toolkits) fn get(&self, key: &str) -> Option<&Self> {
+        match self {
+            Self::Dict(members) => members
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value),
+            _ => None,
+        }
+    }
+
+    /// `dict[key] = value`, keeping an existing key's position.
+    pub(in crate::toolkits) fn set(&mut self, key: &str, value: Self) {
+        if let Self::Dict(members) = self {
+            if let Some(member) = members.iter_mut().find(|(name, _)| name == key) {
+                member.1 = value;
+            } else {
+                members.push((key.to_owned(), value));
+            }
+        }
+    }
+
+    /// A JSON value as an ordered value, objects in the map's order.
+    pub(in crate::toolkits) fn from_json(value: &Value) -> Self {
+        match value {
+            Value::Array(items) => Self::List(items.iter().map(Self::from_json).collect()),
+            Value::Object(object) => Self::Dict(
+                object
+                    .iter()
+                    .map(|(key, value)| (key.clone(), Self::from_json(value)))
+                    .collect(),
+            ),
+            other => Self::Json(other.clone()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

@@ -113,6 +113,8 @@ mod policy_tests;
 #[cfg(test)]
 mod postman_tests;
 #[cfg(test)]
+mod qtest_tests;
+#[cfg(test)]
 mod rally_tests;
 #[cfg(test)]
 mod report_portal_tests;

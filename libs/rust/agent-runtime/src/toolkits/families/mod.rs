@@ -32,6 +32,7 @@ pub mod openapi;
 pub(crate) mod openapi;
 pub(crate) mod postman;
 pub(crate) mod python_repr;
+pub(crate) mod qtest;
 pub(crate) mod rally;
 pub(crate) mod report_portal;
 pub(crate) mod salesforce;

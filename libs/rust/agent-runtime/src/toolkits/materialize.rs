@@ -25,6 +25,7 @@ use super::families::artifact::ArtifactToolAuthority;
 use super::families::bigquery;
 use super::families::confluence;
 use super::families::jira;
+use super::families::qtest;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
 use super::families::testio;
@@ -250,7 +251,10 @@ async fn materialize(
         let toolset = materialize_ado(reference.tool_type(), name, settings, policy)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
-    if matches!(reference.tool_type(), "testio" | "testrail" | "xray_cloud") {
+    if matches!(
+        reference.tool_type(),
+        "qtest" | "testio" | "testrail" | "xray_cloud"
+    ) {
         let toolset = materialize_test_management(reference.tool_type(), name, settings, policy)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
@@ -601,6 +605,16 @@ fn materialize_test_management(
     policy: &Arc<ToolAdmissionPolicy>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
     let toolset = match tool_type {
+        "qtest" => qtest::tools::build_qtest_toolset(
+            name,
+            qtest::config::QtestToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| match error.code() {
+            qtest::tools::QtestToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+            _ => invalid_configuration(),
+        })?,
         "testio" => testio::tools::build_testio_toolset(
             name,
             testio::config::TestIoToolkitConfig::parse(settings)
