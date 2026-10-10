@@ -7,8 +7,8 @@ use crate::protocol::elitea::runtime::v1::{
     SignedWorkerCommandEnvelopeV1, ToolkitAuthorizationRequiredV1,
     ToolkitAvailableToolsArtifactReferenceV1, ToolkitAvailableToolsCommandV1,
     ToolkitAvailableToolsResultV1, ToolkitCallToolCommandV1, ToolkitCallToolResultV1,
-    ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, WorkerCommandTypeV1, WorkerCommandV1,
-    execution_output_frame_v1,
+    ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, VectorClaimTokenV1, WorkerCommandTypeV1,
+    WorkerCommandV1, execution_output_frame_v1,
 };
 use crate::protocol::output::validate_restored_toolkit_execute_read_output_frame;
 use ring::hmac;
@@ -654,4 +654,71 @@ fn shared_toolkit_authorization_result_bounds_metadata_urls_and_identity() {
             "bound mutation {mutation}"
         );
     }
+}
+
+// ── the per-claim elitea-vector token (ADR-0031 decision 1) ────────────────
+
+#[test]
+fn the_vector_token_rides_with_the_claim_to_toolkit_and_agent_code() {
+    use crate::protocol::vector_token::{VectorSource, test_vector_claim_token};
+
+    let (command, mut response) = fixture(ToolkitCommandKind::CallTool);
+    let wire = test_vector_claim_token();
+    let bearer = wire.bearer.clone();
+    response.receipt.as_mut().unwrap().vector_token = Some(wire);
+    let claim = claim(&command, response);
+
+    // The toolkit path: the claim, then the lease-monitored execution.
+    let token = claim.vector_token().expect("carried");
+    assert_eq!(token.bearer(), bearer);
+    assert!(token.allows(VectorSource::ToolkitIndex));
+    assert!(!token.allows(VectorSource::Deepwiki));
+
+    // The agent path: the runtime-context authority derived at AUTHORIZED_NOW.
+    let runtime = ClaimBoundRuntimeContextAuthority::from_claim(&claim);
+    assert_eq!(
+        runtime.vector_token().expect("carried").bearer(),
+        bearer.as_str()
+    );
+
+    let execution = LeaseMonitoredAgentExecution { claim };
+    assert_eq!(
+        execution.vector_token().expect("carried").bearer(),
+        bearer.as_str()
+    );
+    // Nothing that prints the claim's token shows the bearer.
+    let printed = format!("{:?}", execution.vector_token());
+    assert!(!printed.contains(&bearer), "{printed}");
+}
+
+#[test]
+fn a_claim_without_a_vector_token_carries_none() {
+    let (command, response) = fixture(ToolkitCommandKind::CallTool);
+    let claim = claim(&command, response);
+    assert!(claim.vector_token().is_none());
+    assert!(
+        ClaimBoundRuntimeContextAuthority::from_claim(&claim)
+            .vector_token()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_malformed_vector_token_refuses_the_claim() {
+    use crate::protocol::vector_token::test_vector_claim_token;
+
+    let (command, mut response) = fixture(ToolkitCommandKind::CallTool);
+    response.receipt.as_mut().unwrap().vector_token = Some(VectorClaimTokenV1 {
+        allowed_sources: vec!["everything".to_owned()],
+        ..test_vector_claim_token()
+    });
+    let Err(error) =
+        parse_accepted_agent_claim(&verified(&command), response, "workload-1", "worker-1", NOW)
+    else {
+        panic!("a malformed vector token was accepted");
+    };
+    assert!(
+        matches!(error, ControlSemanticError::AuthorizationFailed(_)),
+        "{error:?}"
+    );
 }
