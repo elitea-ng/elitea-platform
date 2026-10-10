@@ -122,8 +122,11 @@ const EXTENSIONS: &[Row] = &[
     Row("mdx", Some("text/markdown"), Kind::Markdown),
     Row("html", Some("text/html"), Kind::Html),
     Row("htm", Some("text/html"), Kind::Html),
-    // Chunked as HTML, but its media type stays unlisted (as before).
-    Row("xhtml", None, Kind::Html),
+    // Round 2 changed this from unlisted (`application/octet-stream`): an
+    // `.xhtml` file is `application/xhtml+xml`. `is_text` is false for it,
+    // so nothing extracts it unless the caller opts into the HTML
+    // conversion.
+    Row("xhtml", Some("application/xhtml+xml"), Kind::Html),
     Row("xml", Some("application/xml"), Kind::Text),
     Row("json", Some("application/json"), Kind::Json),
     Row("jsonl", Some("application/json"), Kind::Json),
@@ -201,7 +204,6 @@ const EXTENSIONS: &[Row] = &[
 /// for (the rows above answer for the canonical spelling).
 const MIME_ALIASES: &[(&str, &str)] = &[
     ("text/x-markdown", "md"),
-    ("application/xhtml+xml", "xhtml"),
     ("text/json", "json"),
     ("text/x-python", "py"),
     ("application/x-python-code", "py"),
@@ -224,6 +226,12 @@ const MIME_ALIASES: &[(&str, &str)] = &[
 
 fn row_of(extension: &str) -> Option<&'static Row> {
     EXTENSIONS.iter().find(|row| row.0 == extension)
+}
+
+/// Whether the table lists a lower-case extension, with or without its dot.
+#[must_use]
+pub fn is_known_extension(extension: &str) -> bool {
+    row_of(extension.strip_prefix('.').unwrap_or(extension)).is_some()
 }
 
 /// The kind of a lower-case extension, with or without its dot. An unknown
@@ -305,7 +313,11 @@ mod tests {
         assert_eq!(kind_of_extension("kt"), Kind::Code);
         assert_eq!(kind_of_extension(".md"), Kind::Markdown);
         assert_eq!(kind_of_extension(".xhtml"), Kind::Html);
-        assert_eq!(mime_of("a.xhtml"), "application/octet-stream");
+        assert_eq!(mime_of("a.xhtml"), "application/xhtml+xml");
+        assert_eq!(
+            extension_of_mime("application/xhtml+xml"),
+            Some(".xhtml".to_owned())
+        );
         assert_eq!(kind_of_extension(".jsonl"), Kind::Json);
         assert_eq!(kind_of_extension(".yaml"), Kind::Text);
         assert_eq!(kind_of_extension(".nope"), Kind::Text);

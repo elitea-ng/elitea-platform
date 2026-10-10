@@ -273,6 +273,23 @@ mod tests {
         }
     }
 
+    /// `.xhtml` has a media type of its own now (`application/xhtml+xml`).
+    /// Extraction without the HTML opt-in does not read it, so it is skipped
+    /// as before; the ingestion path never asks for the conversion.
+    #[test]
+    fn xhtml_is_still_skipped_without_the_html_opt_in() {
+        let mime = elitea_content_source::mime_of("page.xhtml");
+        assert_eq!(mime, "application/xhtml+xml");
+        assert_eq!(
+            Selection::default().admit_document("page.xhtml", mime),
+            Err(Skipped::UnsupportedExtension)
+        );
+        assert_eq!(
+            Selection::default().admit_document("page.html", "text/html"),
+            Ok(())
+        );
+    }
+
     #[test]
     fn selection_is_the_loader_order() {
         let selection = Selection {
