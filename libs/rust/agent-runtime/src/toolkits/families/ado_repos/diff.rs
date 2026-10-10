@@ -7,8 +7,40 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::toolkits::families::ado::format::python_lines;
+use crate::toolkits::families::vcs_text::python_line_ranges;
 
 const CONTEXT: usize = 3;
+/// One file the diff reads; larger files are reported, not diffed.
+pub(crate) const MAX_DIFF_FILE_BYTES: usize = 1_024 * 1_024;
+/// The longest side, in lines, one file's diff compares. `SequenceMatcher`
+/// is O(n·m) in lines in the worst case, so the byte cap alone still admits a
+/// 1 MiB file of short lines — hundreds of thousands per side. Above this a
+/// file is reported, not diffed, and the rest of the pull request still is.
+pub(crate) const MAX_DIFF_FILE_LINES: usize = 10_000;
+
+/// One `edit` entry's diff text under both caps: the unified diff, or a note
+/// naming why it was omitted. Never an error — one oversized file must not
+/// fail the whole `list_pull_request_files` call. CPU-bound: callers run it
+/// on the blocking pool.
+pub(crate) fn bounded_file_diff(
+    change_type: &str,
+    base: &str,
+    target: &str,
+    file_path: &str,
+) -> String {
+    if base.len() > MAX_DIFF_FILE_BYTES || target.len() > MAX_DIFF_FILE_BYTES {
+        return format!("Change Type: {change_type} (file too large to diff)");
+    }
+    let lines = python_line_ranges(base)
+        .len()
+        .max(python_line_ranges(target).len());
+    if lines > MAX_DIFF_FILE_LINES {
+        return format!(
+            "Change Type: {change_type} (diff omitted: file too large ({lines} lines))"
+        );
+    }
+    generate_diff(base, target, file_path)
+}
 
 /// The unified diff of `base` → `target` as `a/<path>` → `b/<path>`; empty
 /// when the two are equal.

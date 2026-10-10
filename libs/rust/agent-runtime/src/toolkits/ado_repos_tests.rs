@@ -610,3 +610,65 @@ async fn every_tool_keeps_the_sdk_contract() {
         .expect("complete ado_repos toolset");
     super::sdk_conformance::assert_sdk_conformance("ado_repos", &tools(&toolset).await);
 }
+
+/// #1207 review round 2: base and target are read concurrently (output order
+/// kept), the diff runs on the blocking pool, and a file over the line cap is
+/// reported as omitted instead of diffed — the rest of the call still is.
+#[tokio::test]
+async fn pull_request_files_omit_a_diff_over_the_line_cap_and_keep_entry_order() {
+    use super::families::ado_repos::diff::MAX_DIFF_FILE_LINES;
+    let big_base = "x\n".repeat(MAX_DIFF_FILE_LINES + 1);
+    let big_target = format!("{big_base}y\n");
+    let transport = FixtureTransport::new(move |request, index| match index {
+        0 => collection(&json!([
+            {"id":3,"sourceRefCommit":{"commitId":"s3"},"targetRefCommit":{"commitId":"t3"}}
+        ])),
+        1 => ok(json!({"changeEntries":[
+            {"item":{"path":"/big.txt"},"changeType":"edit"},
+            {"item":{"path":"/gone.txt"},"changeType":"delete"},
+            {"item":{"path":"/app.py"},"changeType":"edit"}
+        ]})),
+        _ => {
+            let version = request.query_value("versionDescriptor.version");
+            match (request.query_value("path"), version) {
+                (Some("/big.txt"), Some("t3")) => text(&big_base),
+                (Some("/big.txt"), Some("s3")) => text(&big_target),
+                (Some("/app.py"), Some("t3")) => text("a\nb\n"),
+                (Some("/app.py"), Some("s3")) => text("a\nc\n"),
+                other => panic!("unexpected item read {other:?}"),
+            }
+        }
+    });
+    let lines = MAX_DIFF_FILE_LINES + 2;
+    assert_eq!(
+        repos(transport)
+            .list_pull_request_files("9")
+            .await
+            .expect("diffs"),
+        json!(format!(
+            "[{{\"path\": \"/big.txt\", \"diff\": \"Change Type: edit (diff omitted: file too large ({lines} lines))\"}}, {{\"path\": \"/gone.txt\", \"diff\": \"Change Type: delete\"}}, {{\"path\": \"/app.py\", \"diff\": \"--- a//app.py\\n+++ b//app.py\\n@@ -1,2 +1,2 @@\\n a\\n-b\\n+c\\n\"}}]"
+        ))
+    );
+}
+
+#[test]
+fn a_file_diff_is_bounded_by_bytes_and_by_lines() {
+    use super::families::ado_repos::diff::{
+        MAX_DIFF_FILE_BYTES, MAX_DIFF_FILE_LINES, bounded_file_diff,
+    };
+    let at_cap = "x\n".repeat(MAX_DIFF_FILE_LINES);
+    assert!(bounded_file_diff("edit", &at_cap, &at_cap, "/f").is_empty());
+    let over = "x\n".repeat(MAX_DIFF_FILE_LINES + 1);
+    assert_eq!(
+        bounded_file_diff("edit", "a\n", &over, "/f"),
+        format!(
+            "Change Type: edit (diff omitted: file too large ({} lines))",
+            MAX_DIFF_FILE_LINES + 1
+        )
+    );
+    let huge = "x".repeat(MAX_DIFF_FILE_BYTES + 1);
+    assert_eq!(
+        bounded_file_diff("edit", &huge, "a\n", "/f"),
+        "Change Type: edit (file too large to diff)"
+    );
+}

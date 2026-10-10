@@ -3,6 +3,7 @@
 
 use std::fmt::Write as _;
 
+use futures::StreamExt as _;
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
@@ -17,14 +18,14 @@ use crate::toolkits::families::gitlab_org::edit::{EditErrorCode, apply_update};
 use crate::toolkits::families::python_repr::{repr as python_repr, repr_str as python_str_repr};
 
 use super::config::AdoRepository;
-use super::diff::generate_diff;
+use super::diff::bounded_file_diff;
 
 const GIT_API: &str = "7.0";
 /// `DEFAULT_MAX_OUTPUT_CHARS` of the SDK's read guard.
 const MAX_OUTPUT_CHARS: usize = 200_000;
 const MAX_OUTPUT_BYTES: usize = crate::toolkits::families::ado::client::MAX_OUTPUT_BYTES;
-/// One file the diff reads; larger files are reported, not diffed.
-const MAX_DIFF_FILE_BYTES: usize = 1_024 * 1_024;
+/// Base/target reads one `list_pull_request_files` call keeps in flight.
+const DIFF_FETCH_CONCURRENCY: usize = 8;
 const MAX_PULL_REQUEST_CHANGES: usize = 100;
 /// `list_open_pull_requests` reads threads and commits for every PR.
 const MAX_OPEN_PULL_REQUESTS: usize = 100;
@@ -711,7 +712,7 @@ impl AdoReposClient {
                 entries.len()
             )));
         }
-        let mut data = Vec::with_capacity(entries.len());
+        let mut changes = Vec::with_capacity(entries.len());
         for change in &entries {
             let path = change
                 .get("item")
@@ -722,33 +723,62 @@ impl AdoReposClient {
                 .get("changeType")
                 .and_then(Value::as_str)
                 .ok_or_else(invalid_response)?;
-            let diff = if change_type == "edit" {
-                let base = match self.item_text(path, &target_commit, "commit").await {
-                    Ok(base) => base,
-                    Err(error) => {
-                        return Ok(Value::String(format!(
-                            "Failed to process base file content for path: {path}: Failed to get item text. Error: {error}"
-                        )));
-                    }
-                };
-                let target = match self.item_text(path, &source_commit, "commit").await {
-                    Ok(target) => target,
-                    Err(error) => {
-                        return Ok(Value::String(format!(
-                            "Failed to process target file content for path: {path}: Failed to get item text. Error: {error}"
-                        )));
-                    }
-                };
-                if base.len() > MAX_DIFF_FILE_BYTES || target.len() > MAX_DIFF_FILE_BYTES {
-                    format!("Change Type: {change_type} (file too large to diff)")
-                } else {
-                    generate_diff(&base, &target, path)
-                }
-            } else {
-                format!("Change Type: {change_type}")
-            };
-            data.push((path.to_owned(), diff));
+            changes.push((path.to_owned(), change_type.to_owned()));
         }
+        // Both sides of every `edit` are read with bounded concurrency
+        // (`buffered` keeps the entry order), instead of 2 x 100 serial
+        // round-trips. The first failure IN ENTRY ORDER — base before target
+        // — answers, as the SDK's serial walk would.
+        let (target_commit, source_commit) = (&target_commit, &source_commit);
+        let texts = futures::stream::iter(changes.clone())
+            .map(|(path, change_type)| async move {
+                if change_type != "edit" {
+                    return None;
+                }
+                Some(futures::join!(
+                    self.item_text(&path, target_commit, "commit"),
+                    self.item_text(&path, source_commit, "commit"),
+                ))
+            })
+            .buffered(DIFF_FETCH_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+        let mut pending = Vec::with_capacity(changes.len());
+        for ((path, change_type), texts) in changes.into_iter().zip(texts) {
+            let texts = match texts {
+                None => None,
+                Some((Err(error), _)) => {
+                    return Ok(Value::String(format!(
+                        "Failed to process base file content for path: {path}: Failed to get item text. Error: {error}"
+                    )));
+                }
+                Some((Ok(_), Err(error))) => {
+                    return Ok(Value::String(format!(
+                        "Failed to process target file content for path: {path}: Failed to get item text. Error: {error}"
+                    )));
+                }
+                Some((Ok(base), Ok(target))) => Some((base, target)),
+            };
+            pending.push((path, change_type, texts));
+        }
+        // `generate_diff` is a `difflib.SequenceMatcher` port, O(n·m) in
+        // lines: it runs on the blocking pool, never on the async executor.
+        let data = tokio::task::spawn_blocking(move || {
+            pending
+                .into_iter()
+                .map(|(path, change_type, texts)| {
+                    let diff = match texts {
+                        Some((base, target)) => {
+                            bounded_file_diff(&change_type, &base, &target, &path)
+                        }
+                        None => format!("Change Type: {change_type}"),
+                    };
+                    (path, diff)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|_| invalid_response())?;
         let mut output = String::from("[");
         for (index, (path, diff)) in data.iter().enumerate() {
             if index > 0 {
