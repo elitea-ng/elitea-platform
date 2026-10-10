@@ -15,7 +15,7 @@
 # service builds against.
 [workspace]
 resolver = "3"
-members = ["adk-gateway", "agent-runtime", "code-parsers", "content-source", "conversation", "doc-extract", "engine-core", "engine-sidecar", "graph-algos", "inventory-core", "llm-wire", "local-index", "local-tools", "model-client", "pg-migrate", "repo-ingest"]
+members = ["adk-gateway", "agent-runtime", "code-parsers", "connectors", "content-source", "conversation", "doc-extract", "engine-core", "engine-sidecar", "graph-algos", "inventory-core", "llm-wire", "local-index", "local-tools", "model-client", "pg-migrate", "repo-ingest"]
 # Vendored crates are path dependencies, never members: their own tests,
 # benches and dev-dependencies are not built or resolved (vendor/README.md).
 exclude = ["vendor"]

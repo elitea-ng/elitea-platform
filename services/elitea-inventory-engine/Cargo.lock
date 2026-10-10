@@ -1358,6 +1358,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-connectors"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http",
+ "thiserror",
+ "url",
+]
+
+[[package]]
 name = "elitea-content-source"
 version = "0.1.0"
 dependencies = [
@@ -1511,6 +1522,7 @@ name = "elitea-repo-ingest"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "elitea-connectors",
  "elitea-engine-core",
  "gix",
  "regex",

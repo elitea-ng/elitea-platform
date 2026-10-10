@@ -23,6 +23,8 @@ on:
       - "libs/rust/local-tools/**"
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
+      # The provider clients the toolkit families share (ADR-0030 decision 3).
+      - "libs/rust/connectors/**"
       - "libs/rust/doc-extract/**"
       # The local workspace index (ADR-0029 decision 7) links the Inventory
       # core's parsers and Python-compatible text; both crates keep
@@ -51,6 +53,8 @@ on:
       - "libs/rust/local-tools/**"
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
+      # The provider clients the toolkit families share (ADR-0030 decision 3).
+      - "libs/rust/connectors/**"
       - "libs/rust/doc-extract/**"
       # The local workspace index (ADR-0029 decision 7) links the Inventory
       # core's parsers and Python-compatible text; both crates keep

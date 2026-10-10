@@ -10,7 +10,7 @@ publish.workspace = true
 # Test fixtures the worker's own tests still build against (they compose the
 # moved nodes and toolkit families with worker-only modules). Never enabled
 # by a production build.
-test-support = []
+test-support = ["elitea-connectors/test-support"]
 # Builds this crate with the serde_json features every other crate in this
 # workspace turns on (`preserve_order`, `float_roundtrip`: engine-core,
 # engine-sidecar, model-client, adk-gateway, repo-ingest, code-parsers,
@@ -47,6 +47,10 @@ async-trait = "0.1.92"
 base64 = "0.23.1"
 bytes = "1.12.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
+# The provider clients the toolkit families share with the indexing
+# connectors (ADR-0030 decision 3), over this crate's reqwest 0.12 (rustls on
+# ring): the connectors crate names no TLS stack of its own.
+elitea-connectors = { path = "../connectors", features = ["reqwest-012"] }
 # The Figma family applies a caller-supplied output `regexp` the way the SDK's
 # Python `re` does, lookaround included (its documented example uses one).
 fancy-regex = "0.18.0"
@@ -94,6 +98,7 @@ tracing = "0.1.44"
 zeroize = "1.9.0"
 
 [dev-dependencies]
+elitea-connectors = { path = "../connectors", features = ["reqwest-012", "test-support"] }
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 # The invocation suite captures the spans a toolkit call emits.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
