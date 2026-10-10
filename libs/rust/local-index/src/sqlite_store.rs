@@ -313,6 +313,24 @@ impl SqliteGraphStore {
         })
     }
 
+    /// [`GraphStore::load`], synchronously (outside an async context).
+    ///
+    /// # Errors
+    ///
+    /// The store failed or a row is damaged.
+    pub fn load_now(&self, key: GraphKey) -> Result<Option<(Graph, i64)>> {
+        self.with(|conn| load(conn, key))
+    }
+
+    /// [`GraphStore::status_document`], synchronously.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn status_document_now(&self, key: GraphKey) -> Result<Value> {
+        self.with(|conn| status_document(conn, key))
+    }
+
     /// What the source's last completed run recorded of each document: the
     /// stat cache a folder listing compares against before it re-hashes.
     ///
@@ -1017,7 +1035,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     async fn load(&self, key: GraphKey) -> Result<Option<(Graph, i64)>> {
-        self.with(|conn| load(conn, key))
+        self.load_now(key)
     }
 
     async fn revision(&self, key: GraphKey) -> Result<Option<i64>> {
@@ -1147,7 +1165,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     async fn status_document(&self, key: GraphKey) -> Result<Value> {
-        self.with(|conn| status_document(conn, key))
+        self.status_document_now(key)
     }
 
     async fn rank(&self, key: GraphKey, vector: &[f64], min_score: f64) -> Result<Ranking> {

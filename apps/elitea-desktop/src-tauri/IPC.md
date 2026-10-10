@@ -130,7 +130,7 @@ type Workspace = {
 | --- | --- | --- |
 | `workspace_open` | — | `Workspace \| null` — the native folder dialog; `null` when cancelled. Opening a folder that is already a workspace returns that workspace. |
 | `workspace_list` | — | `Workspace[]` |
-| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
+| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
@@ -361,6 +361,64 @@ and the conversation: another account or deployment never reads them.
 the same account sees it again, and another account does not);
 `workspace_remove` deletes the workspace's rows for every account.
 
+## Local index (`src/index.rs`, `libs/rust/local-index`)
+
+A workspace's code index (ADR-0029 decision 7): the Inventory knowledge
+graph of the folder, parsed on this machine and kept in the app data
+directory (`workspaces/<id>/index/index.sqlite`, owner-only), never in the
+folder. It is turned on per workspace, and only while the policy allows
+both local work and the index (`local_work.allowed && local_work.local_index`);
+otherwise every command but `index_disable` and `index_remove` rejects with
+`local_index_disabled`, and turns are offered no index tools. Nothing is
+sent anywhere: there are no embeddings yet.
+
+```ts
+type IndexStatus = {
+  state: "off" | "building" | "ready" | "stale" | "error";
+  files: number;          // documents of the last build
+  entities: number;
+  relations: number;
+  vectors: number;        // 0 until embeddings exist
+  last_run: string | null; // when the last build was committed (UTC, ISO 8601)
+  changed_files: number;  // files turns changed since the last build
+  error: string | null;   // why the last refresh failed
+};
+```
+
+`off`: not turned on (or turned off). `building`: a refresh runs (the
+previous build, if any, still answers). `ready`: built, nothing known to
+have changed. `stale`: built, but turns changed files since, or the folder
+has not been checked since the app started (a refresh starts on its own
+when the index is first used after a launch). `error`: the last refresh
+failed; the previous build, if any, still answers.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `index_status` | `{workspace_id}` | `IndexStatus` |
+| `index_enable` | `{workspace_id}` | `IndexStatus` — turns the index on and starts building it (incrementally, over what an earlier build kept). |
+| `index_disable` | `{workspace_id}` | `IndexStatus` (`off`) — stops a running refresh and stops offering the index; the build is kept for when it is turned on again. Allowed whatever the policy. |
+| `index_refresh` | `{workspace_id, full?: boolean}` | `IndexStatus` — starts a refresh: only files whose size or mtime changed are read again; `full` rebuilds from nothing. Rejects `index_off` (not turned on), `index_busy` (`full` while one runs). |
+| `index_cancel` | `{workspace_id}` | `boolean` — stops the running refresh at its next checkpoint (nothing it did is kept); `false` when none runs. Never rejects. |
+| `index_remove` | `{workspace_id, confirm: true}` | `null` — deletes the index (it can be built again). Rejects `confirmation_required` without `confirm: true`. Allowed whatever the policy. |
+
+Every command also rejects `workspace_unknown`; an index that cannot be
+opened rejects `index_refused` (its directory is a symlink, another user's
+or inside the folder), `index_newer_schema` (written by a newer app) or
+`index_storage`. Progress arrives as `index://event` (below).
+
+The index is kept across sign-out and `host_wipe`: it holds the code
+structure of the person's own folder and no account data. `index_remove`
+or `workspace_remove` deletes it.
+
+A turn in a workspace whose index is on and built is offered its tools
+(toolset `workspace_index`, reported `remote: false`): `search_knowledge_graph`,
+`get_entity_details`, `get_related_entities`, `query_graph`,
+`list_entity_types`, `impact_analysis` and `get_entity_content`, with the
+cloud Inventory tools' names and arguments. They only read, so they run
+without approval and in plan mode too. An answer from a build that may be
+out of date starts with a one-line `Note:`. A toolkit tool never takes one
+of these names (it gets a `_2` suffix), whether or not the index is on.
+
 ## App and native shell (`src/platform.rs`, `src/local_commands.rs`)
 
 | Command | Arguments | Result |
@@ -482,9 +540,24 @@ for them.
 
 ## Events
 
-Two event names, both emitted to the `main` window only: `app://command`
-(above) and `agent://event`. The webview may listen
+Three event names, all emitted to the `main` window only: `app://command`
+(above), `agent://event` and `index://event`. The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
+
+`index://event`:
+
+```ts
+type IndexEvent = {
+  workspace_id: string;
+  phase: "listing" | "parsing" | "building" | "saving" | "ready" | "stale" | "cancelled" | "error";
+  message: string | null; // progress text, or why it failed
+  status: IndexStatus;    // as index_status would answer now
+};
+```
+
+A refresh reports `listing`, then `parsing` / `building` progress, then
+`saving` and `ready`, or ends `cancelled` or `error`. `stale` is sent when
+a turn's changes make a ready index out of date.
 
 `agent://event`:
 

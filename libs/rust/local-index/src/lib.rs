@@ -8,7 +8,11 @@
 //!   confined walk the agent's tools use, re-hashing only what changed;
 //! * [`sqlite_store`] — the `GraphStore` over one owner-only SQLite file,
 //!   with diff writes that keep the graph's order;
-//! * [`fs`] — the owner-only directories and files it lives in.
+//! * [`fs`] — the owner-only directories and files it lives in;
+//! * [`service`] — one workspace's index kept current: refresh on the
+//!   blocking pool, progress, cancel, status;
+//! * [`tools`] — the read-only `workspace_index` toolset, named and shaped
+//!   as the cloud Inventory tools.
 //!
 //! Nothing here talks to the network: the index is code structure parsed
 //! locally.
@@ -27,5 +31,7 @@
 compile_error!("elitea-local-index supports macOS and Linux; Windows is ADR-0029 phase D3");
 
 pub mod fs;
+pub mod service;
 pub mod source;
 pub mod sqlite_store;
+pub mod tools;

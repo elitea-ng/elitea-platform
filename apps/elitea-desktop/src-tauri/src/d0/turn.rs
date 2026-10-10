@@ -38,11 +38,12 @@ use elitea_agent_runtime::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
+use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
 use elitea_local_tools::approvals::{JsonFileChoices, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
-use elitea_local_tools::provider::{LocalToolProvider, TOOLSET_NAME as LOCAL_TOOLSET};
+use elitea_local_tools::provider::LocalToolProvider;
 use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
 use futures::StreamExt as _;
 use serde_json::{Map, Value, json};
@@ -55,10 +56,13 @@ use super::framing;
 use super::mentions;
 use super::model::GatewayTransport;
 use super::recorder::{FileChange, Recorder};
-use super::remote_tools::{RemoteContext, RemoteToolProvider, RetryPolicy};
+use super::remote_tools::{
+    RemoteContext, RemoteToolProvider, RetryPolicy, TOOLSET_NAME as REMOTE_TOOLSET,
+};
 use super::skills::{self, InvokedSkill};
 use super::tools::{ObservedToolset, ToolObserver};
 use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, TurnTap};
+use crate::index::IndexRegistry;
 use crate::workspaces::{Workspace, WorkspaceStore};
 
 const APP_NAME: &str = "elitea-desktop";
@@ -165,6 +169,8 @@ pub struct HostDeps {
     pub retry: RetryPolicy,
     /// The local thread history; `None` runs without one.
     pub history: Option<Arc<HistoryStore>>,
+    /// The workspaces' local indexes; `None` offers no index tools.
+    pub index: Option<Arc<IndexRegistry>>,
 }
 
 /// One workspace's local session and its prompt.
@@ -881,7 +887,14 @@ impl AgentHost {
                 Some("You cannot view this project's context, so this turn runs without it."),
             );
         }
-        let local_names: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
+        // A remote tool never takes a local tool's name, nor an index
+        // tool's (whether or not this workspace has an index: names stay
+        // stable as the index comes and goes).
+        let local_names: Vec<&str> = TOOLS
+            .iter()
+            .map(|tool| tool.name)
+            .chain(INDEX_TOOLS)
+            .collect();
         let admitted = definition::admit(&resolved, &local_names)
             .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
         // A picked skill must be one of this version's own, as the platform
@@ -1018,6 +1031,7 @@ impl AgentHost {
             let _ = sink.finish(RunOutcome::Stopped).await;
             drop(claim);
             let changes = recorder.changes(session.workspace());
+            self.index_changed(&request.workspace_id, changes.len());
             tap.changes(&changes);
             events.status(Phase::Cancelled, None);
             entry.finish(
@@ -1072,6 +1086,7 @@ impl AgentHost {
         // Free before `done`: the UI may send the next turn as soon as it sees it.
         drop(claim);
         let changes = recorder.changes(session.workspace());
+        self.index_changed(&request.workspace_id, changes.len());
         tap.changes(&changes);
         let changed_files = changes.len();
         if let Err(error) = &committed {
@@ -1193,8 +1208,24 @@ impl AgentHost {
         } else {
             admitted.remote_tools.clone()
         };
-        let provider = LocalToolProvider::new(workspace.session.clone())
-            .with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
+        // The workspace's index tools, when its index is on and built: they
+        // only read, so plan mode keeps them.
+        let index = match &self.deps.index {
+            Some(registry) => {
+                let registry = registry.clone();
+                let workspace_id = request.workspace_id.clone();
+                tokio::task::spawn_blocking(move || registry.for_turn(&workspace_id))
+                    .await
+                    .ok()
+                    .flatten()
+            }
+            None => None,
+        };
+        let mut provider = LocalToolProvider::new(workspace.session.clone());
+        if let Some(index) = index {
+            provider = provider.with(Arc::new(IndexToolProvider::new(index)));
+        }
+        let provider = provider.with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
         let toolsets = provider
             .toolsets(&ToolsetRequest {
                 toolkits: Vec::new(),
@@ -1216,7 +1247,9 @@ impl AgentHost {
             .disallow_transfer_to_peers(true);
         builder = plan.bind_builder(builder);
         for toolset in toolsets {
-            let remote = toolset.name() != LOCAL_TOOLSET;
+            // The local tools and the index tools run here; only the
+            // toolkits' tools are remote.
+            let remote = toolset.name() == REMOTE_TOOLSET;
             builder = builder.toolset(Arc::new(ObservedToolset::new(
                 toolset,
                 observer.clone(),
@@ -1357,8 +1390,17 @@ impl AgentHost {
             .clear();
     }
 
+    /// A turn changed `files` files of the workspace: its index (if open)
+    /// says it may be out of date until the next refresh.
+    fn index_changed(&self, workspace_id: &str, files: usize) {
+        if let Some(index) = &self.deps.index {
+            index.mark_changed(workspace_id, files);
+        }
+    }
+
     /// `workspace_remove`: forget the workspace, its host data and
-    /// everything this host keeps for it (its session, its turns).
+    /// everything this host keeps for it (its session, its turns, its
+    /// index).
     ///
     /// # Errors
     ///
@@ -1371,6 +1413,11 @@ impl AgentHost {
             workspace_id,
             "Wait for the running turn to end, or stop it, before removing this workspace.",
         )?;
+        // The index's refresh stopped and its database closed before the
+        // directory holding it is deleted.
+        if let Some(index) = &self.deps.index {
+            index.forget(workspace_id);
+        }
         self.deps
             .workspaces
             .remove(workspace_id)

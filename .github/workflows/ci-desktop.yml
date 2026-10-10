@@ -31,6 +31,8 @@ on:
       - "libs/rust/code-parsers/**"
       - "libs/rust/inventory-core/**"
       - "libs/rust/local-index/**"
+      # The index tools mirror the cloud Inventory descriptor; a drift test reads it.
+      - "services/elitea-subapp-host/internal/apps/inventory/descriptor.json"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
@@ -57,6 +59,8 @@ on:
       - "libs/rust/code-parsers/**"
       - "libs/rust/inventory-core/**"
       - "libs/rust/local-index/**"
+      # The index tools mirror the cloud Inventory descriptor; a drift test reads it.
+      - "services/elitea-subapp-host/internal/apps/inventory/descriptor.json"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"

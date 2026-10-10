@@ -1642,12 +1642,17 @@ dependencies = [
 name = "elitea-local-index"
 version = "0.1.0"
 dependencies = [
+ "adk-core",
+ "async-trait",
+ "elitea-agent-runtime",
+ "elitea-code-parsers",
  "elitea-content-source",
  "elitea-engine-core",
  "elitea-inventory-core",
  "elitea-local-tools",
  "rusqlite",
  "rustix",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",

@@ -15,6 +15,7 @@ mod discovery;
 mod doctor;
 mod error;
 mod history;
+mod index;
 mod local_commands;
 mod logging;
 mod loopback;
@@ -47,6 +48,7 @@ use crate::d0::remote_tools::RetryPolicy;
 use crate::d0::turn::{AgentHost, HostDeps};
 use crate::error::HostError;
 use crate::history::HistoryStore;
+use crate::index::{IndexRegistry, MainWindowIndexEvents};
 use crate::local_commands::{
     AppDoctorHooks, AuthCredentials, LocalState, MainWindowEvents, StoredPolicy,
 };
@@ -192,16 +194,25 @@ pub fn run() {
                 }
             };
             let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
+            let policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
+            // The local workspace indexes (ADR-0029 decision 7), opened on
+            // first use; kept across sign-out and wipe (src/index.rs).
+            let index = Arc::new(IndexRegistry::new(
+                workspaces.clone(),
+                policy.clone(),
+                Arc::new(MainWindowIndexEvents(app.handle().clone())),
+            ));
             let agents = Arc::new(
                 AgentHost::new(HostDeps {
                     http: http.clone(),
                     credentials: Arc::new(AuthCredentials(auth.clone())),
                     client_version: env!("CARGO_PKG_VERSION").to_owned(),
-                    policy: Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone()))),
+                    policy,
                     workspaces: workspaces.clone(),
                     emitter: Arc::new(MainWindowEvents(app.handle().clone())),
                     retry: RetryPolicy::default(),
                     history: history.clone(),
+                    index: Some(index.clone()),
                 })
                 .map_err(|error| error.message)?,
             );
@@ -224,6 +235,7 @@ pub fn run() {
                 workspaces,
                 history,
                 agents,
+                index,
             });
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));
@@ -258,6 +270,12 @@ pub fn run() {
             local_commands::checkpoint_preview,
             local_commands::reveal_path,
             local_commands::open_path,
+            index::index_status,
+            index::index_enable,
+            index::index_disable,
+            index::index_refresh,
+            index::index_cancel,
+            index::index_remove,
             platform::app_platform,
             net::http_fetch,
             net::http_read_body,

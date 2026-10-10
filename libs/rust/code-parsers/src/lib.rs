@@ -32,7 +32,7 @@ pub mod swift;
 pub mod typescript;
 mod visit_support;
 
-pub use limits::{LARGEST_PARSER_STACK, with_pool_failures};
+pub use limits::{LARGEST_PARSER_STACK, parser_threads, set_parser_threads, with_pool_failures};
 
 use model::ParseResult;
 use std::collections::BTreeMap;

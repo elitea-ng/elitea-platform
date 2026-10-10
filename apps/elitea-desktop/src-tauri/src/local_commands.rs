@@ -35,6 +35,8 @@ use elitea_local_tools::find::FoundPath;
 pub struct LocalState {
     pub workspaces: Arc<WorkspaceStore>,
     pub agents: Arc<AgentHost>,
+    /// The workspaces' local indexes (`src/index.rs`).
+    pub index: Arc<crate::index::IndexRegistry>,
     /// The thread history, flushed at exit (`None` runs without one).
     pub history: Option<Arc<crate::history::HistoryStore>>,
 }
