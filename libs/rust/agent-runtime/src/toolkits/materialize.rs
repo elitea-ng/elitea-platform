@@ -27,6 +27,7 @@ use super::families::confluence;
 use super::families::jira;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
+use super::families::testio;
 use super::families::{
     aha, artifact, azure, azure_search, bitbucket, carrier, elastic, figma, gcp, github, gitlab,
     gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
@@ -557,6 +558,16 @@ fn materialize_p_to_z(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
+        "testio" => testio::tools::build_testio_toolset(
+            name,
+            testio::config::TestIoToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| match error.code() {
+            testio::tools::TestIoToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+            _ => invalid_configuration(),
+        })?,
         "yagmail" => yagmail::tools::build_yagmail_toolset(
             name,
             yagmail::config::YagmailToolkitConfig::parse(settings)

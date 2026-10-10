@@ -159,6 +159,7 @@ var rustNativeToolTypes = []string{
 	"slack",
 	"sonar",
 	"sql",
+	"testio",
 	"yagmail",
 	"zephyr",
 	"zephyr_enterprise",

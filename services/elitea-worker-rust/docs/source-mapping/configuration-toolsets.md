@@ -168,7 +168,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `sharepoint` | `configurations/sharepoint.py::SharepointConfiguration` | `tools/sharepoint::SharepointToolkit` | 28 | Yes | `toolkits/families/sharepoint/{config,client,tools}.rs` | Partial capability-disabled delegated read family: 8 explicitly selected Graph operations cover lists, columns, metadata-only recursive file discovery and bounded raw OneNote XHTML with proactive missing-token guards and direct-node reactive 401 interrupts. Empty/all selection, ACS/app-only auth, remaining content/artifact/index/effect tools, rich OAuth discovery/DCR/refresh metadata, model-loop reactive 401 confirmation, approved egress and live-provider proof remain gates |
 | `carrier` | `configurations/carrier.py::CarrierConfiguration` | `tools/carrier::EliteACarrierToolkit` | 18 | No | `toolkits/families/carrier/{config,client,tools}.rs` | Partial capability-disabled family: 15 ticket, backend and UI test/report operations with the SDK's confirmation steps; the archive tools `get_report_by_id`, `create_excel_report` and `create_ui_excel_report` stay SDK-only (archive/xlsx writers), and exact-interrupt HITL, effect reconciliation, approved egress and live proof remain gates |
 | `report_portal` | `configurations/report_portal.py::ReportPortalConfiguration` | `tools/report_portal::ReportPortalToolkit` | 9 | Yes | `toolkits/families/report_portal/{config,client,tools}.rs` | Capability-disabled complete read family: nine bounded project/report reads, including explicit UTF-8 HTML and base64 PDF export projections; authorized materialization, egress policy and live provider proof remain gates |
-| `testio` | `TestIOConfiguration` | `TestIOToolkit` | 15 | Yes | corresponding family paths | Deferred as an incoherent source contract: the check and official API require `Authorization: Token`, while runtime tools send `Bearer`; exploratory-test retrieval cannot receive its implementation-required product ID; and the two SDK write payloads do not map to the current provider create/confirmation operations without inventing product behavior |
+| `testio` | `configurations/testio.py::TestIOConfiguration` | `tools/testio::TestIOToolkit` | 15 | Yes | `toolkits/families/testio/{config,client,tools}.rs` | Partial read family (13 of 15): every read over `Authorization: Token`; the two SDK writes stay unserved because their payloads do not map to the current provider create/confirmation operations (below), and the capability snapshot lists the 13 served tools so the catalogue marks the writes unavailable |
 | `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Direct-node delegated 401 recovery has component proof in `delegated-auth-expiry.md`. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
 | `langfuse` | `LangfuseConfiguration` | No standard toolkit | 0 | Yes | `configurations/families/langfuse.rs` | Planned; observability support configuration |
 | `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 32 of 33 | Yes | `toolkits/families/aha/`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): all 25 reads, 5 writes, 1 delete and the effectful combined execute surface pass the SDK conformance gate and are served; `attach_file` is implemented behind a claim-scoped verified temp-spool resolver but omitted from the served set (`supported_tools.aha`) until an artifact-read grant plane exists |
@@ -270,19 +270,25 @@ metadata-only traversal, reactive-401 and materializer-catalog proof. This
 mapping was rechecked against SDK commit
 `c181fc0fb56e9db017cb301841644680684b4b54` on 2026-08-24.
 
-`testio` is deliberately deferred rather than copied as a nominally complete
-family. Its connection check and Test IO's current customer API authenticate
-with `Authorization: Token`, while all fifteen runtime methods send `Bearer`.
-The public `get_exploratory_test` schema also omits the product ID required by
-its implementation, and product-scoped list calls can construct a literal
-`/products/None/` path. More importantly, the SDK's two writes are not safely
-repairable by changing a URL: current exploratory-test creation requires a
-product-scoped nested request with a test environment and a feature-or-template
-choice, while the SDK exposes unrelated legacy device/date/goal fields; its
+`testio` is ported as a partial read family rather than as a nominally
+complete one. Its connection check and Test IO's current customer API
+authenticate with `Authorization: Token`, while all fifteen runtime methods
+send `Bearer`; Rust sends `Token`. The public `get_exploratory_test` schema
+omits the product ID its implementation requires, and product-scoped list
+calls can construct a literal `/products/None/` path: Rust adds an optional
+`product_id` to `get_exploratory_test` (an extra optional property keeps every
+SDK-shaped call valid) and refuses either exploratory-test read without one
+instead of requesting a `None` path. `list_products` applies the documented
+product-ID filter itself because the SDK's nested `filter` dict is encoded by
+`requests` as `filter=product_ids` and never filters. The SDK's two writes are
+not served: current exploratory-test creation requires a product-scoped
+nested request with a test environment and a feature-or-template choice,
+while the SDK exposes unrelated legacy device/date/goal fields, and its
 `confirm_bug_fix` payload maps neither to the current confirmation-information
-request nor to the separate bug-state transitions. A Rust port therefore needs
-a coordinated platform/SDK contract revision or provider-backed migration
-fixtures, not guessed provider effects.
+request nor to the separate bug-state transitions. Serving them needs a
+coordinated platform/SDK contract revision or provider-backed migration
+fixtures, not guessed provider effects. `testio_tests.rs` owns the wire,
+result-member, selection and SDK-conformance proof.
 
 Additional standard toolkits without a registered same-named configuration are
 tracked separately: AWS (1), Azure Resource Manager (2), GCP (1), Kubernetes

@@ -135,6 +135,8 @@ mod sonar_tests;
 #[cfg(all(test, feature = "toolkit-sql"))]
 mod sql_tests;
 #[cfg(test)]
+mod testio_tests;
+#[cfg(test)]
 mod yagmail_tests;
 #[cfg(test)]
 mod zephyr_enterprise_tests;

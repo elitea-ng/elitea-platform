@@ -136,7 +136,7 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 	// A Zephyr REST family leaves this list when the Rust worker starts
 	// materializing it; the served check below then covers it.
 	want := []string{
-		"bitbucket", "gitlab", "pptx", "qtest", "testio", "testrail", "xray_cloud",
+		"bitbucket", "gitlab", "pptx", "qtest", "testrail", "xray_cloud",
 	}
 	sort.Strings(want)
 	got := append([]string(nil), body.HiddenToolkitTypes...)
@@ -153,7 +153,7 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 	}
 	// Families the Rust worker DOES materialize must not appear hidden. A
 	// partial family (no indexing tools) is supported per tool, not hidden.
-	for _, served := range []string{"sql", "figma", "zephyr_enterprise", "zephyr_essential", "zephyr_scale"} {
+	for _, served := range []string{"sql", "figma", "testio", "zephyr_enterprise", "zephyr_essential", "zephyr_scale"} {
 		if gotSet[served] {
 			t.Errorf("hidden_toolkit_types contains %q, which materialize.rs supports", served)
 		}

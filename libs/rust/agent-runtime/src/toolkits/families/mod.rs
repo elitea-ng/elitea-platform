@@ -40,6 +40,7 @@ pub(crate) mod slack;
 pub(crate) mod sonar;
 #[cfg(feature = "toolkit-sql")]
 pub(crate) mod sql;
+pub(crate) mod testio;
 pub(crate) mod vcs_text;
 pub(crate) mod yagmail;
 pub(crate) mod zephyr;
