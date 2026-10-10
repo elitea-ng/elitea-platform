@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+// TokenIntrospectionService is served by elitea-main on its private mTLS
+// control listener. elitea-vector calls it to verify the project-bound
+// token of a request (ADR-0031 decision 1). elitea-main admits only the
+// client certificate identities in its configured list.
+
+package elitea.vector.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
+
+service TokenIntrospectionService {
+  // IntrospectToken answers whether a token is usable for vector access, and
+  // for which project. An unusable token is a normal answer (active =
+  // false), not an error. An error means elitea-main could not decide; the
+  // caller must refuse the request it is serving.
+  rpc IntrospectToken(IntrospectTokenRequest) returns (IntrospectTokenResponse);
+}
+
+// TokenKind names what minted a token.
+enum TokenKind {
+  TOKEN_KIND_UNSPECIFIED = 0;
+  // A token minted for one worker claim. Not minted yet; see the V0 notes.
+  TOKEN_KIND_WORKER_CLAIM = 1;
+  // A provider callback token, minted for one engine invocation
+  // (v2auth.CallbackTokenMinter).
+  TOKEN_KIND_ENGINE_CALLBACK = 2;
+}
+
+message IntrospectTokenRequest {
+  // token is the bearer string, without the "Bearer " prefix.
+  string token = 1;
+}
+
+message IntrospectTokenResponse {
+  // active is false for a token that is malformed, unknown, revoked,
+  // expired, not bound to an active project, or without an expiry.
+  bool active = 1;
+  // project_id is the project the token is bound to.
+  int64 project_id = 2;
+  // principal is the token owner, as "user:<id>".
+  string principal = 3;
+  TokenKind kind = 4;
+  // expires_at_unix is the token expiry, in seconds since the Unix epoch.
+  int64 expires_at_unix = 5;
+}
