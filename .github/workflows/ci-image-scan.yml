@@ -106,6 +106,7 @@ on:
       # missing once (the retired Python DeepWiki image) was re-measured only
       # by the daily run.
       - "services/elitea-deepwiki-engine/**"
+      - "services/elitea-vector/**"
       - "libs/rust/**"
       - "apps/elitea-web/**"
       # The elitea-ui image builds the apps/elitea-ui submodule, so a submodule
@@ -140,6 +141,7 @@ on:
       - "services/elitea-subapp-host/**"
       - "services/elitea-llm-gateway/**"
       - "services/elitea-deepwiki-engine/**"
+      - "services/elitea-vector/**"
       - "libs/rust/**"
       - "apps/elitea-web/**"
       - "apps/elitea-ui"
@@ -440,6 +442,16 @@ jobs:
           - name: elitea-deepwiki-engine-native
             context: .
             dockerfile: ./services/elitea-deepwiki-engine/Containerfile
+            target: ""
+            build_args: ""
+            expect_type: rustbinary
+            blocking: true
+          # elitea-vector (ADR-0031). Repo ROOT context: the Containerfile
+          # COPYs services/elitea-vector, libs/proto and libs/rust from
+          # there. `rustbinary` and blocking for the engines' reasons.
+          - name: elitea-vector
+            context: .
+            dockerfile: ./services/elitea-vector/Containerfile
             target: ""
             build_args: ""
             expect_type: rustbinary

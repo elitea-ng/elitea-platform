@@ -1,4 +1,4 @@
--- 0160_project_deletions_journal.sql — the cleanup journal of a project delete
+-- 0161_project_deletions_journal.sql — the cleanup journal of a project delete
 -- (#1211).
 --
 -- WHY. A project delete removes resources in places one transaction cannot
@@ -91,4 +91,4 @@ CREATE INDEX IF NOT EXISTS project_deletions_pending_idx
     WHERE completed_at IS NULL;
 
 COMMENT ON TABLE centry.project_deletions IS
-    'Cleanup journal of project deletes (#1211, shared/0160). The project row is deleted in the transaction that inserts this row; the steps recorded in cleanup run afterwards and are retried by a reconciler until completed_at is set.';
+    'Cleanup journal of project deletes (#1211, shared/0161). The project row is deleted in the transaction that inserts this row; the steps recorded in cleanup run afterwards and are retried by a reconciler until completed_at is set.';

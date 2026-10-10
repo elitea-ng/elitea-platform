@@ -11,7 +11,7 @@ package projectprovisioning
 //     FOR UPDATE, refuses while the project has work in flight, REVOKES THE
 //     PROJECT'S IDENTITY (the vault, the system token and user, the project
 //     roles and their memberships, the token bindings), records what is left to
-//     clean up in the journal (centry.project_deletions, shared/0160), deletes
+//     clean up in the journal (centry.project_deletions, shared/0161), deletes
 //     every row that references the project and the project row itself, and
 //     commits. The credentials therefore die atomically with the row. If any of
 //     it fails the project is unchanged and fully usable, and the delete answers

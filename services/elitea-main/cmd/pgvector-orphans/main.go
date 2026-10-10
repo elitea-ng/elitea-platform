@@ -360,7 +360,7 @@ func connectPlatform(ctx context.Context, databaseURL string) (*pgx.Conn, error)
 }
 
 // journalPresent reports whether the platform database has the project-delete
-// cleanup journal (shared/0160). An older platform has none, and then no id is
+// cleanup journal (shared/0161). An older platform has none, and then no id is
 // journal-owned.
 func journalPresent(ctx context.Context, platform *pgx.Conn) (bool, error) {
 	var present bool

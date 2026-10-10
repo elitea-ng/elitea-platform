@@ -117,6 +117,7 @@ updates:
       - /services/elitea-deepwiki-engine
       - /libs/rust
       - /services/elitea-inventory-engine
+      - /services/elitea-vector
       - /apps/elitea-desktop/src-tauri
     multi-ecosystem-group: weekly
     patterns: ["*"]
