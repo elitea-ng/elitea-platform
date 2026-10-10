@@ -562,6 +562,10 @@ jobs:
       # produces — the runtime material volume and the three runtime listener
       # ports on both the Deployment and the Service — so a schema error in
       # them is invisible everywhere else.
+      #
+      # vector.enabled adds elitea-vector's introspection pool (8 connections
+      # per Main replica), so the profile's own guidance applies: 3 replicas
+      # fit postgresql.maxConnections 200, 4 do not (values-standalone.yaml).
       - name: helm template + kubeconform (standalone capability values)
         if: matrix.chart == 'elitea'
         run: |
@@ -571,6 +575,7 @@ jobs:
             --set-string 'llmGateway.egressPosture=public-unrestricted' \
             --set vector.enabled=true \
             --set-string vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
+            --set main.autoscaling.maxReplicas=3 \
             > /tmp/elitea-main-standalone.yaml
           kubeconform -strict -summary -verbose \
             -kubernetes-version 1.30.0 \
