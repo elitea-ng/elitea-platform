@@ -73,6 +73,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
+import { keepThemeOffTheServer } from '../fixtures/serverTheme';
 import { SNAPSHOT_TOLERANCE, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
 
 /*
@@ -619,6 +620,8 @@ for (const route of ROUTES) {
  * stylesheet actually keys off — not a proxy for it.
  */
 async function useLightScheme(page: Page): Promise<void> {
+  // The click would otherwise store `light` for the shared persona (fixture doc).
+  await keepThemeOffTheServer(page);
   await page.goto(BASE_URL + '/app/settings/personalization', { waitUntil: 'domcontentloaded' });
   const light = page.getByRole('button', { name: 'Light', exact: true });
   await expect(light).toBeVisible({ timeout: 20_000 });
