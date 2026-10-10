@@ -26,6 +26,9 @@ elitea-content-source = { path = "../../libs/rust/content-source" }
 elitea-doc-extract = { path = "../../libs/rust/doc-extract" }
 # The tree-sitter parsers of the parser stage.
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
+# The graph, the store-free ingestion steps and the retrieval tools, shared
+# with the desktop's local workspace index (ADR-0029 decision 7).
+elitea-inventory-core = { path = "../../libs/rust/inventory-core" }
 # adk's model over the gateway client.
 elitea-adk-gateway = { path = "../../libs/rust/adk-gateway" }
 # investigate's conversation and its summarisation (shared with DeepWiki).

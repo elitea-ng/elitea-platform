@@ -490,7 +490,7 @@ impl Graph {
                     citations.push(new);
                 }
                 existing.insert("citations".to_owned(), Value::Array(citations));
-                existing.shift_remove("citation");
+                crate::map::shift_remove(existing, "citation");
             }
             return entity_id.to_owned();
         }
@@ -909,7 +909,7 @@ fn set_provenance(edge: &mut Map<String, Value>, entries: Vec<Map<String, Value>
                 edge.insert("discovered_in_file".to_owned(), file.clone());
             }
             None => {
-                edge.shift_remove("discovered_in_file");
+                crate::map::shift_remove(edge, "discovered_in_file");
             }
         }
     }
@@ -919,7 +919,7 @@ fn set_provenance(edge: &mut Map<String, Value>, entries: Vec<Map<String, Value>
             Value::Array(entries.into_iter().map(Value::Object).collect()),
         );
     } else {
-        edge.shift_remove(PROVENANCE);
+        crate::map::shift_remove(edge, PROVENANCE);
     }
 }
 
@@ -974,7 +974,7 @@ fn take_id(
     key: &str,
     what: &str,
 ) -> Result<String, FormatError> {
-    match attributes.shift_remove(key) {
+    match crate::map::shift_remove(attributes, key) {
         Some(Value::String(id)) => Ok(id),
         Some(other) => Err(FormatError(format!(
             "{what} has a non-string `{key}` ({other})"

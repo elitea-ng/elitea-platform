@@ -163,6 +163,22 @@ jobs:
             exit 1
           fi
 
+      # elitea-inventory-core (ADR-0029 decision 7) runs its retrieval goldens
+      # in both serde_json builds: in the workspace (other members turn
+      # `preserve_order` on, as the Inventory engine does) every answer is the
+      # Python engine's byte for byte; built alone (as the desktop links it)
+      # a map's keys come out sorted, and the goldens are compared with that
+      # order taken out, against a recorded list of the handlers whose text
+      # depends on it (ORDER_DEPENDENT in tests/retrieval_*.rs).
+      # INVENTORY_CORE_SERDE_ORDER makes each run fail in the other build
+      # rather than pass checking the wrong thing.
+      - name: Inventory core — retrieval goldens with and without preserve_order
+        working-directory: libs/rust
+        run: |
+          INVENTORY_CORE_SERDE_ORDER=preserve cargo test --locked -p elitea-inventory-core -p elitea-engine-sidecar --all-targets --all-features
+          INVENTORY_CORE_SERDE_ORDER=sorted cargo test --locked -p elitea-inventory-core --all-targets --all-features
+          cargo clippy --locked -p elitea-inventory-core --all-targets --all-features -- -D warnings
+
       # The workspace Clippy run above uses --all-features, which turns on
       # `test-support`, and that switches off the crate's
       # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the

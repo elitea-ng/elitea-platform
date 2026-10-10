@@ -12,6 +12,12 @@ socket protocol the Python sidecar spoke, with two runners:
 | `fixture` | the canned graph every Inventory fixture runner replays |
 | `native` | the engine itself over PostgreSQL (`ELITEA_INVENTORY_DATABASE_URL`): every tool of the `inventory` and `inventory_search` families |
 
+The graph, the store-free ingestion steps, the read tools and the type tables
+live in `libs/rust/inventory-core` (ADR-0029 decision 7: the desktop's local
+workspace index links them too); this crate re-exports them under the paths
+below, so `src/graph.rs`, `src/retrieval` and `src/ingest/{files,ids,parse}.rs`
+here mean those files there.
+
 The knowledge graph and its PostgreSQL store (P3a), file ingestion (P3b), the
 parser stage (P3c) and the model stage (P3d) are in; communities, embeddings and
 the native runner (P3e) serve `run_ingestion` on the socket; the read tools
@@ -21,7 +27,7 @@ and the source toolkits' read-only tools through elitea-main's `test_tool`
 route) complete it (P4).
 
 The model stage (`src/extract`) uses the Python engine's prompts and type tables
-as data: `assets/python_inventory.json`, frozen from its source (see
+as data: `libs/rust/inventory-core/assets/python_inventory.json`, frozen from its source (see
 `tests/fixtures/PROVENANCE.md`). The module docs list where it deliberately differs:
 absolute citations, kept text facts, and relations that are actually extracted.
 

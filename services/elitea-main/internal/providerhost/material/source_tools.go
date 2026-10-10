@@ -324,7 +324,7 @@ func engineSourceToolName(raw []byte) (string, bool) {
 // The Inventory engine's read-only rule for a source tool (Python
 // `_filter_read_only_tools`; the Rust engine's investigate::read_only over
 // READ_ONLY_PREFIXES / WRITE_OPERATION_PATTERNS in
-// services/elitea-inventory-engine/assets/python_inventory.json). Restated
+// libs/rust/inventory-core/assets/python_inventory.json). Restated
 // here so the platform enforces what the engine only offers;
 // TestReadOnlyRulesMatchTheEngineAsset pins the two together.
 var (

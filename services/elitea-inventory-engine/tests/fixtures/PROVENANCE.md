@@ -6,16 +6,20 @@ before the Python service was removed). The Python service and the generator
 scripts were then deleted; the JSON is now frozen reference data that the Rust
 engine's tests compare against. Do not edit it by hand.
 
+Five of them moved since, with the code that reads them, to
+`libs/rust/inventory-core` (ADR-0029 decision 7); the table gives where each
+file is now (prefixed `inventory-core:`) and where its generator was.
+
 | Golden file(s) | Generator (path inside `services/elitea-inventory-engine/` at `a1d38fb4d`) |
 |---|---|
-| `assets/python_inventory.json` | `assets/generate.py` (prompts, taxonomies, type tables) |
-| `assets/python_retrieval.json` | `assets/generate_retrieval.py` (retrieval-tool tables) |
-| `assets/source_tools.json` | `assets/source_tools.py` (still present; reads `python_inventory.json` and elitea-main's toolkit schema snapshot, not Python source) |
+| `inventory-core:assets/python_inventory.json` | `assets/generate.py` (prompts, taxonomies, type tables) |
+| `inventory-core:assets/python_retrieval.json` | `assets/generate_retrieval.py` (retrieval-tool tables) |
+| `assets/source_tools.json` | `assets/source_tools.py` (still present; reads `inventory-core:assets/python_inventory.json` and elitea-main's toolkit schema snapshot, not Python source) |
 | `tests/fixtures/communities/{two_clusters,centrality}.expected.json` | `tests/fixtures/communities/generate.py` (real igraph + networkx over `two_clusters.json` / `centrality.json`) |
 | `tests/fixtures/graph_store/graph.golden.json` | `tests/fixtures/graph_store/generate.py` (replays `ops.json` through the Python `KnowledgeGraph`) |
 | `tests/fixtures/ingest/entity_ids.json` | `tests/fixtures/ingest/generate.py` (Python `_generate_entity_id`) |
-| `tests/fixtures/retrieval/{graph,goldens}.json` | `tests/fixtures/retrieval/generate.py` |
-| `tests/fixtures/retrieval_more/{graph,bare,goldens}.json` | `tests/fixtures/retrieval_more/generate.py` |
+| `inventory-core:tests/fixtures/retrieval/{graph,goldens}.json` | `tests/fixtures/retrieval/generate.py` |
+| `inventory-core:tests/fixtures/retrieval_more/{graph,bare,goldens}.json` | `tests/fixtures/retrieval_more/generate.py` |
 | `tests/fixtures/smart_normalize/{graph,goldens}.json` | `tests/fixtures/smart_normalize/generate.py` |
 | `tests/fixtures/code_like/goldens.json` | `tests/fixtures/code_like/generate.py` |
 

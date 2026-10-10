@@ -29,6 +29,7 @@ on:
       # `preserve_order` out of their normal dependencies for this host.
       - "libs/rust/engine-core/**"
       - "libs/rust/code-parsers/**"
+      - "libs/rust/inventory-core/**"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
@@ -53,6 +54,7 @@ on:
       # `preserve_order` out of their normal dependencies for this host.
       - "libs/rust/engine-core/**"
       - "libs/rust/code-parsers/**"
+      - "libs/rust/inventory-core/**"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"

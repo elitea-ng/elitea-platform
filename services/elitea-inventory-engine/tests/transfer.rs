@@ -20,7 +20,7 @@ const PYTHON_DOCUMENTS: [(&str, &str); 2] = [
     ),
     (
         "retrieval_more",
-        include_str!("fixtures/retrieval_more/graph.json"),
+        include_str!("../../../libs/rust/inventory-core/tests/fixtures/retrieval_more/graph.json"),
     ),
 ];
 

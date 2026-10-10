@@ -106,14 +106,9 @@ pub async fn fail(pool: &PgPool, key: GraphKey, toolkit_id: &str, error: &str) -
     Ok(())
 }
 
-/// What the store keeps of one document of a source (ADR-0028): its
-/// version, media type and readers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocumentState {
-    pub version: String,
-    pub mime: String,
-    pub acl: Acl,
-}
+/// What the store keeps of one document of a source (the shared core's
+/// type, ADR-0029 decision 7).
+pub use elitea_inventory_core::store::DocumentState;
 
 /// The version of every document the source's last completed run read,
 /// by key.

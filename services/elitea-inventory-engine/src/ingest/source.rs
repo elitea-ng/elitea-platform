@@ -145,6 +145,17 @@ fn json_type(value: &Value) -> &'static str {
 }
 
 impl Source {
+    /// What ingestion needs of this source: its name and its whitelist and
+    /// blacklist ([`elitea_inventory_core::ingest::SourceSelection`]).
+    #[must_use]
+    pub fn selection(&self) -> elitea_inventory_core::ingest::SourceSelection {
+        elitea_inventory_core::ingest::SourceSelection {
+            name: self.name.clone(),
+            whitelist: self.whitelist.clone(),
+            blacklist: self.blacklist.clone(),
+        }
+    }
+
     /// Validate the expanded source object (`parse_source`), refusing
     /// anything else by name. `allowed` is the configured type list.
     ///
