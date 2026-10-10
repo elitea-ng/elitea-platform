@@ -139,6 +139,30 @@ jobs:
           cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql
           cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql
 
+      # engine-core and code-parsers keep `preserve_order` and
+      # `float_roundtrip` in their dev-dependencies only, so the desktop host
+      # can link them (ADR-0029 decisions 2 and 7); every engine binary turns
+      # both on in its own manifest. Their own tests above need both (pyjson's
+      # float repr, the JS/TS/Rust parser goldens compared as text), so the
+      # order-off run is their normal build: linted alone, without
+      # dev-dependencies, and the resolved features checked, since a feature
+      # one of them turned back on would otherwise pass unnoticed.
+      - name: Engine core and code parsers — normal build without preserve_order
+        working-directory: libs/rust
+        run: |
+          cargo clippy --locked -p elitea-engine-core -p elitea-code-parsers --lib -- -D warnings
+          features=$(cargo tree --locked -p elitea-engine-core -p elitea-code-parsers \
+            -e normal,features -i serde_json --prefix none)
+          echo "$features"
+          if ! grep -q '^serde_json feature "std"' <<<"$features"; then
+            echo "cargo tree listed no serde_json features: the check below would check nothing" >&2
+            exit 1
+          fi
+          if grep -E '^serde_json feature "(preserve_order|float_roundtrip|arbitrary_precision)"' <<<"$features"; then
+            echo "a normal dependency of engine-core or code-parsers turns on a serde_json feature the desktop host must not link" >&2
+            exit 1
+          fi
+
       # The workspace Clippy run above uses --all-features, which turns on
       # `test-support`, and that switches off the crate's
       # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the

@@ -24,6 +24,11 @@ on:
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
       - "libs/rust/doc-extract/**"
+      # The local workspace index (ADR-0029 decision 7) links the Inventory
+      # core's parsers and Python-compatible text; both crates keep
+      # `preserve_order` out of their normal dependencies for this host.
+      - "libs/rust/engine-core/**"
+      - "libs/rust/code-parsers/**"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
@@ -43,6 +48,11 @@ on:
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
       - "libs/rust/doc-extract/**"
+      # The local workspace index (ADR-0029 decision 7) links the Inventory
+      # core's parsers and Python-compatible text; both crates keep
+      # `preserve_order` out of their normal dependencies for this host.
+      - "libs/rust/engine-core/**"
+      - "libs/rust/code-parsers/**"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
