@@ -616,7 +616,9 @@ impl AgentHost {
             return Ok(existing.clone());
         }
         let data_dir = self.deps.workspaces.data_dir(workspace_id);
-        std::fs::create_dir_all(&data_dir).map_err(|e| {
+        // Owner-only (0700), the workspaces folder above it too: remembered
+        // approvals, copy checkpoints and the index are the folder's data.
+        elitea_local_index::fs::create_private_dir(&data_dir).map_err(|e| {
             TurnError::new(
                 "storage",
                 format!("could not prepare the workspace data: {e}"),

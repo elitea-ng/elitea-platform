@@ -1,0 +1,37 @@
+[package]
+name = "elitea-local-index"
+description = "The desktop's local workspace index (ADR-0029 decision 7): a workspace folder as a content source, the Inventory graph kept in an owner-only SQLite file, and the read-only index tools the local agent calls."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+elitea-content-source = { path = "../content-source" }
+elitea-inventory-core = { path = "../inventory-core" }
+# The confined workspace (openat / O_NOFOLLOW reads, `path_deny`) and the
+# walk every local tool lists a folder with.
+elitea-local-tools = { path = "../local-tools" }
+# The same line as the desktop host (`bundled`: the SQLite the app ships
+# with) and as sqlx here: one libsqlite3-sys in every lockfile.
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+# Default features only: the desktop host links this crate and must not
+# build serde_json with `preserve_order` (ADR-0029 decision 2).
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+
+# The owner check on the database and its sidecars (geteuid), without
+# `unsafe`.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["fs", "process"] }
+
+[dev-dependencies]
+# The progress context `ingest_documents` reports through.
+elitea-engine-core = { path = "../engine-core" }
+elitea-inventory-core = { path = "../inventory-core", features = ["test-support"] }
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+
+[lints]
+workspace = true

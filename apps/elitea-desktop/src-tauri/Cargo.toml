@@ -46,6 +46,9 @@ shlex = "2"
 # `serde_json_preserve_order_is_off` test asserts it).
 elitea-agent-runtime = { path = "../../../libs/rust/agent-runtime" }
 elitea-local-tools = { path = "../../../libs/rust/local-tools" }
+# The local workspace index (decision 7): the folder source, its owner-only
+# SQLite store and the index tools. Order-free like everything above.
+elitea-local-index = { path = "../../../libs/rust/local-index" }
 elitea-llm-wire = { path = "../../../libs/rust/llm-wire" }
 # Tilde, like the runtime: adk breaks its API between minors. adk-agent and
 # adk-runner are PATCHED (below); the runtime refuses to compile without it.

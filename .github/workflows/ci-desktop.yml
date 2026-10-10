@@ -30,6 +30,7 @@ on:
       - "libs/rust/engine-core/**"
       - "libs/rust/code-parsers/**"
       - "libs/rust/inventory-core/**"
+      - "libs/rust/local-index/**"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
@@ -55,6 +56,7 @@ on:
       - "libs/rust/engine-core/**"
       - "libs/rust/code-parsers/**"
       - "libs/rust/inventory-core/**"
+      - "libs/rust/local-index/**"
       - "libs/rust/vendor/adk-agent/**"
       - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
@@ -134,3 +136,14 @@ jobs:
       - name: Run tests
         working-directory: apps/elitea-desktop/src-tauri
         run: cargo test --locked --all-targets
+
+      # The local workspace index the host links (ADR-0029 decision 7): its
+      # own tests (the shared GraphStore conformance suite over SQLite, the
+      # folder source, owner-only files) run in the libs workspace, built
+      # alone so serde_json's `preserve_order` stays off as in the host.
+      - name: Local index (fmt, clippy, tests)
+        working-directory: libs/rust
+        run: |
+          cargo fmt -p elitea-local-index -- --check
+          cargo clippy --locked -p elitea-local-index --all-targets -- -D warnings
+          cargo test --locked -p elitea-local-index --all-targets

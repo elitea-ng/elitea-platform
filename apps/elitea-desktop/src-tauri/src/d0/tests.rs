@@ -420,6 +420,17 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
     assert_eq!(calls[0].payload["remote"], false);
     assert_eq!(calls[0].payload["args_summary"], "notes.txt");
     assert_eq!(calls[1].payload["tool"], "Jira_create_issue");
+
+    // The workspace's host data (and the folder holding every workspace's)
+    // is owner-only, whatever the umask.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let data = h.app.path().join("workspaces").join(&h.workspace_id);
+        assert_eq!(mode(&data), 0o700);
+        assert_eq!(mode(&h.app.path().join("workspaces")), 0o700);
+    }
     assert_eq!(calls[1].payload["remote"], true);
     assert!(
         by_kind("tool_result")

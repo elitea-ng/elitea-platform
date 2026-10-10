@@ -3,8 +3,9 @@
 //!
 //! The desktop receives the policy with every token response and enforces
 //! it here; the server cannot verify what a client did. Fields this crate
-//! does not use (`local_mcp`, `local_index`, `memory_write`, `cloud_sync`)
-//! are ignored when deserialising. Every default fails closed.
+//! does not use (`local_mcp`, `memory_write`, `cloud_sync`) are ignored when
+//! deserialising. Every default fails closed (`local_index` too: the server
+//! sends `true` by default, a policy without the field turns it off).
 
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +37,8 @@ impl SandboxMode {
 }
 
 /// `native_client_policy.local_work`.
+// The server's wire format: one switch per capability.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct LocalWorkPolicy {
@@ -62,6 +65,9 @@ pub struct LocalWorkPolicy {
     /// Paths no local tool reads or writes (globs, see
     /// [`crate::workspace::Workspace::open`]).
     pub path_deny: Vec<String>,
+    /// Whether the desktop may build and use a local index of a workspace
+    /// (ADR-0029 decision 7). Only with `allowed`: the host gates on both.
+    pub local_index: bool,
 }
 
 impl Default for LocalWorkPolicy {
@@ -74,6 +80,7 @@ impl Default for LocalWorkPolicy {
             command_allow: Vec::new(),
             command_deny: Vec::new(),
             path_deny: Vec::new(),
+            local_index: false,
         }
     }
 }
@@ -95,7 +102,16 @@ mod tests {
         assert!(!policy.shell);
         assert!(!policy.network);
         assert_eq!(policy.max_sandbox_mode, SandboxMode::FullAccess);
+        assert!(!policy.local_index, "sent as false");
         assert!(!LocalWorkPolicy::default().allowed);
+        assert!(
+            !LocalWorkPolicy::default().local_index,
+            "absent is off, like every other field"
+        );
+        let on: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true, "local_index": true}))
+                .expect("parse");
+        assert!(on.local_index);
         assert!(SandboxMode::ReadOnly < SandboxMode::WorkspaceWrite);
         assert!(SandboxMode::WorkspaceWrite < SandboxMode::FullAccess);
     }
