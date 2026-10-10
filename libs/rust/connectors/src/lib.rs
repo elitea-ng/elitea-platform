@@ -13,7 +13,16 @@
 //! * [`base_url`] — the one strict base-URL rule.
 //! * [`egress`] — the shared, fail-closed host allowlist and the guard
 //!   transport that applies it to every request.
+//! * per provider (feature `providers`): its configuration (secrets
+//!   zeroized), its errors (data-free), its wire layer and its request
+//!   building and authentication — [`ado`].
 
+// The provider modules were crate-private in agent-runtime and are public
+// here only so the families can call them: their accessors are plain getters
+// and every error is a data-free code documented on its type.
+#[cfg(feature = "providers")]
+#[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+pub mod ado;
 pub mod base_url;
 pub mod egress;
 mod reqwest_adapter;

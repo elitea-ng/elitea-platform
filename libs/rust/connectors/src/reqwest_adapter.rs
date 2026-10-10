@@ -30,6 +30,7 @@ pub struct ClientPolicy {
 #[error("the HTTP client could not be built")]
 pub struct BuildError;
 
+#[cfg(any(feature = "reqwest-012", feature = "reqwest-013"))]
 macro_rules! reqwest_adapter {
     ($reqwest:ident) => {
         use async_trait::async_trait;
@@ -161,4 +162,5 @@ macro_rules! reqwest_adapter {
     };
 }
 
+#[cfg(any(feature = "reqwest-012", feature = "reqwest-013"))]
 pub(crate) use reqwest_adapter;

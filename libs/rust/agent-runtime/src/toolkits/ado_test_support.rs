@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use adk_tool::{BasicToolset, SimpleToolContext};
 use async_trait::async_trait;
+use elitea_connectors::transport::{Body, Method, Request, StatusCode};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, IF_MATCH};
-use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
 use super::families::ado::client::{
@@ -158,7 +158,7 @@ impl AdoTransport for FixtureTransport {
                 .collect(),
             body: request
                 .body()
-                .and_then(reqwest::Body::as_bytes)
+                .and_then(Body::as_bytes)
                 .and_then(|bytes| serde_json::from_slice(bytes).ok()),
             content_type: header(CONTENT_TYPE),
             authorization: header(AUTHORIZATION),
