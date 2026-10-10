@@ -117,7 +117,7 @@ test('the mic control reflects idle/recording state in its tooltip, aria-pressed
 }) => {
   await openChat(page);
 
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
   await expect(mic).toBeVisible({ timeout: 20_000 });
   await expect(mic).toHaveAttribute('aria-pressed', 'false');
   await mic.hover();
@@ -153,7 +153,7 @@ test('clicking the mic starts capture and the transcript lands in the input; sto
   const input = page.getByTestId('chat-message-input');
   await expect(input).toHaveValue('');
 
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
   await mic.click();
   await expect(mic).toHaveAttribute('aria-pressed', 'true');
 
@@ -173,7 +173,7 @@ test('stopping dictation without sending submits nothing, and a new session appe
   await openChat(page);
 
   const input = page.getByTestId('chat-message-input');
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
 
   await mic.click();
   await fireTranscript(page, 'First sentence');
@@ -215,7 +215,7 @@ test('a dictated transcript and an attached file both stay on the composer', asy
 
   await expect(page.getByTestId('chat-attachment-chip-0')).toBeVisible({ timeout: 15_000 });
 
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
   await mic.click();
   await fireTranscript(page, 'Please analyze this file');
   await page.getByRole('button', { name: 'stop voice input' }).click();
@@ -241,7 +241,7 @@ test('a dictated transcript and an attached file both stay on the composer', asy
 test('the Speaking Mode control is disabled while dictation is recording', async ({ page }) => {
   await openChat(page);
 
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
   const speakingModeButton = page.getByTestId('chat-speaking-mode-button');
   await expect(speakingModeButton).toBeEnabled({ timeout: 20_000 });
 
@@ -273,7 +273,7 @@ test('the Speaking Mode control is disabled while dictation is recording', async
 test('a denied microphone permission surfaces a readable error toast', async ({ page }) => {
   await openChat(page);
 
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
   await mic.click();
   await fireError(page, 'not-allowed');
 
@@ -294,7 +294,7 @@ test('with no project ASR model, the mic is still offered and transcribes progre
 }) => {
   await openChat(page);
 
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
   await expect(mic, 'Chrome/Chromium must offer the browser fallback mic even with no ASR model').toBeVisible();
 
   await mic.click();
@@ -332,7 +332,7 @@ test('voice dictation inserts at the last edited position, not a bare click', as
   for (let i = 0; i < 4; i++) await input.press('ArrowRight');
   // Caret now sits right after "Hello" (before the space).
 
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
   await mic.click();
   await fireTranscript(page, 'beautiful');
   await page.getByRole('button', { name: 'stop voice input' }).click();
@@ -358,7 +358,7 @@ test('a network interruption during active recording does not freeze the input f
   await openChat(page);
   const input = page.getByTestId('chat-message-input');
 
-  const mic = page.locator('button[aria-pressed]');
+  const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
   await mic.click();
   await fireTranscript(page, 'checking the network', false);
   await expect(input).toHaveValue('checking the network');

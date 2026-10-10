@@ -201,7 +201,7 @@ test('dictation transcribes through the project speech model over HTTPS — no s
 
     const input = page.getByTestId('chat-message-input');
     await expect(input).toBeEditable({ timeout: 20_000 });
-    const mic = page.locator('button[aria-pressed]');
+    const mic = page.locator('button[aria-pressed][aria-label*="voice input"]');
     await expect(mic).toBeVisible({ timeout: 20_000 });
 
     const upload = page.waitForResponse(
