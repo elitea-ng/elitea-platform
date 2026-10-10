@@ -134,6 +134,7 @@ var pythonVerifiedImportKeys = []string{
 // repository keeps finding.
 var rustNativeToolTypes = []string{
 	"ado_boards",
+	"ado_plans",
 	"artifact",
 	"azure",
 	"azure_search",

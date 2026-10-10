@@ -57,6 +57,8 @@ pub mod tool_binding;
 #[cfg(test)]
 mod ado_boards_tests;
 #[cfg(test)]
+mod ado_plans_tests;
+#[cfg(test)]
 mod ado_test_support;
 #[cfg(test)]
 mod aha_tests;

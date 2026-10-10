@@ -131,7 +131,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `artifact` | None; the bucket is an inline toolkit setting and the AUTHORITY is the live execution claim, not a credential | `runtime/tools/artifact::ArtifactWrapper` | 4 of 8 | No | `toolkits/families/artifact/{config,tools}.rs` | The one family whose authority is not in the frozen snapshot (#906): there is no third-party endpoint, only this platform's own storage, reached over main's private claim-bound content listener (`ContentServer.PostArtifact*`). `list_files`, `read_file`, `create_file` and `delete_file` carry the SDK's own names and argument names; the read enforces the SDK's 200,000-character agent-path cap and refuses with the same structured `content_too_large` object. Built only where the claim is in scope: the ordinary agent path and a root pipeline's direct and LLM nodes ([pipeline artifact toolkit nodes](pipeline-artifact-toolkit-nodes-20261009.md)). Saved child pipelines and nested applications still skip it; a direct node there is refused as `unsupported_capability`. `read_multiple_files`, `get_file_metadata`, `append_data`, `create_new_bucket` and the indexing pair remain gates |
 | `github` | `configurations/github.py::GithubConfiguration` | `tools/github::EliteAGitHubToolkit` | 44 | Yes | `toolkits/families/github/{config,client,code_search,commits,projects,pull_requests,workflow_runs,tools}.rs`; common configured-tool materializer | Partial read profile: strict anonymous/PAT/basic/App probe parsing plus twenty identity, branch, file, repository-navigation, issue, pull-request, commit, server-side code-search, workflow-status and Project V2 reads; a mixed explicit SDK selection keeps these reads and omits unsupported operations with one bounded warning; the other 24 tools, workflow-log archives, App installation auth, sensitive effects and indexing remain gates |
 | `ado_repos` | `configurations/ado.py::AdoConfiguration` | `tools/ado/repos::AzureDevOpsReposToolkit` | 22 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_repos/` | Planned as its own complete SDK family; 16 repository operations plus 6 inherited indexing tools |
-| `ado_plans` | `configurations/ado.py::AdoConfiguration` | `tools/ado/test_plan::AzureDevOpsPlansToolkit` | 18 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_plans/` | Planned as its own complete SDK family; 12 test-plan operations plus 6 inherited indexing tools |
+| `ado_plans` | `configurations/ado.py::AdoConfiguration` | `tools/ado/test_plan::AzureDevOpsPlansToolkit` | 18 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_plans}/` | Partial native family: all 12 test-plan operations; the 6 indexing tools stay on the Python worker |
 | `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 19 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_boards}/` | Partial native family: 11 of 13 work-item operations; `get_image_by_url` (vision LLM), `attach_file_to_work_item` (artifact storage) and the 6 indexing tools stay on the Python worker |
 | `ado_wiki` | `configurations/ado.py::AdoConfiguration` | `tools/ado/wiki::AzureDevOpsWikiToolkit` | 14 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_wiki/` | Planned as its own complete SDK family; 8 wiki operations plus 6 inherited indexing tools |
 | `gitlab` | `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab::EliteAGitlabToolkit` | 27 | Yes | `toolkits/families/gitlab/{config,client,tools}.rs`, shared `families/vcs_text.rs`; reuses `gitlab_org` transport, status/effect mapping, OLD/NEW editor and MR diff positions | Partial capability-disabled family (per-tool capability): all 21 non-index tools (10 reads, 9 writes, 2 deletes) keep SDK names, argument schemas, messages, protected-base-branch rules, the invocation-local active branch (moved by reads, as in the SDK) and first-page vs all-pages pagination. A selected index tool is omitted with a warning; the 6 index tools, non-UTF-8 document/image parsing, live check, exact-interrupt HITL and effect reconciliation remain gates |
@@ -2674,6 +2674,55 @@ Proof: `toolkits/ado_boards_tests.rs` (configuration, WIQL/field reads,
 JSON Patch create, rule-error text, unknown outcome, relations, comment
 pagination, wiki artifact links, field report golden, selection/policy,
 argument validation, SDK conformance).
+
+### Azure DevOps Test Plans family
+
+`ado_plans` serves all twelve non-index tools of
+`tools/ado/test_plan/test_plan_wrapper.py` at the same pinned SDK revision,
+over the shared `families/ado` connection. The SDK's `TestPlanClient` comes
+from `connection.clients` (v7.0); test case work items go through the work
+item wrapper it builds internally, which Rust reuses as
+`families/ado/work_items.rs`.
+
+| Tool | Route (api-version 7.0 unless noted) | Result |
+| --- | --- | --- |
+| `create_test_plan` | `POST {project}/_apis/testplan/plans` | `Test plan <id> created successfully.` |
+| `delete_test_plan` | `DELETE .../testplan/plans/{planId}` | `Test plan <id> deleted successfully.` |
+| `get_test_plan` | `GET .../testplan/plans/{planId}` or `.../plans` (first page) | msrest `as_dict()` object or list; `plan_id` 0/absent lists |
+| `create_test_suite` | `POST .../testplan/Plans/{planId}/suites` | `Test suite <id> created successfully.` |
+| `delete_test_suite` | `DELETE .../testplan/Plans/{planId}/Suites/{suiteId}` | `Test suite <id> deleted successfully.` |
+| `get_test_suite` | `GET .../Plans/{planId}/Suites/{suiteId}` or `.../suites` | `as_dict()` object or list |
+| `add_test_case` | `POST .../Plans/{planId}/Suites/{suiteId}/TestCase` | `as_dict()` test case list |
+| `create_test_case` | `POST {project}/_apis/wit/workitems/$Test Case` (7.1-preview.3), then `add_test_case` | the added test cases |
+| `create_test_cases` | `create_test_case` per entry | list of per-entry results |
+| `get_test_case` / `get_test_cases` | `GET .../TestCase/{id}` or `.../TestCase`, then `GET wit/workitems/{id}` (`$expand=Relations` without `fields`) | `as_dict()` test case plus `work_item_full_details`; the SDK's "No test cases found ..." text |
+| `get_all_test_case_fields_for_project` | `GET wit/workitemtypes/Test Case` | the work item field report for `Test Case` |
+
+The `*_create_params` and `suite_test_case_create_update_parameters`
+arguments stay JSON strings with the SDK's Python attribute names
+(`area_path`, `parent_suite`, `work_item`). `model_body` admits exactly the
+msrest model's attributes (an unknown name returns the constructor's
+`TypeError` text, as the SDK does), renames them to REST camelCase and
+coerces the `int` attributes (`work_item.id` "23" becomes 23) as msrest's
+serializer does. Test steps are rebuilt into `Microsoft.VSTS.TCM.Steps`
+byte for byte as `ElementTree.tostring` writes them (`steps.rs`), from the
+JSON array or the `<Steps><Step>` XML; the XML reader is bounded and refuses
+DTDs and undefined entities. A `TF401320` or validation failure on create
+returns the provider rule text with the SDK's pointer to
+`get_all_test_case_fields_for_project`.
+
+Differences: `create_test_cases` validates every entry before creating the
+first work item (the SDK raises `KeyError` midway, after creating earlier
+entries), defaults a missing `test_steps_format` to `json`, and takes at
+most 50 entries. `get_test_cases` reads at most 200 test cases with their
+work items and otherwise returns a model-visible "read them by id" text.
+A failed field-definition read is not cached. As in the SDK, a failed work
+item read leaves a test case without `work_item_full_details`.
+
+Proof: `toolkits/ado_plans_tests.rs` (ElementTree step golden output, XML
+reader defaults/entities/refusals, create params naming and errors, add/list
+`as_dict` shapes, create-test-case flow and rule-error hint, test case
+details, unknown outcome, argument shapes, SDK conformance).
 
 ## Special runtime toolsets
 

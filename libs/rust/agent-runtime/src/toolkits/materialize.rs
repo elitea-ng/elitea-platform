@@ -294,6 +294,7 @@ fn materialize_ado(
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
     use super::families::ado::config::AdoConfigErrorCode;
     use super::families::ado_boards;
+    use super::families::ado_plans;
     let config_error = |code: AdoConfigErrorCode| match code {
         AdoConfigErrorCode::InvalidConfiguration => invalid_configuration(),
         AdoConfigErrorCode::ResourceExhausted => resource_exhausted(),
@@ -302,6 +303,13 @@ fn materialize_ado(
         "ado_boards" => ado_boards::tools::build_ado_boards_toolset(
             name,
             ado_boards::config::AdoBoardsToolkitConfig::parse(settings)
+                .map_err(|error| config_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| ado_toolset_materialization_error(error.code()))?,
+        "ado_plans" => ado_plans::tools::build_ado_plans_toolset(
+            name,
+            ado_plans::config::AdoPlansToolkitConfig::parse(settings)
                 .map_err(|error| config_error(error.code()))?,
             policy,
         )
