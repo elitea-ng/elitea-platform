@@ -14,6 +14,7 @@
 //! that does not parse is reported without its text.
 
 use crate::graph::Graph;
+use elitea_inventory_core::store::GraphRead;
 use elitea_pg_migrate::{Ledger, MigrateError, Migration};
 use serde_json::{Map, Value};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
@@ -419,6 +420,25 @@ fn unstorable(error: sqlx::Error) -> StoreError {
 ///
 /// [`StoreError::Database`].
 pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> {
+    Ok(load_graph(pool, key, true)
+        .await?
+        .map(|read| (read.graph, read.revision)))
+}
+
+/// The stored graph `key` for reading: [`load`] without the entity
+/// vectors, which are most of a graph's bytes (a 747-entity graph at 2560
+/// dimensions is 15 MB, 97% of it vectors), and the ids of the entities
+/// that have one. The vectors are never selected, so they never leave the
+/// database.
+///
+/// # Errors
+///
+/// [`StoreError::Database`].
+pub async fn load_view(pool: &PgPool, key: GraphKey) -> Result<Option<GraphRead>> {
+    load_graph(pool, key, false).await
+}
+
+async fn load_graph(pool: &PgPool, key: GraphKey, vectors: bool) -> Result<Option<GraphRead>> {
     // One snapshot for the three reads: a concurrent save is all or nothing.
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -444,25 +464,38 @@ pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> 
         .map(|schema| schema.0);
     let revision: i64 = header.try_get("revision")?;
 
-    let entities = sqlx::query(
-        "SELECT entity_id, attributes, citations, embedding
+    // `embedded` is true for a non-empty vector: what `get_stats` counted.
+    let entities = sqlx::query(if vectors {
+        "SELECT entity_id, attributes, citations, embedding,
+                (embedding IS NOT NULL AND cardinality(embedding) > 0) AS embedded
            FROM inventory_graph.entities
           WHERE project_id = $1 AND application_id = $2
-          ORDER BY ordinal",
-    )
+          ORDER BY ordinal"
+    } else {
+        "SELECT entity_id, attributes, citations,
+                (embedding IS NOT NULL AND cardinality(embedding) > 0) AS embedded
+           FROM inventory_graph.entities
+          WHERE project_id = $1 AND application_id = $2
+          ORDER BY ordinal"
+    })
     .bind(key.project_id)
     .bind(key.application_id)
     .fetch_all(&mut *transaction)
     .await?;
+    let mut embedded = Vec::new();
     for row in entities {
         let mut attributes = object(row.try_get::<Json<Value>, _>("attributes")?.0);
         if let Some(citations) = row.try_get::<Option<Json<Value>>, _>("citations")? {
             attributes.insert("citations".to_owned(), citations.0);
         }
-        if let Some(embedding) = row.try_get::<Option<Vec<f64>>, _>("embedding")? {
+        if vectors && let Some(embedding) = row.try_get::<Option<Vec<f64>>, _>("embedding")? {
             attributes.insert("embedding".to_owned(), Value::from(embedding));
         }
-        graph.insert_node(row.try_get("entity_id")?, attributes);
+        let id: String = row.try_get("entity_id")?;
+        if row.try_get::<bool, _>("embedded")? {
+            embedded.push(id.clone());
+        }
+        graph.insert_node(id, attributes);
     }
 
     let relations = sqlx::query(
@@ -489,7 +522,11 @@ pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> 
         );
     }
     transaction.commit().await?;
-    Ok(Some((graph, revision)))
+    Ok(Some(GraphRead {
+        graph,
+        revision,
+        embedded,
+    }))
 }
 
 /// The stored graph's revision, or `None` when there is no graph: a

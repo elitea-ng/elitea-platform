@@ -125,6 +125,16 @@ pub struct Completion<'a> {
     pub commit_sha: Option<&'a str>,
 }
 
+/// A stored graph for reading ([`GraphStore::load_view`]).
+#[derive(Debug, Clone)]
+pub struct GraphRead {
+    /// The graph, no node carrying an `embedding`.
+    pub graph: Graph,
+    pub revision: i64,
+    /// The entities that have a non-empty vector, in node order.
+    pub embedded: Vec<String>,
+}
+
 /// A similarity ranking: `(entity id, cosine similarity)` best first, or
 /// numpy's message when an entity's vector has another width than the
 /// query's (Python's `semantic_search` raised it, the wrapper printed it).
@@ -155,6 +165,16 @@ pub trait GraphStore: Send + Sync {
         &self,
         key: GraphKey,
     ) -> impl Future<Output = Result<Option<(Graph, i64)>, Self::Error>> + Send;
+
+    /// The stored graph as a reader needs it ([`GraphRead`]): the graph
+    /// [`GraphStore::load`] returns without the entity vectors (the bulk of
+    /// its bytes), and the ids of the entities that have one. A reader
+    /// that only asks whether and how many entities are embedded
+    /// ([`GraphStore::rank`] does the comparing) never holds a vector.
+    fn load_view(
+        &self,
+        key: GraphKey,
+    ) -> impl Future<Output = Result<Option<GraphRead>, Self::Error>> + Send;
 
     /// The stored graph's revision, or `None` when there is no graph: a
     /// cheap check of whether a cached copy is still current.

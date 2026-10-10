@@ -54,11 +54,11 @@ impl<S: GraphStore> ViewCache<S> {
         if let Some(view) = self.cached(key).filter(|view| view.revision == revision) {
             return Ok(Some(view));
         }
-        let Some((graph, revision)) = self.store.load(key).await? else {
+        let Some(read) = self.store.load_view(key).await? else {
             self.forget(key);
             return Ok(None);
         };
-        let mut view = GraphView::new(graph, revision);
+        let mut view = GraphView::from_read(read);
         for (source, document, acl) in self.store.restricted_documents(key).await? {
             view.restricted.insert((source, document), acl);
         }

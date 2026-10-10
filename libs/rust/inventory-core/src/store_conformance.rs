@@ -5,7 +5,7 @@
 //! the retrieval tools alike over the same graph.
 //!
 //! [`run`] takes a FRESH, EMPTY store and panics on the first broken
-//! promise, naming it. It uses the graphs `(1, 1)` to `(1, 9)` and
+//! promise, naming it. It uses the graphs `(1, 1)` to `(1, 10)` and
 //! `(1, 105)`, and deletes each graph it wrote.
 
 #![allow(clippy::missing_panics_doc, clippy::too_many_lines)]
@@ -30,6 +30,7 @@ pub async fn run<S: GraphStore>(store: &S) {
     ranking(store, key(6)).await;
     graphs_are_apart(store).await;
     the_administrative_writers(store, key(9)).await;
+    the_view_holds_no_vectors(store, key(10)).await;
 }
 
 fn key(application_id: i64) -> GraphKey {
@@ -531,5 +532,57 @@ async fn the_administrative_writers<S: GraphStore>(store: &S, key: GraphKey) {
     let status = ok("status", store.status_document(key).await);
     assert!(status["sources"]["repo"].is_null(), "{status}");
     assert!(status["sources"]["mirror"].is_object(), "{status}");
+    ok("delete", store.delete(key).await);
+}
+
+/// `load_view` is `load` without the vectors, plus the ids that have one:
+/// a non-empty vector counts, an empty one and none do not. The revision is
+/// the stored one, and the vectors stay stored (`load` and `rank` see them).
+async fn the_view_holds_no_vectors<S: GraphStore>(store: &S, key: GraphKey) {
+    assert!(
+        ok("load_view", store.load_view(key).await).is_none(),
+        "no graph, no view"
+    );
+    let mut graph = sample();
+    graph.add_entity("blank", "Blank", "class", None, None);
+    assert!(graph.set_embedding("blank", &[]));
+    let revision = ok(
+        "complete",
+        commit(store, key, &graph, "repo", &BTreeMap::new()).await,
+    );
+    let Some(read) = ok("load_view", store.load_view(key).await) else {
+        panic!("the committed graph has a view");
+    };
+    assert_eq!(read.revision, revision, "the view reports the revision");
+    assert_eq!(
+        read.embedded,
+        vec!["alpha".to_owned()],
+        "only the non-empty vector counts"
+    );
+    assert_eq!(ids(&read.graph), ids(&graph), "node order");
+    assert_eq!(edges(&read.graph), edges(&graph), "edge order");
+    for (id, node) in graph.nodes() {
+        let mut expected = node.clone();
+        expected.remove("embedding");
+        assert_eq!(read.graph.node(id), Some(&expected), "view node {id}");
+    }
+    assert_eq!(read.graph.metadata, graph.metadata, "the stamp stays");
+    // The vectors are still stored.
+    let Some((full, _)) = ok("load", store.load(key).await) else {
+        panic!("the graph loads");
+    };
+    assert_eq!(
+        full.node("alpha").and_then(|node| node.get("embedding")),
+        Some(&json!([0.25, -0.5, 1.0, 0.125]))
+    );
+    assert!(
+        !ok(
+            "rank",
+            store.rank(key, &[0.25, -0.5, 1.0, 0.125], 0.9).await
+        )
+        .unwrap_or_default()
+        .is_empty(),
+        "rank still sees the vector"
+    );
     ok("delete", store.delete(key).await);
 }

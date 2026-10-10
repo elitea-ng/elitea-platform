@@ -44,7 +44,9 @@ use elitea_content_source::Acl;
 use elitea_inventory_core::graph::Graph;
 /// The key every call of this store takes (re-exported for its callers).
 pub use elitea_inventory_core::store::GraphKey;
-use elitea_inventory_core::store::{Completion, GraphStore, Imported, Ranking, SourceStatus};
+use elitea_inventory_core::store::{
+    Completion, GraphRead, GraphStore, Imported, Ranking, SourceStatus,
+};
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, params};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -527,7 +529,18 @@ impl SqliteGraphStore {
     /// The store failed or a row is damaged.
     pub fn load_now(&self, key: GraphKey) -> Result<Option<(Graph, i64)>> {
         self.loads.fetch_add(1, Ordering::SeqCst);
-        self.with(|conn| load(conn, key))
+        self.with(|conn| Ok(load_read(conn, key, true)?.map(|read| (read.graph, read.revision))))
+    }
+
+    /// [`GraphStore::load_view`], synchronously: the graph without its
+    /// vectors (the blobs are never selected), and the embedded ids.
+    ///
+    /// # Errors
+    ///
+    /// The store failed or a row is damaged.
+    pub fn load_view_now(&self, key: GraphKey) -> Result<Option<GraphRead>> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        self.with(|conn| load_read(conn, key, false))
     }
 
     /// [`GraphStore::revision`], synchronously.
@@ -1156,7 +1169,7 @@ fn parse_map(text: &str, what: &str) -> Result<Map<String, Value>> {
     }
 }
 
-fn load(conn: &mut Connection, key: GraphKey) -> Result<Option<(Graph, i64)>> {
+fn load_read(conn: &mut Connection, key: GraphKey, vectors: bool) -> Result<Option<GraphRead>> {
     let transaction = conn.transaction()?;
     let head: Option<(i64, String, String, Option<String>)> = transaction
         .query_row(
@@ -1178,23 +1191,35 @@ fn load(conn: &mut Connection, key: GraphKey) -> Result<Option<(Graph, i64)>> {
                 .map_err(|_| StoreError::Damaged("the graph's schema is not JSON".to_owned()))
         })
         .transpose()?;
+    let mut embedded = Vec::new();
     {
-        let mut statement = transaction.prepare(
-            "SELECT entity_id, attributes, embedding FROM entities
-              WHERE project_id = ?1 AND application_id = ?2 ORDER BY ordinal",
-        )?;
+        // The blob is selected only when the vectors are wanted; the view
+        // asks the database whether there is one.
+        let mut statement = transaction.prepare(if vectors {
+            "SELECT entity_id, attributes, embedding,
+                    (embedding IS NOT NULL AND length(embedding) > 0) FROM entities
+              WHERE project_id = ?1 AND application_id = ?2 ORDER BY ordinal"
+        } else {
+            "SELECT entity_id, attributes, NULL,
+                    (embedding IS NOT NULL AND length(embedding) > 0) FROM entities
+              WHERE project_id = ?1 AND application_id = ?2 ORDER BY ordinal"
+        })?;
         let rows = statement.query_map(params![key.project_id, key.application_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, Option<Vec<u8>>>(2)?,
+                row.get::<_, bool>(3)?,
             ))
         })?;
         for row in rows {
-            let (id, attributes, embedding) = row?;
+            let (id, attributes, embedding, has_vector) = row?;
             let mut attributes = parse_map(&attributes, "an entity")?;
             if let Some(embedding) = embedding {
                 attributes.insert("embedding".to_owned(), Value::from(decode(&embedding)));
+            }
+            if has_vector {
+                embedded.push(id.clone());
             }
             graph.insert_node(id, attributes);
         }
@@ -1217,7 +1242,11 @@ fn load(conn: &mut Connection, key: GraphKey) -> Result<Option<(Graph, i64)>> {
         }
     }
     transaction.commit()?;
-    Ok(Some((graph, revision)))
+    Ok(Some(GraphRead {
+        graph,
+        revision,
+        embedded,
+    }))
 }
 
 fn rank(conn: &Connection, key: GraphKey, vector: &[f64], min_score: f64) -> Result<Ranking> {
@@ -1321,6 +1350,10 @@ impl GraphStore for SqliteGraphStore {
 
     async fn load(&self, key: GraphKey) -> Result<Option<(Graph, i64)>> {
         self.load_now(key)
+    }
+
+    async fn load_view(&self, key: GraphKey) -> Result<Option<GraphRead>> {
+        self.load_view_now(key)
     }
 
     async fn revision(&self, key: GraphKey) -> Result<Option<i64>> {

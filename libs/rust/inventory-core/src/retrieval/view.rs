@@ -8,8 +8,10 @@
 //! [`Graph::edges`] yields. [`GraphView::in_edges`] keeps that order.
 
 use crate::graph::Graph;
+use crate::store::GraphRead;
+use elitea_engine_core::pyvalue::py_truthy;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A read-only graph with its indices.
 #[derive(Debug, Clone, Default)]
@@ -26,6 +28,10 @@ pub struct GraphView {
     /// The graph's restricted documents (ADR-0028 D3): `(source name,
     /// document key)` → readers. Empty for a graph of project-wide sources.
     pub restricted: HashMap<(String, String), elitea_content_source::Acl>,
+    /// The entities that have a vector. The vectors themselves are not in
+    /// the view (they are most of a graph's bytes and nothing here compares
+    /// them: the store ranks); what a reader asks is whether and how many.
+    embedded: HashSet<String>,
 }
 
 impl GraphView {
@@ -41,7 +47,11 @@ impl GraphView {
         }
         let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
         let mut by_type: HashMap<String, Vec<String>> = HashMap::new();
+        let mut embedded: HashSet<String> = HashSet::new();
         for (id, node) in graph.nodes() {
+            if node.get("embedding").is_some_and(py_truthy) {
+                embedded.insert(id.to_owned());
+            }
             if let Some(name) = node
                 .get("name")
                 .and_then(Value::as_str)
@@ -70,7 +80,54 @@ impl GraphView {
             by_type,
             revision,
             restricted: HashMap::new(),
+            embedded,
         }
+    }
+
+    /// The view of a stored graph read without its vectors
+    /// ([`crate::store::GraphStore::load_view`]).
+    #[must_use]
+    pub fn from_read(read: GraphRead) -> Self {
+        let mut view = Self::new(read.graph, read.revision);
+        view.embedded = read.embedded.into_iter().collect();
+        view
+    }
+
+    /// A view over `graph` with its vectors taken off the nodes and kept
+    /// only as the set of embedded entities: what a graph just built (it
+    /// carries its vectors, for the store) is read as.
+    #[must_use]
+    pub fn without_vectors(mut graph: Graph, revision: i64) -> Self {
+        let mut embedded = HashSet::new();
+        for (id, node) in graph.nodes_mut() {
+            if node
+                .remove("embedding")
+                .is_some_and(|vector| py_truthy(&vector))
+            {
+                embedded.insert(id.to_owned());
+            }
+        }
+        let mut view = Self::new(graph, revision);
+        view.embedded = embedded;
+        view
+    }
+
+    /// Whether the entity has a vector.
+    #[must_use]
+    pub fn is_embedded(&self, id: &str) -> bool {
+        self.embedded.contains(id)
+    }
+
+    /// How many entities have a vector (`get_stats()['embeddings_count']`).
+    #[must_use]
+    pub fn embedded_count(&self) -> usize {
+        self.embedded.len()
+    }
+
+    /// Whether any entity has a vector (`get_stats()['has_embeddings']`).
+    #[must_use]
+    pub fn has_embeddings(&self) -> bool {
+        !self.embedded.is_empty()
     }
 
     /// The view `caller` may read, or `None` when it is this one (no
@@ -141,6 +198,12 @@ impl GraphView {
         }
         let mut filtered = Self::new(graph, self.revision);
         filtered.restricted.clone_from(&self.restricted);
+        filtered.embedded = self
+            .embedded
+            .iter()
+            .filter(|id| kept.contains(*id))
+            .cloned()
+            .collect();
         Some(filtered)
     }
 
