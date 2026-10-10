@@ -482,3 +482,32 @@ async fn a_touched_file_is_read_once_and_not_parsed_again() {
     assert_eq!(again.unchanged, 2);
     assert_eq!(again.hashes, built.hashes);
 }
+
+/// A workspace bound at the home directory: the host's deny list (the
+/// credentials, the app's own data) is never listed, whatever `path_deny`
+/// says, so it is never read or indexed.
+#[test]
+fn the_hosts_deny_list_is_never_listed() {
+    use elitea_local_tools::deny::DenyList;
+    let folder = tempfile::tempdir().unwrap();
+    let home = fs::canonicalize(folder.path()).unwrap();
+    write(&home, ".ssh/id_ed25519", "PRIVATE KEY\n");
+    write(
+        &home,
+        "Library/Application Support/ai.elitea.desktop/credentials.json",
+        "{\"refresh\": \"x\"}\n",
+    );
+    write(&home, "host-config/settings.json", "{}\n");
+    write(&home, "notes.md", "# notes\n");
+    let deny = DenyList::for_session(
+        Some(&home),
+        Some("ai.elitea.desktop"),
+        true,
+        [home.join("host-config")],
+    );
+    let workspace = Workspace::open(&home, &[])
+        .unwrap()
+        .with_deny_list(Arc::new(deny));
+    let source = LocalFolderSource::new(Arc::new(workspace));
+    assert_eq!(keys(&source), ["notes.md"]);
+}

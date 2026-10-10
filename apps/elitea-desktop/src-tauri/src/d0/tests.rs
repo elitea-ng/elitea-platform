@@ -254,6 +254,17 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         policy.clone(),
         Arc::new(elitea_local_index::service::NoEvents),
     ));
+    // The app's resolved directories, as lib.rs passes them: config and
+    // logs exist, the cache does not yet, data is the workspaces' parent.
+    for dir in ["config", "logs"] {
+        std::fs::create_dir_all(app.path().join(dir)).unwrap();
+    }
+    let sandbox_deny = super::turn::app_dirs_for_sandbox([
+        Some(app.path().join("config")),
+        Some(app.path().to_owned()),
+        Some(app.path().join("logs")),
+        Some(app.path().join("cache")),
+    ]);
     let host = Arc::new(
         AgentHost::new(HostDeps {
             http: crate::net::SharedHttp::new("0.1.0"),
@@ -270,6 +281,8 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
                 crate::history::HistoryStore::open(app.path()).unwrap(),
             )),
             index: Some(index.clone()),
+            sandbox_deny,
+            app_id: Some(TEST_APP_ID.to_owned()),
         })
         .unwrap(),
     );
@@ -935,6 +948,68 @@ fn serde_json_preserve_order_is_off() {
 fn turn_errors_keep_their_codes() {
     let error: super::turn::TurnError = ApiError::local("network", "down").into();
     assert_eq!(error.code, "network");
+}
+
+/// The identifier the harness's host passes, as lib.rs passes the Tauri
+/// config's (`sandbox_app_id`).
+const TEST_APP_ID: &str = "com.example.elitea-test";
+
+/// The app's own directories as the host resolved them (config, data, log,
+/// cache) reach the sandbox of every local command under both spellings
+/// (as given, and resolved), the identifier the host passes names the
+/// default directories under the home, and the session's temporary
+/// directory inside the data directory stays a writable root.
+#[tokio::test]
+async fn the_apps_resolved_dirs_reach_the_sandbox_request() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let request = h
+        .host
+        .sandbox_request(&h.workspace_id, h.folder.path().to_owned());
+    let app = std::fs::canonicalize(h.app.path()).unwrap();
+    for dir in ["config", "", "logs", "cache"] {
+        let given = if dir.is_empty() {
+            h.app.path().to_owned()
+        } else {
+            h.app.path().join(dir)
+        };
+        let resolved = if dir.is_empty() {
+            app.clone()
+        } else {
+            app.join(dir)
+        };
+        for path in [&given, &resolved] {
+            assert!(
+                request.deny_paths.contains(path),
+                "{} is not denied: {:?}",
+                path.display(),
+                request.deny_paths
+            );
+        }
+    }
+    // The identifier's default directories, under the person's home.
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap();
+    for relative in [
+        format!("Library/Application Support/{TEST_APP_ID}"),
+        format!(".config/{TEST_APP_ID}"),
+    ] {
+        let path = home.join(&relative);
+        assert!(
+            request.deny_paths.contains(&path)
+                || elitea_local_tools::deny::resolved_spelling(&path)
+                    .is_some_and(|resolved| request.deny_paths.contains(&resolved)),
+            "{relative} is not denied"
+        );
+    }
+    let temp = &request.writable_roots[1];
+    assert!(temp.starts_with(&app), "{}", temp.display());
+    assert_eq!(
+        super::turn::app_dirs_for_sandbox([Some(app.clone()), None, Some(app.clone())]),
+        [app],
+        "one entry per directory"
+    );
 }
 
 #[tokio::test]

@@ -161,6 +161,25 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   on every keychain read. The keychain item older builds wrote is never read
   (reading it is what prompted); see "Upgrading from a keychain build".
 
+- **Local tools cannot read the app's own data or your credentials.** The
+  config, data, log and cache directories the app resolves once at launch
+  (wherever `XDG_*` or the platform puts them; one that cannot be resolved
+  is logged), the default locations under the bundle identifier from
+  `tauri.conf.json` (Application Support, Caches, Logs, WebKit,
+  HTTPStorages, Preferences, saved window state; `~/.config`,
+  `~/.local/share`, `~/.cache`) as a fallback, and your credentials
+  (`~/.ssh`, cloud, git and browser credentials, the keychains) form one
+  deny list per session. The OS sandbox of every command, the app's own
+  git, the file tools (`read_file`, `list_tree`, `search_files`,
+  `read_document`) and the local index all honour it, even for a workspace
+  opened at your home folder: the stored sign-in, the history, other
+  workspaces' checkpoints and indexes stay out of reach, while the
+  session's temporary directory inside them stays usable. A command whose
+  sandbox cannot hide them (Linux with only Landlock, a workspace too large
+  for bubblewrap's walk, no sandbox) is asked every time, and its result
+  says why. Indexes built before this list existed are rebuilt before they
+  answer.
+
 - The window loads **only bundled assets**. `on_navigation` refuses every other
   origin, so remote content never sits next to the IPC commands.
 - IPC is an explicit allowlist: eight `host_*` commands plus the local-work

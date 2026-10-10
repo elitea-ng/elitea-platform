@@ -50,6 +50,7 @@ use elitea_local_index::service::{
     limit_parser_threads, policy_fingerprint,
 };
 use elitea_local_index::sqlite_store::{FILE_NAME, Peek, SqliteGraphStore};
+use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::policy::LocalWorkPolicy;
 use tauri::State;
 
@@ -210,6 +211,9 @@ pub struct IndexRegistry {
     entries: Mutex<HashMap<String, Arc<Entry>>>,
     /// The debounce of the refresh after a turn's changes; `None`: none.
     refresh_delay: Option<Duration>,
+    /// What no index lists, reads or keeps, wherever the workspace sits:
+    /// the credentials and the app's own data (the agent's deny list).
+    deny: Option<Arc<DenyList>>,
 }
 
 impl IndexRegistry {
@@ -226,7 +230,16 @@ impl IndexRegistry {
             events,
             entries: Mutex::new(HashMap::new()),
             refresh_delay: Some(DEFAULT_REFRESH_DELAY),
+            deny: None,
         }
+    }
+
+    /// Leave out what `deny` covers from every index: never listed, read
+    /// or kept (the agent's deny list: credentials, the app's own data).
+    #[must_use]
+    pub fn with_deny_list(mut self, deny: Arc<DenyList>) -> Self {
+        self.deny = Some(deny);
+        self
     }
 
     /// The debounce of the refresh that follows a turn's changes (`None`:
@@ -394,8 +407,11 @@ impl IndexRegistry {
             self.index_dir(&workspace.id),
             self.events.clone(),
         );
-        let service =
-            blocking(move || IndexService::open(&id, &root, &deny, &dir, events)).await??;
+        let host_deny = self.deny.clone();
+        let service = blocking(move || {
+            IndexService::open_with_deny(&id, &root, &deny, host_deny, &dir, events)
+        })
+        .await??;
         slot.peeked = None;
         slot.open = Some(Open {
             service: service.clone(),

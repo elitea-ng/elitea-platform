@@ -171,6 +171,30 @@ pub struct HostDeps {
     pub history: Option<Arc<HistoryStore>>,
     /// The workspaces' local indexes; `None` offers no index tools.
     pub index: Option<Arc<IndexRegistry>>,
+    /// The app's own directories as Tauri resolved them (config, data,
+    /// log, cache; see [`app_dirs_for_sandbox`]): no local tool may read
+    /// them, whatever `XDG_*` or the platform puts them at. The authority
+    /// for the app's data; the session's deny list adds their resolved
+    /// spellings.
+    pub sandbox_deny: Vec<PathBuf>,
+    /// The app's identifier from its Tauri config: the library derives the
+    /// default directories under it (a fallback to `sandbox_deny`).
+    pub app_id: Option<String>,
+}
+
+/// The app's resolved directories as deny entries, as given (the deny list
+/// keeps this spelling and adds the resolved one, lazily: a directory
+/// created after launch is still covered), without duplicates (on macOS
+/// config and data are one directory).
+#[must_use]
+pub fn app_dirs_for_sandbox(dirs: impl IntoIterator<Item = Option<PathBuf>>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for dir in dirs.into_iter().flatten() {
+        if !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    out
 }
 
 /// One workspace's local session and its prompt.
@@ -642,6 +666,8 @@ impl AgentHost {
             prompt: prompt.clone(),
             data_dir,
             shell: None,
+            deny_read: self.deps.sandbox_deny.clone(),
+            app_id: self.deps.app_id.clone(),
         })
         .map_err(|e| TurnError::new("workspace_unavailable", e.message().to_owned()))?;
         let entry = Arc::new(WorkspaceSession {
@@ -651,6 +677,22 @@ impl AgentHost {
         });
         sessions.insert(workspace_id.to_owned(), entry.clone());
         Ok(entry)
+    }
+
+    /// The sandbox request a workspace-write command in `workspace_id`
+    /// would run under (tests).
+    #[cfg(test)]
+    pub(super) fn sandbox_request(
+        &self,
+        workspace_id: &str,
+        root: PathBuf,
+    ) -> elitea_local_tools::sandbox::SandboxRequest {
+        let policy = self.policy().expect("policy");
+        self.session(workspace_id, root, &policy)
+            .expect("session")
+            .session
+            .sandbox_request(SandboxMode::WorkspaceWrite, false)
+            .expect("request")
     }
 
     /// The request's workspace, bound to the request's project. A turn runs

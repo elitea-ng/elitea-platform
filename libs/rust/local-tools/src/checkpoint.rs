@@ -51,6 +51,7 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -58,6 +59,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::git::Repo;
 use crate::sandbox::SandboxConfig;
@@ -290,32 +292,39 @@ impl Checkpoints {
     ) -> ToolResult<Self> {
         check_session(session)?;
         let restorer = Workspace::open(workspace.root(), &[])?;
-        let refused = match Repo::discover(workspace.root(), sandbox).and_then(|repo| match repo {
-            Some(repo) => repo.check_attributes(&[]).map(|()| Some(repo)),
-            None => Ok(None),
-        }) {
-            Ok(Some(repo)) => {
-                if let Ok(prefix) = workspace.root().strip_prefix(repo.top()) {
-                    let prefix = WsPath::from_relative(prefix)?;
-                    return Ok(Self::Git(GitCheckpoints {
-                        repo,
-                        prefix,
-                        session: session.to_owned(),
-                        restorer,
-                        limits: CheckpointLimits::default(),
-                    }));
+        // Host git cannot read the session's deny list; a host that gave
+        // none gets the person's credentials under HOME.
+        let deny = workspace
+            .deny_list()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(DenyList::env_home_credentials()));
+        let refused =
+            match Repo::discover(workspace.root(), sandbox, deny).and_then(|repo| match repo {
+                Some(repo) => repo.check_attributes(&[]).map(|()| Some(repo)),
+                None => Ok(None),
+            }) {
+                Ok(Some(repo)) => {
+                    if let Ok(prefix) = workspace.root().strip_prefix(repo.top()) {
+                        let prefix = WsPath::from_relative(prefix)?;
+                        return Ok(Self::Git(GitCheckpoints {
+                            repo,
+                            prefix,
+                            session: session.to_owned(),
+                            restorer,
+                            limits: CheckpointLimits::default(),
+                        }));
+                    }
+                    None
                 }
-                None
-            }
-            Ok(None) => None,
-            Err(error) => {
-                tracing::warn!(
-                    reason = error.message(),
-                    "unsafe git repository: checkpoints by copy, git tools refused"
-                );
-                Some(error)
-            }
-        };
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(
+                        reason = error.message(),
+                        "unsafe git repository: checkpoints by copy, git tools refused"
+                    );
+                    Some(error)
+                }
+            };
         let mut key = Sha256::new();
         key.update(workspace.root().as_os_str().as_encoded_bytes());
         let key = hex(&key.finalize()[..8]);

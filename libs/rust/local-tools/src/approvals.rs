@@ -27,19 +27,18 @@
 //! |------|---------|
 //! | `read_file`, `list_tree`, `search_files`, `read_document`, git reads | allowed |
 //! | `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed (the turn's checkpoint undoes them; `path_deny`, `.git` and paths outside the workspace are refused before any rule) |
-//! | `git_commit` | allowed (denied paths are never staged) |
+//! | `git_commit` | allowed (denied paths are never committed: left out of the given paths; a commit of what is staged is refused while the index holds one) |
 //! | `run_command` in `read-only` or `workspace-write`, no network, not destructive (see [`crate::classify`]) | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
-//! | `run_command` that is destructive, asks for the network or `full-access`, or may run unconfined (the host allows unenforced sandboxes) | asked |
+//! | `run_command` that is destructive, asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; [`ToolCall::unconfined`], decided per command, from the sandbox chosen for it) | asked |
 //!
 //! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
 //! loosen them: a workspace allow or a remembered choice allows a call the
 //! default would ask about. Two limits hold whatever they say: a workspace
 //! allow of a compound command holds only when the command is not
-//! destructive, and on a machine that may run commands unconfined every
-//! command is asked. Compound commands and `git_commit` are never
-//! remembered, nor is any command on a machine that may run it
-//! unconfined: `approve_always` is not offered there and
-//! [`RulesEngine::remember`] refuses it.
+//! destructive, and a command that would run unconfined is asked every
+//! time. Compound commands and `git_commit` are never remembered, nor is a
+//! command that would run unconfined: `approve_always` is not offered for
+//! it and [`RulesEngine::remember`] refuses it.
 //!
 //! [`RuleApprovals`] exposes the engine as the runtime's
 //! [`ApprovalChannel`]: rule verdicts are answered inline, asks go on to the
@@ -117,6 +116,13 @@ pub struct ToolCall {
     pub sandbox: Option<SandboxMode>,
     #[serde(default)]
     pub network: bool,
+    /// For [`ToolKind::RunCommand`]: the sandbox chosen for this command
+    /// cannot hide what it denies (no sandbox, Landlock alone, a
+    /// bubblewrap walk cut short: [`crate::sandbox::Prepared::hides_denied`]).
+    /// Such a command is asked every time, like every command on a host
+    /// that allows unenforced sandboxes.
+    #[serde(default)]
+    pub unconfined: bool,
 }
 
 impl ToolCall {
@@ -128,6 +134,7 @@ impl ToolCall {
             command: None,
             sandbox: None,
             network: false,
+            unconfined: false,
         }
     }
 
@@ -414,13 +421,20 @@ impl RulesEngine {
         })
     }
 
-    /// Whether a command may run without an enforced sandbox (the host's
-    /// [`crate::sandbox::SandboxConfig::allow_unenforced`]): then every
-    /// command is asked.
+    /// Treat every command as unconfined, whatever its own sandbox
+    /// ([`ToolCall::unconfined`] decides per command otherwise): every
+    /// command is asked. For hosts that cannot classify commands.
     #[must_use]
     pub fn with_unenforced_commands(mut self, unenforced: bool) -> Self {
         self.confined = !unenforced;
         self
+    }
+
+    /// A command that may run without its denied paths hidden: on a host
+    /// that allows unenforced sandboxes, or one the session found its
+    /// sandbox cannot confine ([`ToolCall::unconfined`]).
+    fn runs_unconfined(&self, call: &ToolCall) -> bool {
+        call.tool == ToolKind::RunCommand && (!self.confined || call.unconfined)
     }
 
     #[must_use]
@@ -455,13 +469,13 @@ impl RulesEngine {
         let risk = (call.tool == ToolKind::RunCommand).then(|| self.command_risk(call));
         // A command that may run unconfined is the person's call every time:
         // neither a workspace allow nor a remembered choice vouches for it.
-        let unconfined = call.tool == ToolKind::RunCommand && !self.confined;
+        let unconfined = self.runs_unconfined(call);
         if let Some(decision) = self.workspace_rules(call, shape.as_ref(), risk.as_ref()) {
             if unconfined && decision.verdict == Verdict::Allow {
                 return Decision::new(
                     Verdict::Ask,
                     Source::Workspace,
-                    "a workspace rule allows the command, but commands may run without a sandbox on this machine",
+                    "a workspace rule allows the command, but it would run without a sandbox hiding what it may not read",
                 );
             }
             return decision;
@@ -501,9 +515,10 @@ impl RulesEngine {
         if call.network {
             return Risk::Destructive("network access needs your approval".to_owned());
         }
-        if !self.confined {
+        if self.runs_unconfined(call) {
             return Risk::Destructive(
-                "commands may run without a sandbox on this machine".to_owned(),
+                "this command would run without a sandbox hiding credentials and the app's data"
+                    .to_owned(),
             );
         }
         let (cwd, _) = self.resolution(call);
@@ -701,9 +716,9 @@ impl RulesEngine {
     ///   path of the call (`None`: exactly the call's paths).
     ///
     /// Compound commands and commits are never remembered, and neither is
-    /// any command on a machine that may run it unconfined: every command
-    /// is asked there ([`Self::decide`]), so the choice would sit unused
-    /// and silently start applying if the sandbox were enforced later.
+    /// a command that would run unconfined: it is asked every time
+    /// ([`Self::decide`]), so the choice would sit unused and silently
+    /// start applying to a confined run later.
     ///
     /// # Errors
     ///
@@ -776,8 +791,7 @@ fn compound_refusal() -> ToolError {
 
 impl RulesEngine {
     /// Why `call` can never be remembered, whatever its scope: a commit, a
-    /// compound command, or a command on a machine that may run it
-    /// unconfined. The one precondition [`Self::can_remember`] and
+    /// compound command, or a command that would run unconfined. The one precondition [`Self::can_remember`] and
     /// [`Self::remember`] share.
     fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
         if call.tool == ToolKind::GitCommit {
@@ -786,7 +800,7 @@ impl RulesEngine {
                 "commits are asked every time",
             ));
         }
-        if call.tool == ToolKind::RunCommand && !self.confined {
+        if self.runs_unconfined(call) {
             return Some(ToolError::new(
                 ErrorCode::Denied,
                 "commands may run without a sandbox on this machine, so each one is asked; \
@@ -1413,6 +1427,27 @@ mod tests {
             "not offered"
         );
         assert!(engine.choices.list().is_empty(), "nothing stored");
+    }
+
+    /// A command whose own sandbox cannot hide what it denies (the session
+    /// decides per command) is asked, and cannot be remembered, even on a
+    /// host whose sandboxes are otherwise enforced.
+    #[test]
+    fn a_command_its_sandbox_cannot_confine_is_asked_every_time() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let confined = shell("cargo test");
+        assert_eq!(verdict(&engine, &confined).0, Verdict::Allow);
+        assert!(engine.can_remember(&confined));
+        let unconfined = ToolCall {
+            unconfined: true,
+            ..shell("cargo test")
+        };
+        assert_eq!(verdict(&engine, &unconfined).0, Verdict::Ask);
+        assert!(!engine.can_remember(&unconfined));
+        assert!(engine.remember(&unconfined, None).is_err());
+        // Remembering the confined form never vouches for the unconfined.
+        engine.remember(&confined, None).expect("remember");
+        assert_eq!(verdict(&engine, &unconfined).0, Verdict::Ask);
     }
 
     /// `can_remember` is exactly `remember`'s precondition: for every call

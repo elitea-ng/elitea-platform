@@ -17,6 +17,7 @@ pub mod approvals;
 pub mod checkpoint;
 pub mod classify;
 pub mod command;
+pub mod deny;
 pub mod error;
 pub mod files;
 pub mod find;
