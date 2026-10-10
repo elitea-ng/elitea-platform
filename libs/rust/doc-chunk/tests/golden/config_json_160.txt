@@ -1,0 +1,7 @@
+1 document json [] 107c 41t | {"service": "elitea-main", "owner": {"team": "pl
+2 document json [] 103c 34t | {"limits": {"requests_per_minute": 600, "burst":
+3 document json [] 102c 38t | {"routes": {"0": {"path": "/api/v2/agents", "met
+4 document json [] 88c 31t | {"routes": {"1": {"path": "/api/v2/chat", "metho
+5 document json [] 113c 43t | {"routes": {"2": {"path": "/api/v2/files", "meth
+6 document json [] 80c 29t | {"routes": {"3": {"path": "/healthz", "methods":
+7 document json [] 213c 78t | {"notes": "R\u00e9sum\u00e9: d\u00e9j\u00e0 vu \
