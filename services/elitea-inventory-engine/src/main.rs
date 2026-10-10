@@ -1,5 +1,5 @@
 //! `elitea-inventory-engine [serve | healthcheck | migrate | import-graph |
-//! export-graph | --version]`.
+//! export-graph | orphans | --version]`.
 
 #![cfg_attr(
     not(test),
@@ -22,7 +22,8 @@ use std::time::Duration;
 
 const USAGE: &str = "usage: elitea-inventory-engine [serve | healthcheck | migrate | --version]
        elitea-inventory-engine import-graph --project-id N --application-id N [--file PATH | -] [--replace-ingestion-state]
-       elitea-inventory-engine export-graph --project-id N --application-id N [--file PATH | -]";
+       elitea-inventory-engine export-graph --project-id N --application-id N [--file PATH | -]
+       elitea-inventory-engine orphans --existing-projects FILE|- [--existing-toolkits FILE] [--delete]";
 
 /// The OTLP `service.name` of this engine's spans.
 const SERVICE_NAME: &str = "elitea-inventory-engine";
@@ -36,6 +37,16 @@ fn main() -> ExitCode {
             let arguments: Vec<String> = std::env::args().skip(2).collect();
             match GraphArguments::parse(command, &arguments) {
                 Ok(parsed) => on_runtime(transfer(parsed)),
+                Err(error) => {
+                    eprintln!("{error}\n{USAGE}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        Some("orphans") => {
+            let arguments: Vec<String> = std::env::args().skip(2).collect();
+            match OrphanArguments::parse(&arguments) {
+                Ok(parsed) => on_runtime(orphans(parsed)),
                 Err(error) => {
                     eprintln!("{error}\n{USAGE}");
                     ExitCode::from(2)
@@ -365,9 +376,308 @@ async fn run_transfer(pool: &sqlx::PgPool, arguments: &GraphArguments) -> ExitCo
     }
 }
 
+/// The arguments of `orphans`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrphanArguments {
+    /// The file of existing project ids; `-` is standard input.
+    projects: String,
+    /// The file of existing `project_id toolkit_id` pairs, if given.
+    toolkits: Option<String>,
+    delete: bool,
+}
+
+impl OrphanArguments {
+    fn parse(arguments: &[String]) -> Result<Self, String> {
+        let (mut projects, mut toolkits, mut delete) = (None, None, false);
+        let mut rest = arguments.iter();
+        while let Some(argument) = rest.next() {
+            match argument.as_str() {
+                "--existing-projects" => {
+                    projects = Some(
+                        rest.next()
+                            .ok_or("--existing-projects needs a value")?
+                            .clone(),
+                    );
+                }
+                "--existing-toolkits" => {
+                    toolkits = Some(
+                        rest.next()
+                            .ok_or("--existing-toolkits needs a value")?
+                            .clone(),
+                    );
+                }
+                "--delete" => delete = true,
+                other => return Err(format!("orphans: unknown argument {other}")),
+            }
+        }
+        let projects = projects.ok_or("orphans needs --existing-projects")?;
+        if toolkits.as_deref() == Some("-") && projects == "-" {
+            return Err("orphans: only one list can be read from standard input".to_owned());
+        }
+        Ok(Self {
+            projects,
+            toolkits,
+            delete,
+        })
+    }
+}
+
+/// The positive ids in `text`, one per line (`#` comments and blank lines
+/// ignored). A line that is not one is an error, never skipped: a skipped
+/// line would make that project look deleted.
+fn parse_project_ids(text: &str) -> Result<std::collections::HashSet<i64>, String> {
+    let mut ids = std::collections::HashSet::new();
+    for (number, line) in text.lines().enumerate() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        match line.parse::<i64>() {
+            Ok(id) if id > 0 => {
+                ids.insert(id);
+            }
+            _ => return Err(format!("line {}: {line:?} is not a project id", number + 1)),
+        }
+    }
+    Ok(ids)
+}
+
+/// The `project_id toolkit_id` pairs in `text`, one per line, separated by
+/// whitespace or a comma. Strict, as [`parse_project_ids`].
+fn parse_toolkit_pairs(text: &str) -> Result<std::collections::HashSet<(i64, i64)>, String> {
+    let mut pairs = std::collections::HashSet::new();
+    for (number, line) in text.lines().enumerate() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|field| !field.is_empty())
+            .collect();
+        let ids = match fields.as_slice() {
+            [project, toolkit] => project.parse::<i64>().ok().zip(toolkit.parse::<i64>().ok()),
+            _ => None,
+        };
+        match ids {
+            Some((project, toolkit)) if project > 0 && toolkit > 0 => {
+                pairs.insert((project, toolkit));
+            }
+            _ => {
+                return Err(format!(
+                    "line {}: {line:?} is not a project id and a toolkit id",
+                    number + 1
+                ));
+            }
+        }
+    }
+    Ok(pairs)
+}
+
+fn read_list(source: &str) -> Result<String, String> {
+    if source == "-" {
+        std::io::read_to_string(std::io::stdin())
+            .map_err(|e| format!("cannot read standard input: {e}"))
+    } else {
+        std::fs::read_to_string(source).map_err(|e| format!("cannot read {source}: {e}"))
+    }
+}
+
+/// `orphans`: list the Inventory graphs whose project (or toolkit) no longer
+/// exists (issue #1244). The platform's projects are not in this database,
+/// so the caller supplies the ids that DO exist:
+///
+/// ```text
+/// psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' \
+///     | elitea-inventory-engine orphans --existing-projects -
+/// ```
+///
+/// A dry run unless `--delete`. An empty project list is refused: it would
+/// call every graph an orphan. With `--existing-toolkits FILE` (lines of
+/// `project_id toolkit_id`) a graph of a live project whose toolkit is gone
+/// is listed too; without it only graphs of deleted projects are, because
+/// the engine cannot tell that a toolkit is gone.
+async fn orphans(arguments: OrphanArguments) -> ExitCode {
+    let parsed = read_list(&arguments.projects)
+        .and_then(|text| parse_project_ids(&text))
+        .and_then(
+            |projects| match arguments.toolkits.as_deref().map(read_list) {
+                None => Ok((projects, None)),
+                Some(text) => text
+                    .and_then(|text| parse_toolkit_pairs(&text))
+                    .map(|toolkits| (projects, Some(toolkits))),
+            },
+        );
+    let (projects, toolkits) = match parsed {
+        Ok((projects, _)) if projects.is_empty() => {
+            eprintln!(
+                "the list of existing projects is empty; refusing to call every graph an orphan"
+            );
+            return ExitCode::FAILURE;
+        }
+        Ok(lists) => lists,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let dsn = std::env::var(store::DSN_ENV).unwrap_or_default();
+    if dsn.trim().is_empty() {
+        eprintln!("{} is not set, so there is no graph store", store::DSN_ENV);
+        return ExitCode::FAILURE;
+    }
+    let pool = match store::lazy_pool(&dsn, 2) {
+        Ok(pool) => pool,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Read-only unless --delete, so it checks the schema instead of
+    // migrating it, as export-graph does.
+    match store::schema_gap(&pool).await {
+        Ok(None) => {}
+        Ok(Some(gap)) => {
+            eprintln!("{gap}; orphans does not migrate");
+            return ExitCode::FAILURE;
+        }
+        Err(error) => {
+            eprintln!("cannot read the migration ledger: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let code = report_orphans(&pool, &projects, toolkits.as_ref(), arguments.delete).await;
+    pool.close().await;
+    code
+}
+
+async fn report_orphans(
+    pool: &sqlx::PgPool,
+    projects: &std::collections::HashSet<i64>,
+    toolkits: Option<&std::collections::HashSet<(i64, i64)>>,
+    delete: bool,
+) -> ExitCode {
+    use elitea_inventory_engine::store::delete::{self, GraphDeletion};
+    let found = match delete::orphans(pool, projects, toolkits).await {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("cannot list the orphans: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if found.is_empty() {
+        println!("no orphaned Inventory graph");
+        return ExitCode::SUCCESS;
+    }
+    println!("project_id\ttoolkit_id\treason\tentities\tlast_updated");
+    for orphan in &found {
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            orphan.key.project_id,
+            orphan.key.application_id,
+            orphan.reason,
+            orphan.entities,
+            orphan.updated_at
+        );
+    }
+    if !delete {
+        println!(
+            "dry run: {} orphaned graph(s); pass --delete to remove them",
+            found.len()
+        );
+        return ExitCode::SUCCESS;
+    }
+    let mut failed = false;
+    for orphan in found {
+        match delete::delete_graph(pool, orphan.key).await {
+            Ok(GraphDeletion::Deleted { removed, .. }) => println!(
+                "deleted project {} toolkit {}: {} entities, {} relations",
+                orphan.key.project_id,
+                orphan.key.application_id,
+                removed.entities,
+                removed.relations
+            ),
+            Ok(GraphDeletion::Busy) => {
+                eprintln!(
+                    "project {} toolkit {}: an ingestion holds it; run orphans --delete again",
+                    orphan.key.project_id, orphan.key.application_id
+                );
+                failed = true;
+            }
+            Err(error) => {
+                eprintln!(
+                    "project {} toolkit {}: {error}",
+                    orphan.key.project_id, orphan.key.application_id
+                );
+                failed = true;
+            }
+        }
+    }
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_ids_parse_one_per_line() {
+        let ids = parse_project_ids("1\n  2 # two\n\n# note\n30\n");
+        assert_eq!(ids.map(|s| s.len()), Ok(3));
+    }
+
+    #[test]
+    fn a_bad_line_is_an_error_not_a_skip() {
+        for bad in ["abc", "0", "-4", "1 2"] {
+            assert!(parse_project_ids(bad).is_err(), "{bad}");
+        }
+        for bad in ["1", "1 2 3", "x 1", "0 1", "1,-2"] {
+            assert!(parse_toolkit_pairs(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            parse_toolkit_pairs("1 2\n3,4 # c\n").map(|p| p.len()),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn orphan_arguments_parse_and_refuse() {
+        let parse = |arguments: &[&str]| {
+            let owned: Vec<String> = arguments.iter().map(|a| (*a).to_owned()).collect();
+            OrphanArguments::parse(&owned)
+        };
+        assert_eq!(
+            parse(&["--existing-projects", "-", "--existing-toolkits", "t.txt"]),
+            Ok(OrphanArguments {
+                projects: "-".to_owned(),
+                toolkits: Some("t.txt".to_owned()),
+                delete: false,
+            })
+        );
+        assert!(parse(&["--existing-projects", "p", "--delete"]).is_ok_and(|a| a.delete));
+        for (arguments, needle) in [
+            (&["--delete"][..], "needs --existing-projects"),
+            (&["--existing-projects"][..], "needs a value"),
+            (
+                &["--existing-projects", "p", "--force"][..],
+                "unknown argument",
+            ),
+            (
+                &["--existing-projects", "-", "--existing-toolkits", "-"][..],
+                "only one list",
+            ),
+        ] {
+            let refused = parse(arguments);
+            assert!(
+                refused.as_ref().is_err_and(|e| e.contains(needle)),
+                "{arguments:?}: {refused:?}"
+            );
+        }
+    }
 
     fn parse(command: &str, arguments: &[&str]) -> Result<GraphArguments, String> {
         let owned: Vec<String> = arguments.iter().map(|a| (*a).to_owned()).collect();

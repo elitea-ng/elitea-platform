@@ -92,6 +92,21 @@ fn full_rebuild(params: &Map<String, Value>) -> bool {
     crate::retrieval::lenient_flag(params.get("full_rebuild"))
 }
 
+/// The call's `project_id` alone (a project-wide tool names no toolkit):
+/// an integer, or a string of one, above zero.
+fn project_id_of(arguments: &Map<String, Value>) -> Result<i64, crate::store::StoreError> {
+    let parsed = match arguments.get("project_id") {
+        Some(Value::Number(number)) => number.as_i64(),
+        Some(Value::String(text)) => text.trim().parse().ok(),
+        _ => None,
+    };
+    parsed.filter(|id| *id >= 1).ok_or_else(|| {
+        crate::store::StoreError::InvalidKey(
+            "the call carries no positive integer project_id, so it names no project".to_owned(),
+        )
+    })
+}
+
 fn text_param<'a>(params: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
         .find_map(|key| params.get(*key).and_then(Value::as_str))
@@ -187,6 +202,10 @@ impl NativeRunner {
             .get("params")
             .and_then(Value::as_object)
             .unwrap_or(&empty);
+        if family == tools::ADMIN_FAMILY {
+            context.thinking(format!("Running {tool}"));
+            return self.admin(tool, arguments, params, context).await;
+        }
         let key = GraphKey::from_arguments(arguments).map_err(|e| invalid(e.to_string()))?;
         context.thinking(format!("Running {tool}"));
         match tool {
@@ -204,6 +223,106 @@ impl NativeRunner {
             other => {
                 self.read(other, family, key, params, &caller_of(arguments))
                     .await
+            }
+        }
+    }
+
+    /// The `inventory_admin` tools (issue #1244): the platform deleting what
+    /// a deleted toolkit or project left behind.
+    async fn admin(
+        &self,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::store::delete::{self, GraphDeletion};
+        let store_error =
+            |e: crate::store::StoreError| EngineError::new(ErrorType::Runtime, e.to_string());
+        let json = json_format(params);
+        if tool == tools::DELETE_PROJECT_GRAPHS {
+            let project_id = project_id_of(arguments).map_err(|e| invalid(e.to_string()))?;
+            context.checkpoint()?;
+            let done = delete::delete_project(&self.pool, project_id)
+                .await
+                .map_err(store_error)?;
+            if !done.busy.is_empty() {
+                // Not a success: the project's data is not gone. What was
+                // deleted stays deleted, and the call is repeatable.
+                return Err(EngineError::new(
+                    ErrorType::Runtime,
+                    format!(
+                        "deleted the Inventory graphs of {} toolkit(s) of project {project_id}, but an ingestion is running on toolkit(s) {}; stop it and delete the project's graphs again",
+                        done.deleted.len(),
+                        done.busy
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+            let text = format!(
+                "Deleted the Inventory graphs of {} toolkit(s) of project {project_id}: {} entities, {} relations, {} sources, {} documents.",
+                done.deleted.len(),
+                done.removed.entities,
+                done.removed.relations,
+                done.removed.sources,
+                done.removed.documents
+            );
+            return Ok(crate::retrieval::answer(if json {
+                elitea_engine_core::pyjson::dumps(&json!({
+                    "project_id": project_id,
+                    "toolkits": done.deleted,
+                    "entities": done.removed.entities,
+                    "relations": done.removed.relations,
+                    "sources": done.removed.sources,
+                    "documents": done.removed.documents,
+                }))
+            } else {
+                text
+            }));
+        }
+        let key = GraphKey::from_arguments(arguments).map_err(|e| invalid(e.to_string()))?;
+        context.checkpoint()?;
+        match delete::delete_graph(&self.pool, key)
+            .await
+            .map_err(store_error)?
+        {
+            GraphDeletion::Busy => Err(EngineError::new(
+                ErrorType::Runtime,
+                "an ingestion of this Inventory toolkit is running; stop it and delete the graph again",
+            )),
+            GraphDeletion::Deleted { existed, removed } => {
+                let text = if existed {
+                    format!(
+                        "Deleted the Inventory graph of toolkit {} in project {}: {} entities, {} relations, {} sources, {} documents.",
+                        key.application_id,
+                        key.project_id,
+                        removed.entities,
+                        removed.relations,
+                        removed.sources,
+                        removed.documents
+                    )
+                } else {
+                    format!(
+                        "Toolkit {} in project {} has no Inventory graph; nothing to delete.",
+                        key.application_id, key.project_id
+                    )
+                };
+                Ok(crate::retrieval::answer(if json {
+                    elitea_engine_core::pyjson::dumps(&json!({
+                        "deleted": existed,
+                        "project_id": key.project_id,
+                        "application_id": key.application_id,
+                        "entities": removed.entities,
+                        "relations": removed.relations,
+                        "sources": removed.sources,
+                        "documents": removed.documents,
+                    }))
+                } else {
+                    text
+                }))
             }
         }
     }

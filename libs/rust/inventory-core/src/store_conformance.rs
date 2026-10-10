@@ -5,7 +5,7 @@
 //! the retrieval tools alike over the same graph.
 //!
 //! [`run`] takes a FRESH, EMPTY store and panics on the first broken
-//! promise, naming it. It uses the graphs `(1, 1)` to `(1, 10)` and
+//! promise, naming it. It uses the graphs `(1, 1)` to `(1, 11)` and
 //! `(1, 105)`, and deletes each graph it wrote.
 
 #![allow(clippy::missing_panics_doc, clippy::too_many_lines)]
@@ -13,6 +13,7 @@
 use crate::graph::{Citation, Graph};
 use crate::store::{
     Completion, DocumentState, GraphKey, GraphStore, Imported, RunCounts, SourceStatus,
+    delete_graph,
 };
 use elitea_content_source::Acl;
 use elitea_content_source::acl::{Principal, PrincipalKind};
@@ -31,6 +32,7 @@ pub async fn run<S: GraphStore>(store: &S) {
     graphs_are_apart(store).await;
     the_administrative_writers(store, key(9)).await;
     the_view_holds_no_vectors(store, key(10)).await;
+    a_delete_waits_for_no_one(store, key(11)).await;
 }
 
 fn key(application_id: i64) -> GraphKey {
@@ -592,4 +594,88 @@ async fn the_view_holds_no_vectors<S: GraphStore>(store: &S, key: GraphKey) {
         "rank still sees the vector"
     );
     ok("delete", store.delete(key).await);
+}
+
+/// `delete_graph` leaves nothing of a graph, and of no other: every table's
+/// rows for the key are gone (the graph, its sources, its documents), a
+/// neighbour's are not, and it is REFUSED while a writer holds the lease,
+/// leaving the graph as it was.
+async fn a_delete_waits_for_no_one<S: GraphStore>(store: &S, key: GraphKey) {
+    let neighbour = GraphKey {
+        application_id: key.application_id + 100,
+        ..key
+    };
+    let graph = sample();
+    let documents = BTreeMap::from([
+        ("src/a.py".to_owned(), document("v1")),
+        ("docs/secret.md".to_owned(), restricted("v1")),
+    ]);
+    let revision = ok(
+        "complete",
+        commit(store, key, &graph, "repo", &documents).await,
+    );
+    ok(
+        "complete",
+        commit(store, neighbour, &graph, "repo", &documents).await,
+    );
+
+    // A writer has the graph: the delete is refused and nothing moves.
+    let Some(writer) = ok("lease", store.lease(key).await) else {
+        panic!("the lease of a free graph is granted");
+    };
+    assert_eq!(
+        ok("delete_graph", delete_graph(store, key).await),
+        None,
+        "a delete while a run holds the graph is refused"
+    );
+    assert_eq!(ok("revision", store.revision(key).await), Some(revision));
+    assert_eq!(
+        ok("versions", store.document_versions(key, "repo").await).len(),
+        2,
+        "a refused delete keeps the document versions"
+    );
+    assert_eq!(
+        ok("status", store.status_document(key).await)["sources"]["repo"]["status"],
+        json!("completed"),
+        "and the sources"
+    );
+    drop(writer);
+
+    // Free, it deletes every table's rows for the key, and the lease is
+    // released afterwards.
+    assert_eq!(
+        ok("delete_graph", delete_graph(store, key).await),
+        Some(true)
+    );
+    assert!(ok("load", store.load(key).await).is_none());
+    assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
+    assert!(ok("restricted", store.restricted_documents(key).await).is_empty());
+    assert_eq!(
+        ok("status", store.status_document(key).await)["sources"],
+        json!({})
+    );
+    assert_eq!(
+        ok("delete_graph", delete_graph(store, key).await),
+        Some(false),
+        "deleting what is gone is not an error"
+    );
+    assert!(
+        ok("lease", store.lease(key).await).is_some(),
+        "the delete released its lease"
+    );
+
+    // The neighbour is untouched.
+    let Some((kept, _)) = ok("load", store.load(neighbour).await) else {
+        panic!("deleting one graph keeps the other");
+    };
+    assert_same_graph(&kept, &graph, "the neighbour");
+    assert_eq!(
+        ok("versions", store.document_versions(neighbour, "repo").await).len(),
+        2
+    );
+    assert_eq!(
+        ok("restricted", store.restricted_documents(neighbour).await).len(),
+        1
+    );
+    ok("delete", store.delete(neighbour).await);
 }

@@ -283,6 +283,27 @@ pub trait GraphStore: Send + Sync {
     ) -> impl Future<Output = Result<Imported, Self::Error>> + Send;
 }
 
+/// Delete the graph `key` unless an ingestion (or an import, a source
+/// removal, a type normalisation: every writer holds the lease) has it:
+/// `None` then, and nothing is deleted; else whether there was a graph.
+///
+/// [`GraphStore::delete`] alone does not wait for a run that has already
+/// loaded the graph, which would write it back; the lease is what makes a
+/// delete leave nothing, or leave the graph as it was.
+///
+/// # Errors
+///
+/// The store failed.
+pub async fn delete_graph<S: GraphStore>(
+    store: &S,
+    key: GraphKey,
+) -> Result<Option<bool>, S::Error> {
+    let Some(_lease) = store.lease(key).await? else {
+        return Ok(None);
+    };
+    store.delete(key).await.map(Some)
+}
+
 /// What [`GraphStore::import`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Imported {

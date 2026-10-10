@@ -23,6 +23,7 @@ use sqlx::{QueryBuilder, Row};
 use std::str::FromStr;
 use std::time::Duration;
 
+pub mod delete;
 pub mod graph_store;
 pub mod sources;
 pub mod vectors;
@@ -563,33 +564,16 @@ pub async fn revision(pool: &PgPool, key: GraphKey) -> Result<Option<i64>> {
 }
 
 /// Delete the stored graph `key` and its sources' state; `true` when there
-/// was a graph.
+/// was a graph. Atomic, and serialised against every writer by the graph's
+/// write lock, but it does not wait for or refuse a running ingestion (a
+/// run that has loaded the graph would write it back): that is
+/// [`delete::delete_graph`], which holds the ingestion lease.
 ///
 /// # Errors
 ///
 /// [`StoreError::Database`].
 pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
-    let mut transaction = pool.begin().await?;
-    lock(&mut transaction, key).await?;
-    let deleted = sqlx::query(
-        "DELETE FROM inventory_graph.graphs WHERE project_id = $1 AND application_id = $2",
-    )
-    .bind(key.project_id)
-    .bind(key.application_id)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected();
-    for table in ["inventory_graph.sources", "inventory_graph.documents"] {
-        sqlx::query(&format!(
-            "DELETE FROM {table} WHERE project_id = $1 AND application_id = $2"
-        ))
-        .bind(key.project_id)
-        .bind(key.application_id)
-        .execute(&mut *transaction)
-        .await?;
-    }
-    transaction.commit().await?;
-    Ok(deleted > 0)
+    Ok(delete::remove(pool, key).await?.0)
 }
 
 /// What [`import`] did (the shared core's type, ADR-0029 decision 7).

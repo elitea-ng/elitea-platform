@@ -183,6 +183,44 @@ owner runs them without cluster access:
 
 `tests/transfer_tools.rs` drives both over the socket.
 
+## Deleting graphs (issue #1244, ADR-0031 phase C0)
+
+Before it nothing deleted a graph: a toolkit's entities (descriptions,
+citations, embeddings), relations, documents with their ACLs and source
+status stayed in `inventory_graph` after the toolkit or its project was
+deleted. `store::delete` (`src/store/delete.rs`) and the `inventory_admin`
+tools:
+
+* `delete_graph` (`project_id`, `application_id`) deletes one graph. It takes
+  the graph's **ingestion lease** first, the session advisory lock a run, an
+  import, a source removal and a type normalisation hold, and **refuses**
+  (an error: "an ingestion of this Inventory toolkit is running") while
+  another holds it. Then one transaction, under the graph's write lock,
+  removes the rows of `graphs` (with their `entities` and `relations`),
+  `sources` and `documents`. So a delete never interleaves with a write; the
+  graph ends whole or absent. Deleting a graph that is not there succeeds
+  and says so; a failed first ingestion's status row goes too.
+* `delete_project_graphs` (`project_id`) deletes every toolkit's graph of
+  the project, one transaction each. A toolkit being ingested is skipped and
+  named in the error; what was deleted stays deleted, and the call is
+  repeated once the run ends.
+* `elitea-inventory-engine orphans --existing-projects FILE|-
+  [--existing-toolkits FILE] [--delete]` lists the graphs whose project is not
+  in the list of existing project ids the caller supplies (one per line),
+  and, with `--existing-toolkits` (lines of `project_id toolkit_id`), those of
+  a live project whose toolkit is gone. The product database is not readable
+  from here, so the lists are the caller's:
+  `psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' | elitea-inventory-engine orphans --existing-projects -`.
+  A dry run unless `--delete`; an empty project list is refused. Both
+  lists are strict: a line that is not an id is an error, never skipped.
+
+The tools are in a family the descriptor does not advertise, so no toolkit
+shows them to a user or an agent: the platform calls them (the host admits
+`inventory_admin` and `delete_project_graphs` needs a verified identity that
+names the project and no user; see `internal/apps/inventory/run`).
+`delete_graph` is what an Inventory toolkit's deletion calls,
+`delete_project_graphs` what a project's deprovisioning calls.
+
 ## Settings
 
 | Variable | Default | |

@@ -53,12 +53,27 @@ pub const SEARCH_TOOLS: [&str; 6] = [
     "investigate",
 ];
 
+/// The `inventory_admin` family (issue #1244): the platform's own calls,
+/// which the descriptor does NOT advertise, so no toolkit exposes them to a
+/// user or an agent. `delete_graph` deletes one toolkit's graph (the
+/// platform calls it when an Inventory toolkit is deleted),
+/// `delete_project_graphs` every graph of the project (project deletion).
+pub const ADMIN_TOOLS: [&str; 2] = [DELETE_GRAPH, DELETE_PROJECT_GRAPHS];
+
+/// The family's name, as the host sends it.
+pub const ADMIN_FAMILY: &str = "inventory_admin";
+/// Delete one `(project_id, application_id)` graph.
+pub const DELETE_GRAPH: &str = "delete_graph";
+/// Delete every graph of `project_id`.
+pub const DELETE_PROJECT_GRAPHS: &str = "delete_project_graphs";
+
 /// The tools of a family, or `None` for a family that does not exist.
 #[must_use]
 pub fn family(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "inventory" => Some(&INVENTORY_TOOLS),
         "inventory_search" => Some(&SEARCH_TOOLS),
+        ADMIN_FAMILY => Some(&ADMIN_TOOLS),
         _ => None,
     }
 }
@@ -66,5 +81,5 @@ pub fn family(name: &str) -> Option<&'static [&'static str]> {
 /// Whether any family routes `tool` — what the socket admits.
 #[must_use]
 pub fn serves(tool: &str) -> bool {
-    INVENTORY_TOOLS.contains(&tool) || SEARCH_TOOLS.contains(&tool)
+    INVENTORY_TOOLS.contains(&tool) || SEARCH_TOOLS.contains(&tool) || ADMIN_TOOLS.contains(&tool)
 }
