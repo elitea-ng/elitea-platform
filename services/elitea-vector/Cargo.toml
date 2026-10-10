@@ -7,9 +7,13 @@ publish = false
 description = "The platform's vector facade: the only Qdrant client, with project scope injection (ADR-0031)."
 
 [dependencies]
+# Atomic swap of the reloaded certificates.
+arc-swap = "=1.9.2"
 async-trait = "=0.1.92"
 # Process tracing and OTLP span export, shared with the engines.
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
+# The introspection cache: a bounded LRU with single-flight misses.
+moka = { version = "=0.12.16", default-features = false, features = ["future"] }
 prost = "=0.14.4"
 # The Qdrant gRPC client, matched to the server (qdrant/qdrant:v1.19.2).
 # `serde` converts payload values to and from JSON; no snapshot download.
@@ -22,7 +26,9 @@ sha2 = "=0.10.9"
 thiserror = "=2.0.21"
 tokio = { version = "=1.53.2", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "=0.1.19", features = ["net"] }
-tonic = { version = "=0.14.6", features = ["tls-ring"] }
+# The TLS acceptor of the gRPC listener (a reloading certificate resolver).
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring"] }
+tonic = { version = "=0.14.6", features = ["tls-ring", "tls-connect-info"] }
 tonic-prost = "=0.14.6"
 tracing = "=0.1.44"
 uuid = { version = "=1.18.1", features = ["v5"] }

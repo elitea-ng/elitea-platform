@@ -16,12 +16,14 @@
 //! Anything else is `UNAUTHENTICATED`. When elitea-main cannot answer, the
 //! request is refused with `UNAVAILABLE`: the service fails closed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use moka::future::Cache;
 use sha2::{Digest as _, Sha256};
 use tonic::transport::Channel;
 use tonic::{Request, Status};
@@ -190,7 +192,8 @@ pub fn unix_now() -> i64 {
 
 /// elitea-main's `TokenIntrospectionService` over mTLS.
 pub struct GrpcIntrospector {
-    client: TokenIntrospectionServiceClient<Channel>,
+    /// Swapped when the client certificate rotates ([`crate::tls`]).
+    client: ArcSwap<TokenIntrospectionServiceClient<Channel>>,
     timeout: Duration,
 }
 
@@ -199,16 +202,23 @@ impl GrpcIntrospector {
     #[must_use]
     pub fn new(channel: Channel, timeout: Duration) -> Self {
         Self {
-            client: TokenIntrospectionServiceClient::new(channel),
+            client: ArcSwap::from_pointee(TokenIntrospectionServiceClient::new(channel)),
             timeout,
         }
+    }
+
+    /// Uses `channel` for every call from now on; calls already in flight
+    /// finish on the old one.
+    pub fn replace_channel(&self, channel: Channel) {
+        self.client
+            .store(Arc::new(TokenIntrospectionServiceClient::new(channel)));
     }
 }
 
 #[async_trait]
 impl Introspector for GrpcIntrospector {
     async fn introspect(&self, token: &str) -> Result<Option<TokenGrant>, IntrospectError> {
-        let mut client = self.client.clone();
+        let mut client = TokenIntrospectionServiceClient::clone(&self.client.load());
         let call = client.introspect_token(pb::IntrospectTokenRequest {
             token: token.to_owned(),
         });
@@ -262,7 +272,6 @@ pub fn grant_from_response(response: &pb::IntrospectTokenResponse, now: i64) -> 
     })
 }
 
-#[derive(Clone)]
 struct CacheEntry {
     grant: Option<TokenGrant>,
     valid_until: i64,
@@ -278,10 +287,12 @@ pub struct CachePolicy {
     /// its expiry does not show, so this bounds how long a revoked one still
     /// works here. It never exceeds `max_ttl_seconds`.
     pub worker_claim_max_ttl_seconds: i64,
-    /// How long a refusal is kept.
+    /// How long a refusal is kept. Refusals are cached only briefly (at most
+    /// a few seconds): long enough that a flood of one bad token costs
+    /// elitea-main one call, short enough that a token minted a moment after
+    /// its first (premature) use is not refused for long.
     pub negative_ttl_seconds: i64,
-    /// The most entries kept; a full cache drops its expired entries, then
-    /// everything.
+    /// The most entries kept; beyond it the least recently used go.
     pub max_entries: usize,
 }
 
@@ -290,7 +301,7 @@ impl Default for CachePolicy {
         Self {
             max_ttl_seconds: 300,
             worker_claim_max_ttl_seconds: 30,
-            negative_ttl_seconds: 10,
+            negative_ttl_seconds: 5,
             max_entries: 10_000,
         }
     }
@@ -301,34 +312,38 @@ pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 /// Caches introspection answers, keyed by the token's SHA-256 (the token
 /// itself is never kept).
+///
+/// The cache is a bounded LRU with single-flight misses: any number of
+/// concurrent requests for one uncached token cause one call to elitea-main,
+/// and all of them share its answer. A failed call is not cached.
 pub struct CachingIntrospector {
     inner: Arc<dyn Introspector>,
     policy: CachePolicy,
     clock: Clock,
-    entries: Mutex<HashMap<[u8; 32], CacheEntry>>,
+    entries: Cache<[u8; 32], Arc<CacheEntry>>,
 }
 
 impl CachingIntrospector {
     /// A cache in front of `inner`.
     #[must_use]
     pub fn new(inner: Arc<dyn Introspector>, policy: CachePolicy, clock: Clock) -> Self {
+        let backstop = policy.max_ttl_seconds.max(policy.negative_ttl_seconds);
+        let entries = Cache::builder()
+            .max_capacity(policy.max_entries as u64)
+            // The entries carry their own deadline (checked against `clock`);
+            // this only lets memory go once nothing could still be valid.
+            .time_to_live(Duration::from_secs(u64::try_from(backstop).unwrap_or(1)))
+            .build();
         Self {
             inner,
             policy,
             clock,
-            entries: Mutex::new(HashMap::new()),
+            entries,
         }
     }
 
-    /// A live cache entry, if any.
-    fn lookup(&self, digest: &[u8; 32], now: i64) -> Option<CacheEntry> {
-        let entries = self.entries.lock().ok()?;
-        let entry = entries.get(digest)?;
-        (now < entry.valid_until).then(|| entry.clone())
-    }
-
-    fn store(&self, digest: [u8; 32], grant: Option<TokenGrant>, now: i64) {
-        let valid_until = match &grant {
+    fn valid_until(&self, grant: Option<&TokenGrant>, now: i64) -> i64 {
+        match grant {
             Some(grant) => {
                 let ttl = if grant.kind == pb::TokenKind::WorkerClaim {
                     self.policy
@@ -340,17 +355,22 @@ impl CachingIntrospector {
                 grant.expires_at_unix.min(now.saturating_add(ttl))
             }
             None => now.saturating_add(self.policy.negative_ttl_seconds),
-        };
-        let Ok(mut entries) = self.entries.lock() else {
-            return;
-        };
-        if entries.len() >= self.policy.max_entries {
-            entries.retain(|_, entry| now < entry.valid_until);
-            if entries.len() >= self.policy.max_entries {
-                entries.clear();
-            }
         }
-        entries.insert(digest, CacheEntry { grant, valid_until });
+    }
+
+    async fn load(
+        &self,
+        digest: [u8; 32],
+        token: &str,
+    ) -> Result<Arc<CacheEntry>, IntrospectError> {
+        self.entries
+            .try_get_with(digest, async {
+                let grant = self.inner.introspect(token).await?;
+                let valid_until = self.valid_until(grant.as_ref(), (self.clock)());
+                Ok::<_, IntrospectError>(Arc::new(CacheEntry { grant, valid_until }))
+            })
+            .await
+            .map_err(|error: Arc<IntrospectError>| IntrospectError::Unavailable(error.to_string()))
     }
 }
 
@@ -359,15 +379,18 @@ impl Introspector for CachingIntrospector {
     async fn introspect(&self, token: &str) -> Result<Option<TokenGrant>, IntrospectError> {
         let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         let now = (self.clock)();
-        let grant = if let Some(cached) = self.lookup(&digest, now) {
-            cached.grant
-        } else {
-            let fresh = self.inner.introspect(token).await?;
-            self.store(digest, fresh.clone(), now);
-            fresh
-        };
+        let mut entry = self.load(digest, token).await?;
+        if now >= entry.valid_until {
+            // Past its deadline: drop it and ask once more (still shared by
+            // every concurrent request for this token).
+            self.entries.invalidate(&digest).await;
+            entry = self.load(digest, token).await?;
+        }
         // Expiry is checked on every use, cached or not.
-        Ok(grant.filter(|grant| now < grant.expires_at_unix))
+        Ok(entry
+            .grant
+            .clone()
+            .filter(|grant| now < grant.expires_at_unix))
     }
 }
 
@@ -398,6 +421,29 @@ impl Authenticator {
         }
     }
 
+    /// The bearer token of `request`, when it carries a well-formed one.
+    #[must_use]
+    pub fn bearer_token<T>(request: &Request<T>) -> Option<String> {
+        let value = request.metadata().get("authorization")?;
+        bearer(value.to_str().ok()).map(str::to_owned)
+    }
+
+    /// Verifies `token` (through the cache) and returns its caller.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a token that is not accepted; `UNAVAILABLE`
+    /// when elitea-main cannot verify it.
+    pub async fn verify_token(&self, token: &str) -> Result<Caller, Status> {
+        match self.introspector.introspect(token).await {
+            Ok(Some(grant)) => Ok(Caller::Token(grant)),
+            Ok(None) => Err(Status::unauthenticated("the token is not accepted")),
+            Err(error) => {
+                tracing::warn!(%error, "token introspection failed; request refused");
+                Err(Status::unavailable("token verification is unavailable"))
+            }
+        }
+    }
+
     /// Admits the caller of `request`.
     ///
     /// # Errors
@@ -407,14 +453,7 @@ impl Authenticator {
         if let Some(value) = request.metadata().get("authorization") {
             let token = bearer(value.to_str().ok())
                 .ok_or_else(|| Status::unauthenticated("malformed authorization metadata"))?;
-            return match self.introspector.introspect(token).await {
-                Ok(Some(grant)) => Ok(Caller::Token(grant)),
-                Ok(None) => Err(Status::unauthenticated("the token is not accepted")),
-                Err(error) => {
-                    tracing::warn!(%error, "token introspection failed; request refused");
-                    Err(Status::unavailable("token verification is unavailable"))
-                }
-            };
+            return self.verify_token(token).await;
         }
         let identity = request.peer_certs().and_then(|certificates| {
             certificates
@@ -500,6 +539,89 @@ mod tests {
         now.store(1_030, Ordering::SeqCst);
         cache.introspect("t").await.expect("ok");
         assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// Slow enough that every concurrent request arrives while the first
+    /// call is still in flight.
+    struct Slow {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Introspector for Slow {
+        async fn introspect(&self, _: &str) -> Result<Option<TokenGrant>, IntrospectError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(Some(grant(7, 100_000)))
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_requests_for_one_uncached_token_cause_one_call() {
+        let inner = Arc::new(Slow {
+            calls: AtomicUsize::new(0),
+        });
+        let now = Arc::new(AtomicI64::new(1_000));
+        let cache = Arc::new(CachingIntrospector::new(
+            inner.clone(),
+            CachePolicy::default(),
+            clock(&now),
+        ));
+        let mut tasks = Vec::new();
+        for _ in 0..50 {
+            let cache = Arc::clone(&cache);
+            tasks.push(tokio::spawn(async move { cache.introspect("one").await }));
+        }
+        for task in tasks {
+            assert_eq!(
+                task.await.expect("joined").expect("answered"),
+                Some(grant(7, 100_000))
+            );
+        }
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_cached_only_briefly() {
+        let inner = Arc::new(Counting {
+            calls: AtomicUsize::new(0),
+            answer: None,
+        });
+        let now = Arc::new(AtomicI64::new(1_000));
+        let cache = CachingIntrospector::new(inner.clone(), CachePolicy::default(), clock(&now));
+        assert_eq!(cache.introspect("bad").await.expect("ok"), None);
+        assert_eq!(cache.introspect("bad").await.expect("ok"), None);
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+        now.store(1_005, Ordering::SeqCst);
+        assert_eq!(cache.introspect("bad").await.expect("ok"), None);
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_call_is_not_cached() {
+        let now = Arc::new(AtomicI64::new(1_000));
+        let cache = CachingIntrospector::new(Arc::new(Down), CachePolicy::default(), clock(&now));
+        assert!(cache.introspect("t").await.is_err());
+        assert!(cache.introspect("t").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_cache_is_bounded() {
+        let inner = Arc::new(Counting {
+            calls: AtomicUsize::new(0),
+            answer: Some(grant(7, 100_000)),
+        });
+        let now = Arc::new(AtomicI64::new(1_000));
+        let policy = CachePolicy {
+            max_entries: 10,
+            ..CachePolicy::default()
+        };
+        let cache = CachingIntrospector::new(inner, policy, clock(&now));
+        for index in 0..200 {
+            cache.introspect(&format!("t{index}")).await.expect("ok");
+        }
+        cache.entries.run_pending_tasks().await;
+        assert!(cache.entries.entry_count() <= 10);
     }
 
     #[test]
