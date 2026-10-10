@@ -1,12 +1,18 @@
-//! Text behaviour shared by the repository-hosting families (`gitlab`,
-//! `bitbucket`): the SDK's line slicing, read guard, `grep_file` search, the
-//! capped batch read's skip notice, and Python `repr` of a JSON value.
+//! Text behaviour shared by the repository-hosting families (`github`,
+//! `gitlab`, `gitlab_org`, `bitbucket`, and `ado`'s line splitting): the
+//! SDK's line slicing, read guard, `grep_file` search, the capped batch
+//! read's skip notice and the `requested` label.
 //!
 //! Each function ports one SDK helper of the pinned revision
 //! (`elitea_sdk/tools/utils/text_operations.py`, `utils/file_metadata.py`
 //! and `BaseCodeToolApiWrapper.search_file`) so a family's output keeps the
-//! shape a saved agent or pipeline was written against. The GitHub family
-//! carries its own copies of the same algorithms; these are kept equal to it.
+//! shape a saved agent or pipeline was written against. This is the ONE copy:
+//! a family whose behaviour deliberately differs says so at the call site or
+//! through a parameter ([`LineRange`] for `gitlab_org`'s strict slicing,
+//! GitHub refusing an invalid regular expression where [`compile_pattern`]
+//! answers "no matches", and `gitlab_org`'s byte-capped read guard, which
+//! keeps its own `guard_text_read` and shares only [`file_extension`] and
+//! [`mime_type`]).
 
 use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value, json};
@@ -70,6 +76,18 @@ pub(in crate::toolkits) const fn is_python_line_break(character: char) -> bool {
     )
 }
 
+/// What [`slice_line_range`] does with a range outside the content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::toolkits) enum LineRange {
+    /// The SDK's `apply_line_slice`: clamp to the content, and a range with
+    /// nothing in it is an empty slice, not an error.
+    Clamp,
+    /// Refuse (`None`) a zero, inverted or past-the-end line number, or any
+    /// range of empty content: `gitlab_org` answers those as invalid input
+    /// rather than silently returning less than was asked for.
+    Refuse,
+}
+
 /// `apply_line_slice(content, offset=start, limit=end-start+1)`: 1-indexed,
 /// inclusive, and an out-of-range request is an empty slice, not an error.
 pub(in crate::toolkits) fn slice_lines(
@@ -77,19 +95,37 @@ pub(in crate::toolkits) fn slice_lines(
     start_line: Option<usize>,
     end_line: Option<usize>,
 ) -> &str {
+    slice_line_range(content, start_line, end_line, LineRange::Clamp).unwrap_or("")
+}
+
+/// Lines `start_line..=end_line` (1-indexed) of `content`, the whole content
+/// when neither is given, with `mode` deciding an out-of-range request.
+pub(in crate::toolkits) fn slice_line_range(
+    content: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    mode: LineRange,
+) -> Option<&str> {
     if start_line.is_none() && end_line.is_none() {
-        return content;
+        return Some(content);
     }
     let ranges = python_line_ranges(content);
+    if mode == LineRange::Refuse {
+        let first = start_line.unwrap_or(1);
+        let last = end_line.unwrap_or(ranges.len());
+        if ranges.is_empty() || first == 0 || last == 0 || first > last || last > ranges.len() {
+            return None;
+        }
+    }
     let first = start_line.unwrap_or(1).saturating_sub(1);
     if first >= ranges.len() {
-        return "";
+        return Some("");
     }
     let last_exclusive = end_line.unwrap_or(ranges.len()).min(ranges.len());
     if first >= last_exclusive {
-        return "";
+        return Some("");
     }
-    &content[ranges[first].0..ranges[last_exclusive - 1].1]
+    Some(&content[ranges[first].0..ranges[last_exclusive - 1].1])
 }
 
 /// The SDK's `requested` label: `start_line=…, end_line=…` or `full file read`.
@@ -176,7 +212,8 @@ pub(in crate::toolkits) fn guard_text_read(
     })
 }
 
-fn file_extension(file_path: &str) -> &str {
+/// The file name's last `.suffix` (a leading dot is not a suffix), or `""`.
+pub(in crate::toolkits) fn file_extension(file_path: &str) -> &str {
     let filename = file_path.rsplit('/').next().unwrap_or(file_path);
     filename
         .rfind('.')
@@ -184,7 +221,8 @@ fn file_extension(file_path: &str) -> &str {
         .map_or("", |index| &filename[index..])
 }
 
-fn mime_type(extension: &str) -> &'static str {
+/// The read guard's `type` for an extension.
+pub(in crate::toolkits) fn mime_type(extension: &str) -> &'static str {
     match extension.to_ascii_lowercase().as_str() {
         ".py" => "text/x-python",
         ".rs" => "text/x-rust",
@@ -318,6 +356,26 @@ fn push_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_strict_range_refuses_what_the_sdk_slice_clamps() {
+        let text = "a\nb\nc\n";
+        let strict = |start, end| slice_line_range(text, start, end, LineRange::Refuse);
+        assert_eq!(strict(None, None), Some(text));
+        assert_eq!(strict(Some(2), Some(3)), Some("b\nc\n"));
+        assert_eq!(strict(Some(2), None), Some("b\nc\n"));
+        assert_eq!(strict(Some(3), Some(9)), None);
+        assert_eq!(strict(Some(0), Some(1)), None);
+        assert_eq!(strict(Some(3), Some(2)), None);
+        assert_eq!(
+            slice_line_range("", Some(1), Some(1), LineRange::Refuse),
+            None
+        );
+        assert_eq!(slice_lines(text, Some(3), Some(9)), "c\n");
+        assert_eq!(file_extension("dir.v2/archive.tar.gz"), ".gz");
+        assert_eq!(file_extension("src/.env"), "");
+        assert_eq!(mime_type(".CSS"), "text/css");
+    }
 
     #[test]
     fn slices_follow_apply_line_slice() {

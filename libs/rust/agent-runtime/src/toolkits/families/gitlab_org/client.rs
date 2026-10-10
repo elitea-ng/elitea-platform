@@ -17,7 +17,9 @@ use super::config::GitLabOrgToolkitConfig;
 use super::diff::{DiffErrorCode, discussion_position, format_changes};
 use super::edit::{EditErrorCode, apply_update};
 use crate::toolkits::families::python_repr::repr_str;
-use crate::toolkits::families::vcs_text::python_line_ranges;
+use crate::toolkits::families::vcs_text::{
+    LineRange, file_extension, mime_type, python_line_ranges, requested_label, slice_line_range,
+};
 
 const PRIVATE_TOKEN: HeaderName = HeaderName::from_static("private-token");
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -855,37 +857,6 @@ fn map_diff_error(error: DiffErrorCode) -> GitLabOrgClientError {
     }
 }
 
-fn slice_requested_lines(
-    content: &str,
-    start: Option<usize>,
-    end: Option<usize>,
-) -> Result<&str, GitLabOrgClientError> {
-    if start.is_none() && end.is_none() {
-        return Ok(content);
-    }
-    let ranges = python_line_ranges(content);
-    if ranges.is_empty() {
-        return Err(invalid_input());
-    }
-    let first = start.unwrap_or(1);
-    let last = end.unwrap_or(ranges.len());
-    if first == 0 || last == 0 || first > last || last > ranges.len() {
-        return Err(invalid_input());
-    }
-    Ok(&content[ranges[first - 1].0..ranges[last - 1].1])
-}
-
-fn requested_range_label(start: Option<usize>, end: Option<usize>) -> String {
-    match (start, end) {
-        (None, None) => "full file".to_owned(),
-        (start, end) => format!(
-            "lines {}..{}",
-            start.map_or_else(|| "1".to_owned(), |value| value.to_string()),
-            end.map_or_else(|| "end".to_owned(), |value| value.to_string())
-        ),
-    }
-}
-
 fn guard_text_read(content: &str, file_path: &str, requested: &str, full_content: &str) -> Value {
     let actual_chars = content.chars().count();
     let serialized_bytes = serde_json::to_vec(&Value::String(content.to_owned()))
@@ -894,16 +865,7 @@ fn guard_text_read(content: &str, file_path: &str, requested: &str, full_content
         return Value::String(content.to_owned());
     }
     let total_lines = python_line_ranges(full_content).len();
-    let extension = file_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(file_path)
-        .rfind('.')
-        .filter(|index| *index > 0)
-        .map_or("", |index| {
-            &file_path[file_path.len() - file_path.rsplit('/').next().unwrap_or(file_path).len()
-                + index..]
-        });
+    let extension = file_extension(file_path);
     let exceeded = match (
         actual_chars > MAX_OUTPUT_CHARS,
         serialized_bytes > MAX_OUTPUT_BYTES,
@@ -959,22 +921,6 @@ fn guard_text_read(content: &str, file_path: &str, requested: &str, full_content
         },
         "context":{"limit_chars":MAX_OUTPUT_CHARS,"actual_chars":actual_chars,"limit_serialized_bytes":MAX_OUTPUT_BYTES,"actual_serialized_bytes":serialized_bytes,"requested":requested}
     })
-}
-
-fn mime_type(extension: &str) -> &'static str {
-    match extension.to_ascii_lowercase().as_str() {
-        ".py" => "text/x-python",
-        ".rs" => "text/x-rust",
-        ".js" => "text/javascript",
-        ".ts" => "text/typescript",
-        ".json" => "application/json",
-        ".md" => "text/markdown",
-        ".yaml" | ".yml" => "application/yaml",
-        ".html" => "text/html",
-        ".csv" => "text/csv",
-        ".txt" | ".log" => "text/plain",
-        _ => "application/octet-stream",
-    }
 }
 
 fn bounded_output(value: Value) -> Result<Value, GitLabOrgClientError> {
@@ -1427,8 +1373,12 @@ impl GitLabOrgApi for GitLabOrgClient {
                 let file = self
                     .read_provider_file(repository, file_path, branch)
                     .await?;
-                let slice = slice_requested_lines(&file.content, start_line, end_line)?;
-                let requested = requested_range_label(start_line, end_line);
+                // Strict, unlike the SDK's clamping `apply_line_slice`: a
+                // range outside the file is invalid input here.
+                let slice =
+                    slice_line_range(&file.content, start_line, end_line, LineRange::Refuse)
+                        .ok_or_else(invalid_input)?;
+                let requested = requested_label(start_line, end_line);
                 bounded_output(guard_text_read(slice, file_path, &requested, &file.content))
             }
             GitLabOrgOperation::UpdateFile {
