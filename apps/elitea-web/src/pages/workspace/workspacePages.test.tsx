@@ -741,6 +741,8 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[0]?.prompt).toBe('one\ntwo');
     });
 
+    // Six commands, a turn and a new thread in one test: the default 5 s is not
+    // enough under the coverage shard's instrumentation (30 s below).
     it('runs the "/" commands: plan, help, agent, new, clear and undo', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       ipc.setChanges('turn-1', { files: [{ path: 'a.txt', status: 'modified', added: 1, removed: 1, diff: '' }] });
@@ -799,7 +801,7 @@ describe('WorkspaceSessionPage', () => {
       await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
       expect(created).toBe(1);
       expect(ipc.calls.started[1]?.conversation_id).toBe('78');
-    });
+    }, 30_000);
 
     it('does not open the command menu for a "/" inside the text', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
