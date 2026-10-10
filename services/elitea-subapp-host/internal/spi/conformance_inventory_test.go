@@ -81,15 +81,16 @@ func inventoryFixture(t *testing.T, parts ...string) []byte {
 // below reads. It moved from legacy-v0 to legacy-v1 in ADR-0023 H4c stage I3,
 // which added four tools the legacy plugin implemented, routed and never
 // declared — see internal/apps/inventory/inventory.go and the fixture
-// directory's README for which four and why.
+// directory's README for which four and why. It moved to legacy-v2 when the
+// native engine's graph import and export became tools.
 //
 // legacy-v0 stays in the fixtures. It is the record of what the legacy plugin
 // ACTUALLY declared, which is what a parity question is asked against; the test
 // below reads it as well, so deleting it fails rather than passing quietly.
-const DescriptorRevision = "legacy-v1"
+const DescriptorRevision = "legacy-v2"
 
 func TestTheInventoryApplicationWalksTheWholeSuite(t *testing.T) {
-	// The served descriptor is the frozen legacy-v1 document, byte for byte
+	// The served descriptor is the frozen legacy-v2 document, byte for byte
 	// after canonical whitespace — key ORDER included, which a map-based
 	// encoder would lose. The fixture's location is the settings default.
 	t.Run("the descriptor is byte-identical to the golden fixture", func(t *testing.T) {
@@ -129,7 +130,7 @@ func TestTheInventoryApplicationWalksTheWholeSuite(t *testing.T) {
 			}
 			return document.ProvidedToolkits
 		}
-		v0, v1 := read("legacy-v0"), read(DescriptorRevision)
+		v0, v1 := read("legacy-v0"), read("legacy-v1")
 		if len(v0) != len(v1) {
 			t.Fatalf("legacy-v1 has %d toolkits, legacy-v0 has %d", len(v1), len(v0))
 		}
@@ -158,6 +159,104 @@ func TestTheInventoryApplicationWalksTheWholeSuite(t *testing.T) {
 				t.Fatalf("%s: legacy-v0's tools are not legacy-v1 minus the four added\n got: %v\nwant: %v",
 					v0[i].Name, kept, before)
 			}
+		}
+	})
+
+	// legacy-v2 differs from legacy-v1 by two added tools and one corrected
+	// description, and nothing else. The same reason as above: a generator
+	// edited a large document, and only a diff shows what it did not change.
+	t.Run("legacy-v2 adds two tools to legacy-v1 and corrects one description", func(t *testing.T) {
+		type toolkit struct {
+			Name          string            `json:"name"`
+			ProvidedTools []json.RawMessage `json:"provided_tools"`
+			Config        json.RawMessage   `json:"toolkit_config"`
+		}
+		read := func(revision string) []toolkit {
+			var document struct {
+				ProvidedToolkits []toolkit `json:"provided_toolkits"`
+			}
+			if err := json.Unmarshal(inventoryFixture(t, "descriptor", revision, "provider_descriptor.json"), &document); err != nil {
+				t.Fatal(err)
+			}
+			return document.ProvidedToolkits
+		}
+		nameOf := func(raw json.RawMessage) string {
+			var tool struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(raw, &tool)
+			return tool.Name
+		}
+		withoutDescription := func(raw json.RawMessage) string {
+			var tool map[string]any
+			_ = json.Unmarshal(raw, &tool)
+			delete(tool, "description")
+			encoded, _ := json.Marshal(tool)
+			return string(encoded)
+		}
+		// legacy-v2 adds one optional toolkit parameter, reasoning_effort;
+		// everything else in toolkit_config must be what legacy-v1 has.
+		configWithoutReasoningEffort := func(raw json.RawMessage) string {
+			var config map[string]any
+			_ = json.Unmarshal(raw, &config)
+			if parameters, ok := config["parameters"].(map[string]any); ok {
+				delete(parameters, "reasoning_effort")
+			}
+			if order, ok := config["fields_order"].([]any); ok {
+				kept := order[:0]
+				for _, field := range order {
+					if field != "reasoning_effort" {
+						kept = append(kept, field)
+					}
+				}
+				config["fields_order"] = kept
+			}
+			encoded, _ := json.Marshal(config)
+			return string(encoded)
+		}
+		v1, v2 := read("legacy-v1"), read(DescriptorRevision)
+		if len(v1) != len(v2) {
+			t.Fatalf("legacy-v2 has %d toolkits, legacy-v1 has %d", len(v2), len(v1))
+		}
+		added := map[string]bool{"import_graph": true, "export_graph": true}
+		seen := 0
+		for i := range v1 {
+			if v1[i].Name != v2[i].Name || configWithoutReasoningEffort(v1[i].Config) != configWithoutReasoningEffort(v2[i].Config) {
+				t.Fatalf("toolkit %d: name or toolkit_config changed beyond the reasoning_effort parameter", i)
+			}
+			var kept []json.RawMessage
+			for _, raw := range v2[i].ProvidedTools {
+				if v2[i].Name == "inventory" && added[nameOf(raw)] {
+					seen++
+					continue
+				}
+				kept = append(kept, raw)
+			}
+			if len(kept) != len(v1[i].ProvidedTools) {
+				t.Fatalf("%s: %d tools kept, legacy-v1 has %d", v1[i].Name, len(kept), len(v1[i].ProvidedTools))
+			}
+			for j := range kept {
+				if nameOf(kept[j]) == "smart_normalize_types" {
+					if withoutDescription(kept[j]) != withoutDescription(v1[i].ProvidedTools[j]) {
+						t.Fatalf("smart_normalize_types changed beyond its description")
+					}
+					if strings.Contains(string(kept[j]), "automatically") {
+						t.Fatalf("smart_normalize_types still claims to run automatically")
+					}
+					continue
+				}
+				var before, after any
+				_ = json.Unmarshal(v1[i].ProvidedTools[j], &before)
+				_ = json.Unmarshal(kept[j], &after)
+				b, _ := json.Marshal(before)
+				a, _ := json.Marshal(after)
+				if !bytes.Equal(a, b) {
+					t.Fatalf("%s/%s changed between legacy-v1 and legacy-v2", v1[i].Name, nameOf(kept[j]))
+				}
+			}
+		}
+		if seen != len(added) {
+			t.Fatalf("legacy-v2 adds %d of the %d tools", seen, len(added))
 		}
 	})
 

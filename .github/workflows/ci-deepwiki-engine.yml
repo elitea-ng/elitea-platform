@@ -172,7 +172,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.work
           cache-dependency-path: services/elitea-subapp-host/go.sum
 
       - name: Run the Go host's sidecar tests against the binary

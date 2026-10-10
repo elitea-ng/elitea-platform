@@ -97,6 +97,37 @@ pub fn answer(result: impl Into<String>) -> Value {
     serde_json::json!({"success": true, "result": result.into()})
 }
 
+/// A boolean tool parameter, read strictly: JSON `true`, or the string
+/// "true" in any case, is on; everything else (absent, `"false"`, `"0"`,
+/// `"no"`, numbers) is off. Python truthiness would turn the string
+/// "false" ON, which for a destructive flag deletes data.
+#[must_use]
+pub fn flag(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Bool(on)) => *on,
+        Some(Value::String(text)) => text.trim().eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
+
+/// A boolean tool parameter, read leniently: JSON `true`, a non-zero
+/// number, or the string "true", "1", "yes" or "on" (trimmed, any case) is
+/// on; everything else is off. Only for a flag whose ON is safe — the
+/// ingestion's `full_rebuild` builds the new graph and swaps it in, so a
+/// caller's `1` or `"yes"` must not silently run incrementally. A
+/// destructive flag (`replace_ingestion_state`) stays on [`flag`].
+#[must_use]
+pub fn lenient_flag(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Bool(on)) => *on,
+        Some(Value::Number(number)) => number.as_f64().is_some_and(|n| n != 0.0),
+        Some(Value::String(text)) => ["true", "1", "yes", "on"]
+            .iter()
+            .any(|word| text.trim().eq_ignore_ascii_case(word)),
+        _ => false,
+    }
+}
+
 /// Route `call` to the module that serves it.
 #[must_use]
 pub fn dispatch(call: &Call<'_>) -> Handled {

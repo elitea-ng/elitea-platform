@@ -55,6 +55,28 @@ const agentRuntimeContextCapabilityFilter = `
       'agent.execute.adhoc.v1'
   )`
 
+// toolkitCallToolInteractiveJob admits a toolkit.call_tool.v1 claim, which
+// the query labels initiator 'user'.
+//
+// A tool run (test_tool, a remote toolkit call, an MCP toolkit tool, a
+// provider's source-tool callback) has no per-capability detail row to join:
+// it is admitted and dispatched inside one synchronous request
+// (internal/db/queries/runtime_toolkit_call_tool.sql says why). Every
+// admission goes through toolkitcalltool.Service, whose RunRequest requires a
+// positive ActorUserID — the authenticated user who asked — and writes it as
+// BOTH actor_id and principal_ref. No schedule or system path creates one.
+//
+// So the job row itself must carry that interactive shape: a positive
+// integer user id as actor_id, repeated as principal_ref. A row in any other
+// shape (a system or schedule actor, a principal that is not the actor) is
+// not a user's run and is refused rather than labelled 'user'. A new
+// non-interactive creator must add a detail row with its own initiator, as
+// index_ingest_jobs does, and an arm here that reads it.
+const toolkitCallToolInteractiveJob = `
+          j.capability_id = 'toolkit.call_tool.v1'
+          AND j.actor_id ~ '^[1-9][0-9]{0,18}$'
+          AND j.principal_ref = j.actor_id`
+
 func (r *PostgresContentRepository) authorizeRuntimeContext(
 	ctx context.Context,
 	claim ContentClaim,
@@ -75,6 +97,14 @@ SELECT j.resource_project_id,
                'agent.execute.application.v1',
                'agent.execute.adhoc.v1'
            ) THEN 'user'
+           -- A toolkit tool run (test_tool, a remote toolkit call, a provider's
+           -- source-tool callback) is created only on a user's request, as
+           -- that user: its worker builds the SDK client from this token
+           -- before it runs the tool, so without this arm every such run
+           -- failed AUTHORIZATION_FAILED ("Execution authorization failed.").
+           -- 'user' only for the interactive job shape the WHERE clause
+           -- requires (toolkitCallToolInteractiveJob).
+           WHEN j.capability_id = 'toolkit.call_tool.v1' THEN 'user'
        END AS initiator,
        -- The claimed AGENT execution's own conversation
        -- (chat_conversations.uuid). COALESCE, not a required column: an index
@@ -119,6 +149,8 @@ WHERE c.claim_id = $1
           )
           AND a.execution_id IS NOT NULL
       )
+      OR
+      (`+toolkitCallToolInteractiveJob+`)
   )`+capabilityFilter,
 		claim.ClaimID,
 		claim.ExecutionID,

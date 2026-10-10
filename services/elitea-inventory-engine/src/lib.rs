@@ -12,6 +12,7 @@
 //! * [`investigate`] — the model agent over the graph and its sources;
 //! * [`graph`] — the knowledge graph, with the Python graph's semantics;
 //! * [`store`] — the graph's PostgreSQL storage;
+//! * [`transfer`] — `graph.json` imported into and exported from the store;
 //! * [`ingest`] — a source's files into the graph;
 //! * [`extract`] — what a model reads out of a file;
 //! * [`communities`] — the graph's communities, labelled by a model;
@@ -31,6 +32,7 @@ pub mod retrieval;
 pub mod runner;
 pub mod store;
 pub mod tools;
+pub mod transfer;
 
 use config::{ConfigError, RunnerKind, Settings};
 use fixture::FixtureGraph;
@@ -57,3 +59,22 @@ pub fn build_runner(settings: &Settings) -> Result<Runner, ConfigError> {
             .map_err(|error| ConfigError(error.message)),
     }
 }
+
+/// The largest invoke body this engine's sidecar reads. The default (2 MB)
+/// is below the host's SPI cap (4 MiB), and `import_graph` carries a graph
+/// document the host read from a bucket (up to 64 MiB, the host's
+/// `MaxGraphImportBytes`; JSON-escaped once more in the body, which the host
+/// bounds at 88 MiB). The socket is the host's alone.
+pub const MAX_INVOKE_BYTES: usize = 96 << 20;
+
+/// The largest `export_graph` document the tool returns, measured as it
+/// travels: JSON-escaped (`ensure_ascii`) in the result line of the
+/// sidecar stream. The host reads that stream one line at a time and caps a
+/// line at 64 MiB (`engine.MaxStreamLineBytes` in
+/// `services/elitea-subapp-host/internal/engine/engine.go`, which mirrors
+/// this value as `engine.MaxExportDocumentBytes` and pins the headroom in a
+/// drift test). The 4 MiB left over carries the line's envelope and the
+/// export summary. A larger graph is refused before it is sent, with a
+/// pointer to the engine's `export-graph` command, rather than failing in
+/// the host as an unreadable line.
+pub const MAX_EXPORT_DOCUMENT_BYTES: usize = 60 << 20;

@@ -5,6 +5,7 @@
 
 use elitea_inventory_engine::fixture::{self, FixtureGraph, PACKAGED_GRAPH};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 fn conformance(parts: &[&str]) -> PathBuf {
@@ -72,7 +73,7 @@ fn ingestion_shape(result: &Value) -> Value {
 fn every_golden_answer_is_this_runners_answer() {
     let graph = FixtureGraph::parse(PACKAGED_GRAPH).unwrap_or_else(|e| panic!("{e}"));
     let mut checked = 0;
-    for kind in ["ingestion", "retrieval"] {
+    for kind in ["ingestion", "retrieval", "transfer"] {
         let mut files: Vec<PathBuf> = std::fs::read_dir(conformance(&[kind]))
             .unwrap_or_else(|e| panic!("{kind}: {e}"))
             .filter_map(Result::ok)
@@ -95,10 +96,28 @@ fn every_golden_answer_is_this_runners_answer() {
                     .unwrap_or_else(|e| panic!("{tool}: {e}"))
             };
             assert_eq!(got, case["expected"], "{}", path.display());
+            if let Some(expected) = case.get("artifacts") {
+                // The artifacts ride beside the result: name, type and the
+                // sha256 of `data` (Python `json.dumps` bytes) are the golden.
+                let ours: Vec<Value> = result["artifacts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|artifact| {
+                        let digest = Sha256::digest(artifact["data"].as_str().unwrap_or_default());
+                        json!({
+                            "name": artifact["name"],
+                            "type": artifact["type"],
+                            "data_sha256": format!("{digest:x}"),
+                        })
+                    })
+                    .collect();
+                assert_eq!(json!(ours), *expected, "{} artifacts", path.display());
+            }
             checked += 1;
         }
     }
-    assert!(checked >= 9, "only {checked} golden files were checked");
+    assert!(checked >= 11, "only {checked} golden files were checked");
 }
 
 /// A JSON answer is Python's `json.dumps` byte for byte (", " and ": "

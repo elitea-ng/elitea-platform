@@ -51,9 +51,18 @@ pub struct Outcome {
     pub unchanged: usize,
     /// Files no longer in the source, whose entities were removed.
     pub removed_files: usize,
-    /// `add_entity` calls (Python's `entities_added`, merges included).
+    /// `add_entity` calls (Python's `entities_added`, merges included):
+    /// what this run extracted, NOT what the graph holds.
     pub entities_added: usize,
+    /// `add_relation` calls that found both endpoints (Python's
+    /// `relations_added`): a relation found twice, or by the parser and the
+    /// model, is one edge in the graph, and the quality pass prunes some.
     pub relations_added: usize,
+    /// The entities the stored graph holds of this source after the run
+    /// ([`Graph::source_counts`]).
+    pub entities_stored: usize,
+    /// The edges the stored graph holds of this source after the run.
+    pub relations_stored: usize,
     pub skipped_whitelist: usize,
     pub skipped_blacklist: usize,
     pub skipped_unsupported: usize,
@@ -429,7 +438,9 @@ pub struct RunOptions {
     pub model: Option<ModelOptions>,
     /// Entity embeddings, when the toolkit configures a model for them.
     pub embeddings: Option<elitea_model_client::embeddings::EmbeddingClient>,
-    /// `full_rebuild`: start from an empty graph (every source of it).
+    /// `full_rebuild`: re-read every document of THIS source, after
+    /// forgetting everything it said ([`Graph::remove_source`]); the other
+    /// sources of the graph are untouched.
     pub full_rebuild: bool,
 }
 
@@ -741,11 +752,15 @@ pub async fn run(
         toolkit_type: source.kind.name().to_owned(),
         branch: Some(source.active_branch()),
     };
-    if options.full_rebuild {
-        store::delete(pool, key)
-            .await
-            .map_err(|e| store_error(&e))?;
-    }
+    // `full_rebuild` does NOT delete anything here: a rebuild that fails
+    // or is stopped must leave the previous graph readable, as every other
+    // failed run does. run_started removes the source's contributions from
+    // the loaded graph in memory instead, and the commit replaces the graph
+    // and the source's state in one transaction. MEASURED: deleting up
+    // front, a rebuild stopped 45 s in left the toolkit with no graph at
+    // all. The rebuild is scoped to the source run_ingestion names: Python
+    // deleted the whole graph.json, every other source's entities,
+    // relations and state with it.
     source_store::start(pool, key, &status)
         .await
         .map_err(|e| store_error(&e))?;
@@ -813,20 +828,27 @@ async fn run_started(
         source.kind.name(),
         source.name
     ));
-    let graph = store::load(pool, key)
+    let mut graph = store::load(pool, key)
         .await
         .map_err(|e| store_error(&e))?
         .map(|(graph, _)| graph)
         .unwrap_or_default();
-    let previous = source_store::document_versions(pool, key, &source.name)
-        .await
-        .map_err(|e| store_error(&e))?;
+    let previous = if options.full_rebuild {
+        // Forget what this source said (its citations, the entities only it
+        // cited, its contribution to every relation) and read every document
+        // again. Nothing is committed until the run completes.
+        graph.remove_source(&source.name);
+        BTreeMap::new()
+    } else {
+        source_store::document_versions(pool, key, &source.name)
+            .await
+            .map_err(|e| store_error(&e))?
+    };
 
     let (_scratch, cloned) = clone(settings, &repo_config, key, source, context).await?;
 
     let tree = cloned.path.clone();
     let checkout = GitSource::new(&tree);
-    let mut graph = graph;
     let (outcome, to_read) = prepare(&mut graph, source, &checkout, &previous, context).await?;
     let source_for_tree = source.clone();
     let context_for_tree = context.clone();
@@ -855,26 +877,29 @@ async fn run_started(
     )
     .await?;
 
-    // What sources_status.json recorded: this run's additions.
+    // What the source status records: what the stored graph holds of the
+    // source. Python's sources_status.json recorded this run's add calls
+    // (merged duplicates, re-found relations and pruned edges included),
+    // so the status disagreed with get_stats on the same graph.
+    (outcome.entities_stored, outcome.relations_stored) = graph.source_counts(&source.name);
     let counts = RunCounts {
-        entities: i64::try_from(outcome.entities_added).unwrap_or(i64::MAX),
-        relations: i64::try_from(outcome.relations_added).unwrap_or(i64::MAX),
+        entities: i64::try_from(outcome.entities_stored).unwrap_or(i64::MAX),
+        relations: i64::try_from(outcome.relations_stored).unwrap_or(i64::MAX),
         documents: i64::try_from(outcome.documents_processed).unwrap_or(i64::MAX),
     };
-    source_store::complete(
-        pool,
-        key,
-        &graph,
-        &Completion {
-            toolkit_id: &source.status_key(),
-            source_name: &source.name,
-            documents: &outcome.documents,
-            counts,
-            commit_sha: Some(cloned.identity.commit()),
-        },
-    )
-    .await
-    .map_err(|e| store_error(&e))?;
+    let toolkit_id = source.status_key();
+    let completion = Completion {
+        toolkit_id: &toolkit_id,
+        source_name: &source.name,
+        documents: &outcome.documents,
+        counts,
+        commit_sha: Some(cloned.identity.commit()),
+    };
+    // A rebuild commits as any run does: the graph, and this source's
+    // documents (all replaced) and status.
+    source_store::complete(pool, key, &graph, &completion)
+        .await
+        .map_err(|e| store_error(&e))?;
     context.thinking(format!(
         "[complete] {} files read, {} unchanged, {} removed",
         outcome.documents_processed, outcome.unchanged, outcome.removed_files

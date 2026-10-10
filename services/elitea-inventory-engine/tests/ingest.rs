@@ -488,6 +488,87 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// A `full_rebuild` that fails (here: its clone is refused) leaves the
+// previous graph readable, as every other failed run does; one that
+// completes replaces the graph and every source's state together. MEASURED
+// on the standalone stack: deleting the graph up front, a rebuild stopped
+// 45 s in left the toolkit with no graph at all.
+#[cfg(feature = "loopback-git-http")]
+#[tokio::test]
+async fn a_failed_full_rebuild_keeps_the_previous_graph() {
+    let Some(pool) = database("rebuild").await else {
+        return;
+    };
+    let root = scratch("rebuild");
+    repository(&root);
+    let port = serve(&root).await;
+    let key = GraphKey::new(1, 10).expect("key");
+    let allowed = settings(&root.join("jobs"), "127.0.0.1");
+    let (context, _lines, _) = context();
+    ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &allowed,
+        &ingest::RunOptions::default(),
+        &context,
+    )
+    .await
+    .expect("the first run");
+    let rebuild = ingest::RunOptions {
+        full_rebuild: true,
+        ..ingest::RunOptions::default()
+    };
+
+    ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &settings(&root.join("jobs"), "github.com"),
+        &rebuild,
+        &context,
+    )
+    .await
+    .expect_err("refused");
+    let (graph, revision) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("the previous graph survived the failed rebuild");
+    assert_eq!(
+        (file_names(&graph), revision),
+        (vec!["README.md".to_owned(), "app.py".to_owned()], 1)
+    );
+    assert_eq!(
+        sources::document_versions(&pool, key, "repo")
+            .await
+            .expect("hashes")
+            .len(),
+        2,
+        "the previous file hashes survived too"
+    );
+
+    let replaced = ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &allowed,
+        &rebuild,
+        &context,
+    )
+    .await
+    .expect("the rebuild");
+    assert_eq!((replaced.documents_processed, replaced.unchanged), (2, 0));
+    let (graph, revision) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    assert_eq!(
+        (file_names(&graph), revision),
+        (vec!["README.md".to_owned(), "app.py".to_owned()], 2)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[cfg(feature = "loopback-git-http")]
 #[tokio::test]
 async fn a_refused_clone_is_recorded_and_commits_nothing() {
@@ -523,6 +604,221 @@ async fn a_refused_clone_is_recorded_and_commits_nothing() {
         status["sources"]["5"]["error_message"]
             .as_str()
             .is_some_and(|m| m.contains("allowlist"))
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn settings_for(root: &Path, allowlist: &str) -> IngestSettings {
+    settings(&root.join("jobs"), allowlist)
+}
+
+/// The relations the graph holds of a source, and its status row's count.
+async fn relation_counts(pool: &PgPool, key: GraphKey, name: &str, id: &str) -> (usize, Value) {
+    let (graph, _) = store::load(pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    let status = sources::status_document(pool, key).await.expect("status");
+    (
+        graph.source_counts(name).1,
+        status["sources"][id]["relations_count"].clone(),
+    )
+}
+
+// Two sources that read the same repository and branch (two github
+// toolkits): every entity id is the same, so entities merge and relations
+// land on the same pairs. MEASURED on the standalone stack: removing the
+// second source took 849 of the first source's 1,301 relations with it,
+// because a relation kept only its last writer's `source_toolkit`.
+#[cfg(feature = "loopback-git-http")]
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn overlapping_sources_keep_each_other_s_relations() {
+    let Some(pool) = database("overlap").await else {
+        return;
+    };
+    let root = scratch("overlap");
+    repository(&root);
+    publish(
+        &root,
+        &[(
+            "src/models.py",
+            Some(
+                "from app import hello\n\nclass Base:\n    pass\n\nclass User(Base):\n    def save(self):\n        return hello()\n",
+            ),
+        )],
+    );
+    let port = serve(&root).await;
+    let key = GraphKey::new(1, 10).expect("key");
+    let settings = settings(&root.join("jobs"), "127.0.0.1");
+    let (context, _lines, _) = context();
+    let repo = loopback_source(port);
+    let mirror = source(&json!({
+        "toolkit_id": 6,
+        "name": "mirror",
+        "github_configuration": {"base_url": format!("http://127.0.0.1:{port}")},
+    }));
+    let run = |source: Source, options: ingest::RunOptions| {
+        let (pool, settings, context) = (pool.clone(), settings.clone(), context.clone());
+        async move {
+            ingest::run(&pool, key, &source, &settings, &options, &context)
+                .await
+                .expect("a run")
+        }
+    };
+
+    run(repo.clone(), ingest::RunOptions::default()).await;
+    let (first, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    let (nodes, edges) = (first.node_count(), first.edge_count());
+    assert!(edges >= 3, "the fixture has relations: {edges}");
+    assert_eq!(first.source_counts("repo"), (nodes, edges));
+
+    run(mirror.clone(), ingest::RunOptions::default()).await;
+    let (both, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    assert_eq!(
+        (both.node_count(), both.edge_count()),
+        (nodes, edges),
+        "merged"
+    );
+    assert_eq!(both.source_counts("mirror"), (nodes, edges));
+    assert_eq!(
+        both.source_counts("repo"),
+        (nodes, edges),
+        "the second source's run did not take the first's relations"
+    );
+    assert_eq!(
+        relation_counts(&pool, key, "repo", "5").await,
+        (edges, json!(edges)),
+        "the first source's status still agrees with the graph"
+    );
+
+    // An incremental run of ONE source re-reads a changed file: it
+    // withdraws only its own contributions from that file.
+    publish(
+        &root,
+        &[("src/app.py", Some("def hello():\n    return 2\n"))],
+    );
+    let again = run(repo.clone(), ingest::RunOptions::default()).await;
+    assert_eq!((again.documents_processed, again.unchanged), (1, 2));
+    let (after, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    assert_eq!(after.edge_count(), edges);
+    assert_eq!(
+        after.source_counts("mirror"),
+        (nodes, edges),
+        "the other source's relations from the re-read file stayed"
+    );
+
+    // remove_source_entities, as native.rs commits it.
+    let mut graph = after;
+    assert_eq!(graph.remove_source("mirror"), 0, "repo cites every entity");
+    sources::remove(&pool, key, &graph, "6", "mirror")
+        .await
+        .expect("remove");
+    let (left, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    assert_eq!(
+        (left.node_count(), left.edge_count()),
+        (nodes, edges),
+        "removing the second source kept the first's relations"
+    );
+    assert!(
+        left.edges()
+            .all(|(_, _, e)| e["source_toolkit"] == json!("repo") && e.get("provenance").is_none()),
+        "every relation is the first source's alone"
+    );
+    assert_eq!(left.source_counts("mirror"), (0, 0));
+    assert_eq!(
+        relation_counts(&pool, key, "repo", "5").await,
+        (edges, json!(edges))
+    );
+    let status = sources::status_document(&pool, key).await.expect("status");
+    assert!(status["sources"].get("6").is_none());
+
+    // A full rebuild is scoped to its source: it forgets what that source
+    // said and reads it again; the other source keeps its entities,
+    // relations, documents and status. Here the rebuilt source no longer
+    // has src/models.py; the mirror (not re-read) still says it.
+    run(mirror.clone(), ingest::RunOptions::default()).await;
+    publish(&root, &[("src/models.py", None)]);
+    let fresh = ingest::RunOptions {
+        full_rebuild: true,
+        ..ingest::RunOptions::default()
+    };
+    // A refused rebuild commits nothing: both sources stay as they were.
+    let refused = ingest::run(
+        &pool,
+        key,
+        &repo,
+        &settings_for(&root, "github.com"),
+        &fresh,
+        &context,
+    )
+    .await;
+    assert!(refused.is_err());
+    let (kept, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    assert_eq!(kept.source_counts("repo"), (nodes, edges));
+    assert_eq!(kept.source_counts("mirror"), (nodes, edges));
+
+    let rebuilt_run = run(repo.clone(), fresh).await;
+    assert_eq!(
+        (rebuilt_run.documents_processed, rebuilt_run.unchanged),
+        (2, 0),
+        "every document read again"
+    );
+    let (rebuilt, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    assert_eq!(
+        (rebuilt.node_count(), rebuilt.edge_count()),
+        (nodes, edges),
+        "the mirror still says src/models.py"
+    );
+    assert_eq!(
+        rebuilt.source_counts("mirror"),
+        (nodes, edges),
+        "the other source is untouched"
+    );
+    let (repo_entities, repo_relations) = rebuilt.source_counts("repo");
+    assert!(
+        repo_entities < nodes && repo_relations < edges,
+        "the rebuilt source no longer cites src/models.py: {repo_entities}/{repo_relations}"
+    );
+    assert_eq!(
+        relation_counts(&pool, key, "repo", "5").await,
+        (repo_relations, json!(repo_relations))
+    );
+    assert_eq!(
+        relation_counts(&pool, key, "mirror", "6").await,
+        (edges, json!(edges))
+    );
+    assert_eq!(
+        sources::document_versions(&pool, key, "mirror")
+            .await
+            .expect("hashes")
+            .len(),
+        3
+    );
+    assert_eq!(
+        sources::document_versions(&pool, key, "repo")
+            .await
+            .expect("hashes")
+            .len(),
+        2
     );
     let _ = std::fs::remove_dir_all(&root);
 }

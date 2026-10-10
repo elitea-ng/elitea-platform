@@ -1,8 +1,8 @@
 //! The graph-reading tools against the Python handlers: `graph.json` was
 //! built by the real `KnowledgeGraph`, and `goldens.json` holds what the
 //! real `tool_operations` handlers answered over it
-//! (`fixtures/retrieval/generate.py`, which documents the order and
-//! deviation patches it applied).
+//! (frozen; its generator, which documents the order and deviation
+//! patches it applied, is recorded in `fixtures/PROVENANCE.md`).
 
 use elitea_engine_core::pyjson::dumps;
 use elitea_inventory_engine::graph::Graph;
@@ -55,6 +55,30 @@ fn without_embeddings(value: &mut Value) -> bool {
         _ => {}
     }
     removed
+}
+
+/// D5 in text: the detail page's `- embedding: N items` property line
+/// (Python listed the vector) leaves the expectation, and with it a
+/// `**Properties:**` header it was the only line of.
+fn without_embedding_property(text: &str) -> (String, bool) {
+    let mut dropped = false;
+    let kept: Vec<&str> = text
+        .split_inclusive('\n')
+        .filter(|line| {
+            let vector = line.starts_with("- embedding: ") && line.trim_end().ends_with(" items");
+            dropped |= vector;
+            !vector
+        })
+        .collect();
+    let mut text = kept.concat();
+    if dropped {
+        // A vector that was the only property leaves no empty section.
+        text = text.replace("\n**Properties:**\n\n", "\n");
+        if let Some(stripped) = text.strip_suffix("\n**Properties:**\n") {
+            text = stripped.to_owned();
+        }
+    }
+    (text, dropped)
 }
 
 /// Arrays sorted by their serialisation, recursively (an `unordered` case).
@@ -140,10 +164,16 @@ fn every_tool_answers_what_the_python_handler_answered() {
             } else {
                 assert_eq!(actual, dumps(&want), "{label}");
             }
-        } else if unordered {
-            assert_eq!(sorted_lines(&actual), sorted_lines(expected), "{label}");
         } else {
-            assert_eq!(actual, expected, "{label}");
+            let (expected, dropped) = without_embedding_property(expected);
+            if dropped {
+                embeddings_dropped += 1;
+            }
+            if unordered {
+                assert_eq!(sorted_lines(&actual), sorted_lines(&expected), "{label}");
+            } else {
+                assert_eq!(actual, expected, "{label}");
+            }
         }
         checked += 1;
     }
@@ -406,4 +436,22 @@ fn tools_route_by_family() {
         view: &view,
     });
     assert!(matches!(failed, Some(Err(_))));
+}
+
+#[test]
+fn the_entity_detail_page_does_not_list_the_vector_as_a_property() {
+    // D5: Python printed `- embedding: 3 items` among UserService's
+    // properties; the other properties stay.
+    let view = view();
+    for (family, tool) in [
+        ("inventory", "get_entity"),
+        ("inventory_search", "get_entity_details"),
+    ] {
+        let page = run(&view, family, tool, &json!({"entity_name": "UserService"}));
+        assert!(
+            page.contains("**Properties:**\n- bases: 1 items\n"),
+            "{page}"
+        );
+        assert!(!page.contains("embedding"), "{family}/{tool}: {page}");
+    }
 }

@@ -331,15 +331,16 @@ const PLATFORM_FLAG_JOURNEYS = [
  * six entities and five relations — the data every one of those journeys
  * asserts on.
  *
- * There is deliberately NO `inventory-stack` project against the standalone
- * stack, the way DeepWiki has `deepwiki-stack`. The standalone stack reaches
- * Inventory through the PYTHON sidecar's fixture runner
- * (services/elitea-inventory/src/elitea_inventory/fixture_runner.py), which
- * answers an EMPTY graph — so every data assertion would fail there, correctly,
- * and a project that ran them would report a red suite for a stack doing
- * exactly what it is configured to do. Nothing is added to `testIgnore` for the
- * same reason in reverse: the journeys belong in the projects that CAN answer
- * them, and excluding them from anywhere would only hide that they ran.
+ * There is NO `inventory-stack` project against the standalone stack, the
+ * way DeepWiki has `deepwiki-stack`. The standalone stack reaches Inventory
+ * through the Rust engine sidecar's fixture runner
+ * (services/elitea-inventory-engine/src/fixture.rs; the retired Python one
+ * answered an EMPTY graph). The Rust runner replays the same canned graph and
+ * is held to the same conformance goldens as the Go runner, but these
+ * journeys have not been run against it, so no project claims they pass
+ * there. Nothing is added to `testIgnore` either: the journeys belong in the
+ * projects that CAN answer them, and excluding them from anywhere would only
+ * hide that they ran.
  */
 
 /*

@@ -44,13 +44,9 @@ PUBLISH=.github/workflows/publish.yml
 SCAN=.github/workflows/ci-image-scan.yml
 EXEMPT=.github/image-scan-exempt.txt
 
-# Bake targets that are built but NOT published. Each needs a reason.
-#
-# elitea-inventory-engine is the engine build: the same source plus the
-# knowledge-graph engine's 126-package closure, which no deployment pulls yet.
-# The PLAIN elitea-inventory image IS published — it carries the sidecar and
-# its fixture runner, which is what the compose stacks and the E2E stack run.
-UNPUBLISHED="elitea-inventory-engine"
+# Bake targets that are built but NOT published. Each needs a reason. None
+# today: elitea-inventory-engine (ADR-0027) is published like every other image.
+UNPUBLISHED=""
 
 die() { printf '::error::%s\n' "$1" >&2; exit 1; }
 
@@ -66,7 +62,11 @@ published_names() {
   all="$(bake_targets)"
   [ -n "$all" ] || die "read no target out of $BAKE — this check measured nothing"
   excluded="$(printf '%s\n' $UNPUBLISHED)"
-  printf '%s\n' "$all" | grep -vxF "$excluded" | sort -u
+  if [ -z "$excluded" ]; then
+    printf '%s\n' "$all" | sort -u
+  else
+    printf '%s\n' "$all" | grep -vxF "$excluded" | sort -u
+  fi
 }
 
 normalise() { printf '%s\n' "$1" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' '; }

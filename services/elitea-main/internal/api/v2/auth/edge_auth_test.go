@@ -33,12 +33,6 @@ func (f principalValidatorFunc) ValidatePrincipal(ctx context.Context, user iden
 	return f(ctx, user)
 }
 
-type forwardedIdentityVerifierFunc func(*http.Request) error
-
-func (f forwardedIdentityVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return f(request)
-}
-
 func TestEdgeAuthRequiresCurrentBaselineTraefikHeaders(t *testing.T) {
 	for _, missing := range currentBaselineTraefikHeaders() {
 		t.Run(missing.name, func(t *testing.T) {

@@ -15,8 +15,8 @@
 # ── Python caches and virtualenvs (never needed in image; rebuilt inside) ────
 # .venv is what every Python service's README tells a developer to create, and
 # it is multi-GB with an engine extra installed. Without this line it is COPYed
-# into the build context: the elitea-inventory engine image failed at
-# `COPY services/elitea-inventory` with "no space left on device", writing a
+# into the build context: the (since retired) Python Inventory engine
+# image failed at `COPY services/elitea-inventory` with "no space left on device", writing a
 # 2.4 GB layer of the host's own virtualenv into the image it was building.
 **/.venv
 **/venv

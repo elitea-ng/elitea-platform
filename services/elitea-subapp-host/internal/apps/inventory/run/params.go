@@ -10,8 +10,8 @@
 // are shared and unchanged.
 //
 // The knowledge-graph engine — what the tools DO — is not here. A Runner takes
-// a table of Tool functions; the engine sidecar (services/elitea-inventory) is
-// one such table.
+// a table of Tool functions; the engine sidecar
+// (services/elitea-inventory-engine) is one such table.
 package run
 
 import (

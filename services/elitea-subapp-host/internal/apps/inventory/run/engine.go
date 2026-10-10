@@ -9,8 +9,8 @@ import (
 )
 
 // Inventory over the engine sidecar (ADR-0023 H4c stage I3). The
-// knowledge-graph engine — the copied Python analysis layer with the ELITEA
-// SDK's closure — stays in Python and listens on a Unix socket next to this
+// knowledge-graph engine — the native Rust engine since ADR-0027
+// (services/elitea-inventory-engine) — listens on a Unix socket next to this
 // host. This host keeps the SPI, the parameter merge, the deferred refusals,
 // the source check, composition and upload.
 //
@@ -75,8 +75,11 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 		}
 	}
 	return &Runner{
-		RunnerName: "legacy",
+		RunnerName: "sidecar",
 		Tools:      tools,
 		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
+		// The native engine keys every graph by the project: only the
+		// verified identity may name it (see Runner.RequireVerifiedProject).
+		RequireVerifiedProject: true,
 	}
 }

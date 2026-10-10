@@ -1,0 +1,93 @@
+# syntax=docker/dockerfile:1.7
+#
+# The Rust-native Inventory engine (ADR-0027): one static-ish binary on a
+# distroless base. No Python, no ML closure, no shell.
+#
+# Build from the repository root (the context must be the root: the engine's
+# shared crates are libs/rust, copied from the root below):
+#   docker buildx bake elitea-inventory-engine
+#   podman build -f services/elitea-inventory-engine/Containerfile -t elitea-inventory-engine .
+#
+# Released as ghcr.io/elitea-ng/elitea-inventory-engine: docker-bake.hcl,
+# publish.yml's build / scan / publish-image
+# matrices and IMAGES array, and ci-image-scan.yml name it together, and
+# scripts/ci/image-matrix.sh holds them in step.
+
+# Debian 13 (trixie) throughout, the release every image in this repository
+# is based on. The runtime keeps glibc and CA roots and has NO system OpenSSL:
+# the engine's TLS is rustls (reqwest, gix; ingest never shells out to git, so the image carries none), so OpenSSL would only be a
+# scanned package that nothing loads. The one other library the binary needs,
+# libgcc_s, comes from distroless cc-debian13 with its package record and
+# licence, as the worker's image does it.
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
+FROM rust:1.97.1-trixie AS runtime-libraries
+COPY --from=runtime-cc /usr/lib/ /cc-lib/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /usr/share/doc/gcc-14-base/ /runtime-files/usr/share/doc/gcc-14-base/
+COPY --from=runtime-cc /usr/share/lintian/overrides/libgcc-s1 /runtime-files/usr/share/lintian/overrides/libgcc-s1
+RUN cd /cc-lib && \
+    set -- */libgcc_s.so.1 && test "$#" -eq 1 && test -f "$1" && \
+    mkdir -p /runtime-files/usr/lib && cp --parents "$1" /runtime-files/usr/lib && \
+    ln -s gcc-14-base /runtime-files/usr/share/doc/libgcc-s1
+
+FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
+COPY --from=runtime-libraries /runtime-files/ /
+
+FROM rust:1.97.1-trixie AS builder
+
+# `cargo auditable` embeds the dependency list trivy's `rustbinary` analyzer
+# reads; without it an image scan sees only the Debian base (see the
+# worker's Containerfile). Installed before any source is copied, so a
+# source change does not rebuild the tool.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-auditable --locked --version 0.7.5
+
+WORKDIR /src/services/elitea-inventory-engine
+# The shared engine crates are path dependencies at ../../libs/rust, so the
+# repository layout is kept under /src (ADR-0027).
+COPY libs/rust /src/libs/rust
+COPY services/elitea-inventory-engine ./
+
+# /cargo-target is shared with every other build on the host, and cargo judges
+# a path crate fresh by mtime, so a context older than another checkout's build
+# would ship that build's binary. Touching /src under the lock recompiles the
+# engine and its libs/rust crates from this context while registry crates stay
+# cached (see the worker's Containerfile).
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/cargo-target,sharing=locked \
+    find /src -type f -exec touch {} + && \
+    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
+    cp /cargo-target/release/elitea-inventory-engine /usr/local/bin/elitea-inventory-engine
+
+# Resolve every library the binary needs against the runtime image, without
+# starting it: no system OpenSSL linked or shipped, CA roots present, and the
+# whole closure found inside the runtime root. A base change that drops a
+# library fails HERE, not as a sidecar that cannot start.
+# The script is shared (libs/rust/scripts), already in the builder with the libs.
+RUN --mount=type=bind,from=runtime-base,source=/,target=/runtime-root,readonly \
+    sh /src/libs/rust/scripts/verify-runtime.sh /usr/local/bin/elitea-inventory-engine
+
+# The socket directory, built here because the runtime image has no shell.
+# A compose named volume (and Docker's fresh volume in particular) takes the
+# IMAGE path's ownership on first mount; without the directory in the image
+# it arrives root:root 0755, uid 10001 cannot bind the socket, the engine is
+# never healthy, and the Go host and elitea-main that wait on it never start.
+# World-writable: the Go host connects as another uid.
+RUN mkdir -p /socket-dir/run/inventory && chmod 0777 /socket-dir/run/inventory
+
+FROM runtime-base AS runtime
+
+COPY --from=builder /usr/local/bin/elitea-inventory-engine /usr/local/bin/elitea-inventory-engine
+COPY --from=builder --chown=10001:10001 /socket-dir/run/ /run/
+
+# The socket is created world-writable inside a directory only the pod (or
+# the compose project) shares, so the Go host — another non-root user — can
+# connect. The probe is the binary itself (`elitea-inventory-engine
+# healthcheck`), because distroless has no shell; compose and Helm declare
+# it, since an OCI image carries no HEALTHCHECK.
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/elitea-inventory-engine"]
+CMD ["serve"]

@@ -184,6 +184,10 @@ type SourceRewriter struct {
 	// Decorate, when set, adjusts the projected source from the invoking
 	// toolkit's own settings and the tool's arguments.
 	Decorate func(source, ownerSettings map[string]any, tool map[string]json.RawMessage, sourceID int32)
+	// Grants records what a grant-only tool's bearer was minted for
+	// (GrantRewriteFor); nil refuses the recorded tool rather than minting
+	// a bearer the source-tool gate cannot recognise.
+	Grants GrantRecorder
 }
 
 // Rewrite reads the body and returns the one to forward, plus the grant it

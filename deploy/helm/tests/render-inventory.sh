@@ -9,13 +9,12 @@
 #
 # WHAT IS DIFFERENT FROM DEEPWIKI, and asserted here BECAUSE it is different:
 #
-#   * no migration Job and no database URL. Inventory has no storage package
-#     and no migrations; a graph's home is the platform artifact bucket. A Job
-#     that appeared here would migrate a schema nobody owns.
-#   * no provider-side git allowlist. Inventory reads its source through the
-#     SDK's toolkit, not from a request-supplied clone URL, so the only
-#     allowlist is the facade's — one that always passed on the provider side
-#     would look like an egress control while being none.
+#   * the engine sidecar is the Rust-native image (ADR-0027): distroless, no
+#     command override, probed by the binary itself, with its OWN database
+#     (the inventory_graph schema, migrated by a pre-install Job from the same
+#     image) and its OWN fail-closed git allowlist, because it clones
+#     repositories itself. The database URL reaches the engine and the Job,
+#     never the host.
 #   * the facade renders with NO callback origin. That disables source
 #     expansion and mounts the facade anyway, which is a supported deployment:
 #     the graph-read tools work and the three that name a source get the
@@ -42,6 +41,9 @@ COMPLETE="\
 --set main.env.ELITEA_INVENTORY_BASE_URL=https://elitea-inventory-svc:8443 \
 --set main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL=http://elitea-main:8080 \
 --set main.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
+--set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
+--set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.secretName=elitea-inventory-db \
+--set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.key=url \
 --set main.env.ELITEA_INVENTORY_CLIENT_CERT_FILE=/run/elitea-inventory/tls.crt \
 --set main.env.ELITEA_INVENTORY_CLIENT_KEY_FILE=/run/elitea-inventory/tls.key \
 --set main.env.ELITEA_INVENTORY_CA_FILE=/run/elitea-inventory/ca.crt"
@@ -66,6 +68,7 @@ for kind_name in \
   "Deployment/elitea-inventory" \
   "Service/elitea-inventory-svc" \
   "ServiceAccount/elitea-inventory" \
+  "Job/elitea-inventory-migrate" \
   "Certificate/elitea-inventory-server" \
   "Certificate/elitea-inventory-facade-client"
 do
@@ -80,12 +83,17 @@ do
   fi
 done
 
-echo "== and NO migration Job: Inventory owns no schema =="
-if printf '%s' "$manifest" | grep -q "name: elitea-inventory-migrate"; then
-  fail "a migration Job rendered; Inventory has no storage package and no migrations, so a Job here would run against a schema nobody owns"
-else
-  note "no Job/elitea-inventory-migrate"
-fi
+echo "== the migrate Job runs the engine image's migrate subcommand =="
+job_image="$(select_one Job elitea-inventory-migrate "$manifest" '.spec.template.spec.containers[0].image')"
+job_args="$(select_one Job elitea-inventory-migrate "$manifest" '.spec.template.spec.containers[0].args | join(" ")')"
+job_secret="$(select_one Job elitea-inventory-migrate "$manifest" \
+  '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_DATABASE_URL") | .valueFrom.secretKeyRef.name')"
+case "$job_image" in
+  ghcr.io/elitea-ng/elitea-inventory-engine:*) note "job image: $job_image" ;;
+  *) fail "the migrate Job runs '$job_image', not the engine image" ;;
+esac
+[ "$job_args" = "migrate" ] || fail "the migrate Job args are '$job_args'; without them the image's default CMD starts a second engine and Helm waits forever"
+[ "$job_secret" = "elitea-inventory-db" ] || fail "the migrate Job reads the database URL from '$job_secret'"
 
 echo "== mTLS material reaches the provider container =="
 env_names="$(select_one Deployment elitea-inventory "$manifest" \
@@ -146,16 +154,49 @@ esac
 engine_image="$(select_one Deployment elitea-inventory "$manifest" \
   '.spec.template.spec.containers[1].image')"
 case "$engine_image" in
-  ghcr.io/elitea-ng/elitea-inventory:*-engine) note "engine image: $engine_image" ;;
-  *) fail "the engine sidecar runs '$engine_image'; without the -engine closure every tool fails at invocation time" ;;
+  ghcr.io/elitea-ng/elitea-inventory-engine:*) note "engine image: $engine_image" ;;
+  *) fail "the engine sidecar runs '$engine_image', not the native engine image" ;;
 esac
 engine_command="$(select_one Deployment elitea-inventory "$manifest" \
-  '.spec.template.spec.containers[1].command | join(" ")')"
-if [ "$engine_command" != "python -m elitea_inventory" ]; then
-  fail "the engine sidecar runs '$engine_command', which is not the sidecar module"
+  '.spec.template.spec.containers[1].command // "" | tostring')"
+if [ -n "$engine_command" ] && [ "$engine_command" != "null" ] && [ "$engine_command" != "" ]; then
+  fail "the engine sidecar overrides its command ('$engine_command'); the image's ENTRYPOINT is the sidecar"
 else
-  note "engine command: $engine_command"
+  note "engine command: image ENTRYPOINT"
 fi
+# A here-string, not `printf | grep -q`: under pipefail grep's early exit on a
+# match kills printf with SIGPIPE and the pipeline reads as "no match".
+inventory_objects="$(printf '%s' "$manifest" | yq eval-all \
+  'select(.metadata.name != null and (.metadata.name | test("inventory"))) | ... comments=""' -)"
+if grep -qi 'python' <<<"$inventory_objects"; then
+  fail "the Inventory objects still mention python; the Python engine is gone: $(grep -i -m3 python <<<"$inventory_objects")"
+else
+  note "no python in the Inventory objects"
+fi
+for probe in livenessProbe readinessProbe; do
+  probe_cmd="$(select_one Deployment elitea-inventory "$manifest" \
+    ".spec.template.spec.containers[1].$probe.exec.command | join(\" \")")"
+  if [ "$probe_cmd" != "/usr/local/bin/elitea-inventory-engine healthcheck" ]; then
+    fail "the engine's $probe is '$probe_cmd'; distroless has no shell, so the binary must probe itself"
+  else
+    note "$probe: $probe_cmd"
+  fi
+done
+engine_runner="$(select_one Deployment elitea-inventory "$manifest" \
+  '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_RUNNER") | .value')"
+[ "$engine_runner" = "native" ] && note "engine runner: native" || fail "the engine's runner is '$engine_runner', expected native (the host's word 'sidecar' must not reach it)"
+engine_allow="$(select_one Deployment elitea-inventory "$manifest" \
+  '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_GIT_ALLOWLIST") | .value')"
+[ "$engine_allow" = "github.com" ] && note "engine git allowlist: $engine_allow" || fail "the engine's git allowlist is '$engine_allow'; unset, every clone is refused"
+engine_db="$(select_one Deployment elitea-inventory "$manifest" \
+  '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_DATABASE_URL") | .valueFrom.secretKeyRef.name')"
+[ "$engine_db" = "elitea-inventory-db" ] && note "engine database URL from Secret $engine_db" || fail "the engine's database URL comes from '$engine_db'"
+host_db="$(select_one Deployment elitea-inventory "$manifest" \
+  '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_DATABASE_URL") | .name')"
+[ -z "$host_db" ] && note "the host container has no database URL" || fail "the host container receives the database URL"
+engine_identity="$(select_one Deployment elitea-inventory "$manifest" \
+  '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_IDENTITY_SECRET") | .name')"
+[ -z "$engine_identity" ] && note "the engine container has no identity secret" || fail "the engine container receives the identity secret"
 for container in 0 1; do
   socket_mount="$(select_one Deployment elitea-inventory "$manifest" \
     ".spec.template.spec.containers[$container].volumeMounts[] | select(.name == \"engine-socket\") | .mountPath")"
@@ -225,8 +266,12 @@ refuses "facade with a path outside the mount"  --set main.env.ELITEA_INVENTORY_
 refuses "facade with certificate TEXT"          --set main.env.ELITEA_INVENTORY_CA_FILE=-----BEGIN
 refuses "facade with no material mounted"       --set main.fileConfig.inventoryClientMaterial.enabled=false
 refuses "an unrecognised ENABLED spelling"      --set main.env.ELITEA_INVENTORY_ENABLED=ture
-refuses "legacy runner on a non-engine image"   --set inventory.engine.image.tag=1.2.3
-refuses "legacy runner with no engine socket"   --set inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET=
+refuses "the retired -engine python image tag"  --set inventory.engine.image.tag=1.2.3-engine
+refuses "the retired python image repository"   --set inventory.engine.image.repository=ghcr.io/elitea-ng/elitea-inventory
+refuses "sidecar runner legacy"                 --set inventory.engine.runner=legacy
+refuses "native engine with no database secret" --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret=
+refuses "native engine with no git allowlist"   --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=
+refuses "sidecar runner with no engine socket"  --set inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET=
 refuses "a socket with no sidecar to answer"    --set inventory.env.ELITEA_INVENTORY_RUNNER=fixture
 
 # The reverse direction: material configured with the facade off is a mounted
@@ -259,11 +304,31 @@ fi
 # A guard that refuses everything is indistinguishable from a broken template,
 # so each refusal above is paired with the render it must allow.
 
-echo "== the legacy runner renders on an engine image =="
-if render $COMPLETE --set inventory.engine.image.tag=1.2.3-engine >/dev/null 2>&1; then
-  note "runner=legacy with an -engine tag renders"
+echo "== the fixture sidecar needs neither database nor allowlist, and gets no Job =="
+fx="$(render $COMPLETE --set inventory.engine.runner=fixture \
+  --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret= \
+  --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=)" \
+  || fail "the fixture sidecar does not render without a database"
+if printf '%s' "$fx" | grep -q "name: elitea-inventory-migrate"; then
+  fail "a migrate Job rendered with no database secret"
 else
-  fail "the guard refuses the CORRECT combination too, so it is not a guard"
+  note "fixture sidecar renders, no migrate Job"
+fi
+
+echo "== the host's runner is sidecar by default, and the legacy alias still renders the same pod =="
+host_runner="$(select_one Deployment elitea-inventory "$manifest" \
+  '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_RUNNER") | .value')"
+[ "$host_runner" = "sidecar" ] && note "host runner: sidecar" || fail "the host's runner is '$host_runner', expected sidecar"
+aliased="$(render $COMPLETE --set inventory.env.ELITEA_INVENTORY_RUNNER=legacy)" \
+  || fail "the legacy alias does not render"
+aliased_containers="$(select_one Deployment elitea-inventory "$aliased" \
+  '.spec.template.spec.containers[].name' | tr '\n' ' ')"
+aliased_engine_runner="$(select_one Deployment elitea-inventory "$aliased" \
+  '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_RUNNER") | .value')"
+if [ "$aliased_containers" = "elitea-inventory engine " ] && [ "$aliased_engine_runner" = "native" ]; then
+  note "legacy alias: $aliased_containers, engine runner native"
+else
+  fail "runner=legacy renders '$aliased_containers' with engine runner '$aliased_engine_runner'"
 fi
 
 echo "== the host's own fixture runner renders ONE container and no sidecar =="
@@ -274,7 +339,7 @@ solo="$(render $COMPLETE \
 solo_containers="$(select_one Deployment elitea-inventory "$solo" \
   '.spec.template.spec.containers[].name' | tr '\n' ' ')"
 if [ "$solo_containers" != "elitea-inventory " ]; then
-  fail "runner=fixture still renders '$solo_containers'; the sidecar belongs to runner=legacy alone"
+  fail "runner=fixture still renders '$solo_containers'; the sidecar belongs to runner=sidecar alone"
 else
   note "containers: $solo_containers"
 fi

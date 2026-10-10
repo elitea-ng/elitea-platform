@@ -75,6 +75,10 @@ struct Sidecar {
 
 impl Sidecar {
     fn start(engine: Toy) -> Self {
+        Self::start_with_limit(engine, server::DEFAULT_INVOKE_BYTES)
+    }
+
+    fn start_with_limit(engine: Toy, max_invoke_bytes: usize) -> Self {
         let socket = PathBuf::from(format!(
             "/tmp/esc-{}-{}/e.sock",
             std::process::id(),
@@ -82,9 +86,14 @@ impl Sidecar {
         ));
         let listener = server::bind(&socket).expect("bind");
         let (stop, stopped) = oneshot::channel::<()>();
-        tokio::spawn(server::serve(listener, engine, async {
-            let _ = stopped.await;
-        }));
+        tokio::spawn(server::serve_with_limit(
+            listener,
+            engine,
+            max_invoke_bytes,
+            async {
+                let _ = stopped.await;
+            },
+        ));
         Self {
             socket,
             stop: Some(stop),
@@ -213,6 +222,43 @@ async fn a_failure_is_an_error_line_with_its_python_class_and_category() {
         0,
         "no after_success on failure"
     );
+}
+
+/// The body limit is the router's parameter: 2 MB by default, whatever an
+/// engine asks for otherwise. A 3 MB document is refused by the default and
+/// served under a 4 MiB limit, and one above the raised limit is refused again.
+#[tokio::test]
+async fn the_invoke_body_limit_is_a_parameter_with_a_two_megabyte_default() {
+    let big = |bytes: usize| request("i-big", "echo", &json!({"document": "x".repeat(bytes)}));
+    let body = big(3 << 20);
+
+    let default = Sidecar::start(Toy::default());
+    let (code, _) =
+        read_json(send(&default.socket, "POST", "/engine/invoke", Some(&body)).await).await;
+    assert_eq!(code, 413, "the default is axum's 2 MB");
+
+    let raised = Sidecar::start_with_limit(Toy::default(), 4 << 20);
+    let lines = lines(send(&raised.socket, "POST", "/engine/invoke", Some(&body)).await).await;
+    let last = lines.last().expect("a line");
+    assert_eq!(last["result"]["success"], json!(true), "served under 4 MiB");
+    assert_eq!(
+        last["result"]["arguments"]["document"]
+            .as_str()
+            .map(str::len),
+        Some(3 << 20),
+        "the arguments reach the engine whole"
+    );
+    let (code, _) = read_json(
+        send(
+            &raised.socket,
+            "POST",
+            "/engine/invoke",
+            Some(&big(5 << 20)),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(code, 413, "above the raised limit");
 }
 
 #[tokio::test]

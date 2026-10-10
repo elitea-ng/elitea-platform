@@ -43,6 +43,25 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
+const (
+	// MaxStreamLineBytes is the longest NDJSON line the host reads from a
+	// sidecar stream. A result line carries every artifact inline, so it
+	// bounds what one tool can return: the Inventory engine's export_graph
+	// returns the whole graph.json, JSON-escaped, in artifacts[].data.
+	MaxStreamLineBytes = 64 << 20
+	// MaxExportDocumentBytes mirrors the Inventory engine's
+	// MAX_EXPORT_DOCUMENT_BYTES (services/elitea-inventory-engine/src/lib.rs):
+	// the largest escaped graph.json its export_graph returns. Above it the
+	// engine refuses with a ValueError that names its export-graph command.
+	// TestExportBoundMirrorsTheEngine reads the Rust constant and pins this
+	// value to it, and pins MaxStreamLineBytes above it with headroom
+	// (streamLineOverhead) for the line's envelope and the export summary.
+	MaxExportDocumentBytes = 60 << 20
+	// streamLineOverhead is the headroom MaxStreamLineBytes keeps above
+	// MaxExportDocumentBytes.
+	streamLineOverhead = 1 << 20
+)
+
 // line is one NDJSON line of the sidecar's stream.
 type line struct {
 	Thinking *string        `json:"thinking,omitempty"`
@@ -140,7 +159,7 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 	defer func() { cancel(); <-watcherDone }()
 
 	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxStreamLineBytes)
 	for scanner.Scan() {
 		raw := bytes.TrimSpace(scanner.Bytes())
 		if len(raw) == 0 {
@@ -172,6 +191,9 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 	case <-stopped:
 		return nil, spi.ErrCancelled
 	default:
+	}
+	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
+		return nil, spi.Failf(spi.KindRuntime, "%s sent a result line over this host's %d MiB limit", c.subject(), MaxStreamLineBytes>>20)
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
 		return nil, spi.Failf(spi.KindRuntime, "%s's stream ended in error: %v", c.subject(), err)

@@ -3,24 +3,27 @@ package run
 // The two-runner parity anchor.
 //
 // There are TWO fixture runners for Inventory: this one (Go, for the E2E
-// stack) and elitea_inventory.fixture_graph (Python, for the standalone-full
-// stack's engine sidecar). Nothing forces them to agree — they are separate
+// stack) and the Rust engine's (services/elitea-inventory-engine/src/
+// fixture.rs, for a stack that runs the engine sidecar). A Python runner was
+// a third until the Python engine was deleted (provenance:
+// services/elitea-inventory-engine/tests/fixtures/PROVENANCE.md). Nothing forces them to agree — they are separate
 // languages with no shared import — so conformance/provider/fixtures/inventory/
 // exists to make agreement a file both sides read and a test both sides run.
 //
 // This file is the Go half. It is `package run`, not `run_test`, because the
 // fixtures below are checked against the UNEXPORTED constants and handlers —
 // the ones a caller three files away cannot reach and therefore cannot get
-// wrong by importing something else. The Python half
-// (services/elitea-inventory/tests/unit/test_fixture_parity.py) reads the SAME
-// files and asserts the same shapes against elitea_inventory.fixture_graph.
+// wrong by importing something else. The Rust half
+// (services/elitea-inventory-engine/tests/conformance.rs) reads the SAME
+// files and asserts the same shapes against its fixture handlers.
 //
 // A change to the canned graph that touches only one language's copy fails
 // here or there, not silently: this test loads spi/graph.json and asserts
-// FixtureEntities/FixtureRelations/FixturePresets equal it; the Python test
-// loads its packaged copy and asserts it equals the same file (see that
-// package's README for why there are two copies of one JSON document).
+// FixtureEntities/FixtureRelations/FixturePresets equal it; the Rust test
+// asserts its compiled-in copy (src/fixtures/graph.json) holds the same data.
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -69,7 +72,7 @@ func roundTrip(t *testing.T, value any) any {
 // runners are supposed to replay.
 func TestTheCannedGraphMatchesTheSharedFixtureFile(t *testing.T) {
 	var golden struct {
-		Entities []FixtureEntity   `json:"entities"`
+		Entities  []FixtureEntity   `json:"entities"`
 		Relations []FixtureRelation `json:"relations"`
 		Presets   map[string]string `json:"presets"`
 	}
@@ -109,16 +112,21 @@ type toolFixture struct {
 	Tool     string         `json:"tool"`
 	Params   map[string]any `json:"params"`
 	Expected map[string]any `json:"expected"`
+	// Artifacts, when a fixture carries them, pin the artifacts a tool
+	// returns by name, type and the sha256 of `data` (Python json.dumps bytes).
+	Artifacts []map[string]any `json:"artifacts"`
 }
 
 // TestEveryIngestionAndRetrievalFixtureMatchesTheGoHandler is "the parity test
 // that loads every fixture file ... and asserts the mode answers each with the
-// same shape" for the Go side. The Python side runs the identical files
-// through elitea_inventory.fixture_graph (test_fixture_parity.py) and must
-// reach the same `expected` document.
+// same shape" for the Go side. The Rust side runs the identical files
+// through its fixture handlers (tests/conformance.rs) and must reach the
+// same `expected` document.
 func TestEveryIngestionAndRetrievalFixtureMatchesTheGoHandler(t *testing.T) {
 	files := listFixtureFiles(t, fixtureConformancePath("ingestion"))
 	files = append(files, listFixtureFiles(t, fixtureConformancePath("retrieval"))...)
+	// transfer/: import_graph and export_graph (descriptor legacy-v2).
+	files = append(files, listFixtureFiles(t, fixtureConformancePath("transfer"))...)
 	if len(files) == 0 {
 		t.Fatal("no ingestion/retrieval fixture files found")
 	}
@@ -160,6 +168,21 @@ func TestEveryIngestionAndRetrievalFixtureMatchesTheGoHandler(t *testing.T) {
 
 			want := roundTrip(t, fx.Expected)
 			assertJSONEqual(t, got, want, fx.Tool)
+
+			if fx.Artifacts != nil {
+				var ours []any
+				artifacts, _ := result["artifacts"].([]any)
+				for _, raw := range artifacts {
+					artifact, _ := raw.(map[string]any)
+					data, _ := artifact["data"].(string)
+					sum := sha256.Sum256([]byte(data))
+					ours = append(ours, map[string]any{
+						"name": artifact["name"], "type": artifact["type"],
+						"data_sha256": hex.EncodeToString(sum[:]),
+					})
+				}
+				assertJSONEqual(t, roundTrip(t, ours), roundTrip(t, fx.Artifacts), fx.Tool+" artifacts")
+			}
 		})
 	}
 }
@@ -218,4 +241,15 @@ func listFixtureFiles(t *testing.T, dir string) []string {
 		files = append(files, filepath.Join(dir, entry.Name()))
 	}
 	return files
+}
+
+// TestPyDumpsIsPythonsJSONDumps pins the encoder the artifacts are written
+// with: insertion-ordered keys, ", " / ": " separators, ensure_ascii, and no
+// HTML escaping (encoding/json would write < for "<").
+func TestPyDumpsIsPythonsJSONDumps(t *testing.T) {
+	got := pyDumps(pyObject{{"z", "<a&b>"}, {"a", []any{1, true, nil}}, {"u", "é😀\n\"\\"}})
+	want := "{\"z\": \"<a&b>\", \"a\": [1, true, null], \"u\": \"\\u00e9\\ud83d\\ude00\\n\\\"\\\\\"}"
+	if got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
 }

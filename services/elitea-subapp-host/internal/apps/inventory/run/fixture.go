@@ -25,11 +25,13 @@ package run
 // whether a read answers markdown or JSON (`output_format`, the legacy
 // switch every read tool carries).
 //
-// THERE IS A SECOND FIXTURE RUNNER, in Python
-// (services/elitea-inventory/src/elitea_inventory/fixture_runner.py), reached
-// over the engine socket when a stack runs the sidecar. The two are kept in
-// step BY HAND — the same trap DeepWiki records. This one is the richer of the
-// two on purpose: it is the one a browser journey reads.
+// THERE IS A SECOND FIXTURE RUNNER, in Rust
+// (services/elitea-inventory-engine/src/fixture.rs), reached over the engine
+// socket when a stack runs the sidecar with ELITEA_INVENTORY_RUNNER=fixture.
+// The two are held to the same goldens (conformance/provider/fixtures/
+// inventory/, fixture_parity_test.go here and tests/conformance.rs there).
+// This one is the richer of the two on purpose: it is the one a browser
+// journey reads.
 
 import (
 	"context"
@@ -136,6 +138,8 @@ var FixtureSteps = map[string][]string{
 	"normalize_types":        {"Reading the graph", "Normalising the entity types"},
 	"smart_normalize_types":  {"Reading the graph", "Normalising the entity types"},
 	"cleanup_cache":          {"Reading the cache", "Removing the stale entries"},
+	"import_graph":           {"Reading the graph document", "Checking the graph document"},
+	"export_graph":           {"Reading the graph", "Writing graph.json"},
 	"investigate":            {"Planning the investigation", "Reading the graph", "Writing the answer"},
 }
 
@@ -167,32 +171,32 @@ func SourceLabelFor(params Params) string {
 
 // FixtureGraph is the graph document `run_ingestion` writes, for one source
 // label. The `_metadata` block is what the read tools would have loaded.
-func FixtureGraph(sourceLabel string) map[string]any {
+func FixtureGraph(sourceLabel string) pyObject {
 	nodes := make([]any, 0, len(FixtureEntities))
 	for _, entity := range FixtureEntities {
-		nodes = append(nodes, map[string]any{
-			"id": entity.ID, "name": entity.Name, "type": entity.Type,
-			"layer": entity.Layer, "file_path": entity.FilePath,
-			"citations": []any{map[string]any{"source_toolkit": entity.Source, "file_path": entity.FilePath}},
+		nodes = append(nodes, pyObject{
+			{"id", entity.ID}, {"name", entity.Name}, {"type", entity.Type},
+			{"layer", entity.Layer}, {"file_path", entity.FilePath},
+			{"citations", []any{pyObject{{"source_toolkit", entity.Source}, {"file_path", entity.FilePath}}}},
 		})
 	}
 	edges := make([]any, 0, len(FixtureRelations))
 	for _, relation := range FixtureRelations {
-		edges = append(edges, map[string]any{
-			"source": relation.From, "target": relation.To, "relation_type": relation.Type,
+		edges = append(edges, pyObject{
+			{"source", relation.From}, {"target", relation.To}, {"relation_type", relation.Type},
 		})
 	}
-	return map[string]any{
-		"nodes": nodes,
-		"edges": edges,
-		"_metadata": map[string]any{
-			"fixture":         true,
-			"schema_version":  1,
-			"source_toolkits": fixtureSourceNames(),
-			"ingested_source": sourceLabel,
-			"node_count":      len(FixtureEntities),
-			"edge_count":      len(FixtureRelations),
-		},
+	return pyObject{
+		{"nodes", nodes},
+		{"edges", edges},
+		{"_metadata", pyObject{
+			{"fixture", true},
+			{"schema_version", 1},
+			{"source_toolkits", fixtureSourceNames()},
+			{"ingested_source", sourceLabel},
+			{"node_count", len(FixtureEntities)},
+			{"edge_count", len(FixtureRelations)},
+		}},
 	}
 }
 
@@ -327,34 +331,34 @@ func fixtureHandlers() map[string]fixtureFunc {
 		"normalize_types":       fixtureNormalizeTypes,
 		"smart_normalize_types": fixtureNormalizeTypes,
 		"rebuild_indices":       fixtureRebuildIndices,
+
+		// ── graph transfer ─────────────────────────────────────────────────
+		"import_graph": fixtureImportGraph,
+		"export_graph": fixtureExportGraph,
 	}
 }
 
 func fixtureRunIngestion(_, _ string, params Params) map[string]any {
 	label := SourceLabelFor(params)
-	graph, _ := json.MarshalIndent(FixtureGraph(label), "", "  ")
-	status, _ := json.MarshalIndent(map[string]any{
-		"sources": []any{map[string]any{
-			"source":         label,
-			"status":         "completed",
-			"entity_count":   len(FixtureEntities),
-			"relation_count": len(FixtureRelations),
-		}},
-	}, "", "  ")
-	checkpoint, _ := json.MarshalIndent(map[string]any{
-		"source": label, "stage": "completed", "files_processed": 12,
-	}, "", "  ")
+	graph := pyDumps(FixtureGraph(label))
+	status := pyDumps(pyObject{{"sources", []any{pyObject{
+		{"source", label},
+		{"status", "completed"},
+		{"entity_count", len(FixtureEntities)},
+		{"relation_count", len(FixtureRelations)},
+	}}}})
+	checkpoint := pyDumps(pyObject{{"source", label}, {"stage", "completed"}, {"files_processed", 12}})
 	return map[string]any{
 		"success": true,
 		"result": fmt.Sprintf(
 			"Ingestion completed for %s: %d entities, %d relations from %d files.",
 			label, len(FixtureEntities), len(FixtureRelations), 12),
 		"artifacts": []any{
-			map[string]any{"name": "graph.json", "type": "application/json", "data": string(graph)},
-			map[string]any{"name": "sources_status.json", "type": "application/json", "data": string(status)},
+			map[string]any{"name": "graph.json", "type": "application/json", "data": graph},
+			map[string]any{"name": "sources_status.json", "type": "application/json", "data": status},
 			map[string]any{
 				"name": ".ingestion-checkpoint-" + label + ".json",
-				"type": "application/json", "data": string(checkpoint),
+				"type": "application/json", "data": checkpoint,
 			},
 		},
 	}
@@ -711,6 +715,60 @@ func fixtureRebuildIndices(_, _ string, params Params) map[string]any {
 	return fixtureAnswer(params,
 		map[string]any{"indexed_entities": len(FixtureEntities)},
 		fmt.Sprintf("Rebuilt the indices over %d entities.", len(FixtureEntities)))
+}
+
+// fixtureImportGraph checks the document the host read from the bucket and
+// says plainly that nothing was stored: the fixture serves its canned graph,
+// and an answer that claimed an import would be a success with nothing
+// behind it.
+func fixtureImportGraph(_, _ string, params Params) map[string]any {
+	name := strings.TrimSpace(str(params["artifact_name"]))
+	if name == "" {
+		name = DefaultGraphArtifact
+	}
+	var document map[string]any
+	if err := json.Unmarshal([]byte(str(params[GraphDocumentParam])), &document); err != nil || document == nil {
+		return map[string]any{
+			"success":        false,
+			"error":          "the graph document cannot be imported: it is not a JSON object",
+			"error_category": "invalid_input",
+		}
+	}
+	links, ok := document["links"].([]any)
+	if !ok {
+		links, _ = document["edges"].([]any)
+	}
+	nodes, _ := document["nodes"].([]any)
+	var model any
+	if metadata := object(document["_metadata"]); metadata != nil {
+		if text, isText := metadata["embeddings_model"].(string); isText && text != "" {
+			model = text
+		}
+	}
+	return fixtureAnswer(params,
+		map[string]any{"stored": false, "entities": len(nodes), "relations": len(links), "embeddings_model": model},
+		fmt.Sprintf("Checked %s: %d entities and %d relations. The fixture runner serves its canned graph, so nothing was imported.",
+			name, len(nodes), len(links)))
+}
+
+// fixtureExportGraph exports the canned graph, as the engine exports the
+// stored one: graph.json as an artifact, for the host to upload.
+// The answer is a summary of what goes to the bucket (the canned graph is not
+// stored, so its revision is null); the document rides only as the artifact.
+func fixtureExportGraph(_, _ string, params Params) map[string]any {
+	graph := pyDumps(FixtureGraph(SourceLabelFor(params)))
+	bucket := ResolveBucket(params)
+	result := fixtureAnswer(params,
+		map[string]any{
+			"artifact": DefaultGraphArtifact, "bucket": bucket, "entities": len(FixtureEntities),
+			"relations": len(FixtureRelations), "revision": nil, "size_bytes": len(graph),
+		},
+		fmt.Sprintf("Exported %d entities and %d relations to %s in bucket %s (%d bytes).",
+			len(FixtureEntities), len(FixtureRelations), DefaultGraphArtifact, bucket, len(graph)))
+	result["artifacts"] = []any{
+		map[string]any{"name": DefaultGraphArtifact, "type": "application/json", "data": graph},
+	}
+	return result
 }
 
 // ---------------------------------------------------------------------------

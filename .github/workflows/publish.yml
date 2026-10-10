@@ -92,7 +92,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.work
           # uictl has no external dependencies and no go.sum, so the cache
           # would hold the toolchain and little else for two commands that run
           # once per release.
@@ -266,24 +266,14 @@ jobs:
           - name: elitea-worker-rust
             context: .
             dockerfile: ./services/elitea-worker-rust/Containerfile
-          # The Inventory provider engine (ADR-0023 H4c). Repo ROOT context:
-          # the Containerfile COPYs services/elitea-inventory from there.
-          #
-          # No build-args, and that is the whole EXTRAS decision: the
-          # knowledge-graph engine's closure is 126 packages and a release
-          # must not wait on it for two architectures. The published image
-          # serves the sidecar protocol and REFUSES every engine tool — the
-          # runner defaults to the refusing one and GET /engine/health names
-          # the active one — while still carrying the FIXTURE runner, which is
-          # what every compose stack here runs.
-          #
-          # The engine image is `docker buildx bake elitea-inventory-engine`,
-          # deliberately not released. Releasing it needs a decision about
-          # scan thresholds against that closure which this entry does not
-          # make.
-          - name: elitea-inventory
+          # The Rust-native Inventory engine (ADR-0027): the only Inventory
+          # engine sidecar. It replaced the Python elitea-inventory image,
+          # which is no longer published. Repo ROOT context: the
+          # Containerfile COPYs services/elitea-inventory-engine and the
+          # shared libs/rust crates from there.
+          - name: elitea-inventory-engine
             context: .
-            dockerfile: ./services/elitea-inventory/Containerfile
+            dockerfile: ./services/elitea-inventory-engine/Containerfile
           # The Rust-native DeepWiki engine (ADR-0026 phase 7): the only
           # engine sidecar the chart runs. It replaced the Python
           # elitea-deepwiki image, which is no longer published. Repo ROOT
@@ -475,14 +465,12 @@ jobs:
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
           # RELEASED: no build-args, so the engine closure is not in the image
           # under test either.
-          #
-          # python-pkg and EXEMPT: its Debian base carries HIGH/CRITICAL
-          # findings with no published fix. Findings #635, retirement #636 —
-          # the entry in .github/image-scan-exempt.txt, which the coverage
-          # job holds against this field.
-          - name: elitea-inventory
-            expect_type: python-pkg
-            blocking: false
+          # The Rust-native Inventory engine (ADR-0027): `rustbinary` and
+          # blocking, as the DeepWiki engine below, for the same distroless
+          # base and cargo-auditable build.
+          - name: elitea-inventory-engine
+            expect_type: rustbinary
+            blocking: true
           # The Rust-native DeepWiki engine (ADR-0026 phase 7). `rustbinary`
           # for elitea-worker-rust's reason: the Containerfile builds with
           # cargo-auditable, and this value makes a report that only reached
@@ -625,14 +613,12 @@ jobs:
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
           # RELEASED: no build-args, so the engine closure is not in the image
           # under test either.
-          #
-          # python-pkg and EXEMPT: its Debian base carries HIGH/CRITICAL
-          # findings with no published fix. Findings #635, retirement #636 —
-          # the entry in .github/image-scan-exempt.txt, which the coverage
-          # job holds against this field.
-          - name: elitea-inventory
-            expect_type: python-pkg
-            blocking: false
+          # The Rust-native Inventory engine (ADR-0027): `rustbinary` and
+          # blocking, as the DeepWiki engine below, for the same distroless
+          # base and cargo-auditable build.
+          - name: elitea-inventory-engine
+            expect_type: rustbinary
+            blocking: true
           # The Rust-native DeepWiki engine (ADR-0026 phase 7). `rustbinary`
           # for elitea-worker-rust's reason: the Containerfile builds with
           # cargo-auditable, and this value makes a report that only reached
@@ -896,6 +882,12 @@ jobs:
         run: |
           CHART_DIR="deploy/helm/${{ matrix.chart }}"
           if [ "$(yq -r '.dependencies // [] | length' "${CHART_DIR}/Chart.yaml")" -gt 0 ]; then
+            # dependency build refuses an http(s) repository it has no
+            # definition for, so register each one the chart names first.
+            yq -r '.dependencies[].repository // ""' "${CHART_DIR}/Chart.yaml" \
+              | grep -E '^https?://' | sort -u | while read -r repo; do
+                  helm repo add "dep-$(printf '%s' "$repo" | sha256sum | cut -c1-12)" "$repo" --force-update
+                done
             helm dependency build "$CHART_DIR"
           else
             echo "no dependencies declared"
@@ -996,7 +988,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory" "elitea-deepwiki-engine-native")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

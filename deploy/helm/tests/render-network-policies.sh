@@ -63,6 +63,9 @@ DEEPWIKI=(--set deepwiki.enabled=true
   --set main.env.ELITEA_DEEPWIKI_CA_FILE=/run/elitea-deepwiki/ca.crt)
 DEEPWIKI_DIRECT=(--set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=http://elitea-main:8080)
 INVENTORY=(--set inventory.enabled=true
+  --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com
+  --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.secretName=elitea-inventory-db
+  --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.key=url
   --set main.fileConfig.inventoryClientMaterial.enabled=true
   --set main.fileConfig.inventoryClientMaterial.secretName=elitea-main-inventory-client-tls
   --set main.env.ELITEA_INVENTORY_ENABLED=true

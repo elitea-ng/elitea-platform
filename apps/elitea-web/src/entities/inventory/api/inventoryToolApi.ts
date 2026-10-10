@@ -78,10 +78,22 @@ function invocationPath(
  * the settings is not optional decoration: `bucket` and `llm_model` reach the
  * provider through no other field, so an invoke without them reads the default
  * bucket and refuses to ingest.
+ *
+ * `configuration.application_id` is the toolkit's own id, and it is not
+ * optional either: the facade reads it to find the toolkit whose `sources`
+ * gate an ingestion (absent: 400), and the native engine keys every graph by
+ * project and toolkit (absent: "the call carries no integer application_id"
+ * on every tool). Measured on the standalone stack with the native engine.
  */
 function buildInventoryRequest(target: InventoryTarget, params: ToolParams) {
+  const applicationId = Number(target.toolkitId);
   return {
-    configuration: { parameters: { ...target.settings } },
+    configuration: {
+      ...(Number.isInteger(applicationId) && applicationId > 0
+        ? { application_id: applicationId }
+        : {}),
+      parameters: { ...target.settings },
+    },
     parameters: { ...params },
   };
 }

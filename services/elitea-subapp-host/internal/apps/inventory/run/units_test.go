@@ -189,7 +189,7 @@ func TestBothConstructorsProduceARunnerThatServesTheEngineTable(t *testing.T) {
 	settings := spi.Settings{Prefix: "ELITEA_INVENTORY_", EngineSocket: "/run/inventory/engine.sock"}
 	for name, runner := range map[string]*run.Runner{
 		"fixture": run.NewFixtureRunner(settings, 0),
-		"legacy":  run.NewEngineRunner(settings),
+		"sidecar": run.NewEngineRunner(settings),
 	} {
 		if runner == nil {
 			t.Fatalf("%s composed as nil", name)

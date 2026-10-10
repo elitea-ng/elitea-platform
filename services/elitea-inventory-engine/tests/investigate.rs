@@ -212,6 +212,21 @@ async fn investigate_asks_the_model_with_graph_and_source_tools() {
     assert_eq!(platform[0]["toolkit"], json!("5"));
     assert_eq!(platform[0]["bearer"], json!("Bearer callback-bearer"));
     assert_eq!(platform[0]["body"]["tool_name"], json!("read_file"));
+    // Exactly the shape the platform's investigate grant admits
+    // (material.SourceToolGate): no llm_model, no settings.
+    let mut keys: Vec<&String> = platform[0]["body"]
+        .as_object()
+        .map(|body| body.keys().collect())
+        .unwrap_or_default();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["request_id", "tool_name", "tool_params", "toolkit_config"]
+    );
+    assert_eq!(
+        platform[0]["body"]["toolkit_config"],
+        json!({"toolkit_id": "5"})
+    );
     assert_eq!(
         platform[0]["body"]["tool_params"],
         json!({"file_path": "docs/refunds.md"})

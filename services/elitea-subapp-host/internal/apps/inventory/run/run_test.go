@@ -19,6 +19,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
@@ -29,6 +30,31 @@ type recordedUpload struct{ Bucket, Name, Data string }
 type fakeArtifacts struct {
 	uploads []recordedUpload
 	fail    map[string]error
+	// objects are what Download serves, keyed "bucket/key".
+	objects map[string][]byte
+}
+
+// seededGraph is the graph.json every harness bucket holds, as the Python
+// engine left it: what import_graph reads.
+const seededGraph = `{"directed": true, "multigraph": false, "graph": {}, "nodes": [{"id": "code:a"}, {"id": "code:b"}], "links": [{"source": "code:a", "target": "code:b"}]}`
+
+func (f *fakeArtifacts) Download(_ context.Context, bucket, key string) ([]byte, error) {
+	if err := f.fail["download:"+key]; err != nil {
+		return nil, err
+	}
+	data, ok := f.objects[bucket+"/"+key]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s/%s", artifacts.ErrNotFound, bucket, key)
+	}
+	return data, nil
+}
+
+func (f *fakeArtifacts) DownloadUpTo(ctx context.Context, bucket, key string, limit int) ([]byte, error) {
+	data, err := f.Download(ctx, bucket, key)
+	if err == nil && len(data) > limit {
+		return nil, fmt.Errorf("%w: %s/%s", artifacts.ErrTooLarge, bucket, key)
+	}
+	return data, err
 }
 
 func (f *fakeArtifacts) Upload(_ context.Context, bucket, name string, data []byte) error {
@@ -85,9 +111,69 @@ func TestTheVerifiedCallerReachesTheEngine(t *testing.T) {
 	}
 }
 
+// TestTheVerifiedProjectAddressesTheGraph: the graph's project comes from the
+// signed identity. The facade sends none in the body, and a body that names
+// another project must not reach that project's graph in the shared store.
+func TestTheVerifiedProjectAddressesTheGraph(t *testing.T) {
+	h := newHarness(t, map[string]run.Tool{"search_graph": answer(map[string]any{"success": true, "result": "ok"})})
+	h.identity = spi.Identity{ProjectID: "7", UserID: "42"}
+	for _, request := range []map[string]any{
+		{"configuration": map[string]any{"application_id": 70}, "parameters": map[string]any{"query": "x"}},
+		{"configuration": map[string]any{"application_id": 70, "project_id": 8}, "project_id": 8,
+			"parameters": map[string]any{"query": "x", "project_id": 8}},
+	} {
+		if _, err := h.invoke("inventory", "inventory", "search_graph", request); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.lastArgs["project_id"]; got != "7" {
+			t.Errorf("project_id = %v, want the verified 7 (request %v)", got, request)
+		}
+	}
+}
+
+// TestARunnerOverTheStoreRefusesACallWithNoVerifiedProject: the identity
+// gate drops an unsigned or badly signed identity on a hop without mTLS, so
+// an empty identity reaches the runner. A runner over the shared graph store
+// must then refuse, never fall back to the body's project_id (which would
+// select any tenant's graph). The fixture runner reads no tenant data.
+func TestARunnerOverTheStoreRefusesACallWithNoVerifiedProject(t *testing.T) {
+	h := newHarness(t, map[string]run.Tool{"search_graph": answer(map[string]any{"success": true, "result": "ok"})})
+	h.runner.RequireVerifiedProject = true
+	request := map[string]any{"project_id": 8, "configuration": map[string]any{"application_id": 70, "project_id": 8},
+		"parameters": map[string]any{"query": "x", "project_id": 8}}
+	for _, identity := range []spi.Identity{{}, {UserID: "42"}} {
+		h.identity, h.lastArgs = identity, nil
+		body, err := h.invoke("inventory", "inventory", "search_graph", request)
+		if err == nil {
+			t.Fatalf("identity %+v: a call with no verified project was served: %v", identity, body)
+		}
+		if h.lastArgs != nil {
+			t.Fatalf("identity %+v: the engine was called with %v", identity, h.lastArgs)
+		}
+		if !strings.Contains(fmt.Sprint(body), "signed identity") {
+			t.Errorf("identity %+v: the refusal does not say why: %v", identity, body)
+		}
+	}
+	h.identity = spi.Identity{ProjectID: "7"}
+	if _, err := h.invoke("inventory", "inventory", "search_graph", request); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.lastArgs["project_id"]; got != "7" {
+		t.Errorf("project_id = %v, want the verified 7", got)
+	}
+
+	settings := spi.Settings{Prefix: "ELITEA_INVENTORY_", EngineSocket: "/run/inventory/engine.sock"}
+	if !run.NewEngineRunner(settings).RequireVerifiedProject {
+		t.Error("the engine sidecar runner serves a call with no verified project")
+	}
+	if run.NewFixtureRunner(settings, 0).RequireVerifiedProject {
+		t.Error("the fixture runner, which reads no tenant data, needs a verified project")
+	}
+}
+
 func newHarness(t *testing.T, tools map[string]run.Tool) *harness {
 	t.Helper()
-	uploads := &fakeArtifacts{fail: map[string]error{}}
+	uploads := &fakeArtifacts{fail: map[string]error{}, objects: map[string][]byte{"graphs/graph.json": []byte(seededGraph)}}
 	h := &harness{t: t, uploads: uploads}
 	wrapped := map[string]run.Tool{}
 	for name, tool := range tools {
@@ -97,7 +183,7 @@ func newHarness(t *testing.T, tools map[string]run.Tool) *harness {
 			return inner(ctx, arguments, tc)
 		}
 	}
-	h.runner = &run.Runner{RunnerName: "legacy", Tools: wrapped, Artifacts: uploads.factory()}
+	h.runner = &run.Runner{RunnerName: "sidecar", Tools: wrapped, Artifacts: uploads.factory()}
 	return h
 }
 
@@ -132,7 +218,9 @@ func (h *harness) invoke(family, toolkit, tool string, request map[string]any) (
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	// Generous: only a hang waits this long, and the tens-of-MiB import cases
+	// take several seconds under -race on a shared CI runner.
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		body, err := manager.Poll(ctx, toolkit, tool, invocation.ID)
 		if err != nil {

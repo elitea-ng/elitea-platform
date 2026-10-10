@@ -1158,12 +1158,29 @@ exit 0
         arguments
     }
 
-    /// The product a Go integer expression such as `64*1024*1024` is.
+    /// The value of a Go integer expression such as `64*1024*1024` or `64 << 20`.
     fn go_product(expression: &str) -> Option<usize> {
+        if let Some((base, shift)) = expression.split_once("<<") {
+            let base = go_product(base)?;
+            let shift = u32::try_from(go_product(shift)?).ok()?;
+            return base.checked_shl(shift);
+        }
         expression
             .split('*')
             .map(|factor| factor.trim().parse::<usize>().ok())
             .product()
+    }
+
+    /// The value of `expression` in `source`: a literal, or the name of a
+    /// constant declared there as `Name = <literal expression>`.
+    fn go_value(source: &str, expression: &str) -> Option<usize> {
+        let expression = expression.trim();
+        go_product(expression).or_else(|| {
+            source.lines().find_map(|line| {
+                let (name, value) = line.trim().split_once('=')?;
+                (name.trim() == expression).then(|| go_product(value.split("//").next()?))?
+            })
+        })
     }
 
     #[test]
@@ -1179,7 +1196,7 @@ exit 0
             .trim_end()
             .strip_suffix(')')
             .and_then(|args| args.rsplit_once(','))
-            .and_then(|(_, max)| go_product(max))
+            .and_then(|(_, max)| go_value(&source, max))
             .unwrap_or_else(|| panic!("unreadable scanner.Buffer call: {call}"));
         assert_eq!(maximum, MAX_RESULT_LINE);
     }

@@ -82,7 +82,7 @@ func findTokens(t *testing.T, root string) []string {
 		if err != nil {
 			return err
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		scanner := bufio.NewScanner(file)
 		scanner.Buffer(make([]byte, 0, 64<<10), maxScannedFileBytes)
 		for line := 1; scanner.Scan(); line++ {

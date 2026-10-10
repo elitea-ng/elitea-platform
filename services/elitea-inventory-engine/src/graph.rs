@@ -34,6 +34,18 @@
 //!   index, and a `name` property renames the node but not its index entry.
 //!   [`Graph::indices`] derives them from the nodes every time, which is
 //!   what Python's own `_rebuild_indices` computes.
+//! * **Relation provenance by last writer.** Python's edge has ONE
+//!   `source_toolkit` / `discovered_in_file`, overwritten by every source
+//!   that finds the same pair, so removing the later source (or re-reading
+//!   its file) deleted a relation the earlier one still says. Here an edge
+//!   found by two or more (source, file) contributions also carries
+//!   `provenance`: the list of them, `{"source_toolkit", "discovered_in_file"}`,
+//!   the most recent last ([`relation_provenance`]). Removing a file
+//!   or a source withdraws only its contributions; the edge goes when none
+//!   is left, and otherwise its `source_toolkit` / `discovered_in_file` name
+//!   the last remaining one. An edge with one contribution has no
+//!   `provenance` (its two fields are it), so a single-source graph's
+//!   document is byte-for-byte Python's, and a Python document loads as is.
 //! * **Edge provenance loss.** networkx writes an edge as
 //!   `{**attributes, "source": u, "target": v}`, so an edge's own `source`
 //!   attribute (`"parser"`, `"llm"`) is overwritten on every save. The
@@ -376,6 +388,12 @@ impl Graph {
         self.nodes.iter().map(|(id, node)| (id.as_str(), node))
     }
 
+    /// Every node, mutable, in insertion order (maintenance that rewrites
+    /// an attribute in place, such as `smart_normalize_types`).
+    pub fn nodes_mut(&mut self) -> impl Iterator<Item = (&str, &mut Map<String, Value>)> {
+        self.nodes.iter_mut().map(|(id, node)| (id.as_str(), node))
+    }
+
     /// Every edge `(source, target, attributes)`, in export order.
     pub fn edges(&self) -> impl Iterator<Item = (&str, &str, &Map<String, Value>)> {
         self.nodes.keys().flat_map(move |source| {
@@ -525,15 +543,35 @@ impl Graph {
             "relation_type".to_owned(),
             json!(relation_type.to_lowercase()),
         );
+        // The contributions so far, with this call's last: the one the
+        // edge's own `source_toolkit` / `discovered_in_file` name.
+        let mut provenance = self
+            .edge(source_id, target_id)
+            .map(relation_provenance)
+            .unwrap_or_default();
         if let Some(properties) = properties {
             edge.extend(properties.clone());
+            if let Some(new) = contribution(properties) {
+                provenance.retain(|entry| *entry != new);
+                provenance.push(new);
+            }
         }
         self.insert_edge(source_id, target_id, edge);
+        if !provenance.is_empty()
+            && let Some(stored) = self
+                .edges
+                .get_mut(source_id)
+                .and_then(|targets| targets.get_mut(target_id))
+        {
+            set_provenance(stored, provenance);
+        }
         true
     }
 
-    /// Forget what one file of one source said: its citations, the edges
-    /// discovered in it, and every node left with no citation at all
+    /// Forget what one file of one source said: its citations, its
+    /// contribution to the edges discovered in it (an edge goes when no
+    /// other file or source found it too), and every node left with no
+    /// citation at all
     /// (with that node's edges). A node another file or source still
     /// cites stays, with its other citations. Returns the number of nodes
     /// removed.
@@ -561,20 +599,24 @@ impl Graph {
             self.nodes.shift_remove(id);
             self.edges.shift_remove(id);
         }
-        let discovered_here = |edge: &Map<String, Value>| {
-            edge.get("discovered_in_file").and_then(Value::as_str) == Some(file_path)
-                && edge.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+        // An edge loses this file's contribution; it goes only when no
+        // other file or source still says it.
+        let discovered_here = |entry: &Map<String, Value>| {
+            entry.get("discovered_in_file").and_then(Value::as_str) == Some(file_path)
+                && entry.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
         };
         for targets in self.edges.values_mut() {
-            targets.retain(|target, edge| !orphaned.contains(target) && !discovered_here(edge));
+            targets.retain(|target, edge| {
+                !orphaned.contains(target) && withdraw(edge, discovered_here)
+            });
         }
         self.edges.retain(|_, targets| !targets.is_empty());
         orphaned.len()
     }
 
     /// Forget everything one source said: every file it cited
-    /// ([`Graph::remove_file`]) and every edge it recorded. Entities other
-    /// sources still cite stay. Returns the number of entities removed.
+    /// ([`Graph::remove_file`]) and its contribution to every edge. Entities
+    /// other sources still cite, and edges other sources also found, stay. Returns the number of entities removed.
     pub fn remove_source(&mut self, source_toolkit: &str) -> usize {
         let mut files: Vec<String> = Vec::new();
         for (_, node) in self.nodes() {
@@ -596,10 +638,45 @@ impl Graph {
             .iter()
             .map(|path| self.remove_file(source_toolkit, path))
             .sum();
-        self.retain_edges(|_, _, edge| {
-            edge.get("source_toolkit").and_then(Value::as_str) != Some(source_toolkit)
-        });
+        for targets in self.edges.values_mut() {
+            targets.retain(|_, edge| {
+                withdraw(edge, |entry| {
+                    entry.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+                })
+            });
+        }
+        self.edges.retain(|_, targets| !targets.is_empty());
         removed
+    }
+
+    /// What the graph holds of one source: the entities it cites (an
+    /// entity other sources cite too counts for each) and the edges it
+    /// recorded. What a run reports and the source status shows: the
+    /// stored graph, after duplicates merged into one entity, a relation
+    /// found twice became one edge, and the quality pass pruned.
+    #[must_use]
+    pub fn source_counts(&self, source_toolkit: &str) -> (usize, usize) {
+        let by_source = |fields: &Map<String, Value>| {
+            fields.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+        };
+        let entities = self
+            .nodes()
+            .filter(|(_, node)| {
+                node.get("citations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .chain(node.get("citation"))
+                    .filter_map(Value::as_object)
+                    .any(by_source)
+            })
+            .count();
+        // An edge other sources found too counts for each, as an entity does.
+        let relations = self
+            .edges()
+            .filter(|(_, _, edge)| relation_sources(edge).iter().any(|s| s == source_toolkit))
+            .count();
+        (entities, relations)
     }
 
     /// Set a node's embedding vector; `false` for an unknown node.
@@ -775,6 +852,96 @@ impl Graph {
 }
 
 /// Python truthiness of a JSON value.
+/// The edge attribute listing a relation's contributions when it has two
+/// or more.
+pub const PROVENANCE: &str = "provenance";
+
+/// One contribution named by `fields` (an edge, or one `provenance`
+/// entry): its `source_toolkit` and, if any, `discovered_in_file`. `None`
+/// without a string `source_toolkit`.
+fn contribution(fields: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let source = fields.get("source_toolkit").and_then(Value::as_str)?;
+    let mut entry = Map::new();
+    entry.insert("source_toolkit".to_owned(), json!(source));
+    if let Some(file) = fields.get("discovered_in_file").and_then(Value::as_str) {
+        entry.insert("discovered_in_file".to_owned(), json!(file));
+    }
+    Some(entry)
+}
+
+/// The (source, file) contributions an edge records: its `provenance`
+/// list when it has one, else the one its own `source_toolkit` /
+/// `discovered_in_file` name; empty for an edge no source recorded.
+#[must_use]
+pub fn relation_provenance(edge: &Map<String, Value>) -> Vec<Map<String, Value>> {
+    match edge.get(PROVENANCE) {
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .filter_map(Value::as_object)
+            .filter_map(contribution)
+            .collect(),
+        _ => contribution(edge).into_iter().collect(),
+    }
+}
+
+/// The distinct sources that contributed an edge, in contribution order.
+#[must_use]
+pub fn relation_sources(edge: &Map<String, Value>) -> Vec<String> {
+    let mut sources: Vec<String> = Vec::new();
+    for entry in relation_provenance(edge) {
+        if let Some(source) = entry.get("source_toolkit").and_then(Value::as_str)
+            && !sources.iter().any(|known| known == source)
+        {
+            sources.push(source.to_owned());
+        }
+    }
+    sources
+}
+
+/// Record `entries` on `edge`: the last one is what its `source_toolkit` /
+/// `discovered_in_file` say, and `provenance` lists them all when there
+/// are two or more.
+fn set_provenance(edge: &mut Map<String, Value>, entries: Vec<Map<String, Value>>) {
+    if let Some(last) = entries.last() {
+        edge.insert("source_toolkit".to_owned(), last["source_toolkit"].clone());
+        match last.get("discovered_in_file") {
+            Some(file) => {
+                edge.insert("discovered_in_file".to_owned(), file.clone());
+            }
+            None => {
+                edge.shift_remove("discovered_in_file");
+            }
+        }
+    }
+    if entries.len() > 1 {
+        edge.insert(
+            PROVENANCE.to_owned(),
+            Value::Array(entries.into_iter().map(Value::Object).collect()),
+        );
+    } else {
+        edge.shift_remove(PROVENANCE);
+    }
+}
+
+/// Withdraw the contributions `drop` matches from `edge`. `false` when the
+/// edge had contributions and none is left (it must go); an edge no source
+/// recorded is kept.
+fn withdraw(edge: &mut Map<String, Value>, drop: impl Fn(&Map<String, Value>) -> bool) -> bool {
+    let all = relation_provenance(edge);
+    if all.is_empty() {
+        return true;
+    }
+    let remaining: Vec<_> = all.iter().filter(|entry| !drop(entry)).cloned().collect();
+    if remaining.len() == all.len() {
+        return true;
+    }
+    if remaining.is_empty() {
+        return false;
+    }
+    set_provenance(edge, remaining);
+    true
+}
+
 fn truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -879,6 +1046,30 @@ mod tests {
     }
 
     #[test]
+    fn a_source_counts_what_is_stored_not_what_was_added() {
+        let cite = |file: &str, source: &str| Citation {
+            file_path: file.to_owned(),
+            source_toolkit: Some(source.to_owned()),
+            ..Citation::default()
+        };
+        let mut graph = Graph::new();
+        // Three add calls, two entities: a duplicate merges.
+        graph.add_entity("a", "A", "class", Some(&cite("a.py", "repo")), None);
+        graph.add_entity("a", "A", "class", Some(&cite("b.py", "repo")), None);
+        graph.add_entity("b", "B", "class", Some(&cite("b.py", "repo")), None);
+        graph.add_entity("w", "W", "concept", Some(&cite("w.md", "wiki")), None);
+        let by = |source: &str| json!({"source_toolkit": source});
+        // Three add calls that succeed, two edges: a re-found pair is one.
+        assert!(graph.add_relation("a", "b", "calls", by("repo").as_object()));
+        assert!(graph.add_relation("a", "b", "uses", by("repo").as_object()));
+        assert!(graph.add_relation("b", "w", "describes", by("repo").as_object()));
+        assert!(graph.add_relation("w", "a", "describes", by("wiki").as_object()));
+        assert_eq!(graph.source_counts("repo"), (2, 2));
+        assert_eq!(graph.source_counts("wiki"), (1, 1));
+        assert_eq!(graph.source_counts("absent"), (0, 0));
+    }
+
+    #[test]
     fn removing_a_file_keeps_what_others_still_cite() {
         let cite = |file: &str, source: &str| Citation {
             file_path: file.to_owned(),
@@ -943,5 +1134,113 @@ mod tests {
         assert!(graph.node("uncited").is_some());
         let edges: Vec<(&str, &str)> = graph.edges().map(|(s, t, _)| (s, t)).collect();
         assert_eq!(edges, [("other_source", "shared")]);
+    }
+
+    /// Two sources (`repo`, `mirror`) that read the same file: same ids,
+    /// so their entities merge and their relations land on the same pairs.
+    fn two_overlapping_sources() -> Graph {
+        let cite = |source: &str| Citation {
+            file_path: "a.py".to_owned(),
+            source_toolkit: Some(source.to_owned()),
+            ..Citation::default()
+        };
+        let found = |source: &str| json!({"source_toolkit": source, "discovered_in_file": "a.py", "source": "parser"});
+        let mut graph = Graph::new();
+        for source in ["repo", "mirror"] {
+            graph.add_entity("a", "A", "class", Some(&cite(source)), None);
+            graph.add_entity("b", "B", "class", Some(&cite(source)), None);
+            assert!(graph.add_relation("a", "b", "calls", found(source).as_object()));
+        }
+        // Only the mirror found this one.
+        assert!(graph.add_relation("b", "a", "uses", found("mirror").as_object()));
+        graph
+    }
+
+    #[test]
+    fn a_relation_two_sources_found_records_both() {
+        let graph = two_overlapping_sources();
+        let edge = graph.edge("a", "b").unwrap_or_else(|| panic!("the edge"));
+        assert_eq!(edge["source_toolkit"], json!("mirror"), "the last writer");
+        assert_eq!(
+            edge[PROVENANCE],
+            json!([
+                {"source_toolkit": "repo", "discovered_in_file": "a.py"},
+                {"source_toolkit": "mirror", "discovered_in_file": "a.py"},
+            ])
+        );
+        assert_eq!(relation_sources(edge), ["repo", "mirror"]);
+        let single = graph.edge("b", "a").unwrap_or_else(|| panic!("the edge"));
+        assert!(single.get(PROVENANCE).is_none(), "one contribution: none");
+        assert_eq!(graph.source_counts("repo"), (2, 1));
+        assert_eq!(graph.source_counts("mirror"), (2, 2));
+        // Found again by the same source and file: still two contributions.
+        let mut again = two_overlapping_sources();
+        let repo = json!({"source_toolkit": "repo", "discovered_in_file": "a.py"});
+        assert!(again.add_relation("a", "b", "calls", repo.as_object()));
+        let edge = again.edge("a", "b").unwrap_or_else(|| panic!("the edge"));
+        assert_eq!(relation_sources(edge), ["mirror", "repo"]);
+        assert_eq!(edge["source_toolkit"], json!("repo"));
+    }
+
+    #[test]
+    fn removing_one_of_two_sources_keeps_their_shared_relations() {
+        let mut graph = two_overlapping_sources();
+        assert_eq!(graph.remove_source("mirror"), 0, "repo still cites both");
+        let edges: Vec<(&str, &str)> = graph.edges().map(|(s, t, _)| (s, t)).collect();
+        assert_eq!(edges, [("a", "b")], "the mirror-only edge went");
+        let edge = graph.edge("a", "b").unwrap_or_else(|| panic!("the edge"));
+        assert_eq!(edge["source_toolkit"], json!("repo"));
+        assert_eq!(edge["discovered_in_file"], json!("a.py"));
+        assert!(edge.get(PROVENANCE).is_none());
+        assert_eq!(graph.source_counts("repo"), (2, 1));
+        assert_eq!(graph.source_counts("mirror"), (0, 0));
+
+        let mut graph = two_overlapping_sources();
+        assert_eq!(graph.remove_source("repo"), 0);
+        assert_eq!(graph.edge_count(), 2);
+        assert_eq!(graph.source_counts("mirror"), (2, 2));
+        assert_eq!(graph.remove_source("mirror"), 2, "now nobody cites them");
+        assert_eq!((graph.node_count(), graph.edge_count()), (0, 0));
+    }
+
+    #[test]
+    fn removing_one_source_s_file_keeps_another_source_s_relation() {
+        let mut graph = two_overlapping_sources();
+        assert_eq!(graph.remove_file("repo", "a.py"), 0);
+        let edge = graph.edge("a", "b").unwrap_or_else(|| panic!("the edge"));
+        assert_eq!(relation_sources(edge), ["mirror"]);
+        assert!(edge.get(PROVENANCE).is_none());
+        // A legacy edge (no provenance) goes with its file, as before.
+        let mut legacy = Graph::new();
+        let cite = Citation {
+            file_path: "a.py".to_owned(),
+            source_toolkit: Some("repo".to_owned()),
+            ..Citation::default()
+        };
+        legacy.add_entity("a", "A", "class", Some(&cite), None);
+        legacy.add_entity("u", "U", "class", None, None);
+        legacy.insert_edge(
+            "u",
+            "u",
+            json!({"source_toolkit": "repo", "discovered_in_file": "a.py"})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        );
+        legacy.remove_file("repo", "a.py");
+        assert_eq!(legacy.edge_count(), 0);
+    }
+
+    #[test]
+    fn provenance_round_trips_through_the_document() {
+        let graph = two_overlapping_sources();
+        let Ok(loaded) = Graph::from_node_link(&graph.to_node_link("now")) else {
+            panic!("loads");
+        };
+        let edge = loaded.edge("a", "b").unwrap_or_else(|| panic!("the edge"));
+        assert_eq!(relation_sources(edge), ["repo", "mirror"]);
+        let mut loaded = loaded;
+        loaded.remove_source("mirror");
+        assert_eq!(loaded.edge_count(), 1);
     }
 }

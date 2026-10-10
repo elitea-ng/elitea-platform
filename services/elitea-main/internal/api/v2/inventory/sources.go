@@ -59,8 +59,16 @@ var ExpandingTools = []string{"run_ingestion", "delta_update", "remove_source_en
 // the callback block (a minted bearer, the gateway and the model) and
 // nothing else. Without it the engine has no way to reach a model, which
 // is why the Python investigate never answered (its admin client was gone
-// and nothing replaced it).
-var GrantTools = []string{"investigate"}
+// and nothing replaced it). `smart_normalize_types` maps entity types with
+// the same model, so it takes the same block. `import_graph` and
+// `export_graph` call no model, but the host reads and writes the toolkit's
+// bucket with that bearer (the legacy graph.json in, the native graph out).
+//
+// investigate's grant is also RECORDED with the toolkit's source toolkits
+// (material.GrantRewriteFor): its agent calls their read-only tools through
+// test_tool with that bearer, and material.SourceToolGate admits those calls
+// with the chat-time execute permission rather than tool.patch.
+var GrantTools = []string{"investigate", "smart_normalize_types", "import_graph", "export_graph"}
 
 // SourceKinds is what this facade knows how to project, by toolkit type. The
 // descriptor admits four (github, ado_repos, gitlab, bitbucket); two are
@@ -97,12 +105,13 @@ func NewSources(
 	toolkits material.ToolkitReader,
 	settings material.SettingsResolver,
 	minter material.Minter,
+	grants material.GrantRecorder,
 	cfg SourcesConfig,
 ) (*Sources, error) {
 	base := strings.TrimRight(strings.TrimSpace(cfg.CallbackBaseURL), "/")
-	if toolkits == nil || settings == nil || minter == nil || base == "" {
+	if toolkits == nil || settings == nil || minter == nil || grants == nil || base == "" {
 		return nil, fmt.Errorf(
-			"%w: a toolkit reader, a settings resolver, a callback minter and %s are required",
+			"%w: a toolkit reader, a settings resolver, a callback minter, a grant recorder and %s are required",
 			material.ErrSourceUnavailable, CallbackBaseURLEnv)
 	}
 	return &Sources{SourceRewriter: material.SourceRewriter{
@@ -123,6 +132,7 @@ func NewSources(
 		SourceArg:    "toolkit_id",
 		OutputField:  "source",
 		Decorate:     mergeSourceConfig,
+		Grants:       grants,
 	}}, nil
 }
 
@@ -186,10 +196,9 @@ func (s *Sources) invoke(forward material.Forwarder, logger *slog.Logger) http.H
 		Provider: "Inventory",
 		Rewrite:  s.Rewrite,
 		// The grant-only tools get the callback block alone, as DeepWiki's
-		// `wiki_query` does.
-		RewriteFor: material.ForTools(
-			material.CallbackOnly("inventory", s.Minter, s.CallbackBase, s.Lifetime), GrantTools...),
-		Forward: forward,
+		// `wiki_query` does; investigate's grant is recorded besides.
+		RewriteFor: s.GrantRewriteFor("investigate", GrantTools...),
+		Forward:    forward,
 		Path: func(r *http.Request) string {
 			return spi.InvokePath(
 				chi.URLParam(r, "toolkit_name"), chi.URLParam(r, "tool_name"))

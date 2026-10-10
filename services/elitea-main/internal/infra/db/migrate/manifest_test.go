@@ -656,7 +656,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 158: shared/0158_social_feedbacks_project.sql, the legacy shared
 	// centry.social_feedbacks table (created if absent) with a nullable
 	// project_id and two indexes. No tenant table, no permission.
-	require.EqualValues(t, 158, Head(shared))
+	//
+	// 159: shared/0159_callback_token_grants.sql, what a provider callback
+	// token was minted for (elitea_identity.callback_token_grant: provider,
+	// tool, project, invoking toolkit, source toolkits), read by the
+	// Inventory investigate source-tool gate on test_tool. No permission.
+	require.EqualValues(t, 159, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

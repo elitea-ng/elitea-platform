@@ -2,15 +2,17 @@
 {{- $env := .Values.inventory.env | default dict }}
 {{- /*
   Sensitive values, resolved in the shape every other component in this chart
-  uses. Inventory has NO database of its own — no storage package, no
-  migrations, no migrate Job — so there is no database URL here and no
-  postgresql fallback to complete: the graph's home is the platform artifact
-  bucket, reached through the callback bearer the facade mints.
+  uses. The HOST container gets inventory.secrets (the identity key) and never
+  the database URL; the ENGINE sidecar gets only the database URL (from
+  inventory.secrets.ELITEA_INVENTORY_DATABASE_URL, else postgresql.
+  existingSecret, the same resolution the migrate Job uses) and never the
+  identity key. The database is the engine's own (ADR-0027): the graph lives in
+  the inventory_graph schema, migrated by the engine image's `migrate`.
 
-  `urlKey` is passed as an empty string, so the shared define adds nothing and
-  what stays is the component's own secrets map.
+  `urlKey` is not passed for the host: no database URL belongs there.
 */ -}}
-{{- $secrets := .Values.inventory.secrets | default dict }}
+{{- $secrets := omit (.Values.inventory.secrets | default dict) "ELITEA_INVENTORY_DATABASE_URL" }}
+{{- $dbSecrets := fromJson (include "elitea-inventory.databaseSecrets" .) }}
 {{- include "elitea-inventory.validateGuards" . -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -114,10 +116,14 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.inventory.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 12 }}{{- end }}
-        {{- if eq (get $env "ELITEA_INVENTORY_RUNNER" | toString) "legacy" }}
-        # The engine sidecar (ADR-0023 H2): the Python tool layer and its
-        # dependency closure, reached by the host over the shared socket. No
-        # port, no TLS, no identity — the socket directory is the only way in.
+        {{- if include "elitea-inventory.sidecar" . }}
+        # The engine sidecar (ADR-0023 H2, ADR-0027): the Rust-native engine,
+        # reached by the host over the shared socket. No port, no TLS, no
+        # identity — the socket directory is the only way in. One distroless
+        # binary: the image's own ENTRYPOINT/CMD (`elitea-inventory-engine
+        # serve`) is the sidecar, so no command is set. Its runner is
+        # inventory.engine.runner: native, or fixture (canned graph, no
+        # database read).
         - name: engine
           image: "{{ .Values.inventory.engine.image.repository }}:{{ include "elitea-inventory.engineTag" . }}"
           imagePullPolicy: {{ .Values.inventory.engine.image.pullPolicy }}
@@ -125,28 +131,33 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          # The image's ENTRYPOINT already IS the sidecar (`python -m
-          # elitea_inventory`), unlike DeepWiki's, whose entrypoint is its SPI
-          # shell. Stated anyway so a change to that entrypoint cannot silently
-          # start something else in this pod.
-          command: ["python", "-m", "elitea_inventory"]
           env:
-            {{- $engineEnv := merge (dict "ELITEA_INVENTORY_RUNNER" .Values.inventory.engine.runner) $env }}
+            {{- $engineEnv := merge (dict "ELITEA_INVENTORY_RUNNER" (.Values.inventory.engine.runner | toString)) (omit $env "ELITEA_INVENTORY_IDENTITY_SECRET" "ELITEA_INVENTORY_RUNNER") }}
             {{- range $key, $value := $engineEnv }}
-            {{- if not (hasKey $secrets $key) }}
+            {{- if not (hasKey $dbSecrets $key) }}
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
             {{- end }}
-            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+            {{- with .Values.inventory.engine.callbackCa.secretName }}
+            # Model calls and artifact reads go to the callback origin; when
+            # that is TLS under a private CA, trust it.
+            - name: ELITEA_INVENTORY_CALLBACK_CA_FILE
+              value: {{ $.Values.inventory.engine.callbackCa.mountPath }}/{{ $.Values.inventory.engine.callbackCa.key }}
+            {{- end }}
+            # ELITEA_INVENTORY_DATABASE_URL, from the secret the migrate Job
+            # reads (validateGuards refuses a native runner without one).
+            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $dbSecrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+          # Distroless: no shell, no python. The binary connects to its own
+          # socket and asks it for its health.
           livenessProbe:
             exec:
-              command: ["python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('{{ .Values.inventory.engine.socketDir }}/engine.sock'); s.close()"]
+              command: ["/usr/local/bin/elitea-inventory-engine", "healthcheck"]
             periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
           readinessProbe:
             exec:
-              command: ["python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('{{ .Values.inventory.engine.socketDir }}/engine.sock'); s.close()"]
+              command: ["/usr/local/bin/elitea-inventory-engine", "healthcheck"]
             periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
           resources:
@@ -154,14 +165,19 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            # The engine reads a source repository and builds a graph before
-            # uploading it. That is ephemeral pod storage by design: nothing
-            # durable lives here, and a replica that dies mid-ingestion loses
-            # only work that is being redone anyway.
+            # Shallow clones of the repositories being ingested (removed after
+            # each run). Ephemeral by design: the graph lives in PostgreSQL,
+            # never here, and a replica that dies mid-ingestion loses only
+            # work that is being redone anyway.
             - name: scratch
               mountPath: {{ .Values.inventory.scratch.mountPath }}
             - name: engine-socket
               mountPath: {{ .Values.inventory.engine.socketDir }}
+            {{- if .Values.inventory.engine.callbackCa.secretName }}
+            - name: callback-ca
+              mountPath: {{ .Values.inventory.engine.callbackCa.mountPath }}
+              readOnly: true
+            {{- end }}
         {{- end }}
       volumes:
         - name: tmp
@@ -173,6 +189,15 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        {{- if and (include "elitea-inventory.sidecar" .) .Values.inventory.engine.callbackCa.secretName }}
+        # Only the CA key of the named Secret: nothing else in it is mounted.
+        - name: callback-ca
+          secret:
+            secretName: {{ .Values.inventory.engine.callbackCa.secretName }}
+            items:
+              - key: {{ .Values.inventory.engine.callbackCa.key }}
+                path: {{ .Values.inventory.engine.callbackCa.key }}
+        {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 8 }}{{- end }}
       {{- with .Values.inventory.nodeSelector }}
       nodeSelector:

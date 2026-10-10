@@ -1,11 +1,12 @@
 //! The pattern, semantic, community and admin tools against the Python
 //! engine's own answers.
 //!
-//! `fixtures/retrieval_more/generate.py` builds `graph.json` (and the bare
-//! `bare.json`) with the Python `KnowledgeGraph`, loads them back as
-//! production did, and records in `goldens.json` what the real Python code
-//! answered (see the generator for the two things it arranges: start-set
-//! order, and the chat closures around the wrapper methods).
+//! A deleted generator (`fixtures/PROVENANCE.md`) built `graph.json` (and
+//! the bare `bare.json`) with the Python `KnowledgeGraph`, loaded them back
+//! as production did, and recorded in `goldens.json` what the real Python
+//! code answered (see the generator at that commit for the two things it
+//! arranged: start-set order, and the chat closures around the wrapper
+//! methods).
 
 mod common;
 

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
@@ -140,11 +139,8 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 		IdleTimeout:       config.ContentIdleTimeout,
 		MaxHeaderBytes:    config.ContentMaxHeaderBytes,
 	}
-	if err := http2.ConfigureServer(contentServer, &http2.Server{
-		MaxConcurrentStreams: uint32(config.ContentMaxStreams),
-	}); err != nil {
-		return nil, fmt.Errorf("configure content HTTP/2 limits: %w", err)
-	}
+	// ServeTLS enables HTTP/2 itself and applies this configuration.
+	contentServer.HTTP2 = &http.HTTP2Config{MaxConcurrentStreams: config.ContentMaxStreams}
 	return &PrivateServerSet{
 		config:        config,
 		controlServer: controlServer,

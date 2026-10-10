@@ -195,6 +195,15 @@ pub async fn complete(
     graph: &Graph,
     completion: &Completion<'_>,
 ) -> Result<i64> {
+    commit_run(pool, key, graph, completion).await
+}
+
+async fn commit_run(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    completion: &Completion<'_>,
+) -> Result<i64> {
     let mut transaction = pool.begin().await?;
     let revision = write_graph(&mut transaction, key, graph).await?;
     sqlx::query(

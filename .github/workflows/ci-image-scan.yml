@@ -50,23 +50,19 @@ name: CI — Image scan
 # for a weaker test. The `coverage` job fails when the two matrices disagree
 # about an image, its expected target type, or whether it blocks.
 #
-# TWO IMAGES DO NOT BLOCK, AND THEY SAY SO
+# ONE IMAGE DOES NOT BLOCK, AND IT SAYS SO
 #
-# `elitea-worker-python` and `elitea-inventory` are scanned, report their full
-# finding counts, and do NOT fail the merge. Every other image blocks.
+# `elitea-worker-python` is scanned, reports its full finding count, and does
+# NOT fail the merge. Every other image blocks.
 #
-# A THIRD used to. `pylon-indexer` carried 604 findings, all of them from
+# Others used to. `pylon-indexer` carried 604 findings, all of them from
 # `ghcr.io/eliteaai/pylon:1.2.25`, an image this repository never built. #509
 # recorded them and said the exemption ends when the service goes away rather
 # than by correcting an image we delete. #339 deleted it, so the entry is gone
-# from here and from the register. That is the shape an exemption is supposed
-# to have: a cause, and an end.
-#
-# They are exempt for different reasons, and the difference is the point.
-# elitea-inventory's are ALL from the Debian base, none from this project's own
-# packages, and none has a published fixed version (measured as 54 on
-# 2026-09-06 on the retired elitea-deepwiki image, which had the same base).
-# Both #635 and #636 hold that measurement and the path that ends it.
+# from here and from the register. The Python elitea-inventory image (Debian
+# base findings with no published fix, #635/#636) ended the same way: the
+# Rust engine on distroless replaced it. That is the shape an exemption is
+# supposed to have: a cause, and an end.
 #
 # elitea-worker-python is the MIXED case the register's criterion 1 was widened
 # for: 82 of its 101 lines come from a Debian base with no fix published, and
@@ -76,7 +72,7 @@ name: CI — Image scan
 # they too are owned outside this repository, and the register names them one
 # by one rather than rounding them into "upstream".
 #
-# `.github/image-scan-exempt.txt` records both, with the date each count was
+# `.github/image-scan-exempt.txt` records it, with the date each count was
 # re-measured. A count in a comment goes stale in silence; the guard that does
 # not is the one below — an exempt image reporting ZERO findings FAILS.
 #
@@ -423,26 +419,18 @@ jobs:
             target: ""
             expect_type: rustbinary
             blocking: true
-          # The Inventory provider engine (ADR-0023 H4c). Repo ROOT context:
-          # the Containerfile COPYs services/elitea-inventory from there.
-          #
-          # No build_args, exactly as publish.yml releases it. Scanning the
-          # `-engine` build instead would report on a closure nobody publishes,
-          # which is a scan of something that does not ship.
-          #
-          # EXEMPT on Debian base findings with no published fix. The cause
-          # was measured on the retired elitea-deepwiki image, which had the
-          # same base: python:3.12.14-slim with the same --only-upgrade of
-          # the three packages Debian trixie has a fix for. Findings #635,
-          # retirement #636 — and the coverage job holds this field and
-          # .github/image-scan-exempt.txt in step.
-          - name: elitea-inventory
+          # The Rust-native Inventory engine (ADR-0027). Repo ROOT context:
+          # the Containerfile COPYs services/elitea-inventory-engine and the
+          # shared libs/rust crates from there. `rustbinary` and blocking for
+          # the DeepWiki engine's reasons below: cargo-auditable, distroless
+          # base-nossl-debian13 plus libgcc_s.
+          - name: elitea-inventory-engine
             context: .
-            dockerfile: ./services/elitea-inventory/Containerfile
+            dockerfile: ./services/elitea-inventory-engine/Containerfile
             target: ""
             build_args: ""
-            expect_type: python-pkg
-            blocking: false
+            expect_type: rustbinary
+            blocking: true
           # The Rust-native DeepWiki engine (ADR-0026 phase 7). Repo ROOT
           # context: the Containerfile COPYs services/elitea-deepwiki-engine
           # from there. `rustbinary` and
