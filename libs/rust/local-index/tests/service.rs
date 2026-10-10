@@ -68,6 +68,35 @@ fn open() -> Opened {
     }
 }
 
+/// A file ingestion decoded from `Shift_JIS` reads back through the tool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn entity_content_reads_a_legacy_encoded_file_ingestion_indexed() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = "# 返金ポリシー: 返金は三十日以内に受け付けます。\n# 担当は請求チームです。\nclass Refunds:\n    def run(self):\n        return 1\n";
+    let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(source);
+    assert!(std::str::from_utf8(&bytes).is_err());
+    std::fs::write(folder.path().join("refunds.py"), &bytes).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = IndexService::open(
+        "ws1",
+        folder.path(),
+        &[],
+        &data.path().join("index"),
+        Arc::new(Recorded::default()),
+    )
+    .unwrap();
+    service.refresh(false).await.unwrap();
+    let content = call(
+        &service,
+        "get_entity_content",
+        json!({"entity_name": "Refunds"}),
+    )
+    .await;
+    let content = text(&content);
+    assert!(content.contains("class Refunds:"), "{content}");
+    assert!(content.contains("def run(self):"), "{content}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_build_then_an_incremental_refresh_reads_only_what_changed() {
     let opened = open();

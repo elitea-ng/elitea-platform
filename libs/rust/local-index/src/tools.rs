@@ -283,7 +283,7 @@ fn entity_content(
     let (path, start, end) = located(view, name)?;
     let file = WsPath::from_relative(Path::new(&path)).ok()?;
     let read = workspace.read(&file, MAX_FILE_BYTES).ok()?;
-    let text = std::str::from_utf8(&read.bytes).ok()?;
+    let text = elitea_doc_extract::decode_text(&read.bytes).ok()?;
     let lines: Vec<&str> = text.lines().collect();
     let first = usize::try_from(start.max(1)).ok()?;
     let last = if end >= start && end > 0 {
