@@ -538,16 +538,8 @@ pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
     Ok(deleted > 0)
 }
 
-/// What [`import`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Imported {
-    /// The graph was saved at this revision.
-    Saved { revision: i64 },
-    /// Nothing was written: native ingestion state exists for the graph
-    /// (source status rows, document versions) and replacing it was not
-    /// asked for.
-    HasIngestionState { sources: i64, documents: i64 },
-}
+/// What [`import`] did (the shared core's type, ADR-0029 decision 7).
+pub use elitea_inventory_core::store::Imported;
 
 /// Store an imported graph (`import-graph`) in one transaction: refused
 /// while the graph has native ingestion state, unless `replace_state`, which

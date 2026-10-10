@@ -44,7 +44,7 @@ use elitea_content_source::Acl;
 use elitea_inventory_core::graph::Graph;
 /// The key every call of this store takes (re-exported for its callers).
 pub use elitea_inventory_core::store::GraphKey;
-use elitea_inventory_core::store::{Completion, GraphStore, Ranking, SourceStatus};
+use elitea_inventory_core::store::{Completion, GraphStore, Imported, Ranking, SourceStatus};
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, params};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -1051,24 +1051,27 @@ fn last_completed_run(conn: &Connection, key: GraphKey) -> Result<Option<String>
     )?)
 }
 
-fn commit(
-    conn: &mut Connection,
+/// The graph's rows and head in `transaction`: the entities and relations
+/// that changed, the policy fingerprint when there is one, and the head row
+/// at a new revision. Returns the revision and the rows written.
+fn write_graph(
+    transaction: &rusqlite::Transaction<'_>,
     key: GraphKey,
     graph: &Graph,
-    completion: &Completion<'_>,
-    rows: &Written<'_>,
+    entities: &[EntityRow],
+    relations: &[RelationRow],
+    policy: Option<&str>,
 ) -> Result<(i64, u64)> {
-    let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let mut written = write_entities(&transaction, key, rows.entities)?;
-    written += write_relations(&transaction, key, rows.relations)?;
-    if let Some(policy) = rows.policy {
+    let mut written = write_entities(transaction, key, entities)?;
+    written += write_relations(transaction, key, relations)?;
+    if let Some(policy) = policy {
         written += count(transaction.execute(
             "INSERT INTO meta (key, value) VALUES ('policy', ?1)
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             [policy],
         )?);
     }
-    let revision = next_revision(&transaction)?;
+    let revision = next_revision(transaction)?;
     let schema = graph.schema.as_ref().map(to_text).transpose()?;
     written += count(transaction.execute(
         "INSERT INTO graphs (project_id, application_id, revision, attributes, metadata, schema)
@@ -1085,6 +1088,25 @@ fn commit(
             schema
         ],
     )?);
+    Ok((revision, written))
+}
+
+fn commit(
+    conn: &mut Connection,
+    key: GraphKey,
+    graph: &Graph,
+    completion: &Completion<'_>,
+    rows: &Written<'_>,
+) -> Result<(i64, u64)> {
+    let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let (revision, mut written) = write_graph(
+        &transaction,
+        key,
+        graph,
+        rows.entities,
+        rows.relations,
+        rows.policy,
+    )?;
     written += write_documents(&transaction, key, completion, rows.stats)?;
     written += count(transaction.execute(
         &format!(
@@ -1449,6 +1471,79 @@ impl GraphStore for SqliteGraphStore {
             }
             transaction.commit()?;
             Ok(existed)
+        })
+    }
+
+    async fn save(&self, key: GraphKey, graph: &Graph) -> Result<i64> {
+        let entities = entity_rows(graph)?;
+        let relations = relation_rows(graph)?;
+        self.with(|conn| {
+            let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let (revision, _) = write_graph(&transaction, key, graph, &entities, &relations, None)?;
+            transaction.commit()?;
+            Ok(revision)
+        })
+    }
+
+    async fn remove_source(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        toolkit_id: &str,
+        source_name: &str,
+    ) -> Result<i64> {
+        let entities = entity_rows(graph)?;
+        let relations = relation_rows(graph)?;
+        self.with(|conn| {
+            let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let (revision, _) = write_graph(&transaction, key, graph, &entities, &relations, None)?;
+            transaction.execute(
+                "DELETE FROM documents
+                  WHERE project_id = ?1 AND application_id = ?2 AND source_name = ?3",
+                params![key.project_id, key.application_id, source_name],
+            )?;
+            transaction.execute(
+                "DELETE FROM sources
+                  WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id = ?3",
+                params![key.project_id, key.application_id, toolkit_id],
+            )?;
+            transaction.commit()?;
+            Ok(revision)
+        })
+    }
+
+    async fn import(&self, key: GraphKey, graph: &Graph, replace_state: bool) -> Result<Imported> {
+        let entities = entity_rows(graph)?;
+        let relations = relation_rows(graph)?;
+        self.with(|conn| {
+            let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let mut counts = [0_i64; 2];
+            for (found, table) in counts.iter_mut().zip(["sources", "documents"]) {
+                *found = transaction.query_row(
+                    &format!(
+                        "SELECT count(*) FROM {table} WHERE project_id = ?1 AND application_id = ?2"
+                    ),
+                    params![key.project_id, key.application_id],
+                    |row| row.get(0),
+                )?;
+                if replace_state {
+                    transaction.execute(
+                        &format!(
+                            "DELETE FROM {table} WHERE project_id = ?1 AND application_id = ?2"
+                        ),
+                        params![key.project_id, key.application_id],
+                    )?;
+                }
+            }
+            if !replace_state && counts.iter().any(|found| *found > 0) {
+                return Ok(Imported::HasIngestionState {
+                    sources: counts[0],
+                    documents: counts[1],
+                });
+            }
+            let (revision, _) = write_graph(&transaction, key, graph, &entities, &relations, None)?;
+            transaction.commit()?;
+            Ok(Imported::Saved { revision })
         })
     }
 }

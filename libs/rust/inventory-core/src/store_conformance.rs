@@ -5,13 +5,15 @@
 //! the retrieval tools alike over the same graph.
 //!
 //! [`run`] takes a FRESH, EMPTY store and panics on the first broken
-//! promise, naming it. It uses the graphs `(1, 1)` to `(1, 8)` and
+//! promise, naming it. It uses the graphs `(1, 1)` to `(1, 9)` and
 //! `(1, 105)`, and deletes each graph it wrote.
 
 #![allow(clippy::missing_panics_doc, clippy::too_many_lines)]
 
 use crate::graph::{Citation, Graph};
-use crate::store::{Completion, DocumentState, GraphKey, GraphStore, RunCounts, SourceStatus};
+use crate::store::{
+    Completion, DocumentState, GraphKey, GraphStore, Imported, RunCounts, SourceStatus,
+};
 use elitea_content_source::Acl;
 use elitea_content_source::acl::{Principal, PrincipalKind};
 use serde_json::{Map, json};
@@ -27,6 +29,7 @@ pub async fn run<S: GraphStore>(store: &S) {
     one_lease_holder_at_a_time(store, key(5)).await;
     ranking(store, key(6)).await;
     graphs_are_apart(store).await;
+    the_administrative_writers(store, key(9)).await;
 }
 
 fn key(application_id: i64) -> GraphKey {
@@ -429,4 +432,104 @@ async fn graphs_are_apart<S: GraphStore>(store: &S) {
         1
     );
     ok("delete", store.delete(one).await);
+}
+
+/// `save`, `remove_source` and `import`: the writes that are not a run's
+/// completion. Each is one transaction that moves the revision, and each
+/// leaves exactly the state it is documented to leave.
+async fn the_administrative_writers<S: GraphStore>(store: &S, key: GraphKey) {
+    let graph = sample();
+    let documents = BTreeMap::from([("src/a.py".to_owned(), document("v1"))]);
+    let first = ok(
+        "complete",
+        commit(store, key, &graph, "repo", &documents).await,
+    );
+
+    // save: the graph is replaced, the sources' state is not touched.
+    let mut changed = graph.clone();
+    changed.add_entity("saved", "Saved", "class", None, None);
+    let saved = ok("save", store.save(key, &changed).await);
+    assert!(
+        saved > first,
+        "a save bumps the revision ({first} -> {saved})"
+    );
+    assert_eq!(ok("revision", store.revision(key).await), Some(saved));
+    let Some((loaded, _)) = ok("load", store.load(key).await) else {
+        panic!("the saved graph loads");
+    };
+    assert_same_graph(&loaded, &changed, "saved graph");
+    assert_eq!(
+        ok("versions", store.document_versions(key, "repo").await),
+        BTreeMap::from([("src/a.py".to_owned(), "v1".to_owned())]),
+        "a save keeps the document versions"
+    );
+    let status = ok("status", store.status_document(key).await);
+    assert_eq!(status["sources"]["repo"]["status"], json!("completed"));
+
+    // import: refused while native state exists, and it writes nothing.
+    let mut imported = Graph::new();
+    imported.add_entity("imp", "Imp", "class", None, None);
+    assert!(
+        matches!(
+            ok("import", store.import(key, &imported, false).await),
+            Imported::HasIngestionState {
+                sources: 1,
+                documents: 1
+            }
+        ),
+        "an import over ingestion state is refused"
+    );
+    assert_eq!(
+        ok("revision", store.revision(key).await),
+        Some(saved),
+        "a refused import writes nothing"
+    );
+    // ... and with replace_state it takes the state with the old graph.
+    let Imported::Saved { revision } = ok("import", store.import(key, &imported, true).await)
+    else {
+        panic!("an import that replaces the state is stored");
+    };
+    assert!(revision > saved, "an import bumps the revision");
+    let Some((loaded, _)) = ok("load", store.load(key).await) else {
+        panic!("the imported graph loads");
+    };
+    assert_same_graph(&loaded, &imported, "imported graph");
+    assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
+    assert_eq!(
+        ok("status", store.status_document(key).await)["sources"],
+        json!({}),
+        "replacing the state removed the sources"
+    );
+    // An import over a graph with no state needs no flag.
+    assert!(matches!(
+        ok("import", store.import(key, &graph, false).await),
+        Imported::Saved { .. }
+    ));
+
+    // remove_source: the graph without the source, and its state gone,
+    // while another source's state stays.
+    ok(
+        "complete",
+        commit(store, key, &graph, "repo", &documents).await,
+    );
+    let mirror = BTreeMap::from([("m.py".to_owned(), document("m1"))]);
+    ok(
+        "complete",
+        commit(store, key, &graph, "mirror", &mirror).await,
+    );
+    let removed_at = ok(
+        "remove_source",
+        store.remove_source(key, &graph, "repo", "repo").await,
+    );
+    assert_eq!(ok("revision", store.revision(key).await), Some(removed_at));
+    assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
+    assert_eq!(
+        ok("versions", store.document_versions(key, "mirror").await).len(),
+        1,
+        "another source's versions stay"
+    );
+    let status = ok("status", store.status_document(key).await);
+    assert!(status["sources"]["repo"].is_null(), "{status}");
+    assert!(status["sources"]["mirror"].is_object(), "{status}");
+    ok("delete", store.delete(key).await);
 }

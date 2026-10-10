@@ -4,7 +4,7 @@
 
 use super::sources::{self, Completion, Lease, SourceStatus};
 use super::vectors::{self, Ranking};
-use super::{GraphKey, StoreError};
+use super::{GraphKey, Imported, StoreError};
 use crate::graph::Graph;
 use elitea_content_source::Acl;
 use elitea_inventory_core::store::GraphStore;
@@ -95,5 +95,28 @@ impl GraphStore for PgGraphStore {
 
     async fn delete(&self, key: GraphKey) -> Result<bool, StoreError> {
         super::delete(&self.pool, key).await
+    }
+
+    async fn save(&self, key: GraphKey, graph: &Graph) -> Result<i64, StoreError> {
+        super::save(&self.pool, key, graph).await
+    }
+
+    async fn remove_source(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        toolkit_id: &str,
+        source_name: &str,
+    ) -> Result<i64, StoreError> {
+        sources::remove(&self.pool, key, graph, toolkit_id, source_name).await
+    }
+
+    async fn import(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        replace_state: bool,
+    ) -> Result<Imported, StoreError> {
+        super::import(&self.pool, key, graph, replace_state).await
     }
 }

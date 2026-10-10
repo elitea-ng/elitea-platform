@@ -224,7 +224,54 @@ pub trait GraphStore: Send + Sync {
 
     /// Delete the graph and its sources' state; `true` when there was a
     /// graph.
+    ///
+    /// This is the bare delete, atomic on its own. A caller that must not
+    /// race an ingestion takes the [`GraphStore::lease`] first.
     fn delete(&self, key: GraphKey) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    /// Replace the graph with `graph` in one transaction (its revision
+    /// moves), leaving the sources' status and document versions alone: the
+    /// write of an administrative edit such as type normalisation. Returns
+    /// the new revision. The caller holds the [`GraphStore::lease`].
+    fn save(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+    ) -> impl Future<Output = Result<i64, Self::Error>> + Send;
+
+    /// Commit a source's removal in ONE transaction: `graph` (already
+    /// without the source), and the source's status row and document
+    /// versions gone. Returns the new revision. The caller holds the
+    /// [`GraphStore::lease`].
+    fn remove_source(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        toolkit_id: &str,
+        source_name: &str,
+    ) -> impl Future<Output = Result<i64, Self::Error>> + Send;
+
+    /// Store an imported graph in one transaction: refused
+    /// ([`Imported::HasIngestionState`]) while the graph has native
+    /// ingestion state, unless `replace_state`, which deletes that state
+    /// with the old graph. The caller holds the [`GraphStore::lease`].
+    fn import(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        replace_state: bool,
+    ) -> impl Future<Output = Result<Imported, Self::Error>> + Send;
+}
+
+/// What [`GraphStore::import`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Imported {
+    /// The graph was saved at this revision.
+    Saved { revision: i64 },
+    /// Nothing was written: native ingestion state exists for the graph
+    /// (source status rows, document versions) and replacing it was not
+    /// asked for.
+    HasIngestionState { sources: i64, documents: i64 },
 }
 
 #[cfg(test)]

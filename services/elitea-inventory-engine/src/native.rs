@@ -62,7 +62,7 @@ fn invalid(message: impl Into<String>) -> EngineError {
 ///
 /// `FileNotFound` when no graph is stored; `Runtime` on a store failure.
 pub async fn load_existing(pool: &PgPool, key: GraphKey) -> Result<Graph, EngineError> {
-    match store::load(pool, key).await {
+    match store::PgGraphStore::new(pool.clone()).load(key).await {
         Ok(Some((graph, _))) => Ok(graph),
         Ok(None) => Err(EngineError::new(
             ErrorType::FileNotFound,
@@ -224,19 +224,22 @@ impl NativeRunner {
         let store_error =
             |e: crate::store::StoreError| EngineError::new(ErrorType::Runtime, e.to_string());
         let (toolkit_id, name) = Self::source_identity(params)?;
-        let Some(_lease) = sources::lease(&self.pool, key).await.map_err(store_error)? else {
+        let graphs = self.views.store();
+        let Some(_lease) = graphs.lease(key).await.map_err(store_error)? else {
             return Err(EngineError::new(
                 ErrorType::Runtime,
                 "an ingestion of this Inventory toolkit is running; remove the source when it finishes",
             ));
         };
-        let mut graph = store::load(&self.pool, key)
+        let mut graph = graphs
+            .load(key)
             .await
             .map_err(store_error)?
             .map(|(graph, _)| graph)
             .unwrap_or_default();
         let removed = graph.remove_source(&name);
-        sources::remove(&self.pool, key, &graph, &toolkit_id, &name)
+        graphs
+            .remove_source(key, &graph, &toolkit_id, &name)
             .await
             .map_err(store_error)?;
         Ok(crate::retrieval::answer(format!(
@@ -402,7 +405,8 @@ impl NativeRunner {
         }
         context.checkpoint()?;
         context.thinking("Applying type mappings to graph...");
-        let Some(_lease) = sources::lease(&self.pool, key).await.map_err(store_error)? else {
+        let graphs = self.views.store();
+        let Some(_lease) = graphs.lease(key).await.map_err(store_error)? else {
             return Err(EngineError::new(
                 ErrorType::Runtime,
                 "an ingestion of this Inventory toolkit is running; normalise the types when it finishes",
@@ -411,9 +415,7 @@ impl NativeRunner {
         // The graph as stored now, not as planned: a run may have saved since.
         let mut graph = load_existing(&self.pool, key).await?;
         let entities_normalized = admin::apply_mappings(&mut graph, &mappings);
-        store::save(&self.pool, key, &graph)
-            .await
-            .map_err(store_error)?;
+        graphs.save(key, &graph).await.map_err(store_error)?;
         let applied = Applied {
             types_after: admin::graph_entity_types(&graph).len(),
             entities_normalized,
