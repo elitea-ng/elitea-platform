@@ -127,13 +127,28 @@ func TestCapabilityVerdicts(t *testing.T) {
 	require.True(t, both.Rust)
 	require.Equal(t, VerdictSupported, both.Verdict)
 
-	// jira was the Python-only example until its partial Rust family landed.
-	// No catalogue type is verified on Python alone any more, so a type both
-	// workers run stands in for the old case: the verdict must stay supported.
-	pythonOnly := source.ToolkitCapability("jira")
+	// jira was the Python-only example until its partial Rust family landed;
+	// it is carried by both workers now.
+	jira := source.ToolkitCapability("jira")
+	require.True(t, jira.Python)
+	require.True(t, jira.Rust)
+	require.Equal(t, VerdictSupported, jira.Verdict)
+
+	// No pinned catalogue type is Python-only today, so the Python-only row
+	// is exercised on the verdict table with a type the Rust worker genuinely
+	// does not dispatch (pptx): it must still read as supported, by Python.
+	require.False(t, rustNativeTypes()["pptx"], "pptx must stay unsupported on Rust for this case")
+	pythonOnly := capabilityVerdict("pptx", true, rustNativeTypes()["pptx"])
 	require.True(t, pythonOnly.Python)
-	require.True(t, pythonOnly.Rust)
+	require.False(t, pythonOnly.Rust)
 	require.Equal(t, VerdictSupported, pythonOnly.Verdict)
+	require.NotContains(t, pythonOnly.Reason, "Rust")
+	for _, toolkitType := range CapabilityTypes() {
+		capability := source.ToolkitCapability(toolkitType)
+		if capability.Python && !capability.Rust {
+			require.Equal(t, pythonOnly.Reason, capability.Reason, "%s is Python-only", toolkitType)
+		}
+	}
 
 	rustOnly := source.ToolkitCapability("slack")
 	require.False(t, rustOnly.Python)
@@ -147,7 +162,7 @@ func TestCapabilityVerdicts(t *testing.T) {
 
 	// Every verdict carries a sentence naming the runtime fact behind it. A
 	// bare boolean would send the operator to read Go source.
-	for _, capability := range []Capability{both, pythonOnly, rustOnly, neither} {
+	for _, capability := range []Capability{both, jira, pythonOnly, rustOnly, neither} {
 		require.NotEmpty(t, capability.Reason)
 	}
 	require.Contains(t, neither.Reason, "not verified",

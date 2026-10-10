@@ -205,9 +205,13 @@ type PinnedWorkerCapabilities struct{}
 // ToolkitCapability resolves one catalogue type.
 func (PinnedWorkerCapabilities) ToolkitCapability(toolkitType string) Capability {
 	key := strings.TrimSpace(toolkitType)
-	python := pythonVerifiedTypes()[key]
-	rust := rustNativeTypes()[key]
+	return capabilityVerdict(key, pythonVerifiedTypes()[key], rustNativeTypes()[key])
+}
 
+// capabilityVerdict is the verdict table for one type given what each worker
+// carries. Split out so every row is testable even when the pinned lists hold
+// no type for it (no catalogue type is Python-only today).
+func capabilityVerdict(key string, python, rust bool) Capability {
 	capability := Capability{ToolkitType: key, Python: python, Rust: rust}
 	switch {
 	case python && rust:
