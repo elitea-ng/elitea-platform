@@ -16,6 +16,10 @@
 //! * per provider (feature `providers`): its configuration (secrets
 //!   zeroized), its errors (data-free), its wire layer and its request
 //!   building and authentication — [`ado`], [`bitbucket`], [`github`], [`gitlab`].
+//! * `ContentSource` connectors over those clients (feature
+//!   `content-source`): [`source`] holds what they share (egress guard,
+//!   bounded 429 backoff, listing and fetch caps); each provider module holds
+//!   its own `source`.
 
 // The provider modules were crate-private in agent-runtime and are public
 // here only so the families can call them: their accessors are plain getters
@@ -35,6 +39,8 @@ pub mod github;
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
 pub mod gitlab;
 mod reqwest_adapter;
+#[cfg(feature = "content-source")]
+pub mod source;
 pub mod transport;
 
 pub use reqwest_adapter::{BuildError, ClientPolicy};

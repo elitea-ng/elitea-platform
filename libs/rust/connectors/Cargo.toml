@@ -7,14 +7,16 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = ["providers"]
+# Both on by default, so `cargo test -p elitea-connectors` runs every
+# connector suite. agent-runtime turns defaults off and takes `providers`
+# alone: the toolkit families never list or fetch documents.
+default = ["providers", "content-source"]
 # The provider clients (configuration, wire layer, request building and
 # authentication). Off only for a crate that wants the egress rule alone
 # (elitea-repo-ingest), so it does not link the provider dependencies.
 providers = [
     "dep:base64",
     "dep:chrono",
-    "dep:percent-encoding",
     "dep:ring",
     "dep:serde_json",
     "dep:tokio",
@@ -43,7 +45,6 @@ url = "2.5.8"
 base64 = { version = "0.23.1", optional = true }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"], optional = true }
 elitea-content-source = { path = "../content-source", optional = true }
-percent-encoding = { version = "2.3.2", optional = true }
 # RS256 for the GitHub App JWT only; it is not a TLS provider.
 ring = { version = "0.17.14", optional = true }
 # Default features only: nothing here may depend on map order or number

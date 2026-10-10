@@ -11,3 +11,5 @@
 pub mod client;
 pub mod config;
 pub mod repos;
+#[cfg(feature = "content-source")]
+pub mod source;

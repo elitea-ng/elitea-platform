@@ -4,4 +4,6 @@
 
 pub mod config;
 pub mod org_config;
+#[cfg(feature = "content-source")]
+pub mod source;
 pub mod wire;

@@ -1562,7 +1562,6 @@ dependencies = [
  "chrono",
  "elitea-content-source",
  "http",
- "percent-encoding",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
  "ring",

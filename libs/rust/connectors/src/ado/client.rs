@@ -424,12 +424,9 @@ impl AdoClient {
         Ok(url)
     }
 
-    /// Send one request and map its status. Only a 2xx response comes back.
-    pub async fn send(
-        &self,
-        request: AdoRequest<'_>,
-        effect: bool,
-    ) -> Result<AdoHttpResponse, AdoClientError> {
+    /// The HTTP request for one REST call: the URL, the PAT as a sensitive
+    /// Basic credential, the accept type and a bounded body.
+    pub fn build(&self, request: AdoRequest<'_>) -> Result<Request, AdoClientError> {
         let url = self.url(&request)?;
         let mut http = Request::new(request.method.clone(), url);
         let credential =
@@ -470,6 +467,16 @@ impl AdoClient {
                 .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
             *http.body_mut() = Some(encoded.into());
         }
+        Ok(http)
+    }
+
+    /// Send one request and map its status. Only a 2xx response comes back.
+    pub async fn send(
+        &self,
+        request: AdoRequest<'_>,
+        effect: bool,
+    ) -> Result<AdoHttpResponse, AdoClientError> {
+        let http = self.build(request)?;
         let response = self.transport.execute(http, effect).await?;
         if !response.status.is_success()
             || response.status == StatusCode::NON_AUTHORITATIVE_INFORMATION

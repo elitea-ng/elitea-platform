@@ -1330,7 +1330,6 @@ dependencies = [
  "bytes",
  "chrono",
  "http",
- "percent-encoding",
  "reqwest 0.12.28",
  "ring",
  "serde_json",
