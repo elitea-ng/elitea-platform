@@ -265,7 +265,7 @@ export function App() {
     <AppProviders>
       {sessionUserId !== undefined && (
         <Suspense fallback={null}>
-          <ThemePreferenceSync key={sessionUserId} />
+          <ThemePreferenceSync key={sessionUserId} userId={String(sessionUserId)} />
         </Suspense>
       )}
       <RealtimeStatusContext.Provider value={realtimeStatus}>

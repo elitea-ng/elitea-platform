@@ -1027,7 +1027,7 @@ async fn a_picked_skill_is_applied_to_the_turn_after_the_agents_instructions() {
     let system = first["messages"][0]["content"].as_str().unwrap();
     let agent = system.find("Be brief.").unwrap();
     let skill = system
-        .find("<invoked_skill name=\"Style\">\nWrite tersely.\n</invoked_skill>")
+        .find("name=\"Style\">\nWrite tersely.\n</invoked_skill nonce=\"")
         .unwrap();
     let project = system.find("Run task test.").unwrap();
     let memory = system.find("Memory: the user likes tea.").unwrap();

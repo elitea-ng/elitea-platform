@@ -18,7 +18,9 @@
  * - A local choice the server has not confirmed (`unsyncedThemeChoice`: its
  *   PUT failed or is still out) is never overwritten by a read: the read is
  *   skipped and the PUT retried instead, and a read that started while a
- *   choice was unconfirmed discards its answer.
+ *   choice was unconfirmed discards its answer. A PUT the server refuses for
+ *   good (4xx) drops the choice's mark, and the server's value applies.
+ *   The mark is the signed-in user's (`userId`), bound here.
  *
  * The desktop's native window theme needs nothing here: `DesktopFrame`'s
  * `useNativeWindowTheme` already follows the MUI mode this sets.
@@ -31,12 +33,13 @@ import { useEffect, useRef } from 'react';
 import { useColorScheme } from '@mui/material/styles';
 
 import {
+  bindThemeUser,
   fetchThemePreference,
   isThemeMode,
+  retryUnsyncedTheme,
   saveThemePreference,
   themeSyncState,
   type ThemeSyncState,
-  unsyncedThemeChoice,
 } from '@/shared/api/themePreference';
 import { DEFAULT_COLOR_SCHEME } from '@/shared/brand/constants';
 
@@ -49,7 +52,12 @@ function savedMeanwhile(before: ThemeSyncState): boolean {
   return before.busy || after.busy || after.generation !== before.generation;
 }
 
-export default function ThemePreferenceSync(): null {
+export interface ThemePreferenceSyncProps {
+  /** The signed-in user: an unconfirmed choice is applied and pushed only for them. */
+  readonly userId: string;
+}
+
+export default function ThemePreferenceSync({ userId }: ThemePreferenceSyncProps): null {
   const { mode, setMode } = useColorScheme();
   const modeRef = useRef(mode);
   const setModeRef = useRef(setMode);
@@ -67,17 +75,20 @@ export default function ThemePreferenceSync(): null {
   }, [mode, setMode]);
 
   useEffect(() => {
+    bindThemeUser(userId);
+    return () => bindThemeUser(undefined);
+  }, [userId]);
+
+  useEffect(() => {
     let disposed = false;
     let lastRead = Date.now();
 
     const read = async (): Promise<void> => {
       // An unconfirmed local choice: the server's value is stale. Push the
-      // choice again (unless its PUT is still out) instead of reading.
-      const unsynced = unsyncedThemeChoice();
-      if (unsynced !== undefined) {
-        if (!themeSyncState().saving) void saveThemePreference(unsynced);
-        return;
-      }
+      // choice again instead of reading — unless the server refused it for
+      // good, and then its value applies.
+      const retried = await retryUnsyncedTheme();
+      if (retried !== 'none' && retried !== 'refused') return;
       const before = themeSyncState();
       const changes = localChanges.current;
       const stored = await fetchThemePreference();

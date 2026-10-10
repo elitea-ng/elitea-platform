@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createHostFetch, encodeFetchFrame, MAX_REQUEST_BODY_BYTES, type RawInvoke, type ReleaseRegistry } from './hostFetch';
+import { createHostFetch, encodeFetchMeta, MAX_REQUEST_BODY_BYTES, META_HEADER, type RawInvoke, type ReleaseRegistry } from './hostFetch';
 
 /** The host rejects with `{code, message}` (net.rs `FetchError`); an Error carrying both is that shape. */
 function refusal(code: string, message: string): Error {
@@ -10,12 +10,15 @@ function refusal(code: string, message: string): Error {
 interface Sent {
   meta: { id: number; method: string; url: string; headers: [string, string][] };
   body: string;
+  raw: Uint8Array;
 }
 
-function decode(frame: Uint8Array): Sent {
-  const length = new DataView(frame.buffer, frame.byteOffset).getUint32(0);
-  const meta = JSON.parse(new TextDecoder().decode(frame.subarray(4, 4 + length))) as Sent['meta'];
-  return { meta, body: new TextDecoder().decode(frame.subarray(4 + length)) };
+/** What the host reads: the raw payload is the body, the header the metadata. */
+function decode(payload: unknown, options: Parameters<RawInvoke>[2]): Sent {
+  const raw = payload as Uint8Array;
+  const header = options?.headers?.[META_HEADER] ?? '';
+  const meta = JSON.parse(decodeURIComponent(header)) as Sent['meta'];
+  return { meta, body: new TextDecoder().decode(raw), raw };
 }
 
 const head = (over: Partial<{ status: number; hasBody: boolean; headers: [string, string][] }> = {}) => ({
@@ -33,9 +36,9 @@ function host(answer: unknown, chunks: string[] = []) {
   const reads: number[] = [];
   const cancels: number[] = [];
   const queue = chunks.map((c) => new TextEncoder().encode(c).buffer);
-  const invoke = vi.fn<RawInvoke>((command, args) => {
+  const invoke = vi.fn<RawInvoke>((command, args, options) => {
     if (command === 'http_fetch') {
-      sent.push(decode(args as Uint8Array));
+      sent.push(decode(args, options));
       return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
     }
     if (command === 'http_read_body') {
@@ -48,12 +51,11 @@ function host(answer: unknown, chunks: string[] = []) {
   return { invoke, sent, reads, cancels };
 }
 
-describe('encodeFetchFrame', () => {
-  it('is a big-endian length, the JSON metadata, then the body', () => {
-    const frame = encodeFetchFrame({ id: 1 }, new Uint8Array([7, 8]));
-    expect([...frame.subarray(0, 4)]).toEqual([0, 0, 0, 8]);
-    expect(new TextDecoder().decode(frame.subarray(4, 12))).toBe('{"id":1}');
-    expect([...frame.subarray(12)]).toEqual([7, 8]);
+describe('encodeFetchMeta', () => {
+  it('is percent-encoded JSON, ASCII whatever the header values hold', () => {
+    const value = encodeFetchMeta({ id: 1, headers: [['x-name', 'Zoë']] });
+    expect(value).toMatch(/^[\x20-\x7e]+$/);
+    expect(JSON.parse(decodeURIComponent(value))).toEqual({ id: 1, headers: [['x-name', 'Zoë']] });
   });
 });
 
@@ -122,8 +124,7 @@ describe('createHostFetch', () => {
     });
     const controller = new AbortController();
     const pending = createHostFetch(invoke, { firstId: 9 })('https://h.example/slow', { signal: controller.signal });
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('http_fetch', expect.anything(), expect.anything()));
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(cancels).toEqual([{ id: 10 }]);
@@ -167,7 +168,7 @@ describe('createHostFetch', () => {
     });
     const controller = new AbortController();
     const pending = createHostFetch(invoke, { firstId: 30 })(new Request('https://h.example/slow', { signal: controller.signal }));
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('http_fetch', expect.anything()));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('http_fetch', expect.anything(), expect.anything()));
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(cancels).toEqual([{ id: 31 }]);
@@ -225,5 +226,40 @@ describe('createHostFetch', () => {
     const read = await fetch('https://h.example/b');
     expect(await read.text()).toBe('one');
     expect(unregistered).toContain(registered[1]?.token);
+  });
+
+  it('sends the body itself as the payload, with no frame around it', async () => {
+    const h = host(head({ hasBody: false, status: 204 }));
+    const buffers: ArrayBuffer[] = [];
+    const arrayBuffer = vi.spyOn(Request.prototype, 'arrayBuffer');
+    arrayBuffer.mockImplementation(async function (this: Request) {
+      const buffer = await new Response(this.body).arrayBuffer();
+      buffers.push(buffer);
+      return buffer;
+    });
+    await createHostFetch(h.invoke, { firstId: 70 })('https://h.example/up', { method: 'PUT', body: 'payload' });
+    arrayBuffer.mockRestore();
+    expect(h.sent[0]?.body).toBe('payload');
+    expect(h.sent[0]?.raw.byteLength).toBe('payload'.length);
+    // The very buffer the request was read into: not copied into a frame.
+    expect(h.sent[0]?.raw.buffer).toBe(buffers[0]);
+    expect(h.sent[0]?.meta).toMatchObject({ id: 71, method: 'PUT', url: 'https://h.example/up' });
+  });
+
+  it('ends at once on an abort while the body is still being read, and never asks the host', async () => {
+    const h = host(head());
+    const controller = new AbortController();
+    // A body that never finishes arriving.
+    const endless = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => undefined) });
+    const pending = createHostFetch(h.invoke)('https://h.example/up', {
+      method: 'POST',
+      body: endless,
+      signal: controller.signal,
+      duplex: 'half',
+    } as RequestInit);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(h.invoke).not.toHaveBeenCalled();
   });
 });

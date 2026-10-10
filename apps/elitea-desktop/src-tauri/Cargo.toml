@@ -24,6 +24,7 @@ url = "2"
 sha2 = "0.10"
 base64 = "0.22"
 bytes = "1"
+percent-encoding = "2"
 rand = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
 # The one HTTP client (src/net.rs): host calls and the webview's fetch share its pool.

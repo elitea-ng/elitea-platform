@@ -41,7 +41,7 @@ export interface LaunchOptions {
 function desktopFetch(): ReturnType<typeof createHostFetch> {
   const invoke = tauriInvoke();
   if (invoke === undefined) throw new Error('desktop: launchApp needs the Tauri host');
-  // Tauri's invoke takes a typed array as a raw body (the `http_fetch` frame).
+  // Tauri's invoke takes a typed array as a raw body, and `headers` (the request metadata).
   return withRequestLogging(createHostFetch(invoke as RawInvoke));
 }
 

@@ -50,9 +50,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use elitea_agent_runtime::host::{
-    ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError, HostErrorCode,
-};
+use elitea_agent_runtime::host::{ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError};
 use globset::{GlobBuilder, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -711,18 +709,8 @@ impl RulesEngine {
     ///
     /// When the choice is not rememberable or cannot be stored.
     pub fn remember(&self, call: &ToolCall, scope: Option<&str>) -> ToolResult<()> {
-        if call.tool == ToolKind::GitCommit {
-            return Err(ToolError::new(
-                ErrorCode::Denied,
-                "commits are asked every time",
-            ));
-        }
-        if call.tool == ToolKind::RunCommand && !self.confined {
-            return Err(ToolError::new(
-                ErrorCode::Denied,
-                "commands may run without a sandbox on this machine, so each one is asked; \
-                 \"always allow\" cannot be remembered for them",
-            ));
+        if let Some(refusal) = self.never_remembered(call) {
+            return Err(refusal);
         }
         let command = match call.command.as_deref().map(analyse) {
             None => None,
@@ -750,10 +738,7 @@ impl RulesEngine {
                 Some(tokens)
             }
             Some(CommandShape::Compound { .. }) => {
-                return Err(ToolError::new(
-                    ErrorCode::Denied,
-                    "compound commands are asked every time",
-                ));
+                return Err(compound_refusal());
             }
         };
         let (paths, glob) = if command.is_some() {
@@ -785,18 +770,46 @@ impl RulesEngine {
     }
 }
 
+fn compound_refusal() -> ToolError {
+    ToolError::new(ErrorCode::Denied, "compound commands are asked every time")
+}
+
 impl RulesEngine {
-    /// Whether an "always allow" for `call` would be remembered
-    /// ([`Self::remember`] accepts it): not a commit, not a compound
-    /// command, and not a command on a machine that may run it unconfined.
+    /// Why `call` can never be remembered, whatever its scope: a commit, a
+    /// compound command, or a command on a machine that may run it
+    /// unconfined. The one precondition [`Self::can_remember`] and
+    /// [`Self::remember`] share.
+    fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
+        if call.tool == ToolKind::GitCommit {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "commits are asked every time",
+            ));
+        }
+        if call.tool == ToolKind::RunCommand && !self.confined {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "commands may run without a sandbox on this machine, so each one is asked; \
+                 \"always allow\" cannot be remembered for them",
+            ));
+        }
+        if call
+            .command
+            .as_deref()
+            .is_some_and(|command| !analyse(command).is_simple())
+        {
+            return Some(compound_refusal());
+        }
+        None
+    }
+
+    /// Whether "always allow" may be offered for `call`: exactly when
+    /// [`Self::remember`]'s precondition holds. (`remember` can still fail
+    /// on the scope the person picked, or on storage; the channel then
+    /// approves once.)
     #[must_use]
     pub fn can_remember(&self, call: &ToolCall) -> bool {
-        call.tool != ToolKind::GitCommit
-            && (call.tool != ToolKind::RunCommand || self.confined)
-            && call
-                .command
-                .as_deref()
-                .is_none_or(|command| analyse(command).is_simple())
+        self.never_remembered(call).is_none()
     }
 }
 
@@ -887,12 +900,14 @@ impl ApprovalChannel for RuleApprovals {
                                 "glob"
                             };
                             let scope = value.get(key).and_then(Value::as_str);
-                            self.engine.remember(&call, scope).map_err(|_| {
-                                HostError::new(
-                                    HostErrorCode::InvalidInput,
-                                    "the choice could not be remembered",
-                                )
-                            })?;
+                            // The person approved: a choice that cannot be
+                            // stored still approves this call, once.
+                            if let Err(error) = self.engine.remember(&call, scope) {
+                                tracing::warn!(
+                                    reason = error.message(),
+                                    "\"always allow\" could not be remembered; approved once"
+                                );
+                            }
                         }
                         Ok(ApprovalOutcome::Decided {
                             action: "approve".to_owned(),
@@ -1397,6 +1412,53 @@ mod tests {
             "not offered"
         );
         assert!(engine.choices.list().is_empty(), "nothing stored");
+    }
+
+    /// `can_remember` is exactly `remember`'s precondition: for every call
+    /// it refuses whatever the scope, it is false, and the other way round.
+    #[test]
+    fn can_remember_and_remember_agree() {
+        let (_dir, confined) = engine_with(policy(), Vec::new());
+        let (_dir2, unconfined) = engine_with(policy(), Vec::new());
+        let unconfined = unconfined.with_unenforced_commands(true);
+        let calls = [
+            shell("cargo test"),
+            shell("cargo test && cargo build"),
+            file(ToolKind::WriteFile, "a"),
+            ToolCall::new(ToolKind::GitCommit),
+        ];
+        for engine in [&confined, &unconfined] {
+            for call in &calls {
+                // No scope: the call's own argv or paths, always in scope.
+                let remembered = engine.remember(call, None).is_ok();
+                assert_eq!(engine.can_remember(call), remembered, "{call:?}");
+            }
+        }
+    }
+
+    /// The person chose "always allow" and storing it failed: the call is
+    /// approved once, never turned into an error.
+    #[tokio::test]
+    async fn a_choice_that_cannot_be_stored_still_approves_once() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let engine = Arc::new(engine);
+        let prompt = Arc::new(ScriptedPrompt {
+            answer: ApprovalOutcome::Decided {
+                action: super::APPROVE_ALWAYS.to_owned(),
+                // A prefix that is not a prefix of the command: refused.
+                value: json!({ "prefix": "npm install" }),
+            },
+            seen: Mutex::new(Vec::new()),
+        });
+        let channel = RuleApprovals::new(engine.clone(), prompt);
+        let outcome = channel
+            .request(request(&shell("git reset --hard v1")))
+            .await
+            .expect("approved, not an error");
+        assert!(
+            matches!(outcome, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
+        assert!(engine.choices.list().is_empty());
     }
 
     /// Policy, plan mode and workspace rules only tighten the defaults.

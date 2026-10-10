@@ -9,10 +9,12 @@
  * followed, no cookies — and the body streams one chunk per read, so the
  * fetch-based SSE (`fetchEventSource.ts`) works unchanged.
  *
- * Wire format of `http_fetch`: one binary IPC body, a 4-byte big-endian
- * length, that many bytes of JSON `{id, method, url, headers}`, then the
- * request body. The id is the page's, so an abort can name a request before
- * its answer arrives (the host remembers an abort that overtakes its request).
+ * Wire format of `http_fetch`: the request body is the raw IPC payload (a
+ * `Uint8Array`, sent as is), and the metadata `{id, method, url, headers}`
+ * travels as percent-encoded JSON in the {@link META_HEADER} invoke header —
+ * no frame, so the body is not copied into one. The id is the page's, so an
+ * abort can name a request before its answer arrives (the host remembers an
+ * abort that overtakes its request).
  *
  * Bounds: a request body over {@link MAX_REQUEST_BODY_BYTES} is refused here,
  * before it is buffered when its size is known. A response body the page can
@@ -21,8 +23,11 @@
  * also drops a body nobody reads for a minute.
  */
 
-/** The `invoke` of `window.__TAURI_INTERNALS__`: a typed array argument is sent as a raw body. */
-export type RawInvoke = (command: string, args?: unknown) => Promise<unknown>;
+/** The `invoke` of `window.__TAURI_INTERNALS__`: a typed array argument is sent as a raw body, `headers` as the IPC request's headers. */
+export type RawInvoke = (command: string, args?: unknown, options?: { headers?: Record<string, string> }) => Promise<unknown>;
+
+/** The invoke header carrying the request's metadata (net.rs `META_HEADER`). */
+export const META_HEADER = 'x-elitea-fetch';
 
 interface FetchHead {
   status: number;
@@ -147,14 +152,19 @@ function hostBodyStream(
   });
 }
 
-/** Frame metadata and body into the one buffer `http_fetch` reads. */
-export function encodeFetchFrame(meta: object, body: Uint8Array): Uint8Array {
-  const json = new TextEncoder().encode(JSON.stringify(meta));
-  const frame = new Uint8Array(4 + json.byteLength + body.byteLength);
-  new DataView(frame.buffer).setUint32(0, json.byteLength);
-  frame.set(json, 4);
-  frame.set(body, 4 + json.byteLength);
-  return frame;
+/** The metadata as the {@link META_HEADER} value: percent-encoded JSON (header values are ASCII). */
+export function encodeFetchMeta(meta: object): string {
+  return encodeURIComponent(JSON.stringify(meta));
+}
+
+/** `work`, rejected with an `AbortError` as soon as `signal` aborts. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal | null): Promise<T> {
+  if (signal === null) return work;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(abortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort)).catch(() => undefined);
+  });
 }
 
 export interface HostFetchOptions {
@@ -186,7 +196,10 @@ export function createHostFetch(invoke: RawInvoke, options: HostFetchOptions = {
     const request = new Request(input, init);
     const signal = requestSignal(input, init);
     if (aborted(signal)) throw abortError();
-    const body = await boundedBody(request, init, maxBody);
+    // An abort while the body is read (a large file, a FormData) ends the
+    // wait at once; checked again before anything reaches the host.
+    const body = await untilAborted(boundedBody(request, init, maxBody), signal);
+    if (aborted(signal)) throw abortError();
     nextId += 1;
     const id = nextId;
     const cancel = (): void => release(id);
@@ -199,7 +212,9 @@ export function createHostFetch(invoke: RawInvoke, options: HostFetchOptions = {
 
     let head: FetchHead;
     try {
-      head = (await invoke('http_fetch', encodeFetchFrame({ id, method: request.method, url: request.url, headers: [...request.headers] }, body))) as FetchHead;
+      head = (await invoke('http_fetch', body, {
+        headers: { [META_HEADER]: encodeFetchMeta({ id, method: request.method, url: request.url, headers: [...request.headers] }) },
+      })) as FetchHead;
     } catch (cause) {
       settled();
       throw toFetchError(cause, signal);

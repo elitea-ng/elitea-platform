@@ -13,7 +13,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { clearNamespace } from '@/shared/lib/storage';
 import { server } from '@/test/setup';
 
-import { saveThemePreference, unsyncedThemeChoice } from '@/shared/api/themePreference';
+import { configureThemeSync, MAX_SAVE_ATTEMPTS, saveThemePreference, unsyncedThemeChoice } from '@/shared/api/themePreference';
 
 import ThemePreferenceSync, { REFRESH_INTERVAL_MS } from './ThemePreferenceSync';
 
@@ -30,7 +30,7 @@ function Probe(): null {
 function renderSync() {
   return render(
     <BrandThemeProvider>
-      <ThemePreferenceSync />
+      <ThemePreferenceSync userId="u1" />
       <Probe />
     </BrandThemeProvider>,
   );
@@ -60,6 +60,7 @@ async function settle(): Promise<void> {
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: BASE });
+  configureThemeSync({ retryBaseMs: 5 });
 });
 
 afterEach(() => {
@@ -151,10 +152,8 @@ describe('ThemePreferenceSync', () => {
     });
   }
 
-  it('never lets a read overwrite a choice whose save failed; it retries the save', async () => {
-    let clock = 1_000_000;
-    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
-    let putFails = true;
+  /** The server says dark; PUTs answer `statuses` in turn, then 200. */
+  function serveStale(statuses: number[]) {
     const calls = { reads: 0, saves: [] as unknown[] };
     server.use(
       http.get(URL, () => {
@@ -164,26 +163,75 @@ describe('ThemePreferenceSync', () => {
       http.put(URL, async ({ request }) => {
         const body = (await request.json()) as { theme_mode: unknown };
         calls.saves.push(body.theme_mode);
-        return putFails ? HttpResponse.json({ error: 'no' }, { status: 500 }) : HttpResponse.json(body);
+        const status = statuses.shift() ?? 200;
+        return status === 200 ? HttpResponse.json(body) : HttpResponse.json({ error: 'no' }, { status });
       }),
     );
+    return calls;
+  }
+
+  it('never lets a read overwrite a choice whose save keeps failing', async () => {
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const calls = serveStale(Array.from({ length: 20 }, () => 500));
+    renderSync();
+    await waitFor(() => expect(current?.mode).toBe('dark'));
+    toggle('light');
+    // While it retries, and after it gave up: reads never apply the stale dark.
+    for (let i = 0; i < 2; i += 1) {
+      clock += REFRESH_INTERVAL_MS;
+      act(() => { window.dispatchEvent(new Event('focus')); });
+      await settle();
+      expect(current?.mode).toBe('light');
+    }
+    await waitFor(() => expect(calls.saves).toHaveLength(MAX_SAVE_ATTEMPTS));
+    clock += REFRESH_INTERVAL_MS;
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await settle();
+    expect(calls.reads).toBe(1);
+    expect(calls.saves).toHaveLength(MAX_SAVE_ATTEMPTS);
+    expect(current?.mode).toBe('light');
+    expect(unsyncedThemeChoice()).toBe('light');
+    now.mockRestore();
+  });
+
+  it('retries a choice left unconfirmed by an earlier page instead of reading', async () => {
+    localStorage.setItem('el-mode', 'light');
+    localStorage.setItem('el.theme.unsynced', JSON.stringify({ user_id: 'u1', mode: 'light', id: 'earlier' }));
+    const calls = serveStale([]);
+    renderSync();
+    await waitFor(() => expect(calls.saves).toEqual(['light']));
+    await settle();
+    expect(calls.reads).toBe(0);
+    expect(current?.mode).toBe('light');
+    expect(unsyncedThemeChoice()).toBeUndefined();
+  });
+
+  it('drops a choice the server refuses for good, and then applies the server value', async () => {
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const calls = serveStale([403]);
     renderSync();
     await waitFor(() => expect(current?.mode).toBe('dark'));
     toggle('light');
     await waitFor(() => expect(calls.saves).toEqual(['light']));
     await settle();
-    expect(unsyncedThemeChoice()).toBe('light');
-
-    // The server still says dark: the read does not apply it, it pushes light again.
-    clock += REFRESH_INTERVAL_MS;
-    putFails = false;
-    act(() => { window.dispatchEvent(new Event('focus')); });
-    await waitFor(() => expect(calls.saves).toEqual(['light', 'light']));
-    await settle();
-    expect(calls.reads).toBe(1);
-    expect(current?.mode).toBe('light');
     expect(unsyncedThemeChoice()).toBeUndefined();
+    clock += REFRESH_INTERVAL_MS;
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(current?.mode).toBe('dark'));
+    expect(calls.saves).toEqual(['light']);
     now.mockRestore();
+  });
+
+  it('ignores another user\'s unconfirmed choice', async () => {
+    localStorage.setItem('el-mode', 'light');
+    localStorage.setItem('el.theme.unsynced', JSON.stringify({ user_id: 'u2', mode: 'light', id: 'theirs' }));
+    const calls = serveStale([]);
+    renderSync();
+    await waitFor(() => expect(current?.mode).toBe('dark'));
+    await settle();
+    expect(calls.saves).toEqual([]);
   });
 
   it('discards a read that starts while a save is still out', async () => {

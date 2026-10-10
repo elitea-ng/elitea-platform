@@ -52,7 +52,7 @@ host's own calls use. It replaces `tauri-plugin-http`, which built a client
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `http_fetch` | one **binary** IPC body: a 4-byte big-endian length `n`, `n` bytes of JSON `{id, method, url, headers: [name, value][]}`, then the request body | `{status, statusText, headers: [name, value][], url, hasBody}`, the response head. The body stays with the host under `id` until it has been read to the end, cancelled, or left unread too long (below). |
+| `http_fetch` | the request body as the **raw** IPC payload (a `Uint8Array`, sent as is), and the invoke header `x-elitea-fetch`: percent-encoded JSON `{id, method, url, headers: [name, value][]}` (at most 256 KiB) | `{status, statusText, headers: [name, value][], url, hasBody}`, the response head. The body stays with the host under `id` until it has been read to the end, cancelled, or left unread too long (below). |
 | `http_read_body` | `{id}` | the next chunk as raw bytes (an `ArrayBuffer`); **zero bytes means the end**, and the id is then forgotten |
 | `http_cancel` | `{id}` | `null`. Aborts a pending `http_fetch`, or ends a body or stream; a pending read rejects with `aborted`. An id the host has not seen yet is remembered for 30 s (at most 1024 ids), and an `http_fetch` with it is then refused with `aborted` before anything is sent: IPC calls can overtake each other. |
 
@@ -73,22 +73,46 @@ arrives; an id still in flight is refused. The rules:
   deployment default is 150 MiB), plus the multipart envelope. The page
   refuses a larger body before buffering it where it can tell the size
   (a `Blob`, `File`, buffer, string or `FormData`), the host before
-  parsing the frame (`body_too_large`); the frame's JSON half is at most
-  1 MiB;
+  sending anything (`body_too_large`). An abort while the page is still
+  reading the body ends the call at once, and nothing reaches the host;
 - the IPC's postMessage fallback (used only when its custom protocol is
-  unavailable) carries a binary body as one JSON number per byte; there a
-  frame is at most 1 MiB (`body_too_large`);
-- a response nobody reads for 60 s is dropped (a stream with a read
-  waiting on it is not idle, so SSE is unaffected), and with 256 entries
-  open the longest-unread response is dropped; a later read answers
-  `unknown_request`. The page also cancels a body it can no longer read
-  (its `Response` was garbage-collected) and a HEAD or null-body response
-  at once;
+  unavailable, e.g. blocked by a CSP) carries a binary body as one JSON
+  number per byte, tens of bytes of memory per byte sent; there a body is
+  at most **16 MiB**, else `body_too_large` with a message naming the
+  fallback channel;
+- at most **256 requests are open** at once, pending, streaming and unread
+  alike. When the table is full, the longest-unread response that nobody
+  has read for at least 5 s is dropped to make room; with none, the new
+  request is refused with `too_many_requests` (nothing is sent). A
+  response nobody reads for 60 s is dropped (a stream with a read waiting
+  on it is not idle, so SSE is unaffected); a later read answers
+  `unknown_request`. A head that does not arrive within **120 s** fails
+  the request (`network`) and frees its slot; a body, once streaming, has
+  no deadline. The page also cancels a body it can no longer read (its
+  `Response` was garbage-collected) and a HEAD or null-body response at
+  once;
 - a page reload cancels everything the old page had in flight.
 
 Errors reject with `{code, message}`: `aborted` (the page maps it to an
 `AbortError`), `url_not_allowed`, `invalid_request`, `body_too_large`,
-`unknown_request`, `network` (mapped to a `TypeError`, as `fetch` throws).
+`too_many_requests`, `unknown_request`, `network` (mapped to a
+`TypeError`, as `fetch` throws).
+
+**Copies of an upload** (a 150 MiB body, on the custom-protocol IPC). The
+counts are by reading each copy site, not by profiling; the IPC's own
+copies inside WebKit and wry are outside this code and not counted.
+
+| | before (frame) | now (raw payload + header) |
+| --- | --- | --- |
+| page: `Request.arrayBuffer()` | 150 MiB | 150 MiB |
+| page: frame (metadata + body concatenated) | +150 MiB | — |
+| host: the IPC's buffer (lent to the command for its whole life) | 150 MiB | 150 MiB |
+| host: the command's own copy | +150 MiB (`Bytes::copy_from_slice`) | ≤ 320 KiB (64 KiB pieces, 4 queued + 1 in flight) |
+| **peak held by this code** | **~600 MiB** | **~300 MiB** |
+
+Tauri 2.12 lends the command the IPC buffer (`tauri::ipc::Request` borrows
+it) and has no way to take it, so the host streams from the borrowed buffer
+instead of copying it whole; a body up to 256 KiB is copied, as before.
 
 ## Workspaces (`src/local_commands.rs`, `src/workspaces.rs`)
 
@@ -182,19 +206,23 @@ resolved version (or equals a skill's frozen `id`), so the skill is read
 server-side, under the person's own permissions, with the definition.
 At most 5 names, each non-blank, at most 256 bytes and without control
 characters, else `invalid_request` before any request. A name the version
-has no skill with instructions for is refused with `skill_unknown`; a
-picked skill whose frozen snapshot fails the runtime's own admission check
-(`instruction_authority::check_skill`: `id`, `scope` and `revision`
-present and within bounds, and `revision` the SHA-256 of the instructions)
-with `skill_invalid`; and more than 64 KiB of picked skill text together
-with `skill_too_large` (refused, not cut). All three after the definition
-is read and before the turn is started on the platform. The picked skills
-are appended to the agent's instructions, before the AGENTS.md section, as
-one `## Skill for this turn` section with one `<invoked_skill name="…">`
-block per skill, ending with `## End of skill instructions`; the name is
-escaped as an attribute value and the text is defused as AGENTS.md text is
-(below). Every attached skill also stays in the runtime's catalogue, for
-`load_skill`, as before.
+has no skill with instructions for is refused with `skill_unknown`, and
+more than 64 KiB of picked skill text together with `skill_too_large`
+(refused, not cut). Whether or not a skill is picked, **every** skill of
+the version goes through the runtime's own instruction admission
+(`instruction_authority::check_skills`: each snapshot's `id`, `scope` and
+`revision` present and within bounds, `revision` the SHA-256 of the
+instructions, no two skills under one name, the catalogue's bounds; then
+`InstructionPlan::admit` with the project context): a skill it refuses
+fails the start with `skill_invalid`, naming the skill. All of these after
+the definition is read and before the turn is started on the platform
+(the runtime loads every attached skill, so such a turn could not run).
+The picked skills are appended to the agent's instructions, before the
+AGENTS.md section, as one `## Skill for this turn` section with one
+`<invoked_skill nonce="…" name="…">` block per skill, ending with
+`## End of skill instructions`; the name is escaped as an attribute value
+and the text is framed as AGENTS.md text is (below). Every attached skill
+also stays in the runtime's catalogue, for `load_skill`, as before.
 
 **Precedence.** The system instructions are in the order of their
 authority, and each framed section's preamble says so: the agent's own
@@ -213,14 +241,20 @@ files past the cap are skipped. They are appended to the agent's system
 instructions, after the agent's own instructions and any picked skill
 (which outrank it, as the section's preamble says) and before the memory
 splice, as one `## Project instructions (AGENTS.md)` section with one
-`<agents_md path="…">` block per file. The path is escaped as an attribute
-value (`&`, `"`, `<`, `>` and control characters as entities). In the
-text (AGENTS.md and skills alike) every `<` becomes `&lt;`, so no tag of
-any spelling (`< /agents_md>`, `</ invoked_skill>`, `<INVOKED_SKILL`)
-survives, and every line that starts with `#` after optional blanks gets a
-`\` in front, a line being ended by LF, CR, CR LF, VT, FF, NEL, U+2028 or
-U+2029; so no file can close its block, open another or start or end a
-section. Edits apply from the next turn.
+`<agents_md nonce="…" path="…">` block per file. The path is escaped as an
+attribute value (`&`, `"`, `<`, `>` and control characters as entities).
+Edits apply from the next turn.
+
+**Nonce framing** (AGENTS.md and skills alike, `src/d0/framing.rs`). Every
+turn draws a fresh random 128-bit nonce `N` (32 hex digits). A block opens
+with `<tag nonce="N" …>` and ends only at `</tag nonce="N">`; each section's
+preamble says so, and that everything before that closing tag — including
+text that looks like a closing tag, a heading or the end of the section —
+is the block's content. The text is left byte for byte as written
+(Markdown headings, `Vec<u8>`, `#include`, shell comments and tags of its
+own included), except for the one sequence that could end the block: the
+exact closing tag with this turn's nonce (ASCII case ignored), which the
+text cannot know in advance; should it occur, its `</` becomes `<\/`.
 
 ```ts
 type FileChange = {
@@ -490,5 +524,9 @@ order, when committed. `approval_request.can_remember` is true when
 file change); otherwise `allow_always` answers once and the UI does not
 offer it. It is false for every `run_command` on a machine that may run
 commands unconfined (the OS sandbox cannot be enforced): every command is
-asked there, so a remembered choice would never apply. Remote toolkit
+asked there, so a remembered choice would never apply. `can_remember` is
+computed from the very precondition the host's `remember` checks; should
+storing the choice still fail (the scope the person picked does not match,
+or the store cannot be written), the call is approved once and a warning
+logged — an approval is never turned into an error. Remote toolkit
 confirmations (`confirmation_required`) never remember.

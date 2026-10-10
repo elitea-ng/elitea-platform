@@ -746,6 +746,23 @@ pub fn check_skill(skill: &Value) -> Result<(), NativeAgentAssemblyError> {
     skill_snapshot(skill).map(|_| ())
 }
 
+/// Admit a version's `skills` the way [`InstructionPlan::admit`] does —
+/// each snapshot ([`check_skill`]), no two skills under one name, the same
+/// id never with other content, and the catalogue's bounds — one skill at
+/// a time, so a refusal names the skill.
+///
+/// # Errors
+///
+/// The index of the first skill refused, and why.
+pub fn check_skills(skills: &[Value]) -> Result<(), (usize, NativeAgentAssemblyError)> {
+    let mut plan = InstructionPlan::default();
+    for (index, skill) in skills.iter().enumerate() {
+        plan.add_skills(std::slice::from_ref(skill))
+            .map_err(|error| (index, error))?;
+    }
+    Ok(())
+}
+
 pub fn content_digest(content: &str) -> String {
     let mut result = String::with_capacity(64);
     for byte in digest::digest(&digest::SHA256, content.as_bytes()).as_ref() {

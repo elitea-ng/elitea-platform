@@ -132,3 +132,25 @@ fn check_skill_admits_exactly_what_the_plan_admits() {
         assert!(plan.add_skills(&[skill]).is_err());
     }
 }
+
+#[test]
+fn check_skills_runs_the_plans_admission_and_names_the_refused_skill() {
+    let skill = |id: &str, name: &str, text: &str| json!({"id":id,"name":name,"revision":content_digest(text),"scope":"project:1","instructions":text});
+    assert!(check_skills(&[skill("a", "A", "x"), skill("b", "B", "y")]).is_ok());
+    // A collision only the whole admission sees: each snapshot alone is fine.
+    let collision = [
+        skill("a", "A", "x"),
+        skill("b", "B", "y"),
+        skill("c", "a", "z"),
+    ];
+    assert!(collision.iter().all(|s| check_skill(s).is_ok()));
+    assert_eq!(check_skills(&collision).unwrap_err().0, 2);
+    let mut tampered = skill("b", "B", "y");
+    tampered["instructions"] = json!("other");
+    assert_eq!(
+        check_skills(&[skill("a", "A", "x"), tampered])
+            .unwrap_err()
+            .0,
+        1
+    );
+}
