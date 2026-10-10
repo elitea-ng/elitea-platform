@@ -129,6 +129,11 @@ pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
         ".password-store",
         ".local/share/keyrings",
         ".config/elitea*",
+        // The desktop app's own data (credentials.json, threads.sqlite, every
+        // workspace's checkpoints and index), under its bundle identifier.
+        ".config/ai.elitea.desktop",
+        ".local/share/ai.elitea.desktop",
+        ".cache/ai.elitea.desktop",
         ".mozilla",
         ".config/google-chrome",
         ".config/chromium",
@@ -146,6 +151,10 @@ pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
         "Library/Application Support/Vivaldi",
         "Library/Application Support/com.operasoftware.Opera",
         "Library/Application Support/elitea*",
+        "Library/Application Support/ai.elitea.desktop",
+        "Library/Caches/ai.elitea.desktop",
+        "Library/Logs/ai.elitea.desktop",
+        "Library/WebKit/ai.elitea.desktop",
     ];
     let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
     RELATIVE
@@ -1311,6 +1320,26 @@ mod tests {
             ..req.clone()
         };
         assert!(seatbelt::profile(&full).0.contains("GIT_ROOT_0"));
+    }
+
+    /// The app's own data is named by its bundle identifier, which the
+    /// `elitea*` prefixes never matched: an auto-allowed command could read
+    /// the stored sign-in and every other workspace's data.
+    #[test]
+    fn the_desktop_apps_own_data_is_denied() {
+        let home = std::path::Path::new("/home/me");
+        let denied = credential_paths(home);
+        for relative in [
+            "Library/Application Support/ai.elitea.desktop",
+            "Library/Logs/ai.elitea.desktop",
+            ".config/ai.elitea.desktop",
+            ".local/share/ai.elitea.desktop",
+        ] {
+            assert!(
+                denied.contains(&home.join(relative)),
+                "{relative} is not denied"
+            );
+        }
     }
 
     #[test]

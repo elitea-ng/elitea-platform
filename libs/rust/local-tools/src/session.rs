@@ -249,7 +249,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "git_commit",
         kind: ToolKind::GitCommit,
-        description: "Commit to git through the host (hooks and signing off, your global git identity). With paths, commits exactly those files as they are now; without, commits what is staged. Always confirmed by the person.",
+        description: "Commit to git through the host (hooks and signing off, your global git identity). With paths, commits exactly those files as they are now; without, commits what is staged. Paths the policy denies are never staged; workspace or policy rules may ask the person first.",
         parameters: || {
             json!({
                 "type": "object",

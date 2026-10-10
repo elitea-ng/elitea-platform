@@ -246,6 +246,8 @@ async fn path_deny_credentials_and_the_data_directory_are_unreadable() {
         "echo x > .env".to_owned(),
         format!("cat {}", quoted(&data.join("checkpoints/manifest.json"))),
         "ls \"$HOME/Library/Keychains\"".to_owned(),
+        // The desktop app's own data (stored sign-in, other workspaces).
+        "ls \"$HOME/Library/Application Support/ai.elitea.desktop\"".to_owned(),
     ] {
         let output = sh(&fixture, &probe, SandboxMode::WorkspaceWrite, false).await;
         assert_ne!(
