@@ -935,6 +935,11 @@ func newMCPPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, string(registry)); err != nil {
 		t.Fatalf("apply %s: %v", mcpRegistryMigration, err)
 	}
+	// The personal-project resolver filters on the delete tombstone of
+	// shared/0160, which this helper does not run (#1211).
+	if _, err := pool.Exec(ctx, `ALTER TABLE centry.project ADD COLUMN IF NOT EXISTS deleting_at TIMESTAMPTZ`); err != nil {
+		t.Fatalf("add the project tombstone column: %v", err)
+	}
 	return pool
 }
 

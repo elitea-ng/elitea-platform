@@ -246,7 +246,7 @@ func TestChatAuthorityCreatorRestrictionPreservesMembershipAndGrants(t *testing.
 	pool := newChatAuthorityPool(t)
 	ctx := context.Background()
 	if _, err := pool.Exec(ctx, `
-CREATE TABLE centry.project(id integer PRIMARY KEY,suspended boolean NOT NULL DEFAULT false);
+CREATE TABLE centry.project(id integer PRIMARY KEY,suspended boolean NOT NULL DEFAULT false,deleting_at timestamptz);
 INSERT INTO centry.project VALUES (1),(2);
 CREATE TABLE IF NOT EXISTS public.auth_core__user(id integer PRIMARY KEY,email text,name text,last_login timestamp,suspended boolean NOT NULL DEFAULT false);
 CREATE TABLE public.auth_core__role(id integer PRIMARY KEY,name text,mode text);
