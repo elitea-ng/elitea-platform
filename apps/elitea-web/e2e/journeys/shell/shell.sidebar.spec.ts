@@ -28,6 +28,14 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { checkA11y } from '../../fixtures/axe';
 import { expectTextSpacingSurvives, expectTypeScale } from '../../fixtures/typeScale';
 import { BASE_URL } from '../../../playwright.config';
+import { keepThemeOffTheServer } from '../../fixtures/serverTheme';
+
+// The theme is a per-user server preference and this file's tests share a
+// persona with parallel workers: keep every page's theme off the server
+// (`fixtures/serverTheme.ts`).
+test.beforeEach(async ({ page }) => {
+  await keepThemeOffTheServer(page);
+});
 
 /** `STORAGE_NAMESPACE` + `collapsedPersistence.ts`'s own key (`chat.navigation.spec.ts` uses the same constant). */
 const COLLAPSED_KEY = 'el.sidebar.collapsed';

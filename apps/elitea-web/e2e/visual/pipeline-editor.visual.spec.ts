@@ -131,6 +131,14 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { SNAPSHOT_TOLERANCE, settle, shellSettled, volatileRegions } from './lib/settle';
+import { keepThemeOffTheServer } from '../fixtures/serverTheme';
+
+// The theme is a per-user server preference and this file's tests share a
+// persona with parallel workers: keep every page's theme off the server
+// (`fixtures/serverTheme.ts`).
+test.beforeEach(async ({ page }) => {
+  await keepThemeOffTheServer(page);
+});
 
 /*
  * The `parity/screenshot-index.json` route this file claims, spelled verbatim.

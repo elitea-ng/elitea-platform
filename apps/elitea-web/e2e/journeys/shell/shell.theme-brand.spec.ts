@@ -11,6 +11,13 @@ import { BASE_URL } from '../../../playwright.config';
 import { skipOnLiveTarget } from '../../fixtures/deployment';
 import { keepThemeOffTheServer } from '../../fixtures/serverTheme';
 
+// The theme is a per-user server preference and this file's tests share a
+// persona with parallel workers: keep every page's theme off the server
+// (`fixtures/serverTheme.ts`).
+test.beforeEach(async ({ page }) => {
+  await keepThemeOffTheServer(page);
+});
+
 /** `shared/brand/constants.ts:27` — the attribute MUI's colour scheme selector resolves to. */
 const SCHEME_ATTRIBUTE = 'data-el-scheme';
 /** `shared/brand/constants.ts:9` — `cssVarPrefix: 'el'`, so every token is `--el-…`. */
@@ -29,9 +36,6 @@ const readPrimary = (page: import('@playwright/test').Page): Promise<string> =>
 // Journey 29: Theme switch persists across reload
 // ─────────────────────────────────────────────────────────────────────────────
 test('J29: theme switch persists across reload', async ({ page }) => {
-  // The reload proves the local persistence (`el-mode`); the server copy is
-  // the persona's, shared with parallel tests, so it stays out (fixture doc).
-  await keepThemeOffTheServer(page);
   // The theme control lives on the Personalization settings tab
   // (`features/settings/ui/profile/ProfilePersonalization.tsx:72` renders
   // `shared/ui/ThemeModeToggle`, a `TabGroupButton` = MUI ToggleButtonGroup).

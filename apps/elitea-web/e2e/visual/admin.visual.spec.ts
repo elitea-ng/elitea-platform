@@ -85,6 +85,13 @@ import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
 import { keepThemeOffTheServer } from '../fixtures/serverTheme';
 import { SNAPSHOT_TOLERANCE, settle, volatileRegions } from './lib/settle';
 
+// The theme is a per-user server preference and this file's tests share a
+// persona with parallel workers: keep every page's theme off the server
+// (`fixtures/serverTheme.ts`).
+test.beforeEach(async ({ page }) => {
+  await keepThemeOffTheServer(page);
+});
+
 /**
  * The admin pages are gated server-side on `administration`-mode permissions
  * that only the admin persona holds (`admin.auth.users`,
@@ -454,8 +461,6 @@ for (const route of ADMIN_ROUTES) {
  * the thing the stylesheet keys off.
  */
 async function useLightScheme(page: Page): Promise<void> {
-  // The click would otherwise store `light` for the shared persona (fixture doc).
-  await keepThemeOffTheServer(page);
   const light = page
     .getByTestId('admin-nav')
     .getByRole('button', { name: 'Light', exact: true });
