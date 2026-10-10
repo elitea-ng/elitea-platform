@@ -22,9 +22,10 @@ use zeroize::Zeroizing;
 use super::config::{BitbucketHosting, BitbucketToolkitConfig};
 use crate::toolkits::families::gitlab_org::client::wildcard_matches;
 use crate::toolkits::families::gitlab_org::edit::{EditErrorCode, apply_update};
+use crate::toolkits::families::python_repr::repr as python_repr;
 use crate::toolkits::families::vcs_text::{
     MAX_OUTPUT_CHARS, batch_skip_notice, compile_pattern, grep_content, guard_text_read,
-    measure_result_chars, python_repr, requested_label, slice_lines,
+    measure_result_chars, requested_label, slice_lines,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);

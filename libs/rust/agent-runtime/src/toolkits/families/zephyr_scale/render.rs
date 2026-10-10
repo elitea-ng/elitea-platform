@@ -10,14 +10,14 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
+use crate::toolkits::families::python_repr;
 use crate::toolkits::families::zephyr_rest::client::ZephyrReply;
 
-/// Python's `repr(value)` for a decoded JSON value.
+/// Python's `repr(value)` for a decoded JSON value (the shared
+/// `python_repr`, members in sorted key order).
 #[must_use]
 pub(in crate::toolkits) fn py_repr(value: &Value) -> String {
-    let mut out = String::new();
-    write_repr(&mut out, value);
-    out
+    python_repr::repr(value)
 }
 
 /// Python's `str(value)` (and `f"{value}"`): a string is itself, anything
@@ -49,80 +49,7 @@ pub(in crate::toolkits) fn reply_str(reply: &ZephyrReply) -> String {
 /// `str(list_of_strings)`.
 #[must_use]
 pub(in crate::toolkits) fn py_repr_str_list(items: &[String]) -> String {
-    let mut out = String::from("[");
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write_repr_str(&mut out, item);
-    }
-    out.push(']');
-    out
-}
-
-fn write_repr(out: &mut String, value: &Value) {
-    match value {
-        Value::Null => out.push_str("None"),
-        Value::Bool(true) => out.push_str("True"),
-        Value::Bool(false) => out.push_str("False"),
-        Value::Number(number) => {
-            let _ = write!(out, "{number}");
-        }
-        Value::String(text) => write_repr_str(out, text),
-        Value::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                write_repr(out, item);
-            }
-            out.push(']');
-        }
-        Value::Object(object) => {
-            out.push('{');
-            for (index, (key, item)) in sorted(object).into_iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                write_repr_str(out, key);
-                out.push_str(": ");
-                write_repr(out, item);
-            }
-            out.push('}');
-        }
-    }
-}
-
-/// Python's `repr(str)`: single quotes unless the text has a single quote and
-/// no double quote, with Python's escapes for the quote, backslash and
-/// non-printable characters.
-fn write_repr_str(out: &mut String, text: &str) {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    out.push(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            character if character == quote => {
-                out.push('\\');
-                out.push(character);
-            }
-            character
-                if u32::from(character) < 0x20 || (0x7f..=0xa0).contains(&u32::from(character)) =>
-            {
-                let _ = write!(out, "\\x{:02x}", u32::from(character));
-            }
-            character => out.push(character),
-        }
-    }
-    out.push(quote);
+    python_repr::repr_str_list(items)
 }
 
 fn sorted(object: &Map<String, Value>) -> Vec<(&String, &Value)> {

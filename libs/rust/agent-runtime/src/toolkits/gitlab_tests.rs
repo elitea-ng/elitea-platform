@@ -516,7 +516,8 @@ async fn listings_issues_and_commits_keep_the_sdk_shapes() {
         .expect("issues");
     assert_eq!(
         text(&issues),
-        "Found 1 issues:\n[{'title': 'It\\'s broken', 'number': 4}]"
+        // CPython's repr picks double quotes for text holding only a `'`.
+        "Found 1 issues:\n[{'title': \"It's broken\", 'number': 4}]"
     );
     let none = client
         .execute(GitLabOperation::GetIssues)

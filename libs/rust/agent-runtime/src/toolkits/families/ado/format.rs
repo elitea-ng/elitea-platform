@@ -78,107 +78,13 @@ pub(crate) fn camel_case(key: &str) -> String {
     output
 }
 
-/// Python `repr()` of a JSON value as the SDK's `str(list_of_dicts)` prints
-/// it: `None`, `True`, single-quoted strings, `{'k': v}`.
-pub(crate) fn python_repr(value: &Value) -> String {
-    let mut output = String::new();
-    write_python(value, &mut output);
-    output
-}
-
-fn write_python(value: &Value, output: &mut String) {
-    match value {
-        Value::Null => output.push_str("None"),
-        Value::Bool(true) => output.push_str("True"),
-        Value::Bool(false) => output.push_str("False"),
-        Value::Number(number) => output.push_str(&number.to_string()),
-        Value::String(text) => output.push_str(&python_str_repr(text)),
-        Value::Array(values) => {
-            output.push('[');
-            for (index, value) in values.iter().enumerate() {
-                if index > 0 {
-                    output.push_str(", ");
-                }
-                write_python(value, output);
-            }
-            output.push(']');
-        }
-        Value::Object(object) => {
-            output.push('{');
-            for (index, (key, value)) in object.iter().enumerate() {
-                if index > 0 {
-                    output.push_str(", ");
-                }
-                output.push_str(&python_str_repr(key));
-                output.push_str(": ");
-                write_python(value, output);
-            }
-            output.push('}');
-        }
-    }
-}
-
-/// Python `repr(str)`: single quotes unless the text holds a single quote
-/// and no double quote.
-pub(crate) fn python_str_repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut output = String::with_capacity(text.len() + 2);
-    output.push(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => output.push_str("\\\\"),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            character if character == quote => {
-                output.push('\\');
-                output.push(character);
-            }
-            character if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') => {
-                let code = u32::from(character);
-                if code < 0x100 {
-                    let _ = write!(output, "\\x{code:02x}");
-                } else {
-                    let _ = write!(output, "\\u{code:04x}");
-                }
-            }
-            character => output.push(character),
-        }
-    }
-    output.push(quote);
-    output
-}
-
-/// Python's `str.splitlines(keepends=True)` boundaries.
+/// Python's `str.splitlines(keepends=True)`, over the shared boundaries in
+/// `vcs_text`.
 pub(crate) fn python_lines(content: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0usize;
-    let mut characters = content.char_indices().peekable();
-    while let Some((index, character)) = characters.next() {
-        let end = match character {
-            '\r' => {
-                if characters.peek().is_some_and(|(_, next)| *next == '\n') {
-                    let (next_index, _) = characters.next().unwrap_or((index, '\n'));
-                    next_index + 1
-                } else {
-                    index + 1
-                }
-            }
-            '\n' | '\u{000B}' | '\u{000C}' | '\u{001C}' | '\u{001D}' | '\u{001E}' | '\u{0085}'
-            | '\u{2028}' | '\u{2029}' => index + character.len_utf8(),
-            _ => continue,
-        };
-        lines.push(&content[start..end]);
-        start = end;
-    }
-    if start < content.len() {
-        lines.push(&content[start..]);
-    }
-    lines
+    crate::toolkits::families::vcs_text::python_line_ranges(content)
+        .into_iter()
+        .map(|(start, end)| &content[start..end])
+        .collect()
 }
 
 /// `json.dumps(str)`: ASCII-only, as Python's default `ensure_ascii=True`.

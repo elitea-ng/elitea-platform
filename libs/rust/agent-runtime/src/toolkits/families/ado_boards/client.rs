@@ -13,12 +13,13 @@ use crate::toolkits::families::ado::client::{
     invalid_response, resource_exhausted,
 };
 use crate::toolkits::families::ado::config::AdoToolkitConfig;
-use crate::toolkits::families::ado::format::{as_dict, python_json_string, python_repr};
+use crate::toolkits::families::ado::format::{as_dict, python_json_string};
 use crate::toolkits::families::ado::work_items::{
     DEFAULT_SEARCH_FIELDS, FieldDefinition, WORK_ITEMS_API, create_work_item,
     format_work_item_type_fields, get_work_item, id_text, transform_work_item, update_work_item,
     work_item_result, work_item_type_fields,
 };
+use crate::toolkits::families::python_repr::repr as python_repr;
 
 const WIQL_API: &str = "7.1-preview.2";
 const RELATION_TYPES_API: &str = "7.1-preview.2";

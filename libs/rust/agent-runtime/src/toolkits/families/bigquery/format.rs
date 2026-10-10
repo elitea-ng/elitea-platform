@@ -154,9 +154,8 @@ fn write_string(out: &mut String, value: &str) {
     out.push('"');
 }
 
-/// `CPython`'s `repr(float)`, which `json.dumps` uses: the shortest
-/// round-tripping digits, positional for decimal exponents in `-4..16`,
-/// otherwise `d.ddde±XX`.
+/// `json.dumps` of a float: `CPython`'s `repr(float)` (the shared
+/// `python_repr::repr_float`), with JSON's `NaN`/`Infinity` spellings.
 #[must_use]
 pub(in crate::toolkits) fn python_float(value: f64) -> String {
     if value.is_nan() {
@@ -169,62 +168,7 @@ pub(in crate::toolkits) fn python_float(value: f64) -> String {
             "-Infinity".to_owned()
         };
     }
-    if value == 0.0 {
-        return if value.is_sign_negative() {
-            "-0.0".to_owned()
-        } else {
-            "0.0".to_owned()
-        };
-    }
-    // `{:e}` is Rust's shortest round-trip form, e.g. `-1.2345e-5`.
-    let scientific = format!("{value:e}");
-    let (mantissa, exponent) = scientific
-        .split_once('e')
-        .unwrap_or((scientific.as_str(), "0"));
-    let exponent: i32 = exponent.parse().unwrap_or(0);
-    let (sign, mantissa) = mantissa
-        .strip_prefix('-')
-        .map_or(("", mantissa), |rest| ("-", rest));
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    if (-4..16).contains(&exponent) {
-        let point = exponent + 1;
-        let mut text = String::from(sign);
-        if point <= 0 {
-            text.push_str("0.");
-            for _ in 0..(-point) {
-                text.push('0');
-            }
-            text.push_str(&digits);
-        } else {
-            let point = usize::try_from(point).unwrap_or(0);
-            if digits.len() <= point {
-                text.push_str(&digits);
-                for _ in digits.len()..point {
-                    text.push('0');
-                }
-                text.push_str(".0");
-            } else {
-                text.push_str(&digits[..point]);
-                text.push('.');
-                text.push_str(&digits[point..]);
-            }
-        }
-        text
-    } else {
-        let mut text = String::from(sign);
-        text.push_str(&digits[..1]);
-        if digits.len() > 1 {
-            text.push('.');
-            text.push_str(&digits[1..]);
-        }
-        let _ = write!(
-            text,
-            "e{}{:02}",
-            if exponent < 0 { '-' } else { '+' },
-            exponent.unsigned_abs()
-        );
-        text
-    }
+    crate::toolkits::families::python_repr::repr_float(value)
 }
 
 #[cfg(test)]

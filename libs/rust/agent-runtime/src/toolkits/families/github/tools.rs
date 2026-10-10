@@ -8,6 +8,7 @@ use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::vcs_text::{is_python_line_break, python_line_ranges};
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -1413,49 +1414,6 @@ fn optional_bool(arguments: &Map<String, Value>, key: &str) -> adk_core::Result<
 
 fn optional_number_label(value: Option<usize>) -> String {
     value.map_or_else(|| "None".to_owned(), |value| value.to_string())
-}
-
-fn python_line_ranges(content: &str) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut start = 0_usize;
-    let mut characters = content.char_indices().peekable();
-    while let Some((index, character)) = characters.next() {
-        let end = if character == '\r' {
-            if let Some((next_index, '\n')) = characters.peek().copied() {
-                let _ = characters.next();
-                Some(next_index.saturating_add('\n'.len_utf8()))
-            } else {
-                Some(index.saturating_add(character.len_utf8()))
-            }
-        } else if is_python_line_break(character) {
-            Some(index.saturating_add(character.len_utf8()))
-        } else {
-            None
-        };
-        if let Some(end) = end {
-            ranges.push((start, end));
-            start = end;
-        }
-    }
-    if start < content.len() {
-        ranges.push((start, content.len()));
-    }
-    ranges
-}
-
-fn is_python_line_break(character: char) -> bool {
-    matches!(
-        character,
-        '\n' | '\r'
-            | '\u{000B}'
-            | '\u{000C}'
-            | '\u{001C}'
-            | '\u{001D}'
-            | '\u{001E}'
-            | '\u{0085}'
-            | '\u{2028}'
-            | '\u{2029}'
-    )
 }
 
 fn slice_lines(content: &str, start_line: Option<usize>, end_line: Option<usize>) -> &str {

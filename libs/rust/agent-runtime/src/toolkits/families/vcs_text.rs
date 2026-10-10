@@ -8,8 +8,6 @@
 //! shape a saved agent or pipeline was written against. The GitHub family
 //! carries its own copies of the same algorithms; these are kept equal to it.
 
-use std::fmt::Write as _;
-
 use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value, json};
 
@@ -22,7 +20,6 @@ pub(in crate::toolkits) const MAX_CONTEXT_LINES: usize = 32;
 const MAX_GREP_MATCHES: usize = 2_000;
 const REGEX_SIZE_LIMIT: usize = 2 * 1_024 * 1_024;
 const REGEX_DFA_SIZE_LIMIT: usize = 2 * 1_024 * 1_024;
-const MAX_REPR_DEPTH: usize = 64;
 
 /// The search output would exceed [`MAX_OUTPUT_CHARS`] or the match bound.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,7 +54,8 @@ pub(in crate::toolkits) fn python_line_ranges(content: &str) -> Vec<(usize, usiz
     ranges
 }
 
-const fn is_python_line_break(character: char) -> bool {
+/// A character `str.splitlines` breaks a line at (`\r\n` is one break).
+pub(in crate::toolkits) const fn is_python_line_break(character: char) -> bool {
     matches!(
         character,
         '\n' | '\r'
@@ -317,78 +315,6 @@ fn push_bounded(
     Ok(())
 }
 
-/// Python's `repr` of the value `json.loads` would produce, as the SDK's
-/// `str(dict)` / `str(list)` renders a provider response inside a message.
-pub(in crate::toolkits) fn python_repr(value: &Value) -> String {
-    let mut output = String::new();
-    push_repr(&mut output, value, 0);
-    output
-}
-
-fn push_repr(output: &mut String, value: &Value, depth: usize) {
-    if depth > MAX_REPR_DEPTH {
-        output.push_str("...");
-        return;
-    }
-    match value {
-        Value::Null => output.push_str("None"),
-        Value::Bool(true) => output.push_str("True"),
-        Value::Bool(false) => output.push_str("False"),
-        Value::Number(number) => output.push_str(&number.to_string()),
-        Value::String(text) => push_quoted(output, text),
-        Value::Array(values) => {
-            output.push('[');
-            for (index, value) in values.iter().enumerate() {
-                if index > 0 {
-                    output.push_str(", ");
-                }
-                push_repr(output, value, depth + 1);
-            }
-            output.push(']');
-        }
-        Value::Object(values) => {
-            output.push('{');
-            for (index, (key, value)) in values.iter().enumerate() {
-                if index > 0 {
-                    output.push_str(", ");
-                }
-                push_quoted(output, key);
-                output.push_str(": ");
-                push_repr(output, value, depth + 1);
-            }
-            output.push('}');
-        }
-    }
-}
-
-/// Python's string `repr`: single quotes unless the text holds a single
-/// quote and no double quote.
-fn push_quoted(output: &mut String, text: &str) {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    output.push(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => output.push_str("\\\\"),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            character if character == quote => {
-                output.push('\\');
-                output.push(character);
-            }
-            character if character.is_control() => {
-                let _ = write!(output, "\\x{:02x}", u32::from(character));
-            }
-            character => output.push(character),
-        }
-    }
-    output.push(quote);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,15 +348,6 @@ mod tests {
             "No matches found for pattern '(' in f.txt"
         );
         assert!(compile_pattern("(", false).is_some());
-    }
-
-    #[test]
-    fn repr_matches_python() {
-        let value = json!({"a": [1, true, null, "it's"], "b": "x\ny", "c": {"d": false}});
-        assert_eq!(
-            python_repr(&value),
-            "{'a': [1, True, None, \"it's\"], 'b': 'x\\ny', 'c': {'d': False}}"
-        );
     }
 
     #[test]

@@ -3,13 +3,22 @@
 //!
 //! The model reads the SDK's output as Python literal text (single-quoted
 //! strings, `True`, `None`), so a port that wants the same text renders the
-//! same literal. Object members render in the order the [`Value`] holds them;
-//! callers that need the SDK's insertion order pass ordered pairs to
-//! [`repr_pairs`].
+//! same literal. This is the one implementation of `CPython`'s `repr` rules in
+//! the toolkit families: string quoting and escaping (`unicode_repr`, with
+//! `str.isprintable`), float `repr`, and `None`/`True`/`False`.
+//!
+//! Object members of a [`Value`] render in sorted key order whatever
+//! `serde_json` features a build unifies, the rule `crate::canonical` sets:
+//! without `preserve_order` (the worker) a `Map` iterates sorted, with it
+//! (the desktop, through feature unification) it would iterate in insertion
+//! order, and the same tool would answer different text on the two hosts.
+//! Callers that need the SDK's insertion order pass ordered pairs to
+//! [`repr_pairs`] or build a [`PyValue`].
 
 use std::fmt::Write as _;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 /// `repr(value)` for a JSON value.
 pub(in crate::toolkits) fn repr(value: &Value) -> String {
@@ -62,13 +71,31 @@ fn write_value(output: &mut String, value: &Value) {
             }
             output.push(']');
         }
-        Value::Object(object) => {
-            write_pairs(
-                output,
-                object.iter().map(|(key, value)| (key.as_str(), value)),
-            );
-        }
+        Value::Object(object) => write_pairs(output, sorted_members(object)),
     }
+}
+
+/// A map's members in key-byte order, as `crate::canonical` writes them.
+fn sorted_members(object: &Map<String, Value>) -> Vec<(&str, &Value)> {
+    let mut members = object
+        .iter()
+        .map(|(key, value)| (key.as_str(), value))
+        .collect::<Vec<_>>();
+    members.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    members
+}
+
+/// `repr(list_of_strings)`.
+pub(in crate::toolkits) fn repr_str_list<S: AsRef<str>>(items: &[S]) -> String {
+    let mut output = String::from("[");
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            output.push_str(", ");
+        }
+        write_str(&mut output, item.as_ref());
+    }
+    output.push(']');
+    output
 }
 
 fn write_pairs<'a>(output: &mut String, pairs: impl IntoIterator<Item = (&'a str, &'a Value)>) {
@@ -85,13 +112,29 @@ fn write_pairs<'a>(output: &mut String, pairs: impl IntoIterator<Item = (&'a str
 }
 
 /// An integer as digits; a float the way Python prints one (`1.0`, `1e+16`).
+///
+/// Under `arbitrary_precision` (the worker) an integer wider than 64 bits
+/// keeps its digits, as `json.loads` makes it a Python `int`.
 pub(in crate::toolkits) fn repr_number(number: &serde_json::Number) -> String {
     if number.is_i64() || number.is_u64() {
         return number.to_string();
     }
-    let Some(float) = number.as_f64() else {
-        return number.to_string();
-    };
+    let text = number.to_string();
+    if !text.is_empty()
+        && text
+            .strip_prefix('-')
+            .unwrap_or(&text)
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+    {
+        return text;
+    }
+    number.as_f64().map_or(text, repr_float)
+}
+
+/// `CPython`'s `repr(float)`: the shortest round-tripping digits, positional
+/// for decimal exponents in `-4..16`, otherwise `d.ddde±XX`; `nan`, `inf`.
+pub(in crate::toolkits) fn repr_float(float: f64) -> String {
     if float.is_nan() {
         return "nan".to_owned();
     }
@@ -117,6 +160,10 @@ pub(in crate::toolkits) fn repr_number(number: &serde_json::Number) -> String {
     }
 }
 
+/// `CPython`'s `unicode_repr`: the quote, backslash, `\t`, `\n` and `\r`
+/// escaped; other characters below U+0020 and U+007F as `\xhh`; any other
+/// character `str.isprintable` refuses as `\xhh`, `\uhhhh` or `\Uhhhhhhhh`
+/// by its width; everything else as itself.
 fn write_str(output: &mut String, value: &str) {
     let quote = if value.contains('\'') && !value.contains('"') {
         '"'
@@ -134,18 +181,40 @@ fn write_str(output: &mut String, value: &str) {
                 output.push('\\');
                 output.push(character);
             }
-            character if character.is_control() => {
+            character if character < ' ' || character == '\u{7f}' => {
+                let _ = write!(output, "\\x{:02x}", u32::from(character));
+            }
+            character if character.is_ascii() || is_printable(character) => output.push(character),
+            character => {
                 let code = u32::from(character);
                 if code <= 0xff {
                     let _ = write!(output, "\\x{code:02x}");
-                } else {
+                } else if code <= 0xffff {
                     let _ = write!(output, "\\u{code:04x}");
+                } else {
+                    let _ = write!(output, "\\U{code:08x}");
                 }
             }
-            character => output.push(character),
         }
     }
     output.push(quote);
+}
+
+/// `str.isprintable` for one non-ASCII character: false for the categories
+/// `CPython` treats as non-printable (Cc, Cf, Cs, Co, Cn, Zl, Zp, Zs; the ASCII
+/// space is handled before this is asked).
+fn is_printable(character: char) -> bool {
+    !matches!(
+        get_general_category(character),
+        GeneralCategory::Control
+            | GeneralCategory::Format
+            | GeneralCategory::Surrogate
+            | GeneralCategory::PrivateUse
+            | GeneralCategory::Unassigned
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+            | GeneralCategory::SpaceSeparator
+    )
 }
 
 /// A Python value built in the SDK's insertion order: a JSON leaf, or a
@@ -235,14 +304,15 @@ impl PyValue {
         }
     }
 
-    /// A JSON value as an ordered value, objects in the map's order.
+    /// A JSON value as an ordered value, objects in sorted key order (the
+    /// same order [`repr`] uses, whatever the `serde_json` features).
     pub(in crate::toolkits) fn from_json(value: &Value) -> Self {
         match value {
             Value::Array(items) => Self::List(items.iter().map(Self::from_json).collect()),
             Value::Object(object) => Self::Dict(
-                object
-                    .iter()
-                    .map(|(key, value)| (key.clone(), Self::from_json(value)))
+                sorted_members(object)
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), Self::from_json(value)))
                     .collect(),
             ),
             other => Self::Json(other.clone()),
@@ -270,5 +340,56 @@ mod tests {
         assert_eq!(repr(&json!(-0.5)), "-0.5");
         let (one, two) = (json!(1), json!("x"));
         assert_eq!(repr_pairs([("z", &one), ("a", &two)]), "{'z': 1, 'a': 'x'}");
+    }
+
+    /// Expected strings are what `CPython`'s `repr` prints for the same value.
+    #[test]
+    fn strings_escape_like_cpython() {
+        // C0 controls and DEL as \xhh; C1 controls, NBSP and the soft hyphen
+        // (Cc, Zs, Cf) as \xhh too; printable Latin-1 as itself.
+        assert_eq!(repr_str("\u{0}\u{1f}\u{7f}"), "'\\x00\\x1f\\x7f'");
+        assert_eq!(
+            repr_str("\u{80}\u{9f}\u{a0}\u{ad}"),
+            "'\\x80\\x9f\\xa0\\xad'"
+        );
+        assert_eq!(repr_str("\u{a1}é\u{ff}"), "'\u{a1}é\u{ff}'");
+        // Line/paragraph separators, ideographic space, zero-width space and
+        // BOM as \uhhhh; private use and unassigned planes as \Uhhhhhhhh.
+        assert_eq!(
+            repr_str("\u{2028}\u{2029}\u{3000}\u{200b}\u{feff}"),
+            "'\\u2028\\u2029\\u3000\\u200b\\ufeff'"
+        );
+        assert_eq!(repr_str("\u{f0000}\u{e0001}"), "'\\U000f0000\\U000e0001'");
+        // Printable non-Latin text and emoji stay as themselves.
+        assert_eq!(repr_str("Привет 日本 😀"), "'Привет 日本 😀'");
+        assert_eq!(repr_str("both ' and \""), "'both \\' and \"'");
+    }
+
+    #[test]
+    fn numbers_follow_cpython() {
+        assert_eq!(repr(&json!(0.0001)), "0.0001");
+        assert_eq!(repr(&json!(9_999_999_999_999_998.0)), "9999999999999998.0");
+        assert_eq!(repr(&json!(1e22)), "1e+22");
+        assert_eq!(repr(&json!(1.5e-7)), "1.5e-07");
+        assert_eq!(repr(&json!(-0.0)), "-0.0");
+        assert_eq!(repr(&json!(100.0)), "100.0");
+        assert_eq!(repr(&json!(u64::MAX)), "18446744073709551615");
+    }
+
+    /// Passes with and without `--features test-preserve-order`: the members
+    /// were inserted out of order, and repr sorts them like `crate::canonical`.
+    #[test]
+    fn object_members_render_sorted_whatever_the_serde_json_features() {
+        let value: serde_json::Value = serde_json::from_str(
+            r#"{"zeta": {"b": 1, "a": [{"y": 2, "x": 1}]}, "Beta": true, "alpha": null}"#,
+        )
+        .expect("fixture");
+        let expected = "{'Beta': True, 'alpha': None, 'zeta': {'a': [{'x': 1, 'y': 2}], 'b': 1}}";
+        assert_eq!(repr(&value), expected);
+        assert_eq!(super::PyValue::from_json(&value).repr(), expected);
+        assert_eq!(
+            crate::canonical::to_string(&value).expect("canonical"),
+            r#"{"Beta":true,"alpha":null,"zeta":{"a":[{"x":1,"y":2}],"b":1}}"#
+        );
     }
 }

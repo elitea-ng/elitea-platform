@@ -2632,11 +2632,7 @@ fn py_truthy(value: &Value) -> bool {
 
 /// `str(list_of_strings)`: `['a', 'b']`.
 fn py_list(values: &[String]) -> String {
-    let quoted = values
-        .iter()
-        .map(|value| format!("'{value}'"))
-        .collect::<Vec<_>>();
-    format!("[{}]", quoted.join(", "))
+    crate::toolkits::families::python_repr::repr_str_list(values)
 }
 
 fn keep_fields(source: &Value, fields: &[&str]) -> Map<String, Value> {

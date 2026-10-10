@@ -12,8 +12,9 @@ use crate::toolkits::families::ado::client::{
     invalid_response, resource_exhausted, response_shape_failure,
 };
 use crate::toolkits::families::ado::config::AdoConnection;
-use crate::toolkits::families::ado::format::{python_json_string, python_str_repr};
+use crate::toolkits::families::ado::format::python_json_string;
 use crate::toolkits::families::gitlab_org::edit::{EditErrorCode, apply_update};
+use crate::toolkits::families::python_repr::{repr as python_repr, repr_str as python_str_repr};
 
 use super::config::AdoRepository;
 use super::diff::generate_diff;
@@ -1330,7 +1331,7 @@ fn json_value(value: Option<&Value>) -> PyValue {
 impl PyValue {
     fn repr(&self) -> String {
         match self {
-            Self::Json(value) => crate::toolkits::families::ado::format::python_repr(value),
+            Self::Json(value) => python_repr(value),
             Self::List(values) => format!(
                 "[{}]",
                 values.iter().map(Self::repr).collect::<Vec<_>>().join(", ")

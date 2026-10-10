@@ -16,6 +16,8 @@ use zeroize::Zeroizing;
 use super::config::GitLabOrgToolkitConfig;
 use super::diff::{DiffErrorCode, discussion_position, format_changes};
 use super::edit::{EditErrorCode, apply_update};
+use crate::toolkits::families::python_repr::repr_str;
+use crate::toolkits::families::vcs_text::python_line_ranges;
 
 const PRIVATE_TOKEN: HeaderName = HeaderName::from_static("private-token");
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -796,23 +798,6 @@ fn wildcard_tokens(pattern: &str) -> Vec<WildcardToken> {
     tokens
 }
 
-pub(in crate::toolkits) fn python_quote(value: &str) -> String {
-    let mut output = String::with_capacity(value.len() + 2);
-    output.push('\'');
-    for character in value.chars() {
-        match character {
-            '\\' => output.push_str("\\\\"),
-            '\'' => output.push_str("\\'"),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            _ => output.push(character),
-        }
-    }
-    output.push('\'');
-    output
-}
-
 pub(in crate::toolkits) fn python_issue_list(issues: &[(&str, u64)]) -> String {
     let mut output = String::from("[");
     for (index, (title, iid)) in issues.iter().enumerate() {
@@ -820,7 +805,7 @@ pub(in crate::toolkits) fn python_issue_list(issues: &[(&str, u64)]) -> String {
             output.push_str(", ");
         }
         output.push_str("{'title': ");
-        output.push_str(&python_quote(title));
+        output.push_str(&repr_str(title));
         output.push_str(", 'number': ");
         output.push_str(&iid.to_string());
         output.push('}');
@@ -835,7 +820,7 @@ fn python_string_list(values: &[String]) -> String {
         if index > 0 {
             output.push_str(", ");
         }
-        output.push_str(&python_quote(value));
+        output.push_str(&repr_str(value));
     }
     output.push(']');
     output
@@ -878,34 +863,6 @@ fn map_diff_error(error: DiffErrorCode) -> GitLabOrgClientError {
         DiffErrorCode::InvalidIndex => invalid_input(),
         DiffErrorCode::InvalidShape => invalid_response(),
     }
-}
-
-fn python_line_ranges(content: &str) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut start = 0usize;
-    let mut chars = content.char_indices().peekable();
-    while let Some((index, character)) = chars.next() {
-        let end = match character {
-            '\r' => {
-                if chars.peek().is_some_and(|(_, next)| *next == '\n') {
-                    chars
-                        .next()
-                        .map_or(index + 1, |(next, value)| next + value.len_utf8())
-                } else {
-                    index + character.len_utf8()
-                }
-            }
-            '\n' | '\u{000B}' | '\u{000C}' | '\u{001C}' | '\u{001D}' | '\u{001E}' | '\u{0085}'
-            | '\u{2028}' | '\u{2029}' => index + character.len_utf8(),
-            _ => continue,
-        };
-        ranges.push((start, end));
-        start = end;
-    }
-    if start < content.len() {
-        ranges.push((start, content.len()));
-    }
-    ranges
 }
 
 fn slice_requested_lines(

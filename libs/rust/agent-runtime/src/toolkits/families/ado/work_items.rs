@@ -297,7 +297,7 @@ pub(crate) fn python_text(value: &Value) -> String {
         Value::Bool(true) => "True".to_owned(),
         Value::Bool(false) => "False".to_owned(),
         Value::String(text) => text.clone(),
-        other => super::format::python_repr(other),
+        other => crate::toolkits::families::python_repr::repr(other),
     }
 }
 

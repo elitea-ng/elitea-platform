@@ -351,11 +351,9 @@ fn truthy(value: &Value) -> bool {
 }
 
 fn py_list(values: &BTreeSet<String>) -> String {
-    let quoted = values
-        .iter()
-        .map(|value| format!("'{value}'"))
-        .collect::<Vec<_>>();
-    format!("[{}]", quoted.join(", "))
+    crate::toolkits::families::python_repr::repr_str_list(
+        &values.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
 }
 
 /// Python's `json.dumps(value)` with its default separators and
