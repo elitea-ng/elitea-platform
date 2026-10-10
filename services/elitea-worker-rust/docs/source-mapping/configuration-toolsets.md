@@ -159,7 +159,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `zephyr_squad` | None; credentials are inline toolkit settings | `tools/zephyr_squad::ZephyrSquadToolkit` | 15 | No | `toolkits/families/zephyr_squad/{config,client,tools}.rs` | Capability-disabled complete family: five bounded reads plus all eight writes and two deletes over fixed Squad Cloud JWT routes; authorized materialization, live credential proof, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `zephyr_enterprise` | `configurations/zephyr_enterprise.py::ZephyrEnterpriseConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_enterprise::ZephyrEnterpriseToolkit` | 11 | Yes | `toolkits/families/zephyr_enterprise/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all five business operations (three reads, two effects) over one bearer flex-REST client; the six inherited indexing tools are not served and the capability snapshot lists the family per tool |
 | `zephyr_essential` | `configurations/zephyr_essential.py::ZephyrEssentialConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_essential::ZephyrEssentialToolkit` | 51 | Yes | `toolkits/families/zephyr_essential/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: 41 of the 45 business operations (24 reads, 17 effects); not served are the six indexing tools, the three automation-result uploads and the BDD ZIP download (see the family section) |
-| `figma` | `configurations/figma.py::FigmaConfiguration` | `tools/figma::FigmaToolkit` | 17 | Yes | corresponding family paths | Planned; content/artifact limits required |
+| `figma` | `configurations/figma.py::FigmaConfiguration` | `tools/figma::FigmaToolkit` | 17 | Yes | `toolkits/families/figma/{config,client,output,tokens,tools}.rs` | Partial capability-disabled family: eight REST reads/comment with the SDK's `extra_params` output reduction plus both design-token extractors; `analyze_file` (LLM/TOON) and the six indexing tools stay SDK-only; exact-interrupt HITL for the comment effect, approved egress and live proof remain gates |
 | `rally` | `configurations/rally.py::RallyConfiguration` | `tools/rally::RallyToolkit` | 8 | No | `toolkits/families/rally/{config,client,tools}.rs` | Capability-disabled complete family: six bounded WSAPI reads plus create/update, with lazy per-invocation API-key/Basic authority; authorized materialization, exact-interrupt HITL, live WSAPI proof and cancellation-safe effect reconciliation remain gates |
 | `sonar` | `configurations/sonar.py::SonarConfiguration` | `tools/code/sonar::SonarToolkit` | 1 | No | `toolkits/families/sonar/{config,client,tools}.rs` | Capability-disabled complete read family: one project-bound `/api/issues/search` request with bounded filters and raw JSON projection; authorized materialization and live Sonar TLS proof remain gates |
 | `sql` | `configurations/sql.py::SqlConfiguration` | `tools/sql::SQLToolkit` | 2 | No | `toolkits/families/sql/` | Capability-disabled complete family: backend-specific PostgreSQL/MySQL execution plus bounded default-schema discovery; exact-interrupt HITL, effect reconciliation, TLS authority and driver preallocation controls remain gates |
@@ -2392,6 +2392,68 @@ unavailable. A result over 1000 rows is refused with a narrow-the-filter error
 rather than returned unbounded. Production registration remains gated on the
 same live service-account, exact-interrupt HITL, effect-reconciliation and
 egress proofs as the `gcp` family.
+
+### Figma partial design-file family
+
+Ported from the worker-pinned SDK revision
+`b5113a129329b85d23c2d5c2bf55f18e307414ec` (no pinned patch touches Figma)
+and the `FigmaPy==2018.1.0` client it wraps. Configuration is
+`figma_configuration.token` (sent as a sensitive `X-Figma-Token`) plus the
+toolkit-level `global_limit` and `global_regexp` defaults; a missing token or
+a `global_regexp` that does not compile refuses the toolkit, as the SDK's
+validator does. All calls go to the fixed `https://api.figma.com/v1/` origin
+through the family's bounded transport (no redirects or automatic retries,
+16 MiB response cap); keys and ids are single percent-encoded path segments.
+
+| SDK tool | Route | Result |
+| --- | --- | --- |
+| `get_file_nodes` | `GET files/{key}/nodes?ids=` | Raw JSON through `process_output` |
+| `get_file` | `GET files/{key}` | FigmaPy `File` attributes: `name`, `last_modified`, `thumbnail_url`, `document`, `components`, `schema_version`, `styles` |
+| `get_file_versions` | `GET files/{key}/versions` | `versions`, `pagination` |
+| `get_file_comments` | `GET files/{key}/comments` | `comments` rebuilt from FigmaPy `Comment`'s nine attributes |
+| `post_file_comment` | `POST files/{key}/comments` | `{"message", "client_meta"?}` body (the SDK's override of FigmaPy's broken payload); one effect |
+| `get_file_images` | `GET images/{key}?ids=` | `err`, `images` |
+| `get_team_projects` | `GET teams/{id}/projects` | `projects` |
+| `get_project_files` | `GET projects/{id}/files` | `files` |
+| `extract_design_tokens` | `GET files/{key}/nodes?ids=&depth=` | Colours, strokes, typography, effects, summary and raw entries |
+| `extract_design_tokens_batch` | the same, up to five entries at once | `full`, `compact`, `summary` or `style_guide` |
+
+`output.rs` reproduces `process_output`: the result is serialized as Python's
+`json.dumps` writes it (`", "`/`": "` separators, `ensure_ascii`), because
+`limit` counts characters of that text and `regexp` is matched against it.
+`regexp` uses `fancy-regex`, so lookaround (which the SDK's own documented
+example uses) behaves as in Python `re`, under a bounded backtracking budget.
+Over the limit, the RAW result is reduced by `fields_retain`/`fields_remove`
+between `depth_start` and `depth_end`, prefixed with the SDK's note and cut at
+`limit` characters. An empty result answers the SDK's "Response result is
+empty" text, and an unusable control answers `Error in '<tool>': ...`, as the
+SDK's catch-all does.
+
+`tokens.rs` reproduces the extraction and the four dedup passes, including
+Python's `round` (ties to even; an integer stays an integer) and value-equal
+dedup keys (`1` and `1.0` collide, as in a Python dict).
+
+Deliberate differences:
+
+- `simplified_dict` turns everything below depth 3 into Python `str()`
+  reprs (so a file's pages and a version's user become repr strings). Rust
+  returns those values as JSON; key order follows the worker's `serde_json`.
+- FigmaPy appends `geometry`, `version`, `scale` and `format` to the query
+  as bare values (`?paths`), so Figma never received them. Rust sends them
+  as named parameters; a `key=value` argument (the SDK's own internal
+  `depth=1`) is kept as that pair.
+- A non-2xx Figma answer is a redacted error instead of the SDK's
+  `Error in '...': Figma API error <status>: <body>` text, and an ambiguous
+  `post_file_comment` is an unknown-outcome error.
+- Token results are JSON values (the SDK returns `json.dumps` text); a batch
+  holds at most 100 entries.
+
+Not ported: `analyze_file` renders frames to images and asks the toolkit's
+LLM to explain screens and flows, over the 2,900-line TOON serializer; a
+Rust toolkit is materialized from settings alone and holds no model
+authority, and a model-free variant would answer something the SDK never
+does. The six indexing tools wait for the shared indexing overlay. The
+capability snapshot lists the ten served tools.
 
 ### Carrier partial performance-testing family
 

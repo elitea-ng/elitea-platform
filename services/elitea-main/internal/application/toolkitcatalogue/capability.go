@@ -138,6 +138,7 @@ var rustNativeToolTypes = []string{
 	"azure_search",
 	"carrier",
 	"elastic",
+	"figma",
 	"gcp",
 	"github",
 	"gitlab_org",

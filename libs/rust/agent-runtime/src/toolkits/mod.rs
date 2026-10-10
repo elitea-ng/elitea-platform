@@ -73,6 +73,8 @@ mod direct_execution_tests;
 #[cfg(test)]
 mod elastic_tests;
 #[cfg(test)]
+mod figma_tests;
+#[cfg(test)]
 mod gcp_tests;
 #[cfg(test)]
 mod github_tests;

@@ -11,6 +11,7 @@ pub(crate) mod bitbucket;
 pub(crate) mod carrier;
 pub(crate) mod confluence;
 pub(crate) mod elastic;
+pub(crate) mod figma;
 pub(crate) mod gcp;
 pub(crate) mod github;
 pub(crate) mod gitlab;

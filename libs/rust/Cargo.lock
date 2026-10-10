@@ -1494,6 +1494,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "fancy-regex 0.18.0",
  "futures",
  "hmac 0.13.0",
  "html-to-markdown-rs",

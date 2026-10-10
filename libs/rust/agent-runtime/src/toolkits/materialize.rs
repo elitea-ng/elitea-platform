@@ -28,7 +28,7 @@ use super::families::jira;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
 use super::families::{
-    aha, artifact, azure, azure_search, bitbucket, carrier, elastic, gcp, github, gitlab,
+    aha, artifact, azure, azure_search, bitbucket, carrier, elastic, figma, gcp, github, gitlab,
     gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
     salesforce, service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
 };
@@ -187,6 +187,7 @@ async fn materialize(
             | "bigquery"
             | "carrier"
             | "elastic"
+            | "figma"
             | "gcp"
             | "github"
             | "gitlab"
@@ -351,6 +352,13 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
+        "figma" => figma::tools::build_figma_toolset(
+            name,
+            figma::config::FigmaToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|error| figma_toolset_materialization_error(error.code()))?,
         "gcp" => gcp::tools::build_gcp_toolset(
             name,
             gcp::config::GcpToolkitConfig::parse(settings).map_err(|_| invalid_configuration())?,
@@ -655,6 +663,18 @@ const fn carrier_toolset_materialization_error(
         | carrier::tools::CarrierToolsetErrorCode::InvalidDefinition => invalid_configuration(),
         carrier::tools::CarrierToolsetErrorCode::ResourceExhausted => resource_exhausted(),
         carrier::tools::CarrierToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
+    }
+}
+
+const fn figma_toolset_materialization_error(
+    code: figma::tools::FigmaToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        figma::tools::FigmaToolsetErrorCode::InvalidConfiguration
+        | figma::tools::FigmaToolsetErrorCode::Client
+        | figma::tools::FigmaToolsetErrorCode::InvalidDefinition => invalid_configuration(),
+        figma::tools::FigmaToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        figma::tools::FigmaToolsetErrorCode::UnsupportedSelection => unsupported_toolkit(),
     }
 }
 
