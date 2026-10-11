@@ -305,6 +305,70 @@ async fn a_project_delete_covers_every_toolkit_of_the_project_and_no_other() {
     assert!(done.deleted.is_empty() && done.busy.is_empty());
 }
 
+/// A toolkit that appears while the project is being deleted (created, or
+/// ingested into, between the listing and the end of the pass) is seen by
+/// the next listing and deleted; when the rounds run out, what is still
+/// there is reported busy, so the call never says "complete" over a graph
+/// it did not delete.
+#[tokio::test]
+async fn a_toolkit_that_appears_mid_delete_is_deleted_or_reported_busy() {
+    let Some(pool) = common::database("delete_project_rounds").await else {
+        return;
+    };
+    let graphs = PgGraphStore::new(pool.clone());
+    for toolkit in [1, 2] {
+        commit(&graphs, key(5, toolkit), &graph(&format!("p{toolkit}"))).await;
+    }
+    // One toolkit appears after the first pass: the second listing finds
+    // it, the third finds nothing new.
+    let late = graphs.clone();
+    let done = delete::delete_project_observed(&pool, 5, |round| {
+        let late = late.clone();
+        async move {
+            if round == 1 {
+                commit(&late, key(5, 3), &graph("late")).await;
+            }
+        }
+    })
+    .await
+    .expect("delete");
+    assert_eq!(done.deleted, vec![1, 2, 3]);
+    assert!(done.complete(), "{done:?}");
+    assert_eq!(
+        done.by_toolkit
+            .iter()
+            .map(|(toolkit, removed)| (*toolkit, removed.entities))
+            .collect::<Vec<_>>(),
+        vec![(1, 3), (2, 3), (3, 3)]
+    );
+    for toolkit in 1..=3 {
+        assert_eq!(rows(&pool, key(5, toolkit)).await, [0; 5], "{toolkit}");
+    }
+
+    // A toolkit appears after EVERY pass: the rounds run out, and the one
+    // still there is reported busy, not deleted and not forgotten.
+    commit(&graphs, key(6, 1), &graph("p1")).await;
+    let late = graphs.clone();
+    let done = delete::delete_project_observed(&pool, 6, |round| {
+        let late = late.clone();
+        async move {
+            let toolkit = i64::try_from(round).expect("small") + 1;
+            commit(&late, key(6, toolkit), &graph("late")).await;
+        }
+    })
+    .await
+    .expect("delete");
+    let rounds = i64::try_from(delete::MAX_PROJECT_ROUNDS).expect("small");
+    assert_eq!(done.deleted, (1..=rounds).collect::<Vec<_>>());
+    assert_eq!(done.busy, vec![rounds + 1]);
+    assert!(!done.complete());
+    assert_eq!(rows(&pool, key(6, rounds + 1)).await, [1, 3, 2, 1, 2]);
+    // Called again once things settle, it finishes.
+    let done = delete::delete_project(&pool, 6).await.expect("delete");
+    assert_eq!(done.deleted, vec![rounds + 1]);
+    assert!(done.complete());
+}
+
 #[tokio::test]
 async fn orphans_are_the_graphs_the_platform_no_longer_has() {
     let Some(pool) = common::database("delete_orphans").await else {
@@ -435,15 +499,36 @@ async fn the_platform_tools_delete_a_graph_and_a_projects_graphs() {
     .expect_err("refused");
     assert!(refused.contains("ingestion"), "{refused}");
     assert_eq!(rows(&pool, key(7, 71)).await, [1, 3, 2, 1, 2]);
-    // ... as does a project delete, which still deletes what it can.
-    let refused = call(
+    // A project delete deletes what it can and SUCCEEDS, saying that it is
+    // not complete and which toolkits are held: the platform's cleanup
+    // records what is left and calls again, instead of a refusal that hides
+    // what was deleted.
+    let partial = call(
+        &runner,
+        "delete_project_graphs",
+        json!({"family": "platform", "project_id": "7", "params": {"output_format": "json"}}),
+    )
+    .await
+    .expect("deletes what it can");
+    let report: Value =
+        serde_json::from_str(partial["result"].as_str().expect("text")).expect("json");
+    assert_eq!(report["complete"], json!(false));
+    assert_eq!(report["busy_toolkits"], json!([71]));
+    assert_eq!(report["toolkits"], json!([]));
+    assert_eq!(report["by_toolkit"], json!([]));
+    assert_eq!(rows(&pool, key(7, 71)).await, [1, 3, 2, 1, 2], "untouched");
+    let partial = call(
         &runner,
         "delete_project_graphs",
         json!({"family": "platform", "project_id": "7"}),
     )
     .await
-    .expect_err("refused");
-    assert!(refused.contains("toolkit(s) 71"), "{refused}");
+    .expect("deletes what it can");
+    let text = partial["result"].as_str().expect("text");
+    assert!(
+        text.contains("An ingestion is running on toolkit(s) 71"),
+        "{text}"
+    );
     drop(run);
     let answer = call(
         &runner,
@@ -464,6 +549,28 @@ async fn the_platform_tools_delete_a_graph_and_a_projects_graphs() {
         [1, 3, 2, 1, 2],
         "another project"
     );
+    // The JSON report names each deleted toolkit with its own counts.
+    commit(&graphs, key(8, 81), &graph("8x81")).await;
+    let answer = call(
+        &runner,
+        "delete_project_graphs",
+        json!({"family": "platform", "project_id": 8, "params": {"output_format": "json"}}),
+    )
+    .await
+    .expect("deletes");
+    let report: Value =
+        serde_json::from_str(answer["result"].as_str().expect("text")).expect("json");
+    assert_eq!(report["complete"], json!(true));
+    assert_eq!(report["toolkits"], json!([80, 81]));
+    assert_eq!(report["busy_toolkits"], json!([]));
+    assert_eq!(
+        report["by_toolkit"],
+        json!([
+            {"toolkit_id": 80, "entities": 3, "relations": 2, "sources": 1, "documents": 2},
+            {"toolkit_id": 81, "entities": 3, "relations": 2, "sources": 1, "documents": 2},
+        ])
+    );
+    assert_eq!(report["entities"], json!(6));
 
     // A call that names no graph names no project.
     for (tool, arguments) in [
@@ -480,7 +587,11 @@ async fn the_platform_tools_delete_a_graph_and_a_projects_graphs() {
         let refused = call(&runner, tool, arguments.clone()).await;
         assert!(refused.is_err(), "{tool} {arguments}: {refused:?}");
     }
-    assert_eq!(rows(&pool, key(8, 80)).await, [1, 3, 2, 1, 2]);
+    assert_eq!(
+        rows(&pool, key(8, 80)).await,
+        [0; 5],
+        "already deleted above"
+    );
 }
 
 /// `orphans` on the binary: a dry run lists and deletes nothing, `--delete`
@@ -530,6 +641,10 @@ async fn the_orphans_command_is_a_dry_run_unless_asked() {
     assert!(out.contains("3\t31\tproject\t3\t"), "{out}");
     assert!(!out.contains("1\t10\t"), "{out}");
     assert!(out.contains("dry run: 2 orphaned graph(s)"), "{out}");
+    assert!(
+        out.contains("3 stored graph(s); 1 existing project(s) in the list(s); 2 orphaned"),
+        "the counts are printed: {out}"
+    );
     assert_eq!(
         rows(&pool, key(3, 30)).await,
         [1, 3, 2, 1, 2],
@@ -542,14 +657,83 @@ async fn the_orphans_command_is_a_dry_run_unless_asked() {
         "{err}"
     );
     assert_eq!(rows(&pool, key(3, 30)).await, [1, 3, 2, 1, 2]);
+    // A toolkit list that is given must hold something: empty (or not
+    // parsable) it is a broken export, which would make every toolkit of
+    // every live project an orphan.
+    let scratch = common::scratch("orphans-toolkits");
+    let empty = scratch.join("empty.txt");
+    std::fs::write(&empty, "# nothing\n").expect("write");
+    let (ok, _, err) = orphans(
+        "1\n",
+        &["--existing-toolkits", empty.to_str().expect("utf-8")],
+    );
+    assert!(
+        !ok && err.contains("the list of existing toolkits is empty"),
+        "{err}"
+    );
+    let broken = scratch.join("broken.txt");
+    std::fs::write(&broken, "1 10\nnot a pair\n").expect("write");
+    let (ok, _, err) = orphans(
+        "1\n",
+        &["--existing-toolkits", broken.to_str().expect("utf-8")],
+    );
+    assert!(
+        !ok && err.contains("line 2") && err.contains("not a project id and a toolkit id"),
+        "{err}"
+    );
+    let (ok, _, err) = orphans("1\n", &["--existing-toolkits", "/nonexistent/toolkits.txt"]);
+    assert!(!ok && err.contains("cannot read"), "{err}");
+    assert_eq!(rows(&pool, key(3, 30)).await, [1, 3, 2, 1, 2]);
 
     // A deletion needs the time the list was taken.
     let (ok, _, err) = orphans("1\n", &["--delete"]);
     assert!(!ok && err.contains("--delete needs --listed-at"), "{err}");
     assert_eq!(rows(&pool, key(3, 30)).await, [1, 3, 2, 1, 2]);
 
+    // Two of three stored graphs would be orphans: more than the default
+    // fifth, so the deletion is refused as a wrong list until forced.
     let listed_at = now(&pool).await;
     let (ok, out, err) = orphans("1\n", &["--delete", "--listed-at", &listed_at]);
+    assert!(!ok, "{out}");
+    assert!(
+        err.contains("2 of 3 stored graph(s) (67%)") && err.contains("--force-fraction"),
+        "{err}"
+    );
+    assert_eq!(rows(&pool, key(3, 30)).await, [1, 3, 2, 1, 2], "refused");
+    let (ok, _, err) = orphans(
+        "1\n",
+        &[
+            "--delete",
+            "--listed-at",
+            &listed_at,
+            "--max-orphan-fraction",
+            "0.5",
+        ],
+    );
+    assert!(
+        !ok && err.contains("more than --max-orphan-fraction 0.5 (50%)"),
+        "{err}"
+    );
+    for bad in ["2", "-0.1", "lots"] {
+        let (ok, _, err) = orphans(
+            "1\n",
+            &[
+                "--delete",
+                "--listed-at",
+                &listed_at,
+                "--max-orphan-fraction",
+                bad,
+            ],
+        );
+        assert!(!ok && err.contains("between 0 and 1"), "{bad}: {err}");
+    }
+    let (ok, _, err) = orphans("1\n", &["--force-fraction"]);
+    assert!(!ok && err.contains("only apply with --delete"), "{err}");
+    assert_eq!(rows(&pool, key(3, 30)).await, [1, 3, 2, 1, 2], "refused");
+    let (ok, out, err) = orphans(
+        "1\n",
+        &["--delete", "--listed-at", &listed_at, "--force-fraction"],
+    );
     assert!(ok, "{err}");
     assert!(
         out.contains("deleted project 3 toolkit 30: 3 entities"),
@@ -738,8 +922,19 @@ async fn the_orphans_command_refuses_a_stale_or_future_list_and_skips_newer_grap
     );
 
     // The deletion removes the older one and leaves the newer.
-    let (code, out, err) =
-        orphans_command(database, "1\n", &["--delete", "--listed-at", &listed_at]);
+    // (One of three stored graphs: a third, so the limit is raised to let
+    // the deletion through; the skipped graph does not count.)
+    let (code, out, err) = orphans_command(
+        database,
+        "1\n",
+        &[
+            "--delete",
+            "--listed-at",
+            &listed_at,
+            "--max-orphan-fraction",
+            "0.34",
+        ],
+    );
     assert_eq!(code, Some(0), "{err}");
     assert!(out.contains("deleted project 3 toolkit 30"), "{out}");
     assert_eq!(rows(&pool, key(3, 30)).await, [0; 5]);
@@ -759,7 +954,13 @@ async fn the_orphans_command_refuses_a_stale_or_future_list_and_skips_newer_grap
     let (code, out, err) = orphans_command(
         database,
         "1\n",
-        &["--delete", "--listed-at", &hour_old, "--allow-stale-list"],
+        &[
+            "--delete",
+            "--listed-at",
+            &hour_old,
+            "--allow-stale-list",
+            "--force-fraction",
+        ],
     );
     assert_eq!(code, Some(0), "{err}");
     assert!(
@@ -797,7 +998,7 @@ async fn the_orphans_command_exits_non_zero_when_a_deletion_fails() {
     let (code, out, err) = orphans_command(
         "delete_cli_failure",
         "1\n",
-        &["--delete", "--listed-at", &listed_at],
+        &["--delete", "--listed-at", &listed_at, "--force-fraction"],
     );
     assert_eq!(code, Some(1), "{out} {err}");
     assert!(

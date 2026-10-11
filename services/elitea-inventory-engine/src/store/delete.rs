@@ -267,10 +267,8 @@ pub async fn activity_since_conn(
     .bind(listed_at)
     .fetch_optional(&mut *connection)
     .await?;
-    if let Some(at) = graph {
-        return Ok(Some(format!(
-            "the graph was written at {at}, after {listed_at}"
-        )));
+    if graph.is_some() {
+        return Ok(activity_reason(graph, None, listed_at));
     }
     let source: Option<String> = sqlx::query_scalar(
         "SELECT greatest(started_at, last_updated)::text FROM inventory_graph.sources
@@ -283,19 +281,98 @@ pub async fn activity_since_conn(
     .bind(listed_at)
     .fetch_optional(&mut *connection)
     .await?;
-    Ok(source.map(|at| format!("a source was ingested at {at}, after {listed_at}")))
+    Ok(activity_reason(None, source, listed_at))
+}
+
+/// The reason [`activity_since`] gives, from the graph's write time after
+/// `listed_at` (first) or a source's (second); `None` without either.
+fn activity_reason(
+    graph_at: Option<String>,
+    source_at: Option<String>,
+    listed_at: &str,
+) -> Option<String> {
+    if let Some(at) = graph_at {
+        return Some(format!("the graph was written at {at}, after {listed_at}"));
+    }
+    source_at.map(|at| format!("a source was ingested at {at}, after {listed_at}"))
+}
+
+/// [`activity_since`] for many graphs in ONE query: the keys of `keys` that
+/// were written or ingested after `listed_at`, with the reason. A key with
+/// no such activity is absent. The orphans command partitions its candidates
+/// with it instead of a round trip per graph; the deletion still checks each
+/// graph again inside its own transaction, under its lock
+/// ([`delete_graph_guarded`]).
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn activity_since_many(
+    pool: &PgPool,
+    keys: &[GraphKey],
+    listed_at: &str,
+) -> Result<std::collections::HashMap<GraphKey, String>> {
+    if keys.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let projects: Vec<i64> = keys.iter().map(|key| key.project_id).collect();
+    let toolkits: Vec<i64> = keys.iter().map(|key| key.application_id).collect();
+    let rows: Vec<(i64, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT w.project_id, w.application_id,
+                (SELECT g.updated_at::text FROM inventory_graph.graphs g
+                  WHERE g.project_id = w.project_id AND g.application_id = w.application_id
+                    AND g.updated_at > $3::timestamptz),
+                (SELECT greatest(s.started_at, s.last_updated)::text FROM inventory_graph.sources s
+                  WHERE s.project_id = w.project_id AND s.application_id = w.application_id
+                    AND (s.started_at > $3::timestamptz OR s.last_updated > $3::timestamptz)
+                  ORDER BY s.last_updated DESC LIMIT 1)
+           FROM unnest($1::bigint[], $2::bigint[]) AS w(project_id, application_id)",
+    )
+    .bind(&projects)
+    .bind(&toolkits)
+    .bind(listed_at)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(project_id, application_id, graph_at, source_at)| {
+            let reason = activity_reason(graph_at, source_at, listed_at)?;
+            Some((
+                GraphKey {
+                    project_id,
+                    application_id,
+                },
+                reason,
+            ))
+        })
+        .collect())
 }
 
 /// What [`delete_project`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDeletion {
-    /// The toolkits whose graph state was deleted, in id order.
+    /// The toolkits whose graph state was deleted, in the order they were.
     pub deleted: Vec<i64>,
-    /// The toolkits skipped because a write holds them.
+    /// What each deleted toolkit held, in the same order as `deleted`.
+    pub by_toolkit: Vec<(i64, Removed)>,
+    /// The toolkits that still have state because a write holds them (or,
+    /// when the rounds ran out, because they kept appearing), in id order.
     pub busy: Vec<i64>,
     /// What the deleted graphs held, together.
     pub removed: Removed,
 }
+
+impl ProjectDeletion {
+    /// Whether nothing of the project is left: no toolkit was skipped.
+    #[must_use]
+    pub fn complete(&self) -> bool {
+        self.busy.is_empty()
+    }
+}
+
+/// The most times [`delete_project`] lists the project's toolkits: a toolkit
+/// created while the project is being deleted shows up in a later listing.
+pub const MAX_PROJECT_ROUNDS: usize = 5;
 
 /// The toolkits that have any graph state in `project_id`.
 ///
@@ -319,29 +396,77 @@ pub async fn project_toolkits(pool: &PgPool, project_id: i64) -> Result<Vec<i64>
 /// transaction per graph. A graph a write holds is skipped and named in
 /// [`ProjectDeletion::busy`]; call again once it ends.
 ///
+/// The project's toolkits are listed again after each pass, up to
+/// [`MAX_PROJECT_ROUNDS`] times, until a listing holds nothing new: a
+/// toolkit created (or ingested into) while the project was being deleted
+/// would otherwise survive a call that reported success. A toolkit still
+/// there when the rounds run out is reported busy.
+///
 /// # Errors
 ///
 /// [`super::StoreError::Database`]. Graphs deleted before the failure stay
 /// deleted; the call is idempotent.
 pub async fn delete_project(pool: &PgPool, project_id: i64) -> Result<ProjectDeletion> {
+    delete_project_observed(pool, project_id, |_| std::future::ready(())).await
+}
+
+/// [`delete_project`], calling `between_rounds(round)` after each pass and
+/// before the next listing: the seam a test uses to create a toolkit while
+/// the deletion is under way.
+///
+/// # Errors
+///
+/// See [`delete_project`].
+pub async fn delete_project_observed<F, Fut>(
+    pool: &PgPool,
+    project_id: i64,
+    mut between_rounds: F,
+) -> Result<ProjectDeletion>
+where
+    F: FnMut(usize) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let mut done = ProjectDeletion {
         deleted: Vec::new(),
+        by_toolkit: Vec::new(),
         busy: Vec::new(),
         removed: Removed::default(),
     };
-    for application_id in project_toolkits(pool, project_id).await? {
-        let key = GraphKey {
-            project_id,
-            application_id,
-        };
-        match delete_graph(pool, key).await? {
-            GraphDeletion::Deleted { removed, .. } => {
-                done.deleted.push(application_id);
-                done.removed.add(removed);
-            }
-            GraphDeletion::Busy => done.busy.push(application_id),
+    let mut busy: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    let mut settled = false;
+    for round in 1..=MAX_PROJECT_ROUNDS {
+        let pending: Vec<i64> = project_toolkits(pool, project_id)
+            .await?
+            .into_iter()
+            .filter(|toolkit| !busy.contains(toolkit))
+            .collect();
+        if pending.is_empty() {
+            settled = true;
+            break;
         }
+        for application_id in pending {
+            let key = GraphKey {
+                project_id,
+                application_id,
+            };
+            match delete_graph(pool, key).await? {
+                GraphDeletion::Deleted { removed, .. } => {
+                    done.deleted.push(application_id);
+                    done.by_toolkit.push((application_id, removed));
+                    done.removed.add(removed);
+                }
+                GraphDeletion::Busy => {
+                    busy.insert(application_id);
+                }
+            }
+        }
+        between_rounds(round).await;
     }
+    if !settled {
+        // The toolkits kept appearing: what is there now is not deleted.
+        busy.extend(project_toolkits(pool, project_id).await?);
+    }
+    done.busy = busy.into_iter().collect();
     Ok(done)
 }
 
@@ -356,6 +481,24 @@ pub struct OrphanGraph {
     /// When the graph was last written, as text; empty for state without a
     /// graph row (a failed first ingestion's status).
     pub updated_at: String,
+}
+
+/// How many graph keys have any state in the database: what the orphans
+/// are a fraction of.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn stored_count(pool: &PgPool) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) FROM (
+             SELECT project_id, application_id FROM inventory_graph.graphs
+             UNION SELECT project_id, application_id FROM inventory_graph.sources
+             UNION SELECT project_id, application_id FROM inventory_graph.documents
+         ) k",
+    )
+    .fetch_one(pool)
+    .await?)
 }
 
 /// Every graph key with any state in the database, with its entity count.

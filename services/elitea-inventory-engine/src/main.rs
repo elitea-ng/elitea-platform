@@ -23,7 +23,7 @@ use std::time::Duration;
 const USAGE: &str = "usage: elitea-inventory-engine [serve | healthcheck | migrate | --version]
        elitea-inventory-engine import-graph --project-id N --application-id N [--file PATH | -] [--replace-ingestion-state]
        elitea-inventory-engine export-graph --project-id N --application-id N [--file PATH | -]
-       elitea-inventory-engine orphans --existing-projects FILE|- [--existing-toolkits FILE] [--listed-at RFC3339] [--delete --listed-at RFC3339 [--allow-stale-list]]";
+       elitea-inventory-engine orphans --existing-projects FILE|- [--existing-toolkits FILE] [--listed-at RFC3339] [--delete --listed-at RFC3339 [--allow-stale-list] [--max-orphan-fraction F] [--force-fraction]]";
 
 /// The OTLP `service.name` of this engine's spans.
 const SERVICE_NAME: &str = "elitea-inventory-engine";
@@ -377,7 +377,7 @@ async fn run_transfer(pool: &sqlx::PgPool, arguments: &GraphArguments) -> ExitCo
 }
 
 /// The arguments of `orphans`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct OrphanArguments {
     /// The file of existing project ids; `-` is standard input.
     projects: String,
@@ -388,6 +388,36 @@ struct OrphanArguments {
     listed_at: Option<String>,
     /// Accept a list older than ten minutes.
     allow_stale_list: bool,
+    /// Refuse `--delete` when more than this share of the stored graphs
+    /// are orphans ([`DEFAULT_MAX_ORPHAN_FRACTION`]).
+    max_orphan_fraction: f64,
+    /// Delete although the share exceeds `max_orphan_fraction`.
+    force_fraction: bool,
+}
+
+/// The share of the stored graphs `orphans --delete` may call orphans
+/// without `--force-fraction`: a higher share means a wrong or partial list
+/// (the wrong database's projects, a toolkit export that missed a project's
+/// toolkits), not a platform that lost most of its data. The same default as
+/// elitea-main's `pgvector-orphans --max-orphan-fraction`.
+const DEFAULT_MAX_ORPHAN_FRACTION: f64 = 0.2;
+
+/// Why `--delete` over `orphans` of `stored` graphs is refused by the
+/// fraction guard, or `None` when it may go ahead.
+fn fraction_refusal(orphans: usize, stored: i64, arguments: &OrphanArguments) -> Option<String> {
+    if !arguments.delete || arguments.force_fraction || stored <= 0 || orphans == 0 {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)] // counts of graphs, far below 2^52
+    let fraction = orphans as f64 / stored as f64;
+    (fraction > arguments.max_orphan_fraction).then(|| {
+        format!(
+            "refusing to delete: {orphans} of {stored} stored graph(s) ({:.0}%) would be orphans, more than --max-orphan-fraction {} ({:.0}%). That many usually means a wrong or partial list (another database's projects, a toolkit list missing a project), not a platform that deleted most of its projects. If it is really right, re-run with --force-fraction",
+            fraction * 100.0,
+            arguments.max_orphan_fraction,
+            arguments.max_orphan_fraction * 100.0
+        )
+    })
 }
 
 /// Whether `text` is an RFC 3339 timestamp in the strict form
@@ -445,6 +475,7 @@ impl OrphanArguments {
     fn parse(arguments: &[String]) -> Result<Self, String> {
         let (mut projects, mut toolkits, mut delete) = (None, None, false);
         let (mut listed_at, mut allow_stale_list) = (None, false);
+        let (mut max_orphan_fraction, mut force_fraction) = (None, false);
         let mut rest = arguments.iter();
         while let Some(argument) = rest.next() {
             match argument.as_str() {
@@ -467,6 +498,19 @@ impl OrphanArguments {
                     listed_at = Some(rest.next().ok_or("--listed-at needs a value")?.clone());
                 }
                 "--allow-stale-list" => allow_stale_list = true,
+                "--max-orphan-fraction" => {
+                    let value = rest.next().ok_or("--max-orphan-fraction needs a value")?;
+                    let fraction: f64 = value.parse().map_err(|_| {
+                        format!("--max-orphan-fraction {value:?} is not a number between 0 and 1")
+                    })?;
+                    if !(0.0..=1.0).contains(&fraction) {
+                        return Err(format!(
+                            "--max-orphan-fraction {value} must be between 0 and 1"
+                        ));
+                    }
+                    max_orphan_fraction = Some(fraction);
+                }
+                "--force-fraction" => force_fraction = true,
                 other => return Err(format!("orphans: unknown argument {other}")),
             }
         }
@@ -487,12 +531,20 @@ impl OrphanArguments {
         if allow_stale_list && !delete {
             return Err("orphans: --allow-stale-list only applies with --delete".to_owned());
         }
+        if (force_fraction || max_orphan_fraction.is_some()) && !delete {
+            return Err(
+                "orphans: --max-orphan-fraction and --force-fraction only apply with --delete"
+                    .to_owned(),
+            );
+        }
         Ok(Self {
             projects,
             toolkits,
             delete,
             listed_at,
             allow_stale_list,
+            max_orphan_fraction: max_orphan_fraction.unwrap_or(DEFAULT_MAX_ORPHAN_FRACTION),
+            force_fraction,
         })
     }
 }
@@ -599,6 +651,14 @@ async fn orphans(arguments: OrphanArguments) -> ExitCode {
             );
             return ExitCode::FAILURE;
         }
+        Ok((_, Some(toolkits))) if toolkits.is_empty() => {
+            // Given but empty is a broken export, not "no toolkit exists":
+            // it would call every graph of every live project an orphan.
+            eprintln!(
+                "the list of existing toolkits is empty; refusing to call every toolkit's graph an orphan (leave out --existing-toolkits to check projects only)"
+            );
+            return ExitCode::FAILURE;
+        }
         Ok(lists) => lists,
         Err(error) => {
             eprintln!("{error}");
@@ -641,7 +701,9 @@ async fn orphans(arguments: OrphanArguments) -> ExitCode {
 /// Split `found` into the graphs nothing was written to since `listed_at`
 /// and those something was: written after the lists were taken, a graph is
 /// not an orphan whatever the lists say (a project created after them is not
-/// in them).
+/// in them). One query for all of them ([`delete::activity_since_many`]);
+/// the deletion checks each graph again inside its own transaction, under
+/// its lock.
 async fn partition_newer(
     pool: &sqlx::PgPool,
     found: Vec<elitea_inventory_engine::store::delete::OrphanGraph>,
@@ -654,20 +716,16 @@ async fn partition_newer(
     String,
 > {
     use elitea_inventory_engine::store::delete;
+    let Some(listed_at) = listed_at else {
+        return Ok((found, Vec::new()));
+    };
+    let keys: Vec<_> = found.iter().map(|orphan| orphan.key).collect();
+    let mut newer = delete::activity_since_many(pool, &keys, listed_at)
+        .await
+        .map_err(|error| format!("cannot check the graphs for writes after the list: {error}"))?;
     let (mut orphans, mut skipped) = (Vec::new(), Vec::new());
     for orphan in found {
-        let newer = match listed_at {
-            Some(listed_at) => delete::activity_since(pool, orphan.key, listed_at)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "project {} toolkit {}: {error}",
-                        orphan.key.project_id, orphan.key.application_id
-                    )
-                })?,
-            None => None,
-        };
-        match newer {
+        match newer.remove(&orphan.key) {
             None => orphans.push(orphan),
             Some(reason) => skipped.push((orphan, reason)),
         }
@@ -681,7 +739,7 @@ async fn report_orphans(
     toolkits: Option<&std::collections::HashSet<(i64, i64)>>,
     arguments: &OrphanArguments,
 ) -> ExitCode {
-    use elitea_inventory_engine::store::delete::{self, GuardedDeletion};
+    use elitea_inventory_engine::store::delete;
     let listed_at = arguments.listed_at.as_deref();
     if arguments.delete
         && let Some(listed_at) = listed_at
@@ -691,24 +749,48 @@ async fn report_orphans(
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-    let found = match delete::orphans(pool, projects, toolkits).await {
-        Ok(found) => found,
+    let listed = async {
+        Ok::<_, store::StoreError>((
+            delete::stored_count(pool).await?,
+            delete::orphans(pool, projects, toolkits).await?,
+        ))
+    };
+    let (stored, found) = match listed.await {
+        Ok(listed) => listed,
         Err(error) => {
             eprintln!("cannot list the orphans: {error}");
             return ExitCode::FAILURE;
         }
     };
+    println!(
+        "{stored} stored graph(s); {} existing project(s){} in the list(s); {} orphaned",
+        projects.len(),
+        toolkits.map_or_else(String::new, |toolkits| format!(
+            " and {} existing toolkit(s)",
+            toolkits.len()
+        )),
+        found.len()
+    );
     if found.is_empty() {
         println!("no orphaned Inventory graph");
         return ExitCode::SUCCESS;
     }
-    let (orphans, mut skipped) = match partition_newer(pool, found, listed_at).await {
+    let (orphans, skipped) = match partition_newer(pool, found, listed_at).await {
         Ok(parts) => parts,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
+    println!(
+        "{} orphaned graph(s) to delete, {} skipped as written after the list",
+        orphans.len(),
+        skipped.len()
+    );
+    if let Some(refusal) = fraction_refusal(orphans.len(), stored, arguments) {
+        eprintln!("{refusal}");
+        return ExitCode::FAILURE;
+    }
     println!("project_id\ttoolkit_id\treason\tentities\tlast_updated");
     for orphan in &orphans {
         println!(
@@ -738,6 +820,21 @@ async fn report_orphans(
         );
         return ExitCode::SUCCESS;
     }
+    delete_orphans(pool, orphans, skipped, listed_at).await
+}
+
+type Orphan = elitea_inventory_engine::store::delete::OrphanGraph;
+
+/// Delete `orphans` one guarded transaction at a time, printing each
+/// outcome; `skipped` are the ones the dry-run partition already set aside.
+/// Non-zero when any deletion failed.
+async fn delete_orphans(
+    pool: &sqlx::PgPool,
+    orphans: Vec<Orphan>,
+    mut skipped: Vec<(Orphan, String)>,
+    listed_at: Option<&str>,
+) -> ExitCode {
+    use elitea_inventory_engine::store::delete::{self, GuardedDeletion};
     let mut failed = false;
     for orphan in orphans {
         let (project, toolkit) = (orphan.key.project_id, orphan.key.application_id);
@@ -819,7 +916,22 @@ mod tests {
                 delete: false,
                 listed_at: None,
                 allow_stale_list: false,
+                max_orphan_fraction: DEFAULT_MAX_ORPHAN_FRACTION,
+                force_fraction: false,
             })
+        );
+        assert!(
+            parse(&[
+                "--existing-projects",
+                "p",
+                "--delete",
+                "--listed-at",
+                "2026-10-10T09:30:00Z",
+                "--max-orphan-fraction",
+                "0.5",
+                "--force-fraction",
+            ])
+            .is_ok_and(|a| a.force_fraction && (a.max_orphan_fraction - 0.5).abs() < f64::EPSILON)
         );
         assert!(
             parse(&[
@@ -858,6 +970,33 @@ mod tests {
                 &["--existing-projects", "-", "--existing-toolkits", "-"][..],
                 "only one list",
             ),
+            (
+                &["--existing-projects", "p", "--force-fraction"][..],
+                "only apply with --delete",
+            ),
+            (
+                &[
+                    "--existing-projects",
+                    "p",
+                    "--delete",
+                    "--listed-at",
+                    "2026-10-10T09:30:00Z",
+                    "--max-orphan-fraction",
+                    "1.5",
+                ][..],
+                "between 0 and 1",
+            ),
+            (
+                &[
+                    "--existing-projects",
+                    "p",
+                    "--delete",
+                    "--listed-at",
+                    "2026-10-10T09:30:00Z",
+                    "--max-orphan-fraction",
+                ][..],
+                "needs a value",
+            ),
         ] {
             let refused = parse(arguments);
             assert!(
@@ -865,6 +1004,36 @@ mod tests {
                 "{arguments:?}: {refused:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_fraction_guard_refuses_a_deletion_of_too_many() {
+        let arguments = |delete: bool, max: f64, force: bool| OrphanArguments {
+            projects: "p".to_owned(),
+            toolkits: None,
+            delete,
+            listed_at: None,
+            allow_stale_list: false,
+            max_orphan_fraction: max,
+            force_fraction: force,
+        };
+        // Over the limit: refused, and the message says how to override.
+        let refused = fraction_refusal(3, 10, &arguments(true, 0.2, false));
+        assert!(
+            refused.as_deref().is_some_and(|m| m.contains("3 of 10")
+                && m.contains("30%")
+                && m.contains("--force-fraction")),
+            "{refused:?}"
+        );
+        // At or under the limit, forced, a dry run, or nothing to delete.
+        assert_eq!(fraction_refusal(2, 10, &arguments(true, 0.2, false)), None);
+        assert_eq!(fraction_refusal(3, 10, &arguments(true, 0.3, false)), None);
+        assert_eq!(fraction_refusal(3, 10, &arguments(true, 0.2, true)), None);
+        assert_eq!(fraction_refusal(3, 10, &arguments(false, 0.2, false)), None);
+        assert_eq!(fraction_refusal(0, 10, &arguments(true, 0.2, false)), None);
+        // Everything an orphan is the clearest sign of a wrong list.
+        assert!(fraction_refusal(10, 10, &arguments(true, 0.99, false)).is_some());
+        assert_eq!(fraction_refusal(10, 10, &arguments(true, 1.0, false)), None);
     }
 
     fn parse(command: &str, arguments: &[&str]) -> Result<GraphArguments, String> {

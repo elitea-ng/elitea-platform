@@ -187,7 +187,7 @@ async fn database(name: &str) -> Option<PgPool> {
     let applied = store::migrate(&pool).await.expect("migrate");
     assert_eq!(
         applied,
-        ["0001", "0002", "0003", "0004", "0005"]
+        ["0001", "0002", "0003", "0004", "0005", "0006"]
             .map(str::to_owned)
             .to_vec()
     );
@@ -343,7 +343,7 @@ async fn migrating_twice_applies_nothing_the_second_time() {
     .fetch_all(&pool)
     .await
     .expect("ledger");
-    assert_eq!(ledger, ["0001", "0002", "0003", "0004", "0005"]);
+    assert_eq!(ledger, ["0001", "0002", "0003", "0004", "0005", "0006"]);
 }
 
 /// The shared `GraphStore` contract (libs/rust/inventory-core
@@ -382,6 +382,53 @@ async fn the_view_cache_reloads_when_the_revision_moves() {
     assert_eq!(fresh.revision, second);
     assert!(store::delete(&pool, key).await.expect("delete"));
     assert!(views.view(key).await.expect("view").is_none());
+}
+
+/// A graph deleted and created again starts at revision 1 again. A cache
+/// that holds the DELETED graph's revision 1 (another replica's, which the
+/// deleting replica's `forget` never reached) must not serve it for the new
+/// graph: the stamp's incarnation (migration 0006) tells the two apart.
+#[tokio::test]
+async fn the_view_cache_tells_a_recreated_graph_from_the_deleted_one() {
+    use elitea_inventory_core::store::GraphStore as _;
+    let Some(pool) = database("view_incarnation").await else {
+        return;
+    };
+    let key = key(1, 1);
+    let graphs = store::PgGraphStore::new(pool.clone());
+    let views = elitea_inventory_engine::retrieval::ViewCache::new(graphs.clone());
+    let mut graph = replay();
+    assert_eq!(store::save(&pool, key, &graph).await.expect("save"), 1);
+    let stale = views.view(key).await.expect("view").expect("a graph");
+    assert_eq!(stale.revision, 1);
+    let first = graphs.stamp(key).await.expect("stamp").expect("a graph");
+    assert_eq!(stale.incarnation, first.incarnation);
+    assert!(!first.incarnation.is_empty(), "the PostgreSQL store stamps");
+
+    // Deleted and created again, with other content, behind the cache's
+    // back: revision 1 again, another incarnation.
+    assert!(store::delete(&pool, key).await.expect("delete"));
+    graph.add_entity("recreated", "Recreated", "class", None, None);
+    assert_eq!(store::save(&pool, key, &graph).await.expect("save"), 1);
+    let second = graphs.stamp(key).await.expect("stamp").expect("a graph");
+    assert_eq!(second.revision, first.revision, "the revision repeats");
+    assert_ne!(second.incarnation, first.incarnation);
+
+    let fresh = views.view(key).await.expect("view").expect("a graph");
+    assert!(
+        !std::sync::Arc::ptr_eq(&stale, &fresh),
+        "the deleted graph's view is not served for the new graph"
+    );
+    assert_eq!(fresh.incarnation, second.incarnation);
+    assert!(fresh.graph.node("recreated").is_some());
+    assert!(stale.graph.node("recreated").is_none());
+    // And a write within the new incarnation moves the revision as before.
+    assert_eq!(store::save(&pool, key, &graph).await.expect("save"), 2);
+    let moved = views.view(key).await.expect("view").expect("a graph");
+    assert_eq!(
+        (moved.revision, &moved.incarnation),
+        (2, &second.incarnation)
+    );
 }
 
 /// The cached view holds no vectors (they are most of a graph's bytes),

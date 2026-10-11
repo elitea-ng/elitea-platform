@@ -14,7 +14,7 @@
 //! that does not parse is reported without its text.
 
 use crate::graph::Graph;
-use elitea_inventory_core::store::GraphRead;
+use elitea_inventory_core::store::{GraphRead, GraphStamp};
 use elitea_pg_migrate::{Ledger, MigrateError, Migration};
 use serde_json::{Map, Value};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
@@ -63,6 +63,10 @@ const EMBEDDED: &[(&str, &str)] = &[
     (
         "0005_entity_embedding_hash.sql",
         include_str!("../../migrations/0005_entity_embedding_hash.sql"),
+    ),
+    (
+        "0006_graph_incarnation.sql",
+        include_str!("../../migrations/0006_graph_incarnation.sql"),
     ),
 ];
 
@@ -464,7 +468,7 @@ async fn load_graph(pool: &PgPool, key: GraphKey, vectors: bool) -> Result<Optio
         .execute(&mut *transaction)
         .await?;
     let Some(header) = sqlx::query(
-        "SELECT attributes, metadata, schema_document, revision
+        "SELECT attributes, metadata, schema_document, revision, graph_id::text AS incarnation
            FROM inventory_graph.graphs
           WHERE project_id = $1 AND application_id = $2",
     )
@@ -482,6 +486,7 @@ async fn load_graph(pool: &PgPool, key: GraphKey, vectors: bool) -> Result<Optio
         .try_get::<Option<Json<Value>>, _>("schema_document")?
         .map(|schema| schema.0);
     let revision: i64 = header.try_get("revision")?;
+    let incarnation: String = header.try_get("incarnation")?;
 
     // `embedded` is true for a non-empty vector: what `get_stats` counted.
     let entities = sqlx::query(if vectors {
@@ -547,24 +552,44 @@ async fn load_graph(pool: &PgPool, key: GraphKey, vectors: bool) -> Result<Optio
     Ok(Some(GraphRead {
         graph,
         revision,
+        incarnation,
         embedded,
     }))
 }
 
-/// The stored graph's revision, or `None` when there is no graph: a
-/// cheap check of whether a cached copy is still current.
+/// The stored graph's revision, or `None` when there is no graph. Not
+/// enough on its own to know that a cached copy is still current: a graph
+/// deleted and created again starts at revision 1 again ([`stamp`]).
 ///
 /// # Errors
 ///
 /// [`StoreError::Database`].
 pub async fn revision(pool: &PgPool, key: GraphKey) -> Result<Option<i64>> {
-    Ok(sqlx::query_scalar(
-        "SELECT revision FROM inventory_graph.graphs WHERE project_id = $1 AND application_id = $2",
+    Ok(stamp(pool, key).await?.map(|stamp| stamp.revision))
+}
+
+/// The stored graph's [`GraphStamp`], or `None` when there is no graph: a
+/// cheap check of whether a cached copy is still current. The incarnation is
+/// the `graphs` row's `graph_id` (migration 0006), drawn when the row is
+/// inserted and kept by every update, so a re-created graph never carries
+/// the deleted one's stamp.
+///
+/// # Errors
+///
+/// [`StoreError::Database`].
+pub async fn stamp(pool: &PgPool, key: GraphKey) -> Result<Option<GraphStamp>> {
+    let row: Option<(String, i64)> = sqlx::query_as(
+        "SELECT graph_id::text, revision FROM inventory_graph.graphs
+          WHERE project_id = $1 AND application_id = $2",
     )
     .bind(key.project_id)
     .bind(key.application_id)
     .fetch_optional(pool)
-    .await?)
+    .await?;
+    Ok(row.map(|(incarnation, revision)| GraphStamp {
+        incarnation,
+        revision,
+    }))
 }
 
 /// Delete the stored graph `key` and its sources' state; `true` when there

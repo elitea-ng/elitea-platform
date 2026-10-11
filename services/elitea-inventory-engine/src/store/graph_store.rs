@@ -7,7 +7,7 @@ use super::vectors::{self, Ranking};
 use super::{GraphKey, Imported, StoreError};
 use crate::graph::Graph;
 use elitea_content_source::Acl;
-use elitea_inventory_core::store::{GraphRead, GraphStore};
+use elitea_inventory_core::store::{GraphRead, GraphStamp, GraphStore};
 use serde_json::Value;
 use sqlx::postgres::PgPool;
 use std::collections::BTreeMap;
@@ -50,6 +50,10 @@ impl GraphStore for PgGraphStore {
 
     async fn revision(&self, key: GraphKey) -> Result<Option<i64>, StoreError> {
         super::revision(&self.pool, key).await
+    }
+
+    async fn stamp(&self, key: GraphKey) -> Result<Option<GraphStamp>, StoreError> {
+        super::stamp(&self.pool, key).await
     }
 
     async fn document_versions(

@@ -227,6 +227,73 @@ impl NativeRunner {
         }
     }
 
+    /// `delete_project_graphs`: every toolkit's graph of the project
+    /// ([`delete::delete_project`]), answered as a structured result.
+    async fn delete_project_graphs(
+        &self,
+        project_id: i64,
+        json: bool,
+    ) -> Result<Value, EngineError> {
+        use crate::store::delete;
+        let done = delete::delete_project(&self.pool, project_id)
+            .await
+            .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?;
+        for &(application_id, _) in &done.by_toolkit {
+            self.views.forget(GraphKey {
+                project_id,
+                application_id,
+            });
+        }
+        // A toolkit a write holds is NOT a failure of the call: what was
+        // deleted stays deleted, and the answer says which toolkits are
+        // left and that the deletion is not complete, so the host can
+        // report that as such and the platform can call again.
+        let busy = done
+            .busy
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut text = format!(
+            "Deleted the Inventory graphs of {} toolkit(s) of project {project_id}: {} entities, {} relations, {} sources, {} documents.",
+            done.deleted.len(),
+            done.removed.entities,
+            done.removed.relations,
+            done.removed.sources,
+            done.removed.documents
+        );
+        if !done.complete() {
+            text.push_str(&format!(
+                " An ingestion is running on toolkit(s) {busy}; their graphs were not deleted. Stop it and delete the project's graphs again."
+            ));
+        }
+        Ok(crate::retrieval::answer(if json {
+            elitea_engine_core::pyjson::dumps(&json!({
+                "project_id": project_id,
+                "complete": done.complete(),
+                "toolkits": done.deleted,
+                "busy_toolkits": done.busy,
+                "by_toolkit": done
+                    .by_toolkit
+                    .iter()
+                    .map(|(toolkit_id, removed)| json!({
+                        "toolkit_id": toolkit_id,
+                        "entities": removed.entities,
+                        "relations": removed.relations,
+                        "sources": removed.sources,
+                        "documents": removed.documents,
+                    }))
+                    .collect::<Vec<_>>(),
+                "entities": done.removed.entities,
+                "relations": done.removed.relations,
+                "sources": done.removed.sources,
+                "documents": done.removed.documents,
+            }))
+        } else {
+            text
+        }))
+    }
+
     /// The `platform` tools (issue #1244, the host's gRPC platform service): the platform deleting what
     /// a deleted toolkit or project left behind.
     async fn platform_tools(
@@ -243,45 +310,7 @@ impl NativeRunner {
         if tool == tools::DELETE_PROJECT_GRAPHS {
             let project_id = project_id_of(arguments).map_err(|e| invalid(e.to_string()))?;
             context.checkpoint()?;
-            let done = delete::delete_project(&self.pool, project_id)
-                .await
-                .map_err(store_error)?;
-            if !done.busy.is_empty() {
-                // Not a success: the project's data is not gone. What was
-                // deleted stays deleted, and the call is repeatable.
-                return Err(EngineError::new(
-                    ErrorType::Runtime,
-                    format!(
-                        "deleted the Inventory graphs of {} toolkit(s) of project {project_id}, but an ingestion is running on toolkit(s) {}; stop it and delete the project's graphs again",
-                        done.deleted.len(),
-                        done.busy
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                ));
-            }
-            let text = format!(
-                "Deleted the Inventory graphs of {} toolkit(s) of project {project_id}: {} entities, {} relations, {} sources, {} documents.",
-                done.deleted.len(),
-                done.removed.entities,
-                done.removed.relations,
-                done.removed.sources,
-                done.removed.documents
-            );
-            return Ok(crate::retrieval::answer(if json {
-                elitea_engine_core::pyjson::dumps(&json!({
-                    "project_id": project_id,
-                    "toolkits": done.deleted,
-                    "entities": done.removed.entities,
-                    "relations": done.removed.relations,
-                    "sources": done.removed.sources,
-                    "documents": done.removed.documents,
-                }))
-            } else {
-                text
-            }));
+            return self.delete_project_graphs(project_id, json).await;
         }
         let key = GraphKey::from_arguments(arguments).map_err(|e| invalid(e.to_string()))?;
         context.checkpoint()?;
@@ -294,6 +323,9 @@ impl NativeRunner {
                 "an ingestion of this Inventory toolkit is running; stop it and delete the graph again",
             )),
             GraphDeletion::Deleted { existed, removed } => {
+                // This replica's cached view of the graph goes with it (the
+                // stamp's incarnation covers every other replica's).
+                self.views.forget(key);
                 let text = if existed {
                     format!(
                         "Deleted the Inventory graph of toolkit {} in project {}: {} entities, {} relations, {} sources, {} documents.",
