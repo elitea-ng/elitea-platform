@@ -19,7 +19,6 @@ providers = [
     "dep:chrono",
     "dep:ring",
     "dep:serde_json",
-    "dep:tokio",
     "dep:zeroize",
 ]
 # `ContentSource` implementations over the provider clients (list with
@@ -40,6 +39,9 @@ async-trait = "0.1.92"
 bytes = "1.12.1"
 http = "1.5.0"
 thiserror = "2.0.20"
+# `time` for the response body's idle timeout (always: the transport seam
+# is built without `providers`), `sync` for the listing cache.
+tokio = { version = "1.53.1", default-features = false, features = ["sync", "time"] }
 url = "2.5.8"
 
 base64 = { version = "0.23.1", optional = true }
@@ -51,7 +53,6 @@ ring = { version = "0.17.14", optional = true }
 # representation (the worker builds serde_json with `arbitrary_precision`,
 # the engines with `preserve_order`).
 serde_json = { version = "1.0.151", optional = true }
-tokio = { version = "1.53.1", default-features = false, features = ["sync", "time"], optional = true }
 zeroize = { version = "1.9.0", optional = true }
 
 reqwest012 = { package = "reqwest", version = "0.12.28", default-features = false, optional = true }

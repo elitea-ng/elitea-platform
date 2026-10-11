@@ -25,8 +25,8 @@ use super::client::{
 use super::config::{GitHubAuthKind, GitHubToolkitConfig};
 use crate::egress::HostAllowlist;
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of,
-    valid_git_object_id, valid_key, web_url,
+    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references,
+    title_of, valid_git_object_id, valid_key, web_url,
 };
 use crate::transport::header::ACCEPT;
 use crate::transport::{HeaderValue, Request, StatusCode, Transport, Url};
@@ -109,6 +109,14 @@ impl GitHubSource {
         self
     }
 
+    /// Connect and read-idle timeouts for this source's requests (default:
+    /// 30 s to a response, 60 s without a body byte).
+    #[must_use]
+    pub fn with_timeouts(mut self, timeouts: Timeouts) -> Self {
+        self.http = self.http.with_timeouts(timeouts);
+        self
+    }
+
     fn request(&self, path: &[&str], query: &[(&str, String)]) -> Result<Request, Failure> {
         let mut segments = vec!["repos", self.owner.as_str(), self.repository.as_str()];
         segments.extend_from_slice(path);
@@ -149,7 +157,6 @@ impl GitHubSource {
         let recursive = self
             .get(&["git", "trees", &root], &[("recursive", "1".to_owned())])
             .await?;
-        let mut pages = 1;
         let mut listed = Vec::new();
         if !truncated(&recursive)? {
             collect(
@@ -161,11 +168,13 @@ impl GitHubSource {
             )?;
             return Ok(listed);
         }
-        // Truncated: walk one directory at a time.
+        // Truncated: walk one directory at a time. Each tree read is a
+        // directory (capped by `max_directories`), not a listing page.
         let mut pending = VecDeque::from([(String::new(), root)]);
+        let mut directories = 0;
         while let Some((prefix, sha)) = pending.pop_front() {
-            pages += 1;
-            self.http.check_pages(pages)?;
+            directories += 1;
+            self.http.check_directories(directories)?;
             let tree = self.get(&["git", "trees", &sha], &[]).await?;
             if truncated(&tree)? {
                 return Err(Failure::InvalidResponse(
@@ -180,6 +189,18 @@ impl GitHubSource {
     async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
         self.cache
             .get_or_list(|| async {
+                self.listing()
+                    .await
+                    .map_err(|failure| failure.into_source_error(PROVIDER, None))
+            })
+            .await
+    }
+
+    /// A listing made now (or the one already running), replacing the
+    /// remembered one: what `list()` returns.
+    async fn listed_fresh(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
+        self.cache
+            .list_shared(|| async {
                 self.listing()
                     .await
                     .map_err(|failure| failure.into_source_error(PROVIDER, None))
@@ -261,11 +282,8 @@ fn collect(
 
 impl ContentSource for GitHubSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        let listing = self
-            .listing()
-            .await
-            .map_err(|failure| failure.into_source_error(PROVIDER, None))?;
-        Ok(self.cache.store(listing).await)
+        let listing = self.listed_fresh().await?;
+        Ok(references(&listing))
     }
 
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
@@ -629,5 +647,172 @@ mod tests {
         let closed = GitHubSource::new(config(), HostAllowlist::default(), transport.clone());
         assert!(closed.is_err(), "an empty allowlist refuses everything");
         assert!(transport.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_list_and_fetch_make_one_listing() {
+        let transport = Scripted::new(|request, _| match request.url().path() {
+            "/repos/EliteaAI/demo/branches/main" => Reply::json(&branch()),
+            "/repos/EliteaAI/demo/git/trees/1111111111111111111111111111111111111111" => {
+                Reply::json(&json!({"tree": [entry("README.md", "blob", README, Some(5))]}))
+            }
+            "/repos/EliteaAI/demo/git/blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" => {
+                Reply::bytes(b"# hi\n")
+            }
+            other => panic!("unexpected request {other}"),
+        });
+        // Every request yields, so the four calls genuinely overlap.
+        let source = GitHubSource::new(config(), allow(), Arc::new(Yielding(transport.clone())))
+            .expect("source");
+        let (a, fetched, b, again) = tokio::join!(
+            source.list(),
+            source.fetch("README.md"),
+            source.list(),
+            source.fetch("README.md"),
+        );
+        let (a, b) = (a.expect("list"), b.expect("list"));
+        assert_eq!(a, b, "both lists return the one shared snapshot");
+        assert_eq!(fetched.expect("fetch").reference, a[0]);
+        again.expect("fetch");
+        let seen = transport.seen();
+        let listings = seen
+            .iter()
+            .filter(|seen| seen.contains("/branches/"))
+            .count();
+        assert_eq!(listings, 1, "{seen:?}");
+
+        // A list() after that is a deliberate re-list: it sees the source as
+        // it is now (the indexer's answer to `Changed`).
+        source.list().await.expect("re-list");
+        let seen = transport.seen();
+        assert_eq!(
+            seen.iter()
+                .filter(|seen| seen.contains("/branches/"))
+                .count(),
+            2,
+            "{seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_truncated_tree_of_twelve_thousand_directories_lists() {
+        let transport = Scripted::new(|request, _| {
+            let path = request.url().path();
+            let tree = path.strip_prefix("/repos/EliteaAI/demo/git/trees/");
+            match tree {
+                _ if path == "/repos/EliteaAI/demo/branches/main" => Reply::json(&branch()),
+                Some(sha) if request.url().query() == Some("recursive=1") => {
+                    assert_eq!(sha, TREE);
+                    Reply::json(&json!({"truncated": true, "tree": []}))
+                }
+                Some(TREE) => {
+                    let directories: Vec<Value> = (1..=12_000_u32)
+                        .map(|i| entry(&format!("d{i}"), "tree", &format!("{i:040x}"), None))
+                        .collect();
+                    Reply::json(&json!({"truncated": false, "tree": directories}))
+                }
+                Some(sha) => {
+                    let index = u32::from_str_radix(sha, 16).expect("a directory sha");
+                    let tree = if index == 7 {
+                        vec![entry("f.md", "blob", README, Some(1))]
+                    } else {
+                        Vec::new()
+                    };
+                    Reply::json(&json!({"truncated": false, "tree": tree}))
+                }
+                None => panic!("unexpected request {path}"),
+            }
+        });
+        let source = GitHubSource::new(config(), allow(), transport).expect("source");
+        let listed = source.list().await.expect("listing");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].key, "d7/f.md");
+
+        let limits = SourceLimits {
+            max_directories: 50,
+            ..SourceLimits::default()
+        };
+        let error = source.with_limits(limits).list().await.expect_err("capped");
+        assert!(error.to_string().contains("more directories"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_host_is_named_by_the_provider_client() {
+        use crate::egress::EgressGuard;
+        use crate::github::client::GitHubClientErrorCode;
+        let inner = Scripted::new(|_, _| panic!("no request may be sent"));
+        let guarded = Arc::new(EgressGuard::new(HostAllowlist::default(), inner));
+        let rest = GitHubRest::new(config(), guarded).expect("client");
+        let error = rest.probe().await.expect_err("refused");
+        assert_eq!(error.code(), GitHubClientErrorCode::EgressRefused);
+        assert!(!error.retryable());
+        assert!(
+            error.to_string().contains("not on the egress allowlist"),
+            "{error}"
+        );
+    }
+
+    /// Yields to the scheduler before every request.
+    struct Yielding(Arc<Scripted>);
+
+    #[async_trait::async_trait]
+    impl Transport for Yielding {
+        async fn execute(
+            &self,
+            request: Request,
+        ) -> Result<crate::transport::Response, crate::transport::TransportError> {
+            tokio::task::yield_now().await;
+            self.0.execute(request).await
+        }
+    }
+
+    /// Lists through a scripted tree, serves the blob as a slow trickle.
+    struct SlowBlob {
+        listing: Arc<Scripted>,
+        blob: Arc<crate::source::fixture::Trickle>,
+    }
+
+    #[async_trait::async_trait]
+    impl Transport for SlowBlob {
+        async fn execute(
+            &self,
+            request: Request,
+        ) -> Result<crate::transport::Response, crate::transport::TransportError> {
+            if request.url().path().contains("/git/blobs/") {
+                self.blob.execute(request).await
+            } else {
+                self.listing.execute(request).await
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fifty_mib_blob_on_a_slow_link_is_fetched() {
+        let listing = Scripted::new(|request, _| match request.url().path() {
+            "/repos/EliteaAI/demo/branches/main" => Reply::json(&branch()),
+            "/repos/EliteaAI/demo/git/trees/1111111111111111111111111111111111111111" => {
+                Reply::json(&json!({"tree": [
+                    entry("big.bin", "blob", README, Some(50 * 1_024 * 1_024)),
+                ]}))
+            }
+            other => panic!("unexpected request {other}"),
+        });
+        let blob = crate::source::fixture::Trickle::new(50, 1_024 * 1_024, Duration::from_secs(5));
+        let transport = Arc::new(SlowBlob { listing, blob });
+        let source = GitHubSource::new(config(), allow(), transport.clone()).expect("source");
+        source.list().await.expect("listing");
+        let document = source.fetch("big.bin").await.expect("the whole blob");
+        assert_eq!(document.bytes.len(), 50 * 1_024 * 1_024);
+
+        // A tighter idle timeout, set on the source, gives up on the same link.
+        let slow = GitHubSource::new(config(), allow(), transport)
+            .expect("source")
+            .with_timeouts(Timeouts {
+                read_idle: Duration::from_secs(2),
+                ..Timeouts::default()
+            });
+        slow.list().await.expect("listing");
+        let error = slow.fetch("big.bin").await.expect_err("idle too long");
+        assert!(error.to_string().contains("timed out"), "{error}");
     }
 }

@@ -103,6 +103,11 @@ impl IntoAdk for GitLabOrgClientError {
                 "gitlab_org.resource_exhausted",
                 "the GitLab Org request or response exceeds the approved limit",
             ),
+            GitLabOrgClientErrorCode::EgressRefused => (
+                ErrorCategory::Forbidden,
+                "gitlab_org.egress.refused",
+                "the GitLab host is not on the egress allowlist",
+            ),
             GitLabOrgClientErrorCode::UnknownOutcome => (
                 ErrorCategory::Internal,
                 "gitlab_org.effect.unknown_outcome",

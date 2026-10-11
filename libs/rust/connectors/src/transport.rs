@@ -163,11 +163,20 @@ impl TransportError {
     const REQUEST: u8 = 1 << 2;
     const BODY: u8 = 1 << 3;
     const DECODE: u8 = 1 << 4;
+    const REFUSED: u8 = 1 << 5;
 
     /// Anything else (a refused redirect, a builder error, a policy refusal).
     #[must_use]
     pub const fn other() -> Self {
         Self(0)
+    }
+
+    /// The destination host is not on the egress allowlist, so nothing was
+    /// sent. Carries no host: a provider error says which host class it
+    /// meant and the guard's caller knows the URL.
+    #[must_use]
+    pub const fn egress_refused() -> Self {
+        Self(Self::REFUSED)
     }
 
     /// The request or body timed out.
@@ -213,6 +222,12 @@ impl TransportError {
         if holds { self.and(other) } else { self }
     }
 
+    /// Refused by the egress allowlist before any byte was sent.
+    #[must_use]
+    pub const fn is_refused(&self) -> bool {
+        self.0 & Self::REFUSED != 0
+    }
+
     #[must_use]
     pub const fn is_timeout(&self) -> bool {
         self.0 & Self::TIMEOUT != 0
@@ -248,13 +263,16 @@ impl fmt::Debug for TransportError {
             .field("request", &self.is_request())
             .field("body", &self.is_body())
             .field("decode", &self.is_decode())
+            .field("refused", &self.is_refused())
             .finish()
     }
 }
 
 impl fmt::Display for TransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(if self.is_timeout() {
+        formatter.write_str(if self.is_refused() {
+            "the host is not on the egress allowlist"
+        } else if self.is_timeout() {
             "the request timed out"
         } else if self.is_connect() {
             "the connection could not be made"
@@ -294,6 +312,7 @@ pub struct Response {
     status: StatusCode,
     headers: HeaderMap,
     body: Box<dyn ResponseBody>,
+    idle: Option<Duration>,
 }
 
 impl fmt::Debug for Response {
@@ -313,7 +332,18 @@ impl Response {
             status,
             headers,
             body,
+            idle: None,
         }
+    }
+
+    /// Fail a body read that gets no bytes for `idle` with a timeout
+    /// ([`TransportError::timeout`] and [`TransportError::body`]), instead
+    /// of leaving the body to the client's whole-request deadline: a large
+    /// document on a slow link keeps streaming as long as bytes keep coming.
+    #[must_use]
+    pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
+        self.idle = Some(idle);
+        self
     }
 
     /// A response whose whole body is `bytes` (a fixture, or a buffering
@@ -337,9 +367,15 @@ impl Response {
     ///
     /// # Errors
     ///
-    /// The body stopped or timed out.
+    /// The body stopped or timed out (no bytes for the idle timeout, when
+    /// one is set).
     pub async fn chunk(&mut self) -> Result<Option<Bytes>, TransportError> {
-        self.body.chunk().await
+        match self.idle {
+            None => self.body.chunk().await,
+            Some(idle) => tokio::time::timeout(idle, self.body.chunk())
+                .await
+                .unwrap_or_else(|_| Err(TransportError::timeout().and(TransportError::body()))),
+        }
     }
 
     /// Whether the declared `Content-Length` is over `limit` (a body that

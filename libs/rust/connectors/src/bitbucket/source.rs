@@ -1,13 +1,19 @@
 //! One Bitbucket repository branch as a `ContentSource` (ADR-0030
 //! decision 3), on Bitbucket Server / Data Center or Bitbucket Cloud.
 //!
+//! * **Caps.** Listing pages (a directory's continuation pages, Cloud's
+//!   `next` links) and directory reads are counted apart: a monorepo's tens
+//!   of thousands of directories are not "pages", and `max_documents` stays
+//!   the real bound.
 //! * **Server.** The branch resolves to its head commit (`commits?until=`),
 //!   and `browse/{dir}?at={commit}` is read one directory at a time, paged
 //!   by `start` / `nextPageStart` until `isLastPage`. Each file carries its
 //!   blob id (`contentId`) and size: the version is the blob id. Fetch is
 //!   `raw/{path}?at={commit}` at the listed commit, so the bytes are the
 //!   listed version even if the branch has moved since.
-//! * **Cloud.** The branch resolves to its head commit, and `src/{commit}/
+//! * **Cloud.** The branch (or tag, or sha) resolves to its head commit
+//!   (`refs/branches/{ref}`, then `refs/tags/{ref}`, then `commit/{ref}`, all
+//!   through the source's own backoff), and `src/{commit}/
 //!   {dir}/` is read one directory at a time, following the `next` link —
 //!   which must stay on this repository's API resource and pass the egress
 //!   allowlist. Cloud exposes no per-file blob id or last-change commit in
@@ -26,10 +32,11 @@ use super::client::{BitbucketRest, Body, valid_hash};
 use super::config::{BitbucketHosting, BitbucketToolkitConfig};
 use crate::egress::HostAllowlist;
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of, valid_key,
+    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references,
+    title_of, valid_key,
 };
 use crate::transport::header::ACCEPT;
-use crate::transport::{HeaderValue, Method, Request, Transport, Url};
+use crate::transport::{HeaderValue, Method, Request, StatusCode, Transport, Url};
 
 const PROVIDER: &str = "Bitbucket";
 const SERVER_PAGE_SIZE: &str = "500";
@@ -87,6 +94,14 @@ impl BitbucketSource {
         self
     }
 
+    /// Connect and read-idle timeouts for this source's requests (default:
+    /// 30 s to a response, 60 s without a body byte).
+    #[must_use]
+    pub fn with_timeouts(mut self, timeouts: Timeouts) -> Self {
+        self.http = self.http.with_timeouts(timeouts);
+        self
+    }
+
     fn cloud(&self) -> bool {
         self.rest.config().hosting() == BitbucketHosting::Cloud
     }
@@ -115,12 +130,18 @@ impl BitbucketSource {
         let commit = self.server_commit().await?;
         let mut listed = Vec::new();
         let mut pending = VecDeque::from([String::new()]);
-        let mut pages = 0;
+        let (mut directories, mut pages) = (0, 0);
         while let Some(directory) = pending.pop_front() {
+            directories += 1;
+            self.http.check_directories(directories)?;
             let mut start = String::from("0");
+            let mut first = true;
             loop {
-                pages += 1;
-                self.http.check_pages(pages)?;
+                if !first {
+                    pages += 1;
+                    self.http.check_pages(pages)?;
+                }
+                first = false;
                 let mut suffix = vec!["browse"];
                 suffix.extend(directory.split('/').filter(|part| !part.is_empty()));
                 let request = self.get(
@@ -187,12 +208,41 @@ impl BitbucketSource {
         Ok(listed)
     }
 
+    /// Cloud: the commit the branch, tag or sha points at now. Each lookup
+    /// goes through [`SourceHttp`], so a 429 backs off like any other
+    /// request; a 404 tries the next kind of reference (as Server's
+    /// `commits?until=` accepts all three).
     async fn cloud_commit(&self) -> Result<String, Failure> {
-        self.rest
-            .branch_hash(&self.branch)
-            .await
-            .map(|hash| hash.to_ascii_lowercase())
-            .map_err(|error| Failure::Client(error.to_string()))
+        let reference = self.branch.as_str();
+        let lookups: [(&[&str], &str); 3] = [
+            (&["refs", "branches"], "target"),
+            (&["refs", "tags"], "target"),
+            (&["commit"], ""),
+        ];
+        for (route, nested) in lookups {
+            let mut suffix = route.to_vec();
+            suffix.push(reference);
+            let request = self.get(self.url(&suffix)?, &[])?;
+            let body = match self.http.json(request).await {
+                Ok((_, body)) => body,
+                Err(Failure::Status(StatusCode::NOT_FOUND)) => continue,
+                Err(failure) => return Err(failure),
+            };
+            let holder = if nested.is_empty() {
+                Some(&body)
+            } else {
+                body.get(nested)
+            };
+            return holder
+                .and_then(|holder| holder.get("hash"))
+                .and_then(Value::as_str)
+                .filter(|hash| valid_hash(hash))
+                .map(str::to_ascii_lowercase)
+                .ok_or(Failure::InvalidResponse(
+                    "the branch answer has no head commit",
+                ));
+        }
+        Err(Failure::Status(StatusCode::NOT_FOUND))
     }
 
     /// Server: the commit the branch (or tag, or sha) points at now. Every
@@ -220,16 +270,22 @@ impl BitbucketSource {
         let commit = self.cloud_commit().await?;
         let mut listed = Vec::new();
         let mut pending = VecDeque::from([String::new()]);
-        let mut pages = 0;
+        let (mut directories, mut pages) = (0, 0);
         while let Some(directory) = pending.pop_front() {
+            directories += 1;
+            self.http.check_directories(directories)?;
             let mut suffix = vec!["src", commit.as_str()];
             suffix.extend(directory.split('/').filter(|part| !part.is_empty()));
             // A trailing slash asks for the directory's listing.
             suffix.push("");
             let mut next = Some(self.get(self.url(&suffix)?, &[("pagelen", CLOUD_PAGE_SIZE)])?);
+            let mut first = true;
             while let Some(request) = next.take() {
-                pages += 1;
-                self.http.check_pages(pages)?;
+                if !first {
+                    pages += 1;
+                    self.http.check_pages(pages)?;
+                }
+                first = false;
                 let (_, body) = self.http.json(request).await?;
                 let values = body
                     .get("values")
@@ -292,15 +348,24 @@ impl BitbucketSource {
             })
             .await
     }
+
+    /// A listing made now (or the one already running), replacing the
+    /// remembered one: what `list()` returns.
+    async fn listed_fresh(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
+        self.cache
+            .list_shared(|| async {
+                self.listing()
+                    .await
+                    .map_err(|failure| failure.into_source_error(PROVIDER, None))
+            })
+            .await
+    }
 }
 
 impl ContentSource for BitbucketSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        let listing = self
-            .listing()
-            .await
-            .map_err(|failure| failure.into_source_error(PROVIDER, None))?;
-        Ok(self.cache.store(listing).await)
+        let listing = self.listed_fresh().await?;
+        Ok(references(&listing))
     }
 
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
@@ -557,5 +622,134 @@ mod tests {
         let listed = source.list().await.expect("listing");
         assert_eq!(listed[0].version, HEAD);
         assert_eq!(source.fetch("a.md").await.expect("document").bytes, b"hi");
+    }
+
+    /// A Cloud source at `reference` whose lookups are answered by `lookup`
+    /// (path under the repository -> reply) and whose head has no files.
+    fn cloud_at(
+        reference: &str,
+        lookup: impl Fn(&str, usize) -> Reply + Send + Sync + 'static,
+    ) -> (Arc<Scripted>, BitbucketSource) {
+        const REPO: &str = "/2.0/repositories/PRJ/repo";
+        let transport = Scripted::new(move |request, index| {
+            let path = request.url().path();
+            if path == format!("{REPO}/src/{HEAD}/") {
+                return Reply::json(&json!({"values": []}));
+            }
+            lookup(path.strip_prefix(REPO).expect("repo path"), index)
+        });
+        let source = BitbucketSource::new(
+            config("cloud"),
+            HostAllowlist::parse(Some("api.bitbucket.org")),
+            transport.clone(),
+        )
+        .expect("source")
+        .with_branch(reference);
+        (transport, source)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cloud_head_lookup_backs_off_on_a_rate_limit() {
+        let (transport, source) = cloud_at("main", |path, index| match (path, index) {
+            ("/refs/branches/main", 0) => Reply::rate_limited(Some("2")),
+            ("/refs/branches/main", _) => Reply::json(&json!({"target": {"hash": HEAD}})),
+            (other, _) => panic!("unexpected request {other}"),
+        });
+        let started = tokio::time::Instant::now();
+        source.list().await.expect("listing after the wait");
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(2));
+        let seen = transport.seen();
+        assert_eq!(
+            seen.iter()
+                .filter(|seen| seen.contains("refs/branches/main"))
+                .count(),
+            2,
+            "{seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cloud_resolves_a_tag_then_a_sha() {
+        const SHORT: &str = "ccccccc";
+        let (transport, source) = cloud_at("v1.0", |path, _| match path {
+            "/refs/branches/v1.0" => Reply::status(StatusCode::NOT_FOUND),
+            "/refs/tags/v1.0" => Reply::json(&json!({"name": "v1.0", "target": {"hash": HEAD}})),
+            other => panic!("unexpected request {other}"),
+        });
+        source.list().await.expect("a tag lists");
+        assert_eq!(transport.seen().len(), 3, "{:?}", transport.seen());
+
+        let (transport, source) = cloud_at(SHORT, |path, _| match path {
+            "/refs/branches/ccccccc" | "/refs/tags/ccccccc" => Reply::status(StatusCode::NOT_FOUND),
+            "/commit/ccccccc" => Reply::json(&json!({"hash": HEAD})),
+            other => panic!("unexpected request {other}"),
+        });
+        source.list().await.expect("a sha lists");
+        assert_eq!(transport.seen().len(), 4, "{:?}", transport.seen());
+
+        let (_, source) = cloud_at("nope", |_, _| Reply::status(StatusCode::NOT_FOUND));
+        assert!(source.list().await.is_err(), "no branch, tag or commit");
+    }
+
+    #[tokio::test]
+    async fn a_refused_host_is_named_by_the_provider_client() {
+        use crate::bitbucket::client::BitbucketClientErrorCode;
+        use crate::egress::EgressGuard;
+        let inner = Scripted::new(|_, _| panic!("no request may be sent"));
+        let guarded = Arc::new(EgressGuard::new(HostAllowlist::default(), inner));
+        let rest = BitbucketRest::new(config("cloud"), guarded);
+        let error = rest.branch_hash("main").await.expect_err("refused");
+        assert_eq!(error.code(), BitbucketClientErrorCode::EgressRefused);
+        assert!(!error.retryable());
+        assert!(
+            error.to_string().contains("not on the egress allowlist"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_monorepo_of_twelve_thousand_directories_lists() {
+        let base = "/context/rest/api/1.0/projects/PRJ/repos/repo";
+        let transport = Scripted::new(move |request, _| {
+            let path = request.url().path().strip_prefix(base).expect("repo path");
+            match path {
+                "/commits" => Reply::json(&json!({"values": [{"id": HEAD}]})),
+                "/browse" => {
+                    let directories: Vec<Value> = (0..12_000)
+                        .map(
+                            |i| json!({"path": {"toString": format!("d{i}")}, "type": "DIRECTORY"}),
+                        )
+                        .collect();
+                    Reply::json(&json!({"children": {"isLastPage": true, "values": directories}}))
+                }
+                other => {
+                    let index: usize = other
+                        .strip_prefix("/browse/d")
+                        .and_then(|rest| rest.parse().ok())
+                        .expect("a directory");
+                    let values = if index < 3 {
+                        vec![file("f.md", BLOB_A, 1)]
+                    } else {
+                        Vec::new()
+                    };
+                    Reply::json(&json!({"children": {"isLastPage": true, "values": values}}))
+                }
+            }
+        });
+        let source = BitbucketSource::new(
+            config("server"),
+            HostAllowlist::parse(Some("bitbucket.example")),
+            transport,
+        )
+        .expect("source");
+        assert_eq!(source.list().await.expect("listing").len(), 3);
+
+        // The directory cap is its own, and configurable.
+        let limits = SourceLimits {
+            max_directories: 100,
+            ..SourceLimits::default()
+        };
+        let error = source.with_limits(limits).list().await.expect_err("capped");
+        assert!(error.to_string().contains("more directories"), "{error}");
     }
 }

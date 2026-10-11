@@ -23,8 +23,8 @@ use super::config::AdoConnection;
 use super::repos::{AdoReposToolkitConfig, AdoRepository};
 use crate::egress::HostAllowlist;
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, title_of,
-    valid_git_object_id, valid_key, web_url,
+    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references,
+    title_of, valid_git_object_id, valid_key, web_url,
 };
 use crate::transport::header::ACCEPT;
 use crate::transport::{HeaderValue, Request, Transport, Url};
@@ -86,6 +86,14 @@ impl AdoReposSource {
     #[must_use]
     pub fn with_backoff(mut self, backoff: Backoff) -> Self {
         self.http = self.http.with_backoff(backoff);
+        self
+    }
+
+    /// Connect and read-idle timeouts for this source's requests (default:
+    /// 30 s to a response, 60 s without a body byte).
+    #[must_use]
+    pub fn with_timeouts(mut self, timeouts: Timeouts) -> Self {
+        self.http = self.http.with_timeouts(timeouts);
         self
     }
 
@@ -211,15 +219,24 @@ impl AdoReposSource {
             })
             .await
     }
+
+    /// A listing made now (or the one already running), replacing the
+    /// remembered one: what `list()` returns.
+    async fn listed_fresh(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
+        self.cache
+            .list_shared(|| async {
+                self.listing()
+                    .await
+                    .map_err(|failure| failure.into_source_error(PROVIDER, None))
+            })
+            .await
+    }
 }
 
 impl ContentSource for AdoReposSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        let listing = self
-            .listing()
-            .await
-            .map_err(|failure| failure.into_source_error(PROVIDER, None))?;
-        Ok(self.cache.store(listing).await)
+        let listing = self.listed_fresh().await?;
+        Ok(references(&listing))
     }
 
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {

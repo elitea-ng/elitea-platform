@@ -553,6 +553,7 @@ dependencies = [
  "bytes",
  "http",
  "thiserror",
+ "tokio",
  "url",
 ]
 

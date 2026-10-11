@@ -2,6 +2,7 @@
 //! each request to a response, and every request is kept for assertions.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -9,7 +10,8 @@ use serde_json::Value;
 
 use crate::transport::header::{CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER};
 use crate::transport::{
-    HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode, Transport, TransportError,
+    HeaderMap, HeaderName, HeaderValue, Request, Response, ResponseBody, StatusCode, Transport,
+    TransportError,
 };
 
 /// A canned answer.
@@ -136,4 +138,78 @@ pub(crate) fn query(request: &Request, name: &str) -> Option<String> {
         .query_pairs()
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.into_owned())
+}
+
+/// A transport whose every response is `chunks` bodies of `chunk_bytes`
+/// zero bytes, one per `gap` of (tokio) time: a large download on a slow
+/// link. Keeps the per-request timeout each request asked for.
+pub(crate) struct Trickle {
+    chunks: usize,
+    chunk_bytes: usize,
+    gap: Duration,
+    timeouts: Mutex<Vec<Option<Duration>>>,
+}
+
+impl Trickle {
+    pub(crate) fn new(chunks: usize, chunk_bytes: usize, gap: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            chunks,
+            chunk_bytes,
+            gap,
+            timeouts: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The `timeout` each request carried when it reached the transport.
+    pub(crate) fn timeouts(&self) -> Vec<Option<Duration>> {
+        self.timeouts.lock().expect("fixture lock").clone()
+    }
+}
+
+/// The body half of [`Trickle`].
+pub(crate) struct TrickleBody {
+    pub(crate) left: usize,
+    pub(crate) chunk_bytes: usize,
+    pub(crate) gap: Duration,
+}
+
+#[async_trait]
+impl ResponseBody for TrickleBody {
+    async fn chunk(&mut self) -> Result<Option<Bytes>, TransportError> {
+        if self.left == 0 {
+            return Ok(None);
+        }
+        self.left -= 1;
+        tokio::time::sleep(self.gap).await;
+        Ok(Some(Bytes::from(vec![0_u8; self.chunk_bytes])))
+    }
+}
+
+#[async_trait]
+impl Transport for Trickle {
+    async fn execute(&self, request: Request) -> Result<Response, TransportError> {
+        self.timeouts
+            .lock()
+            .expect("fixture lock")
+            .push(request.timeout().copied());
+        Ok(Response::new(
+            StatusCode::OK,
+            HeaderMap::new(),
+            Box::new(TrickleBody {
+                left: self.chunks,
+                chunk_bytes: self.chunk_bytes,
+                gap: self.gap,
+            }),
+        ))
+    }
+}
+
+/// A transport that never answers.
+pub(crate) struct Stalled;
+
+#[async_trait]
+impl Transport for Stalled {
+    async fn execute(&self, _request: Request) -> Result<Response, TransportError> {
+        std::future::pending().await
+    }
 }

@@ -99,6 +99,11 @@ impl IntoAdk for BitbucketClientError {
                 "bitbucket.resource_exhausted",
                 "the Bitbucket request or response exceeds the approved limit",
             ),
+            BitbucketClientErrorCode::EgressRefused => (
+                ErrorCategory::Forbidden,
+                "bitbucket.egress.refused",
+                "the Bitbucket host is not on the egress allowlist",
+            ),
             BitbucketClientErrorCode::UnknownOutcome => (
                 ErrorCategory::Internal,
                 "bitbucket.effect.unknown_outcome",

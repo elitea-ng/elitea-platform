@@ -95,6 +95,11 @@ impl IntoAdk for AdoClientError {
                 "ado.response.resource_exhausted",
                 "the Azure DevOps response exceeds the approved limit",
             ),
+            AdoClientErrorCode::EgressRefused => (
+                ErrorCategory::Forbidden,
+                "ado.egress.refused",
+                "the Azure DevOps host is not on the egress allowlist",
+            ),
             AdoClientErrorCode::UnknownOutcome => (
                 ErrorCategory::Internal,
                 "ado.effect.unknown_outcome",

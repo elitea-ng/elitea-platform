@@ -61,6 +61,8 @@ pub enum BitbucketClientErrorCode {
     InvalidResponse,
     ResourceExhausted,
     UnknownOutcome,
+    /// The host is not on the egress allowlist; nothing was sent.
+    EgressRefused,
 }
 
 /// Stable provider failure without origin, repository, path, body or secret.
@@ -121,6 +123,9 @@ impl fmt::Display for BitbucketClientError {
             }
             BitbucketClientErrorCode::UnknownOutcome => {
                 "the Bitbucket effect outcome is unknown and must be reconciled"
+            }
+            BitbucketClientErrorCode::EgressRefused => {
+                "the Bitbucket host is not on the egress allowlist"
             }
         })
     }
@@ -563,6 +568,10 @@ pub fn map_http_status(status: StatusCode, effect: bool) -> Result<(), Bitbucket
 }
 
 fn map_transport_error(source: TransportError, effect: bool) -> BitbucketClientError {
+    // Refused before anything was sent: the outcome is known even for a write.
+    if source.is_refused() {
+        return error(BitbucketClientErrorCode::EgressRefused);
+    }
     if effect {
         return unknown_outcome();
     }

@@ -58,6 +58,7 @@ pub(crate) enum GitLabClientErrorCode {
     InvalidResponse,
     ResourceExhausted,
     UnknownOutcome,
+    EgressRefused,
 }
 
 /// Stable provider failure without origin, project, path, body, or token.
@@ -103,6 +104,7 @@ impl From<GitLabOrgClientError> for GitLabClientError {
                     GitLabClientErrorCode::ResourceExhausted
                 }
                 GitLabOrgClientErrorCode::UnknownOutcome => GitLabClientErrorCode::UnknownOutcome,
+                GitLabOrgClientErrorCode::EgressRefused => GitLabClientErrorCode::EgressRefused,
             },
             retryable: source.retryable(),
         }
@@ -139,6 +141,9 @@ impl fmt::Display for GitLabClientError {
             }
             GitLabClientErrorCode::UnknownOutcome => {
                 "the GitLab effect outcome is unknown and must be reconciled"
+            }
+            GitLabClientErrorCode::EgressRefused => {
+                "the GitLab host is not on the egress allowlist"
             }
         })
     }
@@ -203,6 +208,11 @@ impl IntoAdk for GitLabClientError {
                 ErrorCategory::InvalidInput,
                 "gitlab.resource_exhausted",
                 "the GitLab request or response exceeds the approved limit",
+            ),
+            GitLabClientErrorCode::EgressRefused => (
+                ErrorCategory::Forbidden,
+                "gitlab.egress.refused",
+                "the GitLab host is not on the egress allowlist",
             ),
             GitLabClientErrorCode::UnknownOutcome => (
                 ErrorCategory::Internal,

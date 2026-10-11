@@ -101,7 +101,9 @@ impl HostAllowlist {
 }
 
 /// A transport that refuses, before sending, any request whose host is not
-/// on the allowlist. Fail-closed: an empty list refuses every request.
+/// on the allowlist. Fail-closed: an empty list refuses every request. The
+/// refusal is [`TransportError::egress_refused`], so a caller can tell it
+/// from a network failure without recomputing the allowlist.
 pub struct EgressGuard {
     allowlist: HostAllowlist,
     inner: Arc<dyn Transport>,
@@ -124,7 +126,7 @@ impl EgressGuard {
 impl Transport for EgressGuard {
     async fn execute(&self, request: Request) -> Result<Response, TransportError> {
         if !self.allowlist.permits_url(request.url()) {
-            return Err(TransportError::other());
+            return Err(TransportError::egress_refused());
         }
         self.inner.execute(request).await
     }
@@ -184,12 +186,11 @@ mod tests {
                 .await
                 .is_ok()
         );
-        assert!(
-            guard
-                .execute(Request::new(Method::GET, refused))
-                .await
-                .is_err()
-        );
+        let error = guard
+            .execute(Request::new(Method::GET, refused))
+            .await
+            .expect_err("refused");
+        assert!(error.is_refused());
         let closed = EgressGuard::new(HostAllowlist::default(), inner.clone());
         let any = Url::parse("https://api.github.com/").expect("url");
         assert!(

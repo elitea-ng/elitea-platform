@@ -56,6 +56,8 @@ pub enum GitLabOrgClientErrorCode {
     InvalidResponse,
     ResourceExhausted,
     UnknownOutcome,
+    /// The host is not on the egress allowlist; nothing was sent.
+    EgressRefused,
 }
 
 /// Stable provider failure without origin, repository, path, body, or token.
@@ -112,6 +114,9 @@ impl fmt::Display for GitLabOrgClientError {
             }
             GitLabOrgClientErrorCode::UnknownOutcome => {
                 "the GitLab effect outcome is unknown and must be reconciled"
+            }
+            GitLabOrgClientErrorCode::EgressRefused => {
+                "the GitLab host is not on the egress allowlist"
             }
         })
     }
@@ -282,6 +287,10 @@ pub fn map_http_status(status: StatusCode, effect: bool) -> Result<(), GitLabOrg
 }
 
 fn map_transport_error(source: TransportError, effect: bool) -> GitLabOrgClientError {
+    // Refused before anything was sent: the outcome is known even for a write.
+    if source.is_refused() {
+        return error(GitLabOrgClientErrorCode::EgressRefused, false);
+    }
     if effect {
         return unknown_outcome();
     }

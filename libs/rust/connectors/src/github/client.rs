@@ -60,6 +60,8 @@ pub enum GitHubClientErrorCode {
     DependencyUnavailable,
     InvalidResponse,
     ResourceExhausted,
+    /// The host is not on the egress allowlist; nothing was sent.
+    EgressRefused,
 }
 
 /// A safe GitHub client failure.
@@ -115,6 +117,9 @@ impl fmt::Display for GitHubClientError {
             GitHubClientErrorCode::InvalidResponse => "GitHub returned an invalid response",
             GitHubClientErrorCode::ResourceExhausted => {
                 "the GitHub response exceeds its approved limit"
+            }
+            GitHubClientErrorCode::EgressRefused => {
+                "the GitHub host is not on the egress allowlist"
             }
         })
     }
@@ -436,6 +441,9 @@ fn github_rate_limited(headers: &HeaderMap) -> bool {
 }
 
 fn map_transport_error(source: TransportError) -> GitHubClientError {
+    if source.is_refused() {
+        return error_code(GitHubClientErrorCode::EgressRefused);
+    }
     if source.is_timeout() {
         return error_code(GitHubClientErrorCode::Timeout);
     }

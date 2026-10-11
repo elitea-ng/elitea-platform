@@ -154,11 +154,7 @@ pub fn valid_segment(value: &str) -> bool {
 /// `..` segment (so no absolute path).
 #[must_use]
 pub fn valid_object_key(key: &str) -> bool {
-    !key.is_empty()
-        && !key.contains(['\0', '\\'])
-        && key
-            .split('/')
-            .all(|segment| !matches!(segment, "" | "." | ".."))
+    crate::git_id::valid_key(key)
 }
 
 #[cfg(test)]

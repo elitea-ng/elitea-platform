@@ -128,6 +128,11 @@ impl IntoAdk for GitHubClientError {
                 "github.response.resource_exhausted",
                 "the GitHub response exceeds the approved limit",
             ),
+            GitHubClientErrorCode::EgressRefused => (
+                ErrorCategory::Forbidden,
+                "github.egress.refused",
+                "the GitHub host is not on the egress allowlist",
+            ),
         };
         AdkError::new(ErrorComponent::Tool, category, code, message).with_retry(RetryHint {
             should_retry: self.retryable(),

@@ -51,6 +51,8 @@ pub enum AdoClientErrorCode {
     InvalidResponse,
     ResourceExhausted,
     UnknownOutcome,
+    /// The host is not on the egress allowlist; nothing was sent.
+    EgressRefused,
 }
 
 /// Stable Azure DevOps failure.
@@ -136,6 +138,9 @@ impl fmt::Display for AdoClientError {
             }
             AdoClientErrorCode::UnknownOutcome => {
                 "the Azure DevOps effect outcome is unknown and must be reconciled"
+            }
+            AdoClientErrorCode::EgressRefused => {
+                "the Azure DevOps host is not on the egress allowlist"
             }
         })
     }
@@ -561,6 +566,14 @@ fn truncate(value: &str, limit: usize) -> &str {
 }
 
 fn map_transport_error(source: TransportError, effect: bool) -> AdoClientError {
+    // Refused before anything was sent: the outcome is known even for a write.
+    if source.is_refused() {
+        return AdoClientError {
+            code: AdoClientErrorCode::EgressRefused,
+            retryable: false,
+            provider_message: None,
+        };
+    }
     if effect {
         return unknown_outcome();
     }
