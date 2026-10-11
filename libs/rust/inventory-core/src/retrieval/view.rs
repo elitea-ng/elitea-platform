@@ -202,6 +202,10 @@ impl GraphView {
             }
         }
         let mut filtered = Self::new(graph, self.revision);
+        // The filtered view is the SAME stored graph, seen by one caller:
+        // it carries the stamp whole (revision and incarnation), or a cache
+        // comparing stamps would take it for another graph's.
+        filtered.incarnation.clone_from(&self.incarnation);
         filtered.restricted.clone_from(&self.restricted);
         filtered.embedded = self
             .embedded
@@ -266,5 +270,49 @@ impl GraphView {
         self.by_type
             .get(&kind.to_lowercase())
             .map_or(&[], Vec::as_slice)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use elitea_content_source::acl::{Principal, PrincipalKind};
+    use elitea_content_source::{Acl, Caller};
+
+    /// A caller a restricted document hides something from gets a view
+    /// that is still the same stored graph: same revision, same incarnation.
+    #[test]
+    fn the_filtered_view_keeps_the_stamp_of_the_graph_it_was_read_from() {
+        let mut graph = Graph::new();
+        graph.add_entity("open", "Open", "class", None, None);
+        graph.insert_node(
+            "secret".to_owned(),
+            serde_json::json!({
+                "name": "Secret", "type": "class",
+                "citations": [{"source_toolkit": "repo", "file_path": "docs/secret.md"}],
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        );
+        let mut view = GraphView::new(graph, 7);
+        view.incarnation = "0a1b2c".to_owned();
+        view.restricted.insert(
+            ("repo".to_owned(), "docs/secret.md".to_owned()),
+            Acl::Restricted {
+                principals: vec![Principal {
+                    kind: PrincipalKind::User,
+                    id: "7".to_owned(),
+                }],
+            },
+        );
+        let outsider = Caller {
+            user_id: Some("9".to_owned()),
+            ..Caller::default()
+        };
+        let filtered = view.for_caller(&outsider).expect("something is hidden");
+        assert_eq!(filtered.revision, 7);
+        assert_eq!(filtered.incarnation, "0a1b2c");
+        assert!(filtered.node("secret").is_none() && filtered.node("open").is_some());
     }
 }

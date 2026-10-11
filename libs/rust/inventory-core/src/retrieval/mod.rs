@@ -53,9 +53,10 @@ impl<S: GraphStore> ViewCache<S> {
             self.forget(key);
             return Ok(None);
         };
-        if let Some(view) = self.cached(key).filter(|view| {
-            view.revision == stamp.revision && view.incarnation == stamp.incarnation
-        }) {
+        if let Some(view) = self
+            .cached(key)
+            .filter(|view| view.revision == stamp.revision && view.incarnation == stamp.incarnation)
+        {
             return Ok(Some(view));
         }
         let Some(read) = self.store.load_view(key).await? else {
