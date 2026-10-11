@@ -71,16 +71,14 @@ func newRegistryIndexMetaTerminalProcessor(
 }
 
 // newRegistryIndexManualStopCleanupProcessor is
-// newCurrentIndexManualStopCleanupProcessor for the registry.
+// newCurrentIndexManualStopCleanupProcessor for the registry. A manual stop
+// keeps the index's vectors, so it needs no vector deleter.
 func newRegistryIndexManualStopCleanupProcessor(
 	pool *pgxpool.Pool,
 	registry *repos.IndexRegistryRepository,
-	vectors indexingapp.IndexVectorDeleter,
 	reportItemFailure func(error),
-	reportDeferred func(indexingapp.RegistryManualStop),
 ) (*currentIndexManualStopCleanupProcessor, error) {
-	if pool == nil || registry == nil || vectors == nil ||
-		reportItemFailure == nil || reportDeferred == nil {
+	if pool == nil || registry == nil || reportItemFailure == nil {
 		return nil, errors.New("index registry manual Stop cleanup dependencies are required")
 	}
 	bindings, err := repos.NewCurrentIndexMetaTerminalBindingsRepository(pool)
@@ -91,7 +89,7 @@ func newRegistryIndexManualStopCleanupProcessor(
 	if err != nil {
 		return nil, fmt.Errorf("construct current index manual Stop cleanup store: %w", err)
 	}
-	cleaner, err := indexingapp.NewRegistryManualStopCleaner(bindings, registry, vectors, reportDeferred)
+	cleaner, err := indexingapp.NewRegistryManualStopCleaner(bindings, registry)
 	if err != nil {
 		return nil, err
 	}

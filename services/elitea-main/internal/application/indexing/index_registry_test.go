@@ -16,6 +16,7 @@ type registryWriterStub struct {
 	terminals []RegistryTerminal
 	stops     []RegistryManualStop
 	err       error
+	noRow     bool
 }
 
 func (s *registryWriterStub) InitializeRegistryRun(_ context.Context, run RegistryInitialRun) error {
@@ -30,6 +31,9 @@ func (s *registryWriterStub) ApplyRegistryTerminal(_ context.Context, t Registry
 
 func (s *registryWriterStub) VerifyRegistryManualStop(_ context.Context, stop RegistryManualStop) (string, error) {
 	s.stops = append(s.stops, stop)
+	if s.noRow {
+		return "", s.err
+	}
 	return "11111111-1111-1111-1111-111111111111", s.err
 }
 
@@ -168,57 +172,36 @@ func TestRegistryTerminalizerAppliesTheBindingWithoutRedeemingTheToolkit(t *test
 	}
 }
 
-func TestRegistryManualStopCleanerDefersWhileTheVectorHookDoes(t *testing.T) {
+// A manual stop of a reindex only verifies that the registry row is cancelled
+// for the stopped run. The cleaner has no vector deleter to call at all: the
+// index's vectors, and its index_registry_documents rows, stay as the run left
+// them, so a stopped reindex of a completed index is still searchable and the
+// next run reconciles incrementally.
+func TestRegistryManualStopCleanerKeepsTheIndexVectorsAndOnlyVerifiesTheStop(t *testing.T) {
 	writer := &registryWriterStub{}
-	var deferred []RegistryManualStop
-	cleaner, err := NewRegistryManualStopCleaner(
-		bindingsStub{registryBinding()}, writer, DeferredIndexVectorDeleter{},
-		func(stop RegistryManualStop) { deferred = append(deferred, stop) },
-	)
+	cleaner, err := NewRegistryManualStopCleaner(bindingsStub{registryBinding()}, writer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := cleaner.Cleanup(context.Background(), CurrentManualStopCleanupRequest{ExecutionID: "exec-1", Generation: 1}); err != nil {
-		t.Fatalf("a deferred hook must resolve the effect, got %v", err)
-	}
-	// ... but never silently: the deferral is reported.
-	if len(deferred) != 1 || deferred[0].IndexName != "docs" || len(writer.stops) != 1 {
-		t.Fatalf("deferred=%+v stops=%+v", deferred, writer.stops)
-	}
-}
-
-type vectorsStub struct {
-	err error
-	ns  []IndexVectorNamespace
-}
-
-func (v *vectorsStub) DeleteIndexVectors(_ context.Context, ns IndexVectorNamespace) error {
-	v.ns = append(v.ns, ns)
-	return v.err
-}
-
-func TestRegistryManualStopCleanerDeletesTheIndexNamespaceAndRetriesRealFailures(t *testing.T) {
-	writer := &registryWriterStub{}
-	vectors := &vectorsStub{}
-	cleaner, _ := NewRegistryManualStopCleaner(bindingsStub{registryBinding()}, writer, vectors, func(RegistryManualStop) {
-		t.Fatal("nothing was deferred")
-	})
-	if err := cleaner.Cleanup(context.Background(), CurrentManualStopCleanupRequest{ExecutionID: "exec-1", Generation: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if len(vectors.ns) != 1 || vectors.ns[0] != (IndexVectorNamespace{ProjectID: 7, IndexID: "11111111-1111-1111-1111-111111111111"}) {
-		t.Fatalf("namespaces = %+v", vectors.ns)
+	if len(writer.stops) != 1 || writer.stops[0].IndexName != "docs" || writer.stops[0].ProjectID != 7 {
+		t.Fatalf("stops = %+v", writer.stops)
 	}
 
-	vectors.err = errors.New("qdrant unavailable")
-	if err := cleaner.Cleanup(context.Background(), CurrentManualStopCleanupRequest{ExecutionID: "exec-1", Generation: 1}); !errors.Is(err, ErrCurrentIndexMetaMaterializationUnavailable) {
-		t.Fatalf("a real hook failure = %v, want the retryable materialization error", err)
-	}
-	// A row that does not verify (not cancelled for this run) is not cleaned.
+	// A row that does not verify (not cancelled for this run) is refused, and
+	// retried by the effect.
 	writer.err = ErrCurrentIndexMetaConflict
-	vectors.err = nil
-	vectors.ns = nil
-	if err := cleaner.Cleanup(context.Background(), CurrentManualStopCleanupRequest{ExecutionID: "exec-1", Generation: 1}); !errors.Is(err, ErrCurrentIndexMetaConflict) || len(vectors.ns) != 0 {
-		t.Fatalf("unverified stop: err=%v deletions=%d", err, len(vectors.ns))
+	if err := cleaner.Cleanup(context.Background(), CurrentManualStopCleanupRequest{ExecutionID: "exec-1", Generation: 1}); !errors.Is(err, ErrCurrentIndexMetaConflict) {
+		t.Fatalf("unverified stop: err=%v", err)
+	}
+
+	// No row names the run (admitted under python before the mode switched): the
+	// writer acknowledges it with no index id, and the effect resolves.
+	writer.err = nil
+	writer.noRow = true
+	if err := cleaner.Cleanup(context.Background(), CurrentManualStopCleanupRequest{ExecutionID: "exec-1", Generation: 1}); err != nil {
+		t.Fatalf("a stop with no registry row must resolve, got %v", err)
 	}
 }

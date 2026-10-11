@@ -17,6 +17,7 @@ import (
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	recoveryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
@@ -394,10 +395,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct index registry: %w", err)
 		}
+		indexRegistry.repo.WithLogger(dependencies.Logger)
 		terminalRegistry, registryErr := repos.NewIndexRegistryRepository(dependencies.TerminalEffectsPool)
 		if registryErr != nil {
 			return nil, fmt.Errorf("construct index registry terminal repository: %w", registryErr)
 		}
+		terminalRegistry.WithLogger(dependencies.Logger)
 		indexMetaTerminalEffect, err = newRegistryIndexMetaTerminalProcessor(
 			dependencies.TerminalEffectsPool,
 			terminalRegistry,
@@ -411,16 +414,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		indexManualStopCleanupEffect, err = newRegistryIndexManualStopCleanupProcessor(
 			dependencies.TerminalEffectsPool,
 			terminalRegistry,
-			indexVectors,
 			func(err error) {
 				dependencies.Logger.Error("index registry manual Stop cleanup item requeued", "err", err)
-			},
-			func(stop indexingapp.RegistryManualStop) {
-				dependencies.Logger.Warn(
-					"index registry manual Stop cleanup left the stopped run's vectors in place: the vector store hook is deferred",
-					"project_id", stop.ProjectID, "toolkit_id", stop.ToolkitID, "index", stop.IndexName,
-					"execution_id", stop.ExecutionID,
-				)
 			},
 		)
 		if err != nil {
@@ -1056,6 +1051,29 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 					"compose current index manual Stop cleanup reconciler: %w",
 					err,
 				)
+			}
+			// The registry's tombstone sweeper finishes the vector deletion of
+			// deleted indexes. It runs only in rust mode.
+			if indexRegistry != nil {
+				sweeper, sweeperErr := indexregistryapp.NewTombstoneSweeper(
+					indexRegistry.repo,
+					indexRegistry.vectors,
+					indexRegistry.report,
+					DefaultIndexTombstoneBatch,
+				)
+				if sweeperErr != nil {
+					return nil, fmt.Errorf("construct index tombstone sweeper: %w", sweeperErr)
+				}
+				tombstoneReconciler, reconcileErr := newIndexTombstoneReconciler(
+					sweeper, DefaultIndexTombstoneInterval, dependencies.Logger,
+				)
+				if reconcileErr != nil {
+					return nil, fmt.Errorf("construct index tombstone reconciler: %w", reconcileErr)
+				}
+				publisherRoot, err = newPublisherSet(publisherRoot, tombstoneReconciler)
+				if err != nil {
+					return nil, fmt.Errorf("compose index tombstone reconciler: %w", err)
+				}
 			}
 			// The task-id restamp repairs a field the Python SDK overwrites in
 			// its own index_meta row. The rust runtime has no such writer, so

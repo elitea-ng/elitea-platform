@@ -239,10 +239,14 @@ var ErrIndexVectorDeletionDeferred = errors.New("index vector deletion is deferr
 // IndexVectorDeleter is the hook to elitea-vector's Delete (ADR-0031 decision
 // 4: "a toolkit index: deleting it calls Delete on its namespace").
 //
+// It is called when an index is deleted and again, by the tombstone sweeper,
+// for every tombstone it still holds. It is NOT called when a run is stopped:
+// a stop keeps the index's vectors (see RegistryManualStopCleaner).
+//
 // TODO(ADR-0031 V2): elitea-main has no elitea-vector client yet. Until it
 // does, the composition root installs DeferredIndexVectorDeleter, which keeps
-// every deletion pending. The implementation must be idempotent: the registry
-// calls it again for a tombstone it still holds.
+// every deletion pending and makes the sweeper idle. The implementation must be
+// idempotent: the sweeper calls it again for a tombstone it still holds.
 type IndexVectorDeleter interface {
 	DeleteIndexVectors(context.Context, IndexVectorNamespace) error
 }
@@ -269,47 +273,50 @@ func (s RegistryManualStop) Validate() error {
 }
 
 // RegistryManualStopWriter checks that the registry row of the stopped run is
-// cancelled for exactly that run, and returns its index id. It writes nothing:
-// the cancelled transition itself is RegistryTerminalWriter's.
+// cancelled for exactly that run. It writes nothing: the cancelled transition
+// itself is RegistryTerminalWriter's. An empty indexID with a nil error means
+// no row names the run (it was admitted under the python runtime, before the
+// mode switched), and there is nothing to clean.
 type RegistryManualStopWriter interface {
 	VerifyRegistryManualStop(context.Context, RegistryManualStop) (indexID string, err error)
 }
 
 // RegistryManualStopCleaner is the rust-mode counterpart of
-// CurrentManualStopCleaner. The Python cleaner deletes the stopped run's
-// partially written embeddings from the project's pgvector table; here the
-// same vectors are the index namespace's points in the vector store, deleted
-// through IndexVectorDeleter. While that hook defers, the cleaner reports the
-// deferral through Deferred and resolves the effect: retrying would only
-// repeat the same answer every few hundred milliseconds. The points of a
-// stopped run stay in the index until the hook exists.
+// CurrentManualStopCleaner, and it deletes nothing.
+//
+// The Python cleaner deletes the stopped run's partially written embeddings
+// from the project's pgvector table, because each embedding row is tagged with
+// the run that wrote it. The registry has no such tag: its vectors belong to
+// the INDEX namespace, and a reindex is incremental (ADR-0030 decision 3). A
+// stopped reindex of a completed index would, if its namespace were deleted,
+// destroy every vector the index held before the run started and leave it
+// "cancelled" and empty. So a manual stop only verifies that the registry row
+// is cancelled for exactly the stopped run; the vectors and the
+// index_registry_documents rows stay as the run wrote them, and the next run
+// reconciles from the documents table: a document whose recorded version is
+// unchanged is skipped, a changed one is rewritten by deleting its chunks by
+// key, a vanished one is forgotten. Only deleting the whole index removes its
+// vectors (the tombstone sweeper).
 type RegistryManualStopCleaner struct {
 	bindings CurrentIndexMetaTerminalBindingRepository
 	registry RegistryManualStopWriter
-	vectors  IndexVectorDeleter
-	deferred func(RegistryManualStop)
 }
 
 func NewRegistryManualStopCleaner(
 	bindings CurrentIndexMetaTerminalBindingRepository,
 	registry RegistryManualStopWriter,
-	vectors IndexVectorDeleter,
-	deferred func(RegistryManualStop),
 ) (*RegistryManualStopCleaner, error) {
-	if bindings == nil || registry == nil || vectors == nil || deferred == nil {
+	if bindings == nil || registry == nil {
 		return nil, errors.New("index registry manual Stop cleanup dependencies are required")
 	}
-	return &RegistryManualStopCleaner{
-		bindings: bindings, registry: registry, vectors: vectors, deferred: deferred,
-	}, nil
+	return &RegistryManualStopCleaner{bindings: bindings, registry: registry}, nil
 }
 
 func (c *RegistryManualStopCleaner) Cleanup(
 	ctx context.Context,
 	request CurrentManualStopCleanupRequest,
 ) error {
-	if c == nil || c.bindings == nil || c.registry == nil || c.vectors == nil ||
-		c.deferred == nil || ctx == nil {
+	if c == nil || c.bindings == nil || c.registry == nil || ctx == nil {
 		return ErrCurrentIndexMetaInitializationInvalid
 	}
 	if err := request.Validate(); err != nil {
@@ -341,18 +348,8 @@ func (c *RegistryManualStopCleaner) Cleanup(
 	if err := stop.Validate(); err != nil {
 		return err
 	}
-	indexID, err := c.registry.VerifyRegistryManualStop(ctx, stop)
-	if err != nil {
+	if _, err := c.registry.VerifyRegistryManualStop(ctx, stop); err != nil {
 		return currentIndexMetaInitializationError(ctx, err)
 	}
-	err = c.vectors.DeleteIndexVectors(ctx, IndexVectorNamespace{ProjectID: stop.ProjectID, IndexID: indexID})
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, ErrIndexVectorDeletionDeferred):
-		c.deferred(stop)
-		return nil
-	default:
-		return currentIndexMetaInitializationError(ctx, err)
-	}
+	return nil
 }
