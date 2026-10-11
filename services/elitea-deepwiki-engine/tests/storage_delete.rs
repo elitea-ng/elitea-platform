@@ -4,8 +4,12 @@
 
 mod storage_common;
 
+use elitea_deepwiki_engine::runner::StopSignal;
 use elitea_deepwiki_engine::runner::maintenance;
-use elitea_deepwiki_engine::storage::build::{Build, BuildSpace, PublishSettings, WikiRecord};
+use elitea_deepwiki_engine::storage::StorageError;
+use elitea_deepwiki_engine::storage::build::{
+    Build, BuildSpace, PUBLISH_WIKI_LOCK, PublishSettings, WikiRecord, publish_wiki_lock_object,
+};
 use elitea_deepwiki_engine::storage::delete::{self, ProjectLimits, SweepOptions};
 use elitea_deepwiki_engine::storage::rows::{IndexEdge, IndexNode};
 use elitea_deepwiki_engine::storage::{PROJECT_ARG, WikiKey};
@@ -310,6 +314,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &pool,
         &settings,
         STALE_AFTER,
+        &StopSignal::default(),
     )
     .await
     .expect("run");
@@ -322,6 +327,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &pool,
         &settings,
         STALE_AFTER,
+        &StopSignal::default(),
     )
     .await
     .expect("run");
@@ -336,6 +342,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &pool,
         &settings,
         STALE_AFTER,
+        &StopSignal::default(),
     )
     .await
     .expect("run");
@@ -353,6 +360,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
             &pool,
             &settings,
             STALE_AFTER,
+            &StopSignal::default(),
         )
         .await;
         assert!(refused.is_err(), "{tool} without a project");
@@ -363,6 +371,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &pool,
         &settings,
         STALE_AFTER,
+        &StopSignal::default(),
     )
     .await;
     assert!(nameless.is_err());
@@ -455,6 +464,7 @@ async fn deleting_stray_rows_with_no_wikis_row_is_a_deletion() {
         &pool,
         &settings,
         STALE_AFTER,
+        &StopSignal::default(),
     )
     .await
     .expect("run");
@@ -474,6 +484,7 @@ async fn deleting_stray_rows_with_no_wikis_row_is_a_deletion() {
         &pool,
         &settings,
         STALE_AFTER,
+        &StopSignal::default(),
     )
     .await
     .expect("run");
@@ -789,4 +800,310 @@ async fn the_orphan_sweep_reports_a_project_it_could_not_clear() {
     // The project that did fit was deleted.
     assert_eq!(done.deleted.len(), 1);
     assert_eq!(done.deleted[0].0.project_id, 3);
+}
+
+/// Take a publish's per-wiki advisory lock in a transaction of its own, the
+/// way a publish in progress holds it.
+async fn hold_publish_lock(pool: &PgPool, key: &WikiKey) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let mut holder = pool.begin().await.expect("holder");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
+        .bind(PUBLISH_WIKI_LOCK)
+        .bind(publish_wiki_lock_object(key))
+        .execute(&mut *holder)
+        .await
+        .expect("take the publish lock");
+    holder
+}
+
+/// Sessions waiting on an advisory lock right now.
+async fn advisory_waiters(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stat_activity \
+         WHERE wait_event_type = 'Lock' AND wait_event = 'advisory' \
+           AND datname = current_database()",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("waiters")
+}
+
+/// The orphan sweep re-checks the project IMMEDIATELY before each wiki's
+/// deletion, under that wiki's lock: a wiki published after the sweep began
+/// (while it waited on another wiki's publish) stops it, and survives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wiki_published_mid_sweep_survives_and_the_project_is_reported_skipped() {
+    let Some(pool) = common::fresh_database("sweep_midway").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "sweeper");
+    for wiki in ["w-1", "w-2", "w-3"] {
+        publish(&space, &common::key_in(2, wiki), "alpha", 2).await;
+    }
+    sqlx::query(
+        "UPDATE wikis SET created_at = now() - interval '2 hours', \
+         updated_at = now() - interval '2 hours'",
+    )
+    .execute(&pool)
+    .await
+    .expect("age");
+    let existing: HashSet<i32> = [1].into_iter().collect();
+    let at = listed_at(&pool, 1).await;
+
+    // The sweep deletes w-1, then queues behind a "publish" of w-2.
+    let holder = hold_publish_lock(&pool, &common::key_in(2, "w-2")).await;
+    let sweep = {
+        let pool = pool.clone();
+        let existing = existing.clone();
+        let at = at.clone();
+        tokio::spawn(async move {
+            delete::sweep_orphans(
+                &pool,
+                &existing,
+                &SweepOptions {
+                    listed_at: Some(&at),
+                    delete: true,
+                    allow_stale_list: false,
+                },
+                &PublishSettings::default(),
+                &ProjectLimits {
+                    stale_after: STALE_AFTER,
+                    batch: 1,
+                    max_rounds: 10,
+                },
+            )
+            .await
+        })
+    };
+    for _ in 0..100 {
+        if advisory_waiters(&pool).await > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(advisory_waiters(&pool).await, 1, "the sweep waits on w-2");
+
+    // A new wiki of the project is published meanwhile, then w-2's publish ends.
+    publish(&space, &common::key_in(2, "w-fresh"), "beta", 2).await;
+    holder.rollback().await.expect("release");
+
+    let done = sweep.await.expect("join").expect("sweep");
+    assert!(done.failed.is_empty(), "{:?}", done.failed);
+    assert!(done.deleted.is_empty(), "{:?}", done.deleted);
+    assert_eq!(done.skipped.len(), 1, "{:?}", done.skipped);
+    assert_eq!(done.skipped[0].0.project_id, 2);
+    assert!(done.skipped[0].1.contains("w-fresh"), "{:?}", done.skipped);
+    // w-1 went before the newer wiki appeared; everything else survives.
+    assert_eq!(rows(&pool, 2, "w-1").await, vec![0; TABLES.len()]);
+    for wiki in ["w-2", "w-3", "w-fresh"] {
+        assert!(populated(&rows(&pool, 2, wiki).await), "{wiki} survives: {:?}", rows(&pool, 2, wiki).await);
+    }
+}
+
+/// The wait for a publish of the same wiki is bounded: past it the deletion
+/// answers "being published; retry" and deletes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deletion_gives_up_waiting_for_a_publish_and_deletes_nothing() {
+    let Some(pool) = common::fresh_database("delete_lock_wait").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "publisher");
+    let key = common::key("w-busy");
+    publish(&space, &key, "alpha", 2).await;
+    let holder = hold_publish_lock(&pool, &key).await;
+    let settings = PublishSettings {
+        delete_lock_wait: Duration::from_millis(400),
+        ..PublishSettings::default()
+    };
+    let started = std::time::Instant::now();
+    let error = delete::delete_wiki(&pool, &key, &settings)
+        .await
+        .expect_err("the lock is held");
+    assert!(matches!(error, StorageError::Busy(_)), "{error:?}");
+    assert!(error.to_string().contains("being published"), "{error}");
+    assert!(error.to_string().contains("retry"), "{error}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "waited {:?}",
+        started.elapsed()
+    );
+    assert!(populated(&rows(&pool, 1, "w-busy").await), "nothing deleted");
+
+    // As a tool: a runtime error a caller can read and retry.
+    let refused = maintenance::run(
+        "delete_wiki_index",
+        &arguments(1, &json!({"wiki_id": "w-busy"})),
+        &pool,
+        &settings,
+        STALE_AFTER,
+        &StopSignal::default(),
+    )
+    .await
+    .expect_err("busy");
+    assert!(refused.to_string().contains("retry"), "{refused}");
+
+    // Released, the same deletion goes through.
+    holder.rollback().await.expect("release");
+    let deleted = delete::delete_wiki(&pool, &key, &settings)
+        .await
+        .expect("delete");
+    assert!(deleted.existed);
+}
+
+/// Dropping the deletion (the invocation was cancelled) cancels its wait in
+/// the database: no session is left queued on the lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_deletion_stops_waiting_in_the_database() {
+    let Some(pool) = common::fresh_database("delete_cancel").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "publisher");
+    let key = common::key("w-cancel");
+    publish(&space, &key, "alpha", 2).await;
+    let holder = hold_publish_lock(&pool, &key).await;
+
+    // Directly: the future is aborted while it waits.
+    let attempt = {
+        let pool = pool.clone();
+        let key = key.clone();
+        tokio::spawn(async move {
+            delete::delete_wiki(&pool, &key, &PublishSettings::default()).await
+        })
+    };
+    for _ in 0..100 {
+        if advisory_waiters(&pool).await > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(advisory_waiters(&pool).await, 1);
+    attempt.abort();
+    let _ = attempt.await;
+    for _ in 0..100 {
+        if advisory_waiters(&pool).await == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(advisory_waiters(&pool).await, 0, "the waiter was cancelled");
+
+    // Through the tool: a stop request ends the wait with the stop line.
+    let stop = StopSignal::default();
+    let tool = {
+        let pool = pool.clone();
+        let stop = stop.clone();
+        tokio::spawn(async move {
+            maintenance::run(
+                "delete_wiki_index",
+                &arguments(1, &json!({"wiki_id": "w-cancel"})),
+                &pool,
+                &PublishSettings::default(),
+                STALE_AFTER,
+                &stop,
+            )
+            .await
+        })
+    };
+    for _ in 0..100 {
+        if advisory_waiters(&pool).await > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(advisory_waiters(&pool).await, 1);
+    stop.request();
+    let stopped = tokio::time::timeout(Duration::from_secs(10), tool)
+        .await
+        .expect("the stop ends the tool")
+        .expect("join");
+    assert!(stopped.is_err());
+    for _ in 0..100 {
+        if advisory_waiters(&pool).await == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(advisory_waiters(&pool).await, 0);
+
+    // Nothing was deleted, and once the publish ends a deletion works.
+    holder.rollback().await.expect("release");
+    assert!(populated(&rows(&pool, 1, "w-cancel").await), "{:?}", rows(&pool, 1, "w-cancel").await);
+    let deleted = delete::delete_wiki(&pool, &key, &PublishSettings::default())
+        .await
+        .expect("delete");
+    assert!(deleted.existed);
+}
+
+/// The question's embedding model is chosen from one read of the wiki's row;
+/// the dense search re-checks it INSIDE its own snapshot. A wiki republished
+/// with another model between the two is refused, not ranked by a distance
+/// between vectors of different spaces.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wiki_republished_with_another_model_between_steps_is_refused() {
+    use elitea_deepwiki_engine::ask::stored_embedding_model;
+    use elitea_deepwiki_engine::storage::adapter::{Scope, UnifiedDb};
+    use elitea_deepwiki_engine::storage::search::Hybrid;
+
+    let Some(pool) = common::fresh_database("model_between").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "recorder");
+    let key = common::key_in(1, "w-a");
+    let publish_with = |model: &'static str| {
+        let space = space.clone();
+        let key = key.clone();
+        async move {
+            stage(&space, &key, "alpha", 3)
+                .await
+                .publish(&WikiRecord {
+                    embedding_model: Some(model.into()),
+                    embedding_dim: Some(3),
+                    ..WikiRecord::default()
+                })
+                .await
+                .expect("publish");
+        }
+    };
+    let search = |db: UnifiedDb| async move {
+        db.search_hybrid(
+            "alpha",
+            Some(&[1.0, 1.0, 1.0]),
+            &Scope::default(),
+            &Hybrid::default(),
+        )
+        .await
+    };
+
+    publish_with("model-a").await;
+    // Step 1: the model is chosen from the row.
+    let chosen = stored_embedding_model(&pool, common::project(1), "w-a")
+        .await
+        .expect("read")
+        .expect("recorded");
+    assert_eq!(chosen, "model-a");
+    // Not republished yet: the search is served.
+    let db = UnifiedDb::new(pool.clone(), key.clone()).expecting_embedding_model(chosen.clone());
+    assert!(!search(db).await.expect("same model").is_empty());
+
+    // The wiki is republished with another model BETWEEN the steps.
+    publish_with("model-b").await;
+    let db = UnifiedDb::new(pool.clone(), key.clone()).expecting_embedding_model(chosen);
+    let refused = search(db).await.expect_err("the vectors are model-b's now");
+    assert!(
+        matches!(&refused, StorageError::EmbeddingModelChanged { stored, expected, .. }
+            if stored == "model-b" && expected == "model-a"),
+        "{refused:?}"
+    );
+    assert!(refused.to_string().contains("model-b"), "{refused}");
+
+    // A caller that chose the current model is served; one that did not
+    // record a model (the plain reader) is unaffected.
+    let db = UnifiedDb::new(pool.clone(), key.clone()).expecting_embedding_model("model-b");
+    assert!(!search(db).await.expect("current model").is_empty());
+    let unchecked = UnifiedDb::new(pool.clone(), key.clone());
+    assert!(!search(unchecked).await.expect("unchecked").is_empty());
+
+    // A wiki that records no model has nothing to refuse.
+    publish(&space, &key, "alpha", 3).await;
+    let db = UnifiedDb::new(pool.clone(), key).expecting_embedding_model("anything");
+    assert!(!search(db).await.expect("no model recorded").is_empty());
 }

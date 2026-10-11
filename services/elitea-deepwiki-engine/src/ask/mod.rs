@@ -698,10 +698,12 @@ pub async fn run_tool(
     // A malformed embedding_model is refused before the database is asked.
     named_embedding_model(arguments)?;
     let stored_model = stored_embedding_model(&deps.pool, project, &request.wiki_id).await?;
+    let embedding_model =
+        resolve_embedding_model(stored_model.as_deref(), &request.wiki_id, arguments)?;
     let embedder = Embedder::Client(EmbeddingClient::new(
         deps.transport.clone(),
         settings.clone(),
-        resolve_embedding_model(stored_model.as_deref(), &request.wiki_id, arguments)?,
+        embedding_model.clone(),
         deps.embedding_options,
     ));
     let client = ChatClient::new(deps.transport.clone(), settings);
@@ -724,10 +726,17 @@ pub async fn run_tool(
             deps.clock.clone(),
         )?,
     };
-    let store = PgIndex::new(crate::storage::adapter::UnifiedDb::new(
-        deps.pool.clone(),
-        crate::storage::WikiKey::new(project, request.wiki_id.clone()),
-    ));
+    // The model is chosen above from a read of the wiki's row; the search
+    // checks it again inside its own snapshot, so a republish with another
+    // model in between is refused rather than ranked by a meaningless
+    // distance (storage::search::search_dense).
+    let store = PgIndex::new(
+        crate::storage::adapter::UnifiedDb::new(
+            deps.pool.clone(),
+            crate::storage::WikiKey::new(project, request.wiki_id.clone()),
+        )
+        .expecting_embedding_model(embedding_model),
+    );
     run_agent(&spec, &request, &client, &store, &embedder, context).await
 }
 

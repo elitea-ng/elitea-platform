@@ -11,6 +11,7 @@
 //! The storage side is [`crate::storage::delete`].
 
 use crate::errors::{EngineError, ErrorType};
+use crate::runner::StopSignal;
 use crate::storage::build::PublishSettings;
 use crate::storage::delete::{self, ProjectLimits, WikiDeletion};
 use crate::storage::{ProjectScope, StorageError, WikiKey};
@@ -23,6 +24,11 @@ pub const MAINTENANCE_TOOLS: [&str; 2] = ["delete_wiki_index", "delete_project_w
 
 fn storage_failure(action: &str, error: &StorageError) -> EngineError {
     tracing::error!(%error, "{action} failed");
+    if let StorageError::Busy(message) = error {
+        // A publish of the wiki holds it: retryable, and the caller must be
+        // able to tell it from a failure of the database.
+        return EngineError::new(ErrorType::Runtime, format!("{action} failed: {message}"));
+    }
     if let StorageError::Delete(message) = error {
         // Ours, and it quotes no statement: the caller needs to read it (a
         // project that still holds wikis after the rounds a deletion makes).
@@ -51,8 +57,28 @@ fn rows_json(deleted: &WikiDeletion) -> Value {
 /// # Errors
 ///
 /// A `ValueError` for a missing project or wiki id; a `RuntimeError` for a
-/// database failure (its text stays in the log: it can quote a statement).
+/// database failure (its text stays in the log: it can quote a statement)
+/// or for a publish that held the wiki past the bounded wait (retry); the
+/// stop line after a stop.
 pub async fn run(
+    tool: &str,
+    arguments: &Map<String, Value>,
+    pool: &PgPool,
+    settings: &PublishSettings,
+    build_stale_after: Duration,
+    stop: &StopSignal,
+) -> Result<Value, EngineError> {
+    // A stop (the invocation was cancelled, or its reader went away) ends the
+    // deletion at once: the work future is dropped, which cancels the
+    // transaction in the database (`delete::CancelOnDrop`) instead of letting
+    // it wait on a publish's lock for nobody.
+    tokio::select! {
+        result = run_tool(tool, arguments, pool, settings, build_stale_after) => result,
+        () = stop.stopped() => Err(EngineError::cancelled()),
+    }
+}
+
+async fn run_tool(
     tool: &str,
     arguments: &Map<String, Value>,
     pool: &PgPool,

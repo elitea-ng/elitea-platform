@@ -108,6 +108,11 @@ pub struct PublishSettings {
     pub slots: u32,
     /// `lock_timeout` of each best-effort `ANALYZE` (default 5 s).
     pub analyze_lock_timeout: Duration,
+    /// How long a wiki deletion waits for a publish of the same wiki to
+    /// release the per-wiki advisory lock (default 30 s). Past it the
+    /// deletion gives up with [`crate::storage::StorageError::Busy`] and the
+    /// caller retries; it never queues without a bound.
+    pub delete_lock_wait: Duration,
 }
 
 impl Default for PublishSettings {
@@ -118,6 +123,7 @@ impl Default for PublishSettings {
             work_mem_mb: 64,
             slots: 2,
             analyze_lock_timeout: Duration::from_secs(5),
+            delete_lock_wait: Duration::from_secs(30),
         }
     }
 }

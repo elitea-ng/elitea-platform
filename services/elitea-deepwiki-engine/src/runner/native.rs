@@ -347,6 +347,7 @@ impl NativeRunner {
                 &self.pool,
                 &self.settings.publish,
                 self.settings.build_stale_after,
+                &context.stop_signal(),
             )
             .await;
         }

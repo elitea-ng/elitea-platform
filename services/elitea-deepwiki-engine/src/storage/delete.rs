@@ -13,7 +13,11 @@
 //! `(project_id, wiki_id)`, in ONE transaction. The transaction first takes
 //! the publish's per-wiki advisory lock ([`PUBLISH_WIKI_LOCK`], the same
 //! object [`publish_wiki_lock_object`] names), so it queues behind a publish
-//! of that wiki and a publish queues behind it. Whichever commits last wins
+//! of that wiki and a publish queues behind it. The deletion's queue is
+//! BOUNDED ([`PublishSettings::delete_lock_wait`], default 30 s): past it the
+//! deletion answers [`StorageError::Busy`] ("the wiki is being published;
+//! retry") and deletes nothing. A deletion whose caller went away (a stop)
+//! is cancelled in the database too, not left waiting. Whichever commits last wins
 //! whole: the wiki is either the published index or absent, never a mix. The
 //! `wiki_bm25_*` tables have no foreign key (migration 0001), so they are
 //! deleted explicitly, as the publish does; the other three would also go
@@ -25,7 +29,9 @@
 //! publish waits on this deletion's advisory lock. A generation that was
 //! already running when the wiki was deleted can still publish and bring the
 //! wiki back; the host's `delete_wiki` removes the artifacts first, and the
-//! stop of a running generation is the caller's.
+//! stop of a running generation is the caller's (the host cancels the wiki's
+//! or project's `generate_wiki` invocations and waits for them before it asks
+//! for the deletion).
 //!
 //! # One project
 //!
@@ -119,6 +125,10 @@ pub struct ProjectDeletion {
     /// still running and its publish will find the wiki deleted (and
     /// recreate it; see the module comment).
     pub live_builds: u64,
+    /// Why the deletion stopped before it finished: the guard found activity
+    /// newer than the project listing (see [`delete_project_guarded`]). The
+    /// wikis deleted before it stay deleted; the project is NOT clean.
+    pub stopped: Option<String>,
 }
 
 /// How [`delete_project`] pages and when it gives up.
@@ -146,38 +156,173 @@ impl ProjectLimits {
     }
 }
 
+/// What one attempt to delete a wiki's index did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WikiOutcome {
+    /// The wiki's index was deleted (or was not there).
+    Deleted(WikiDeletion),
+    /// Nothing was deleted: the project has activity newer than the listing
+    /// the deletion was guarded by (the reason names it).
+    Newer(String),
+}
+
+/// Cancels the transaction's backend when the future that owns it is
+/// dropped before it finished.
+///
+/// `sqlx` leaves a dropped query running in the server: a deletion that
+/// waits on an advisory lock would go on waiting after its caller stopped
+/// (the invocation was cancelled), and take the lock later for nobody. This
+/// guard, armed once the transaction exists, asks the server to cancel THAT
+/// transaction: the statement is matched by backend pid AND the transaction's
+/// start time, so a connection the pool has reused for something else is
+/// never touched.
+struct CancelOnDrop {
+    pool: PgPool,
+    pid: i32,
+    started: String,
+    armed: bool,
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let pool = self.pool.clone();
+        let pid = self.pid;
+        let started = std::mem::take(&mut self.started);
+        runtime.spawn(async move {
+            let cancelled = sqlx::query(
+                "SELECT CASE WHEN state = 'active' THEN pg_cancel_backend(pid) \
+                             ELSE pg_terminate_backend(pid) END \
+                 FROM pg_stat_activity \
+                 WHERE pid = $1 AND xact_start = $2::timestamptz AND pid <> pg_backend_pid()",
+            )
+            .bind(pid)
+            .bind(started)
+            .execute(&pool)
+            .await;
+            if let Err(error) = cancelled {
+                tracing::warn!(%error, "could not cancel an abandoned index deletion");
+            }
+        });
+    }
+}
+
+/// `pg_advisory_xact_lock` gave up: the lock timeout (`55P03`) or the
+/// statement timeout (`57014`) fired while a publish held the wiki.
+fn is_wait_timeout(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::Database(db) if matches!(db.code().as_deref(), Some("55P03" | "57014"))
+    )
+}
+
 /// Delete one wiki's index. See the module comment.
 ///
 /// `settings` supplies the statement and lock timeouts (the publish's: both
-/// move a whole index). The wait for a publish of the same wiki has none.
+/// move a whole index) and [`PublishSettings::delete_lock_wait`], the bound
+/// on the wait for a publish of the same wiki.
 ///
 /// # Errors
 ///
-/// [`crate::storage::StorageError::Database`], also for a statement or lock
-/// timeout; nothing is deleted then.
+/// [`StorageError::Busy`] when a publish of the wiki held it for longer than
+/// the wait; [`crate::storage::StorageError::Database`], also for a statement
+/// or lock timeout. Nothing is deleted then.
 pub async fn delete_wiki(
     pool: &PgPool,
     key: &WikiKey,
     settings: &PublishSettings,
 ) -> Result<WikiDeletion> {
+    match delete_wiki_guarded(pool, key, settings, None).await? {
+        WikiOutcome::Deleted(deleted) => Ok(deleted),
+        // Unreachable without a guard; kept total rather than panicking.
+        WikiOutcome::Newer(reason) => Err(StorageError::Delete(reason)),
+    }
+}
+
+/// [`delete_wiki`], optionally guarded by a project listing time: with
+/// `listed_at`, the project is checked for activity newer than it INSIDE
+/// this transaction, after the wiki's lock is held. A wiki published
+/// before that point is seen by the check; one published after it queues
+/// behind this deletion. So a wiki the list did not know about is never
+/// deleted by it.
+///
+/// # Errors
+///
+/// As [`delete_wiki`].
+pub async fn delete_wiki_guarded(
+    pool: &PgPool,
+    key: &WikiKey,
+    settings: &PublishSettings,
+    listed_at: Option<&str>,
+) -> Result<WikiOutcome> {
     let mut connection = pool.acquire().await?;
     let mut tx = connection.begin().await?;
-    // The queue: no timeout while a publish of this wiki finishes.
+    let (pid, started): (i32, String) = sqlx::query_as("SELECT pg_backend_pid(), now()::text")
+        .fetch_one(&mut *tx)
+        .await?;
+    let mut cancel = CancelOnDrop {
+        pool: pool.clone(),
+        pid,
+        started,
+        armed: true,
+    };
+    let result = delete_in_transaction(&mut tx, key, settings, listed_at).await;
+    // Past the last await that can be abandoned: nothing is in flight, and
+    // an error means the statement finished (the transaction rolls back when
+    // it is dropped), so there is nothing left to cancel.
+    cancel.armed = false;
+    let outcome = result?;
+    if matches!(outcome, WikiOutcome::Deleted(_)) {
+        tx.commit().await?;
+    }
+    Ok(outcome)
+}
+
+async fn delete_in_transaction(
+    tx: &mut sqlx::PgTransaction<'_>,
+    key: &WikiKey,
+    settings: &PublishSettings,
+    listed_at: Option<&str>,
+) -> Result<WikiOutcome> {
+    // The queue, BOUNDED: a publish of this wiki can hold the lock for as
+    // long as its statements run, and a deletion that waited without a limit
+    // would hold a connection and a caller for that long. The statement
+    // timeout (a second longer, so the lock timeout speaks first) bounds the
+    // wait too, whichever of the two the server applies to an advisory lock.
+    let wait = settings.delete_lock_wait.max(Duration::from_millis(1));
     apply_settings(
-        &mut tx,
+        tx,
         &[
-            ("lock_timeout", "0".to_owned()),
-            ("statement_timeout", "0".to_owned()),
+            ("lock_timeout", format!("{}ms", wait.as_millis())),
+            (
+                "statement_timeout",
+                format!("{}ms", (wait + Duration::from_secs(1)).as_millis()),
+            ),
         ],
     )
     .await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
+    if let Err(error) = sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
         .bind(PUBLISH_WIKI_LOCK)
         .bind(publish_wiki_lock_object(key))
-        .execute(&mut *tx)
-        .await?;
+        .execute(&mut **tx)
+        .await
+    {
+        if is_wait_timeout(&error) {
+            return Err(StorageError::Busy(format!(
+                "wiki {} is being published (its lock was not released within {}s); retry the deletion",
+                key.wiki_id(),
+                wait.as_secs_f64()
+            )));
+        }
+        return Err(error.into());
+    }
     apply_settings(
-        &mut tx,
+        tx,
         &[
             (
                 "statement_timeout",
@@ -190,16 +335,21 @@ pub async fn delete_wiki(
         ],
     )
     .await?;
-    let rows = delete_live(&mut tx, key).await?;
+    if let Some(listed_at) = listed_at
+        && let Some(reason) = activity_since_conn(tx, key.project_id(), listed_at).await?
+    {
+        // Nothing was changed; the transaction rolls back.
+        return Ok(WikiOutcome::Newer(reason));
+    }
+    let rows = delete_live(tx, key).await?;
     let existed = sqlx::query("DELETE FROM wikis WHERE project_id = $1 AND wiki_id = $2")
         .bind(key.project_id())
         .bind(key.wiki_id())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?
         .rows_affected()
         > 0;
-    tx.commit().await?;
-    Ok(WikiDeletion { existed, rows })
+    Ok(WikiOutcome::Deleted(WikiDeletion { existed, rows }))
 }
 
 /// Wikis deleted per listing round of [`delete_project`].
@@ -227,19 +377,41 @@ pub async fn project_wikis(pool: &PgPool, project: ProjectScope) -> Result<Vec<S
 ///
 /// # Errors
 ///
-/// [`StorageError::Database`]; or [`StorageError::Delete`] when the project
-/// still holds wikis after `limits.max_rounds` rounds (the message names how
-/// many). The wikis deleted before the failure stay deleted; call it again
-/// to finish.
+/// [`StorageError::Database`]; [`StorageError::Busy`] when a publish of one
+/// of the wikis held it too long; or [`StorageError::Delete`] when the
+/// project still holds wikis after `limits.max_rounds` rounds (the message
+/// names how many). The wikis deleted before the failure stay deleted; call
+/// it again to finish.
 pub async fn delete_project(
     pool: &PgPool,
     project: ProjectScope,
     settings: &PublishSettings,
     limits: &ProjectLimits,
 ) -> Result<ProjectDeletion> {
+    delete_project_guarded(pool, project, settings, limits, None).await
+}
+
+/// [`delete_project`] guarded by a project listing time (the orphan sweep).
+///
+/// Before EACH wiki deletion the project is checked for activity newer than
+/// `listed_at`, inside that wiki's transaction and under its lock
+/// ([`delete_wiki_guarded`]). The first time anything newer appears the
+/// deletion stops for the project: [`ProjectDeletion::stopped`] says why, and
+/// nothing further is deleted (the stale-build step included).
+///
+/// # Errors
+///
+/// As [`delete_project`].
+pub async fn delete_project_guarded(
+    pool: &PgPool,
+    project: ProjectScope,
+    settings: &PublishSettings,
+    limits: &ProjectLimits,
+    listed_at: Option<&str>,
+) -> Result<ProjectDeletion> {
     let mut outcome = ProjectDeletion::default();
     let mut finished = false;
-    for _ in 0..limits.max_rounds {
+    'rounds: for _ in 0..limits.max_rounds {
         let batch: Vec<String> = sqlx::query_scalar(
             "SELECT wiki_id FROM wikis WHERE project_id = $1 ORDER BY wiki_id LIMIT $2",
         )
@@ -253,15 +425,25 @@ pub async fn delete_project(
         }
         for wiki in batch {
             let key = WikiKey::new(project, wiki.clone());
-            let deleted = delete_wiki(pool, &key, settings).await?;
-            outcome.rows.nodes += deleted.rows.nodes;
-            outcome.rows.edges += deleted.rows.edges;
-            outcome.rows.embeddings += deleted.rows.embeddings;
-            outcome.rows.statistics += deleted.rows.statistics;
-            if deleted.existed {
-                outcome.wikis.push(wiki);
+            match delete_wiki_guarded(pool, &key, settings, listed_at).await? {
+                WikiOutcome::Deleted(deleted) => {
+                    outcome.rows.nodes += deleted.rows.nodes;
+                    outcome.rows.edges += deleted.rows.edges;
+                    outcome.rows.embeddings += deleted.rows.embeddings;
+                    outcome.rows.statistics += deleted.rows.statistics;
+                    if deleted.existed {
+                        outcome.wikis.push(wiki);
+                    }
+                }
+                WikiOutcome::Newer(reason) => {
+                    outcome.stopped = Some(reason);
+                    break 'rounds;
+                }
             }
         }
+    }
+    if outcome.stopped.is_some() {
+        return Ok(outcome);
     }
     if !finished {
         // The cap was hit with the last batch deleted: look once more.
@@ -282,7 +464,15 @@ pub async fn delete_project(
     // Staged rows of generations that never published, and only those whose
     // heartbeat stopped: a live build belongs to a running generation (see
     // the module comment). A build a publish holds locked is skipped too
-    // (its own sweep removes it).
+    // (its own sweep removes it). Guarded like a wiki: the check and the
+    // delete share one transaction.
+    let mut tx = pool.begin().await?;
+    if let Some(listed_at) = listed_at
+        && let Some(reason) = activity_since_conn(&mut tx, project.id(), listed_at).await?
+    {
+        outcome.stopped = Some(reason);
+        return Ok(outcome);
+    }
     outcome.builds = sqlx::query(
         "DELETE FROM deepwiki_build.builds WHERE build_id IN ( \
              SELECT build_id FROM deepwiki_build.builds \
@@ -292,14 +482,15 @@ pub async fn delete_project(
     )
     .bind(project.id())
     .bind(limits.stale_after.as_secs_f64())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     let live: i64 =
         sqlx::query_scalar("SELECT count(*) FROM deepwiki_build.builds WHERE project_id = $1")
             .bind(project.id())
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await?;
+    tx.commit().await?;
     outcome.live_builds = u64::try_from(live).unwrap_or(0);
     Ok(outcome)
 }
@@ -411,6 +602,21 @@ pub async fn activity_since(
     project_id: i32,
     listed_at: &str,
 ) -> Result<Option<String>> {
+    let mut connection = pool.acquire().await?;
+    activity_since_conn(&mut connection, project_id, listed_at).await
+}
+
+/// [`activity_since`] on a given connection, so it can run inside a
+/// transaction (the deletion's own, under the wiki's lock).
+///
+/// # Errors
+///
+/// [`StorageError::Database`].
+pub async fn activity_since_conn(
+    connection: &mut sqlx::PgConnection,
+    project_id: i32,
+    listed_at: &str,
+) -> Result<Option<String>> {
     let wiki: Option<String> = sqlx::query_scalar(
         "SELECT wiki_id FROM wikis \
          WHERE project_id = $1 AND (created_at > $2::timestamptz OR updated_at > $2::timestamptz) \
@@ -418,7 +624,7 @@ pub async fn activity_since(
     )
     .bind(project_id)
     .bind(listed_at)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?;
     if let Some(wiki) = wiki {
         return Ok(Some(format!(
@@ -432,7 +638,7 @@ pub async fn activity_since(
     )
     .bind(project_id)
     .bind(listed_at)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?;
     Ok(build.map(|wiki| format!("a build of wiki {wiki} started or is running after {listed_at}")))
 }
@@ -470,7 +676,10 @@ pub struct SweepOutcome {
 /// would look orphaned. The guard is two-fold: with `delete`, a list older
 /// than [`MAX_LISTING_AGE`] is refused ([`check_listing_fresh`]); and every
 /// project with a wiki or build created or published after `listed_at` is
-/// skipped, the check made again just before that project's deletion.
+/// skipped, the check made again immediately before EACH wiki's deletion,
+/// inside that wiki's transaction and under its lock
+/// ([`delete_project_guarded`]); the first newer activity stops the project
+/// and reports it as skipped.
 ///
 /// # Errors
 ///
@@ -507,8 +716,20 @@ pub async fn sweep_orphans<S: std::hash::BuildHasher>(
         let Some(scope) = ProjectScope::new(project.project_id) else {
             continue;
         };
-        match delete_project(pool, scope, settings, limits).await {
-            Ok(done) => outcome.deleted.push((project, done)),
+        match delete_project_guarded(pool, scope, settings, limits, options.listed_at).await {
+            Ok(done) => {
+                if let Some(reason) = &done.stopped {
+                    // Something newer than the list appeared mid-sweep: the
+                    // project may exist after all. Stopped, not failed.
+                    let reason = format!(
+                        "{reason} (stopped after deleting {} wiki(s))",
+                        done.wikis.len()
+                    );
+                    outcome.skipped.push((project, reason));
+                } else {
+                    outcome.deleted.push((project, done));
+                }
+            }
             Err(error) => outcome.failed.push((project, error.to_string())),
         }
     }

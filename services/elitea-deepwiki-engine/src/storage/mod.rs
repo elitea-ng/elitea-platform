@@ -74,6 +74,21 @@ pub enum StorageError {
     /// rounds a deletion makes. The message says which and what remains.
     #[error("{0}")]
     Delete(String),
+    /// The wiki was republished with another embedding model between the
+    /// caller choosing its question's model and the search: the stored
+    /// vectors are no longer comparable to the question's.
+    #[error(
+        "wiki '{wiki_id}' was re-indexed with the embedding model '{stored}' while this question was embedded with '{expected}'; its vectors are only comparable with '{stored}'. Ask again"
+    )]
+    EmbeddingModelChanged {
+        wiki_id: String,
+        stored: String,
+        expected: String,
+    },
+    /// A deletion gave up waiting for a publish of the same wiki (the
+    /// bounded advisory-lock wait). Nothing was deleted; the caller retries.
+    #[error("{0}")]
+    Busy(String),
     /// A DSN that does not parse. The text is never part of the message:
     /// it can carry a password.
     #[error(

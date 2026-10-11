@@ -383,6 +383,12 @@ fn publish_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<PublishSett
             defaults.analyze_lock_timeout,
             day,
         )?,
+        delete_lock_wait: bounded_seconds(
+            raw,
+            "PUBLISH_DELETE_LOCK_WAIT_SECONDS",
+            defaults.delete_lock_wait,
+            day,
+        )?,
     })
 }
 
@@ -974,6 +980,7 @@ mod tests {
                 work_mem_mb: 64,
                 slots: 2,
                 analyze_lock_timeout: Duration::from_secs(5),
+                delete_lock_wait: Duration::from_secs(30),
             })
         );
         assert_eq!(
@@ -983,6 +990,7 @@ mod tests {
                 ("ELITEA_DEEPWIKI_PUBLISH_WORK_MEM_MB", "256"),
                 ("ELITEA_DEEPWIKI_PUBLISH_SLOTS", "1"),
                 ("ELITEA_DEEPWIKI_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS", "1"),
+                ("ELITEA_DEEPWIKI_PUBLISH_DELETE_LOCK_WAIT_SECONDS", "7"),
             ])
             .map(|s| s.publish),
             Ok(PublishSettings {
@@ -991,6 +999,7 @@ mod tests {
                 work_mem_mb: 256,
                 slots: 1,
                 analyze_lock_timeout: Duration::from_secs(1),
+                delete_lock_wait: Duration::from_secs(7),
             })
         );
         for (name, bad) in [
@@ -998,6 +1007,7 @@ mod tests {
             ("PUBLISH_STATEMENT_TIMEOUT_SECONDS", "x"),
             ("PUBLISH_STATEMENT_TIMEOUT_SECONDS", "86401"),
             ("PUBLISH_LOCK_TIMEOUT_SECONDS", "-1"),
+            ("PUBLISH_DELETE_LOCK_WAIT_SECONDS", "0"),
             ("PUBLISH_WORK_MEM_MB", "0"),
             ("PUBLISH_WORK_MEM_MB", "64MB"),
             ("PUBLISH_WORK_MEM_MB", "4097"),
