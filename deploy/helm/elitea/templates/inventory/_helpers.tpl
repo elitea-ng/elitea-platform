@@ -52,6 +52,15 @@ host's value never reaches the engine container.
 {{- end }}
 
 {{/*
+elitea-inventory.platformGrpc — "true" when the platform gRPC service is on:
+inventory.platformGrpc.clients names at least one certificate identity. Empty
+otherwise, and the service is then not configured, exposed or admitted at all.
+*/}}
+{{- define "elitea-inventory.platformGrpc" -}}
+{{- if (.Values.inventory.platformGrpc | default dict).clients -}}true{{- end -}}
+{{- end }}
+
+{{/*
 elitea-inventory.databaseSecrets — the engine's database URL secret, as JSON:
 inventory.secrets.ELITEA_INVENTORY_DATABASE_URL, else postgresql.existingSecret
 (the shared define every provider uses). The Deployment's engine container and
@@ -77,6 +86,23 @@ for, and this is a message in the terminal that ran the command.
 {{- $env := .Values.inventory.env | default dict -}}
 {{- $runner := get $env "ELITEA_INVENTORY_RUNNER" | toString -}}
 {{- $hostSidecar := has $runner (list "sidecar" "legacy") -}}
+
+{{/*
+  Guard #0: the platform gRPC service is authorised by the verified client
+  certificate, so it cannot exist without mutual TLS; its port must not
+  collide with the SPI's; and the chart renders its two settings itself.
+*/}}
+{{- if include "elitea-inventory.platformGrpc" . -}}
+{{- if not .Values.inventory.mtls.enabled -}}
+{{- fail "inventory.platformGrpc.clients is set, but inventory.mtls.enabled is false: the platform service authorises a caller by its verified client certificate and refuses to start without mutual TLS. Enable mtls, or empty platformGrpc.clients." -}}
+{{- end -}}
+{{- if eq (.Values.inventory.platformGrpc.port | int) 8080 -}}
+{{- fail "inventory.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
+{{- end -}}
+{{- if or (hasKey $env "ELITEA_INVENTORY_PLATFORM_CLIENTS") (hasKey $env "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") -}}
+{{- fail "inventory.env sets ELITEA_INVENTORY_PLATFORM_CLIENTS or ELITEA_INVENTORY_PLATFORM_GRPC_ADDR; the chart renders both from inventory.platformGrpc (clients, port). Remove them from env." -}}
+{{- end -}}
+{{- end -}}
 
 {{/*
   Guard #1: values from before the Python engine was removed (ADR-0027).
