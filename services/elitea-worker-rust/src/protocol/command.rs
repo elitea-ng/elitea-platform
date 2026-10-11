@@ -210,7 +210,7 @@ impl VerifiedToolkitExecuteReadCommand {
     }
 
     /// The logical output id Main expects for this command's terminal frame;
-    /// see [`terminal_logical_output_id`].
+    /// see `terminal_logical_output_id`.
     #[must_use]
     pub fn logical_output_id(&self) -> String {
         terminal_logical_output_id(&self.common.command)
