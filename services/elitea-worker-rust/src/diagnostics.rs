@@ -1,6 +1,8 @@
 //! Process-wide diagnostic safety boundaries.
 
 pub(crate) mod failure;
+#[cfg(test)]
+mod runtime_log_safety_tests;
 
 use std::fmt;
 use std::io::{self, Write};
@@ -20,8 +22,10 @@ use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer as _;
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 static PANIC_HOOK: Once = Once::new();
@@ -32,6 +36,10 @@ const OTEL_ENDPOINT_ENVIRONMENT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 const OTEL_TRACES_ENDPOINT_ENVIRONMENT: &str = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
 const OTEL_SERVICE_NAME: &str = "elitea-worker-rust";
 const OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Elitea-owned crates whose events are reviewed for field safety. The Worker
+/// and the reusable runtime it hosts (ADR-0027) share one level; every other
+/// crate stays off.
+pub(crate) const OWNED_TARGETS: [&str; 2] = ["elitea_worker_rust", "elitea_agent_runtime"];
 
 /// Process-level tracing setup failures with no environment contents exposed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,10 +146,10 @@ impl std::error::Error for DiagnosticShutdownError {}
 
 /// Install the process subscriber for safe Elitea-owned spans.
 ///
-/// Only a single level is accepted and it is applied exclusively to this
-/// crate. Arbitrary `RUST_LOG` directives are deliberately ignored so enabling
-/// local diagnostics cannot expose dependency-owned HTTP, model, SMTP or SQL
-/// fields. Span close events supply phase duration without logging payloads.
+/// Only a single level is accepted and it is applied exclusively to the
+/// Elitea-owned crates in [`OWNED_TARGETS`]. Arbitrary `RUST_LOG` directives
+/// are deliberately ignored so enabling local diagnostics cannot expose
+/// dependency-owned HTTP, model, SMTP or SQL fields. Span close events supply phase duration without logging payloads.
 ///
 /// # Errors
 ///
@@ -152,16 +160,7 @@ pub fn install_tracing_subscriber() -> Result<DiagnosticGuard, DiagnosticInitErr
     let failure_setting = std::env::var("ELITEA_RUST_FAILURE_DIAGNOSTICS").ok();
     let capture_failures = failure::configured(failure_setting.as_deref())?;
     let configured = std::env::var(LOG_LEVEL_ENVIRONMENT).ok();
-    let directive = tracing_directive(configured.as_deref())?;
-    let log_filter =
-        EnvFilter::try_new(directive).map_err(|_| DiagnosticInitError::InvalidLogLevel)?;
-    let format = tracing_subscriber::fmt::layer()
-        .compact()
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_span_events(FmtSpan::CLOSE)
-        .with_filter(log_filter);
+    let format = log_layer(configured.as_deref(), io::stdout)?;
     let provider = build_trace_provider()?;
     match provider.as_ref() {
         Some(provider) => {
@@ -189,6 +188,27 @@ pub fn install_tracing_subscriber() -> Result<DiagnosticGuard, DiagnosticInitErr
     Ok(DiagnosticGuard { provider })
 }
 
+/// The process log layer: compact, uncoloured, owned crates only.
+fn log_layer<S, W>(
+    configured: Option<&str>,
+    writer: W,
+) -> Result<impl tracing_subscriber::Layer<S> + Send + Sync, DiagnosticInitError>
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let directive = tracing_directive(configured)?;
+    let filter = EnvFilter::try_new(directive).map_err(|_| DiagnosticInitError::InvalidLogLevel)?;
+    Ok(tracing_subscriber::fmt::layer()
+        .compact()
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_span_events(FmtSpan::CLOSE)
+        .with_writer(writer)
+        .with_filter(filter))
+}
+
 fn tracing_directive(configured: Option<&str>) -> Result<String, DiagnosticInitError> {
     level_directive(configured, DiagnosticInitError::InvalidLogLevel)
 }
@@ -208,7 +228,11 @@ fn level_directive(
     ) {
         return Err(invalid);
     }
-    Ok(format!("elitea_worker_rust={level}"))
+    Ok(OWNED_TARGETS
+        .iter()
+        .map(|target| format!("{target}={level}"))
+        .collect::<Vec<_>>()
+        .join(","))
 }
 
 fn build_trace_provider() -> Result<Option<SdkTracerProvider>, DiagnosticInitError> {
@@ -344,9 +368,11 @@ fn panic_source_label(file: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DiagnosticInitError, install_tls_crypto_provider, panic_source_label, trace_directive,
-        trace_export_enabled, tracing_directive,
+        DiagnosticInitError, OWNED_TARGETS, install_tls_crypto_provider, log_layer,
+        panic_source_label, trace_directive, trace_export_enabled, tracing_directive,
     };
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
 
     #[test]
     fn explicit_tls_provider_supports_reqwest_after_feature_unification() {
@@ -361,11 +387,15 @@ mod tests {
     fn tracing_level_is_crate_scoped_and_rejects_directives() {
         assert_eq!(
             tracing_directive(None).expect("default tracing directive"),
-            "elitea_worker_rust=info"
+            "elitea_worker_rust=info,elitea_agent_runtime=info"
         );
         assert_eq!(
             tracing_directive(Some(" DEBUG ")).expect("debug tracing directive"),
-            "elitea_worker_rust=debug"
+            "elitea_worker_rust=debug,elitea_agent_runtime=debug"
+        );
+        assert_eq!(
+            trace_directive(Some("warn")).expect("warn trace directive"),
+            "elitea_worker_rust=warn,elitea_agent_runtime=warn"
         );
         assert_eq!(
             tracing_directive(Some("trace,hyper=trace")),
@@ -375,6 +405,98 @@ mod tests {
             trace_directive(Some("trace,hyper=trace")),
             Err(DiagnosticInitError::InvalidTraceLevel)
         );
+    }
+
+    const FILTER_CHILD_ENV: &str = "ELITEA_DIAGNOSTICS_FILTER_CHILD";
+
+    /// Runtime code moved into `elitea_agent_runtime` (ADR-0027) must stay
+    /// visible at the configured level while dependencies stay off. A child
+    /// process owns the global subscriber, so parallel tests cannot change
+    /// callsite interest and turn a missing line into a silent pass.
+    #[test]
+    fn log_filter_admits_owned_crates_at_the_configured_level_only() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "diagnostics::tests::log_filter_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(FILTER_CHILD_ENV, "1")
+            .output()
+            .expect("log filter child process");
+        let logged = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{logged}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(logged.contains("CHILD-RAN"), "{logged}");
+        assert!(logged.contains("runtime-warn-visible"), "{logged}");
+        assert!(logged.contains("worker-warn-visible"), "{logged}");
+        for hidden in [
+            "runtime-info-hidden",
+            "worker-info-hidden",
+            "dependency-warn-hidden",
+            "dependency-error-hidden",
+        ] {
+            assert!(!logged.contains(hidden), "{hidden} leaked: {logged}");
+        }
+    }
+
+    #[test]
+    fn log_filter_child() {
+        if std::env::var(FILTER_CHILD_ENV).is_err() {
+            return;
+        }
+        tracing_subscriber::registry()
+            .with(log_layer(Some("warn"), std::io::stdout).expect("production log layer"))
+            .init();
+        tracing::warn!(target: "elitea_agent_runtime::graph::state_reducers", "runtime-warn-visible");
+        tracing::info!(target: "elitea_agent_runtime::graph::router", "runtime-info-hidden");
+        tracing::warn!(target: "elitea_worker_rust::runner", "worker-warn-visible");
+        tracing::info!(target: "elitea_worker_rust::runner", "worker-info-hidden");
+        tracing::warn!(target: "hyper::proto", "dependency-warn-hidden");
+        tracing::error!(target: "sqlx::query", "dependency-error-hidden");
+        println!("CHILD-RAN");
+    }
+
+    /// A library crate under `libs/rust` that the Worker hosts and that emits
+    /// tracing events must be an owned target, or its events vanish in deployed
+    /// Workers the way the runtime crate's did after ADR-0027.
+    #[test]
+    fn every_hosted_library_crate_that_traces_is_an_owned_target() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let read = |path: std::path::PathBuf| -> toml::Table {
+            std::fs::read_to_string(&path)
+                .expect("manifest")
+                .parse()
+                .expect("manifest TOML")
+        };
+        let manifest = read(root.join("Cargo.toml"));
+        let dependencies = manifest["dependencies"].as_table().expect("dependencies");
+        let mut hosted = 0;
+        for (name, spec) in dependencies {
+            let Some(path) = spec.get("path").and_then(toml::Value::as_str) else {
+                continue;
+            };
+            if !path.starts_with("../../libs/rust/") || path.starts_with("../../libs/rust/vendor/")
+            {
+                continue;
+            }
+            hosted += 1;
+            let library = read(root.join(path).join("Cargo.toml"));
+            let traces = library
+                .get("dependencies")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.contains_key("tracing"));
+            let target = name.replace('-', "_");
+            assert!(
+                !traces || OWNED_TARGETS.contains(&target.as_str()),
+                "{name} emits tracing events but {target} is not in OWNED_TARGETS"
+            );
+        }
+        assert!(hosted >= 2, "the hosted libs/rust crates were not found");
     }
 
     #[test]

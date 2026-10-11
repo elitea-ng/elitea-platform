@@ -35,7 +35,7 @@ const SDK_TOOL_NAMES: &[&str] = &[
     "create_new_bucket",
 ];
 
-struct FixtureRpc {
+pub(crate) struct FixtureRpc {
     body: Mutex<String>,
     paths: Mutex<Vec<String>>,
     /// The request bodies the tools actually sent. The bucket and the key are
@@ -134,7 +134,10 @@ fn context() -> Arc<SimpleToolContext> {
     )
 }
 
-async fn tools_of(body: &str, selected: &[&str]) -> (Vec<Arc<dyn Tool>>, Arc<FixtureRpc>) {
+pub(crate) async fn tools_of(
+    body: &str,
+    selected: &[&str],
+) -> (Vec<Arc<dyn Tool>>, Arc<FixtureRpc>) {
     let (authority, rpc) = authority(body);
     let config = ArtifactToolkitConfig::parse(&settings(selected)).expect("artifact configuration");
     let toolset =
