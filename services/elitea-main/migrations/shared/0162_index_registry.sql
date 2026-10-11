@@ -40,9 +40,16 @@
 -- (attempts, next_attempt_at).
 --
 -- RUN LIVENESS is not stored here. A run is active exactly when the execution
--- job named by task_id/execution_generation is not terminal; the repository
--- reads that from elitea_runtime.execution_jobs, so a long healthy run needs no
--- heartbeat and a dead one is recognised the moment its job settles.
+-- job named by execution_id/execution_generation is not terminal, or SUCCEEDED
+-- less than a bounded grace ago with its result not yet applied; the
+-- repository reads that from elitea_runtime.execution_jobs, so a long healthy
+-- run needs no heartbeat. A run found dead is recorded with the outcome its
+-- job reached (cancelled, failed, or failed "abandoned" when the job is
+-- missing).
+--
+-- COUNTS. The *_documents/*_chunks columns and `skipped` are the LAST run's.
+-- The index's totals are index_registry_documents (rows, sum of chunk_count),
+-- which the list reads.
 --
 -- Idempotent throughout. No BEGIN/COMMIT: the ledgered runner wraps the file.
 
@@ -68,7 +75,8 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.index_registry (
     -- The `index_data` arguments, replayed verbatim by the next reindex.
     index_configuration jsonb NOT NULL DEFAULT '{}'::jsonb
         CHECK (jsonb_typeof(index_configuration) = 'object'),
-    -- Documents and chunks of the LAST completed run, from the typed result.
+    -- Documents and chunks of the LAST run, from the typed result. The index's
+    -- totals are its index_registry_documents rows.
     indexed_documents   bigint NOT NULL DEFAULT 0 CHECK (indexed_documents >= 0),
     updated_documents   bigint NOT NULL DEFAULT 0 CHECK (updated_documents >= 0),
     indexed_chunks      bigint NOT NULL DEFAULT 0 CHECK (indexed_chunks >= 0),
@@ -82,7 +90,10 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.index_registry (
     embedding_model     text,
     embedding_dimension integer
         CHECK (embedding_dimension IS NULL OR embedding_dimension BETWEEN 1 AND 65535),
-    -- The vector collection of that space (emb_<model-slug>_<dimension>).
+    -- The vector collection of that space, in elitea-vector's form
+    -- emb_<slug>_<dimension>, where slug is the readable model name (lower
+    -- case, [a-z0-9-], truncated) then '-' and the first 12 hex digits of the
+    -- SHA-256 of the exact model string, so distinct models never share one.
     collection          text,
     -- The run fence. Every transition names the execution it applies to, so a
     -- late result of an older run cannot overwrite a newer one.

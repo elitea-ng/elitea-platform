@@ -85,10 +85,14 @@ func admitRegistryRun(
 	return admitted.ExecutionID, initializer.MaterializeInitialIndexMeta(context.Background(), request, outcome)
 }
 
+// setJobState moves a job, stamping settled_at for a terminal state.
 func setJobState(t *testing.T, pool *pgxpool.Pool, executionID, state string) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(),
-		`UPDATE elitea_runtime.execution_jobs SET state = $2 WHERE execution_id = $1`, executionID, state); err != nil {
+	if _, err := pool.Exec(context.Background(), `
+UPDATE elitea_runtime.execution_jobs
+SET state = $2,
+    settled_at = CASE WHEN $2 IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED') THEN clock_timestamp() END
+WHERE execution_id = $1`, executionID, state); err != nil {
 		t.Fatalf("set job %s to %s: %v", executionID, state, err)
 	}
 }
@@ -216,12 +220,12 @@ func TestIndexRegistryResultStampsOnceAndFailsAChangedDimension(t *testing.T) {
 		t.Fatal(err)
 	}
 	outcome, err := repo.ApplyResult(ctx, 1, registryResult(1, "docs", registrySummary(1536, "Text-Embedding-3-Small")))
-	if err != nil || !outcome.Applied || outcome.Mismatch != nil {
+	if err != nil || !outcome.Applied || outcome.Overridden {
 		t.Fatalf("first result: %+v err=%v", outcome, err)
 	}
 	row := mustFind(t, repo, "docs")
 	if row.State != indexregistryapp.StateCompleted || row.Model != "Text-Embedding-3-Small" || row.Dimension != 1536 ||
-		row.Collection != "emb_text_embedding_3_small_1536" || row.Indexed != 5 || row.Chunks != 20 ||
+		row.Collection != indexregistryapp.CollectionName("Text-Embedding-3-Small", 1536) || row.Indexed != 5 || row.Chunks != 20 ||
 		row.Failed != 2 || row.Skipped["too_large"] != 1 {
 		t.Fatalf("stamped row = %+v", row)
 	}
@@ -230,7 +234,7 @@ func TestIndexRegistryResultStampsOnceAndFailsAChangedDimension(t *testing.T) {
 		t.Fatal(err)
 	}
 	outcome, err = repo.ApplyResult(ctx, 1, registryResult(2, "docs", registrySummary(768, "Text-Embedding-3-Small")))
-	if err != nil || !outcome.Applied || outcome.Mismatch == nil {
+	if err != nil || !outcome.Applied || !outcome.Overridden || outcome.Recorded.Status != outputapp.IndexIngestStatusError {
 		t.Fatalf("changed dimension: %+v err=%v", outcome, err)
 	}
 	row = mustFind(t, repo, "docs")
@@ -349,7 +353,7 @@ func TestIndexRegistryDeleteTombstonesFreesTheNameAndPurges(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := mustFind(t, repo, "docs")
-	if row.RunActive {
+	if row.Job.Found || row.Active() {
 		t.Fatal("a run whose job does not exist cannot be active")
 	}
 
@@ -397,9 +401,10 @@ func TestIndexRegistryDeleteTombstonesFreesTheNameAndPurges(t *testing.T) {
 	}
 }
 
-// A run is active exactly while the execution job it names is not terminal.
-// updated_at plays no part: a healthy run that reports rarely is neither
-// deletable nor restartable, and a run whose job ended is both.
+// A run is active exactly while the execution job it names is live, or
+// SUCCEEDED with its result not yet applied. updated_at plays no part: a
+// healthy run that reports rarely is neither deletable nor restartable, and a
+// run whose job ended otherwise is both.
 func TestIndexRegistryRunLivenessComesFromTheExecutionJob(t *testing.T) {
 	repo, pool := newRegistryTestRepo(t)
 	ctx := context.Background()
@@ -414,10 +419,10 @@ func TestIndexRegistryRunLivenessComesFromTheExecutionJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := mustFind(t, repo, "long")
-	if !row.RunActive || !row.Active() || row.Abandoned() {
+	if row.RunStatus() != indexregistryapp.RunLive || !row.Active() || row.Dead() || row.ObservedAt.IsZero() {
 		t.Fatalf("a RUNNING job with a 48h-old updated_at must be an active run: %+v", row)
 	}
-	if listed, _ := repo.List(ctx, 1, 19); len(listed) != 1 || !listed[0].RunActive {
+	if listed, _ := repo.List(ctx, 1, 19); len(listed) != 1 || !listed[0].Active() {
 		t.Fatalf("the list does not read liveness: %+v", listed)
 	}
 	if _, err := repo.MarkDeleted(ctx, 1, 19, row.IndexID); !errors.Is(err, indexregistryapp.ErrActiveRun) {
@@ -428,41 +433,116 @@ func TestIndexRegistryRunLivenessComesFromTheExecutionJob(t *testing.T) {
 	}
 	for _, live := range []string{"PENDING", "DISPATCHED", "CLAIMED", "SETTLING"} {
 		setJobState(t, pool, execution, live)
-		if got := mustFind(t, repo, "long"); !got.RunActive {
-			t.Fatalf("job %s is not terminal, the run is active", live)
+		if got := mustFind(t, repo, "long"); got.RunStatus() != indexregistryapp.RunLive {
+			t.Fatalf("job %s is not terminal, the run is live: %s", live, got.RunStatus())
 		}
 	}
 
-	// Every terminal job state ends the run; the index is then deletable.
-	for _, terminal := range []string{"SUCCEEDED", "FAILED", "CANCELLED"} {
+	// A SUCCEEDED job whose result has not been applied is settling: still
+	// active, so the index is not deletable and no run may start over it.
+	setJobState(t, pool, execution, "SUCCEEDED")
+	settling := mustFind(t, repo, "long")
+	if settling.RunStatus() != indexregistryapp.RunSettling || !settling.Active() {
+		t.Fatalf("a success not yet applied must be settling: %s", settling.RunStatus())
+	}
+	if _, err := repo.MarkDeleted(ctx, 1, 19, settling.IndexID); !errors.Is(err, indexregistryapp.ErrActiveRun) {
+		t.Fatalf("delete during settling = %v, want ErrActiveRun", err)
+	}
+	// ... until the grace runs out.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET settled_at = now() - interval '11 minutes' WHERE execution_id = $1`, execution); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustFind(t, repo, "long"); got.RunStatus() != indexregistryapp.RunAbandoned {
+		t.Fatalf("a success never applied within the grace = %s, want abandoned", got.RunStatus())
+	}
+
+	for terminal, status := range map[string]indexregistryapp.RunStatus{
+		"FAILED": indexregistryapp.RunEndedFailed, "QUARANTINED": indexregistryapp.RunEndedFailed,
+		"CANCELLED": indexregistryapp.RunEndedCancelled,
+	} {
 		setJobState(t, pool, execution, terminal)
 		got := mustFind(t, repo, "long")
-		if got.RunActive || !got.Abandoned() || got.State != indexregistryapp.StateInProgress {
-			t.Fatalf("job %s: the run must be dead and its row still in_progress: %+v", terminal, got)
+		if got.RunStatus() != status || !got.Dead() || got.State != indexregistryapp.StateInProgress {
+			t.Fatalf("job %s: status %s, want %s with the row still in_progress: %+v", terminal, got.RunStatus(), status, got)
 		}
 	}
 
-	// A dead run does not block the next one: it is recorded as abandoned.
+	// A stop (the job is CANCELLED, its cancel effect still queued) followed
+	// by an immediate reindex: the stopped run is recorded as cancelled.
+	setJobState(t, pool, execution, "CANCELLED")
 	second, err := admitRegistryRun(t, pool, repo, "long", "liveness-2", 2)
 	if err != nil {
 		t.Fatalf("starting a run after a dead one: %v", err)
 	}
 	next := mustFind(t, repo, "long")
-	if next.State != indexregistryapp.StateInProgress || *next.TaskID != second || !next.RunActive {
+	if next.State != indexregistryapp.StateInProgress || *next.TaskID != second || !next.Active() {
 		t.Fatalf("the new run is not the row's: %+v", next)
 	}
 	if len(next.History) < 3 {
 		t.Fatalf("history = %+v", next.History)
 	}
 	previous := next.History[len(next.History)-2]
-	if previous["state"] != "failed" || previous["error"] != "abandoned" || previous["execution_id"] != execution {
-		t.Fatalf("the dead run is not recorded as abandoned: %+v", previous)
+	if previous["state"] != "cancelled" || previous["task_id"] != nil || previous["execution_id"] != execution {
+		t.Fatalf("the stopped run is not recorded as cancelled: %+v", previous)
+	}
+	// The queued cancel effect of the stopped run lands now: it names the older
+	// index generation and is refused as superseded, changing nothing.
+	err = repo.ApplyRegistryTerminal(ctx, indexingapp.RegistryTerminal{ProjectID: 1, CurrentTerminalIndexMeta: indexingapp.CurrentTerminalIndexMeta{
+		MetaID: next.History[len(next.History)-2]["index_meta_id"].(string), ExecutionID: execution,
+		Generation: 1, IndexGeneration: 1, IndexName: "long", ToolkitID: 19,
+		State: indexingapp.CurrentIndexMetaCancelled, OccurredAt: time.Now().UTC(),
+	}})
+	if !errors.Is(err, indexingapp.ErrCurrentIndexMetaSuperseded) {
+		t.Fatalf("the late cancel effect = %v, want superseded", err)
+	}
+	if after := mustFind(t, repo, "long"); after.State != indexregistryapp.StateInProgress || *after.TaskID != second ||
+		after.History[len(after.History)-2]["state"] != "cancelled" {
+		t.Fatalf("the late cancel effect changed the row: %+v", after)
 	}
 
-	// ... and the dead run's index can be deleted.
+	// ... and a run whose job FAILED leaves its index deletable.
 	setJobState(t, pool, second, "FAILED")
 	if _, err := repo.MarkDeleted(ctx, 1, 19, next.IndexID); err != nil {
 		t.Fatalf("delete of a run whose job is terminal: %v", err)
+	}
+}
+
+// The list and the exact read carry the index's totals from
+// index_registry_documents; the row's own counts are the last run's.
+func TestIndexRegistryReadsCarryDocumentTotals(t *testing.T) {
+	repo, _ := newRegistryTestRepo(t)
+	ctx := context.Background()
+	if err := repo.InitializeRegistryRun(ctx, registryRun(1, "docs")); err != nil {
+		t.Fatal(err)
+	}
+	row := mustFind(t, repo, "docs")
+	if row.TotalDocuments != 0 || row.TotalChunks != 0 {
+		t.Fatalf("an empty index has totals %d/%d", row.TotalDocuments, row.TotalChunks)
+	}
+	if err := repo.UpsertDocuments(ctx, row.IndexID, []indexregistryapp.DocumentVersion{
+		{Key: "a.md", Version: "v1", ChunkCount: 3}, {Key: "b.md", Version: "v1", ChunkCount: 4},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// An incremental run that changed nothing reports zero for itself.
+	summary := registrySummary(8, "m")
+	summary.IndexedDocuments, summary.FailedChunks, summary.SkippedJSON = 0, 0, `{"unchanged":2}`
+	if _, err := repo.ApplyResult(ctx, 1, registryResult(1, "docs", summary)); err != nil {
+		t.Fatal(err)
+	}
+	found := mustFind(t, repo, "docs")
+	listed, err := repo.List(ctx, 1, 19)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list = %+v err=%v", listed, err)
+	}
+	for _, got := range []indexregistryapp.Row{found, listed[0]} {
+		if got.TotalDocuments != 2 || got.TotalChunks != 7 || got.Indexed != 0 {
+			t.Fatalf("totals %d/%d, run indexed %d; want 2/7 and 0", got.TotalDocuments, got.TotalChunks, got.Indexed)
+		}
+		metadata := indexregistryapp.Metadata(got)
+		if metadata["indexed"] != int64(2) || metadata["indexed_chunks"] != int64(7) {
+			t.Fatalf("metadata totals = %v / %v", metadata["indexed"], metadata["indexed_chunks"])
+		}
 	}
 }
 
@@ -542,6 +622,8 @@ func (d *flakyVectorDeleter) DeleteIndexVectors(_ context.Context, ns indexingap
 	}
 	return nil
 }
+
+func (*flakyVectorDeleter) Deferred() bool { return false }
 
 // The sweeper against the real table: a transient failure keeps the tombstone
 // and backs it off in the row; once due and successful, the tombstone and its
@@ -751,7 +833,7 @@ func TestIndexRegistryResultIsAppliedByTheOutputProjectionOnlyInRustMode(t *test
 			row := mustFind(t, registry, "docs")
 			if rust {
 				if row.State != indexregistryapp.StateCompleted || row.Dimension != 1536 || row.Indexed != 5 ||
-					row.Collection != "emb_text_embedding_3_small_1536" {
+					row.Collection != indexregistryapp.CollectionName("text-embedding-3-small", 1536) {
 					t.Fatalf("rust mode did not apply the result: %+v", row)
 				}
 			} else if row.State != indexregistryapp.StateInProgress || row.Stamped() {

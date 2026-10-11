@@ -15,7 +15,35 @@ import (
 // (apps/elitea-web/.../indexes/api/indexesApi.ts). The typed counts the Rust
 // runtime reports are added only once a run has reported them, so a row that
 // has never completed is indistinguishable from an index_meta row.
+//
+// The response shape has no separate "total" and "last run" keys, so the
+// existing keys are mapped as follows:
+//
+//   - `indexed` and `indexed_chunks` are the INDEX's totals: the number of
+//     documents recorded in index_registry_documents and the sum of their
+//     chunks (row.TotalDocuments, row.TotalChunks). An incremental run that
+//     changed nothing leaves them as they were.
+//   - `updated`, `failed_chunks` and `skipped` are the LAST run's counts.
+//   - every `history` entry carries its own run's counts (`indexed` is the
+//     documents that run wrote, `indexed_chunks` its chunks), and so does the
+//     run's notification.
 func Metadata(row Row) map[string]any {
+	metadata := runMetadata(row)
+	metadata["indexed"] = row.TotalDocuments
+	if row.Stamped() {
+		metadata["indexed_chunks"] = row.TotalChunks
+	}
+	history := make([]any, len(row.History))
+	for i, entry := range row.History {
+		history[i] = entry
+	}
+	metadata["history"] = history
+	return metadata
+}
+
+// runMetadata is the top level with the run's own counts and without the
+// history: what a history entry snapshots.
+func runMetadata(row Row) map[string]any {
 	metadata := map[string]any{
 		"collection":           row.Name,
 		"type":                 "index_meta",
@@ -44,11 +72,6 @@ func Metadata(row Row) map[string]any {
 		metadata["embedding_model"] = row.Model
 		metadata["embedding_dimension"] = row.Dimension
 	}
-	history := make([]any, len(row.History))
-	for i, entry := range row.History {
-		history[i] = entry
-	}
-	metadata["history"] = history
 	return metadata
 }
 
@@ -106,8 +129,7 @@ func currentRunCreatedOn(row Row) any {
 // repeats once per run and which made the list response grow linearly
 // (issue #297).
 func snapshot(row Row) map[string]any {
-	entry := Metadata(row)
-	delete(entry, "history")
+	entry := runMetadata(row)
 	if configuration, ok := entry["index_configuration"].(map[string]any); ok {
 		// Copied first: the map is the row's own, and the row keeps its
 		// chunking configuration.
@@ -179,18 +201,78 @@ func matchesRun(entry map[string]any, executionID string, generation int64) bool
 	return false
 }
 
-// abandonedReason is the history reason of a run that was still `in_progress`
-// when the next one started and whose execution job had already ended.
-const abandonedReason = "abandoned"
+// The history reasons of a run that was still `in_progress` when it was found
+// dead (see EndDeadRun).
+const (
+	// abandonedReason: its execution job is missing, or it SUCCEEDED and its
+	// result was never applied within SettlingGrace.
+	abandonedReason = "abandoned"
+	// executionFailedReason: its job FAILED or was QUARANTINED before its
+	// failed effect landed.
+	executionFailedReason = "execution_failed"
+)
+
+// Effective is the row as its run's outcome will record it. A row whose run
+// is dead (Dead: `in_progress`, its job over, its terminal effect not landed
+// yet) reads as that outcome; any other row reads as stored. The list, the
+// exact read and the scheduler read this, so a dead run never looks active.
+func (r Row) Effective() Row {
+	if !r.Dead() {
+		return r
+	}
+	return EndDeadRun(r)
+}
+
+// EndDeadRun records the outcome of a dead run, derived from its execution job
+// (RunStatus): a cancelled job is `cancelled` (as the queued cancel effect
+// would record it), a failed or quarantined one is `failed`, and a missing job
+// or a success whose result was never applied in time is `failed` with reason
+// "abandoned". A row whose run is not dead is returned unchanged.
+func EndDeadRun(row Row) Row {
+	if !row.Dead() {
+		return row
+	}
+	next := row.clone()
+	switch {
+	case !row.Job.SettledAt.IsZero():
+		next.UpdatedAt = row.Job.SettledAt.UTC()
+	case !row.ObservedAt.IsZero():
+		next.UpdatedAt = row.ObservedAt.UTC()
+	}
+	reason := ""
+	switch row.RunStatus() {
+	case RunEndedCancelled:
+		next.State = StateCancelled
+		next.TaskID = nil
+		next.Error = nil
+	case RunEndedFailed:
+		reason = executionFailedReason
+		next.State = StateFailed
+		next.Error = ptr("the indexing run failed")
+	default:
+		reason = abandonedReason
+		next.State = StateFailed
+		next.Error = ptr(abandonedReason)
+	}
+	finishRun(&next)
+	if reason != "" {
+		// finishRun replaced (or appended) the newest entry with a fresh map.
+		next.History[len(next.History)-1]["reason"] = reason
+	}
+	return next
+}
 
 // StartRun is the admission initializer's transition. existing is nil when the
 // index has no live row. It returns the row to store and whether anything
 // changed; a retry of the same admitted run changes nothing.
 //
 // A row `in_progress` refuses a new run only while its run is active (its
-// execution job is not terminal). When that job is terminal or missing the run
-// is dead: it is recorded in history as failed with reason "abandoned" and the
-// new run starts.
+// execution job is live, or SUCCEEDED with the result still being applied).
+// When the run is dead its outcome is recorded first (EndDeadRun: cancelled,
+// failed, or failed with reason "abandoned" when the job is missing) and the
+// new run starts. The queued terminal effect of that run, when it lands later,
+// names an older index generation and is refused as superseded, so it cannot
+// overwrite the new run.
 func StartRun(existing *Row, run indexingapp.RegistryInitialRun) (Row, bool, error) {
 	if err := run.Validate(); err != nil {
 		return Row{}, false, err
@@ -229,14 +311,7 @@ func StartRun(existing *Row, run indexingapp.RegistryInitialRun) (Row, bool, err
 		if stored.IndexGeneration == indexGeneration || !stored.CanStartNextRun() {
 			return Row{}, false, indexingapp.ErrCurrentIndexMetaConflict
 		}
-		next = stored.clone()
-		if stored.Abandoned() {
-			next.State = StateFailed
-			next.Error = ptr(abandonedReason)
-			next.UpdatedAt = admitted
-			finishRun(&next)
-			next.History[len(next.History)-1]["reason"] = abandonedReason
-		}
+		next = EndDeadRun(stored).clone()
 	}
 
 	next.State = StateInProgress
@@ -371,8 +446,7 @@ func stampsEmbedding(summary outputapp.IndexIngestSummary) bool {
 
 // CheckEmbedding returns the mismatch a result would be turned into a failure
 // for: it would stamp the index, the index is already stamped, and the two
-// differ. It reads nothing but its arguments, so the output projection can ask
-// it before it builds anything from the result.
+// differ. It reads nothing but its arguments.
 func CheckEmbedding(row Row, summary outputapp.IndexIngestSummary) *DimensionMismatchError {
 	if !stampsEmbedding(summary) || !row.Stamped() {
 		return nil
@@ -387,48 +461,87 @@ func CheckEmbedding(row Row, summary outputapp.IndexIngestSummary) *DimensionMis
 	}
 }
 
-// FailedSummary is the summary a mismatching result is replaced with, wherever
-// it is projected: the failure the registry records.
-func (e *DimensionMismatchError) FailedSummary() outputapp.IndexIngestSummary {
+// NoTypedSummaryReason is the failure of a rust-mode result that carries no
+// inline IndexIngestSummaryV1 (only an artifact). The Rust worker always sends
+// the typed summary; one without it cannot stamp, count or be trusted as a
+// success, so the registry records the run failed instead.
+const NoTypedSummaryReason = "the index result carries no typed summary"
+
+// failureSummary is a failed terminal summary with a safe message.
+func failureSummary(message string) outputapp.IndexIngestSummary {
 	return outputapp.IndexIngestSummary{
 		Status:        outputapp.IndexIngestStatusError,
-		Message:       e.Error(),
+		Message:       message,
 		TerminalState: outputapp.IndexIngestTerminalFailed,
 	}
 }
 
-// ApplyResult applies the typed result of a run that reached the output
-// projection. It returns the row to store, whether anything changed, and a
-// non-nil mismatch when the result was turned into a failure because its
-// embedding space differs from the stamp. A row not `in_progress` is returned
-// unchanged: a cancel or an earlier terminal transition has already won.
+// FailedSummary is the summary a mismatching result is recorded as.
+func (e *DimensionMismatchError) FailedSummary() outputapp.IndexIngestSummary {
+	return failureSummary(e.Error())
+}
+
+// RecordedSummary is what the registry records for a result reported against
+// this row, and what the user-facing surfaces (the notification, the
+// activity) describe: the worker's summary, or a failure when the result has
+// no typed summary (NoTypedSummaryReason) or names another embedding space
+// than the index was stamped with (DimensionMismatchError). overridden reports
+// the second case.
 //
-// The first result that indexed something (status ok or partly_indexed, at
-// least one chunk) stamps the model and dimension (ADR-0030 decision 2). A
-// later such result with another dimension, or another model, does not touch
-// the counts or the stamp: it fails the run with a message that says so. The
-// output projection asks CheckEmbedding first and hands the failure summary
-// here, so this path is the safety net for a caller that does not.
-func ApplyResult(row Row, result Result) (next Row, changed bool, mismatch *DimensionMismatchError, err error) {
-	summary := result.Summary
-	if err := summary.Validate(); err != nil || result.ExecutionID == "" || result.Generation == 0 ||
+// This is a BACKSTOP. The worker is told the expected embedding space in the
+// index command (IndexIngestCommandV1.expected_embedding_model/_dimension) and
+// must fail before writing a vector when it differs; a worker that ignores
+// that reaches this check. The output plane has no typed refusal that makes a
+// worker settle FAILED (only a cancellation or deadline winner can replace a
+// terminal frame), so the settlement, the stored projection and the replay
+// event keep the worker's own outcome while the registry and the notification
+// say failed. That inconsistency is deliberate and bounded to a misbehaving
+// worker.
+func RecordedSummary(row Row, summary outputapp.IndexIngestSummary) (recorded outputapp.IndexIngestSummary, overridden bool) {
+	if summary == (outputapp.IndexIngestSummary{}) {
+		return failureSummary(NoTypedSummaryReason), true
+	}
+	if mismatch := CheckEmbedding(row, summary); mismatch != nil {
+		return mismatch.FailedSummary(), true
+	}
+	return summary, false
+}
+
+// ApplyResult applies the typed result of a run that reached the output
+// projection. It returns the row to store and whether anything changed. A row
+// not `in_progress` is returned unchanged: a cancel or an earlier terminal
+// transition has already won.
+//
+// The result is recorded as RecordedSummary says: the first result that
+// indexed something (status ok or partly_indexed, at least one chunk) stamps
+// the model and dimension (ADR-0030 decision 2); a later one with another
+// dimension, or another model, touches neither the counts nor the stamp and
+// fails the run with a message that says so, and so does a result without a
+// typed summary.
+func ApplyResult(row Row, result Result) (next Row, changed bool, err error) {
+	if result.ExecutionID == "" || result.Generation == 0 ||
 		result.Generation > math.MaxInt64 || result.OccurredAt.IsZero() {
-		return Row{}, false, nil, indexingapp.ErrCurrentIndexMetaInitializationInvalid
+		return Row{}, false, indexingapp.ErrCurrentIndexMetaInitializationInvalid
+	}
+	if result.Summary != (outputapp.IndexIngestSummary{}) {
+		if err := result.Summary.Validate(); err != nil {
+			return Row{}, false, indexingapp.ErrCurrentIndexMetaInitializationInvalid
+		}
 	}
 	if row.ExecutionID != result.ExecutionID || row.ExecutionGeneration != int64(result.Generation) {
-		return Row{}, false, nil, indexingapp.ErrCurrentIndexMetaConflict
+		return Row{}, false, indexingapp.ErrCurrentIndexMetaConflict
 	}
 	if row.State != StateInProgress {
-		return row, false, nil, nil
+		return row, false, nil
 	}
+	summary, overridden := RecordedSummary(row, result.Summary)
 	next = row.clone()
 	next.UpdatedAt = result.OccurredAt.UTC()
-
-	if mismatch = CheckEmbedding(next, summary); mismatch != nil {
+	if overridden {
 		next.State = StateFailed
-		next.Error = ptr(mismatch.Error())
+		next.Error = ptr(summary.Message)
 		finishRun(&next)
-		return next, true, mismatch, nil
+		return next, true, nil
 	}
 	if stampsEmbedding(summary) && !next.Stamped() {
 		next.Model = summary.EmbeddingModel
@@ -458,7 +571,7 @@ func ApplyResult(row Row, result Result) (next Row, changed bool, mismatch *Dime
 		next.Error = nil
 	}
 	finishRun(&next)
-	return next, true, nil, nil
+	return next, true, nil
 }
 
 // VerifyManualStop checks the evidence the manual-Stop cleanup acts on: the

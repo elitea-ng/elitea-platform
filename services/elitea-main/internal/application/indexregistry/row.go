@@ -12,6 +12,8 @@
 package indexregistry
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"regexp"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // State is the closed set index_meta carries today. `scheduled_reindex` is a
@@ -94,11 +97,92 @@ type Row struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
-	// RunActive is read, never stored: it is true when the execution job the
-	// row names (TaskID, ExecutionGeneration) exists and is not terminal. It is
-	// the only liveness signal of a run (see Active). The repository fills it
-	// on every read; a Row built any other way is not active.
-	RunActive bool
+	// Job is the execution job the row names (TaskID's execution at
+	// ExecutionGeneration), read with the row and never stored. It is the only
+	// liveness signal of a run (see RunStatus). The repository fills it, and
+	// ObservedAt, on every read; a Row built any other way has no job.
+	Job RunJob
+	// ObservedAt is the database clock at the read, against which the settling
+	// grace (SettlingGrace) is measured.
+	ObservedAt time.Time
+
+	// TotalDocuments and TotalChunks are the index's totals: the number of
+	// index_registry_documents rows and the sum of their chunk_count. They are
+	// read by the list and exact reads only, and never stored on the row; the
+	// Indexed/Updated/Chunks/Failed columns above are the LAST run's counts.
+	TotalDocuments int64
+	TotalChunks    int64
+}
+
+// RunJob is the execution job of a row's run, as the repository read it.
+type RunJob struct {
+	// Found is false when no execution_jobs row has the row's fence.
+	Found        bool
+	State        executiondomain.JobState
+	DesiredState string // execution_jobs.desired_state: RUNNING, CANCELLED or DRAINING
+	// SettledAt is when the job reached its terminal state; zero when it has
+	// not, or when the job does not record it.
+	SettledAt time.Time
+}
+
+// SettlingGrace bounds how long a run whose job SUCCEEDED may stay
+// `in_progress` while its result is applied. Past it, the run is abandoned:
+// nothing will apply that result any more.
+const SettlingGrace = 10 * time.Minute
+
+const desiredCancelled = "CANCELLED"
+
+// RunStatus is the liveness of a row's run, derived from its execution job.
+type RunStatus string
+
+const (
+	// RunAtRest: the row is not `in_progress`; no run owns it.
+	RunAtRest RunStatus = "at_rest"
+	// RunLive: the job is not terminal.
+	RunLive RunStatus = "live"
+	// RunSettling: the job SUCCEEDED and its result has not been applied yet,
+	// within SettlingGrace of the job's terminal time.
+	RunSettling RunStatus = "settling"
+	// RunEndedCancelled: the job was cancelled (state CANCELLED, or a terminal
+	// failure while its desired state was CANCELLED); its cancelled effect has
+	// not landed on the row yet.
+	RunEndedCancelled RunStatus = "cancelled"
+	// RunEndedFailed: the job FAILED or was QUARANTINED; its failed effect has
+	// not landed on the row yet.
+	RunEndedFailed RunStatus = "failed"
+	// RunAbandoned: the job is missing, or it SUCCEEDED and its result was not
+	// applied within SettlingGrace.
+	RunAbandoned RunStatus = "abandoned"
+)
+
+// RunStatus derives the run's liveness from the job the row names. No
+// timestamp of the row itself is involved, so a healthy run that reports
+// rarely is never mistaken for a dead one.
+func (r Row) RunStatus() RunStatus {
+	if r.State != StateInProgress {
+		return RunAtRest
+	}
+	if !r.Job.Found {
+		return RunAbandoned
+	}
+	switch r.Job.State {
+	case executiondomain.JobSucceeded:
+		if !r.Job.SettledAt.IsZero() &&
+			(r.ObservedAt.IsZero() || r.ObservedAt.Before(r.Job.SettledAt.Add(SettlingGrace))) {
+			return RunSettling
+		}
+		return RunAbandoned
+	case executiondomain.JobCancelled:
+		return RunEndedCancelled
+	case executiondomain.JobFailed, executiondomain.JobQuarantined:
+		if r.Job.DesiredState == desiredCancelled {
+			return RunEndedCancelled
+		}
+		return RunEndedFailed
+	}
+	// PENDING, DISPATCHED, CLAIMED, RUNNING, SETTLING (and any state this
+	// code does not know, which is never treated as over).
+	return RunLive
 }
 
 // DocumentVersion is one indexed document's (document_key, version): the unit
@@ -134,14 +218,17 @@ type Tombstone struct {
 func (r Row) Stamped() bool { return r.Dimension != 0 }
 
 // Active reports whether a run owns the row right now: the row is `in_progress`
-// AND the execution job it names is not terminal. A row `in_progress` whose job
-// is terminal or missing is a dead run (its worker died or its result was never
-// applied), not an active one. No timestamp is involved, so a healthy run that
-// reports rarely is never mistaken for a dead one.
-func (r Row) Active() bool { return r.State == StateInProgress && r.RunActive }
+// AND its execution job is live, or SUCCEEDED with its result still being
+// applied (RunSettling). A row `in_progress` whose job ended otherwise is a
+// dead run, not an active one.
+func (r Row) Active() bool {
+	status := r.RunStatus()
+	return status == RunLive || status == RunSettling
+}
 
-// Abandoned reports an `in_progress` row whose run is dead.
-func (r Row) Abandoned() bool { return r.State == StateInProgress && !r.RunActive }
+// Dead reports an `in_progress` row whose run is over although the row has not
+// recorded it yet: its terminal effect is still queued, or its job is missing.
+func (r Row) Dead() bool { return r.State == StateInProgress && !r.Active() }
 
 // CanStartNextRun is index_meta's rule, with liveness from the job: a row at
 // rest may start its next generation, and so may a row whose run is dead. Only
@@ -195,19 +282,44 @@ func ptr(value string) *string { return &value }
 
 var collectionSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
 
-// CollectionName is ADR-0031 decision 2's `emb_<model-slug>_<dimension>`: one
-// vector collection per embedding space. The slug is the lower-cased model name
-// with every run of other characters replaced by one underscore, bounded so the
-// name stays well inside a collection-name limit.
+const (
+	// maxVectorSpaceSlugBytes is elitea-vector's model-slug limit
+	// (services/elitea-vector/src/layout.rs: ^[a-z0-9][a-z0-9-]{0,62}$).
+	maxVectorSpaceSlugBytes = 63
+	// collectionHashHex is how much of the model's SHA-256 the slug carries.
+	collectionHashHex = 12
+	// maxReadableSlugBytes leaves room for "-" and the hash.
+	maxReadableSlugBytes = maxVectorSpaceSlugBytes - 1 - collectionHashHex
+)
+
+// VectorSpaceSlug is the model slug of an embedding space as elitea-vector
+// accepts it (lower-case letters, digits and '-', at most 63 bytes, starting
+// with a letter or digit): a human-readable part, then '-' and the first 12 hex
+// digits of the SHA-256 of the EXACT model string. The readable part is the
+// lower-cased model with every run of other characters replaced by one '-',
+// truncated; it is for people. The hash is what makes the name lossless: two
+// models that differ in case, punctuation or only after the truncation point
+// still get different slugs.
+func VectorSpaceSlug(model string) string {
+	readable := strings.Trim(collectionSlugPattern.ReplaceAllString(strings.ToLower(model), "-"), "-")
+	if len(readable) > maxReadableSlugBytes {
+		readable = strings.TrimRight(readable[:maxReadableSlugBytes], "-")
+	}
+	if readable == "" {
+		readable = "model"
+	}
+	sum := sha256.Sum256([]byte(model))
+	return readable + "-" + hex.EncodeToString(sum[:])[:collectionHashHex]
+}
+
+// CollectionName is ADR-0031 decision 2's one vector collection per embedding
+// space, in elitea-vector's own form: `emb_<slug>_<dimension>`, where slug is
+// VectorSpaceSlug(model). For example "text-embedding-3-small" at 1536 is
+// `emb_text-embedding-3-small-<h>_1536`. elitea-vector parses the dimension
+// after the last '_' and validates the slug, so the name round-trips through
+// its Space::from_collection.
 func CollectionName(model string, dimension int32) string {
-	slug := strings.Trim(collectionSlugPattern.ReplaceAllString(strings.ToLower(model), "_"), "_")
-	if len(slug) > 48 {
-		slug = strings.Trim(slug[:48], "_")
-	}
-	if slug == "" {
-		slug = "model"
-	}
-	return "emb_" + slug + "_" + itoa(int64(dimension))
+	return "emb_" + VectorSpaceSlug(model) + "_" + itoa(int64(dimension))
 }
 
 func itoa(value int64) string { return strconv.FormatInt(value, 10) }

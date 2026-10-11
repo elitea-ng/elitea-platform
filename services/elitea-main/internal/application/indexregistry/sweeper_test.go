@@ -53,6 +53,20 @@ func (v *sweepVectors) DeleteIndexVectors(_ context.Context, ns indexingapp.Inde
 	return v.errs[ns.IndexID]
 }
 
+func (*sweepVectors) Deferred() bool { return false }
+
+// wrappedVectors decorates another deleter (as a metrics or logging wrapper
+// would) and forwards its capability.
+type wrappedVectors struct {
+	inner indexingapp.IndexVectorDeleter
+}
+
+func (w wrappedVectors) DeleteIndexVectors(ctx context.Context, ns indexingapp.IndexVectorNamespace) error {
+	return w.inner.DeleteIndexVectors(ctx, ns)
+}
+
+func (w wrappedVectors) Deferred() bool { return w.inner.Deferred() }
+
 func newSweeper(t *testing.T, store *sweepStore, vectors indexingapp.IndexVectorDeleter, reported *[]error) *TombstoneSweeper {
 	t.Helper()
 	sweeper, err := NewTombstoneSweeper(store, vectors, func(err error) { *reported = append(*reported, err) }, 10)
@@ -139,6 +153,38 @@ func TestSweeperWithTheDeferredDeleterDoesNoWork(t *testing.T) {
 	if err != nil || worked != 0 || store.claims != 0 || len(store.tombstones) != 1 ||
 		len(store.rescheduled) != 0 || len(store.purged) != 0 || len(reported) != 0 {
 		t.Fatalf("worked=%d claims=%d tombstones=%d rescheduled=%v err=%v", worked, store.claims, len(store.tombstones), store.rescheduled, err)
+	}
+}
+
+// Deferral is the deleter's own declared capability, not its concrete type: a
+// pointer to the placeholder and a wrapper around it are deferred too, and a
+// wrapper around a real deleter is not.
+func TestSweeperAsksTheDeleterWhetherItIsDeferred(t *testing.T) {
+	cases := map[string]struct {
+		vectors  indexingapp.IndexVectorDeleter
+		deferred bool
+	}{
+		"pointer to the placeholder":  {&indexingapp.DeferredIndexVectorDeleter{}, true},
+		"wrapped placeholder":         {wrappedVectors{indexingapp.DeferredIndexVectorDeleter{}}, true},
+		"wrapped pointer placeholder": {wrappedVectors{&indexingapp.DeferredIndexVectorDeleter{}}, true},
+		"real deleter":                {&sweepVectors{}, false},
+		"wrapped real deleter":        {wrappedVectors{&sweepVectors{}}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &sweepStore{tombstones: []Tombstone{{IndexID: "a"}}}
+			var reported []error
+			sweeper := newSweeper(t, store, tc.vectors, &reported)
+			if sweeper.Deferred() != tc.deferred {
+				t.Fatalf("Deferred() = %v, want %v", sweeper.Deferred(), tc.deferred)
+			}
+			if _, err := sweeper.RunOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if claimed := store.claims != 0; claimed == tc.deferred {
+				t.Fatalf("claims = %d with a deferred=%v deleter", store.claims, tc.deferred)
+			}
+		})
 	}
 }
 

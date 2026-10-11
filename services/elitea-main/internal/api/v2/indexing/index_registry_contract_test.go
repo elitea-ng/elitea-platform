@@ -21,9 +21,11 @@ import (
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
 	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 type registryMemoryStore struct {
@@ -119,7 +121,7 @@ func (s *registryMemoryStore) add(t *testing.T, project, toolkit int32, name str
 	row.IndexID = "00000000-0000-4000-8000-00000000000" + string(rune('0'+s.seq))
 	s.mu.Unlock()
 	if complete {
-		row, _, _, err = indexregistryapp.ApplyResult(row, indexregistryapp.Result{
+		row, _, err = indexregistryapp.ApplyResult(row, indexregistryapp.Result{
 			ExecutionID: run.ExecutionID, Generation: run.Generation, OccurredAt: time.Now().UTC(),
 			Summary: outputapp.IndexIngestSummary{
 				Status: outputapp.IndexIngestStatusOK, Message: "ok", TerminalState: outputapp.IndexIngestTerminalCompleted,
@@ -131,12 +133,23 @@ func (s *registryMemoryStore) add(t *testing.T, project, toolkit int32, name str
 		}
 	}
 	// The run's execution job is live until a test says otherwise (the real
-	// store reads this from execution_jobs).
-	row.RunActive = !complete
+	// store reads this from execution_jobs), and a completed run's documents
+	// are recorded (the real store sums index_registry_documents).
+	row.ObservedAt = time.Now().UTC()
+	if complete {
+		row.Job = indexregistryapp.RunJob{Found: true, State: executiondomain.JobSucceeded, DesiredState: "RUNNING", SettledAt: row.ObservedAt}
+		row.TotalDocuments, row.TotalChunks = 4, 12
+	} else {
+		row.Job = liveJob()
+	}
 	s.mu.Lock()
 	s.rows = append(s.rows, row)
 	s.mu.Unlock()
 	return row
+}
+
+func liveJob() indexregistryapp.RunJob {
+	return indexregistryapp.RunJob{Found: true, State: executiondomain.JobRunning, DesiredState: "RUNNING"}
 }
 
 type registryToolkits struct{ missing bool }
@@ -165,6 +178,8 @@ func (v *registryVectors) DeleteIndexVectors(_ context.Context, ns indexingapp.I
 	v.deleted = append(v.deleted, ns)
 	return v.err
 }
+
+func (*registryVectors) Deferred() bool { return false }
 
 type registryFixture struct {
 	store     *registryMemoryStore
@@ -351,23 +366,68 @@ func TestRegistryIndexListOfAnEmptyToolkitIsAnEmptyArrayNotNull(t *testing.T) {
 	}
 }
 
-// A run is alive exactly while its execution job is: a dead run is flagged
-// stale and keeps its state, however recently it last wrote.
-func TestRegistryIndexListFlagsARunWhoseJobEndedWithoutChangingItsState(t *testing.T) {
+// A run is alive exactly while its execution job is. A dead run (its job over,
+// its terminal effect not landed yet, or its job missing) is listed with the
+// outcome its job reached and flagged stale, however recently it last wrote.
+func TestRegistryIndexListShowsADeadRunWithTheOutcomeItsJobReached(t *testing.T) {
+	cases := []struct {
+		name  string
+		job   indexregistryapp.RunJob
+		state string
+		error any
+	}{
+		{"cancelled", indexregistryapp.RunJob{Found: true, State: executiondomain.JobCancelled, DesiredState: "CANCELLED", SettledAt: time.Now()}, "cancelled", nil},
+		{"failed", indexregistryapp.RunJob{Found: true, State: executiondomain.JobFailed, DesiredState: "RUNNING", SettledAt: time.Now()}, "failed", "the indexing run failed"},
+		{"missing", indexregistryapp.RunJob{}, "failed", "abandoned"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRegistryFixture(t, registryToolkits{})
+			row := f.store.add(t, 7, 9, "old", 1, false)
+			f.store.rows[0].Job = tc.job
+			response := f.do(http.MethodGet, listPath, "")
+			var list []struct {
+				ID       string         `json:"id"`
+				Metadata map[string]any `json:"metadata"`
+				Stale    bool           `json:"stale"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil || len(list) != 1 || list[0].ID != row.IndexID {
+				t.Fatalf("body=%s err=%v", response.Body, err)
+			}
+			if !list[0].Stale || list[0].Metadata["state"] != tc.state || list[0].Metadata["error"] != tc.error {
+				t.Fatalf("stale=%v state=%v error=%v", list[0].Stale, list[0].Metadata["state"], list[0].Metadata["error"])
+			}
+		})
+	}
+}
+
+// The scheduler skips an index whose state is `in_progress`. It reads the
+// exact index through FindSnapshot, which must give the effective state: a
+// dead run lets the schedule start the next one.
+func TestRegistryExactReadGivesTheSchedulerTheEffectiveState(t *testing.T) {
 	f := newRegistryFixture(t, registryToolkits{})
-	row := f.store.add(t, 7, 9, "old", 1, false)
-	f.store.rows[0].RunActive = false
-	response := f.do(http.MethodGet, listPath, "")
-	var list []struct {
-		ID       string         `json:"id"`
-		Metadata map[string]any `json:"metadata"`
-		Stale    bool           `json:"stale"`
+	f.store.add(t, 7, 9, "nightly", 1, false)
+	request := indexmetaapp.Request{ProjectID: 7, ActorUserID: 11, ToolkitID: 9}
+	toolkit := indexingapp.CurrentToolkitSnapshot{ID: 9, Type: "github", Settings: map[string]any{}}
+	read := func() string {
+		t.Helper()
+		item, found, err := f.service.FindSnapshot(context.Background(), request, "nightly", toolkit)
+		if err != nil || !found {
+			t.Fatalf("found=%v err=%v", found, err)
+		}
+		state, _ := item.Metadata["state"].(string)
+		return state
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil || len(list) != 1 || list[0].ID != row.IndexID {
-		t.Fatalf("body=%s err=%v", response.Body, err)
+	if got := read(); got != "in_progress" {
+		t.Fatalf("a live run reads %q, want in_progress (the schedule must wait)", got)
 	}
-	if !list[0].Stale || list[0].Metadata["state"] != "in_progress" {
-		t.Fatalf("stale=%v state=%v", list[0].Stale, list[0].Metadata["state"])
+	f.store.rows[0].Job = indexregistryapp.RunJob{} // the job is missing
+	if got := read(); got == "in_progress" {
+		t.Fatal("a dead in_progress row still blocks the schedule")
+	}
+	f.store.rows[0].Job = indexregistryapp.RunJob{Found: true, State: executiondomain.JobCancelled, DesiredState: "CANCELLED", SettledAt: time.Now()}
+	if got := read(); got != "cancelled" {
+		t.Fatalf("a cancelled job's run reads %q, want cancelled", got)
 	}
 }
 
@@ -478,9 +538,27 @@ func TestRegistryIndexDeleteRefusesALongHealthyRunButClearsADeadOne(t *testing.T
 	if got := f.do(http.MethodDelete, listPath+"/"+long.IndexID, "").Code; got != http.StatusConflict {
 		t.Fatalf("a healthy run with an old updated_at: status = %d, want 409", got)
 	}
-	f.store.rows[0].RunActive = false // its job ended, or is missing
+	f.store.rows[0].Job = indexregistryapp.RunJob{} // its job is missing
 	if got := f.do(http.MethodDelete, listPath+"/"+long.IndexID, "").Code; got != http.StatusOK {
 		t.Fatalf("a run whose job ended: status = %d, want 200", got)
+	}
+}
+
+// A run whose job SUCCEEDED is still applying its result: deleting the index
+// now would race that write, so it is refused until the result lands (or the
+// settling grace runs out, after which the run is abandoned).
+func TestRegistryIndexDeleteRefusesARunThatIsSettling(t *testing.T) {
+	f := newRegistryFixture(t, registryToolkits{})
+	row := f.store.add(t, 7, 9, "settling", 1, false)
+	now := time.Now().UTC()
+	f.store.rows[0].Job = indexregistryapp.RunJob{Found: true, State: executiondomain.JobSucceeded, DesiredState: "RUNNING", SettledAt: now}
+	f.store.rows[0].ObservedAt = now.Add(time.Minute)
+	if got := f.do(http.MethodDelete, listPath+"/"+row.IndexID, "").Code; got != http.StatusConflict {
+		t.Fatalf("delete during settling: status = %d, want 409", got)
+	}
+	f.store.rows[0].ObservedAt = now.Add(indexregistryapp.SettlingGrace + time.Second)
+	if got := f.do(http.MethodDelete, listPath+"/"+row.IndexID, "").Code; got != http.StatusOK {
+		t.Fatalf("delete after the settling grace: status = %d, want 200", got)
 	}
 }
 

@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,29 +51,51 @@ func NewIndexRegistryRepository(pool *pgxpool.Pool) (*IndexRegistryRepository, e
 	return &IndexRegistryRepository{pool: pool}, nil
 }
 
-// indexRegistryRunActive is the liveness of a run: the execution job the row
-// names (task_id, execution_generation) exists and is not terminal. It is the
-// only definition of "active"; nothing compares updated_at.
-var indexRegistryRunActive = func() string {
-	states := make([]string, 0, 5)
-	for _, state := range executiondomain.NonTerminalJobStates() {
-		states = append(states, "'"+string(state)+"'")
-	}
-	return `EXISTS (
-        SELECT 1 FROM elitea_runtime.execution_jobs AS job
-        WHERE job.execution_id = index_registry.task_id
-          AND job.generation = index_registry.execution_generation
-          AND job.state IN (` + strings.Join(states, ", ") + `))`
-}()
+// indexRegistryRunJob reads the execution job the row names (execution_id at
+// execution_generation): its state, desired state and terminal time, plus the
+// database clock. They are the only liveness inputs (indexregistry.RunStatus);
+// nothing compares updated_at.
+const indexRegistryRunJob = `
+    run_job.state, run_job.desired_state, run_job.settled_at, clock_timestamp()`
 
-var indexRegistryColumns = `
-    index_id::text, project_id, toolkit_id, name, state, task_id, error, conversation_id,
-    history, index_configuration,
-    indexed_documents, updated_documents, indexed_chunks, failed_chunks, skipped,
-    embedding_model, embedding_dimension, collection,
-    execution_id, execution_generation, index_generation, meta_id, correlation_id,
-    created_at, updated_at,
-    ` + indexRegistryRunActive + ` AS run_active`
+const indexRegistryRunJobJoin = `
+LEFT JOIN LATERAL (
+    SELECT job.state, job.desired_state, job.settled_at
+    FROM elitea_runtime.execution_jobs AS job
+    WHERE job.execution_id = index_registry.execution_id
+      AND job.generation = index_registry.execution_generation
+) AS run_job ON true`
+
+const indexRegistryBaseColumns = `
+    index_registry.index_id::text, index_registry.project_id, index_registry.toolkit_id,
+    index_registry.name, index_registry.state, index_registry.task_id, index_registry.error,
+    index_registry.conversation_id, index_registry.history, index_registry.index_configuration,
+    index_registry.indexed_documents, index_registry.updated_documents,
+    index_registry.indexed_chunks, index_registry.failed_chunks, index_registry.skipped,
+    index_registry.embedding_model, index_registry.embedding_dimension, index_registry.collection,
+    index_registry.execution_id, index_registry.execution_generation, index_registry.index_generation,
+    index_registry.meta_id, index_registry.correlation_id,
+    index_registry.created_at, index_registry.updated_at,`
+
+// indexRegistrySelect selects one row with its run job for an update.
+// FOR UPDATE OF locks the registry row only, never the job.
+const indexRegistrySelect = `
+SELECT ` + indexRegistryBaseColumns + indexRegistryRunJob + `,
+    0::bigint, 0::bigint
+FROM elitea_runtime.index_registry` + indexRegistryRunJobJoin
+
+// indexRegistryReadSelect is the list and exact read: it adds the index's
+// totals from index_registry_documents (indexregistry.Metadata).
+const indexRegistryReadSelect = `
+SELECT ` + indexRegistryBaseColumns + indexRegistryRunJob + `,
+    documents.total_documents, documents.total_chunks
+FROM elitea_runtime.index_registry` + indexRegistryRunJobJoin + `
+CROSS JOIN LATERAL (
+    SELECT count(*)::bigint AS total_documents,
+           COALESCE(sum(document.chunk_count), 0)::bigint AS total_chunks
+    FROM elitea_runtime.index_registry_documents AS document
+    WHERE document.index_id = index_registry.index_id
+) AS documents`
 
 func scanIndexRegistryRow(row sqlRow) (indexregistryapp.Row, error) {
 	var (
@@ -83,6 +105,8 @@ func scanIndexRegistryRow(row sqlRow) (indexregistryapp.Row, error) {
 		model, collection, executionID, metaID, correlID *string
 		dimension                                        *int32
 		executionGeneration                              *int64
+		jobState, jobDesired                             *string
+		jobSettledAt                                     *time.Time
 	)
 	if err := row.Scan(
 		&out.IndexID, &out.ProjectID, &out.ToolkitID, &out.Name, &state, &out.TaskID, &out.Error, &out.ConvID,
@@ -90,9 +114,20 @@ func scanIndexRegistryRow(row sqlRow) (indexregistryapp.Row, error) {
 		&out.Indexed, &out.Updated, &out.Chunks, &out.Failed, &skipped,
 		&model, &dimension, &collection,
 		&executionID, &executionGeneration, &out.IndexGeneration, &metaID, &correlID,
-		&out.CreatedAt, &out.UpdatedAt, &out.RunActive,
+		&out.CreatedAt, &out.UpdatedAt,
+		&jobState, &jobDesired, &jobSettledAt, &out.ObservedAt,
+		&out.TotalDocuments, &out.TotalChunks,
 	); err != nil {
 		return indexregistryapp.Row{}, err
+	}
+	if jobState != nil {
+		out.Job = indexregistryapp.RunJob{Found: true, State: executiondomain.JobState(*jobState)}
+		if jobDesired != nil {
+			out.Job.DesiredState = *jobDesired
+		}
+		if jobSettledAt != nil {
+			out.Job.SettledAt = jobSettledAt.UTC()
+		}
 	}
 	out.State = indexregistryapp.State(state)
 	if !out.State.Valid() {
@@ -155,29 +190,55 @@ func nullIfEmpty(value string) *string {
 	return &value
 }
 
+// encodedIndexRegistryRow is a row as the SQL parameters both the insert and
+// the update bind.
+type encodedIndexRegistryRow struct {
+	history, configuration, skipped []byte
+	model, collection               *string
+	dimension                       *int32
+	executionID                     *string
+	executionGeneration             *int64
+	metaID, correlationID           *string
+}
+
+// encodeIndexRegistryRow is the one encoding of a row's stored columns.
+func encodeIndexRegistryRow(row indexregistryapp.Row) (encodedIndexRegistryRow, error) {
+	var (
+		encoded encodedIndexRegistryRow
+		err     error
+	)
+	if encoded.history, err = json.Marshal(row.History); err != nil {
+		return encodedIndexRegistryRow{}, fmt.Errorf("encode index registry history: %w", err)
+	}
+	if encoded.configuration, err = json.Marshal(row.IndexConf); err != nil {
+		return encodedIndexRegistryRow{}, fmt.Errorf("encode index registry configuration: %w", err)
+	}
+	if encoded.skipped, err = json.Marshal(row.Skipped); err != nil {
+		return encodedIndexRegistryRow{}, fmt.Errorf("encode index registry skips: %w", err)
+	}
+	if row.Dimension != 0 {
+		dimension := row.Dimension
+		encoded.dimension = &dimension
+	}
+	if row.ExecutionID != "" {
+		generation := row.ExecutionGeneration
+		encoded.executionGeneration = &generation
+	}
+	encoded.model = nullIfEmpty(row.Model)
+	encoded.collection = nullIfEmpty(row.Collection)
+	encoded.executionID = nullIfEmpty(row.ExecutionID)
+	encoded.metaID = nullIfEmpty(row.MetaID)
+	encoded.correlationID = nullIfEmpty(row.CorrelationID)
+	return encoded, nil
+}
+
 // updateIndexRegistryRow stores every mutable column of a row the caller holds
 // locked. The identity (index id, project, toolkit, name) and created_at never
 // change.
 func updateIndexRegistryRow(ctx context.Context, q sqlExecutor, row indexregistryapp.Row) error {
-	history, err := json.Marshal(row.History)
+	encoded, err := encodeIndexRegistryRow(row)
 	if err != nil {
-		return fmt.Errorf("encode index registry history: %w", err)
-	}
-	configuration, err := json.Marshal(row.IndexConf)
-	if err != nil {
-		return fmt.Errorf("encode index registry configuration: %w", err)
-	}
-	skipped, err := json.Marshal(row.Skipped)
-	if err != nil {
-		return fmt.Errorf("encode index registry skips: %w", err)
-	}
-	var dimension *int32
-	if row.Dimension != 0 {
-		dimension = &row.Dimension
-	}
-	var executionGeneration *int64
-	if row.ExecutionID != "" {
-		executionGeneration = &row.ExecutionGeneration
+		return err
 	}
 	tag, err := q.Exec(ctx, `
 UPDATE elitea_runtime.index_registry SET
@@ -191,12 +252,12 @@ UPDATE elitea_runtime.index_registry SET
 WHERE index_id = $1::uuid`,
 		row.IndexID,
 		string(row.State), row.TaskID, row.Error, row.ConvID,
-		history, configuration,
+		encoded.history, encoded.configuration,
 		row.Indexed, row.Updated, row.Chunks, row.Failed,
-		skipped,
-		nullIfEmpty(row.Model), dimension, nullIfEmpty(row.Collection),
-		nullIfEmpty(row.ExecutionID), executionGeneration, row.IndexGeneration,
-		nullIfEmpty(row.MetaID), nullIfEmpty(row.CorrelationID), row.UpdatedAt,
+		encoded.skipped,
+		encoded.model, encoded.dimension, encoded.collection,
+		encoded.executionID, encoded.executionGeneration, row.IndexGeneration,
+		encoded.metaID, encoded.correlationID, row.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("update index registry row: %w", err)
@@ -208,25 +269,9 @@ WHERE index_id = $1::uuid`,
 }
 
 func insertIndexRegistryRow(ctx context.Context, q sqlExecutor, row indexregistryapp.Row) (string, error) {
-	history, err := json.Marshal(row.History)
+	encoded, err := encodeIndexRegistryRow(row)
 	if err != nil {
-		return "", fmt.Errorf("encode index registry history: %w", err)
-	}
-	configuration, err := json.Marshal(row.IndexConf)
-	if err != nil {
-		return "", fmt.Errorf("encode index registry configuration: %w", err)
-	}
-	skipped, err := json.Marshal(row.Skipped)
-	if err != nil {
-		return "", fmt.Errorf("encode index registry skips: %w", err)
-	}
-	var dimension *int32
-	if row.Dimension != 0 {
-		dimension = &row.Dimension
-	}
-	var executionGeneration *int64
-	if row.ExecutionID != "" {
-		executionGeneration = &row.ExecutionGeneration
+		return "", err
 	}
 	var indexID string
 	err = q.QueryRow(ctx, `
@@ -246,11 +291,11 @@ INSERT INTO elitea_runtime.index_registry (
     $23, $23
 ) RETURNING index_id::text`,
 		row.ProjectID, row.ToolkitID, row.Name, string(row.State), row.TaskID, row.Error, row.ConvID,
-		history, configuration,
-		row.Indexed, row.Updated, row.Chunks, row.Failed, skipped,
-		nullIfEmpty(row.Model), dimension, nullIfEmpty(row.Collection),
-		nullIfEmpty(row.ExecutionID), executionGeneration, row.IndexGeneration,
-		nullIfEmpty(row.MetaID), nullIfEmpty(row.CorrelationID),
+		encoded.history, encoded.configuration,
+		row.Indexed, row.Updated, row.Chunks, row.Failed, encoded.skipped,
+		encoded.model, encoded.dimension, encoded.collection,
+		encoded.executionID, encoded.executionGeneration, row.IndexGeneration,
+		encoded.metaID, encoded.correlationID,
 		row.CreatedAt,
 	).Scan(&indexID)
 	if err != nil {
@@ -266,11 +311,10 @@ func lockLiveRegistryRowByName(
 	projectID, toolkitID int32,
 	name string,
 ) (indexregistryapp.Row, bool, error) {
-	row, err := scanIndexRegistryRow(q.QueryRow(ctx, `
-SELECT `+indexRegistryColumns+`
-FROM elitea_runtime.index_registry
-WHERE project_id = $1 AND toolkit_id = $2 AND name = $3 AND deleted_at IS NULL
-FOR UPDATE`, projectID, toolkitID, name))
+	row, err := scanIndexRegistryRow(q.QueryRow(ctx, indexRegistrySelect+`
+WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
+  AND index_registry.name = $3 AND index_registry.deleted_at IS NULL
+FOR UPDATE OF index_registry`, projectID, toolkitID, name))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return indexregistryapp.Row{}, false, nil
 	}
@@ -451,82 +495,66 @@ func (r *IndexRegistryRepository) VerifyRegistryManualStop(
 	return indexID, err
 }
 
-// RegistryResultOutcome reports what ApplyIndexResult did.
+// RegistryResultOutcome reports what ApplyResult did.
 type RegistryResultOutcome struct {
 	// Applied is false when there was nothing to apply: no live row for the
 	// run (a deleted index, or a run admitted before the deployment switched
 	// runtimes), or a row already at rest.
 	Applied bool
-	// Mismatch is set when the result named another embedding space than the
-	// index was stamped with and was turned into a failure.
-	Mismatch *indexregistryapp.DimensionMismatchError
+	// Recorded is the summary the registry recorded (indexregistry.
+	// RecordedSummary), and Overridden reports that it is a failure the worker
+	// did not report: no typed summary, or another embedding space.
+	Recorded   outputapp.IndexIngestSummary
+	Overridden bool
 }
 
-// ApplyIndexResult applies a run's typed terminal result inside the caller's
-// transaction. The output projection calls it in the transaction that settles
-// the run, so the registry and the settlement cannot disagree after a crash.
+// LockIndexResultRow takes the row lock of the live registry row of one run,
+// the ONE locked read of a result's transaction: the caller decides what to
+// record from the returned row (indexregistry.RecordedSummary) and hands the
+// same row to ApplyIndexResult. found is false when no live row names the run.
+func LockIndexResultRow(
+	ctx context.Context,
+	q sqlExecutor,
+	projectID int32,
+	executionID string,
+	generation uint64,
+) (row indexregistryapp.Row, found bool, err error) {
+	row, err = scanIndexRegistryRow(q.QueryRow(ctx, indexRegistrySelect+`
+WHERE index_registry.project_id = $1 AND index_registry.execution_id = $2
+  AND index_registry.execution_generation = $3 AND index_registry.deleted_at IS NULL
+FOR UPDATE OF index_registry`, projectID, executionID, int64(generation)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return indexregistryapp.Row{}, false, nil
+	}
+	if err != nil {
+		return indexregistryapp.Row{}, false, fmt.Errorf("load index registry row for result: %w", err)
+	}
+	return row, true, nil
+}
+
+// ApplyIndexResult applies a run's typed terminal result to the row the caller
+// locked with LockIndexResultRow in the same transaction. The output
+// projection calls it in the transaction that projects the run's terminal
+// output, so the registry and the projection cannot disagree after a crash.
 func ApplyIndexResult(
 	ctx context.Context,
 	q sqlExecutor,
-	projectID int32,
+	row indexregistryapp.Row,
 	result indexregistryapp.Result,
-) (RegistryResultOutcome, error) {
-	row, err := scanIndexRegistryRow(q.QueryRow(ctx, `
-SELECT `+indexRegistryColumns+`
-FROM elitea_runtime.index_registry
-WHERE project_id = $1 AND execution_id = $2 AND execution_generation = $3 AND deleted_at IS NULL
-FOR UPDATE`, projectID, result.ExecutionID, int64(result.Generation)))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return RegistryResultOutcome{}, nil
-	}
-	if err != nil {
-		return RegistryResultOutcome{}, fmt.Errorf("load index registry row for result: %w", err)
-	}
-	next, changed, mismatch, err := indexregistryapp.ApplyResult(row, result)
-	if err != nil {
-		return RegistryResultOutcome{}, err
-	}
-	if !changed {
-		return RegistryResultOutcome{}, nil
+) (applied bool, err error) {
+	next, changed, err := indexregistryapp.ApplyResult(row, result)
+	if err != nil || !changed {
+		return false, err
 	}
 	if err := updateIndexRegistryRow(ctx, q, next); err != nil {
-		return RegistryResultOutcome{}, err
+		return false, err
 	}
-	return RegistryResultOutcome{Applied: true, Mismatch: mismatch}, nil
+	return true, nil
 }
 
-// PreviewIndexResultEmbedding is the embedding check of ApplyIndexResult,
-// without writing: the mismatch the run's row would turn this result into, or
-// nil. The output projection calls it in the projecting transaction BEFORE it
-// builds anything from the result, so the settlement, the replay event, the
-// notification and the registry all start from one effective summary. It locks
-// the row (FOR UPDATE, as ApplyIndexResult does), so the row cannot change
-// between the check and the write that follows in the same transaction.
-func PreviewIndexResultEmbedding(
-	ctx context.Context,
-	q sqlExecutor,
-	projectID int32,
-	result indexregistryapp.Result,
-) (*indexregistryapp.DimensionMismatchError, error) {
-	row, err := scanIndexRegistryRow(q.QueryRow(ctx, `
-SELECT `+indexRegistryColumns+`
-FROM elitea_runtime.index_registry
-WHERE project_id = $1 AND execution_id = $2 AND execution_generation = $3 AND deleted_at IS NULL
-FOR UPDATE`, projectID, result.ExecutionID, int64(result.Generation)))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load index registry row for result: %w", err)
-	}
-	if row.State != indexregistryapp.StateInProgress {
-		return nil, nil
-	}
-	return indexregistryapp.CheckEmbedding(row, result.Summary), nil
-}
-
-// ApplyResult is ApplyIndexResult in its own transaction. The output
-// projection does not use it; tests and a future result replay do.
+// ApplyResult is LockIndexResultRow and ApplyIndexResult in their own
+// transaction. The output projection does not use it; tests and a future
+// result replay do.
 func (r *IndexRegistryRepository) ApplyResult(
 	ctx context.Context,
 	projectID int32,
@@ -534,8 +562,12 @@ func (r *IndexRegistryRepository) ApplyResult(
 ) (RegistryResultOutcome, error) {
 	var outcome RegistryResultOutcome
 	err := r.withinTx(ctx, func(q sqlExecutor) error {
-		var err error
-		outcome, err = ApplyIndexResult(ctx, q, projectID, result)
+		row, found, err := LockIndexResultRow(ctx, q, projectID, result.ExecutionID, result.Generation)
+		if err != nil || !found || row.State != indexregistryapp.StateInProgress {
+			return err
+		}
+		outcome.Recorded, outcome.Overridden = indexregistryapp.RecordedSummary(row, result.Summary)
+		outcome.Applied, err = ApplyIndexResult(ctx, q, row, result)
 		return err
 	})
 	return outcome, err
@@ -570,11 +602,10 @@ func (r *IndexRegistryRepository) RecordScheduledFailure(
 
 // List implements indexregistry.Store.
 func (r *IndexRegistryRepository) List(ctx context.Context, projectID, toolkitID int32) ([]indexregistryapp.Row, error) {
-	rows, err := r.pool.Query(ctx, `
-SELECT `+indexRegistryColumns+`
-FROM elitea_runtime.index_registry
-WHERE project_id = $1 AND toolkit_id = $2 AND deleted_at IS NULL
-ORDER BY created_at, index_id
+	rows, err := r.pool.Query(ctx, indexRegistryReadSelect+`
+WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
+  AND index_registry.deleted_at IS NULL
+ORDER BY index_registry.created_at, index_registry.index_id
 LIMIT 10001`, projectID, toolkitID)
 	if err != nil {
 		return nil, fmt.Errorf("list index registry: %w", err)
@@ -600,10 +631,9 @@ func (r *IndexRegistryRepository) FindByName(
 	projectID, toolkitID int32,
 	name string,
 ) (indexregistryapp.Row, bool, error) {
-	row, err := scanIndexRegistryRow(r.pool.QueryRow(ctx, `
-SELECT `+indexRegistryColumns+`
-FROM elitea_runtime.index_registry
-WHERE project_id = $1 AND toolkit_id = $2 AND name = $3 AND deleted_at IS NULL`,
+	row, err := scanIndexRegistryRow(r.pool.QueryRow(ctx, indexRegistryReadSelect+`
+WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
+  AND index_registry.name = $3 AND index_registry.deleted_at IS NULL`,
 		projectID, toolkitID, name))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return indexregistryapp.Row{}, false, nil
@@ -645,11 +675,10 @@ func (r *IndexRegistryRepository) MarkDeleted(
 ) (indexregistryapp.Row, error) {
 	var deleted indexregistryapp.Row
 	err := r.withinTx(ctx, func(q sqlExecutor) error {
-		row, err := scanIndexRegistryRow(q.QueryRow(ctx, `
-SELECT `+indexRegistryColumns+`
-FROM elitea_runtime.index_registry
-WHERE index_id = $1::uuid AND project_id = $2 AND toolkit_id = $3 AND deleted_at IS NULL
-FOR UPDATE`, indexID, projectID, toolkitID))
+		row, err := scanIndexRegistryRow(q.QueryRow(ctx, indexRegistrySelect+`
+WHERE index_registry.index_id = $1::uuid AND index_registry.project_id = $2
+  AND index_registry.toolkit_id = $3 AND index_registry.deleted_at IS NULL
+FOR UPDATE OF index_registry`, indexID, projectID, toolkitID))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return indexregistryapp.ErrNotFound
 		}

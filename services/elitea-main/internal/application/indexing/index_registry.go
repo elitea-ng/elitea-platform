@@ -249,6 +249,11 @@ var ErrIndexVectorDeletionDeferred = errors.New("index vector deletion is deferr
 // idempotent: the sweeper calls it again for a tombstone it still holds.
 type IndexVectorDeleter interface {
 	DeleteIndexVectors(context.Context, IndexVectorNamespace) error
+	// Deferred reports that this deleter can never delete anything (no vector
+	// store client exists): every call returns ErrIndexVectorDeletionDeferred.
+	// The tombstone sweeper then idles instead of polling. A real deleter
+	// returns false; a wrapper forwards its inner deleter's answer.
+	Deferred() bool
 }
 
 // DeferredIndexVectorDeleter is the installed hook while no vector store client
@@ -258,6 +263,9 @@ type DeferredIndexVectorDeleter struct{}
 func (DeferredIndexVectorDeleter) DeleteIndexVectors(context.Context, IndexVectorNamespace) error {
 	return ErrIndexVectorDeletionDeferred
 }
+
+// Deferred is always true: this deleter never deletes.
+func (DeferredIndexVectorDeleter) Deferred() bool { return true }
 
 // RegistryManualStop is the immutable evidence of a manual Stop.
 type RegistryManualStop struct {

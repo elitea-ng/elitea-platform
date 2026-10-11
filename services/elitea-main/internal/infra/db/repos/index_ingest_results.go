@@ -73,176 +73,61 @@ func (r *IndexIngestResultsRepository) WithIndexRegistry() *IndexIngestResultsRe
 	return r
 }
 
-// registryResultSummary is the summary the registry applies. A result carried
-// by an artifact has no counts; it still completes the run.
-func registryResultSummary(result outputapp.IndexIngestResult) outputapp.IndexIngestSummary {
-	if result.ResultSummary != (outputapp.IndexIngestSummary{}) {
-		return result.ResultSummary
-	}
-	return outputapp.IndexIngestSummary{
-		Status:        outputapp.IndexIngestStatusOK,
-		Message:       "Indexing completed successfully.",
-		TerminalState: outputapp.IndexIngestTerminalCompleted,
-	}
-}
-
-// effectiveIndexOutput is the one version of a result everything downstream is
-// built from.
-type effectiveIndexOutput struct {
-	// record carries the settlement proposal that will be stored.
-	record outputRecord
-	// result carries the summary the projection, the notification and the
-	// activity describe.
-	result outputapp.IndexIngestResult
-	// browserData is the replay event.
-	browserData []byte
-}
-
-// effectiveIndexOutput runs the registry's embedding check BEFORE anything is
-// built from the result, inside the projecting transaction. When the result
-// would stamp an index that already has another embedding space, the result is
-// a failure: the summary becomes the failure summary, the settlement proposal
-// becomes FAILED, and the replay event says failed. The registry write, the
-// projection row, the notification and the activity all start from the
-// returned value, so none of them can describe the run as succeeded while
-// another says failed. Without the registry (python mode) it returns its
-// arguments.
-func (r *IndexIngestResultsRepository) effectiveIndexOutput(
-	ctx context.Context,
-	tx sqlExecutor,
-	record outputRecord,
-	result outputapp.IndexIngestResult,
-	browserData []byte,
-) (effectiveIndexOutput, error) {
-	effective := effectiveIndexOutput{record: record, result: result, browserData: browserData}
-	if !r.registry || result.ResultSummary == (outputapp.IndexIngestSummary{}) {
-		return effective, nil
-	}
-	if record.ResourceProjectID <= 0 || record.ResourceProjectID > math.MaxInt32 {
-		return effective, outputapp.ErrInvalidIndexIngestOutput
-	}
-	mismatch, err := PreviewIndexResultEmbedding(ctx, tx, int32(record.ResourceProjectID), indexregistryapp.Result{
-		ExecutionID: record.ExecutionID,
-		Generation:  record.Generation,
-		OccurredAt:  record.OccurredAt,
-		Summary:     result.ResultSummary,
-	})
-	if err != nil || mismatch == nil {
-		return effective, err
-	}
-	failed, err := failedIndexSettlement(record)
-	if err != nil {
-		return effective, err
-	}
-	effective.record = failed
-	effective.result.ResultSummary = mismatch.FailedSummary()
-	if effective.browserData, err = indexReplayData(effective.result); err != nil {
-		return effective, err
-	}
-	return effective, nil
-}
-
-// failedIndexSettlement is the record of an index result whose settlement
-// proposal asks for FAILED instead of the worker's SUCCEEDED. The proposal is
-// the worker's own with its requested outcome changed: same proposal id,
-// idempotency key and terminal output, re-encoded so the stored bytes and
-// digest are the canonical ones the settlement path verifies.
-func failedIndexSettlement(source outputRecord) (outputRecord, error) {
-	if source.PayloadType != payloadTypeIndexIngestResult {
-		return outputRecord{}, outputapp.ErrInvalidIndexIngestOutput
-	}
-	if source.SettlementOutcome == executionapp.SettlementFailed {
-		return source, nil
-	}
-	if source.SettlementOutcome != executionapp.SettlementSucceeded {
-		return outputRecord{}, outputapp.ErrInvalidIndexIngestOutput
-	}
-	encoded, err := failedSettlementBytes(
-		source.SettlementProposalID, source.LogicalOutputID, source.EventID,
-		source.Sequence, source.SettlementKey, source.PayloadDigest,
-	)
-	if err != nil {
-		return outputRecord{}, err
-	}
-	failed := source
-	failed.SettlementOutcome = executionapp.SettlementFailed
-	failed.SettlementBytes = encoded
-	failed.SettlementDigest = runtimedomain.SHA256(encoded)
-	if err := failed.validate(); err != nil {
-		return outputRecord{}, err
-	}
-	return failed, nil
-}
-
-// matchIndexRedelivery decides whether a stored output is this frame delivered
-// again, and which summary its notification describes. A frame that was turned
-// into a failure on first delivery is stored with the FAILED settlement, so the
-// redelivered frame (still carrying the worker's SUCCEEDED proposal) is
-// compared against that rewrite too, and its summary is the failure summary
-// stored with the projection. The registry row has moved on by now, so the
-// check cannot be asked again; what the first delivery decided is the record.
-func (r *IndexIngestResultsRepository) matchIndexRedelivery(
-	ctx context.Context,
-	tx sqlExecutor,
-	existing, record outputRecord,
-	summary outputapp.IndexIngestSummary,
-) (outputapp.IndexIngestSummary, bool, error) {
-	if sameDurableOutput(existing, record) {
-		return summary, true, nil
-	}
-	if !r.registry || record.SettlementOutcome != executionapp.SettlementSucceeded {
-		return summary, false, nil
-	}
-	failed, err := failedIndexSettlement(record)
-	if err != nil || !sameDurableOutput(existing, failed) {
-		return summary, false, nil
-	}
-	var message string
-	if err := tx.QueryRow(ctx, `
-SELECT completion_message
-FROM elitea_runtime.index_ingest_results
-WHERE logical_output_id = $1 AND execution_id = $2 AND generation = $3`,
-		existing.LogicalOutputID, existing.ExecutionID, int64(existing.Generation),
-	).Scan(&message); err != nil {
-		return summary, false, fmt.Errorf("load stored index failure summary: %w", err)
-	}
-	return outputapp.IndexIngestSummary{
-		Status:        outputapp.IndexIngestStatusError,
-		Message:       message,
-		TerminalState: outputapp.IndexIngestTerminalFailed,
-	}, true, nil
-}
-
-// applyIndexRegistry records the run's effective result on the registry row.
-// The result is already the effective one (effectiveIndexOutput), so the
-// registry has no embedding decision left to make; if it disagrees with the
-// check made earlier in this transaction the transaction fails rather than
-// store two versions.
+// applyIndexRegistry records a run's terminal result on its registry row, in
+// the projecting transaction, and returns the summary the user-facing surfaces
+// (the notification and the chat activity) describe. Off (python mode) it
+// returns the worker's summary and touches nothing.
+//
+// One locked read (LockIndexResultRow) decides what is recorded
+// (indexregistry.RecordedSummary) and the same row is applied. A result
+// without a typed summary, or one naming another embedding space than the
+// index was stamped with, is recorded as FAILED with the reason, and the
+// returned summary says so.
+//
+// That override is a BACKSTOP for a worker that ignored the expected embedding
+// space in its command (IndexIngestCommandV1.expected_embedding_model and
+// expected_embedding_dimension): such a worker must fail before writing any
+// vector and propose FAILED itself. The output plane has no typed refusal that
+// makes a worker settle FAILED instead (the Rust worker only replaces a
+// terminal frame for a cancellation or deadline winner, and treats every other
+// rejection as non-replaceable, so refusing the frame would only strand the run
+// until its lease expires). So the settlement, the stored projection row and
+// the replay event keep the worker's own outcome, while the registry, the
+// notification and the activity say failed. Follow-up: a typed
+// "result refused" output rejection the worker answers with a FAILED terminal
+// (ADR-0030 I1 worker work).
 func (r *IndexIngestResultsRepository) applyIndexRegistry(
 	ctx context.Context,
 	tx sqlExecutor,
 	record outputRecord,
 	result outputapp.IndexIngestResult,
-) error {
+) (outputapp.IndexIngestSummary, error) {
+	summary := result.ResultSummary
 	if !r.registry {
-		return nil
+		return summary, nil
 	}
 	if record.ResourceProjectID <= 0 || record.ResourceProjectID > math.MaxInt32 {
-		return outputapp.ErrInvalidIndexIngestOutput
+		return summary, outputapp.ErrInvalidIndexIngestOutput
 	}
-	outcome, err := ApplyIndexResult(ctx, tx, int32(record.ResourceProjectID), indexregistryapp.Result{
+	row, found, err := LockIndexResultRow(ctx, tx, int32(record.ResourceProjectID), record.ExecutionID, record.Generation)
+	if err != nil {
+		return summary, err
+	}
+	if !found || row.State != indexregistryapp.StateInProgress {
+		// No row (a deleted index, or a run admitted under the python runtime)
+		// or a row already at rest (a cancel won): nothing is recorded.
+		return summary, nil
+	}
+	recorded, _ := indexregistryapp.RecordedSummary(row, summary)
+	if _, err := ApplyIndexResult(ctx, tx, row, indexregistryapp.Result{
 		ExecutionID: record.ExecutionID,
 		Generation:  record.Generation,
 		OccurredAt:  record.OccurredAt,
-		Summary:     registryResultSummary(result),
-	})
-	if err != nil {
-		return err
+		Summary:     summary,
+	}); err != nil {
+		return summary, err
 	}
-	if outcome.Mismatch != nil {
-		return errors.New("index registry embedding check changed within the projecting transaction")
-	}
-	return nil
+	return recorded, nil
 }
 
 func NewIndexIngestResultsRepository(pool *pgxpool.Pool, policy IndexIngestOutputPolicy) (*IndexIngestResultsRepository, error) {
@@ -482,30 +367,21 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 	var outcome outputapp.ProjectionOutcome
 	cancellationWon := false
 	err = r.projects.WithinProjectTx(ctx, projectID, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
-		// The effective result comes first: every branch below, including the
-		// redelivery of an output stored earlier, describes the run from it.
-		effective, err := r.effectiveIndexOutput(ctx, tx, record, projection.Frame.Result, browserData)
-		if err != nil {
-			return indexProjectionError(err)
-		}
-		// handleExisting settles a stored output with this frame's identity:
-		// the same frame delivered again, the canonical cancellation that won,
-		// or a conflict.
-		handleExisting := func(existing outputRecord) error {
-			summary, same, matchErr := r.matchIndexRedelivery(
-				ctx, tx, existing, record, projection.Frame.Result.ResultSummary,
-			)
-			if matchErr != nil {
-				return indexProjectionError(matchErr)
-			}
+		existing, err := loadExistingOutput(ctx, tx, record)
+		if err == nil {
 			switch {
-			case same:
-				if existing.SettlementOutcome == executionapp.SettlementFailed {
+			case sameDurableOutput(existing, record):
+				if record.SettlementOutcome == executionapp.SettlementFailed {
 					if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, existing); err != nil {
 						return indexProjectionError(err)
 					}
 				}
-				if err := persistCurrentIndexTerminalNotification(ctx, tx, existing, summary); err != nil {
+				if err := persistCurrentIndexTerminalNotification(
+					ctx,
+					tx,
+					existing,
+					projection.Frame.Result.ResultSummary,
+				); err != nil {
 					return indexProjectionError(err)
 				}
 				cursor, cursorErr := replayCursor(ctx, tx, record.EventID)
@@ -527,23 +403,50 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 				return outputapp.ErrIndexIngestOutputConflict
 			}
 		}
-
-		existing, err := loadExistingOutput(ctx, tx, record)
-		if err == nil {
-			return handleExisting(existing)
-		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return indexProjectionError(err)
 		}
 
-		insertResult, err := insertOutputInbox(ctx, tx, effective.record)
+		insertResult, err := insertOutputInbox(ctx, tx, record)
 		if err != nil {
 			return indexProjectionError(err)
 		}
 		if !insertResult.Inserted {
 			existing, loadErr := loadExistingOutput(ctx, tx, record)
 			if loadErr == nil {
-				return handleExisting(existing)
+				switch {
+				case sameDurableOutput(existing, record):
+					if record.SettlementOutcome == executionapp.SettlementFailed {
+						if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, existing); err != nil {
+							return indexProjectionError(err)
+						}
+					}
+					if err := persistCurrentIndexTerminalNotification(
+						ctx,
+						tx,
+						existing,
+						projection.Frame.Result.ResultSummary,
+					); err != nil {
+						return indexProjectionError(err)
+					}
+					cursor, cursorErr := replayCursor(ctx, tx, record.EventID)
+					if cursorErr != nil {
+						return cursorErr
+					}
+					outcome = outputapp.ProjectionOutcome{Inserted: false, Cursor: cursor, CommittedSequence: record.Sequence}
+					return nil
+				case sameCanonicalCancellation(existing, record):
+					if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, existing); err != nil {
+						return indexProjectionError(err)
+					}
+					if _, cursorErr := replayCursor(ctx, tx, record.EventID); cursorErr != nil {
+						return cursorErr
+					}
+					cancellationWon = true
+					return nil
+				default:
+					return outputapp.ErrIndexIngestOutputConflict
+				}
 			}
 			if errors.Is(loadErr, pgx.ErrNoRows) {
 				if insertResult.CancellationRejected {
@@ -564,22 +467,23 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 			return indexProjectionError(loadErr)
 		}
 
-		resultSummary := effective.result.ResultSummary
-		if err := insertIndexIngestProjection(ctx, tx, outputapp.IndexIngestProjection{
-			Frame:            withIndexResult(projection.Frame, effective.result),
-			VerifiedArtifact: projection.VerifiedArtifact,
-		}, effective.record); err != nil {
+		if err := insertIndexIngestProjection(ctx, tx, projection, record); err != nil {
 			return err
 		}
-		if effective.record.SettlementOutcome == executionapp.SettlementFailed {
-			if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, effective.record); err != nil {
+		if record.SettlementOutcome == executionapp.SettlementFailed {
+			if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, record); err != nil {
 				return indexProjectionError(err)
 			}
 		}
-		if err := r.applyIndexRegistry(ctx, tx, effective.record, effective.result); err != nil {
+		// The registry (rust mode) is applied here, after the duplicate checks
+		// above, so a redelivered frame never applies twice. resultSummary is
+		// what the user is told: the worker's summary, or the failure the
+		// registry recorded instead (see applyIndexRegistry).
+		resultSummary, err := r.applyIndexRegistry(ctx, tx, record, projection.Frame.Result)
+		if err != nil {
 			return indexProjectionError(err)
 		}
-		cursor, err := appendReplayEvent(ctx, tx, effective.record, replayEventIndexIngest, effective.browserData)
+		cursor, err := appendReplayEvent(ctx, tx, record, replayEventIndexIngest, browserData)
 		if err != nil {
 			return err
 		}
@@ -598,7 +502,7 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 		}); err != nil {
 			return err
 		}
-		if err := persistCurrentIndexTerminalNotification(ctx, tx, effective.record, resultSummary); err != nil {
+		if err := persistCurrentIndexTerminalNotification(ctx, tx, record, resultSummary); err != nil {
 			return indexProjectionError(err)
 		}
 		if err := markOutputProjected(ctx, tx, record.EventID); err != nil {
@@ -614,12 +518,6 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 		return outputapp.ProjectionOutcome{}, outputapp.ErrOutputCancelled
 	}
 	return outcome, nil
-}
-
-// withIndexResult is the frame with its result replaced.
-func withIndexResult(frame outputapp.IndexIngestFrame, result outputapp.IndexIngestResult) outputapp.IndexIngestFrame {
-	frame.Result = result
-	return frame
 }
 
 func indexOutputRecord(frame outputapp.IndexIngestFrame) (outputRecord, int64, error) {
@@ -752,9 +650,10 @@ func persistCurrentIndexTerminalNotification(
 	if summary.Status == outputapp.IndexIngestStatusError {
 		errorMessage = summary.Message
 	}
-	// The documents a run reports: the typed count when the run is a Rust run
-	// (the same number the registry stores as indexed_documents), the
-	// SDK's sentence count otherwise.
+	// The documents THIS run reports: the typed count when the run is a Rust
+	// run (the same number the registry stores as the run's
+	// indexed_documents), the SDK's sentence count otherwise. The index's
+	// totals are the registry list's, not the notification's.
 	indexed := summary.Indexed
 	if summary.HasTypedResult() {
 		indexed = summary.IndexedDocuments

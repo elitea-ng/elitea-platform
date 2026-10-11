@@ -120,12 +120,14 @@ func (s *Service) List(ctx context.Context, request indexmetaapp.Request) ([]ind
 	return items, nil
 }
 
-// item projects one row. A run is shown as `in_progress` exactly while its
-// execution job is live; an `in_progress` row whose job ended is a dead run and
-// is flagged Stale, which is how the list tells the user it stopped reporting.
+// item projects one row as its run's outcome records it (Row.Effective). A run
+// is shown as `in_progress` exactly while it is active (its job is live, or
+// SUCCEEDED with the result still being applied). A dead run is shown with
+// the outcome its job reached (cancelled, failed, or failed "abandoned") and is
+// flagged Stale, which tells the user the row has not recorded that yet.
 // Nothing here depends on how long ago the row was last written.
 func item(row Row) indexmetaapp.Item {
-	return indexmetaapp.Item{ID: row.IndexID, Metadata: Metadata(row), Stale: row.Abandoned()}
+	return indexmetaapp.Item{ID: row.IndexID, Metadata: Metadata(row.Effective()), Stale: row.Dead()}
 }
 
 // Find is the exact (single-index) read the schedule inspector uses.
@@ -167,7 +169,10 @@ func (s *Service) find(ctx context.Context, projectID, toolkitID int32, collecti
 	if !found {
 		return indexmetaapp.Item{}, false, nil
 	}
-	return indexmetaapp.Item{ID: row.IndexID, Metadata: Metadata(row)}, true, nil
+	// The effective state, so the scheduler (which skips an `in_progress`
+	// index) admits the next run of an index whose run is dead; StartRun then
+	// records the dead run's outcome.
+	return indexmetaapp.Item{ID: row.IndexID, Metadata: Metadata(row.Effective())}, true, nil
 }
 
 var indexIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -179,9 +184,10 @@ var indexIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 //
 // An index whose run is still active is refused with
 // indexing.ErrCurrentIndexMetaConflict: its worker is still writing vectors
-// that nothing would then own. A run is active exactly while the execution job
-// recorded on the row is not terminal; a run whose job ended or is missing is
-// dead, and its index is deletable, which is how a dead run is cleared.
+// that nothing would then own, or its successful result is still being applied
+// (the job SUCCEEDED less than SettlingGrace ago). A run whose job ended
+// otherwise, or is missing, is dead, and its index is deletable, which is how
+// a dead run is cleared.
 //
 // The tombstone is purged only when the hook reports the vectors deleted. When
 // that first attempt does not delete them (the hook defers because

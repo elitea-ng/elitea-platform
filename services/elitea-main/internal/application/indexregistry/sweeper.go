@@ -82,8 +82,7 @@ func NewTombstoneSweeper(
 // then has nothing it could ever succeed at: it does not touch the table, does
 // not count attempts, and a runner should not poll.
 func (s *TombstoneSweeper) Deferred() bool {
-	_, deferred := s.vectors.(indexingapp.DeferredIndexVectorDeleter)
-	return deferred
+	return s.vectors.Deferred()
 }
 
 // RunOnce works one batch and returns how many tombstones it tried. A failure
