@@ -42,6 +42,19 @@ type CommandOutboxRepository struct {
 	store          sharedStore
 	expectedStream string
 	activity       currentIndexActivityProjector
+	// indexRegistry makes an index command carry the embedding space the
+	// index registry has stamped (ELITEA_INDEXING_RUNTIME=rust only).
+	indexRegistry bool
+}
+
+// WithIndexRegistry makes LoadPendingIndexIngest read the expected embedding
+// space of each index run from elitea_runtime.index_registry (the rust
+// indexing runtime). Off, the command never carries one, as on the Python path.
+func (r *CommandOutboxRepository) WithIndexRegistry() *CommandOutboxRepository {
+	if r != nil {
+		r.indexRegistry = true
+	}
+	return r
 }
 
 func NewCommandOutboxRepository(pool *pgxpool.Pool, expectedStream string) (*CommandOutboxRepository, error) {

@@ -156,9 +156,25 @@ type IndexIngestCommandV1 struct {
 	// The command bus carries only this immutable entry reference and digest.
 	EmbeddingBinding *IndexIngestInputBindingV1 `protobuf:"bytes,9,opt,name=embedding_binding,json=embeddingBinding,proto3" json:"embedding_binding,omitempty"`
 	// Durable admission origin. Consumers accept only user, llm, or schedule.
-	Initiator     string `protobuf:"bytes,16,opt,name=initiator,proto3" json:"initiator,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Initiator string `protobuf:"bytes,16,opt,name=initiator,proto3" json:"initiator,omitempty"`
+	// The embedding space the index is already stamped with (ADR-0030 decision
+	// 2), set by elitea-main from the index registry under
+	// ELITEA_INDEXING_RUNTIME=rust. Both are empty (""/0) when the index is not
+	// stamped yet (its first run stamps it) and always on the Python path; they
+	// are set together or not at all. They are a non-secret fence on the run,
+	// not an input: the embedding inputs stay in the input bundle.
+	//
+	// A worker that receives them MUST compare them with the model and
+	// dimension its embedding client actually produces BEFORE it writes any
+	// vector, and on any difference write nothing and propose FAILED with a
+	// terminal summary that says so. elitea-main records a terminal result that
+	// names another space as failed regardless, but only in the registry and the
+	// notification: the settlement and the stored projection keep the worker's
+	// outcome, and vectors already written would sit in the wrong collection.
+	ExpectedEmbeddingModel     string `protobuf:"bytes,17,opt,name=expected_embedding_model,json=expectedEmbeddingModel,proto3" json:"expected_embedding_model,omitempty"`
+	ExpectedEmbeddingDimension uint32 `protobuf:"varint,18,opt,name=expected_embedding_dimension,json=expectedEmbeddingDimension,proto3" json:"expected_embedding_dimension,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *IndexIngestCommandV1) Reset() {
@@ -259,6 +275,20 @@ func (x *IndexIngestCommandV1) GetInitiator() string {
 		return x.Initiator
 	}
 	return ""
+}
+
+func (x *IndexIngestCommandV1) GetExpectedEmbeddingModel() string {
+	if x != nil {
+		return x.ExpectedEmbeddingModel
+	}
+	return ""
+}
+
+func (x *IndexIngestCommandV1) GetExpectedEmbeddingDimension() uint32 {
+	if x != nil {
+		return x.ExpectedEmbeddingDimension
+	}
+	return 0
 }
 
 // IndexIngestInputBindingV1 identifies one exact input value consumed by the SDK
@@ -685,7 +715,7 @@ var File_elitea_runtime_v1_indexing_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\n" +
-	" elitea/runtime/v1/indexing.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\"\x9f\x04\n" +
+	" elitea/runtime/v1/indexing.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\"\x9b\x05\n" +
 	"\x14IndexIngestCommandV1\x12C\n" +
 	"\x1etoolkit_configuration_entry_id\x18\x01 \x01(\tR\x1btoolkitConfigurationEntryId\x127\n" +
 	"\x18tool_parameters_entry_id\x18\x02 \x01(\tR\x15toolParametersEntryId\x12+\n" +
@@ -696,7 +726,9 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\x11client_message_id\x18\a \x01(\tR\x0fclientMessageId\x12\x1b\n" +
 	"\tsio_event\x18\b \x01(\tR\bsioEvent\x12Y\n" +
 	"\x11embedding_binding\x18\t \x01(\v2,.elitea.runtime.v1.IndexIngestInputBindingV1R\x10embeddingBinding\x12\x1c\n" +
-	"\tinitiator\x18\x10 \x01(\tR\tinitiatorJ\x04\b\n" +
+	"\tinitiator\x18\x10 \x01(\tR\tinitiator\x128\n" +
+	"\x18expected_embedding_model\x18\x11 \x01(\tR\x16expectedEmbeddingModel\x12@\n" +
+	"\x1cexpected_embedding_dimension\x18\x12 \x01(\rR\x1aexpectedEmbeddingDimensionJ\x04\b\n" +
 	"\x10\x10\"\xad\x01\n" +
 	"\x19IndexIngestInputBindingV1\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12+\n" +

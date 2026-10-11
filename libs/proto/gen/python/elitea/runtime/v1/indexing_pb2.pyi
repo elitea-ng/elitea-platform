@@ -35,7 +35,7 @@ INDEX_INGEST_TERMINAL_STATE_V1_FAILED: IndexIngestTerminalStateV1
 INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED: IndexIngestTerminalStateV1
 
 class IndexIngestCommandV1(_message.Message):
-    __slots__ = ("toolkit_configuration_entry_id", "tool_parameters_entry_id", "llm_model_entry_id", "llm_configuration_entry_id", "mcp_tokens_entry_id", "client_stream_id", "client_message_id", "sio_event", "embedding_binding", "initiator")
+    __slots__ = ("toolkit_configuration_entry_id", "tool_parameters_entry_id", "llm_model_entry_id", "llm_configuration_entry_id", "mcp_tokens_entry_id", "client_stream_id", "client_message_id", "sio_event", "embedding_binding", "initiator", "expected_embedding_model", "expected_embedding_dimension")
     TOOLKIT_CONFIGURATION_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_PARAMETERS_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
     LLM_MODEL_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
@@ -46,6 +46,8 @@ class IndexIngestCommandV1(_message.Message):
     SIO_EVENT_FIELD_NUMBER: _ClassVar[int]
     EMBEDDING_BINDING_FIELD_NUMBER: _ClassVar[int]
     INITIATOR_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_EMBEDDING_MODEL_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_EMBEDDING_DIMENSION_FIELD_NUMBER: _ClassVar[int]
     toolkit_configuration_entry_id: str
     tool_parameters_entry_id: str
     llm_model_entry_id: str
@@ -56,7 +58,9 @@ class IndexIngestCommandV1(_message.Message):
     sio_event: str
     embedding_binding: IndexIngestInputBindingV1
     initiator: str
-    def __init__(self, toolkit_configuration_entry_id: _Optional[str] = ..., tool_parameters_entry_id: _Optional[str] = ..., llm_model_entry_id: _Optional[str] = ..., llm_configuration_entry_id: _Optional[str] = ..., mcp_tokens_entry_id: _Optional[str] = ..., client_stream_id: _Optional[str] = ..., client_message_id: _Optional[str] = ..., sio_event: _Optional[str] = ..., embedding_binding: _Optional[_Union[IndexIngestInputBindingV1, _Mapping]] = ..., initiator: _Optional[str] = ...) -> None: ...
+    expected_embedding_model: str
+    expected_embedding_dimension: int
+    def __init__(self, toolkit_configuration_entry_id: _Optional[str] = ..., tool_parameters_entry_id: _Optional[str] = ..., llm_model_entry_id: _Optional[str] = ..., llm_configuration_entry_id: _Optional[str] = ..., mcp_tokens_entry_id: _Optional[str] = ..., client_stream_id: _Optional[str] = ..., client_message_id: _Optional[str] = ..., sio_event: _Optional[str] = ..., embedding_binding: _Optional[_Union[IndexIngestInputBindingV1, _Mapping]] = ..., initiator: _Optional[str] = ..., expected_embedding_model: _Optional[str] = ..., expected_embedding_dimension: _Optional[int] = ...) -> None: ...
 
 class IndexIngestInputBindingV1(_message.Message):
     __slots__ = ("entry_id", "immutable_version", "content_digest")

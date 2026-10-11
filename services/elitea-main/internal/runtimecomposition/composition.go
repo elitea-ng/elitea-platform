@@ -528,6 +528,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest command outbox: %w", err)
 		}
+		if config.IndexingRuntime == IndexingRuntimeRust {
+			// Each index command carries the embedding space its index is
+			// stamped with, so the worker refuses another before it writes.
+			indexOutbox.WithIndexRegistry()
+		}
 		indexDispatcher, err := indexingapp.NewIndexIngestDispatcher(indexOutbox, indexProducer)
 		if err != nil {
 			return nil, err
