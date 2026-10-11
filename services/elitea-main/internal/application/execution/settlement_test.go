@@ -241,3 +241,40 @@ func TestAfterSettleHookFiresOnAnIdempotentReplayToo(t *testing.T) {
 		t.Fatalf("hook fired %d times for one fresh + one replayed settlement, want 2", calls)
 	}
 }
+
+type fixedReceiptRepository struct{ receipt SettlementReceipt }
+
+func (r fixedReceiptRepository) PrepareSettlement(context.Context, SettlementProposal) (SettlementReceipt, error) {
+	return r.receipt, nil
+}
+
+// A SUCCEEDED proposal may settle FAILED (an index result the output projection
+// turned into a failure) and never any other way round or across.
+func TestSettlementServiceOnlyAllowsASucceededProposalToSettleFailed(t *testing.T) {
+	cases := []struct {
+		name     string
+		proposed SettlementOutcome
+		receipt  SettlementOutcome
+		ok       bool
+	}{
+		{"same outcome", SettlementSucceeded, SettlementSucceeded, true},
+		{"succeeded settles failed", SettlementSucceeded, SettlementFailed, true},
+		{"failed settles succeeded", SettlementFailed, SettlementSucceeded, false},
+		{"succeeded settles cancelled", SettlementSucceeded, SettlementCancelled, false},
+		{"failed settles cancelled", SettlementFailed, SettlementCancelled, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service, err := NewSettlementService(fixedReceiptRepository{SettlementReceipt{ID: "r", Outcome: tc.receipt}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			proposal := validSettlementProposal()
+			proposal.Outcome = tc.proposed
+			_, err = service.PrepareSettlement(context.Background(), proposal)
+			if (err == nil) != tc.ok {
+				t.Fatalf("proposed %s, receipt %s: err = %v, want ok=%v", tc.proposed, tc.receipt, err, tc.ok)
+			}
+		})
+	}
+}

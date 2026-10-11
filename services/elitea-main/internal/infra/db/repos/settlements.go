@@ -34,6 +34,63 @@ func newSettlementsRepository(store sharedStore, newReceiptID func() (string, er
 	return &SettlementsRepository{store: store, newReceiptID: newReceiptID}, nil
 }
 
+// failedSettlementVariant is the FAILED form of a SUCCEEDED proposal: the same
+// proposal id, idempotency key and terminal output, requesting FAILED, encoded
+// canonically. The output projection stores exactly this proposal for an index
+// result it turned into a failure (an embedding-space mismatch, see
+// failedIndexSettlement), so a worker that proposes the SUCCEEDED original is
+// recognised as asking for the settlement that was stored.
+func failedSettlementVariant(proposal executionapp.SettlementProposal) (executionapp.SettlementProposal, []byte, error) {
+	if proposal.Outcome != executionapp.SettlementSucceeded {
+		return executionapp.SettlementProposal{}, nil, executionapp.ErrInvalidSettlement
+	}
+	encoded, err := failedSettlementBytes(
+		proposal.ProposalID, proposal.TerminalLogicalOutputID, proposal.TerminalEventID,
+		proposal.TerminalSequence, proposal.IdempotencyKey, proposal.TerminalPayloadDigest,
+	)
+	if err != nil {
+		return executionapp.SettlementProposal{}, nil, err
+	}
+	failed := proposal
+	failed.Outcome = executionapp.SettlementFailed
+	failed.ProposalDigest = runtimedomain.SHA256(encoded)
+	return failed, encoded, nil
+}
+
+func failedSettlementBytes(
+	proposalID, logicalOutputID, eventID string,
+	sequence uint64,
+	idempotencyKey string,
+	payloadDigest runtimedomain.Digest,
+) ([]byte, error) {
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&runtimev1.SettlementProposalV1{
+		ProposalId:              proposalID,
+		RequestedOutcome:        runtimev1.ExecutionOutcomeV1_EXECUTION_OUTCOME_V1_FAILED,
+		TerminalLogicalOutputId: logicalOutputID,
+		TerminalEventId:         eventID,
+		TerminalSequence:        sequence,
+		PrepareIdempotencyKey:   idempotencyKey,
+		TerminalPayloadDigest: &runtimev1.DigestV1{
+			Algorithm: runtimev1.DigestAlgorithmV1_DIGEST_ALGORITHM_V1_SHA256,
+			Value:     append([]byte(nil), payloadDigest[:]...),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode failed settlement proposal: %w", err)
+	}
+	return encoded, nil
+}
+
+// PrepareSettlement commits the settlement a worker proposes once the terminal
+// output it names is durably projected and the projection stored that exact
+// proposal.
+//
+// One exception: an index result that the projection turned into a failure
+// (an embedding-space mismatch) is stored with a FAILED proposal while the
+// worker still proposes the SUCCEEDED original. A SUCCEEDED proposal that does
+// not match the stored one is therefore also checked against its own FAILED
+// variant, and settles FAILED when that is what the projection stored. The
+// receipt then says FAILED; nothing else about the verification is relaxed.
 func (r *SettlementsRepository) PrepareSettlement(ctx context.Context, proposal executionapp.SettlementProposal) (executionapp.SettlementReceipt, error) {
 	if err := proposal.Validate(); err != nil {
 		return executionapp.SettlementReceipt{}, err
@@ -41,6 +98,13 @@ func (r *SettlementsRepository) PrepareSettlement(ctx context.Context, proposal 
 	proposalBytes, err := settlementProposalBytes(proposal)
 	if err != nil {
 		return executionapp.SettlementReceipt{}, err
+	}
+	var failedVariant executionapp.SettlementProposal
+	var failedVariantBytes []byte
+	if proposal.Outcome == executionapp.SettlementSucceeded {
+		if failedVariant, failedVariantBytes, err = failedSettlementVariant(proposal); err != nil {
+			return executionapp.SettlementReceipt{}, err
+		}
 	}
 
 	var receipt executionapp.SettlementReceipt
@@ -68,7 +132,14 @@ FOR UPDATE`, proposal.Fence.ExecutionID, int64(proposal.Fence.Generation)).Scan(
 			if !sameSettlementFence(existing.Fence, proposal.Fence) {
 				return runtimedomain.ErrStaleFence
 			}
-			if existing.IdempotencyKey != proposal.IdempotencyKey || existing.ProposalDigest != proposal.ProposalDigest || existing.Receipt.Outcome != proposal.Outcome {
+			sameProposal := existing.IdempotencyKey == proposal.IdempotencyKey &&
+				existing.ProposalDigest == proposal.ProposalDigest && existing.Receipt.Outcome == proposal.Outcome
+			// The replay of a settlement that was committed as the FAILED variant.
+			sameFailedVariant := proposal.Outcome == executionapp.SettlementSucceeded &&
+				existing.Receipt.Outcome == executionapp.SettlementFailed &&
+				existing.IdempotencyKey == failedVariant.IdempotencyKey &&
+				existing.ProposalDigest == failedVariant.ProposalDigest
+			if !sameProposal && !sameFailedVariant {
 				return executionapp.ErrSettlementConflict
 			}
 			receipt = existing.Receipt
@@ -109,8 +180,9 @@ FOR UPDATE`,
 			return fmt.Errorf("verify settlement claim: %w", err)
 		}
 
-		var terminalEventID string
-		err = tx.QueryRow(ctx, `
+		verifyTerminal := func(candidate executionapp.SettlementProposal, candidateBytes []byte) (string, error) {
+			var terminalEventID string
+			err := tx.QueryRow(ctx, `
 SELECT o.event_id
 FROM elitea_runtime.output_inbox AS o
 JOIN elitea_runtime.execution_claims AS source_claim
@@ -144,25 +216,35 @@ WHERE o.execution_id = $1
           AND source_claim.release_reason = 'LEASE_EXPIRED'
       )
   )`,
-			proposal.Fence.ExecutionID,
-			int64(proposal.Fence.Generation),
-			claimID,
-			proposal.TerminalLogicalOutputID,
-			proposal.TerminalEventID,
-			int64(proposal.TerminalSequence),
-			proposal.TerminalPayloadDigest[:],
-			proposal.Fence.Token[:],
-			proposal.Fence.WorkloadIdentity,
-			proposal.Fence.WorkloadSessionID,
-			proposal.Fence.ProducerID,
-			int64(proposal.Fence.ClaimAttempt),
-			int64(proposal.Fence.LeaseEpoch),
-			proposal.ProposalID,
-			string(proposal.Outcome),
-			proposalBytes,
-			proposal.ProposalDigest[:],
-			proposal.IdempotencyKey,
-		).Scan(&terminalEventID)
+				candidate.Fence.ExecutionID,
+				int64(candidate.Fence.Generation),
+				claimID,
+				candidate.TerminalLogicalOutputID,
+				candidate.TerminalEventID,
+				int64(candidate.TerminalSequence),
+				candidate.TerminalPayloadDigest[:],
+				candidate.Fence.Token[:],
+				candidate.Fence.WorkloadIdentity,
+				candidate.Fence.WorkloadSessionID,
+				candidate.Fence.ProducerID,
+				int64(candidate.Fence.ClaimAttempt),
+				int64(candidate.Fence.LeaseEpoch),
+				candidate.ProposalID,
+				string(candidate.Outcome),
+				candidateBytes,
+				candidate.ProposalDigest[:],
+				candidate.IdempotencyKey,
+			).Scan(&terminalEventID)
+			return terminalEventID, err
+		}
+		terminalEventID, err := verifyTerminal(proposal, proposalBytes)
+		if errors.Is(err, pgx.ErrNoRows) && proposal.Outcome == executionapp.SettlementSucceeded {
+			// Not the stored proposal as proposed: perhaps the stored one is
+			// this proposal's FAILED variant (see the function comment).
+			if terminalEventID, err = verifyTerminal(failedVariant, failedVariantBytes); err == nil {
+				proposal, proposalBytes = failedVariant, failedVariantBytes
+			}
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return executionapp.ErrTerminalOutputNotReady
 		}

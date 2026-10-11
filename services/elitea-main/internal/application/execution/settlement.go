@@ -122,7 +122,12 @@ func (s *SettlementService) PrepareSettlement(ctx context.Context, proposal Sett
 	if err != nil {
 		return SettlementReceipt{}, fmt.Errorf("prepare execution settlement: %w", err)
 	}
-	if receipt.ID == "" || !receipt.Outcome.valid() || receipt.Outcome != proposal.Outcome {
+	// A SUCCEEDED proposal may settle FAILED, and only that way: an index result
+	// the output projection turned into a failure (see the repository's
+	// PrepareSettlement). No settlement ever becomes more successful than the
+	// proposal.
+	downgraded := proposal.Outcome == SettlementSucceeded && receipt.Outcome == SettlementFailed
+	if receipt.ID == "" || !receipt.Outcome.valid() || (receipt.Outcome != proposal.Outcome && !downgraded) {
 		return SettlementReceipt{}, errors.New("settlement repository returned an invalid receipt")
 	}
 	// The repository call above already returned successfully — whatever
