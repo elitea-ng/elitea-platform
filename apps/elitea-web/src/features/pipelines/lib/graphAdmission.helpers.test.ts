@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { YamlPipelineDocument, YamlPipelineNode } from './flow-editor/helpers/pipelineFlow.types';
-import { GRAPH_ADMISSION_RULES, collectGraphAdmissionIssues, documentLevelIssues, issuesForNode } from './graphAdmission.helpers';
+import { GRAPH_ADMISSION_RULES, blockingIssues, collectGraphAdmissionIssues, documentLevelIssues, issuesForNode } from './graphAdmission.helpers';
 import type { GraphAdmissionRuleId } from './graphAdmission.types';
 
 /** An LLM node the compiler admits: one declared, non-`messages` output, a legal id, a legal transition. */
@@ -58,6 +58,7 @@ describe('the rule catalogue', () => {
       'state.key',
       'state.type',
       'state.builtin-type',
+      'state.reducer',
       'node.type',
       'node.id',
       'node.required-field',
@@ -208,6 +209,26 @@ describe('state rules', () => {
     expect(pinned?.field).toBe('state.input');
     expect(pinned?.message).toContain('"str"');
     expect(pinned?.citation).toBe('compiler.rs:1391');
+  });
+
+  it('state.reducer: a production build refuses any declared reducer as a deployment limit (compiler.rs:2784)', () => {
+    const issues = collectGraphAdmissionIssues(
+      baseDocument({ state: { input: 'str', messages: 'list', summary: 'str', findings: { type: 'list', value: [], reducer: 'append' } } }),
+    );
+
+    expect(issues).toHaveLength(1);
+    const [refusal] = issues;
+    expect(refusal?.rule).toBe('state.reducer');
+    expect(refusal?.severity).toBeUndefined();
+    expect(refusal?.field).toBe('state.findings');
+    expect(refusal?.message).toContain('not available on this deployment');
+    expect(refusal?.citation).toBe('compiler.rs:2784');
+    expect(blockingIssues(issues)).toEqual(issues);
+  });
+
+  it('state.reducer: a bare type, a descriptor without the key, and `reducer: null` declare none', () => {
+    const state = { input: 'str', messages: 'list', summary: 'str', a: { type: 'list', value: [] }, b: { type: 'list', reducer: null } };
+    expect(ruleIds(baseDocument({ state: state as unknown as NonNullable<YamlPipelineDocument['state']> }))).toEqual([]);
   });
 });
 

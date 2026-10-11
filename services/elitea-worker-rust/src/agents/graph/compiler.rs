@@ -59,6 +59,7 @@ use super::split_out::{SplitOutNode, SplitOutNodeDefinition};
 use super::state_modifier::{
     StateModifierConfigurationError, StateModifierNode, StateModifierNodeDefinition,
 };
+use super::state_reducers::{ReducerGuard, StateReducer};
 use super::static_pause::{StaticPauseCatalog, StaticResumeCheckpointer};
 use super::yaml::{
     MAX_NODE_ID_BYTES, ParallelConfigurationError, ParallelNodeDefinition, valid_graph_id,
@@ -95,6 +96,7 @@ type ValidatedState = (
     BTreeMap<String, String>,
     BTreeMap<String, serde_json::Value>,
     Vec<String>,
+    BTreeMap<String, StateReducer>,
 );
 
 const RUNTIME_STRING_CHANNELS: &[&str] = &[
@@ -149,6 +151,8 @@ struct RawStateTypeDescriptor {
     kind: String,
     #[serde(default)]
     value: Option<serde_json::Value>,
+    #[serde(default)]
+    reducer: Option<String>,
 }
 
 impl RawStateType {
@@ -163,6 +167,13 @@ impl RawStateType {
         match self {
             Self::Name(_) => None,
             Self::Descriptor(descriptor) => descriptor.value.as_ref(),
+        }
+    }
+
+    fn reducer(&self) -> Option<&str> {
+        match self {
+            Self::Name(_) => None,
+            Self::Descriptor(descriptor) => descriptor.reducer.as_deref(),
         }
     }
 }
@@ -258,6 +269,8 @@ pub(crate) struct PipelineDefinition {
     state: BTreeMap<String, String>,
     state_defaults: BTreeMap<String, serde_json::Value>,
     state_declaration_order: Vec<String>,
+    /// Typed channel reducers; absent channels overwrite.
+    state_reducers: Arc<BTreeMap<String, StateReducer>>,
     nodes: Vec<PipelineNodeDefinition>,
     parallel_owned_nodes: BTreeSet<String>,
     map_owned_nodes: BTreeSet<String>,
@@ -429,6 +442,9 @@ impl PipelineNodeRuntimes {
 struct PipelineGraphBuilder {
     target: PipelineGraphTarget,
     result_trace: BTreeMap<String, ResultTraceOutputs>,
+    /// Present only when the definition declares a typed reducer; every bound
+    /// node is then wrapped with [`ReducerGuard`].
+    reducers: Option<Arc<BTreeMap<String, StateReducer>>>,
 }
 
 enum PipelineGraphTarget {
@@ -440,7 +456,17 @@ enum PipelineGraphTarget {
 }
 
 impl PipelineGraphBuilder {
-    fn node<N>(mut self, node: N) -> Self
+    fn node<N>(self, node: N) -> Self
+    where
+        N: Node + 'static,
+    {
+        match self.reducers.clone() {
+            Some(reducers) => self.trace(ReducerGuard::new(node, reducers)),
+            None => self.trace(node),
+        }
+    }
+
+    fn trace<N>(mut self, node: N) -> Self
     where
         N: Node + 'static,
     {
@@ -466,6 +492,7 @@ impl PipelineGraphBuilder {
         Self {
             target,
             result_trace: self.result_trace,
+            reducers: self.reducers,
         }
     }
 
@@ -482,6 +509,7 @@ impl PipelineGraphBuilder {
         Self {
             target,
             result_trace: self.result_trace,
+            reducers: self.reducers,
         }
     }
 
@@ -861,7 +889,8 @@ impl PipelineDefinition {
             ));
         }
         let raw_recovery = recovery_definition::RawRecoveryCatalog::extract(&mut raw.nodes)?;
-        let (state, state_defaults, state_declaration_order) = validate_state(raw.state)?;
+        let (state, state_defaults, state_declaration_order, state_reducers) =
+            validate_state(raw.state, TYPED_REDUCERS_READY)?;
         let (nodes, node_ids) = parse_pipeline_nodes(raw.nodes, &state)?;
         if !node_ids.contains(&raw.entry_point) {
             return Err(PipelineConfigurationError::Invalid(
@@ -904,6 +933,7 @@ impl PipelineDefinition {
             .union(&map_owned_nodes)
             .cloned()
             .collect();
+        validate_overwrite_channels(&nodes, &state_reducers, &recovery_owned)?;
         let recovery = raw_recovery.admit(&nodes, &state, &raw.entry_point, &recovery_owned)?;
         let interrupt_before = validate_static_interrupts(raw.interrupt_before, &node_ids)?;
         let interrupt_after = validate_static_interrupts(raw.interrupt_after, &node_ids)?;
@@ -914,6 +944,10 @@ impl PipelineDefinition {
             &state_declaration_order,
             &nodes,
         );
+        // Overwrite-only definitions keep existing definition bytes and checkpoint lineage.
+        if !state_reducers.is_empty() {
+            definition_digest = reducers_digest(definition_digest, &state_reducers);
+        }
         // Empty policies keep existing definition bytes and checkpoint lineage.
         if !interrupt_before.is_empty() || !interrupt_after.is_empty() {
             definition_digest = super::static_pause::policy_digest(
@@ -929,6 +963,7 @@ impl PipelineDefinition {
             state,
             state_defaults,
             state_declaration_order,
+            state_reducers: Arc::new(state_reducers),
             nodes,
             parallel_owned_nodes,
             map_owned_nodes,
@@ -1288,6 +1323,7 @@ impl PipelineDefinition {
         let node_checkpointer = Arc::clone(&checkpointer);
         let mut builder = PipelineGraphBuilder {
             result_trace: self.result_trace_outputs(),
+            reducers: self.typed_reducers(),
             target: PipelineGraphTarget::Agent(Box::new(
                 GraphAgent::builder(agent_name)
                     .description("Elitea stored pipeline")
@@ -1345,6 +1381,7 @@ impl PipelineDefinition {
                 node_checkpointer,
                 state_schema,
                 self.state_defaults.clone(),
+                Arc::clone(&self.state_reducers),
                 self.entry_point.clone(),
             );
         }
@@ -1363,6 +1400,13 @@ impl PipelineDefinition {
         checkpointer: Arc<dyn Checkpointer>,
         runtimes: &PipelineNodeRuntimes,
     ) -> Result<CompiledGraph, PipelineConfigurationError> {
+        // A child restore re-merges its parent-mapped input through each
+        // channel reducer, so typed channels would reduce twice (v1).
+        if !self.state_reducers.is_empty() {
+            return Err(PipelineConfigurationError::Unsupported(
+                "typed state reducers are not supported in a nested pipeline",
+            ));
+        }
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
         let (checkpointer, bound_runtimes) =
@@ -1383,6 +1427,7 @@ impl PipelineDefinition {
                 terminal: SUBGRAPH_RESULT_NODE,
             },
             result_trace: self.result_trace_outputs(),
+            reducers: None,
         };
         for node in self.nodes.iter().filter(|node| {
             !self.parallel_owned_nodes.contains(node.id())
@@ -1694,10 +1739,11 @@ impl PipelineDefinition {
                     .cloned()
                     .unwrap_or_else(|| runtime_channel_default(&channel))
             };
-            schema.channels.insert(
-                channel.clone(),
-                Channel::new(&channel).with_default(default),
-            );
+            let mut typed = Channel::new(&channel).with_default(default);
+            if let Some(reducer) = self.state_reducers.get(&channel) {
+                typed = typed.with_reducer(reducer.channel_reducer(&channel));
+            }
+            schema.channels.insert(channel.clone(), typed);
         }
         schema
             .channels
@@ -1715,6 +1761,10 @@ impl PipelineDefinition {
                 .with_reducer(Reducer::Custom(Arc::new(merge_or_clear_object))),
         );
         schema
+    }
+
+    fn typed_reducers(&self) -> Option<Arc<BTreeMap<String, StateReducer>>> {
+        (!self.state_reducers.is_empty()).then(|| Arc::clone(&self.state_reducers))
     }
 
     fn state_types_default(&self) -> serde_json::Value {
@@ -2270,11 +2320,14 @@ pub(super) fn internal_result_key(key: &str) -> bool {
 
 /// Persist the first frontier before any node can call a model or tool.
 /// ADK restores it and receives no extra input, so append reducers run once.
+/// A typed channel's default is its initial value, never an update applied to
+/// that same default.
 fn with_initial_checkpoint(
     builder: GraphAgentBuilder,
     checkpointer: Arc<dyn Checkpointer>,
     schema: StateSchema,
     defaults: BTreeMap<String, serde_json::Value>,
+    reducers: Arc<BTreeMap<String, StateReducer>>,
     entry_point: String,
 ) -> GraphAgentBuilder {
     builder
@@ -2282,12 +2335,17 @@ fn with_initial_checkpoint(
             let checkpointer = checkpointer.clone();
             let schema = schema.clone();
             let defaults = defaults.clone();
+            let reducers = Arc::clone(&reducers);
             let entry_point = entry_point.clone();
             async move {
                 if checkpointer.load(context.session_id()).await?.is_none() {
                     let mut state = schema.initialize_state();
                     for (key, value) in invocation_state(context.as_ref(), Some(&defaults), None) {
-                        schema.apply_update(&mut state, &key, value);
+                        if reducers.contains_key(&key) {
+                            state.insert(key, value);
+                        } else {
+                            schema.apply_update(&mut state, &key, value);
+                        }
                     }
                     let checkpoint =
                         Checkpoint::new(context.session_id(), state, 0, vec![entry_point]);
@@ -2382,6 +2440,10 @@ pub(crate) const NODE_TYPE_NOT_AVAILABLE_CODE: &str = "graph.pipeline.node_type_
 /// Production admission of data shaping nodes waits for deployed acceptance.
 /// Only rehearsal builds (`graph-extensions-rehearsal`) admit them.
 const SHAPING_INTEGRATION_READY: bool = cfg!(feature = "graph-extensions-rehearsal");
+
+/// Production admission of typed state reducers waits for the Web reducer
+/// editor (Wave 2). Only rehearsal builds admit the `reducer` key.
+const TYPED_REDUCERS_READY: bool = cfg!(feature = "graph-extensions-rehearsal");
 
 #[cfg(test)]
 pub(super) fn shaping_node_admission(
@@ -2648,6 +2710,7 @@ fn validate_shaping_channels(
 
 fn validate_state(
     raw: serde_yaml_ng::Mapping,
+    reducers_admitted: bool,
 ) -> Result<ValidatedState, PipelineConfigurationError> {
     if raw.len() > MAX_PIPELINE_STATE_KEYS {
         return Err(PipelineConfigurationError::ResourceExhausted);
@@ -2655,6 +2718,7 @@ fn validate_state(
     let mut state = BTreeMap::new();
     let mut defaults = BTreeMap::new();
     let mut declaration_order = Vec::with_capacity(raw.len());
+    let mut reducers = BTreeMap::new();
     for (raw_key, raw_kind) in raw {
         let Some(key) = raw_key.as_str().map(ToOwned::to_owned) else {
             return Err(PipelineConfigurationError::Invalid(
@@ -2696,11 +2760,101 @@ fn validate_state(
                 "a pipeline state default has the wrong type",
             ));
         }
+        if let Some(reducer) = typed_reducer(&key, &kind, normalized, &value, reducers_admitted)? {
+            reducers.insert(key.clone(), reducer);
+        }
         defaults.insert(key.clone(), value);
         declaration_order.push(key.clone());
         state.insert(key, normalized.to_owned());
     }
-    Ok((state, defaults, declaration_order))
+    Ok((state, defaults, declaration_order, reducers))
+}
+
+/// The typed reducer one state declaration selects; `None` overwrites.
+fn typed_reducer(
+    key: &str,
+    kind: &RawStateType,
+    normalized: &str,
+    default: &serde_json::Value,
+    admitted: bool,
+) -> Result<Option<StateReducer>, PipelineConfigurationError> {
+    let Some(name) = kind.reducer() else {
+        return Ok(None);
+    };
+    if !admitted {
+        return Err(PipelineConfigurationError::Unsupported(
+            "typed state reducers are not available in this deployment",
+        ));
+    }
+    if matches!(key, "input" | "messages") {
+        return Err(PipelineConfigurationError::Invalid(
+            "a built-in pipeline state key cannot declare a reducer",
+        ));
+    }
+    let Some(reducer) = StateReducer::parse(name).map_err(|_| {
+        PipelineConfigurationError::Invalid("a pipeline state reducer is not supported")
+    })?
+    else {
+        return Ok(None);
+    };
+    if reducer.state_type() != normalized {
+        return Err(PipelineConfigurationError::Invalid(
+            "a pipeline state reducer does not match its state type",
+        ));
+    }
+    reducer.check_held(default).map_err(|_| {
+        PipelineConfigurationError::Invalid("a pipeline state default exceeds its reducer bounds")
+    })?;
+    Ok(Some(reducer))
+}
+
+/// Channels whose writes must replace the value: a Map destination, a
+/// Parallel output, a shaping output, a HITL edit, a `StateModifier` clean, and
+/// every output of a node that runs inside a Parallel or Map parent (its
+/// updates never pass the top-level [`ReducerGuard`]).
+fn validate_overwrite_channels(
+    nodes: &[PipelineNodeDefinition],
+    reducers: &BTreeMap<String, StateReducer>,
+    fanout_owned: &BTreeSet<String>,
+) -> Result<(), PipelineConfigurationError> {
+    if reducers.is_empty() {
+        return Ok(());
+    }
+    for node in nodes {
+        let replaced: Vec<&str> = if fanout_owned.contains(node.id()) {
+            node.output_keys()
+                .iter()
+                .chain(node.cleaned_keys())
+                .map(String::as_str)
+                .chain(node.edit_state_key())
+                .collect()
+        } else {
+            match node {
+                PipelineNodeDefinition::Map(map) => vec![map.runtime().destination.as_str()],
+                PipelineNodeDefinition::Parallel(parallel) => vec![parallel.output_key()],
+                PipelineNodeDefinition::SplitOut(_) | PipelineNodeDefinition::Aggregate(_) => {
+                    node.output_keys().iter().map(String::as_str).collect()
+                }
+                PipelineNodeDefinition::Hitl(_) => node.edit_state_key().into_iter().collect(),
+                PipelineNodeDefinition::StateModifier(_) => {
+                    node.cleaned_keys().iter().map(String::as_str).collect()
+                }
+                PipelineNodeDefinition::Code(_)
+                | PipelineNodeDefinition::Application(_)
+                | PipelineNodeDefinition::Decision(_)
+                | PipelineNodeDefinition::DirectTool(_)
+                | PipelineNodeDefinition::Llm(_)
+                | PipelineNodeDefinition::Printer(_)
+                | PipelineNodeDefinition::Router(_) => Vec::new(),
+            }
+        };
+        if replaced.iter().any(|key| reducers.contains_key(*key)) {
+            return Err(PipelineConfigurationError::Invalid(
+                "this state channel must use the overwrite reducer",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn default_state_value(kind: &str) -> serde_json::Value {
@@ -2864,6 +3018,27 @@ fn definition_digest(
 fn digest_field(context: &mut digest::Context, value: &[u8]) {
     context.update(&(value.len() as u64).to_be_bytes());
     context.update(value);
+}
+
+const REDUCER_DIGEST_DOMAIN: &[u8] = b"elitea.graph.pipeline.state-reducers.v1\0";
+
+/// Folds the typed reducers into a definition digest. Callers fold only when
+/// at least one exists, so overwrite-only definitions keep their digest.
+pub(super) fn reducers_digest(
+    base: [u8; 32],
+    reducers: &BTreeMap<String, StateReducer>,
+) -> [u8; 32] {
+    let mut context = digest::Context::new(&digest::SHA256);
+    context.update(REDUCER_DIGEST_DOMAIN);
+    context.update(&base);
+    context.update(&(reducers.len() as u64).to_be_bytes());
+    for (key, reducer) in reducers {
+        digest_field(&mut context, key.as_bytes());
+        digest_field(&mut context, reducer.tag().as_bytes());
+    }
+    let mut output = [0_u8; 32];
+    output.copy_from_slice(context.finish().as_ref());
+    output
 }
 
 /// The bound a stored pipeline exceeded. Names the limit, never a value.
@@ -3065,6 +3240,7 @@ mod result_trace_binding_tests {
                 "renamed".to_owned(),
                 ResultTraceOutputs::new(vec!["answer".to_owned()], false),
             )]),
+            reducers: None,
         };
         let Err(error) = builder.into_subgraph() else {
             panic!("an unclaimed trace entry must refuse the graph");

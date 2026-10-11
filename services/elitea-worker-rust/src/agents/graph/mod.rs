@@ -108,6 +108,15 @@ mod split_out;
 #[cfg(test)]
 mod split_out_tests;
 use elitea_agent_runtime::graph::state_modifier;
+#[cfg(test)]
+mod state_reducer_compiler_tests;
+#[cfg(test)]
+mod state_reducer_digest_tests;
+#[cfg(test)]
+mod state_reducer_parity_tests;
+#[cfg(test)]
+mod state_reducer_pg_tests;
+pub(crate) use elitea_agent_runtime::graph::state_reducers;
 pub(crate) mod static_pause;
 #[cfg(test)]
 mod static_pause_tests;

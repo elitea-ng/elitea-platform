@@ -47,6 +47,13 @@ describe('judgeLivePipelineGraph', () => {
     expect(verdict.hasGraph).toBe(true);
   });
 
+  it('refuses a declared reducer on a production build', () => {
+    const verdict = judgeLivePipelineGraph(ADMISSIBLE.replace('  summary: str\n', '  summary: str\n  findings: {type: list, value: [], reducer: append}\n'));
+
+    expect(verdict.isAdmissible).toBe(false);
+    expect(verdict.issues.map((issue) => issue.rule)).toEqual(['state.reducer']);
+  });
+
   it('refuses a graph the compiler would reject, and names the rule', () => {
     // The same document with the `summary` state key deleted: the LLM node
     // now writes nowhere.

@@ -49,7 +49,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
-import { documentLevelIssues } from '../../lib/graphAdmission.helpers';
+import { blockingIssues, documentLevelIssues } from '../../lib/graphAdmission.helpers';
 import type { GraphAdmissionIssue } from '../../lib/graphAdmission.types';
 import { useGraphAdmission } from './useGraphAdmission';
 
@@ -132,8 +132,43 @@ function offendingNodeIds(issues: readonly GraphAdmissionIssue[]): readonly stri
   return [...new Set(issues.flatMap((issue) => (issue.nodeId === undefined ? [] : [issue.nodeId])))];
 }
 
+/**
+ * Notices that never block a save (today: a declared state `reducer`, which
+ * only YAML can edit). The same outlined alert and list as the refusals; each
+ * message names its field, so the list needs no translated title of its own.
+ */
+function GraphAdmissionNotices({ notices }: { readonly notices: readonly GraphAdmissionIssue[] }): ReactNode {
+  if (notices.length === 0) return null;
+  return (
+    <Alert
+      severity="warning"
+      variant="outlined"
+      sx={alertSx}
+      data-testid="graph-admission-notice"
+    >
+      <Box
+        component="ul"
+        sx={listSx}
+      >
+        {notices.map((issue) => (
+          <Typography
+            key={issueKey(issue)}
+            component="li"
+            variant="bodySmall"
+            title={issue.citation}
+          >
+            {issue.message}
+          </Typography>
+        ))}
+      </Box>
+    </Alert>
+  );
+}
+
 export function GraphAdmissionGate({ summaryHidden = false }: GraphAdmissionGateProps): ReactNode {
-  const { issues, hasGraph, parseFailed } = useGraphAdmission();
+  const { issues: allIssues, hasGraph, parseFailed } = useGraphAdmission();
+  const issues = blockingIssues(allIssues);
+  const notices = allIssues.filter((issue) => issue.severity === 'warning');
   /*
    * `parseFailed` is a veto in its own right. It is reachable only from the
    * Yaml tab, and only because that tab is the one place the stored document
@@ -144,54 +179,58 @@ export function GraphAdmissionGate({ summaryHidden = false }: GraphAdmissionGate
    */
   useGraphAdmissionSaveVeto(hasGraph && (parseFailed || issues.length > 0));
 
-  if (summaryHidden || (!parseFailed && issues.length === 0)) return null;
+  if (summaryHidden) return null;
+  if (!parseFailed && issues.length === 0) return <GraphAdmissionNotices notices={notices} />;
 
   const documentIssues = documentLevelIssues(issues);
   const nodeIds = offendingNodeIds(issues);
 
   return (
-    <Alert
-      severity="error"
-      variant="outlined"
-      sx={alertSx}
-      data-testid="graph-admission-gate"
-    >
-      <AlertTitle>{t('features.pipelines.graphAdmissionGate.title', 'This pipeline cannot be saved')}</AlertTitle>
-      <Typography variant="bodySmall">
-        {t('features.pipelines.graphAdmissionGate.body', 'The runtime would refuse this graph, so saving is blocked until it is fixed.')}
-      </Typography>
-      <Box
-        component="ul"
-        sx={listSx}
+    <>
+      <Alert
+        severity="error"
+        variant="outlined"
+        sx={alertSx}
+        data-testid="graph-admission-gate"
       >
-        {parseFailed && (
-          <Typography
-            component="li"
-            variant="bodySmall"
-          >
-            {t('features.pipelines.graphAdmissionGate.unparseable', 'The YAML does not parse, so the runtime cannot read a graph out of it.')}
-          </Typography>
-        )}
-        {documentIssues.map((issue) => (
-          <Typography
-            key={issueKey(issue)}
-            component="li"
-            variant="bodySmall"
-            title={issue.citation}
-          >
-            {issue.message}
-          </Typography>
-        ))}
-        {nodeIds.map((nodeId) => (
-          <Typography
-            key={nodeId}
-            component="li"
-            variant="bodySmall"
-          >
-            {t('features.pipelines.graphAdmissionGate.nodeHint', 'See the errors on node')} {nodeId}
-          </Typography>
-        ))}
-      </Box>
-    </Alert>
+        <AlertTitle>{t('features.pipelines.graphAdmissionGate.title', 'This pipeline cannot be saved')}</AlertTitle>
+        <Typography variant="bodySmall">
+          {t('features.pipelines.graphAdmissionGate.body', 'The runtime would refuse this graph, so saving is blocked until it is fixed.')}
+        </Typography>
+        <Box
+          component="ul"
+          sx={listSx}
+        >
+          {parseFailed && (
+            <Typography
+              component="li"
+              variant="bodySmall"
+            >
+              {t('features.pipelines.graphAdmissionGate.unparseable', 'The YAML does not parse, so the runtime cannot read a graph out of it.')}
+            </Typography>
+          )}
+          {documentIssues.map((issue) => (
+            <Typography
+              key={issueKey(issue)}
+              component="li"
+              variant="bodySmall"
+              title={issue.citation}
+            >
+              {issue.message}
+            </Typography>
+          ))}
+          {nodeIds.map((nodeId) => (
+            <Typography
+              key={nodeId}
+              component="li"
+              variant="bodySmall"
+            >
+              {t('features.pipelines.graphAdmissionGate.nodeHint', 'See the errors on node')} {nodeId}
+            </Typography>
+          ))}
+        </Box>
+      </Alert>
+      <GraphAdmissionNotices notices={notices} />
+    </>
   );
 }

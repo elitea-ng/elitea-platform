@@ -93,6 +93,12 @@ export const CompilerAdmittedNodeTypes: readonly PipelineNodeType[] = [
 
 const admittedNodeTypeSet: ReadonlySet<string> = new Set<string>(CompilerAdmittedNodeTypes);
 
+/**
+ * Typed state reducers (`state.<key>.reducer`) are admitted by the same rehearsal-only Worker feature
+ * (`compiler.rs` `TYPED_REDUCERS_READY`); a production Worker refuses any `reducer` key.
+ */
+export const TYPED_STATE_REDUCERS_ADMITTED = GRAPH_EXTENSIONS_REHEARSAL;
+
 /** Whether the pipeline compiler has a `parse_pipeline_node` arm for `type`. */
 export const isCompilerAdmittedNodeType = (type: string): boolean => admittedNodeTypeSet.has(type);
 

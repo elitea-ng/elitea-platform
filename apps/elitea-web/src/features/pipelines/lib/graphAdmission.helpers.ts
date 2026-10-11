@@ -32,7 +32,7 @@ import { NODE_ADMISSION_RULES } from './graphAdmission.nodes';
 import type { AdmissionGraph, AdmissionNode, GraphAdmissionIssue, GraphAdmissionRule } from './graphAdmission.types';
 import { admissionIssue, readNodeIdentity } from './graphAdmission.types';
 
-const { isReservedStateKey } = RuntimeContractConstants;
+const { isReservedStateKey, TYPED_STATE_REDUCERS_ADMITTED } = RuntimeContractConstants;
 
 /** `compiler.rs:51` — `MAX_PIPELINE_NODES`. */
 const MAX_PIPELINE_NODES = 128;
@@ -69,6 +69,21 @@ function readStateTypeName(spec: unknown): string | undefined {
     return typeof declared === 'string' ? declared : undefined;
   }
   return undefined;
+}
+
+/** `state_reducers.rs` `StateReducer::parse` — each reducer and the one normalised type it accepts (`overwrite`: any). */
+const STATE_REDUCER_TYPES: ReadonlyMap<string, string | undefined> = new Map([
+  ['overwrite', undefined],
+  ['append', 'list'],
+  ['sum_int', 'int'],
+  ['merge', 'dict'],
+]);
+
+/** The `reducer` of one `{type, value, reducer}` descriptor. A bare type name and `reducer: null` have none (`compiler.rs:155`). */
+function readStateReducer(spec: unknown): unknown {
+  if (spec === null || typeof spec !== 'object' || !('reducer' in spec)) return undefined;
+  const declared = (spec as { readonly reducer?: unknown }).reducer;
+  return declared ?? undefined;
 }
 
 /** Normalise a document into the lookup sets every rule reads. Runs once per collection pass. */
@@ -236,6 +251,42 @@ const builtinStateTypeRule: GraphAdmissionRule = {
 };
 
 /**
+ * A declared reducer is kept exactly as written: Save stores the YAML text and
+ * a canvas edit spreads the descriptor (`stateVariableSpec.helpers.ts`). The
+ * canvas cannot show or edit it yet, so this notice says where it lives.
+ * Whether the runtime admits it is the compiler's call (`compiler.rs:2774`).
+ */
+const stateReducerRule: GraphAdmissionRule = {
+  id: 'state.reducer',
+  citation: 'compiler.rs:2774',
+  summary: 'a declared state reducer is admitted only where the runtime admits it, and is then a YAML-only notice',
+  check: (graph) => Object.entries(graph.document.state ?? {}).flatMap(([key, spec]) => stateReducerIssues(graph, key, readStateReducer(spec))),
+};
+
+/** `compiler.rs:2729, 2774-2808` (state type parse, `typed_reducer`), in the compiler's order; a valid reducer becomes a non-blocking notice. */
+function stateReducerIssues(graph: AdmissionGraph, key: string, reducer: unknown): readonly GraphAdmissionIssue[] {
+  if (reducer === undefined) return [];
+  const field = `state.${key}`;
+  const subject = typeof reducer === 'string' ? reducer : '';
+  const refuse = (line: string, message: string): readonly GraphAdmissionIssue[] => [admissionIssue('state.reducer', `compiler.rs:${line}`, undefined, field, subject, message)];
+  if (typeof reducer !== 'string') return refuse('2729', `${field}: reducer must be one of overwrite, append, sum_int or merge.`);
+  if (!TYPED_STATE_REDUCERS_ADMITTED) return refuse('2784', `${field}: the "${reducer}" reducer is not available on this deployment — the whole pipeline is refused.`);
+  if (PINNED_BUILTIN_STATE_TYPES.has(key)) return refuse('2789', `${field}: this built-in variable cannot declare a reducer.`);
+  if (!STATE_REDUCER_TYPES.has(reducer)) return refuse('2794', `${field}: reducer must be one of overwrite, append, sum_int or merge.`);
+  const required = STATE_REDUCER_TYPES.get(reducer);
+  if (required !== undefined && graph.stateTypes.get(key) !== required) return refuse('2800', `${field}: the "${reducer}" reducer needs a "${required}" variable.`);
+  const notice = admissionIssue(
+    'state.reducer',
+    'compiler.rs:2774',
+    undefined,
+    field,
+    reducer,
+    `${field}: the "${reducer}" reducer can be changed in YAML only for now. The visual editor keeps it as written.`,
+  );
+  return [{ ...notice, severity: 'warning' as const }];
+}
+
+/**
  * Every admission rule, document-level first, then per-node — the order the
  * compiler itself hits them (`from_raw` before `parse_pipeline_nodes`).
  * Exported so the unit suite can assert one case per rule id and so nothing
@@ -248,6 +299,7 @@ export const GRAPH_ADMISSION_RULES: readonly GraphAdmissionRule[] = [
   stateKeyRule,
   stateTypeRule,
   builtinStateTypeRule,
+  stateReducerRule,
   ...NODE_ADMISSION_RULES,
 ];
 
@@ -255,6 +307,11 @@ export const GRAPH_ADMISSION_RULES: readonly GraphAdmissionRule[] = [
 export function collectGraphAdmissionIssues(rawDocument: YamlPipelineDocument | undefined): readonly GraphAdmissionIssue[] {
   const graph = readAdmissionGraph(normalizePipelineNodeIdentifiers(rawDocument));
   return [...GRAPH_ADMISSION_RULES.flatMap((rule) => rule.check(graph)), ...graphShapingIssues(graph.document), ...graphMapIssues(graph.document), ...graphParallelIssues(graph.document)];
+}
+
+/** The issues that refuse the document; a `'warning'` notice never blocks a save. */
+export function blockingIssues(issues: readonly GraphAdmissionIssue[]): readonly GraphAdmissionIssue[] {
+  return issues.filter((issue) => issue.severity !== 'warning');
 }
 
 /** The issues a given node's panel should show. */

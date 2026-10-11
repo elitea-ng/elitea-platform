@@ -42,6 +42,11 @@ export type GraphAdmissionRuleId =
   | 'state.type'
   /** `compiler.rs:1391-1395` — `input` must be `str`, `messages` must be `list`. */
   | 'state.builtin-type'
+  /**
+   * `compiler.rs:2774` (`typed_reducer`) — a declared `reducer` is a notice, never a refusal: the
+   * visual editor cannot edit it yet, so the notice keeps it from being dropped unseen.
+   */
+  | 'state.reducer'
   /** `compiler.rs:1242-1270` — `parse_pipeline_node`'s allow-list of `type:` values. */
   | 'node.type'
   /** `yaml.rs:362-369` (`valid_graph_id`), `compiler.rs:1220-1224` (reserved), `compiler.rs:1225-1229` (unique). */
@@ -76,6 +81,8 @@ export interface GraphAdmissionIssue {
   readonly message: string;
   /** `file:line` in `services/elitea-worker-rust/src/agents/graph/`. */
   readonly citation: string;
+  /** `'warning'` is a notice that never blocks a save. Absent means the compiler refuses the document. */
+  readonly severity?: 'warning';
 }
 
 /** One node, normalised: `id`/`type` resolved to strings so no rule has to re-narrow them. */
