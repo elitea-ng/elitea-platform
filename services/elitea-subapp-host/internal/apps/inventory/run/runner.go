@@ -161,9 +161,10 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 			call.Tool)
 	}
 
-	// Found by a deletion of this toolkit or project, which stops the ingest
-	// before it deletes anything (StopIngests).
-	labelIngest(tc, call.Tool, idLabel(identity.ProjectID), identity.ApplicationID)
+	// The labels a deletion of this toolkit or project finds the ingest by
+	// (StopIngests) were set when the invocation was registered (Labels),
+	// not here: set here they would be missing for the whole stretch before
+	// this line.
 
 	if err := tc.Checkpoint(); err != nil {
 		return nil, err

@@ -83,13 +83,14 @@ type DeleteProjectResponse struct {
 	// removed in all. Empty for an application that has no graphs.
 	GraphToolkitIds []int64        `protobuf:"varint,6,rep,packed,name=graph_toolkit_ids,json=graphToolkitIds,proto3" json:"graph_toolkit_ids,omitempty"`
 	Graphs          *GraphDeletion `protobuf:"bytes,7,opt,name=graphs,proto3" json:"graphs,omitempty"`
-	// True when nothing of the project is left in the application. False when
-	// something was left alone: a toolkit's graph an ingest holds
-	// (busy_toolkit_ids) or a build whose heartbeat is live (live_builds). What
-	// was deleted stays deleted; call again once they end.
-	Complete bool `protobuf:"varint,8,opt,name=complete,proto3" json:"complete,omitempty"`
+	// True when something of the project was left alone: a toolkit's graph an
+	// ingest holds (busy_toolkit_ids) or a build whose heartbeat is live
+	// (live_builds). What was deleted stays deleted; call again once they end.
+	// False — the zero value, so also what an application that has nothing to
+	// leave behind reports — means nothing of the project is left.
+	Incomplete bool `protobuf:"varint,8,opt,name=incomplete,proto3" json:"incomplete,omitempty"`
 	// Inventory: the toolkits whose graph was NOT deleted because an ingest
-	// (or another write) holds it. Empty when complete.
+	// (or another write) holds it. Empty unless incomplete.
 	BusyToolkitIds []int64 `protobuf:"varint,9,rep,packed,name=busy_toolkit_ids,json=busyToolkitIds,proto3" json:"busy_toolkit_ids,omitempty"`
 	// Inventory: what each deleted toolkit's graph held, in deletion order;
 	// `graphs` is their sum.
@@ -177,9 +178,9 @@ func (x *DeleteProjectResponse) GetGraphs() *GraphDeletion {
 	return nil
 }
 
-func (x *DeleteProjectResponse) GetComplete() bool {
+func (x *DeleteProjectResponse) GetIncomplete() bool {
 	if x != nil {
-		return x.Complete
+		return x.Incomplete
 	}
 	return false
 }
@@ -310,7 +311,9 @@ type DeleteToolkitResponse struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	ProjectId int32                  `protobuf:"varint,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
 	ToolkitId int32                  `protobuf:"varint,2,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
-	// False when the toolkit had no graph, so there was nothing to delete.
+	// True when anything of the toolkit went: its graph, or source state and
+	// document versions a failed first ingestion left without a graph. False
+	// only when there was nothing at all to delete.
 	Deleted       bool           `protobuf:"varint,3,opt,name=deleted,proto3" json:"deleted,omitempty"`
 	Removed       *GraphDeletion `protobuf:"bytes,4,opt,name=removed,proto3" json:"removed,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -528,7 +531,7 @@ const file_elitea_subapp_v1_platform_proto_rawDesc = "" +
 	"\x1felitea/subapp/v1/platform.proto\x12\x10elitea.subapp.v1\"5\n" +
 	"\x14DeleteProjectRequest\x12\x1d\n" +
 	"\n" +
-	"project_id\x18\x01 \x01(\x05R\tprojectId\"\xd1\x03\n" +
+	"project_id\x18\x01 \x01(\x05R\tprojectId\"\xd5\x03\n" +
 	"\x15DeleteProjectResponse\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\x05R\tprojectId\x124\n" +
@@ -538,8 +541,10 @@ const file_elitea_subapp_v1_platform_proto_rawDesc = "" +
 	"\x14stale_builds_removed\x18\x04 \x01(\x03R\x12staleBuildsRemoved\x12\x16\n" +
 	"\x06errors\x18\x05 \x03(\tR\x06errors\x12*\n" +
 	"\x11graph_toolkit_ids\x18\x06 \x03(\x03R\x0fgraphToolkitIds\x127\n" +
-	"\x06graphs\x18\a \x01(\v2\x1f.elitea.subapp.v1.GraphDeletionR\x06graphs\x12\x1a\n" +
-	"\bcomplete\x18\b \x01(\bR\bcomplete\x12(\n" +
+	"\x06graphs\x18\a \x01(\v2\x1f.elitea.subapp.v1.GraphDeletionR\x06graphs\x12\x1e\n" +
+	"\n" +
+	"incomplete\x18\b \x01(\bR\n" +
+	"incomplete\x12(\n" +
 	"\x10busy_toolkit_ids\x18\t \x03(\x03R\x0ebusyToolkitIds\x12M\n" +
 	"\x0etoolkit_graphs\x18\n" +
 	" \x03(\v2&.elitea.subapp.v1.ToolkitGraphDeletionR\rtoolkitGraphs\"p\n" +

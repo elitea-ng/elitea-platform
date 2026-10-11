@@ -56,9 +56,9 @@ type PlatformOperationsClient interface {
 	// A deletion that went ahead but could not take everything (Inventory: a
 	// toolkit's graph held by an ingest that started meanwhile or runs on
 	// another replica; DeepWiki: a build whose heartbeat is live) is NOT a
-	// failure: it answers OK with `complete = false`, what it deleted, and what
-	// it left (`busy_toolkit_ids`, `live_builds`). The caller records that and
-	// calls again later; the call is idempotent.
+	// failure: it answers OK with `incomplete = true`, what it deleted, and
+	// what it left (`busy_toolkit_ids`, `live_builds`). The caller records that
+	// and calls again later; the call is idempotent.
 	//
 	// It deletes the application's own data only; the project's artifacts
 	// belong to the platform's project deletion.
@@ -138,9 +138,9 @@ type PlatformOperationsServer interface {
 	// A deletion that went ahead but could not take everything (Inventory: a
 	// toolkit's graph held by an ingest that started meanwhile or runs on
 	// another replica; DeepWiki: a build whose heartbeat is live) is NOT a
-	// failure: it answers OK with `complete = false`, what it deleted, and what
-	// it left (`busy_toolkit_ids`, `live_builds`). The caller records that and
-	// calls again later; the call is idempotent.
+	// failure: it answers OK with `incomplete = true`, what it deleted, and
+	// what it left (`busy_toolkit_ids`, `live_builds`). The caller records that
+	// and calls again later; the call is idempotent.
 	//
 	// It deletes the application's own data only; the project's artifacts
 	// belong to the platform's project deletion.

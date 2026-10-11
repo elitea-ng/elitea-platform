@@ -109,6 +109,15 @@ func (s *Server) Stop() { s.manager.Stop() }
 // ManagerAware is a runner that wants the invocation registry.
 type ManagerAware interface{ AttachManager(*Manager) }
 
+// Labeler is a runner that names, from the call alone, the labels an
+// invocation must carry from the moment it is registered (the project and
+// toolkit an ingest writes, say), so that a deletion's StopMatching finds it
+// whether or not the run has begun. The server asks before Submit
+// (Manager.SubmitLabelled); nil or empty means no labels.
+type Labeler interface {
+	Labels(call Invoke) map[string]string
+}
+
 // Starter is a runner with background work (refreshing what the engine can
 // do, say) that runs until the context ends.
 type Starter interface{ Start(ctx context.Context) }
@@ -307,7 +316,18 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request) {
 		}
 		return s.app.Runner.Invoke(ctx, Invoke{Family: family, Toolkit: toolkit, Tool: tool, Request: request, Identity: identity}, tc)
 	}
-	invocation, err := s.manager.Submit(r.Context(), toolkit, tool, call)
+	// The labels a deletion finds the invocation by are set at
+	// registration, not by the run: a run that has not reached its
+	// SetLabel yet would be invisible to a StopMatching in between
+	// (Manager.SubmitLabelled). An unknown toolkit has no family and so no
+	// labels; the run refuses it.
+	var labels map[string]string
+	if labeler, ok := s.app.Runner.(Labeler); ok {
+		if family, err := s.app.Toolkits.Resolve(toolkit); err == nil {
+			labels = labeler.Labels(Invoke{Family: family, Toolkit: toolkit, Tool: tool, Request: request, Identity: identity})
+		}
+	}
+	invocation, err := s.manager.SubmitLabelled(r.Context(), toolkit, tool, labels, call)
 	if err != nil {
 		s.logger.Error("failed to accept an invocation", "toolkit", toolkit, "tool", tool, "error", err)
 		writeJSON(w, http.StatusInternalServerError, TransportError(http.StatusInternalServerError, "Internal Server Error"))

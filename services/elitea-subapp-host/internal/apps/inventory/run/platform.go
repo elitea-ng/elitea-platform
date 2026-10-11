@@ -24,15 +24,17 @@ package run
 // runs on another replica) holds the graph. For one toolkit the engine
 // refuses, which is the same retryable answer. For a project the engine
 // deletes every graph it can and reports the held toolkits; that is answered
-// OK with Complete false and BusyToolkits, never as a failure that would hide
-// what was deleted, and the platform calls again.
+// OK with Incomplete true and BusyToolkits, never as a failure that would
+// hide what was deleted, and the platform calls again.
+//
+// The engine's own tombstone (migration 0007) is what makes the deletion
+// final: an ingest that starts after it — registered as the deletion began,
+// or on another replica — is refused by the engine under the ingestion
+// lease (code toolkit_deleted) and writes nothing.
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -58,8 +60,8 @@ const (
 	DefaultStopWait = 30 * time.Second
 )
 
-// Labels a running ingest carries (spi.Context.SetLabel), so a deletion can
-// find the ones that would write into what it deletes.
+// Labels a running ingest carries (set at registration, Labels), so a
+// deletion can find the ones that would write into what it deletes.
 const (
 	labelProject = "project"
 	labelToolkit = "toolkit"
@@ -91,18 +93,33 @@ func (r *Runner) AttachManager(manager *spi.Manager) { r.manager = manager }
 
 var (
 	_ spi.ManagerAware = (*Runner)(nil)
+	_ spi.Labeler      = (*Runner)(nil)
 	_ spi.PlatformOps  = (*Runner)(nil)
 	_ spi.ToolkitOps   = (*Runner)(nil)
 )
 
-// labelIngest marks a running ingest with the project and toolkit whose graph
-// it writes.
-func labelIngest(tc *spi.Context, tool, project string, toolkit any) {
-	if tool != ingestTool {
-		return
+// Labels names the project and toolkit an ingest writes, for the server to
+// put on the invocation AT REGISTRATION (spi.Manager.SubmitLabelled): they
+// are then on it, under the manager's lock, before it is in flight, so a
+// deletion's StopIngests always sees them. Set from inside the run they
+// would be invisible until the run reached that line, and an ingest
+// registered while the deletion was stopping its siblings would run on and
+// write the graph back. Any other tool carries no labels.
+//
+// The project is the one the gate VERIFIED when the identity carries one
+// (what Invoke uses), else the body's — the same choice Invoke makes.
+func (r *Runner) Labels(call spi.Invoke) map[string]string {
+	if call.Tool != ingestTool {
+		return nil
 	}
-	tc.SetLabel(labelProject, project)
-	tc.SetLabel(labelToolkit, idLabel(toolkit))
+	identity := ExtractIdentity(call.Family.Name, call.Request, MergeParameters(call.Request))
+	if call.Identity.ProjectID != "" {
+		identity.ProjectID = call.Identity.ProjectID
+	}
+	return map[string]string{
+		labelProject: idLabel(identity.ProjectID),
+		labelToolkit: idLabel(identity.ApplicationID),
+	}
 }
 
 // StopIngests stops the running run_ingestion invocations of the project - of
@@ -139,7 +156,8 @@ func (r *Runner) StopIngests(ctx context.Context, project, toolkit string) error
 // DeleteToolkit deletes the graph of one toolkit of one project. It is the
 // platform service's operation (spi.ToolkitOps), called when an Inventory
 // toolkit is deleted, after the service authorised the caller by its mTLS
-// client certificate. A toolkit with no graph answers Deleted = false.
+// client certificate. A toolkit that had nothing at all (no graph, no source
+// state) answers Deleted = false.
 func (r *Runner) DeleteToolkit(ctx context.Context, projectID, toolkitID int32) (*spi.ToolkitDeletion, error) {
 	if r.DeleteGraph == nil {
 		return nil, spi.Failf(spi.KindRuntime, "this host has no Inventory engine, so there is no graph to delete")
@@ -171,7 +189,7 @@ func (r *Runner) DeleteToolkit(ctx context.Context, projectID, toolkitID int32) 
 //
 // It fails (FAILED_PRECONDITION) only when the stop-ingests wait failed, so
 // nothing was deleted. A toolkit the engine found held is reported in
-// BusyToolkits with Complete false; what was deleted is reported too.
+// BusyToolkits with Incomplete true; what was deleted is reported too.
 func (r *Runner) DeleteProject(ctx context.Context, projectID int32) (*spi.ProjectDeletion, error) {
 	if r.DeleteProjectGraphs == nil {
 		return nil, spi.Failf(spi.KindRuntime, "this host has no Inventory engine, so there is no graph to delete")
@@ -191,13 +209,13 @@ func (r *Runner) DeleteProject(ctx context.Context, projectID int32) (*spi.Proje
 	deletion := &spi.ProjectDeletion{
 		ProjectID:     projectID,
 		Graphs:        graphRemoved(document),
-		GraphToolkits: idList(document["toolkits"]),
-		BusyToolkits:  idList(document["busy_toolkits"]),
+		GraphToolkits: spi.JSONIDs(document["toolkits"]),
+		BusyToolkits:  spi.JSONIDs(document["busy_toolkits"]),
 	}
 	perToolkit, _ := document["by_toolkit"].([]any)
 	for _, entry := range perToolkit {
 		counts, _ := entry.(map[string]any)
-		if id, err := strconv.ParseInt(idLabel(counts["toolkit_id"]), 10, 64); err == nil {
+		if id, ok := spi.JSONID(counts["toolkit_id"]); ok {
 			deletion.ToolkitGraphs = append(deletion.ToolkitGraphs, spi.ToolkitGraphDeletion{
 				ToolkitID: id, Removed: graphRemoved(counts),
 			})
@@ -206,29 +224,18 @@ func (r *Runner) DeleteProject(ctx context.Context, projectID int32) (*spi.Proje
 	// The engine says whether it is complete; an engine that does not is
 	// complete when it named no busy toolkit.
 	if complete, ok := document["complete"]; ok {
-		deletion.Complete = Truthy(complete)
+		deletion.Incomplete = !Truthy(complete)
 	} else {
-		deletion.Complete = len(deletion.BusyToolkits) == 0
+		deletion.Incomplete = len(deletion.BusyToolkits) > 0
 	}
 	return deletion, nil
 }
 
-// idList reads a JSON list of toolkit ids (numbers or digit strings), in
-// order, skipping what is not an id.
-func idList(value any) []int64 {
-	entries, _ := value.([]any)
-	var ids []int64
-	for _, entry := range entries {
-		if id, err := strconv.ParseInt(idLabel(entry), 10, 64); err == nil {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
 // callPlatformTool runs an engine delete tool with the project (and toolkit)
 // from the call - there is no user and no identity here - and returns the
-// engine's JSON document.
+// engine's JSON document. The engine's "an ingestion is running" refusal
+// (code busy) becomes spi.ErrIngestRunning, which the transport maps to a
+// retryable code.
 func (r *Runner) callPlatformTool(ctx context.Context, tool Tool, name string, ids map[string]any) (map[string]any, error) {
 	arguments := map[string]any{
 		"family": platformFamily,
@@ -238,18 +245,10 @@ func (r *Runner) callPlatformTool(ctx context.Context, tool Tool, name string, i
 	for key, value := range ids {
 		arguments[key] = value
 	}
-	var id [8]byte
-	_, _ = rand.Read(id[:])
-	tc := spi.DetachedContext("platform-" + name + "-" + hex.EncodeToString(id[:]))
-	result, err := tool(ctx, arguments, tc)
+	result, err := tool(ctx, arguments, spi.PlatformContext(name))
+	result, err = spi.EngineOutcome(name, result, err, EngineError)
 	if err != nil {
-		return nil, classifyEngineFailure(err)
-	}
-	if result == nil {
-		return nil, spi.Failf(spi.KindRuntime, "%s returned nothing, expected a dict", name)
-	}
-	if !Truthy(result["success"]) {
-		return nil, classifyEngineFailure(EngineError(result))
+		return nil, spi.ClassifyBusy(err, spi.ErrIngestRunning, legacyBusyText)
 	}
 	var document map[string]any
 	if err := json.Unmarshal([]byte(str(result["result"])), &document); err != nil {
@@ -258,34 +257,19 @@ func (r *Runner) callPlatformTool(ctx context.Context, tool Tool, name string, i
 	return document, nil
 }
 
-// classifyEngineFailure recognises the engine's "an ingestion is running"
-// refusal (its ingestion lease is held; the wording is the contract, see
-// README "Deleting graphs") and gives it the sentinel the transport maps to
-// a retryable code.
-func classifyEngineFailure(err error) error {
-	if err == nil {
-		return nil
-	}
-	text := err.Error()
-	if strings.Contains(text, "an ingestion") && strings.Contains(text, "running") {
-		return spi.NewFailure(spi.KindRuntime, fmt.Errorf("%w: %s", spi.ErrIngestRunning, text))
-	}
-	return err
+// legacyBusyText recognises the lease refusal of an engine from BEFORE the
+// error code existed (release N-1 of elitea-inventory-engine), by its
+// wording ("an ingestion ... running"). Rollout fallback only: it is
+// consulted when the error carries no code, and goes once every engine is
+// on a release that sends codes.
+func legacyBusyText(text string) bool {
+	return strings.Contains(text, "an ingestion") && strings.Contains(text, "running")
 }
 
 // graphRemoved reads the counts of the engine's deletion document.
 func graphRemoved(document map[string]any) spi.GraphDeletion {
-	count := func(key string) int64 {
-		switch n := document[key].(type) {
-		case float64:
-			return int64(n)
-		case int64:
-			return n
-		}
-		return 0
-	}
 	return spi.GraphDeletion{
-		Entities: count("entities"), Relations: count("relations"),
-		Sources: count("sources"), Documents: count("documents"),
+		Entities: spi.JSONInt(document["entities"]), Relations: spi.JSONInt(document["relations"]),
+		Sources: spi.JSONInt(document["sources"]), Documents: spi.JSONInt(document["documents"]),
 	}
 }

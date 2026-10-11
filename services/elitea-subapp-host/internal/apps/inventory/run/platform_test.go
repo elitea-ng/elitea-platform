@@ -15,6 +15,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -209,9 +210,11 @@ func (r *platformRig) startIngest(t *testing.T, project string, toolkit any, obe
 	family, _ := inventory.Toolkits.Resolve("inventory")
 	request := map[string]any{"configuration": map[string]any{"application_id": toolkit},
 		"parameters": map[string]any{"source": map[string]any{"toolkit": "git"}}}
-	invocation, err := r.manager.Submit(t.Context(), "inventory", "run_ingestion", func(ctx context.Context, tc *spi.Context) (map[string]any, error) {
-		return r.runner.Invoke(ctx, spi.Invoke{Family: family, Toolkit: "inventory", Tool: "run_ingestion",
-			Request: request, Identity: spi.Identity{ProjectID: project}}, tc)
+	call := spi.Invoke{Family: family, Toolkit: "inventory", Tool: "run_ingestion",
+		Request: request, Identity: spi.Identity{ProjectID: project}}
+	// As spi.Server.invoke does: the labels go on at registration.
+	invocation, err := r.manager.SubmitLabelled(t.Context(), "inventory", "run_ingestion", r.runner.Labels(call), func(ctx context.Context, tc *spi.Context) (map[string]any, error) {
+		return r.runner.Invoke(ctx, call, tc)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -222,6 +225,74 @@ func (r *platformRig) startIngest(t *testing.T, project string, toolkit any, obe
 		t.Fatal("the ingest never started")
 	}
 	return invocation
+}
+
+// An ingest REGISTERED while a deletion is under way — accepted by the
+// manager, but its run not yet begun (it has not reached Invoke, let alone
+// any label it could set from inside) — is found and stopped all the same,
+// because its project and toolkit labels went on at registration
+// (Runner.Labels, spi.Manager.SubmitLabelled). Before, StopMatching read an
+// unlabelled invocation and the ingest ran on to write the graph back.
+func TestAnIngestRegisteredMidDeleteIsStopped(t *testing.T) {
+	rig := newPlatformRig(t, []string{"elitea-main"})
+	family, _ := inventory.Toolkits.Resolve("inventory")
+	request := map[string]any{"configuration": map[string]any{"application_id": 70},
+		"parameters": map[string]any{"source": map[string]any{"toolkit": "git"}}}
+	call := spi.Invoke{Family: family, Toolkit: "inventory", Tool: "run_ingestion",
+		Request: request, Identity: spi.Identity{ProjectID: "7"}}
+	labels := rig.runner.Labels(call)
+	if labels["project"] != "7" || labels["toolkit"] != "70" {
+		t.Fatalf("labels from the call: %v", labels)
+	}
+	if rig.runner.Labels(spi.Invoke{Family: family, Tool: "search_graph", Request: request}) != nil {
+		t.Fatal("a read tool carries labels")
+	}
+
+	// The run never reaches Invoke until the deletion has had its say: it
+	// is registered, in flight, and sitting before its first line — where a
+	// real run's first Checkpoint (Invoke's) would see the stop, as this
+	// one does.
+	release := make(chan struct{})
+	ran := make(chan error, 1)
+	invocation, err := rig.manager.SubmitLabelled(t.Context(), "inventory", "run_ingestion", labels, func(ctx context.Context, tc *spi.Context) (map[string]any, error) {
+		for {
+			if err := tc.Checkpoint(); err != nil {
+				ran <- err
+				return nil, err
+			}
+			select {
+			case <-release:
+				ran <- nil
+				return rig.runner.Invoke(ctx, call, tc)
+			case <-ctx.Done():
+				ran <- ctx.Err()
+				return nil, ctx.Err()
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.deleteToolkit(rig.client(t, "elitea-main"), 7, 70); err != nil {
+		t.Fatalf("the deletion did not go through: %v", err)
+	}
+	select {
+	case err := <-ran:
+		if err == nil {
+			t.Fatal("the registered ingest ran instead of being stopped")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the registered ingest was neither stopped nor run")
+	}
+	body, _ := rig.manager.Poll(t.Context(), "inventory", "run_ingestion", invocation.ID)
+	if body["status"] != "Error" {
+		t.Fatalf("the registered ingest did not end as stopped: %v", body)
+	}
+	if rig.manager.InFlight() != 0 || rig.engine.count() != 1 {
+		t.Fatalf("in flight %d, engine calls %d", rig.manager.InFlight(), rig.engine.count())
+	}
+	close(release)
 }
 
 func TestGraphDeletionIsGRPCAuthorisedByTheMainCertificate(t *testing.T) {
@@ -384,23 +455,46 @@ func TestADeletionIsRefusedWhileAnIngestWillNotStop(t *testing.T) {
 	}
 }
 
+// The engine's lease refusal is recognised by its CODE (busy), whatever its
+// words and whichever way it arrives (an error line the engine client turned
+// into a coded failure, or a success:false result carrying the code); only
+// an engine of the previous release, which sends no code, is recognised by
+// its wording, and that fallback never fires on an error that carries some
+// other code.
 func TestTheEnginesLeaseRefusalIsRetryable(t *testing.T) {
 	rig := newPlatformRig(t, []string{"elitea-main"})
 	main := rig.client(t, "elitea-main")
-	message := "an ingestion of this Inventory toolkit is running; stop it and delete the graph again"
-	rig.engine.answer = func(string, map[string]any) (map[string]any, error) {
-		return map[string]any{"success": false, "error": message}, nil
+	expect := func(name string, want codes.Code, answer func() (map[string]any, error)) {
+		t.Helper()
+		rig.engine.answer = func(string, map[string]any) (map[string]any, error) { return answer() }
+		if _, err := rig.deleteToolkit(main, 7, 70); status.Code(err) != want {
+			t.Errorf("%s: want %v, got %v", name, want, err)
+		}
 	}
-	if _, err := rig.deleteToolkit(main, 7, 70); status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("toolkit %q: %v", message, err)
-	}
+	// The error-line path: the engine client wraps the line's code.
+	expect("coded error, any wording", codes.FailedPrecondition, func() (map[string]any, error) {
+		return nil, spi.NewCodedFailure(spi.KindRuntime, spi.CodeBusy, errors.New("the graph is held; retry"))
+	})
+	// The result path: a success:false result with the code.
+	expect("coded result", codes.FailedPrecondition, func() (map[string]any, error) {
+		return map[string]any{"success": false, "error": "held", "code": "busy"}, nil
+	})
+	// An engine from before the code existed: its wording, and only when
+	// there is no code at all.
+	legacy := "an ingestion of this Inventory toolkit is running; stop it and delete the graph again"
+	expect("legacy wording, no code", codes.FailedPrecondition, func() (map[string]any, error) {
+		return map[string]any{"success": false, "error": legacy}, nil
+	})
+	expect("legacy wording under another code", codes.Internal, func() (map[string]any, error) {
+		return nil, spi.NewCodedFailure(spi.KindRuntime, "toolkit_deleted", errors.New(legacy))
+	})
 	// Any other engine failure is internal, not retryable.
-	rig.engine.answer = func(string, map[string]any) (map[string]any, error) {
+	expect("another failure", codes.Internal, func() (map[string]any, error) {
 		return map[string]any{"success": false, "error": "the store is down"}, nil
-	}
-	if _, err := rig.deleteToolkit(main, 7, 70); status.Code(err) != codes.Internal {
-		t.Errorf("%v", err)
-	}
+	})
+	expect("a transport error", codes.Internal, func() (map[string]any, error) {
+		return nil, errors.New("the engine socket is gone")
+	})
 }
 
 // Nothing a user or an agent can reach deletes a graph: the tools are in no
@@ -481,8 +575,8 @@ func TestAPartialProjectDeletionIsOKAndNotComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a partial deletion is OK: %v", err)
 	}
-	if got.GetComplete() {
-		t.Error("complete, although two toolkits were held")
+	if !got.GetIncomplete() {
+		t.Error("not marked incomplete, although two toolkits were held")
 	}
 	if fmt.Sprint(got.GetBusyToolkitIds()) != "[71 72]" || fmt.Sprint(got.GetGraphToolkitIds()) != "[70]" {
 		t.Errorf("busy %v deleted %v", got.GetBusyToolkitIds(), got.GetGraphToolkitIds())
@@ -510,7 +604,7 @@ func TestAPartialProjectDeletionIsOKAndNotComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.GetComplete() || len(got.GetBusyToolkitIds()) != 0 || len(got.GetToolkitGraphs()) != 2 ||
+	if got.GetIncomplete() || len(got.GetBusyToolkitIds()) != 0 || len(got.GetToolkitGraphs()) != 2 ||
 		got.GetToolkitGraphs()[1].GetRemoved().GetEntities() != 4 || got.GetGraphs().GetEntities() != 9 {
 		t.Errorf("%v", got)
 	}
@@ -521,7 +615,7 @@ func TestAPartialProjectDeletionIsOKAndNotComplete(t *testing.T) {
 		return engineDocument(map[string]any{"project_id": 7, "toolkits": []int{}, "entities": 0}), nil
 	}
 	got, err = rig.deleteProject(main, 7)
-	if err != nil || !got.GetComplete() || len(got.GetGraphToolkitIds()) != 0 {
+	if err != nil || got.GetIncomplete() || len(got.GetGraphToolkitIds()) != 0 {
 		t.Errorf("%v %v", got, err)
 	}
 

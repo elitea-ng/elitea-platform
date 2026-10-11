@@ -57,7 +57,7 @@ var (
 	// running after the bounded wait for it to stop (nothing was deleted),
 	// or, for ONE toolkit, started meanwhile and holds its graph (nothing
 	// was deleted either). A project deletion that met such a toolkit is not
-	// a failure: it answers OK with Complete false and the toolkit in
+	// a failure: it answers OK with Incomplete true and the toolkit in
 	// BusyToolkits. Retry.
 	ErrIngestRunning = errors.New("an ingest is still running; retry")
 )
@@ -82,11 +82,13 @@ type ProjectDeletion struct {
 	GraphToolkits []int64
 	Graphs        GraphDeletion
 	ToolkitGraphs []ToolkitGraphDeletion
-	// Complete is true when nothing of the project is left. False when
-	// something was left alone: an Inventory toolkit's graph an ingest holds
-	// (BusyToolkits) or a DeepWiki build whose heartbeat is live
-	// (LiveBuilds). What was deleted stays deleted; the caller calls again.
-	Complete bool
+	// Incomplete is true when something of the project was left alone: an
+	// Inventory toolkit's graph an ingest holds (BusyToolkits) or a
+	// DeepWiki build whose heartbeat is live (LiveBuilds). What was deleted
+	// stays deleted; the caller calls again. False — the zero value, and
+	// what an application with nothing to leave behind reports — means
+	// nothing of the project is left.
+	Incomplete bool
 	// BusyToolkits are the Inventory toolkits whose graph was not deleted
 	// because an ingest (or another write) holds it.
 	BusyToolkits []int64
@@ -302,7 +304,7 @@ func (p *platformService) DeleteProject(ctx context.Context, request *subappv1.D
 		StaleBuildsRemoved: result.StaleBuildsRemoved,
 		Errors:             result.Errors,
 		GraphToolkitIds:    result.GraphToolkits,
-		Complete:           result.Complete,
+		Incomplete:         result.Incomplete,
 		BusyToolkitIds:     result.BusyToolkits,
 	}
 	if len(result.GraphToolkits) > 0 {
@@ -313,7 +315,7 @@ func (p *platformService) DeleteProject(ctx context.Context, request *subappv1.D
 			ToolkitId: toolkit.ToolkitID, Removed: graphDeletionOf(toolkit.Removed),
 		})
 	}
-	if !result.Complete {
+	if result.Incomplete {
 		p.logger.Warn("platform delete_project is not complete; the caller retries",
 			"project_id", project, "busy_toolkits", result.BusyToolkits, "live_builds", result.LiveBuilds)
 	}
