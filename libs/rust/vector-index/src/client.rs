@@ -39,7 +39,9 @@ impl ClaimToken for String {
 /// How to reach `elitea-vector`.
 #[derive(Clone)]
 pub struct ClientConfig {
-    /// `https://host:port` (or `http://` for a plaintext test server).
+    /// `https://host:port`. A plaintext `http://` endpoint is refused unless
+    /// [`Self::allow_insecure`] is set, so a bearer token never travels in
+    /// cleartext by accident.
     pub endpoint: String,
     /// The PEM of the CA that signed the server certificate. Without it the
     /// platform roots would be needed, and the crate links none.
@@ -54,6 +56,9 @@ pub struct ClientConfig {
     /// The deadline of one call. A search is well under a second; an upsert
     /// batch of 512 points is slower.
     pub request_timeout: Duration,
+    /// Allows a plaintext `http://` endpoint, for tests against an
+    /// in-process server. Off by default; never set it in a deployment.
+    pub allow_insecure: bool,
 }
 
 impl ClientConfig {
@@ -68,6 +73,7 @@ impl ClientConfig {
             server_name: None,
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_mins(1),
+            allow_insecure: false,
         }
     }
 }
@@ -83,6 +89,7 @@ impl fmt::Debug for ClientConfig {
                 &self.identity_pem.as_ref().map(|_| "<redacted>"),
             )
             .field("server_name", &self.server_name)
+            .field("allow_insecure", &self.allow_insecure)
             .finish_non_exhaustive()
     }
 }
@@ -168,17 +175,48 @@ impl VectorClient {
     /// connection drops, so a worker can build it at startup before
     /// `elitea-vector` is up.
     ///
+    /// The scheme decides the transport, compared case-insensitively:
+    /// `https` is TLS (with the configured CA, identity and server name);
+    /// `http` is plaintext and allowed only with
+    /// [`ClientConfig::allow_insecure`] and no TLS material, since every
+    /// call carries a bearer token.
+    ///
     /// # Errors
     ///
     /// [`Error::Transport`] when the endpoint or the certificates are
-    /// malformed.
+    /// malformed, when TLS material is configured for a non-`https`
+    /// endpoint, or when a plaintext endpoint is not explicitly allowed.
     pub fn connect_lazy(config: &ClientConfig) -> Result<Self> {
-        let mut endpoint = Endpoint::from_shared(config.endpoint.clone())
+        let (scheme, rest) = config
+            .endpoint
+            .split_once("://")
+            .ok_or_else(|| Error::Transport("invalid endpoint: it has no scheme".to_owned()))?;
+        let scheme = scheme.to_ascii_lowercase();
+        let has_tls_material = config.ca_pem.is_some() || config.identity_pem.is_some();
+        let refusal = if scheme == "https" {
+            None
+        } else if scheme != "http" {
+            Some("invalid endpoint: the scheme must be https")
+        } else if has_tls_material {
+            Some(
+                "TLS certificates are configured but the endpoint is not https://; refusing to send the token in cleartext",
+            )
+        } else if config.allow_insecure {
+            None
+        } else {
+            Some(
+                "the endpoint is plaintext http://; elitea-vector is served over TLS, and a plaintext endpoint is allowed only for tests (allow_insecure)",
+            )
+        };
+        if let Some(message) = refusal {
+            return Err(Error::Transport(message.to_owned()));
+        }
+        let mut endpoint = Endpoint::from_shared(format!("{scheme}://{rest}"))
             .map_err(|error| Error::Transport(format!("invalid endpoint: {error}")))?
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
             .tcp_nodelay(true);
-        if config.endpoint.starts_with("https://") {
+        if scheme == "https" {
             let mut tls = ClientTlsConfig::new();
             if let Some(ca) = &config.ca_pem {
                 tls = tls.ca_certificate(Certificate::from_pem(ca));
@@ -329,11 +367,14 @@ impl VectorClient {
     }
 
     /// Dense search fused with BM25 over the chunk text by weighted
-    /// reciprocal rank fusion. The returned scores are the fused scores.
+    /// reciprocal rank fusion. The returned `score`s are the fused scores;
+    /// every point also carries its dense cosine `dense_score`.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidToken`] or the facade's refusal.
+    /// [`Error::InvalidToken`], the facade's refusal, or [`Error::Rpc`]
+    /// (`UNIMPLEMENTED`) when the facade predates dense scores on hybrid
+    /// results.
     pub async fn hybrid_search(
         &self,
         token: &dyn ClaimToken,
@@ -360,13 +401,20 @@ impl VectorClient {
                 score_threshold: search.score_threshold,
             },
         )?;
-        Ok(self
+        let points = self
             .inner
             .clone()
             .hybrid_search(request)
             .await?
             .into_inner()
-            .points)
+            .points;
+        if points.iter().any(|point| point.dense_score.is_none()) {
+            return Err(Error::Rpc {
+                code: tonic::Code::Unimplemented,
+                message: "elitea-vector returned hybrid results without dense scores; it is older than this client".to_owned(),
+            });
+        }
+        Ok(points)
     }
 
     /// Counts the points matching a scope and a filter.
@@ -435,13 +483,53 @@ fn authorize<T>(token: &dyn ClaimToken, message: T) -> Result<Request<T>> {
 
 /// A search scope over some toolkit-index namespaces. `namespace_ids` is 1
 /// to 64 UUIDs; the project is the token's.
+///
+/// `active_generation`, when set, is the generation every listed namespace
+/// is published at: a point matches when it carries that generation or no
+/// generation at all (an index written incrementally), so the points of a
+/// build still in progress are not searched. Main knows each index's active
+/// generation and supplies it through the [`crate::IndexCatalog`]; use
+/// [`toolkit_scope_with_generations`] when the namespaces differ.
 #[must_use]
-pub fn toolkit_scope(namespace_ids: Vec<String>) -> pb::Scope {
+pub fn toolkit_scope(namespace_ids: Vec<String>, active_generation: Option<&str>) -> pb::Scope {
+    let active_generations = active_generation
+        .map(|generation| {
+            namespace_ids
+                .iter()
+                .map(|namespace_id| pb::ActiveGeneration {
+                    namespace_id: namespace_id.clone(),
+                    generation: generation.to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     pb::Scope {
         project_id: 0,
         source: pb::Source::ToolkitIndex as i32,
         namespace_ids,
         generation: String::new(),
+        active_generations,
+    }
+}
+
+/// A search scope over toolkit-index namespaces, each with its own active
+/// generation (or none). See [`toolkit_scope`].
+#[must_use]
+pub fn toolkit_scope_with_generations(namespaces: &[(String, Option<String>)]) -> pb::Scope {
+    pb::Scope {
+        project_id: 0,
+        source: pb::Source::ToolkitIndex as i32,
+        namespace_ids: namespaces.iter().map(|(id, _)| id.clone()).collect(),
+        generation: String::new(),
+        active_generations: namespaces
+            .iter()
+            .filter_map(|(namespace_id, generation)| {
+                generation.as_ref().map(|generation| pb::ActiveGeneration {
+                    namespace_id: namespace_id.clone(),
+                    generation: generation.clone(),
+                })
+            })
+            .collect(),
     }
 }
 
@@ -474,6 +562,72 @@ mod tests {
         let error = authorize(&token, ()).expect_err("refused");
         assert!(matches!(error, Error::InvalidToken(_)));
         assert!(!error.to_string().contains("bad"));
+    }
+
+    fn refusal(config: &ClientConfig) -> String {
+        match VectorClient::connect_lazy(config) {
+            Err(Error::Transport(message)) => message,
+            Err(other) => panic!("{other}"),
+            Ok(_) => panic!("{config:?} was accepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_scheme_decides_tls_case_insensitively() {
+        // https in any case builds a TLS channel.
+        for endpoint in [
+            "https://vector:9443",
+            "HTTPS://vector:9443",
+            "Https://vector:9443",
+        ] {
+            let mut config = ClientConfig::new(endpoint);
+            config.server_name = Some("vector".to_owned());
+            assert!(VectorClient::connect_lazy(&config).is_ok(), "{endpoint}");
+        }
+        // TLS material with a non-https endpoint is refused, even when
+        // plaintext is allowed.
+        for endpoint in ["http://vector:9443", "HTTP://vector:9443"] {
+            let mut config = ClientConfig::new(endpoint);
+            config.allow_insecure = true;
+            config.ca_pem = Some(b"CA".to_vec());
+            assert!(refusal(&config).contains("not https"), "{endpoint}");
+            config.ca_pem = None;
+            config.identity_pem = Some((b"CERT".to_vec(), b"KEY".to_vec()));
+            assert!(refusal(&config).contains("not https"), "{endpoint}");
+        }
+        // Plaintext without the explicit flag is refused.
+        let plain = ClientConfig::new("http://vector:9443");
+        assert!(refusal(&plain).contains("allow_insecure"));
+        let mut allowed = plain.clone();
+        allowed.allow_insecure = true;
+        assert!(VectorClient::connect_lazy(&allowed).is_ok());
+        // Anything else is not an endpoint.
+        for endpoint in ["vector:9443", "grpc://vector:9443", "ftp://vector"] {
+            let mut config = ClientConfig::new(endpoint);
+            config.allow_insecure = true;
+            let _ = refusal(&config);
+        }
+    }
+
+    #[test]
+    fn scopes_carry_the_active_generation_per_namespace() {
+        let none = toolkit_scope(vec!["a".to_owned()], None);
+        assert!(none.active_generations.is_empty() && none.generation.is_empty());
+        let one = toolkit_scope(vec!["a".to_owned(), "b".to_owned()], Some("g1"));
+        assert_eq!(one.active_generations.len(), 2);
+        assert!(one.generation.is_empty(), "never the strict generation");
+        let mixed = toolkit_scope_with_generations(&[
+            ("a".to_owned(), Some("g1".to_owned())),
+            ("b".to_owned(), None),
+        ]);
+        assert_eq!(mixed.namespace_ids, ["a", "b"]);
+        assert_eq!(
+            mixed.active_generations,
+            vec![pb::ActiveGeneration {
+                namespace_id: "a".to_owned(),
+                generation: "g1".to_owned(),
+            }]
+        );
     }
 
     #[test]

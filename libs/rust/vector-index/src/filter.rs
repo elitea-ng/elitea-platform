@@ -2,13 +2,14 @@
 //! (ADR-0030 decision 5, ADR-0031 decision 4).
 //!
 //! The SDK filters with langchain-postgres operators over a flat metadata
-//! dict. `elitea-vector` accepts something much smaller: three flat lists
-//! of conditions (`must`, `should`, `must_not`), each condition an equality
-//! on a keyword, an integer or a boolean, or a keyword-in-set. This module
-//! translates exactly what that can express and refuses the rest with a
-//! message that names the operator and says why. It never approximates: a
-//! refused filter is an error the model or user can read, not a search that
-//! silently returns something else.
+//! dict. `elitea-vector` takes a Qdrant-shaped filter: `must`, `should` and
+//! `must_not` lists of conditions, where a condition is an equality on a
+//! keyword, an integer or a boolean, a keyword-in-set, a numeric range, a
+//! presence check (`is_empty`), or a nested filter. This module translates
+//! what that can express and refuses the rest with a message that names the
+//! operator and says why. It never approximates: a refused filter is an
+//! error the model or user can read, not a search that silently returns
+//! something else.
 //!
 //! # Where metadata lives
 //!
@@ -22,27 +23,45 @@
 //! without the prefix (`document_key`, `document_version`, `parent_id`,
 //! `chunk_id`, `chunk_type`, `acl`) because they are real payload keys. Five
 //! keys are the facade's own scope and are refused: `project_id`, `source`,
-//! `namespace_id`, `generation` and `text`.
+//! `namespace_id`, `generation` and `text` (so is a `text` match: BM25 over
+//! the chunk text is `full_text_search`'s, not a filter's).
 //!
 //! # Operators
 //!
 //! | SDK | Translation |
 //! | --- | --- |
 //! | `$eq`, implicit equality | `keyword`, `integer` or `boolean` match |
-//! | `$ne` | the same match in `must_not` |
+//! | `$ne` | the key is present and the match does not hold |
 //! | `$in` of strings | one `any` match |
-//! | `$in` of integers or booleans | an `or` of matches (`should`) |
-//! | `$nin` | the negation of `$in` |
-//! | `$and` / several keys | conditions in `must` |
-//! | `$or` | `should` |
-//! | `$not` | De Morgan, then `must_not` |
-//! | `$lt` `$lte` `$gt` `$gte` `$between` | refused: no range condition |
-//! | `$like` `$ilike` | refused: no pattern condition |
-//! | `$exists` | refused: no presence condition |
+//! | `$in` of integers or booleans | an `or` of matches |
+//! | `$nin` | the key is present and the `$in` does not hold |
+//! | `$lt` `$lte` `$gt` `$gte` | a `range` on a number (metadata keys only) |
+//! | `$between` `[low, high]` | a `range` with both bounds, inclusive |
+//! | `$exists` `true` / `false` | not `is_empty` / `is_empty` |
+//! | `$and` / several keys | `must` |
+//! | `$or` | `should`, nesting what a flat `should` cannot hold |
+//! | `$not` | the negation, nested when it is not a single condition |
+//! | `$like` `$ilike` | refused: Qdrant has no pattern condition |
 //!
-//! A filter whose `$or`/`$not` structure cannot be written as one flat
-//! `must`/`should`/`must_not` triple is refused too. (`should` is one
-//! group: "at least one of", `AND`ed with the rest.)
+//! # Missing keys
+//!
+//! langchain-postgres compiles a filter to SQL, where a comparison with a
+//! missing key is NULL and a NULL `WHERE` is false, also under `NOT`. This
+//! module keeps that: every comparison holds only for a point that has the
+//! key, so `{"a": {"$ne": 1}}` does not match a point without `a`, and
+//! neither does `{"$not": {"a": 1}}`. (The translation tracks, for every
+//! sub-filter, both when it is true and when it is false, as SQL's three
+//! valued logic does.) "Missing" is Qdrant's `is_empty`: the key absent,
+//! `null` or `[]`. A JSON `null` is SQL NULL in langchain-postgres too; an
+//! empty array is the one difference (present there, empty here).
+//!
+//! # Limits
+//!
+//! A translated filter nests at most [`MAX_DEPTH`] levels, holds at most
+//! 64 conditions per list and [`MAX_TOTAL_CONDITIONS`] in all, and an `any`
+//! at most 1024 values: `elitea-vector`'s limits. A filter beyond them is
+//! refused before the call. An empty filter object is refused anywhere but
+//! as the whole filter, so `{"$not": {}}` is an error, never "no filter".
 
 use serde_json::Value;
 
@@ -52,6 +71,10 @@ use crate::pb;
 const MAX_CONDITIONS: usize = 64;
 /// The most values `elitea-vector` accepts in one `any` match.
 const MAX_ANY_VALUES: usize = 1024;
+/// The deepest filter `elitea-vector` accepts, counting the filter itself.
+pub const MAX_DEPTH: usize = 8;
+/// The most conditions `elitea-vector` accepts in one filter tree.
+pub const MAX_TOTAL_CONDITIONS: usize = 1024;
 
 /// Keys that are the facade's own scope. A caller's filter cannot name them.
 const RESERVED_KEYS: [&str; 5] = ["project_id", "source", "namespace_id", "generation", "text"];
@@ -69,7 +92,7 @@ const POINT_KEYS: [&str; 6] = [
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum FilterError {
     /// The filter is not valid JSON, or not an object, or an operator got an
-    /// argument of the wrong shape.
+    /// argument of the wrong shape, or a sub-filter is empty.
     #[error("invalid filter: {0}")]
     Invalid(String),
     /// The operator is valid for the SDK but has no `elitea-vector`
@@ -91,7 +114,7 @@ pub enum FilterError {
         "filter key {0:?} cannot be filtered: each dot-separated part must use only letters, digits and underscores"
     )]
     InvalidKey(String),
-    /// The `$or`/`$not` structure has no flat `must`/`should`/`must_not` form.
+    /// The filter is beyond the vector service's size or depth limits.
     #[error(
         "this filter cannot be expressed by the vector service: {0}. Rewrite it, or split the search"
     )]
@@ -108,35 +131,16 @@ pub enum FilterError {
     },
 }
 
-/// A parsed filter tree, before it is flattened.
+/// A parsed filter tree, before it is lowered.
 #[derive(Clone, Debug)]
 enum Node {
+    /// A comparison that holds only when the key is present.
     Leaf(pb::Condition),
+    /// `$exists`: the key is present (`true`) or missing (`false`).
+    Exists(String, bool),
     Not(Box<Node>),
     And(Vec<Node>),
     Or(Vec<Node>),
-}
-
-/// The flat form `elitea-vector` accepts.
-#[derive(Clone, Debug, Default)]
-struct Flat {
-    must: Vec<pb::Condition>,
-    should: Vec<pb::Condition>,
-    must_not: Vec<pb::Condition>,
-}
-
-impl Flat {
-    fn is_empty(&self) -> bool {
-        self.must.is_empty() && self.should.is_empty() && self.must_not.is_empty()
-    }
-
-    fn is_single_positive(&self) -> bool {
-        self.must.len() == 1 && self.should.is_empty() && self.must_not.is_empty()
-    }
-
-    fn is_pure_should(&self) -> bool {
-        self.must.is_empty() && !self.should.is_empty() && self.must_not.is_empty()
-    }
 }
 
 /// Reads a tool's `filter` argument: a JSON object, a JSON string holding
@@ -178,27 +182,9 @@ pub fn translate(input: &Value) -> Result<Option<pb::Filter>, FilterError> {
         return Ok(None);
     };
     let node = parse_object(&filter)?;
-    let flat = lower(&node, false)?;
-    if flat.is_empty() {
-        return Ok(None);
-    }
-    for (name, list) in [
-        ("must", &flat.must),
-        ("should", &flat.should),
-        ("must_not", &flat.must_not),
-    ] {
-        if list.len() > MAX_CONDITIONS {
-            return Err(FilterError::NotExpressible(format!(
-                "it needs {} conditions in {name}, and the vector service accepts at most {MAX_CONDITIONS}",
-                list.len()
-            )));
-        }
-    }
-    Ok(Some(pb::Filter {
-        must: flat.must,
-        should: flat.should,
-        must_not: flat.must_not,
-    }))
+    let lowered = lower(&node, false);
+    check_limits(&lowered)?;
+    Ok(Some(lowered))
 }
 
 /// Adds one `must` condition to a filter. Used for the chunk-type and
@@ -216,6 +202,37 @@ pub fn keyword(key: &str, value: &str) -> pb::Condition {
     pb::Condition {
         key: key.to_owned(),
         r#match: Some(pb::condition::Match::Keyword(value.to_owned())),
+    }
+}
+
+/// A keyword-in-set on a payload key.
+#[must_use]
+pub fn any(key: &str, values: Vec<String>) -> pb::Condition {
+    pb::Condition {
+        key: key.to_owned(),
+        r#match: Some(pb::condition::Match::Any(pb::StringList { values })),
+    }
+}
+
+/// "The key is missing, null or `[]`".
+#[must_use]
+pub fn is_empty(key: &str) -> pb::Condition {
+    pb::Condition {
+        key: key.to_owned(),
+        r#match: Some(pb::condition::Match::IsEmpty(pb::IsEmpty {})),
+    }
+}
+
+/// `filter` as one condition: itself when it is a single positive
+/// condition, else a nested filter.
+#[must_use]
+pub fn nest(filter: pb::Filter) -> pb::Condition {
+    if filter.must.len() == 1 && filter.should.is_empty() && filter.must_not.is_empty() {
+        return filter.must.into_iter().next().unwrap_or_default();
+    }
+    pb::Condition {
+        key: String::new(),
+        r#match: Some(pb::condition::Match::Filter(filter)),
     }
 }
 
@@ -237,6 +254,12 @@ fn parse_object(object: &Value) -> Result<Node, FilterError> {
             kind(object)
         )));
     };
+    if map.is_empty() {
+        return Err(FilterError::Invalid(
+            "an empty filter object matches everything and is only allowed as the whole filter"
+                .to_owned(),
+        ));
+    }
     let mut nodes = Vec::with_capacity(map.len());
     for (key, value) in map {
         if key.starts_with('$') {
@@ -316,32 +339,86 @@ fn parse_field(field: &str, value: &Value) -> Result<Node, FilterError> {
             "expected an operator such as $eq for {field:?}, found {operator:?}"
         )));
     }
-    match operator.to_lowercase().as_str() {
+    let lowered = operator.to_lowercase();
+    match lowered.as_str() {
         "$eq" => eq_leaf(&key, operand),
         "$ne" => Ok(Node::Not(Box::new(eq_leaf(&key, operand)?))),
         "$in" => in_node(&key, operand, "$in"),
         "$nin" => Ok(Node::Not(Box::new(in_node(&key, operand, "$nin")?))),
-        "$lt" | "$lte" | "$gt" | "$gte" => Err(FilterError::UnsupportedOperator {
-            operator: operator.clone(),
-            reason: "the vector service has no range condition, and a comparison cannot be approximated with equality".to_owned(),
-        }),
-        "$between" => Err(FilterError::UnsupportedOperator {
-            operator: operator.clone(),
-            reason: "the vector service has no range condition, and a range cannot be approximated with equality".to_owned(),
-        }),
+        "$lt" | "$lte" | "$gt" | "$gte" => {
+            let bound = range_bound(&key, operand, operator)?;
+            let mut range = pb::Range::default();
+            match lowered.as_str() {
+                "$lt" => range.lt = Some(bound),
+                "$lte" => range.lte = Some(bound),
+                "$gt" => range.gt = Some(bound),
+                _ => range.gte = Some(bound),
+            }
+            Ok(range_leaf(&key, range))
+        }
+        "$between" => {
+            let bounds = match operand {
+                Value::Array(items) if items.len() == 2 => items,
+                other => {
+                    return Err(FilterError::Invalid(format!(
+                        "$between takes an array of two numbers [low, high], not {}",
+                        kind(other)
+                    )));
+                }
+            };
+            let low = range_bound(&key, &bounds[0], operator)?;
+            let high = range_bound(&key, &bounds[1], operator)?;
+            Ok(range_leaf(
+                &key,
+                pb::Range {
+                    gte: Some(low),
+                    lte: Some(high),
+                    ..pb::Range::default()
+                },
+            ))
+        }
+        "$exists" => match operand {
+            Value::Bool(present) => Ok(Node::Exists(key, *present)),
+            other => Err(FilterError::Invalid(format!(
+                "$exists takes true or false, not {}",
+                kind(other)
+            ))),
+        },
         "$like" | "$ilike" => Err(FilterError::UnsupportedOperator {
             operator: operator.clone(),
             reason: "the vector service has no pattern condition on metadata".to_owned(),
-        }),
-        "$exists" => Err(FilterError::UnsupportedOperator {
-            operator: operator.clone(),
-            reason: "the vector service has no presence condition on metadata".to_owned(),
         }),
         _ => Err(FilterError::UnsupportedOperator {
             operator: operator.clone(),
             reason: "it is not an operator the SDK filter defines".to_owned(),
         }),
     }
+}
+
+/// One bound of a range: a finite number, on a metadata key.
+fn range_bound(key: &str, operand: &Value, operator: &str) -> Result<f64, FilterError> {
+    if !key.starts_with("metadata.") {
+        return Err(unsupported_value(
+            key,
+            operand,
+            &format!("{operator} compares numbers, and this point field holds text"),
+        ));
+    }
+    match operand.as_f64() {
+        Some(number) if number.is_finite() => Ok(number),
+        _ => Err(unsupported_value(
+            key,
+            operand,
+            &format!("{operator} compares numbers only"),
+        )),
+    }
+}
+
+fn range_leaf(key: &str, range: pb::Range) -> Node {
+    Node::Leaf(pb::Condition {
+        key: key.to_owned(),
+        r#match: Some(pb::condition::Match::Range(range)),
+    })
 }
 
 fn in_node(key: &str, operand: &Value, operator: &str) -> Result<Node, FilterError> {
@@ -368,10 +445,7 @@ fn in_node(key: &str, operand: &Value, operator: &str) -> Result<Node, FilterErr
             .filter_map(Value::as_str)
             .map(str::to_owned)
             .collect();
-        return Ok(Node::Leaf(pb::Condition {
-            key: key.to_owned(),
-            r#match: Some(pb::condition::Match::Any(pb::StringList { values })),
-        }));
+        return Ok(Node::Leaf(any(key, values)));
     }
     let leaves = items
         .iter()
@@ -390,7 +464,7 @@ fn eq_leaf(key: &str, value: &Value) -> Result<Node, FilterError> {
                 return Err(unsupported_value(
                     key,
                     value,
-                    "only whole numbers can be matched exactly; a decimal cannot be compared for equality",
+                    "only whole numbers can be matched exactly; compare a decimal with $gte and $lte",
                 ));
             }
         },
@@ -398,7 +472,7 @@ fn eq_leaf(key: &str, value: &Value) -> Result<Node, FilterError> {
             return Err(unsupported_value(
                 key,
                 value,
-                "null cannot be matched; the vector service has no presence condition",
+                "null is never equal to anything in the SDK's SQL; use $exists",
             ));
         }
         Value::Array(_) | Value::Object(_) => {
@@ -446,79 +520,126 @@ fn qualify_key(field: &str) -> Result<String, FilterError> {
     Ok(format!("metadata.{path}"))
 }
 
-fn merge(parts: Vec<Flat>) -> Result<Flat, FilterError> {
-    let mut merged = Flat::default();
-    for part in parts {
-        merged.must.extend(part.must);
-        merged.must_not.extend(part.must_not);
-        if !part.should.is_empty() {
-            if !merged.should.is_empty() {
-                return Err(FilterError::NotExpressible(
-                    "two $or groups are combined with $and, and the vector service has one \"at least one of\" group per filter".to_owned(),
-                ));
-            }
-            merged.should = part.should;
-        }
-    }
-    Ok(merged)
-}
-
-/// Flattens `node` (negated when `negate`) into `must`/`should`/`must_not`.
-fn lower(node: &Node, negate: bool) -> Result<Flat, FilterError> {
+/// The filter that holds when `node` is true (`negate` false) or when it is
+/// false (`negate` true), in SQL's sense: a comparison on a missing key is
+/// neither.
+fn lower(node: &Node, negate: bool) -> pb::Filter {
     match node {
-        Node::Leaf(condition) => Ok(if negate {
-            Flat {
-                must_not: vec![condition.clone()],
-                ..Flat::default()
-            }
-        } else {
-            Flat {
-                must: vec![condition.clone()],
-                ..Flat::default()
-            }
-        }),
+        Node::Leaf(condition) if negate => pb::Filter {
+            must_not: vec![is_empty(&condition.key), condition.clone()],
+            ..pb::Filter::default()
+        },
+        Node::Leaf(condition) => pb::Filter {
+            must: vec![condition.clone()],
+            ..pb::Filter::default()
+        },
+        Node::Exists(key, present) if *present != negate => pb::Filter {
+            must_not: vec![is_empty(key)],
+            ..pb::Filter::default()
+        },
+        Node::Exists(key, _) => pb::Filter {
+            must: vec![is_empty(key)],
+            ..pb::Filter::default()
+        },
         Node::Not(inner) => lower(inner, !negate),
-        // not (a and b) == (not a) or (not b)
-        Node::And(children) if negate => lower_or(children, true),
-        Node::And(children) => merge(lower_all(children, false)?),
-        // not (a or b) == (not a) and (not b)
-        Node::Or(children) if negate => merge(lower_all(children, true)?),
-        Node::Or(children) => lower_or(children, false),
+        // false(a and b) == false(a) or false(b)
+        Node::And(children) if negate => or_of(lower_all(children, true)),
+        Node::And(children) => and_of(lower_all(children, false)),
+        // false(a or b) == false(a) and false(b)
+        Node::Or(children) if negate => and_of(lower_all(children, true)),
+        Node::Or(children) => or_of(lower_all(children, false)),
     }
 }
 
-fn lower_all(children: &[Node], negate: bool) -> Result<Vec<Flat>, FilterError> {
+fn lower_all(children: &[Node], negate: bool) -> Vec<pb::Filter> {
     children.iter().map(|child| lower(child, negate)).collect()
 }
 
-/// An "at least one of" group. Each member must itself be one positive
-/// condition (or a group of them): `should` cannot hold a negation or an
-/// `AND`.
-fn lower_or(children: &[Node], negate: bool) -> Result<Flat, FilterError> {
-    let mut parts = lower_all(children, negate)?;
+fn push_unique(list: &mut Vec<pb::Condition>, condition: pb::Condition) {
+    if !list.contains(&condition) {
+        list.push(condition);
+    }
+}
+
+/// Every part holds. `must` and `must_not` merge; the first `should` group
+/// merges, and a later one is nested.
+fn and_of(parts: Vec<pb::Filter>) -> pb::Filter {
+    let mut out = pb::Filter::default();
+    for part in parts {
+        if !part.should.is_empty() && !out.should.is_empty() {
+            push_unique(&mut out.must, nest(part));
+            continue;
+        }
+        for condition in part.must {
+            push_unique(&mut out.must, condition);
+        }
+        for condition in part.must_not {
+            push_unique(&mut out.must_not, condition);
+        }
+        out.should.extend(part.should);
+    }
+    out
+}
+
+/// At least one part holds. A single positive condition or a pure `should`
+/// group joins the list; anything else is nested.
+fn or_of(mut parts: Vec<pb::Filter>) -> pb::Filter {
     if parts.len() == 1 {
-        return Ok(parts.remove(0));
+        return parts.remove(0);
     }
     let mut should = Vec::new();
     for part in parts {
-        if part.is_single_positive() {
-            should.extend(part.must);
-        } else if part.is_pure_should() {
-            should.extend(part.should);
-        } else if part.is_empty() {
-            return Err(FilterError::NotExpressible(
-                "an $or contains an empty filter, which matches everything".to_owned(),
-            ));
+        if part.must.is_empty() && part.must_not.is_empty() {
+            for condition in part.should {
+                push_unique(&mut should, condition);
+            }
         } else {
-            return Err(FilterError::NotExpressible(
-                "an $or (or a negated $and) joins conditions that are negated or grouped with $and; the vector service can only match \"at least one of\" simple equality or $in conditions".to_owned(),
-            ));
+            push_unique(&mut should, nest(part));
         }
     }
-    Ok(Flat {
+    pb::Filter {
         should,
-        ..Flat::default()
-    })
+        ..pb::Filter::default()
+    }
+}
+
+/// Refuses a filter beyond `elitea-vector`'s limits.
+fn check_limits(filter: &pb::Filter) -> Result<(), FilterError> {
+    let mut total = 0;
+    walk(filter, 1, &mut total)?;
+    if total > MAX_TOTAL_CONDITIONS {
+        return Err(FilterError::NotExpressible(format!(
+            "it needs {total} conditions, and the vector service accepts at most {MAX_TOTAL_CONDITIONS}"
+        )));
+    }
+    Ok(())
+}
+
+fn walk(filter: &pb::Filter, depth: usize, total: &mut usize) -> Result<(), FilterError> {
+    if depth > MAX_DEPTH {
+        return Err(FilterError::NotExpressible(format!(
+            "it nests deeper than the {MAX_DEPTH} levels the vector service accepts"
+        )));
+    }
+    for (name, list) in [
+        ("must", &filter.must),
+        ("should", &filter.should),
+        ("must_not", &filter.must_not),
+    ] {
+        if list.len() > MAX_CONDITIONS {
+            return Err(FilterError::NotExpressible(format!(
+                "it needs {} conditions in one {name} list, and the vector service accepts at most {MAX_CONDITIONS}",
+                list.len()
+            )));
+        }
+        for condition in list {
+            *total += 1;
+            if let Some(pb::condition::Match::Filter(inner)) = &condition.r#match {
+                walk(inner, depth + 1, total)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -542,10 +663,46 @@ mod tests {
         translate(input).expect_err("refused")
     }
 
+    fn nested(filter: pb::Filter) -> pb::Condition {
+        pb::Condition {
+            key: String::new(),
+            r#match: Some(pb::condition::Match::Filter(filter)),
+        }
+    }
+
+    /// "present and not `condition`".
+    fn present_not(condition: pb::Condition) -> pb::Filter {
+        pb::Filter {
+            must_not: vec![is_empty(&condition.key.clone()), condition],
+            ..pb::Filter::default()
+        }
+    }
+
     #[test]
     fn empty_filters_mean_no_narrowing() {
         for input in [json!(null), json!({}), json!(""), json!("  "), json!("{}")] {
             assert_eq!(translate(&input), Ok(None), "{input}");
+        }
+    }
+
+    #[test]
+    fn an_empty_negation_or_group_is_refused_not_ignored() {
+        for input in [
+            json!({"$not": {}}),
+            json!({"$not": [{}]}),
+            json!({"$not": [{"a": "1"}, {}]}),
+            json!({"$not": []}),
+            json!({"$not": {"$and": []}}),
+            json!({"$not": {"$or": [{}]}}),
+            json!({"$and": [{}]}),
+            json!({"$or": [{"a": "1"}, {}]}),
+            json!({"a": "1", "$not": {}}),
+            json!(r#"{"$not": {}}"#),
+        ] {
+            assert!(
+                matches!(refused(&input), FilterError::Invalid(_)),
+                "{input}"
+            );
         }
     }
 
@@ -581,20 +738,17 @@ mod tests {
     }
 
     #[test]
-    fn ne_is_a_negated_match() {
+    fn ne_requires_the_key_to_be_present() {
         let filter = translated(&json!({"status": {"$ne": "archived"}}));
-        assert!(filter.must.is_empty());
-        assert_eq!(filter.must_not, vec![kw("metadata.status", "archived")]);
+        assert_eq!(filter, present_not(kw("metadata.status", "archived")));
     }
 
     #[test]
     fn in_of_strings_is_one_any_match() {
         let filter = translated(&json!({"lang": {"$in": ["en", "de"]}}));
         assert_eq!(
-            filter.must[0].r#match,
-            Some(pb::condition::Match::Any(pb::StringList {
-                values: vec!["en".into(), "de".into()]
-            }))
+            filter.must,
+            vec![any("metadata.lang", vec!["en".into(), "de".into()])]
         );
     }
 
@@ -610,17 +764,85 @@ mod tests {
     }
 
     #[test]
-    fn nin_negates_in() {
+    fn nin_requires_the_key_and_negates_in() {
         let strings = translated(&json!({"lang": {"$nin": ["en", "de"]}}));
-        assert!(strings.must.is_empty());
-        assert_eq!(strings.must_not.len(), 1);
-        assert!(matches!(
-            strings.must_not[0].r#match,
-            Some(pb::condition::Match::Any(_))
-        ));
+        assert_eq!(
+            strings,
+            present_not(any("metadata.lang", vec!["en".into(), "de".into()]))
+        );
+        // One presence check, not one per value.
         let numbers = translated(&json!({"year": {"$nin": [2024, 2025]}}));
-        assert_eq!(numbers.must_not.len(), 2);
-        assert!(numbers.should.is_empty());
+        assert_eq!(numbers.must_not.len(), 3);
+        assert_eq!(numbers.must_not[0], is_empty("metadata.year"));
+        assert!(numbers.should.is_empty() && numbers.must.is_empty());
+    }
+
+    #[test]
+    fn ranges_and_between_on_metadata() {
+        let filter = translated(&json!({"year": {"$gte": 2020}, "score": {"$lt": 0.5}}));
+        assert_eq!(must_keys(&filter), ["metadata.year", "metadata.score"]);
+        assert_eq!(
+            filter.must[0].r#match,
+            Some(pb::condition::Match::Range(pb::Range {
+                gte: Some(2020.0),
+                ..pb::Range::default()
+            }))
+        );
+        assert_eq!(
+            filter.must[1].r#match,
+            Some(pb::condition::Match::Range(pb::Range {
+                lt: Some(0.5),
+                ..pb::Range::default()
+            }))
+        );
+        let between = translated(&json!({"year": {"$between": [2020, 2024]}}));
+        assert_eq!(
+            between.must[0].r#match,
+            Some(pb::condition::Match::Range(pb::Range {
+                gte: Some(2020.0),
+                lte: Some(2024.0),
+                ..pb::Range::default()
+            }))
+        );
+        // A negated range still needs the key.
+        let outside = translated(&json!({"$not": {"year": {"$gt": 2020}}}));
+        assert_eq!(outside.must_not[0], is_empty("metadata.year"));
+        for bad in [
+            json!({"year": {"$gt": "2020"}}),
+            json!({"year": {"$gt": null}}),
+            json!({"chunk_id": {"$gt": 1}}),
+            json!({"year": {"$between": [1]}}),
+            json!({"year": {"$between": [1, "x"]}}),
+        ] {
+            assert!(
+                matches!(
+                    refused(&bad),
+                    FilterError::UnsupportedValue { .. } | FilterError::Invalid(_)
+                ),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn exists_is_a_presence_check() {
+        assert_eq!(
+            translated(&json!({"type": {"$exists": true}})).must_not,
+            vec![is_empty("metadata.type")]
+        );
+        assert_eq!(
+            translated(&json!({"type": {"$exists": false}})).must,
+            vec![is_empty("metadata.type")]
+        );
+        // not exists == missing
+        assert_eq!(
+            translated(&json!({"$not": {"type": {"$exists": true}}})).must,
+            vec![is_empty("metadata.type")]
+        );
+        assert!(matches!(
+            refused(&json!({"type": {"$exists": 1}})),
+            FilterError::Invalid(_)
+        ));
     }
 
     #[test]
@@ -628,7 +850,7 @@ mod tests {
         let filter =
             translated(&json!({"$and": [{"a": "1"}, {"b": {"$ne": "2"}}, {"c": {"$in": ["x"]}}]}));
         assert_eq!(must_keys(&filter), ["metadata.a", "metadata.c"]);
-        assert_eq!(filter.must_not.len(), 1);
+        assert_eq!(filter.must_not, present_not(kw("metadata.b", "2")).must_not);
     }
 
     #[test]
@@ -649,62 +871,98 @@ mod tests {
     }
 
     #[test]
-    fn not_applies_de_morgan() {
-        // not (a == 1) -> must_not
+    fn not_negates_with_presence() {
+        // not (a == 1): a present and not 1
         let single = translated(&json!({"$not": {"a": "1"}}));
-        assert_eq!(single.must_not, vec![kw("metadata.a", "1")]);
-        // not (a == 1 or b == 2) -> both in must_not
+        assert_eq!(single, present_not(kw("metadata.a", "1")));
+        // not (a == 1 or b == 2): both false, both present
         let either = translated(&json!({"$not": {"$or": [{"a": "1"}, {"b": "2"}]}}));
-        assert_eq!(either.must_not.len(), 2);
+        assert_eq!(either.must_not.len(), 4);
         assert!(either.should.is_empty());
         // a list of filters negates each and ANDs them
         let listed = translated(&json!({"$not": [{"a": "1"}, {"b": "2"}]}));
-        assert_eq!(listed.must_not.len(), 2);
+        assert_eq!(listed, either);
         // not not a -> a
         let twice = translated(&json!({"$not": {"$not": {"a": "1"}}}));
         assert_eq!(twice.must, vec![kw("metadata.a", "1")]);
-        // not (a != 1) -> a == 1
+        // not (a != 1) -> a == 1 (a missing key is false under both)
         let flipped = translated(&json!({"$not": {"a": {"$ne": "1"}}}));
         assert_eq!(flipped.must, vec![kw("metadata.a", "1")]);
+        assert!(flipped.must_not.is_empty());
     }
 
     #[test]
-    fn not_of_an_and_of_two_is_refused() {
-        // not (a and b) == (not a) or (not b): "should" cannot hold a negation.
-        let error = refused(&json!({"$not": {"$and": [{"a": "1"}, {"b": "2"}]}}));
-        assert!(matches!(error, FilterError::NotExpressible(_)), "{error}");
-        // but not (a and b) with ONE member is just not a
-        assert!(translate(&json!({"$not": {"$and": [{"a": "1"}]}})).is_ok());
+    fn a_negated_and_is_an_or_of_nested_negations() {
+        let filter = translated(&json!({"$not": {"$and": [{"a": "1"}, {"b": "2"}]}}));
+        assert_eq!(
+            filter.should,
+            vec![
+                nested(present_not(kw("metadata.a", "1"))),
+                nested(present_not(kw("metadata.b", "2"))),
+            ]
+        );
+        // with ONE member it is just not a
+        let one = translated(&json!({"$not": {"$and": [{"a": "1"}]}}));
+        assert_eq!(one, present_not(kw("metadata.a", "1")));
     }
 
     #[test]
-    fn or_of_negations_or_groups_is_refused() {
-        for filter in [
-            json!({"$or": [{"a": {"$ne": "1"}}, {"b": "2"}]}),
-            json!({"$or": [{"$and": [{"a": "1"}, {"b": "2"}]}, {"c": "3"}]}),
-            json!({"$and": [{"$or": [{"a": "1"}, {"b": "2"}]}, {"$or": [{"c": "3"}, {"d": "4"}]}]}),
-        ] {
-            let error = refused(&filter);
-            assert!(
-                matches!(error, FilterError::NotExpressible(_)),
-                "{filter}: {error}"
-            );
-        }
+    fn or_of_negations_groups_and_two_ors_nest() {
+        let negation = translated(&json!({"$or": [{"a": {"$ne": "1"}}, {"b": "2"}]}));
+        assert_eq!(
+            negation.should,
+            vec![
+                nested(present_not(kw("metadata.a", "1"))),
+                kw("metadata.b", "2")
+            ]
+        );
+        let group = translated(&json!({"$or": [{"$and": [{"a": "1"}, {"b": "2"}]}, {"c": "3"}]}));
+        assert_eq!(
+            group.should,
+            vec![
+                nested(pb::Filter {
+                    must: vec![kw("metadata.a", "1"), kw("metadata.b", "2")],
+                    ..pb::Filter::default()
+                }),
+                kw("metadata.c", "3")
+            ]
+        );
+        let two = translated(&json!({"$and": [
+            {"$or": [{"a": "1"}, {"b": "2"}]},
+            {"$or": [{"c": "3"}, {"d": "4"}]}
+        ]}));
+        assert_eq!(
+            two.should,
+            vec![kw("metadata.a", "1"), kw("metadata.b", "2")]
+        );
+        assert_eq!(
+            two.must,
+            vec![nested(pb::Filter {
+                should: vec![kw("metadata.c", "3"), kw("metadata.d", "4")],
+                ..pb::Filter::default()
+            })]
+        );
     }
 
     #[test]
-    fn range_pattern_and_presence_operators_are_refused() {
-        for operator in [
-            "$lt", "$lte", "$gt", "$gte", "$between", "$like", "$ilike", "$exists",
-        ] {
-            let operand = match operator {
-                "$between" => json!([1, 2]),
-                "$like" | "$ilike" => json!("a%"),
-                "$exists" => json!(true),
-                _ => json!(3),
-            };
-            let filter = json!({"n": {operator: operand}});
-            match refused(&filter) {
+    fn or_beside_an_integer_in_nests_one_group() {
+        // The integer $in is itself an "at least one of" group.
+        let filter = translated(&json!({
+            "year": {"$in": [2024, 2025]},
+            "$or": [{"lang": "en"}, {"lang": "de"}]
+        }));
+        assert_eq!(filter.should.len(), 2);
+        assert_eq!(filter.must.len(), 1);
+        assert!(matches!(
+            filter.must[0].r#match,
+            Some(pb::condition::Match::Filter(_))
+        ));
+    }
+
+    #[test]
+    fn pattern_operators_are_refused() {
+        for operator in ["$like", "$ilike"] {
+            match refused(&json!({"n": {operator: "a%"}})) {
                 FilterError::UnsupportedOperator {
                     operator: named,
                     reason,
@@ -715,9 +973,6 @@ mod tests {
                 other => panic!("{operator}: {other}"),
             }
         }
-        // The old SDK collection filter used $exists; it is refused loudly.
-        let message = refused(&json!({"type": {"$exists": false}})).to_string();
-        assert!(message.contains("$exists"), "{message}");
     }
 
     #[test]
@@ -746,9 +1001,12 @@ mod tests {
             for filter in [
                 json!({key: "x"}),
                 json!({key: {"$ne": "x"}}),
+                json!({key: {"$exists": false}}),
+                json!({key: {"$gt": 1}}),
                 json!({"$and": [{key: {"$in": ["x"]}}]}),
                 json!({"$or": [{"a": "1"}, {key: "x"}]}),
                 json!({"$not": {key: "x"}}),
+                json!({"$not": {"$and": [{"a": "1"}, {"$or": [{"b": "2"}, {key: "x"}]}]}}),
             ] {
                 assert_eq!(
                     refused(&filter),
@@ -835,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn list_limits_are_enforced_before_the_call() {
+    fn list_depth_and_total_limits_are_enforced_before_the_call() {
         let many: Vec<Value> = (0..65).map(|n| json!({format!("k{n}"): "v"})).collect();
         assert!(matches!(
             refused(&json!({"$and": many})),
@@ -846,6 +1104,49 @@ mod tests {
             refused(&json!({"a": {"$in": huge}})),
             FilterError::NotExpressible(_)
         ));
+        // Each level is an $or whose first member is an $and holding the
+        // previous level: one more nested filter per level.
+        let mut deep = json!({"a": "1"});
+        for level in 0..MAX_DEPTH {
+            deep = json!({"$or": [{"$and": [deep, {format!("z{level}"): "1"}]}, {format!("k{level}"): "x"}]});
+        }
+        assert!(
+            matches!(refused(&deep), FilterError::NotExpressible(ref m) if m.contains("levels")),
+            "{deep}"
+        );
+        // 40 nested groups of 30 conditions: 1240 in all.
+        let wide: Vec<Value> = (0..40)
+            .map(|group| {
+                let members: Vec<Value> = (0..30)
+                    .map(|n| json!({format!("k{group}_{n}"): {"$ne": "x"}}))
+                    .collect();
+                json!({"$or": [{"$and": members}, {"z": "1"}]})
+            })
+            .collect();
+        assert!(matches!(
+            refused(&json!({"$and": wide})),
+            FilterError::NotExpressible(ref m) if m.contains("conditions")
+        ));
+    }
+
+    #[test]
+    fn common_sdk_filter_shapes_translate() {
+        for input in [
+            json!({"file_path": "src/main.rs"}),
+            json!({"file_path": {"$in": ["a.rs", "b.rs"]}}),
+            json!({"$and": [{"type": "code"}, {"lang": {"$ne": "md"}}]}),
+            json!({"$or": [{"author": "ann"}, {"author": "bob"}, {"reviewed": true}]}),
+            json!({"updated_on": {"$gte": 1_700_000_000}, "type": {"$exists": true}}),
+            json!({"$and": [
+                {"$or": [{"a": "1"}, {"b": 2}]},
+                {"$not": {"$and": [{"c": "3"}, {"d": {"$lt": 4}}]}},
+                {"e": {"$nin": [1, 2]}}
+            ]}),
+            json!({"type": {"$exists": false}}),
+            json!({"metadata.chunk_id": {"$between": [1, 10]}}),
+        ] {
+            assert!(translate(&input).is_ok(), "{input}");
+        }
     }
 
     #[test]

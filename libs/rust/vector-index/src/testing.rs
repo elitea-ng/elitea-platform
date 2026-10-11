@@ -2,9 +2,12 @@
 //!
 //! It is **not** the service: it stores points in memory, scores them with
 //! exact cosine similarity, and understands the same filter shape (`must`,
-//! `should`, `must_not` of keyword, any, integer and boolean matches on the
-//! point fields and on `metadata.<path>`). It checks the bearer token and
-//! the project scope. It does not run Qdrant, BM25 statistics or quantization.
+//! `should`, `must_not` of keyword, any, integer, boolean, range, `is_empty`
+//! and `is_null` conditions on the point fields and on `metadata.<path>`,
+//! and nested filters), with Qdrant's semantics ([`matches_filter`]). It
+//! checks the bearer token and the project scope, active generations
+//! included. It does not run Qdrant, BM25 statistics or quantization. It
+//! counts calls ([`FakeVector::calls`]).
 //! The crate's integration tests drive the real client against it, over a
 //! real gRPC connection.
 
@@ -38,6 +41,8 @@ struct State {
     points: Vec<Stored>,
     /// Every bearer the fake saw, in order.
     bearers: Vec<String>,
+    /// Every call, by method name, in order.
+    calls: Vec<&'static str>,
     /// Errors to return for the next calls, oldest first.
     failures: Vec<Status>,
 }
@@ -83,6 +88,16 @@ impl FakeVector {
         self.state.lock().expect("lock").bearers.clone()
     }
 
+    /// The method names of all calls so far (`search`, `hybrid_search`, …).
+    ///
+    /// # Panics
+    ///
+    /// If the state lock is poisoned.
+    #[must_use]
+    pub fn calls(&self) -> Vec<&'static str> {
+        self.state.lock().expect("lock").calls.clone()
+    }
+
     /// How many points are stored.
     ///
     /// # Panics
@@ -111,7 +126,7 @@ impl FakeVector {
         Ok((address, handle))
     }
 
-    fn authenticate<T>(&self, request: &Request<T>) -> Result<i64, Status> {
+    fn authenticate<T>(&self, method: &'static str, request: &Request<T>) -> Result<i64, Status> {
         let header = request
             .metadata()
             .get("authorization")
@@ -119,6 +134,7 @@ impl FakeVector {
             .unwrap_or("");
         let mut state = self.state.lock().expect("lock");
         state.bearers.push(header.to_owned());
+        state.calls.push(method);
         if !state.failures.is_empty() {
             return Err(state.failures.remove(0));
         }
@@ -149,51 +165,87 @@ fn field<'a>(point: &'a pb::Point, key: &str) -> Option<&'a str> {
     }
 }
 
-fn matches_condition(point: &pb::Point, condition: &pb::Condition) -> bool {
-    use pb::condition::Match;
-    let key = condition.key.as_str();
+/// The payload value of `key` on `point`, as Qdrant sees it: `None` when
+/// missing.
+fn payload_value(point: &pb::Point, key: &str) -> Option<Value> {
     if key == "acl" {
-        return match &condition.r#match {
-            Some(Match::Keyword(value)) => point.acl.contains(value),
-            Some(Match::Any(list)) => point.acl.iter().any(|entry| list.values.contains(entry)),
-            _ => false,
-        };
+        return Some(Value::from(point.acl.clone()));
     }
     if let Some(text) = field(point, key) {
-        return match &condition.r#match {
-            Some(Match::Keyword(value)) => text == value,
-            Some(Match::Any(list)) => list.values.iter().any(|value| value == text),
-            _ => false,
-        };
+        return Some(Value::String(text.to_owned()));
     }
-    let Some(path) = key.strip_prefix("metadata.") else {
-        return false;
-    };
-    let mut current: Value = serde_json::from_str(&point.metadata_json).unwrap_or(Value::Null);
+    let path = key.strip_prefix("metadata.")?;
+    let mut current: Value = serde_json::from_str(&point.metadata_json).ok()?;
     for part in path.split('.') {
         current = match current {
-            Value::Object(mut map) => map.remove(part).unwrap_or(Value::Null),
-            _ => Value::Null,
+            Value::Object(mut map) => map.remove(part)?,
+            _ => return None,
         };
     }
-    match (&condition.r#match, &current) {
-        (Some(Match::Keyword(value)), Value::String(text)) => text == value,
-        (Some(Match::Any(list)), Value::String(text)) => list.values.contains(text),
-        (Some(Match::Integer(value)), Value::Number(number)) => number.as_i64() == Some(*value),
-        (Some(Match::Boolean(value)), Value::Bool(flag)) => flag == value,
+    Some(current)
+}
+
+/// Whether one scalar satisfies a match. Qdrant matches an array when any
+/// element does.
+fn scalar_matches(r#match: &pb::condition::Match, value: &Value) -> bool {
+    use pb::condition::Match;
+    match (r#match, value) {
+        (_, Value::Array(items)) => items.iter().any(|item| scalar_matches(r#match, item)),
+        (Match::Keyword(wanted), Value::String(text)) => text == wanted,
+        (Match::Any(list), Value::String(text)) => list.values.contains(text),
+        (Match::Integer(wanted), Value::Number(number)) => number.as_i64() == Some(*wanted),
+        (Match::Boolean(wanted), Value::Bool(flag)) => flag == wanted,
+        (Match::Range(range), Value::Number(number)) => number.as_f64().is_some_and(|number| {
+            range.gt.is_none_or(|bound| number > bound)
+                && range.gte.is_none_or(|bound| number >= bound)
+                && range.lt.is_none_or(|bound| number < bound)
+                && range.lte.is_none_or(|bound| number <= bound)
+        }),
         _ => false,
     }
 }
 
+fn matches_condition(point: &pb::Point, condition: &pb::Condition) -> bool {
+    use pb::condition::Match;
+    let Some(r#match) = &condition.r#match else {
+        return false;
+    };
+    let value = payload_value(point, &condition.key);
+    match r#match {
+        Match::Filter(inner) => matches_filter(point, Some(inner)),
+        Match::IsEmpty(_) => match value {
+            None | Some(Value::Null) => true,
+            Some(Value::Array(items)) => items.is_empty(),
+            Some(_) => false,
+        },
+        Match::IsNull(_) => matches!(value, Some(Value::Null)),
+        other => value.is_some_and(|value| scalar_matches(other, &value)),
+    }
+}
+
 /// Qdrant's semantics: every `must` holds, at least one `should` holds
-/// (when there are any), no `must_not` holds.
-fn matches_filter(point: &pb::Point, filter: Option<&pb::Filter>) -> bool {
+/// (when there are any), no `must_not` holds. Exposed so tests can check a
+/// translated filter against a reference without a server.
+#[must_use]
+pub fn matches_filter(point: &pb::Point, filter: Option<&pb::Filter>) -> bool {
     let Some(filter) = filter else {
         return true;
     };
     filter.must.iter().all(|c| matches_condition(point, c))
         && (filter.should.is_empty() || filter.should.iter().any(|c| matches_condition(point, c)))
         && !filter.must_not.iter().any(|c| matches_condition(point, c))
+}
+
+/// Whether a stored point's generation passes the scope.
+fn generation_passes(scope: &pb::Scope, stored: &Stored) -> bool {
+    if !scope.generation.is_empty() {
+        return stored.generation == scope.generation;
+    }
+    scope
+        .active_generations
+        .iter()
+        .find(|active| active.namespace_id == stored.namespace_id)
+        .is_none_or(|active| stored.generation.is_empty() || stored.generation == active.generation)
 }
 
 fn cosine(left: &[f32], right: &[f32]) -> f32 {
@@ -223,6 +275,7 @@ fn scored(stored: &Stored, score: f32) -> pb::ScoredPoint {
         acl: stored.point.acl.clone(),
         text: stored.point.text.clone(),
         metadata_json: stored.point.metadata_json.clone(),
+        dense_score: Some(score),
     }
 }
 
@@ -247,7 +300,7 @@ impl State {
                 stored.project_id == project
                     && stored.source == scope.source
                     && scope.namespace_ids.contains(&stored.namespace_id)
-                    && (scope.generation.is_empty() || stored.generation == scope.generation)
+                    && generation_passes(scope, stored)
                     && space.as_ref().is_none_or(|space| *space == stored.space)
                     && matches_filter(&stored.point, filter)
             })
@@ -261,7 +314,7 @@ impl VectorService for FakeVector {
         &self,
         request: Request<Streaming<pb::UpsertRequest>>,
     ) -> Result<Response<pb::UpsertResponse>, Status> {
-        let project = self.authenticate(&request)?;
+        let project = self.authenticate("upsert", &request)?;
         let mut stream = request.into_inner();
         let Some(pb::UpsertRequest {
             message: Some(pb::upsert_request::Message::Header(header)),
@@ -321,7 +374,7 @@ impl VectorService for FakeVector {
         &self,
         request: Request<pb::DeleteRequest>,
     ) -> Result<Response<pb::DeleteResponse>, Status> {
-        let project = self.authenticate(&request)?;
+        let project = self.authenticate("delete", &request)?;
         let request = request.into_inner();
         let namespace = request
             .namespace
@@ -360,7 +413,7 @@ impl VectorService for FakeVector {
         &self,
         request: Request<pb::DropProjectRequest>,
     ) -> Result<Response<pb::DropProjectResponse>, Status> {
-        self.authenticate(&request)?;
+        self.authenticate("drop_project", &request)?;
         Err(Status::permission_denied(
             "only an administrator can drop a project",
         ))
@@ -370,7 +423,7 @@ impl VectorService for FakeVector {
         &self,
         request: Request<pb::SearchRequest>,
     ) -> Result<Response<pb::SearchResponse>, Status> {
-        let project = self.authenticate(&request)?;
+        let project = self.authenticate("search", &request)?;
         let request = request.into_inner();
         let state = self.state.lock().expect("lock");
         let mut found: Vec<(&Stored, f32)> = state
@@ -402,7 +455,7 @@ impl VectorService for FakeVector {
         &self,
         request: Request<pb::HybridSearchRequest>,
     ) -> Result<Response<pb::HybridSearchResponse>, Status> {
-        let project = self.authenticate(&request)?;
+        let project = self.authenticate("hybrid_search", &request)?;
         let request = request.into_inner();
         let (dense_weight, text_weight) =
             if request.dense_weight == 0.0 && request.text_weight == 0.0 {
@@ -470,7 +523,10 @@ impl VectorService for FakeVector {
                 .into_iter()
                 .map(|(index, score)| {
                     #[allow(clippy::cast_possible_truncation, reason = "a test score")]
-                    scored(candidates[index], score as f32)
+                    let mut point = scored(candidates[index], score as f32);
+                    point.dense_score =
+                        Some(cosine(&request.vector, &candidates[index].point.vector));
+                    point
                 })
                 .collect(),
         }))
@@ -480,7 +536,7 @@ impl VectorService for FakeVector {
         &self,
         request: Request<pb::CountRequest>,
     ) -> Result<Response<pb::CountResponse>, Status> {
-        let project = self.authenticate(&request)?;
+        let project = self.authenticate("count", &request)?;
         let request = request.into_inner();
         let state = self.state.lock().expect("lock");
         let count = state
@@ -500,7 +556,7 @@ impl VectorService for FakeVector {
         &self,
         request: Request<pb::ListIndexesRequest>,
     ) -> Result<Response<pb::ListIndexesResponse>, Status> {
-        let project = self.authenticate(&request)?;
+        let project = self.authenticate("list_indexes", &request)?;
         let source = request.into_inner().source;
         let state = self.state.lock().expect("lock");
         let mut groups: Vec<((String, u32), i32, String, u64)> = Vec::new();

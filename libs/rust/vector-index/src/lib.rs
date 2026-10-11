@@ -27,7 +27,7 @@ pub mod filter;
 pub mod format;
 pub mod hit;
 mod prompts;
-pub mod pyfmt;
+mod pyfmt;
 pub mod rerank;
 pub mod search;
 pub mod stepback;

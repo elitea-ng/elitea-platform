@@ -8,28 +8,33 @@
 //!   type (`title`, `summary`, `propositions`, `keywords`), `search_top`
 //!   results each. A hit on a non-document chunk brings in its document
 //!   chunk (same document and chunk id), scored by the query; the
-//!   non-document chunk itself is not returned.
+//!   non-document chunk itself is not returned. The document chunks of all
+//!   new hits are read together, [`DOCUMENT_BATCH`] (document, chunk) pairs
+//!   per call, not one call per hit.
 //! * **Duplicates.** Results are keyed `{document_key}_{chunk_id}`. When a
 //!   key repeats, the **better** score is kept (the SDK kept the worse).
 //! * **Rerank, cut-off, truncate.** See [`crate::rerank`]. The cut-off is
-//!   on `|score|`; 0 turns it off.
+//!   on the absolute reranked **dense** score ([`Hit::dense_score`]), after
+//!   reranking; 0 turns it off. No score threshold is ever sent to the
+//!   service, so one rule decides in both modes.
 //! * **`full_text_search`.** Calls `HybridSearch`: BM25 over the chunk text
 //!   fused with the dense search by weighted RRF, 0.3 text / 0.7 dense (the
 //!   SDK's `weight` is the text weight). The SDK's version never ran.
-//!   Fused scores are rank-based and far below any cosine cut-off, so in a
-//!   hybrid search the cut-off is sent as the dense side's score threshold
-//!   instead of being applied to the fused score.
+//!   Results are ordered by the fused score (rank-based, far below any
+//!   cosine), but cut by their dense cosine score, which the service returns
+//!   beside it, exactly as a dense search is cut.
 
 use std::collections::HashSet;
 use std::future::Future;
 
+use elitea_engine_core::pyvalue::py_truthy;
 use serde_json::Value;
 
 use crate::client::{
     ClaimToken, HybridSearchParams, MAX_LIMIT, SearchParams, VectorClient, toolkit_namespace,
 };
 use crate::error::{Error, Result};
-use crate::filter::{keyword, with_must};
+use crate::filter::{keyword, nest, with_must};
 use crate::hit::Hit;
 use crate::pb;
 use crate::rerank::{self, FieldRerank};
@@ -40,6 +45,9 @@ const OVERFETCH_CEILING: usize = 30;
 const EXTENDED_CHUNK_TYPES: [&str; 4] = ["title", "summary", "propositions", "keywords"];
 /// The SDK's default text weight of a full-text search.
 const DEFAULT_TEXT_WEIGHT: f64 = 0.3;
+/// The most (document, chunk) pairs one document-chunk read of
+/// `extended_search` asks for.
+pub const DOCUMENT_BATCH: usize = 32;
 
 /// What the search needs from `elitea-vector`. [`VectorSession`] is the real
 /// one; tests use fakes.
@@ -139,8 +147,8 @@ impl FullText {
                 )),
             };
         };
-        let enabled = config.get("enabled").is_some_and(is_truthy);
-        let has_fields = config.get("fields").is_some_and(is_truthy);
+        let enabled = config.get("enabled").is_some_and(py_truthy);
+        let has_fields = config.get("fields").is_some_and(py_truthy);
         if !enabled || !has_fields {
             return Ok(None);
         }
@@ -159,18 +167,6 @@ impl FullText {
             text_weight: narrow(text_weight),
             dense_weight: narrow(1.0 - text_weight),
         }))
-    }
-}
-
-/// Python truthiness of a JSON value.
-fn is_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(map) => !map.is_empty(),
     }
 }
 
@@ -197,7 +193,7 @@ pub struct SearchPlan {
     pub filter: Option<pb::Filter>,
     /// `search_top`, at least 1.
     pub top: usize,
-    /// The cut-off on `|score|`; 0 turns it off.
+    /// The cut-off on the reranked `|dense score|`; 0 turns it off.
     pub cut_off: f64,
     /// `extended_search` chunk types; empty for a plain search.
     pub extended: Vec<String>,
@@ -237,42 +233,95 @@ pub async fn search_documents<B: VectorBackend>(
                 types.push(chunk_type);
             }
         }
+        // The (document, chunk) of every new non-document hit, in the order
+        // found, once each (a title and a summary of the same chunk name
+        // the same document chunk).
+        let mut wanted: Vec<(String, String)> = Vec::new();
         for chunk_type in types {
             let type_filter = with_must(plan.filter.as_ref(), keyword("chunk_type", chunk_type));
             for found in fetch(backend, plan, Some(&type_filter), plan.top).await? {
-                if !seen.insert(found.key.clone()) {
-                    continue;
-                }
-                // Bring in the document chunk this one belongs to.
-                let mut document = with_must(
-                    plan.filter.as_ref(),
-                    keyword("document_key", &found.document_key),
-                );
-                if !found.chunk_id.is_empty() {
-                    document.must.push(keyword("chunk_id", &found.chunk_id));
-                }
-                document.must.push(keyword("chunk_type", "document"));
-                if let Some(first) = fetch(backend, plan, Some(&document), 1)
-                    .await?
-                    .into_iter()
-                    .next()
-                {
-                    raw.push(first);
+                if seen.insert(found.key.clone()) {
+                    let pair = (found.document_key, found.chunk_id);
+                    if !wanted.contains(&pair) {
+                        wanted.push(pair);
+                    }
                 }
             }
         }
+        raw.extend(document_chunks(backend, plan, &wanted).await?);
     }
     let mut hits = keep_best_duplicates(raw);
     hits.sort_by(|left, right| right.score.total_cmp(&left.score));
     let mut hits = rerank::apply(hits, &plan.rerank)?;
-    if plan.cut_off != 0.0 && plan.full_text.is_none() {
-        hits.retain(|hit| hit.score.abs() >= plan.cut_off);
+    if plan.cut_off != 0.0 {
+        hits.retain(|hit| hit.dense_score.abs() >= plan.cut_off);
     }
     hits.truncate(plan.top);
     Ok(hits)
 }
 
+/// The document chunk of each `(document_key, chunk_id)` pair, read
+/// [`DOCUMENT_BATCH`] pairs per call: the caller's filter, `chunk_type =
+/// document`, and "at least one of" the pairs. A pair can match one point
+/// per searched namespace, so a call asks for pairs x namespaces results
+/// and keeps, per pair, the first (best) one, as the SDK's per-hit fetch of
+/// limit 1 did. A pair without a chunk id (elitea-vector requires one, so
+/// only a foreign point) matches its document's best document chunk.
+///
+/// The batch is keyed by pairs, not by `document_key` alone: the SDK's
+/// chunkers give a title, summary, propositions and document chunk of one
+/// passage the same `chunk_id`, and a document has many passages. A
+/// `document_key IN [...]` read would return the document's *best-scoring*
+/// passage instead of the one the title or summary was found for, and a
+/// document of many passages would fill the batch limit and starve the
+/// other documents' reads.
+async fn document_chunks<B: VectorBackend>(
+    backend: &B,
+    plan: &SearchPlan,
+    wanted: &[(String, String)],
+) -> Result<Vec<Hit>> {
+    let namespaces = plan.scope.namespace_ids.len().max(1);
+    let mut found = Vec::with_capacity(wanted.len());
+    for batch in wanted.chunks(DOCUMENT_BATCH) {
+        let pairs = batch
+            .iter()
+            .map(|(document_key, chunk_id)| {
+                let mut must = vec![keyword("document_key", document_key)];
+                if !chunk_id.is_empty() {
+                    must.push(keyword("chunk_id", chunk_id));
+                }
+                nest(pb::Filter {
+                    must,
+                    ..pb::Filter::default()
+                })
+            })
+            .collect();
+        let mut filter = with_must(plan.filter.as_ref(), keyword("chunk_type", "document"));
+        filter.must.push(nest(pb::Filter {
+            should: pairs,
+            ..pb::Filter::default()
+        }));
+        let hits = fetch(
+            backend,
+            plan,
+            Some(&filter),
+            batch.len().saturating_mul(namespaces),
+        )
+        .await?;
+        for (document_key, chunk_id) in batch {
+            if let Some(hit) = hits.iter().find(|hit| {
+                hit.document_key == *document_key
+                    && (chunk_id.is_empty() || hit.chunk_id == *chunk_id)
+            }) {
+                found.push(hit.clone());
+            }
+        }
+    }
+    Ok(found)
+}
+
 /// One backend call: dense, or hybrid when the plan has full-text weights.
+/// No score threshold is sent: the cut-off is the caller's, after reranking.
 async fn fetch<B: VectorBackend>(
     backend: &B,
     plan: &SearchPlan,
@@ -290,10 +339,6 @@ async fn fetch<B: VectorBackend>(
     };
     let points = match plan.full_text {
         Some(weights) => {
-            let search = SearchParams {
-                score_threshold: (plan.cut_off != 0.0).then(|| narrow(plan.cut_off)),
-                ..search
-            };
             backend
                 .hybrid_search(HybridSearchParams {
                     search,
@@ -351,8 +396,10 @@ mod tests {
     /// A recorded call: kind, limit, filter, score threshold.
     type Call = (String, u32, Option<pb::Filter>, Option<f32>);
 
-    /// Returns chunks that satisfy the request's `must` conditions, by
-    /// score, and records every call.
+    /// Returns chunks that satisfy the request's filter (Qdrant semantics,
+    /// nested filters included), by score, and records every call. A hybrid
+    /// call returns rank-based fused scores and the chunk's score as the
+    /// dense score, as if the text matched nothing.
     #[derive(Default)]
     struct Fake {
         chunks: Vec<Chunk>,
@@ -371,29 +418,33 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((kind.to_owned(), limit, filter.cloned(), threshold));
-            let wants =
-                |key: &str, value: &str| {
-                    filter.is_none_or(|filter| {
-                        filter.must.iter().filter(|c| c.key == key).all(|c| {
-                            c.r#match == Some(pb::condition::Match::Keyword(value.to_owned()))
-                        })
-                    })
-                };
             let mut found: Vec<&Chunk> = self
                 .chunks
                 .iter()
                 .filter(|c| {
-                    wants("chunk_type", c.chunk_type)
-                        && wants("document_key", c.document_key)
-                        && wants("chunk_id", c.chunk_id)
+                    let point = pb::Point {
+                        document_key: c.document_key.to_owned(),
+                        chunk_id: c.chunk_id.to_owned(),
+                        chunk_type: c.chunk_type.to_owned(),
+                        metadata_json: c.metadata.to_owned(),
+                        ..pb::Point::default()
+                    };
+                    crate::testing::matches_filter(&point, filter)
                 })
                 .collect();
             found.sort_by(|a, b| b.score.total_cmp(&a.score));
+            let hybrid = kind.starts_with("hybrid");
             found
                 .into_iter()
                 .take(limit as usize)
-                .map(|c| pb::ScoredPoint {
-                    score: c.score,
+                .enumerate()
+                .map(|(rank, c)| pb::ScoredPoint {
+                    score: if hybrid {
+                        0.7 / (61.0 + f32::from(u8::try_from(rank).unwrap_or(u8::MAX)))
+                    } else {
+                        c.score
+                    },
+                    dense_score: Some(c.score),
                     document_key: c.document_key.to_owned(),
                     chunk_id: c.chunk_id.to_owned(),
                     chunk_type: c.chunk_type.to_owned(),
@@ -449,7 +500,7 @@ mod tests {
 
     fn plan() -> SearchPlan {
         SearchPlan {
-            scope: crate::client::toolkit_scope(vec!["ns".to_owned()]),
+            scope: crate::client::toolkit_scope(vec!["ns".to_owned()], None),
             space: pb::EmbeddingSpace {
                 model_slug: "m".to_owned(),
                 dimension: 2,
@@ -532,6 +583,7 @@ mod tests {
             page_content: text.to_owned(),
             metadata: serde_json::Map::new(),
             score,
+            dense_score: score,
             document_key: "d".to_owned(),
             chunk_id: "1".to_owned(),
         };
@@ -637,25 +689,34 @@ mod tests {
         for hit in &hits {
             assert_eq!(hit.metadata["chunk_type"], "document");
         }
-        // 1 document search + 1 per valid type + 1 document fetch per new key
-        // (d2 from title, d3 from keywords; d1's title hit is already known).
+        // 1 document search + 1 per valid type + ONE read of the document
+        // chunks of every new key (d2 from title, d3 from keywords; d1's
+        // title hit is already known).
         let calls = fake.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1 + 2 + 2);
+        assert_eq!(calls.len(), 1 + 2 + 1);
         assert!(calls.iter().all(|call| call.1 <= 6));
-        assert_eq!(
-            (calls[2].1, calls[4].1),
-            (1, 1),
-            "a document chunk is fetched with limit 1"
-        );
+        assert_eq!(calls[3].1, 2, "two pairs in one namespace");
     }
 
     #[tokio::test]
     async fn extended_search_keeps_the_callers_filter_on_every_call() {
         let fake = Fake {
             chunks: vec![
-                chunk("d", "1", "document", 0.5),
-                chunk("e", "0", "title", 0.9),
-                chunk("e", "0", "document", 0.4),
+                Chunk {
+                    metadata: r#"{"team": "x"}"#,
+                    ..chunk("d", "1", "document", 0.5)
+                },
+                Chunk {
+                    metadata: r#"{"team": "x"}"#,
+                    ..chunk("e", "0", "title", 0.9)
+                },
+                Chunk {
+                    metadata: r#"{"team": "x"}"#,
+                    ..chunk("e", "0", "document", 0.4)
+                },
+                // Another team's chunks never appear, whatever they score.
+                chunk("z", "0", "title", 0.99),
+                chunk("z", "0", "document", 0.98),
             ],
             ..Fake::default()
         };
@@ -678,8 +739,47 @@ mod tests {
         }
         let calls = fake.calls.lock().unwrap();
         let fetch = calls.last().unwrap().2.as_ref().unwrap();
-        assert!(fetch.must.contains(&keyword("document_key", "e")));
-        assert!(fetch.must.contains(&keyword("chunk_id", "0")));
+        assert!(fetch.must.contains(&keyword("chunk_type", "document")));
+        let Some(pb::condition::Match::Filter(pairs)) = &fetch.must.last().unwrap().r#match else {
+            panic!("the pairs group: {fetch:?}");
+        };
+        assert_eq!(
+            pairs.should,
+            vec![nest(pb::Filter {
+                must: vec![keyword("document_key", "e"), keyword("chunk_id", "0")],
+                ..pb::Filter::default()
+            })]
+        );
+    }
+
+    #[tokio::test]
+    async fn extended_search_reads_document_chunks_in_bounded_batches() {
+        // 40 documents whose document chunks score below the 40 fillers'
+        // (so the document search never returns them) but whose titles
+        // score highest: 40 new pairs, found only through their titles.
+        let mut chunks = Vec::new();
+        for n in 0_u8..40 {
+            let key: &'static str = Box::leak(format!("t{n}").into_boxed_str());
+            chunks.push(chunk(key, "0", "title", 0.9 - f32::from(n) * 0.01));
+            chunks.push(chunk(key, "0", "document", 0.3 - f32::from(n) * 0.001));
+            let filler: &'static str = Box::leak(format!("f{n}").into_boxed_str());
+            chunks.push(chunk(filler, "0", "document", 0.5 - f32::from(n) * 0.001));
+        }
+        let fake = Fake {
+            chunks,
+            ..Fake::default()
+        };
+        let mut p = plan();
+        p.cut_off = 0.0;
+        p.top = 40;
+        p.extended = vec!["title".into()];
+        let hits = search_documents(&fake, &p).await.unwrap();
+        assert_eq!(hits.len(), 40);
+        let calls = fake.calls.lock().unwrap();
+        // document search, title search, then ceil(40 / 32) = 2 reads; never
+        // one per hit.
+        assert_eq!(calls.len(), 2 + 40_usize.div_ceil(DOCUMENT_BATCH));
+        assert_eq!((calls[2].1, calls[3].1), (32, 8));
     }
 
     #[tokio::test]
@@ -694,16 +794,53 @@ mod tests {
         let hits = search_documents(&fake, &p).await.unwrap();
         let calls = fake.calls.lock().unwrap();
         assert_eq!(calls[0].0, "hybrid 0.3/0.7 q");
-        assert_eq!(
-            calls[0].3,
-            Some(0.1),
-            "the cut-off becomes the dense threshold"
-        );
+        assert_eq!(calls[0].3, None, "no server-side threshold");
         assert_eq!(
             hits.len(),
             1,
-            "a fused score is not cut by the cosine cut-off"
+            "the cut-off reads the dense score, not the rank-based fused one"
         );
+    }
+
+    #[tokio::test]
+    async fn hybrid_and_dense_cut_and_rerank_alike_when_text_adds_nothing() {
+        let spec = r#"{"kind": "spec"}"#;
+        let fake = Fake {
+            chunks: vec![
+                chunk("a", "0", "document", 0.9),
+                chunk("b", "0", "document", 0.3),
+                // Below the cut-off alone, above it once boosted.
+                Chunk {
+                    metadata: spec,
+                    ..chunk("c", "0", "document", 0.12)
+                },
+                chunk("d", "0", "document", 0.15),
+                chunk("e", "0", "document", 0.05),
+                chunk("f", "0", "document", -0.4),
+            ],
+            ..Fake::default()
+        };
+        let mut p = plan();
+        p.cut_off = 0.2;
+        p.rerank = rerank::parse(&json!({"kind": {"weight": 1.0, "rules": {"priority": "spec"}}}))
+            .unwrap();
+        let mut dense = keys(&search_documents(&fake, &p).await.unwrap())
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        p.full_text =
+            FullText::from_value(Some(&json!({"enabled": true, "fields": ["text"]}))).unwrap();
+        let mut hybrid = keys(&search_documents(&fake, &p).await.unwrap())
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        dense.sort();
+        hybrid.sort();
+        assert_eq!(dense, ["a_0", "b_0", "c_0", "f_0"]);
+        assert_eq!(hybrid, dense);
+        for call in fake.calls.lock().unwrap().iter() {
+            assert_eq!(call.3, None, "{call:?}");
+        }
     }
 
     #[test]

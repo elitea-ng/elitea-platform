@@ -39,9 +39,16 @@ fn space() -> pb::EmbeddingSpace {
 async fn connect() -> (VectorClient, FakeVector) {
     let fake = FakeVector::new(&[(TOKEN_A, 1), (TOKEN_B, 2)]);
     let (address, _server) = fake.clone().serve().await.expect("serve");
-    let client = VectorClient::connect_lazy(&ClientConfig::new(format!("http://{address}")))
-        .expect("client");
+    let client =
+        VectorClient::connect_lazy(&insecure(&format!("http://{address}"))).expect("client");
     (client, fake)
+}
+
+/// A plaintext config: the fake serves without TLS.
+fn insecure(endpoint: &str) -> ClientConfig {
+    let mut config = ClientConfig::new(endpoint);
+    config.allow_insecure = true;
+    config
 }
 
 fn point(
@@ -111,7 +118,7 @@ async fn seed(client: &VectorClient) {
 
 fn search_params(vector: [f32; 3], filter: Option<pb::Filter>, limit: u32) -> SearchParams {
     SearchParams {
-        scope: toolkit_scope(vec![NS.to_owned()]),
+        scope: toolkit_scope(vec![NS.to_owned()], None),
         space: space(),
         vector: vector.to_vec(),
         filter,
@@ -163,7 +170,7 @@ async fn upsert_batches_and_every_call_carries_the_bearer() {
     client
         .count(
             &token(TOKEN_A),
-            toolkit_scope(vec![NS.to_owned()]),
+            toolkit_scope(vec![NS.to_owned()], None),
             None,
             None,
         )
@@ -312,7 +319,7 @@ async fn hybrid_search_fuses_text_with_dense() {
 async fn delete_selectors_count_and_list() {
     let (client, _fake) = connect().await;
     seed(&client).await;
-    let scope = toolkit_scope(vec![NS.to_owned()]);
+    let scope = toolkit_scope(vec![NS.to_owned()], None);
     assert_eq!(
         client
             .count(&token(TOKEN_A), scope.clone(), None, None)
@@ -392,7 +399,7 @@ async fn delete_selectors_count_and_list() {
         )
         .await
         .unwrap();
-    let other_scope = toolkit_scope(vec![OTHER_NS.to_owned()]);
+    let other_scope = toolkit_scope(vec![OTHER_NS.to_owned()], None);
     assert_eq!(
         client
             .count(&token(TOKEN_A), other_scope.clone(), None, None)
@@ -453,7 +460,7 @@ async fn delete_selectors_count_and_list() {
 #[tokio::test]
 async fn statuses_are_classified() {
     let (client, fake) = connect().await;
-    let scope = toolkit_scope(vec![NS.to_owned()]);
+    let scope = toolkit_scope(vec![NS.to_owned()], None);
     let unknown = client
         .count(&token("elvc_unknown"), scope.clone(), None, None)
         .await
@@ -487,8 +494,7 @@ async fn statuses_are_classified() {
         assert_eq!(error.is_retryable(), retryable, "{code:?}");
     }
 
-    let missing_header =
-        VectorClient::connect_lazy(&ClientConfig::new("http://127.0.0.1:1")).unwrap();
+    let missing_header = VectorClient::connect_lazy(&insecure("http://127.0.0.1:1")).unwrap();
     let down = missing_header
         .count(&token(TOKEN_A), scope, None, None)
         .await
@@ -545,11 +551,13 @@ fn catalog() -> IndexCatalog {
         IndexEntry {
             name: "docs".into(),
             namespace_id: NS.into(),
+            active_generation: None,
             space: space(),
         },
         IndexEntry {
             name: "empty".into(),
             namespace_id: OTHER_NS.into(),
+            active_generation: None,
             space: space(),
         },
     ])
@@ -603,14 +611,35 @@ async fn search_index_returns_the_sdk_shapes() {
     assert!(projected[0]["score"].is_number());
     assert!(projected[0].get("page_content").is_none());
 
+    // A range: only the 2025 documents.
+    let ranged = tools
+        .search_index(&args(json!({
+            "query": "install on kubernetes",
+            "filter": {"year": {"$gt": 2024}},
+            "cut_off": 0.0,
+        })))
+        .await
+        .unwrap()
+        .into_value();
+    let years: Vec<&Value> = ranged
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|doc| &doc["metadata"]["year"])
+        .collect();
+    assert!(
+        !years.is_empty() && years.iter().all(|year| **year == json!(2025)),
+        "{ranged}"
+    );
+
     // A refused filter is an error with the operator named.
     let error = tools
         .search_index(&args(
-            json!({"query": "x", "filter": {"year": {"$gt": 2020}}}),
+            json!({"query": "x", "filter": {"filename": {"$like": "%.md"}}}),
         ))
         .await
         .expect_err("refused");
-    assert!(error.to_string().contains("$gt"), "{error}");
+    assert!(error.to_string().contains("$like"), "{error}");
     let error = tools
         .search_index(&args(json!({"query": "x", "filter": {"project_id": 2}})))
         .await
@@ -651,6 +680,7 @@ async fn search_index_messages() {
     let wrong_dimension = IndexCatalog::new(vec![IndexEntry {
         name: "wide".into(),
         namespace_id: NS.into(),
+        active_generation: None,
         space: pb::EmbeddingSpace {
             model_slug: "test-model".into(),
             dimension: 8,
@@ -671,11 +701,13 @@ async fn search_index_messages() {
         IndexEntry {
             name: "a".into(),
             namespace_id: NS.into(),
+            active_generation: None,
             space: space(),
         },
         IndexEntry {
             name: "b".into(),
             namespace_id: OTHER_NS.into(),
+            active_generation: None,
             space: pb::EmbeddingSpace {
                 model_slug: "other".into(),
                 dimension: 3,
@@ -820,6 +852,7 @@ async fn remove_index_refuses_an_empty_name_and_deletes_a_named_one() {
     let single = IndexCatalog::new(vec![IndexEntry {
         name: "only".into(),
         namespace_id: NS.into(),
+        active_generation: None,
         space: space(),
     }]);
     let tools = IndexTools::new(&session, &KeywordEmbedder, &single, Doctype::Document);
@@ -872,12 +905,315 @@ async fn stepback_tools_use_the_model_twice_for_a_summary() {
     ));
     assert!(prompts[2].contains("'page_content': 'install the platform on kubernetes'"));
 
-    let nothing = tools
-        .stepback_search_index(
-            &args(json!({"query": "q", "index_name": "unknown-index"})),
-            &model,
-        )
+    // An unknown index is reported before the model is called.
+    let calls = model.prompts.lock().unwrap().len();
+    for unknown in [
+        tools
+            .stepback_search_index(
+                &args(json!({"query": "q", "index_name": "unknown-index"})),
+                &model,
+            )
+            .await
+            .unwrap(),
+        tools
+            .stepback_summary_index(
+                &args(json!({"query": "q", "index_name": "unknown-index"})),
+                &model,
+            )
+            .await
+            .unwrap(),
+    ] {
+        assert_eq!(
+            unknown,
+            "Index 'unknown-index' not found. Available indexes: docs,empty"
+        );
+    }
+    assert_eq!(model.prompts.lock().unwrap().len(), calls);
+}
+
+// ── review round 1 ─────────────────────────────────────────────────────────
+
+/// SQL's three-valued reading of an SDK filter over one metadata object, as
+/// langchain-postgres compiles it: a comparison on a missing or null key is
+/// NULL (`None`), `NOT NULL` is NULL, and a row matches only on `TRUE`.
+fn sql(filter: &Value, metadata: &Value) -> Option<bool> {
+    let map = filter.as_object().expect("object");
+    let parts: Vec<Option<bool>> = map
+        .iter()
+        .map(|(key, value)| match key.as_str() {
+            "$and" => and(value.as_array().unwrap().iter().map(|f| sql(f, metadata))),
+            "$or" => or(value.as_array().unwrap().iter().map(|f| sql(f, metadata))),
+            "$not" => match value {
+                Value::Array(items) => and(items.iter().map(|f| sql(f, metadata).map(|b| !b))),
+                other => sql(other, metadata).map(|b| !b),
+            },
+            field => compare(metadata.get(field).filter(|v| !v.is_null()), value),
+        })
+        .collect();
+    and(parts.into_iter())
+}
+
+fn and(parts: impl Iterator<Item = Option<bool>>) -> Option<bool> {
+    let parts: Vec<_> = parts.collect();
+    if parts.contains(&Some(false)) {
+        Some(false)
+    } else if parts.contains(&None) {
+        None
+    } else {
+        Some(true)
+    }
+}
+
+fn or(parts: impl Iterator<Item = Option<bool>>) -> Option<bool> {
+    let parts: Vec<_> = parts.collect();
+    if parts.contains(&Some(true)) {
+        Some(true)
+    } else if parts.contains(&None) {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+fn compare(actual: Option<&Value>, condition: &Value) -> Option<bool> {
+    let Value::Object(operators) = condition else {
+        return actual.map(|a| a == condition);
+    };
+    let (operator, operand) = operators.iter().next().unwrap();
+    if operator == "$exists" {
+        return Some(actual.is_some() == operand.as_bool().unwrap());
+    }
+    let actual = actual?;
+    let number = || actual.as_f64();
+    Some(match operator.as_str() {
+        "$eq" => actual == operand,
+        "$ne" => actual != operand,
+        "$in" => operand.as_array().unwrap().contains(actual),
+        "$nin" => !operand.as_array().unwrap().contains(actual),
+        "$gt" => number()? > operand.as_f64().unwrap(),
+        "$gte" => number()? >= operand.as_f64().unwrap(),
+        "$lt" => number()? < operand.as_f64().unwrap(),
+        "$lte" => number()? <= operand.as_f64().unwrap(),
+        "$between" => {
+            let bounds = operand.as_array().unwrap();
+            (bounds[0].as_f64().unwrap()..=bounds[1].as_f64().unwrap()).contains(&number()?)
+        }
+        other => panic!("{other}"),
+    })
+}
+
+#[test]
+fn translated_filters_agree_with_the_sdks_sql_on_missing_keys() {
+    let documents = [
+        json!({"lang": "en", "year": 2024, "draft": false}),
+        json!({"lang": "de", "year": 2025}),
+        json!({"lang": null, "year": 2020, "draft": true}),
+        json!({"year": 2023}),
+        json!({"lang": "en"}),
+        json!({}),
+    ];
+    let filters = [
+        json!({"lang": {"$ne": "en"}}),
+        json!({"lang": {"$nin": ["en", "fr"]}}),
+        json!({"year": {"$nin": [2024, 2025]}}),
+        json!({"$not": {"lang": "en"}}),
+        json!({"$not": {"lang": {"$ne": "en"}}}),
+        json!({"$not": {"$and": [{"lang": "en"}, {"year": 2024}]}}),
+        json!({"$not": {"$or": [{"lang": "en"}, {"year": {"$gte": 2025}}]}}),
+        json!({"$not": [{"lang": "de"}, {"draft": true}]}),
+        json!({"$or": [{"lang": {"$ne": "de"}}, {"year": {"$lt": 2021}}]}),
+        json!({"$or": [{"$and": [{"lang": "en"}, {"draft": false}]}, {"year": 2023}]}),
+        json!({"$and": [{"$or": [{"lang": "en"}, {"lang": "de"}]}, {"$or": [{"year": 2024}, {"year": 2025}]}]}),
+        json!({"year": {"$in": [2020, 2023]}, "$or": [{"draft": true}, {"lang": {"$exists": false}}]}),
+        json!({"year": {"$between": [2021, 2024]}}),
+        json!({"$not": {"year": {"$gt": 2023}}}),
+        json!({"lang": {"$exists": true}}),
+        json!({"$not": {"lang": {"$exists": true}}}),
+        json!({"$not": {"$not": {"draft": {"$ne": true}}}}),
+    ];
+    for filter_json in &filters {
+        let translated =
+            filter::translate(filter_json).unwrap_or_else(|error| panic!("{filter_json}: {error}"));
+        for metadata in &documents {
+            let point = pb::Point {
+                metadata_json: metadata.to_string(),
+                ..pb::Point::default()
+            };
+            assert_eq!(
+                elitea_vector_index::testing::matches_filter(&point, translated.as_ref()),
+                sql(filter_json, metadata) == Some(true),
+                "{filter_json} on {metadata}: {translated:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_search_excludes_a_build_in_progress_but_keeps_unversioned_points() {
+    let (client, _fake) = connect().await;
+    for (generation, document) in [("g1", "published"), ("g2", "building"), ("", "plain")] {
+        client
+            .upsert(
+                &token(TOKEN_A),
+                space(),
+                pb::Namespace {
+                    generation: generation.to_owned(),
+                    ..toolkit_namespace(NS)
+                },
+                vec![point(
+                    document,
+                    "0",
+                    "document",
+                    "kubernetes",
+                    &json!({}),
+                    [1.0, 0.0, 0.0],
+                )],
+            )
+            .await
+            .expect("upsert");
+    }
+    let session_token = token(TOKEN_A);
+    let session = VectorSession::new(&client, &session_token);
+    let found = |catalog: IndexCatalog| async move {
+        let tools = IndexTools::new(&session, &KeywordEmbedder, &catalog, Doctype::Document);
+        let mut keys: Vec<String> = match tools
+            .search_index(&args(json!({"query": "kubernetes", "index_name": "docs"})))
+            .await
+            .unwrap()
+        {
+            SearchOutput::Documents(docs) => docs
+                .iter()
+                .map(|d| d["page_content"].as_str().unwrap().to_owned())
+                .collect(),
+            SearchOutput::Message(message) => panic!("{message}"),
+        };
+        keys.sort();
+        keys
+    };
+    let pinned = IndexCatalog::new(vec![IndexEntry {
+        name: "docs".into(),
+        namespace_id: NS.into(),
+        space: space(),
+        active_generation: Some("g1".into()),
+    }]);
+    // Same text everywhere: count by metadata instead.
+    assert_eq!(found(pinned).await.len(), 2, "g1 and the unversioned point");
+    let unpinned = IndexCatalog::new(vec![IndexEntry {
+        name: "docs".into(),
+        namespace_id: NS.into(),
+        space: space(),
+        active_generation: None,
+    }]);
+    assert_eq!(found(unpinned).await.len(), 3, "no generation: every point");
+}
+
+/// Counts model calls; never expected to be called in the test that uses
+/// it.
+struct CountingModel(std::sync::atomic::AtomicUsize);
+
+impl StepbackModel for CountingModel {
+    async fn invoke(&self, _prompt: &str) -> Result<Value, Error> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(json!("kubernetes"))
+    }
+}
+
+#[tokio::test]
+async fn an_invalid_step_back_request_makes_no_model_call() {
+    let (client, fake) = connect().await;
+    seed(&client).await;
+    let session_token = token(TOKEN_A);
+    let session = VectorSession::new(&client, &session_token);
+    let catalog = catalog();
+    let tools = IndexTools::new(&session, &KeywordEmbedder, &catalog, Doctype::Document);
+    let model = CountingModel(std::sync::atomic::AtomicUsize::new(0));
+    let before = fake.calls().len();
+    for bad in [
+        json!({"query": "q", "cut_off": 2.0}),
+        json!({"query": "q", "cut_off": -0.1}),
+        json!({"query": "q", "search_top": 0}),
+        json!({"query": "q", "filter": {"a": {"$like": "x%"}}}),
+        json!({"query": "q", "filter": {"$not": {}}}),
+        json!({"query": "q", "filter": "{not json"}),
+        json!({"query": "q", "filter": {"project_id": 1}}),
+        json!({"query": "q", "reranking_config": [1]}),
+        json!({"query": "q", "reranking_config": {"kind": {"weight": "high"}}}),
+        json!({"query": "q", "full_text_search": {"enabled": true, "fields": ["t"], "weight": 3}}),
+        json!({"query": "  "}),
+    ] {
+        let search = tools
+            .stepback_search_index(&args(bad.clone()), &model)
+            .await;
+        assert!(search.is_err(), "{bad}");
+        let summary = tools
+            .stepback_summary_index(&args(bad.clone()), &model)
+            .await;
+        assert!(summary.is_err(), "{bad}");
+    }
+    let unknown = tools
+        .stepback_search_index(&args(json!({"query": "q", "index_name": "nope"})), &model)
         .await
         .unwrap();
-    assert_eq!(nothing, "No documents found matching the query.");
+    assert!(unknown.starts_with("Index 'nope' not found"), "{unknown}");
+    assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(fake.calls().len(), before, "nor any vector call");
+}
+
+#[tokio::test]
+async fn extended_search_reads_document_chunks_in_one_call() {
+    let (client, fake) = connect().await;
+    // Five documents found only through their titles: their document
+    // chunks score below five fillers', which the document search returns
+    // instead.
+    let mut points = Vec::new();
+    for n in 0..5 {
+        let document = format!("doc{n}");
+        points.push(point(
+            &document,
+            "0",
+            "title",
+            "Deployment",
+            &json!({}),
+            [1.0, 0.0, 0.0],
+        ));
+        points.push(point(
+            &document,
+            "0",
+            "document",
+            &format!("body {n}"),
+            &json!({}),
+            [0.0, 1.0, 0.0],
+        ));
+        points.push(point(
+            &format!("filler{n}"),
+            "0",
+            "document",
+            &format!("filler {n}"),
+            &json!({}),
+            [1.0, 0.0, 0.0],
+        ));
+    }
+    client
+        .upsert(&token(TOKEN_A), space(), toolkit_namespace(NS), points)
+        .await
+        .expect("upsert");
+    let session_token = token(TOKEN_A);
+    let session = VectorSession::new(&client, &session_token);
+    let catalog = catalog();
+    let tools = IndexTools::new(&session, &KeywordEmbedder, &catalog, Doctype::Document);
+    let before = fake.calls().len();
+    let found = tools
+        .search_index(&args(json!({
+            "query": "deployment",
+            "index_name": "docs",
+            "extended_search": ["title"],
+            "search_top": 5,
+            "cut_off": 0.0,
+        })))
+        .await
+        .unwrap()
+        .into_value();
+    assert_eq!(found.as_array().unwrap().len(), 5, "{found}");
+    // document search + title search + one read of the five document chunks.
+    assert_eq!(fake.calls()[before..], ["search", "search", "search"]);
 }

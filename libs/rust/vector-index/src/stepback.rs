@@ -13,6 +13,7 @@
 
 use std::future::Future;
 
+use elitea_engine_core::pyvalue::repr_value;
 use serde_json::Value;
 
 use crate::error::Result;
@@ -67,8 +68,8 @@ pub fn stepback_prompt(query: &str) -> String {
 /// and the messages print as Python would print the list.
 #[must_use]
 pub fn answer_prompt(query: &str, search_results: &[Value], messages: &[Value]) -> String {
-    let results = pyfmt::repr(&Value::Array(search_results.to_vec()));
-    let messages = pyfmt::repr(&Value::Array(messages.to_vec()));
+    let results = repr_value(&Value::Array(search_results.to_vec()));
+    let messages = repr_value(&Value::Array(messages.to_vec()));
     render(
         GET_ANSWER_PROMPT,
         &[

@@ -12,6 +12,9 @@ publish.workspace = true
 test-server = ["dep:tokio", "tokio-stream/net"]
 
 [dependencies]
+# Python's repr/str/json.dumps/truthiness, shared with the engines, so the
+# SDK's printed outputs stay byte for byte.
+elitea-engine-core = { path = "../engine-core" }
 # Request and response messages of elitea.vector.v1.
 prost = "0.14.4"
 # `preserve_order`: the SDK's output dicts keep their key order, and

@@ -5,13 +5,24 @@
 //!
 //! An SDK index *name* is an `index_registry` row in this platform
 //! (ADR-0031): the worker resolves the project's rows into an
-//! [`IndexCatalog`] (name, namespace UUID, embedding space) and hands it
-//! over; nothing here reads the registry.
+//! [`IndexCatalog`] (name, namespace UUID, embedding space, active
+//! generation) and hands it over; nothing here reads the registry.
+//!
+//! **Active generation.** An index rebuilt as a whole is written under a
+//! new generation and published when complete (ADR-0031 decision 3). Main
+//! knows each index's published generation and supplies it in
+//! [`IndexEntry::active_generation`]; a search then reads that generation
+//! and points written without one (an index updated incrementally), never a
+//! build still in progress. `None` reads every point of the namespace.
+//!
+//! **Validation first.** Every argument (cut-off, `search_top`, the filter,
+//! the rerank and full-text configs, the query, the index name) is checked
+//! before any model call, so a bad request costs no step-back call.
 
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::client::toolkit_scope;
+use crate::client::toolkit_scope_with_generations;
 use crate::error::{Error, Result};
 use crate::filter;
 use crate::format::{
@@ -32,7 +43,7 @@ pub const DEFAULT_CUT_OFF: f64 = 0.1;
 pub const DEFAULT_SEARCH_TOP: usize = 10;
 
 /// One index of the project: what the registry knows of it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct IndexEntry {
     /// The name the user gave the index.
     pub name: String,
@@ -40,6 +51,9 @@ pub struct IndexEntry {
     pub namespace_id: String,
     /// The embedding space the index was built in.
     pub space: pb::EmbeddingSpace,
+    /// The generation the index is published at, from Main's registry, or
+    /// `None` for an index that has never been built by generation.
+    pub active_generation: Option<String>,
 }
 
 /// The project's indexes of one toolkit, in listing order.
@@ -178,8 +192,19 @@ impl SearchOutput {
 enum Target {
     /// Nothing to search: the toolkit has no indexes.
     Nothing,
-    /// The namespaces and their one embedding space.
-    Found(Vec<String>, pb::EmbeddingSpace),
+    /// The namespaces (with their active generations) and their one
+    /// embedding space.
+    Found(Vec<(String, Option<String>)>, pb::EmbeddingSpace),
+}
+
+/// The validated arguments of one search.
+struct Prepared {
+    cut_off: f64,
+    top: usize,
+    filter: Option<pb::Filter>,
+    rerank: Vec<rerank::FieldRerank>,
+    full_text: Option<FullText>,
+    extended: Vec<String>,
 }
 
 /// The index tools of one toolkit, for the claim's project.
@@ -228,7 +253,8 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
             Err(Error::NotFound(message)) => return Ok(SearchOutput::Message(message)),
             Err(error) => return Err(error),
         };
-        let hits = self.run(args, &args.query, &target, true).await?;
+        let prepared = Self::prepare(args, true)?;
+        let hits = self.run(&prepared, &args.query, &target).await?;
         let mut docs = format_hits(&hits, self.doctype);
         if let Some(fields) = args
             .output_fields
@@ -248,7 +274,10 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
     }
 
     /// `stepback_search_index`: the model turns the question into a generic
-    /// query, then the index is searched with it.
+    /// query, then the index is searched with it. An unknown index name
+    /// returns the `Index '...' not found` message, as `search_index` does,
+    /// without calling the model. (The SDK called it and then searched
+    /// nothing.)
     ///
     /// # Errors
     ///
@@ -258,13 +287,18 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
         args: &SearchArgs,
         model: &M,
     ) -> Result<String> {
-        let docs = self.stepback_documents(args, model).await?;
-        Ok(stepback_result_text(&docs))
+        match self.stepback_documents(args, model).await {
+            Ok(docs) => Ok(stepback_result_text(&docs)),
+            Err(Error::NotFound(message)) => Ok(message),
+            Err(error) => Err(error),
+        }
     }
 
     /// `stepback_summary_index`: the step-back search, then a second model
     /// call that answers from its results. Returns the model's reply as it
-    /// is (see [`crate::stepback::answer_section`] for the answer alone).
+    /// is (see [`crate::stepback::answer_section`] for the answer alone). An
+    /// unknown index name returns the `Index '...' not found` message
+    /// without calling the model.
     ///
     /// # Errors
     ///
@@ -274,7 +308,11 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
         args: &SearchArgs,
         model: &M,
     ) -> Result<String> {
-        let docs = self.stepback_documents(args, model).await?;
+        let docs = match self.stepback_documents(args, model).await {
+            Ok(docs) => docs,
+            Err(Error::NotFound(message)) => return Ok(message),
+            Err(error) => return Err(error),
+        };
         let messages = args.messages.clone().unwrap_or_default();
         let prompt = answer_prompt(&args.query, &docs, &messages);
         Ok(extract_completion_text(&model.invoke(&prompt).await?))
@@ -317,16 +355,17 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
         args: &SearchArgs,
         model: &M,
     ) -> Result<Vec<Value>> {
+        // Everything is checked before the model is called.
+        let prepared = Self::prepare(args, false)?;
+        check_query(&args.query)?;
+        let target = self.resolve(args.index_name())?;
+        if matches!(target, Target::Nothing) {
+            // No index: the search finds nothing whatever the query.
+            return Ok(Vec::new());
+        }
         let reply = model.invoke(&stepback_prompt(&args.query)).await?;
         let query = extract_completion_text(&reply);
-        // The SDK does not check the index exists here: an unknown name
-        // simply finds nothing.
-        let target = match self.resolve(args.index_name()) {
-            Ok(target) => target,
-            Err(Error::NotFound(_)) => Target::Nothing,
-            Err(error) => return Err(error),
-        };
-        let hits = self.run(args, &query, &target, false).await?;
+        let hits = self.run(&prepared, &query, &target).await?;
         Ok(format_hits(&hits, self.doctype))
     }
 
@@ -354,14 +393,14 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
                 self.catalog
                     .entries
                     .iter()
-                    .map(|entry| entry.namespace_id.clone())
+                    .map(|entry| (entry.namespace_id.clone(), entry.active_generation.clone()))
                     .collect(),
                 first.space.clone(),
             ));
         }
         match self.catalog.entry(index_name) {
             Some(entry) => Ok(Target::Found(
-                vec![entry.namespace_id.clone()],
+                vec![(entry.namespace_id.clone(), entry.active_generation.clone())],
                 entry.space.clone(),
             )),
             None => Err(Error::NotFound(index_not_found_message(
@@ -371,28 +410,25 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
         }
     }
 
-    /// Validates the arguments, embeds the query and runs the search.
-    async fn run(
-        &self,
-        args: &SearchArgs,
-        query: &str,
-        target: &Target,
-        legacy_reranker: bool,
-    ) -> Result<Vec<Hit>> {
-        let cut_off = args.cut_off()?;
-        let top = args.top()?;
-        let translated = filter::translate(&args.filter)?;
-        let rules = rerank::choose(
-            Some(&args.reranking_config),
-            legacy_reranker.then_some(&args.reranker),
-        )?;
-        let full_text = FullText::from_value(Some(&args.full_text_search))?;
-        if query.trim().is_empty() {
-            return Err(Error::InvalidArgument(
-                "the query must not be empty".to_owned(),
-            ));
-        }
-        let Target::Found(namespace_ids, space) = target else {
+    /// Validates every argument of a search, without calling anything.
+    fn prepare(args: &SearchArgs, legacy_reranker: bool) -> Result<Prepared> {
+        Ok(Prepared {
+            cut_off: args.cut_off()?,
+            top: args.top()?,
+            filter: filter::translate(&args.filter)?,
+            rerank: rerank::choose(
+                Some(&args.reranking_config),
+                legacy_reranker.then_some(&args.reranker),
+            )?,
+            full_text: FullText::from_value(Some(&args.full_text_search))?,
+            extended: args.extended_search.clone().unwrap_or_default(),
+        })
+    }
+
+    /// Embeds the query and runs the search.
+    async fn run(&self, prepared: &Prepared, query: &str, target: &Target) -> Result<Vec<Hit>> {
+        check_query(query)?;
+        let Target::Found(namespaces, space) = target else {
             return Ok(Vec::new());
         };
         let vector = self.embedder.embed_query(query, space).await?;
@@ -405,17 +441,26 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
             )));
         }
         let plan = SearchPlan {
-            scope: toolkit_scope(namespace_ids.clone()),
+            scope: toolkit_scope_with_generations(namespaces),
             space: space.clone(),
             query: query.to_owned(),
             vector,
-            filter: translated,
-            top,
-            cut_off,
-            extended: args.extended_search.clone().unwrap_or_default(),
-            full_text,
-            rerank: rules,
+            filter: prepared.filter.clone(),
+            top: prepared.top,
+            cut_off: prepared.cut_off,
+            extended: prepared.extended.clone(),
+            full_text: prepared.full_text,
+            rerank: prepared.rerank.clone(),
         };
         search_documents(self.backend, &plan).await
     }
+}
+
+fn check_query(query: &str) -> Result<()> {
+    if query.trim().is_empty() {
+        return Err(Error::InvalidArgument(
+            "the query must not be empty".to_owned(),
+        ));
+    }
+    Ok(())
 }

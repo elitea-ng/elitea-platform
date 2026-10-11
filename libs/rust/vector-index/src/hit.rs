@@ -3,7 +3,6 @@
 use serde_json::{Map, Value};
 
 use crate::pb;
-use crate::pyfmt;
 
 /// One chunk found by a search.
 #[derive(Clone, Debug, PartialEq)]
@@ -19,6 +18,11 @@ pub struct Hit {
     /// Cosine similarity, or the fused score of a hybrid search; reranking
     /// changes it.
     pub score: f64,
+    /// The dense cosine similarity: `score` itself in a dense search, the
+    /// dense side's score in a hybrid one. Reranking boosts it by the same
+    /// factor as `score`, and the cut-off reads it, so one rule serves both
+    /// modes.
+    pub dense_score: f64,
     /// The point's `document_key`.
     pub document_key: String,
     /// The point's `chunk_id`.
@@ -56,6 +60,7 @@ impl Hit {
             page_content: point.text.clone(),
             metadata,
             score: f64::from(point.score),
+            dense_score: f64::from(point.dense_score.unwrap_or(point.score)),
             document_key: point.document_key.clone(),
             chunk_id: point.chunk_id.clone(),
         }
@@ -85,5 +90,5 @@ pub fn score_value(score: f64) -> Value {
 /// `str(score)` as Python prints it.
 #[must_use]
 pub fn score_text(score: f64) -> String {
-    pyfmt::float_repr(score)
+    elitea_engine_core::pyjson::float_repr(score)
 }

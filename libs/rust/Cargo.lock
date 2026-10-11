@@ -1813,6 +1813,7 @@ dependencies = [
 name = "elitea-vector-index"
 version = "0.1.0"
 dependencies = [
+ "elitea-engine-core",
  "elitea-vector-index",
  "prost",
  "protoc-bin-vendored",

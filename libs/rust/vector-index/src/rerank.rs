@@ -12,7 +12,9 @@
 //!
 //! The boosts of one field apply once per result however many rules match
 //! (the SDK computes each from the result's score at the start of that
-//! field). Results are then ordered by score, descending, unless a `sort`
+//! field). A hit's dense score ([`Hit::dense_score`]) is boosted by the
+//! same factor, so the cut-off reads the same reranked cosine in a dense
+//! and in a hybrid search. Results are then ordered by score, descending, unless a `sort`
 //! rule ordered them.
 
 use std::cmp::Ordering;
@@ -124,20 +126,21 @@ pub fn apply(mut hits: Vec<Hit>, rules: &[FieldRerank]) -> Result<Vec<Hit>> {
             else {
                 continue;
             };
-            let base = hit.score;
-            let mut boosted = None;
+            let mut boosted = false;
             if let (Some(Value::String(wanted)), Value::String(actual)) = (&rule.contains, value)
                 && actual.to_lowercase().contains(&wanted.to_lowercase())
             {
-                boosted = Some(base * (1.0 + rule.weight));
+                boosted = true;
             }
             if let Some(wanted) = &rule.priority
                 && pyfmt::display(value).to_lowercase() == pyfmt::display(wanted).to_lowercase()
             {
-                boosted = Some(base * (1.0 + rule.weight));
+                boosted = true;
             }
-            if let Some(score) = boosted {
-                hit.score = score;
+            if boosted {
+                // Once per field, from the score at the start of the field.
+                hit.score *= 1.0 + rule.weight;
+                hit.dense_score *= 1.0 + rule.weight;
             }
         }
     }
@@ -240,6 +243,7 @@ mod tests {
             page_content: key.to_owned(),
             metadata: metadata.as_object().cloned().unwrap_or_default(),
             score,
+            dense_score: score,
             document_key: key.to_owned(),
             chunk_id: "0".to_owned(),
         }

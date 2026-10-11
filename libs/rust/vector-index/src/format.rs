@@ -211,7 +211,7 @@ pub fn sdk_collection_filter(filter: Option<&Value>, index_name: &str) -> Value 
 pub fn no_documents_message(query: &str, collection_filter: &Value) -> String {
     format!(
         "No documents found by query '{query}' and filter '{}'",
-        pyfmt::repr(collection_filter)
+        elitea_engine_core::pyvalue::repr_value(collection_filter)
     )
 }
 
@@ -233,7 +233,7 @@ pub fn stepback_result_text(docs: &[Value]) -> String {
         format!(
             "Found {} documents matching the query\n{}",
             docs.len(),
-            pyfmt::json_dumps(&Value::Array(docs.to_vec()), 4)
+            elitea_engine_core::pyjson::dumps_with(&Value::Array(docs.to_vec()), Some(4), true)
         )
     }
 }
@@ -248,6 +248,7 @@ mod tests {
             page_content: content.to_owned(),
             metadata: metadata.as_object().cloned().unwrap_or_default(),
             score,
+            dense_score: score,
             document_key: "k".to_owned(),
             chunk_id: "0".to_owned(),
         }
