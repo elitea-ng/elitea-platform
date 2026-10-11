@@ -10,6 +10,7 @@
 */ -}}
 
 {{- include "elitea.compiledSnapshots.validate" . }}
+{{- include "elitea.codeNodes.validateWorker" . }}
 {{- /*
   The runtime Redis (`runtimeRedis`: Deployment, Service, ConfigMap, PVC and
   the elitea-runtime-redis-material Secret) is removed. Nothing has read it
