@@ -6,9 +6,9 @@ use super::wire::{Schema, scan_message};
 use super::{
     ProtocolError,
     elitea::runtime::v1::{
-        AgentExecutionCommandV1, DigestAlgorithmV1, DigestV1, ExecutionInputBundleReferenceV1,
-        SignatureProfileV1, SignedWorkerCommandEnvelopeV1, WorkerCommandTypeV1, WorkerCommandV1,
-        worker_command_v1,
+        AgentExecutionCommandV1, ConfigurationValidationCommandV1, DigestAlgorithmV1, DigestV1,
+        ExecutionInputBundleReferenceV1, SignatureProfileV1, SignedWorkerCommandEnvelopeV1,
+        WorkerCommandTypeV1, WorkerCommandV1, worker_command_v1,
     },
 };
 use crate::agents::AgentExecutionKind;
@@ -23,12 +23,19 @@ pub const TOOLKIT_EXECUTE_READ_CAPABILITY_ID: &str = "toolkit.execute.read.v1";
 pub const TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION: &str = "1";
 pub const TOOLKIT_CALL_TOOL_CAPABILITY_ID: &str = "toolkit.call_tool.v1";
 pub const TOOLKIT_AVAILABLE_TOOLS_CAPABILITY_ID: &str = "toolkit.available_tools.v1";
+pub const CONFIGURATION_VALIDATE_CAPABILITY_ID: &str = "configuration.validate.v1";
+pub const CONFIGURATION_VALIDATE_CAPABILITY_VERSION: &str = "1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolkitCommandKind {
     ExecuteRead,
     CallTool,
     AvailableTools,
+    /// `configuration.validate.v1`: a schema check of one SDK configuration.
+    /// It shares the direct-execution claim, lease, output and retirement
+    /// machinery with the toolkit kinds; only its input, result and logical
+    /// output identity differ.
+    ConfigurationValidate,
 }
 
 impl ToolkitCommandKind {
@@ -38,8 +45,38 @@ impl ToolkitCommandKind {
             Self::ExecuteRead => "toolkit-execute-read",
             Self::CallTool => "toolkit-call-tool",
             Self::AvailableTools => "toolkit-available-tools",
+            Self::ConfigurationValidate => "configuration-validation",
         }
     }
+}
+
+/// The logical output id Main expects for a command's terminal frame
+/// (`ExpectedRuntimeFailure` in the output inbox). Configuration validation is
+/// keyed by its configuration revision; every toolkit kind by its execution;
+/// agent executions by theirs. This is the one place the rule lives.
+#[must_use]
+pub(crate) fn terminal_logical_output_id(command: &WorkerCommandV1) -> String {
+    use worker_command_v1::CapabilityCommand;
+    let (prefix, key) = match command.capability_command.as_ref() {
+        Some(CapabilityCommand::ConfigurationValidation(validation)) => (
+            ToolkitCommandKind::ConfigurationValidate.output_prefix(),
+            validation.configuration_revision_id.as_str(),
+        ),
+        Some(CapabilityCommand::ToolkitExecuteRead(_)) => (
+            ToolkitCommandKind::ExecuteRead.output_prefix(),
+            command.execution_id.as_str(),
+        ),
+        Some(CapabilityCommand::ToolkitCallTool(_)) => (
+            ToolkitCommandKind::CallTool.output_prefix(),
+            command.execution_id.as_str(),
+        ),
+        Some(CapabilityCommand::ToolkitAvailableTools(_)) => (
+            ToolkitCommandKind::AvailableTools.output_prefix(),
+            command.execution_id.as_str(),
+        ),
+        _ => ("agent-execution", command.execution_id.as_str()),
+    };
+    format!("{prefix}:{key}")
 }
 
 const MAX_SIGNED_ENVELOPE_BYTES: usize = 48 * 1024;
@@ -165,8 +202,18 @@ impl VerifiedToolkitExecuteReadCommand {
             Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(command)) => {
                 &command.settings_entry_id
             }
+            Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(command)) => {
+                &command.settings_entry_id
+            }
             _ => unreachable!("verified toolkit command lost its capability wrapper"),
         }
+    }
+
+    /// The logical output id Main expects for this command's terminal frame;
+    /// see `terminal_logical_output_id`.
+    #[must_use]
+    pub fn logical_output_id(&self) -> String {
+        terminal_logical_output_id(&self.common.command)
     }
 }
 
@@ -320,7 +367,8 @@ pub(crate) fn parse_and_verify_execution_command(
         Some(
             worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)
             | worker_command_v1::CapabilityCommand::ToolkitCallTool(_)
-            | worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_),
+            | worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)
+            | worker_command_v1::CapabilityCommand::ConfigurationValidation(_),
         ) => {
             scan_toolkit_execute_read_worker_command(&common.signed.worker_command_bytes)?;
             let kind = validate_toolkit_execute_read_command(&common.command)?;
@@ -420,6 +468,19 @@ fn scan_toolkit_execute_read_worker_command(raw: &[u8]) -> Result<(), ProtocolEr
     let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
     scan_message(input_digest, Schema::Digest)?;
+    if fields.contains(32) {
+        let validation =
+            fields.length_field(32, "the configuration validation command is missing")?;
+        let validation_fields = scan_message(validation, Schema::ConfigurationValidationCommand)?;
+        for digest_field in [4, 7] {
+            let digest = validation_fields.length_field(
+                digest_field,
+                "the configuration validation digest is missing",
+            )?;
+            scan_message(digest, Schema::Digest)?;
+        }
+        return Ok(());
+    }
     let (tag, schema) = if fields.contains(64) {
         (64, Schema::ToolkitExecuteReadCommand)
     } else if fields.contains(36) {
@@ -509,13 +570,27 @@ fn validate_toolkit_execute_read_command(
                 ],
             )
         }
+        Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation))
+            if command.capability_id == CONFIGURATION_VALIDATE_CAPABILITY_ID
+                && command.command_type == WorkerCommandTypeV1::ConfigurationValidate as i32 =>
+        {
+            (
+                ToolkitCommandKind::ConfigurationValidate,
+                configuration_validation_identities(validation)?,
+            )
+        }
         _ => {
             return Err(ProtocolError::UnsupportedCapability(
                 "the worker command capability is not supported",
             ));
         }
     };
-    if command.capability_version != TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION {
+    let expected_version = if kind == ToolkitCommandKind::ConfigurationValidate {
+        CONFIGURATION_VALIDATE_CAPABILITY_VERSION
+    } else {
+        TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION
+    };
+    if command.capability_version != expected_version {
         return Err(ProtocolError::UnsupportedCapability(
             "the worker command capability version is not supported",
         ));
@@ -538,6 +613,29 @@ fn validate_toolkit_execute_read_command(
     }
     validate_common_command_invariants(command, input, "the toolkit root identity is malformed")?;
     Ok(kind)
+}
+
+/// The identities a configuration-validation command must carry, after its two
+/// digests have proven to be SHA-256.
+fn configuration_validation_identities(
+    validation: &ConfigurationValidationCommandV1,
+) -> Result<Vec<&str>, ProtocolError> {
+    require_sha256(
+        validation.catalog_digest.as_ref(),
+        "the configuration catalog digest is malformed",
+    )?;
+    require_sha256(
+        validation.schema_digest.as_ref(),
+        "the configuration schema digest is malformed",
+    )?;
+    Ok(vec![
+        validation.configuration_revision_id.as_str(),
+        validation.configuration_type.as_str(),
+        validation.catalog_revision.as_str(),
+        validation.schema_id.as_str(),
+        validation.schema_revision.as_str(),
+        validation.settings_entry_id.as_str(),
+    ])
 }
 
 fn select_agent_entrypoint(

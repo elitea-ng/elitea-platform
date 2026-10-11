@@ -17,6 +17,12 @@ on:
       - "deploy/docker-compose.standalone-full.yml"
       - "deploy/docker-compose.code-consumers.yml"
       - "deploy/runtime/install-material.sh"
+      # The derived-document gate below renders the validate worker's runtime
+      # document from the agent worker's; an edit to either, or to the
+      # renderer, must run it.
+      - "deploy/runtime/worker-runtime.rust.json"
+      - "deploy/runtime/worker-runtime.rust-validate.json"
+      - "deploy/scripts/render-validate-worker-runtime.py"
       - "scripts/runtime/*code*"
       - "services/elitea-code-runner/Containerfile.code-platform"
       # The publish-coverage gate below reads the chart matrix out of
@@ -44,6 +50,9 @@ on:
       - "deploy/docker-compose.standalone-full.yml"
       - "deploy/docker-compose.code-consumers.yml"
       - "deploy/runtime/install-material.sh"
+      - "deploy/runtime/worker-runtime.rust.json"
+      - "deploy/runtime/worker-runtime.rust-validate.json"
+      - "deploy/scripts/render-validate-worker-runtime.py"
       - "scripts/runtime/*code*"
       - "services/elitea-code-runner/Containerfile.code-platform"
       - ".github/workflows/publish.yml"
@@ -254,6 +263,14 @@ jobs:
           bash deploy/helm/tests/render-worker.sh
           bash deploy/helm/tests/render-worker-sandbox.sh
           bash deploy/helm/tests/render-sandbox-kubernetes.sh
+
+      # The VALIDATE worker's runtime document is derived from the agent
+      # worker's (deploy/scripts/render-validate-worker-runtime.py): same
+      # limits and paths, five identity/stream keys replaced. A hand edit to
+      # either file that is not re-rendered fails here rather than shipping two
+      # workers with different limits.
+      - name: The validate worker's runtime document is derived, not hand-edited
+        run: python3 deploy/scripts/render-validate-worker-runtime.py --check
 
       - name: Code consumers preserve typed settings and private material boundaries
         run: |

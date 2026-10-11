@@ -180,6 +180,35 @@ assert set(parsed) == required, (
 assert parsed["schema_version"] == "elitea.runtime-deploy.v1", parsed["schema_version"]
 PY
 
+echo "== the Rust worker binds the configuration-validation route =="
+# configuration.validate.v1 is dispatched on ELITEA_RT_V1_VALIDATE, which the
+# runtime plane refuses to share with agent or index dispatch. The chart's one
+# worker Deployment binds one stream, so serving validation from Rust is a
+# release of this chart whose worker is pointed at that route. The pair is
+# fixed by the command bus, and the Rust worker's own pair check
+# (valid_route_pair) must accept exactly what is rendered here.
+"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=rust \
+    --set worker.runtime.natsStream=ELITEA_RT_V1_VALIDATE \
+    --set worker.runtime.natsConsumer=elitea-configuration-worker-v1 \
+    >"$TMP/rust-validate.yaml" 2>"$TMP/rust-validate.err" \
+  && python3 - "$TMP/rust-validate.yaml" <<'PY' && ok "rust: renders bound to the validation stream and durable" || bad "rust validate route: $(tail -1 "$TMP/rust-validate.err")"
+import json, sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs
+          if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
+runtime = json.loads(cm["data"]["runtime.json"])
+assert runtime["nats_stream"] == "ELITEA_RT_V1_VALIDATE", runtime["nats_stream"]
+assert runtime["nats_consumer"] == "elitea-configuration-worker-v1", runtime["nats_consumer"]
+# The Rust bootstrap opens the agent-state database whatever the stream
+# (src/bootstrap.rs load_agentstate_options), so the path stays.
+assert runtime["agent_checkpoint_connection_path"], runtime
+dep = next(d for d in docs
+           if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-worker")
+c = next(x for x in dep["spec"]["template"]["spec"]["containers"] if x["name"] == "worker")
+assert c["image"].startswith("ghcr.io/elitea-ng/elitea-worker-rust:"), c["image"]
+PY
+
 echo "== the guards refuse what the workers cannot run =="
 # Returns 0 only when the render FAILED and failed for the stated reason. A
 # refusal for some other reason is not this assertion passing — it is the chart

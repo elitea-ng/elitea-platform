@@ -85,6 +85,7 @@ pub(crate) enum Schema {
     ToolkitExecuteReadCommand,
     ToolkitCallToolCommand,
     ToolkitAvailableToolsCommand,
+    ConfigurationValidationCommand,
     ToolkitExecuteReadInput,
     NodeEvent,
 }
@@ -274,6 +275,10 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::ToolkitAvailableToolsCommand => match field {
             1..=2 | 16 => Some(length()),
+            _ => None,
+        },
+        Schema::ConfigurationValidationCommand => match field {
+            1..=8 => Some(length()),
             _ => None,
         },
         Schema::ToolkitExecuteReadInput => match field {
