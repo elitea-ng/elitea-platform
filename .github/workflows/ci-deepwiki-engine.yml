@@ -78,7 +78,9 @@ jobs:
   engine:
     name: Engine — lint, test, and the Go host against the binary
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # About 23 minutes with a warm cache; a change to a shared crate or a
+    # lockfile invalidates the cache and the cold build needs more than 30.
+    timeout-minutes: 45
     # The index storage tests' database (ADR-0026 decision 5).
     services:
       postgres:
