@@ -106,6 +106,9 @@ func TestIndexIngestProducerBuildsTypedReferenceOnlyCommand(t *testing.T) {
 		ClientMessageID:             command.GetIndexIngest().GetClientMessageId(),
 		SIOEvent:                    command.GetIndexIngest().GetSioEvent(),
 		Initiator:                   executiondomain.IndexIngestInitiator(command.GetIndexIngest().GetInitiator()),
+		// Rust mode: the stamp of the index, which the worker must match.
+		ExpectedEmbeddingModel:     "Org/Model.A",
+		ExpectedEmbeddingDimension: 1536,
 	}
 	prepared, err := producer.PrepareIndexIngest(context.Background(), dispatch)
 	if err != nil {
@@ -124,6 +127,47 @@ func TestIndexIngestProducerBuildsTypedReferenceOnlyCommand(t *testing.T) {
 	}
 	if wire.GetInputBundleRef().GetInputBundleId() != dispatch.InputBundleID || wire.GetIndexIngest().GetToolkitConfigurationEntryId() != dispatch.ToolkitConfigurationEntryID || wire.GetIndexIngest().GetToolParametersEntryId() != dispatch.ToolParametersEntryID || wire.GetIndexIngest().GetClientStreamId() != dispatch.ClientStreamID || wire.GetIndexIngest().GetClientMessageId() != dispatch.ClientMessageID || wire.GetIndexIngest().GetSioEvent() != dispatch.SIOEvent || wire.GetIndexIngest().GetInitiator() != string(dispatch.Initiator) {
 		t.Fatalf("typed dispatch changed reference identities: %+v", wire)
+	}
+	if wire.GetIndexIngest().GetExpectedEmbeddingModel() != "Org/Model.A" ||
+		wire.GetIndexIngest().GetExpectedEmbeddingDimension() != 1536 {
+		t.Fatalf("the expected embedding space was not carried: %+v", wire.GetIndexIngest())
+	}
+}
+
+func TestIndexIngestDispatchRefusesHalfAnExpectedEmbeddingSpace(t *testing.T) {
+	for name, mutate := range map[string]func(*indexingapp.IndexIngestDispatch){
+		"model without dimension": func(d *indexingapp.IndexIngestDispatch) { d.ExpectedEmbeddingModel = "m" },
+		"dimension without model": func(d *indexingapp.IndexIngestDispatch) { d.ExpectedEmbeddingDimension = 8 },
+		"oversized dimension": func(d *indexingapp.IndexIngestDispatch) {
+			d.ExpectedEmbeddingModel, d.ExpectedEmbeddingDimension = "m", 70000
+		},
+		"model with a newline": func(d *indexingapp.IndexIngestDispatch) {
+			d.ExpectedEmbeddingModel, d.ExpectedEmbeddingDimension = "m\n", 8
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dispatch := validIndexIngestDispatchForExpectedEmbedding()
+			mutate(&dispatch)
+			if err := dispatch.Validate(); !errors.Is(err, indexingapp.ErrInvalidIndexIngestDispatch) {
+				t.Fatalf("validate = %v, want ErrInvalidIndexIngestDispatch", err)
+			}
+		})
+	}
+	if err := validIndexIngestDispatchForExpectedEmbedding().Validate(); err != nil {
+		t.Fatalf("a dispatch without an expected space (python mode, unstamped index) = %v", err)
+	}
+}
+
+func validIndexIngestDispatchForExpectedEmbedding() indexingapp.IndexIngestDispatch {
+	return indexingapp.IndexIngestDispatch{
+		OutboxID: "outbox-1", CommandID: "command-1", ExecutionID: "execution-1", Generation: 1, DispatchOrdinal: 1,
+		TenantID: "1", ResourceProjectID: "1", ProjectionProjectID: "1", PrincipalRef: "principal-1",
+		InputBundleID: "bundle-1", InputBundleVersion: "1", InputBundleMediaType: "application/x-protobuf",
+		InputBundleByteLength: 1, InputBundleDigest: runtimedomain.SHA256([]byte("m")),
+		CapabilityVersion: "1", ResourceClass: "indexing", IsolationClass: "shared", Priority: 1,
+		Deadline: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC), LimitsRevision: "limits-v1",
+		ToolkitConfigurationEntryID: "toolkit-config", ToolParametersEntryID: "tool-params",
+		Initiator: executiondomain.IndexIngestInitiatorUser,
 	}
 }
 

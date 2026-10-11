@@ -47,6 +47,35 @@ const (
 
 type LookupEnv func(string) (string, bool)
 
+const (
+	// IndexingRuntimeEnv names the deployment-wide indexing implementation.
+	// It is not ELITEA_RUNTIME_*: that prefix belongs to the dispatch plane,
+	// which a default install leaves off, and this choice is not a plane.
+	IndexingRuntimeEnv = "ELITEA_INDEXING_RUNTIME"
+
+	IndexingRuntimePython = "python"
+	IndexingRuntimeRust   = "rust"
+)
+
+// IndexingRuntimeFromEnv reads ELITEA_INDEXING_RUNTIME. Unset or empty is
+// python. An unrecognised value is refused at startup: falling back would let
+// a typo silently keep a Rust deployment on the legacy per-project pgvector
+// path, which Rust-written indexes are invisible to.
+func IndexingRuntimeFromEnv(lookup LookupEnv) (string, error) {
+	if lookup == nil {
+		return "", errors.New("runtime environment lookup is required")
+	}
+	value, _ := lookup(IndexingRuntimeEnv)
+	switch value {
+	case "", IndexingRuntimePython:
+		return IndexingRuntimePython, nil
+	case IndexingRuntimeRust:
+		return IndexingRuntimeRust, nil
+	default:
+		return "", fmt.Errorf("%s must be python or rust", IndexingRuntimeEnv)
+	}
+}
+
 type Config struct {
 	Enabled                 bool
 	ToolkitDiscoveryEnabled bool
@@ -61,7 +90,15 @@ type Config struct {
 	// stay built in when the variables are unset.
 	SSEStreamLimits executionapi.SSEStreamLimits
 
-	IndexIngestDispatchEnabled    bool
+	IndexIngestDispatchEnabled bool
+	// IndexingRuntime is ELITEA_INDEXING_RUNTIME: which implementation indexes
+	// toolkit content for this deployment (ADR-0030 decision 6). "python" (the
+	// default) keeps every index path exactly as it is: index_meta rows in the
+	// project's pgvector database, written by the SDK and Main together. "rust"
+	// runs the index routes and the admission initializer on the
+	// elitea_runtime.index_registry table, which only Main writes. The two are
+	// never mixed per toolkit.
+	IndexingRuntime               string
 	IndexSchedulingEnabled        bool
 	SchedulerInstanceID           string
 	IndexIngestCommandStream      string
@@ -111,8 +148,15 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, errors.New("runtime environment lookup is required")
 	}
 	enabledValue, _ := lookup("ELITEA_RUNTIME_ENABLED")
+	indexingRuntime, err := IndexingRuntimeFromEnv(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	switch enabledValue {
 	case "", "false":
+		if indexingRuntime == IndexingRuntimeRust {
+			return Config{}, errors.New(IndexingRuntimeEnv + "=rust requires the runtime and index ingest dispatch")
+		}
 		if _, _, _, err := codeConsumerConfigFromEnv(lookup, nil); err != nil {
 			return Config{}, err
 		}
@@ -167,7 +211,7 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 
 	var config Config
 	config.Enabled = true
-	var err error
+	config.IndexingRuntime = indexingRuntime
 	if config.CommandStream, err = required("ELITEA_RUNTIME_COMMAND_STREAM"); err != nil {
 		return Config{}, err
 	}
@@ -189,6 +233,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		}
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED must be true or false")
+	}
+	if config.IndexingRuntime == IndexingRuntimeRust && !config.IndexIngestDispatchEnabled {
+		return Config{}, errors.New(IndexingRuntimeEnv + "=rust requires index ingest dispatch")
 	}
 	agentExecutionEnabled, _ := lookup("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED")
 	switch agentExecutionEnabled {
@@ -358,6 +405,15 @@ func (c Config) Validate() error {
 	}
 	if c.ExecutionInterruptsAPIEnabled && (!c.Enabled || !c.AgentExecutionDispatchEnabled) {
 		return errors.New("execution interrupts API requires active agent execution dispatch")
+	}
+	switch c.IndexingRuntime {
+	case "", IndexingRuntimePython:
+	case IndexingRuntimeRust:
+		if !c.Enabled || !c.IndexIngestDispatchEnabled {
+			return errors.New(IndexingRuntimeEnv + "=rust requires index ingest dispatch")
+		}
+	default:
+		return errors.New("runtime indexing implementation is invalid")
 	}
 	if !c.Enabled {
 		return nil

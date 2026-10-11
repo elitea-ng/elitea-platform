@@ -3718,6 +3718,20 @@ worker:
   # near-term answer, not a statement that the port is done.
   implementation: python
 
+  # Which implementation indexes toolkit content (ADR-0030 decision 6,
+  # ADR-0031). Written to elitea-main as ELITEA_INDEXING_RUNTIME. A deployment
+  # runs indexing entirely on one side; there is no per-toolkit routing.
+  #
+  #   python (default) -- unchanged. Index metadata is the `index_meta` row in
+  #     the project's pgvector database, written by the SDK and by elitea-main.
+  #   rust -- the index routes (list, delete, configuration save) and the
+  #     admission initializer read and write elitea_runtime.index_registry, a
+  #     table only elitea-main writes. NOTHING IS MIGRATED: indexes created
+  #     under python are not listed, and users create their indexes again.
+  #     Requires worker.implementation=rust (only the Rust worker searches the
+  #     new vector store) and the index ingest dispatch plane.
+  indexingRuntime: python
+
   image:
     # Built, signed and published by this repository's own release workflow
     # (.github/workflows/publish.yml), and public, so no pull secret is needed.

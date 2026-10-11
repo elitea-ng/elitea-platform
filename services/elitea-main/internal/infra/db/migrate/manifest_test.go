@@ -671,7 +671,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (centry.project_deletions) a project delete writes in the transaction
 	// that removes the project row, and that a reconciler drains (#1211). No
 	// tenant table, no permission.
-	require.EqualValues(t, 161, Head(shared))
+	//
+	// 162: shared/0162_index_registry.sql, the index registry of the Rust
+	// indexing runtime (ADR-0031 V1, ADR-0030 decision 2):
+	// elitea_runtime.index_registry (state, history, counts, skips, embedding
+	// stamp, run fence, tombstone) and index_registry_documents (one
+	// document_key/version per indexed document). New tables only, nothing
+	// migrated from index_meta, no permission.
+	require.EqualValues(t, 162, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
