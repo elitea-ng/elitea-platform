@@ -666,7 +666,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// for elitea-vector (ADR-0031 decision 1): the SHA-256 of the bearer, its
 	// claim, execution, resource project, actor, sources and expiry. Liveness
 	// is read from the claim and the execution, never written. No permission.
-	require.EqualValues(t, 160, Head(shared))
+	//
+	// 161: shared/0161_project_deletions_journal.sql, the cleanup journal
+	// (centry.project_deletions) a project delete writes in the transaction
+	// that removes the project row, and that a reconciler drains (#1211). No
+	// tenant table, no permission.
+	require.EqualValues(t, 161, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -400,6 +400,20 @@ type RouterConfig struct {
 	// which imports this layer. Unassigned, a created project has no vector
 	// store and cannot index — see createProjectVectorStore.
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
+	// OnProjectProvisioner, when set, is called once with the one shared project
+	// provisioner, after it is built. The process uses it to start the
+	// project-deletion reconciler (#1211) over the same provisioner the routes
+	// delete with, instead of building a second one (see newProjectProvisioner). It is
+	// not called when the composition has no pool and so no provisioner.
+	OnProjectProvisioner func(*projectprovisioning.Provisioner)
+	// ProjectCleanupContext is the context whose end means the process is
+	// shutting down. A project delete's cleanup continues in the background after
+	// the request has answered, and stops with this context, releasing its
+	// journal lease without counting an attempt. Nil: never cancelled.
+	ProjectCleanupContext context.Context
+	// ProjectDeleteBudget is how long DELETE of a project waits for the slow
+	// cleanup before it answers 202 (zero: v2projects.DefaultDeleteBudget).
+	ProjectDeleteBudget time.Duration
 	// PlatformModelDefaults is the platform default model service (#6826). It
 	// backs /api/v2/admin/gateway/default_model, the default_usage count a
 	// platform-model delete reads, the release of stored defaults after a
@@ -726,6 +740,9 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	// SECRETS_MASTER_KEY rule.
 	options := []projectprovisioning.Option{
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(cfg.Pool)),
+	}
+	if cfg.ProjectCleanupContext != nil {
+		options = append(options, projectprovisioning.WithLifecycleContext(cfg.ProjectCleanupContext))
 	}
 	// The vector store (#371) IS conditional — see this function's doc comment.
 	if cfg.ProjectVectorStore != nil {
@@ -1181,6 +1198,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// switches project creation, the support assistant and personal-project
 	// provisioning off together and reports nothing.
 	projectProvisioner, projectProvisionerOK := newProjectProvisioner(cfg)
+	if projectProvisionerOK && cfg.OnProjectProvisioner != nil {
+		cfg.OnProjectProvisioner(projectProvisioner)
+	}
 	// The personal-project ensurer over that one provisioner. Nil when the
 	// composition has no pool, which every consumer tolerates.
 	var personalProjects *personalproject.Ensurer
@@ -1885,7 +1905,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				v2projects.WithPermissionResolver(permissionResolver),
 			}
 			if projectProvisionerOK {
-				projectOptions = append(projectOptions, v2projects.WithProvisioner(projectProvisioner))
+				projectOptions = append(projectOptions, v2projects.WithProvisioner(projectProvisioner),
+					v2projects.WithDeleteBudget(cfg.ProjectDeleteBudget))
 			}
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
 

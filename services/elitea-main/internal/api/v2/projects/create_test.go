@@ -13,8 +13,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -42,6 +45,7 @@ func (s stubProvisioner) Provision(
 func (s stubProvisioner) Deprovision(
 	ctx context.Context,
 	projectID int64,
+	_ ...projectprovisioning.DeprovisionOption,
 ) (projectprovisioning.Result, error) {
 	return s.deprovision(ctx, projectID)
 }
@@ -419,6 +423,183 @@ func TestDeleteProjectReportsAFailedRemovalAsAnError(t *testing.T) {
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func deleteWith(t *testing.T, result projectprovisioning.Result, err error) *httptest.ResponseRecorder {
+	t.Helper()
+	stub := stubProvisioner{
+		provision: func(context.Context, projectprovisioning.Request) (projectprovisioning.Result, error) {
+			t.Fatal("the delete route called Provision")
+			return projectprovisioning.Result{}, nil
+		},
+		deprovision: func(context.Context, int64) (projectprovisioning.Result, error) { return result, err },
+	}
+	router := createRouter(t,
+		grantingResolver(auth.PermissionModeAdministration, handler.DeleteProjectPermission), stub)
+	request := withUser(
+		httptest.NewRequest(http.MethodDelete, "/projects/project/administration/42", nil),
+		auth.User{ID: "7", UserID: "7"},
+	)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// Active work is retryable: 409 with advice, and no step list because nothing ran.
+func TestDeleteProjectAnswersConflictWhileWorkIsActive(t *testing.T) {
+	recorder := deleteWith(t, projectprovisioning.Result{}, projectprovisioning.ErrProjectWorkActive)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "stop them or wait") || !strings.Contains(body, "retry") {
+		t.Fatalf("the 409 does not tell the caller to stop or wait and retry: %s", body)
+	}
+}
+
+// A delete that lost a race to another delete of the same project finds no
+// row: 404, the same as any other id with no project.
+func TestDeleteProjectAnswersNotFoundToTheLoserOfTwoDeletes(t *testing.T) {
+	recorder := deleteWith(t, projectprovisioning.Result{}, projectprovisioning.ErrProjectNotFound)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// The project is gone but its vector database is not: 202 Accepted naming the
+// database, listing the pending step and carrying the per-step detail; the
+// cleanup journal retries the drop.
+func TestDeleteProjectNamesTheVectorDatabaseItCouldNotDrop(t *testing.T) {
+	failed := false
+	result := projectprovisioning.Result{
+		ProjectID:      42,
+		VectorDatabase: "project_42",
+		Pending:        []string{projectprovisioning.StepProjectPgvectorDrop},
+		RollbackSteps: []projectprovisioning.StepStatus{
+			{Step: projectprovisioning.StepProjectPgvectorDrop, Initialized: true, OK: &failed, Msg: "step project_pgvector_drop did not complete"},
+		},
+	}
+	err := fmt.Errorf("%w: database \"project_42\" remains", projectprovisioning.ErrVectorStoreNotDropped)
+
+	recorder := deleteWith(t, result, err)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Steps    []projectprovisioning.StepStatus `json:"steps"`
+		Pending  []string                         `json:"pending"`
+		Message  string                           `json:"message"`
+		Database string                           `json:"database"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, recorder.Body.String())
+	}
+	if body.Database != "project_42" {
+		t.Errorf("database = %q, want project_42", body.Database)
+	}
+	if len(body.Steps) != 1 || body.Steps[0].Step != projectprovisioning.StepProjectPgvectorDrop {
+		t.Errorf("steps = %+v", body.Steps)
+	}
+	if len(body.Pending) != 1 || body.Pending[0] != projectprovisioning.StepProjectPgvectorDrop {
+		t.Errorf("pending = %v, want the drop", body.Pending)
+	}
+	if !strings.Contains(body.Message, "continues in the background") {
+		t.Errorf("message does not say the cleanup continues: %q", body.Message)
+	}
+}
+
+// Every pending step is listed whichever combination arrives, the status is 202
+// whenever anything was left, and the body never carries the underlying errors.
+func TestDeleteProjectListsEveryPendingStepWithoutLeakingErrors(t *testing.T) {
+	failed := false
+	result := projectprovisioning.Result{
+		ProjectID:      42,
+		VectorDatabase: "project_42",
+		Pending: []string{
+			projectprovisioning.StepArtifactBuckets, projectprovisioning.StepProjectSchema,
+			projectprovisioning.StepProjectPgvectorDrop,
+		},
+		RollbackSteps: []projectprovisioning.StepStatus{
+			{Step: projectprovisioning.StepArtifactBuckets, Initialized: true, OK: &failed, Msg: "x"},
+			{Step: projectprovisioning.StepProjectSchema, Initialized: true, OK: &failed, Msg: "z"},
+			{Step: projectprovisioning.StepProjectPgvectorDrop, Initialized: true, OK: &failed, Msg: "y"},
+		},
+	}
+	err := errors.Join(
+		projectprovisioning.ErrTenantSchemaNotRemoved,
+		projectprovisioning.ErrArtifactsNotRemoved,
+		fmt.Errorf("%w: database \"project_42\" remains, the cleanup journal retries it: dial tcp 10.0.0.9:5432: secret-detail",
+			projectprovisioning.ErrVectorStoreNotDropped),
+	)
+
+	recorder := deleteWith(t, result, err)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Steps    []projectprovisioning.StepStatus `json:"steps"`
+		Pending  []string                         `json:"pending"`
+		Database string                           `json:"database"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, recorder.Body.String())
+	}
+	if len(body.Pending) != 3 {
+		t.Errorf("pending = %v, want the three steps", body.Pending)
+	}
+	for _, leak := range []string{"secret-detail", "10.0.0.9"} {
+		if strings.Contains(recorder.Body.String(), leak) {
+			t.Errorf("the body leaks the underlying error (%s): %s", leak, recorder.Body.String())
+		}
+	}
+	if body.Database != "project_42" || len(body.Steps) != 3 {
+		t.Errorf("database=%q steps=%d, want project_42 and the 3 steps", body.Database, len(body.Steps))
+	}
+}
+
+// A delete whose budget ran out before a step ran has no error at all, only a
+// pending list: still 202. A delete with nothing pending is 200.
+func TestDeleteProjectAnswers202ForPendingWithoutAnErrorAnd200WhenDone(t *testing.T) {
+	pending := deleteWith(t, projectprovisioning.Result{
+		ProjectID: 42, Pending: []string{projectprovisioning.StepArtifactBuckets},
+	}, nil)
+	if pending.Code != http.StatusAccepted {
+		t.Fatalf("pending without an error: status = %d, want 202; body=%s", pending.Code, pending.Body.String())
+	}
+	if !strings.Contains(pending.Body.String(), `"pending":["artifact_buckets"]`) {
+		t.Fatalf("the 202 does not list the pending step: %s", pending.Body.String())
+	}
+
+	done := deleteWith(t, projectprovisioning.Result{ProjectID: 42}, nil)
+	if done.Code != http.StatusOK {
+		t.Fatalf("nothing pending: status = %d, want 200; body=%s", done.Code, done.Body.String())
+	}
+	if strings.Contains(done.Body.String(), "pending") {
+		t.Fatalf("a finished delete carries a pending list: %s", done.Body.String())
+	}
+}
+
+// A delete that did not happen is a 500 that says so, whatever the cause; the
+// leftovers of a delete that did happen are never one.
+func TestDeleteProjectFailuresBeforeTheDecisionAreServerErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"not removed": {projectprovisioning.ErrProjectNotRemoved, "was not removed"},
+		"unknown":     {errors.New("boom"), "was not removed"},
+	} {
+		recorder := deleteWith(t, projectprovisioning.Result{}, tc.err)
+		if recorder.Code != http.StatusInternalServerError {
+			t.Errorf("%s: status = %d, want 500", name, recorder.Code)
+		}
+		if !strings.Contains(recorder.Body.String(), tc.want) {
+			t.Errorf("%s: body does not mention %q: %s", name, tc.want, recorder.Body.String())
+		}
 	}
 }
 

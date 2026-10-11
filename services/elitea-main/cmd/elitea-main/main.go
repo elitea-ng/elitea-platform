@@ -2357,7 +2357,28 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
 
+	// The project-deletion reconciler (#1211) drains the cleanup journal over
+	// the one provisioner the router builds, so it is started from the router's
+	// hook. A failure to construct it
+	// is carried out of the hook and stops startup like the other composition
+	// errors.
+	deletionReconciler, err := projectDeletionReconcilerFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load project deletion reconciler settings: %w", err)
+	}
+	projectDeleteBudget, err := projectDeleteBudgetFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load project delete budget: %w", err)
+	}
+	var deletionReconcilerErr error
+	startDeletionReconciler := func(provisioner *projectprovisioning.Provisioner) {
+		deletionReconcilerErr = startProjectDeletionReconciler(ctx, deletionReconciler, provisioner, logger)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
+		OnProjectProvisioner:         startDeletionReconciler,
+		ProjectCleanupContext:        ctx,
+		ProjectDeleteBudget:          projectDeleteBudget,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,
@@ -2519,6 +2540,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		WebhookDestinationGuard:     webhookDestinationGuard,
 		MCPAuthorizationEgressGuard: mcpAuthorizationEgressGuard,
 	})
+	if deletionReconcilerErr != nil {
+		return fmt.Errorf("start project deletion reconciler: %w", deletionReconcilerErr)
+	}
 
 	// NOTE(#126): the Socket.IO prototype server (internal/api/socketio) is
 	// gone. It was never mounted — the comment that stood here said it stayed

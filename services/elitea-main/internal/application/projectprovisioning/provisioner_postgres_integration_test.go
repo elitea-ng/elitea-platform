@@ -987,6 +987,13 @@ WHERE r.source_id=repeat('d',64)`
 		}
 	}
 
+	// The execution is finished; a running one refuses the delete
+	// (ErrProjectWorkActive, #1211). Its rows stay for the delete to clear.
+	if _, err := pool.Exec(ctx,
+		`UPDATE elitea_runtime.execution_jobs SET state = 'SUCCEEDED' WHERE resource_project_id = $1`, projectID); err != nil {
+		t.Fatalf("settle the execution: %v", err)
+	}
+
 	result, err := provisioner.Deprovision(ctx, projectID)
 	if err != nil {
 		t.Fatalf("deprovision a project that ran an execution: %v (steps=%+v)", err, result.RollbackSteps)
@@ -1106,19 +1113,17 @@ CREATE TABLE centry.delete_blocker (
 		t.Errorf("the preflight does not list project %d, so its tenant would never migrate again", projectID)
 	}
 
-	// The report names the held-back step, and it says the step was not
-	// started rather than that it failed halfway.
-	var schemaStep projectprovisioning.StepStatus
-	for _, status := range result.RollbackSteps {
-		if status.Step == "project_schema" {
-			schemaStep = status
-		}
+	// The report names the deciding step, and only it: the row delete runs in
+	// the transaction that decides the delete (#1211), so no cleanup step ran
+	// and none was recorded.
+	if len(result.RollbackSteps) != 1 || result.RollbackSteps[0].Step != projectprovisioning.StepProjectModel ||
+		result.RollbackSteps[0].OK == nil || *result.RollbackSteps[0].OK {
+		t.Errorf("steps = %+v, want only project_model, failed", result.RollbackSteps)
 	}
-	if schemaStep.OK == nil || *schemaStep.OK {
-		t.Errorf("project_schema is reported as %+v, want a step that did not succeed", schemaStep)
-	}
-	if schemaStep.Msg != projectprovisioning.HeldBackStepMessage("project_schema") {
-		t.Errorf("project_schema msg = %q, want the held-back message", schemaStep.Msg)
+	var journal int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM centry.project_deletions WHERE project_id = $1`, projectID).Scan(&journal); err != nil || journal != 0 {
+		t.Errorf("a delete that did not happen recorded cleanup: rows=%d err=%v", journal, err)
 	}
 
 	// And the delete converges once the blocker is gone.

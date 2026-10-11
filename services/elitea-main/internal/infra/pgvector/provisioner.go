@@ -372,8 +372,8 @@ func validateRequest(request Request) (database string, role string, err error) 
 		return "", "", ErrInvalidRequest
 	}
 
-	database = "project_" + strconv.FormatInt(request.ProjectID, 10)
-	role = database + "_user"
+	database = ProjectDatabaseName(request.ProjectID)
+	role = ProjectRoleName(request.ProjectID)
 	if !validPostgresName(database) || !validPostgresName(role) {
 		return "", "", ErrInvalidRequest
 	}

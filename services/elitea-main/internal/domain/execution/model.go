@@ -155,6 +155,21 @@ const (
 	JobQuarantined JobState = "QUARANTINED"
 )
 
+// NonTerminalJobStates is the one Go definition of "this job is still in
+// flight": admitted work that holds the project's resources (its PgVector
+// database among them) until it settles. QUARANTINED is terminal for this
+// purpose: a quarantined job is not executing.
+//
+// The admission-capacity index of shared/0033
+// (execution_jobs_active_capability_idx) carries a SQL copy of this list. It is
+// checksum-immutable and is deliberately not generated from here; a state added
+// to this list needs a new migration beside it, and TestEveryJobStateIsClassified
+// fails until the new constant is classified (the test holds the terminal
+// complement itself).
+func NonTerminalJobStates() []JobState {
+	return []JobState{JobPending, JobDispatched, JobClaimed, JobRunning, JobSettling}
+}
+
 func (s JobState) Valid() bool {
 	switch s {
 	case JobPending, JobDispatched, JobClaimed, JobRunning, JobSettling, JobSucceeded, JobFailed, JobCancelled, JobQuarantined:
