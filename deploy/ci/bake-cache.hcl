@@ -55,6 +55,10 @@ target "elitea-inventory" {
 target "elitea-inventory-engine" {
   cache-from = ["type=gha,scope=elitea-inventory-engine-linux-amd64"]
 }
+// elitea-vector (ADR-0031) and its Qdrant, in the standalone stack.
+target "elitea-vector" {
+  cache-from = ["type=gha,scope=elitea-vector-linux-amd64"]
+}
 target "elitea-web" {
   cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
 }
@@ -95,6 +99,7 @@ group "standalone" {
     "elitea-llm-gateway", "llm-mock", "elitea-deepwiki", "elitea-deepwiki-engine",
     "elitea-deepwiki-migrate",
     "elitea-inventory", "elitea-inventory-engine",
+    "elitea-vector",
     "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",
     "ado-mock",
   ]

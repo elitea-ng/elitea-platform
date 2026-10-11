@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,6 +22,25 @@ type Handler struct {
 	projects    CurrentProjectLister
 	resolver    auth.PermissionResolver
 	provisioner ProjectProvisioner
+	// deleteBudget is how long DELETE waits for the cleanup after the project
+	// is gone. See WithDeleteBudget.
+	deleteBudget time.Duration
+}
+
+// DefaultDeleteBudget is how long a project DELETE waits, after the project row
+// and its credentials are gone, for the slow cleanup (artifact bytes, the tenant
+// schema, the PgVector database) before it answers 202 and leaves the rest to
+// the cleanup journal.
+const DefaultDeleteBudget = 20 * time.Second
+
+// WithDeleteBudget sets the in-request cleanup budget of DELETE. Zero or
+// negative keeps DefaultDeleteBudget.
+func WithDeleteBudget(budget time.Duration) Option {
+	return func(h *Handler) {
+		if budget > 0 {
+			h.deleteBudget = budget
+		}
+	}
 }
 
 // ProjectProvisioner creates a project and its tenant. It is an interface at
@@ -28,7 +48,7 @@ type Handler struct {
 // this package does not depend on the provisioner's concrete constructor.
 type ProjectProvisioner interface {
 	Provision(ctx context.Context, request projectprovisioning.Request) (projectprovisioning.Result, error)
-	Deprovision(ctx context.Context, projectID int64) (projectprovisioning.Result, error)
+	Deprovision(ctx context.Context, projectID int64, options ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error)
 }
 
 // WithProvisioner supplies the project-create pipeline. Without it the create
@@ -69,7 +89,7 @@ func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
 	if pool != nil {
 		projects = sqlcgen.New(pool)
 	}
-	handler := &Handler{pool: pool, projects: projects}
+	handler := &Handler{pool: pool, projects: projects, deleteBudget: DefaultDeleteBudget}
 	for _, option := range options {
 		option(handler)
 	}

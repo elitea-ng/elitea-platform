@@ -1,6 +1,6 @@
 package repos
 
-// The index registry against a real PostgreSQL (migration shared/0160).
+// The index registry against a real PostgreSQL (migration shared/0162).
 // Requires ELITEA_TEST_DATABASE_URL; every test skips without it.
 
 import (

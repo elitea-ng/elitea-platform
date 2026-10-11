@@ -282,6 +282,12 @@ jobs:
           - name: elitea-deepwiki-engine-native
             context: .
             dockerfile: ./services/elitea-deepwiki-engine/Containerfile
+          # elitea-vector (ADR-0031), the only Qdrant client. Repo ROOT
+          # context: the Containerfile COPYs services/elitea-vector,
+          # libs/proto and libs/rust from there.
+          - name: elitea-vector
+            context: .
+            dockerfile: ./services/elitea-vector/Containerfile
         platform:
           - runner: ubuntu-latest
             arch: linux/amd64
@@ -480,6 +486,12 @@ jobs:
           - name: elitea-deepwiki-engine-native
             expect_type: rustbinary
             blocking: true
+          # elitea-vector (ADR-0031): the same distroless base and
+          # cargo-auditable build as the engines, so `rustbinary` and
+          # blocking for the same reason.
+          - name: elitea-vector
+            expect_type: rustbinary
+            blocking: true
 
     steps:
       - name: Checkout
@@ -626,6 +638,12 @@ jobs:
           # on distroless base-nossl-debian13 plus libgcc_s (no system
           # OpenSSL to scan); nothing here is exempt.
           - name: elitea-deepwiki-engine-native
+            expect_type: rustbinary
+            blocking: true
+          # elitea-vector (ADR-0031): the same distroless base and
+          # cargo-auditable build as the engines, so `rustbinary` and
+          # blocking for the same reason.
+          - name: elitea-vector
             expect_type: rustbinary
             blocking: true
 
@@ -988,7 +1006,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

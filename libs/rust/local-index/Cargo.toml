@@ -15,6 +15,8 @@ elitea-agent-runtime = { path = "../agent-runtime" }
 # The parsers' thread cap (`set_parser_threads`).
 elitea-code-parsers = { path = "../code-parsers" }
 elitea-content-source = { path = "../content-source" }
+# `decode_text`: files are read back the way ingestion decoded them.
+elitea-doc-extract = { path = "../doc-extract" }
 # The progress context and stop flag ingestion reports through, and
 # Python-compatible text the entity lookup shares with the cloud tools.
 elitea-engine-core = { path = "../engine-core" }
@@ -41,6 +43,7 @@ tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
 rustix = { version = "1.1.5", features = ["fs", "process"] }
 
 [dev-dependencies]
+encoding_rs = "0.8.42"
 elitea-inventory-core = { path = "../inventory-core", features = ["test-support"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

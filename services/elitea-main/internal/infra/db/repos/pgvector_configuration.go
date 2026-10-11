@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 
 	vectorstoreapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/vectorstore"
@@ -196,3 +197,49 @@ func cloneCurrentProjectPgvectorLabel(label *string) *string {
 }
 
 var _ vectorstoreapp.ProjectConfigurationRepository = (*CurrentProjectPgvectorConfigurationsRepository)(nil)
+
+// ExistsCurrentProjectPgvectorConfiguration reports whether the project's
+// system PgVector row exists in its tenant schema, reading through the
+// transaction the caller supplies.
+//
+// The project delete asks this inside its deciding transaction (#1211), so the
+// answer comes from the snapshot that removes the project and no second pool
+// connection is taken while the project row is locked. The generated statement
+// names the table without a schema, so the tenant search_path is installed in a
+// SAVEPOINT and the savepoint is rolled back: SET LOCAL ends with it, and the
+// caller's own search_path is untouched for the statements that follow.
+//
+// The caller has checked that the tenant table exists; an absent table is an
+// error here, and (in PostgreSQL) an error would abort the supplied
+// transaction, which is why that check comes first.
+func ExistsCurrentProjectPgvectorConfiguration(
+	ctx context.Context,
+	tx interface {
+		Begin(context.Context) (pgx.Tx, error)
+	},
+	projectID int64,
+	title string,
+) (bool, error) {
+	if tx == nil || ctx == nil || projectID <= 0 || projectID > math.MaxInt32 || title == "" {
+		return false, vectorstoreapp.ErrInvalidProjectPgvectorRequest
+	}
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = savepoint.Rollback(context.WithoutCancel(ctx)) }()
+	// The schema name is built from an int64 id, never from caller input.
+	if _, err := savepoint.Exec(ctx,
+		"SELECT set_config('search_path', $1, true)",
+		fmt.Sprintf("p_%d, public", projectID),
+	); err != nil {
+		return false, err
+	}
+	return sqlcgen.New(savepoint).ExistsCurrentProjectPgvectorConfiguration(
+		ctx,
+		sqlcgen.ExistsCurrentProjectPgvectorConfigurationParams{
+			ProjectID:   int32(projectID),
+			EliteaTitle: title,
+		},
+	)
+}

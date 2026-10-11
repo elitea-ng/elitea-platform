@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	vectorstoreapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/vectorstore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
@@ -45,6 +46,12 @@ import (
 // deliberately distinct from "absent": an absent row means the deployment runs
 // no vector store, a malformed one means it is misconfigured.
 var ErrProjectVectorStoreBootstrap = errors.New("runtimecomposition: project vector-store bootstrap is unusable")
+
+// ErrProjectVectorStoreBootstrapMissing reports a drop for a project that HAD a
+// vector store, on a deployment whose public elitea-pgvector bootstrap is gone.
+// The database exists and cannot be reached, so the drop is not OK and not a
+// skip (#1211).
+var ErrProjectVectorStoreBootstrapMissing = errors.New("PgVector bootstrap not configured")
 
 type projectVectorStoreFinder interface {
 	FindByEliteaTitle(
@@ -156,8 +163,9 @@ func (s *ProjectVectorStore) ProvisionProjectVectorStore(ctx context.Context, pr
 // RemoveProjectVectorStore removes the project's `vectorstorage` configuration
 // row.
 //
-// It does NOT drop the PgVector role or database — see the step's own comment
-// in projectprovisioning for why that boundary is where it is.
+// It does NOT drop the PgVector role or database: it is the create-failure
+// rollback. An explicit delete drops the tenant schema (and this row with it)
+// and calls DropProjectVectorStore from its cleanup journal.
 //
 // IT NO LONGER REMOVES THE VAULT (#399). The project_secrets step owns the
 // vault, and removeProjectSecrets removes it. Both callers of this method reach
@@ -174,7 +182,7 @@ func (s *ProjectVectorStore) RemoveProjectVectorStore(ctx context.Context, proje
 
 	// The tenant may already be gone: Deprovision runs every remove, and a
 	// project deleted before this step existed has no row to remove either.
-	present, err := s.tenantConfigurationPresent(ctx, projectID)
+	present, err := tenantConfigurationPresent(ctx, s.schemas, projectID)
 	if err != nil {
 		return err
 	}
@@ -189,14 +197,117 @@ func (s *ProjectVectorStore) RemoveProjectVectorStore(ctx context.Context, proje
 	return nil
 }
 
+// ProjectHasVectorStore reports whether the project has its `vectorstorage`
+// configuration row. A project whose tenant schema is already gone has none.
+//
+// It reads through query, which the project delete passes as its deciding
+// transaction (#1211): the answer comes from the snapshot that removes the
+// project, and no second pool connection is taken while the project row is
+// locked.
+func (s *ProjectVectorStore) ProjectHasVectorStore(ctx context.Context, query projectprovisioning.Querier, projectID int64) (bool, error) {
+	if s == nil {
+		return false, errors.New("project vector store is not configured")
+	}
+	if projectID <= 0 {
+		return false, vectorstoreapp.ErrInvalidProjectPgvectorRequest
+	}
+	if query == nil {
+		return false, errors.New("project vector-store probe needs a querier")
+	}
+	present, err := tenantConfigurationPresent(ctx, query, projectID)
+	if err != nil || !present {
+		return false, err
+	}
+	has, err := repos.ExistsCurrentProjectPgvectorConfiguration(
+		ctx, query, projectID, vectorstoreapp.DefaultProjectPgvectorTitle)
+	if err != nil {
+		return false, fmt.Errorf("read project vector-store configuration: %w", err)
+	}
+	return has, nil
+}
+
+// DropProjectVectorStore drops the project's PgVector database and login role
+// (#1211). Callers: only an explicit project delete, from its cleanup journal. The create-failure rollback
+// calls RemoveProjectVectorStore, which never reaches this.
+//
+// It is idempotent (a missing database or role is a no-op). hadStore is whether
+// the project had a vector store before its removal (recorded in the cleanup
+// journal by the transaction that removed the project row).
+//
+// THE DROP IS ATTEMPTED WHATEVER hadStore SAYS, whenever a PgVector bootstrap is
+// configured. hadStore comes from the project's configuration row, and a
+// database can exist without one: a provisioning run that died between creating
+// the database and writing the row, or a row removed by hand. Trusting the probe
+// would leak that database for ever. hadStore decides only what the absence of a
+// bootstrap means: with no bootstrap and hadStore false there is nothing the
+// project could have used (a skip, database ""); with hadStore true the database
+// exists and cannot be reached (ErrProjectVectorStoreBootstrapMissing).
+func (s *ProjectVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (string, error) {
+	if s == nil {
+		return "", errors.New("project vector store is not configured")
+	}
+	if projectID <= 0 {
+		return "", vectorstoreapp.ErrInvalidProjectPgvectorRequest
+	}
+	database := pgvector.ProjectDatabaseName(projectID)
+	bootstrap, configured, err := s.resolveBootstrap(ctx)
+	if err != nil {
+		return database, err
+	}
+	if !configured {
+		if !hadStore {
+			return "", nil
+		}
+		return database, ErrProjectVectorStoreBootstrapMissing
+	}
+	databases, err := newCurrentProjectPgvectorDatabaseProvisioner(bootstrap)
+	if err != nil {
+		return database, fmt.Errorf("%w: %s", ErrProjectVectorStoreBootstrap, err)
+	}
+	result, err := databases.Drop(ctx, projectID)
+	if err != nil {
+		return database, err
+	}
+	s.logger.InfoContext(ctx, "dropped project vector store",
+		"project_id", projectID,
+		"database_dropped", result.DatabaseDropped, "role_dropped", result.RoleDropped)
+	return database, nil
+}
+
+// ProjectVectorDatabaseExists reports whether the project's PgVector database or
+// role exists on the PgVector server. checkable is false when this deployment has
+// no PgVector bootstrap, so nothing can be asked. The project delete uses it to
+// find the leftovers of a project whose row is already gone (#1211).
+func (s *ProjectVectorStore) ProjectVectorDatabaseExists(ctx context.Context, projectID int64) (exists bool, checkable bool, err error) {
+	if s == nil {
+		return false, false, errors.New("project vector store is not configured")
+	}
+	if projectID <= 0 {
+		return false, false, vectorstoreapp.ErrInvalidProjectPgvectorRequest
+	}
+	bootstrap, configured, err := s.resolveBootstrap(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	if !configured {
+		return false, false, nil
+	}
+	databases, err := newCurrentProjectPgvectorDatabaseProvisioner(bootstrap)
+	if err != nil {
+		return false, false, fmt.Errorf("%w: %s", ErrProjectVectorStoreBootstrap, err)
+	}
+	exists, err = databases.Exists(ctx, projectID)
+	return exists, err == nil, err
+}
+
 // tenantConfigurationPresent reports whether the project's tenant configuration
 // table exists. The delete runs inside a tenant transaction, which refuses a
 // schema that is not there.
-func (s *ProjectVectorStore) tenantConfigurationPresent(ctx context.Context, projectID int64) (bool, error) {
+func tenantConfigurationPresent(ctx context.Context, query projectVectorStoreSchemas, projectID int64) (bool, error) {
 	var present bool
 	// The name is derived from an int64 id, never from caller input, and it is
 	// bound as one text argument rather than concatenated in SQL.
-	if err := s.schemas.QueryRow(ctx,
+	if err := query.QueryRow(ctx,
 		`SELECT to_regclass($1::text) IS NOT NULL`,
 		fmt.Sprintf("p_%d.configuration", projectID),
 	).Scan(&present); err != nil {

@@ -31,6 +31,11 @@ main:
   #
   # 4 x 42 = 168, inside 175. Raise this only together with
   # postgresql.maxConnections; the guard checks the pair, which is the point.
+  #
+  # vector.enabled adds elitea-vector's token-introspection pool (8
+  # connections per replica, ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS):
+  # 50 per replica, so 4 replicas no longer fit. Lower maxReplicas to 3 (150) or
+  # raise postgresql.maxConnections to 225 when you turn vector on.
   autoscaling:
     maxReplicas: 4
 

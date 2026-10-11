@@ -105,7 +105,9 @@ fn a_tree_is_selected_as_the_loader_did_and_diffed_by_hash() {
     write(&root, "README.md", b"# demo\n");
     write(&root, "logo.png", b"\x89PNG");
     write(&root, "empty.py", b"");
-    write(&root, "latin1.txt", b"caf\xe9\n");
+    // Not text: a NUL byte (a legacy-encoded file is decoded now, ADR-0030
+    // decision 4; see doc-extract's tests).
+    write(&root, "latin1.txt", b"caf\xe9\x00\n");
     write(&root, ".git/config", b"[core]\n");
     let (context, _lines, _) = context();
     let source = source(&json!({"exclude_patterns": "*/vendor/*"}));
@@ -117,7 +119,7 @@ fn a_tree_is_selected_as_the_loader_did_and_diffed_by_hash() {
     assert_eq!(first.skipped_blacklist, 1);
     assert_eq!(first.skipped_unsupported, 1, "logo.png");
     assert_eq!(first.skipped_empty, 1);
-    assert_eq!(first.skipped_unreadable, 1, "not UTF-8");
+    assert_eq!(first.skipped_unreadable, 1, "a NUL byte");
     assert_eq!(
         first.hashes.keys().collect::<Vec<_>>(),
         ["README.md", "src/app.py"]

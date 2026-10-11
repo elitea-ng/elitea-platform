@@ -41,6 +41,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/output"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -98,6 +99,11 @@ type Dependencies struct {
 	ReplayPool                    *pgxpool.Pool
 	TerminalEffectsPool           *pgxpool.Pool
 	ContentPool                   *pgxpool.Pool
+	// VectorIntrospectionPool is the seventh, optional pool: the claim-token
+	// reads of elitea-vector's token introspection. Required when
+	// Config.VectorIntrospectionClients is set, and never ControlPool or any
+	// other pool (validateDependencies).
+	VectorIntrospectionPool *pgxpool.Pool
 	// Optional original supervisor state DB, owned and closed by the calling command.
 	CompiledSnapshotStatePool        *pgxpool.Pool
 	CurrentConfigurations            *CurrentConfigurationsRuntime
@@ -105,8 +111,13 @@ type Dependencies struct {
 	ActorTokenIssuer                 storage.ActorTokenIssuer
 	ProjectTokenValidator            storage.ProjectTokenValidator
 	ProjectSystemTokenSource         ProjectSystemTokenSource
-	PermissionResolver               auth.PermissionResolver
-	Logger                           *slog.Logger
+	// CallbackTokenFacts reads callback token grants for elitea-vector's
+	// token introspection (ADR-0031). Required only when
+	// Config.VectorIntrospectionClients is set; ProjectTokenValidator then
+	// checks the signature.
+	CallbackTokenFacts vectorintrospection.CallbackFacts
+	PermissionResolver auth.PermissionResolver
+	Logger             *slog.Logger
 
 	// ObjectStore backs the artifact retention sweeper (S14). A nil store
 	// leaves current index scheduling enabled but omits that separate
@@ -1163,7 +1174,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if compiledSnapshots != nil {
 		compiledAuthority = compiledSnapshots
 	}
+	vectorTokens, err := newVectorClaimTokenIssuer(config, dependencies)
+	if err != nil {
+		return nil, err
+	}
 	controlServer, err := control.NewServer(control.ServerConfig{
+		VectorTokens:           vectorTokens,
 		SandboxGrants:          sandboxGrants,
 		CompiledSnapshots:      compiledAuthority,
 		CompiledProfiles:       compiledProfiles,
@@ -2022,6 +2038,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 	}
 
+	vectorIntrospection, err := newVectorIntrospection(config, dependencies)
+	if err != nil {
+		return nil, err
+	}
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:                  config.ControlAddress,
 		OutputAddress:                   config.OutputAddress,
@@ -2044,9 +2064,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		ContentMaxHeaderBytes:           16 * 1024,
 		ShutdownTimeout:                 15 * time.Second,
 	}, runtimegrpc.PrivateServices{
-		Control: controlServer,
-		Output:  outputServer,
-		Content: contentServer.Routes(),
+		Control:             controlServer,
+		Output:              outputServer,
+		Content:             contentServer.Routes(),
+		VectorIntrospection: vectorIntrospection,
 	})
 	if err != nil {
 		return nil, err

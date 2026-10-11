@@ -52,7 +52,7 @@ func (a *PeerAuthorizer) authorize(ctx context.Context, workloadSessionID, produ
 	if !boundedIdentityPart(workloadSessionID) || !boundedIdentityPart(producerID) {
 		return "", ErrWorkloadUnauthorized
 	}
-	identity, err := verifiedPeerIdentity(ctx)
+	identity, err := VerifiedPeerIdentity(ctx)
 	if err != nil {
 		return "", ErrWorkloadUnauthorized
 	}
@@ -67,7 +67,11 @@ func (a *PeerAuthorizer) authorize(ctx context.Context, workloadSessionID, produ
 	return identity, nil
 }
 
-func verifiedPeerIdentity(ctx context.Context) (string, error) {
+// VerifiedPeerIdentity is the canonical identity (one DNS name or SPIFFE ID,
+// by the workloadidentity rule) of the verified mTLS peer of ctx. A context
+// with no peer, a non-TLS peer or no verified chain is
+// ErrWorkloadUnauthorized.
+func VerifiedPeerIdentity(ctx context.Context) (string, error) {
 	peerInfo, ok := peer.FromContext(ctx)
 	if !ok || peerInfo == nil || peerInfo.AuthInfo == nil {
 		return "", ErrWorkloadUnauthorized

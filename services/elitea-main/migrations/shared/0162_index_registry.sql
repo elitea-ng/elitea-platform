@@ -1,4 +1,4 @@
--- 0160_index_registry.sql — the index registry (ADR-0031 V1, ADR-0030
+-- 0162_index_registry.sql — the index registry (ADR-0031 V1, ADR-0030
 -- decision 2).
 --
 -- WHY. Under the Python indexing path an index's metadata is an `index_meta`

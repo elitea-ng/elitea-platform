@@ -15,7 +15,7 @@ import (
 )
 
 // IndexRegistryRepository is the Postgres implementation of the index registry
-// (migration shared/0160). elitea-main is its only writer (ADR-0030 decision
+// (migration shared/0162). elitea-main is its only writer (ADR-0030 decision
 // 2): every write here is a transition computed by the application layer
 // (indexregistry.StartRun, ApplyTerminal, ApplyResult, ...) from a row this
 // repository has locked, so the rules live in one place and the SQL only

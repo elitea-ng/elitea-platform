@@ -1,0 +1,5 @@
+1 document markdown [Support Handbook] 100c 19t | # Support Handbook  
+2 document markdown [Support Handbook; Refunds] 230c 45t | ## Refunds  
+3 document markdown [Support Handbook; Refunds; Partial refunds] 263c 61t | ### Partial refunds  
+4 document markdown [Support Handbook; Escalation; Contacts] 292c 67t | ## Escalation  
+5 document markdown [Appendix] 24c 6t | # Appendix  
