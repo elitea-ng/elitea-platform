@@ -250,10 +250,10 @@ fn an_index_from_a_newer_app_is_refused() {
     SqliteGraphStore::open(&index).unwrap().close();
     rusqlite::Connection::open(index.join(FILE_NAME))
         .unwrap()
-        .execute_batch("PRAGMA user_version = 2;")
+        .execute_batch("PRAGMA user_version = 3;")
         .unwrap();
     match SqliteGraphStore::open(&index) {
-        Err(StoreError::NewerSchema(2)) => {}
+        Err(StoreError::NewerSchema(3)) => {}
         other => panic!("a newer schema is refused, got {other:?}"),
     }
 }
@@ -284,4 +284,65 @@ fn a_symlinked_database_is_refused() {
         SqliteGraphStore::open(&index),
         Err(StoreError::Refused(_))
     ));
+}
+
+/// A version-1 index (no `embedding_hash` column) is upgraded when it is
+/// opened, keeps its graph, and then keeps the hash of each vector's text.
+#[test]
+fn a_version_1_index_gains_the_embedding_hash_column() {
+    use elitea_inventory_core::graph::Graph;
+    use elitea_inventory_core::store::{Completion, RunCounts};
+    let dir = tempfile::tempdir().unwrap();
+    let index = dir.path().join("index");
+    let complete = |store: &SqliteGraphStore, graph: &Graph| {
+        store
+            .complete_with_stats(
+                GraphKey::LOCAL,
+                graph,
+                &Completion {
+                    toolkit_id: "workspace",
+                    source_name: "workspace",
+                    documents: &std::collections::BTreeMap::default(),
+                    counts: RunCounts::default(),
+                    commit_sha: None,
+                },
+                &std::collections::HashMap::default(),
+                None,
+            )
+            .unwrap()
+    };
+    let mut graph = Graph::new();
+    graph.add_entity("a", "Alpha", "class", None, None);
+    graph.add_entity("b", "Beta", "class", None, None);
+    graph.set_embedding("a", &[1.0, 0.0]);
+    let store = SqliteGraphStore::open(&index).unwrap();
+    complete(&store, &graph);
+    store.close();
+
+    // Turn the file back into what version 1 wrote.
+    let raw = rusqlite::Connection::open(index.join(FILE_NAME)).unwrap();
+    raw.execute_batch(
+        "ALTER TABLE entities DROP COLUMN embedding_hash;
+         UPDATE meta SET value = '1' WHERE key = 'schema_version';
+         PRAGMA user_version = 1;",
+    )
+    .unwrap();
+    drop(raw);
+
+    let store = SqliteGraphStore::open(&index).unwrap();
+    let (loaded, _) = store.load_now(GraphKey::LOCAL).unwrap().unwrap();
+    assert_eq!(loaded.node_count(), 2, "the graph survives the upgrade");
+    assert_eq!(loaded.embedding_hash("a"), None, "nothing was recorded");
+    graph.set_embedding_hash("a", "hash-a".to_owned());
+    graph.set_embedding_hash("b", "stale".to_owned());
+    complete(&store, &graph);
+    let (loaded, _) = store.load_now(GraphKey::LOCAL).unwrap().unwrap();
+    assert_eq!(loaded.embedding_hash("a"), Some("hash-a"));
+    assert_eq!(loaded.embedding_hash("b"), None, "no vector, no hash");
+    // A changed hash alone is a change to write.
+    graph.set_embedding_hash("a", "hash-a2".to_owned());
+    complete(&store, &graph);
+    assert!(store.last_commit_rows() > 0);
+    let (loaded, _) = store.load_now(GraphKey::LOCAL).unwrap().unwrap();
+    assert_eq!(loaded.embedding_hash("a"), Some("hash-a2"));
 }

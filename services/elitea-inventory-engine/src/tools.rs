@@ -53,12 +53,29 @@ pub const SEARCH_TOOLS: [&str; 6] = [
     "investigate",
 ];
 
+/// The `platform` family (issue #1244): the two deletions the platform
+/// makes through the host's gRPC platform service. They are NOT toolkit
+/// tools: the host's admission table and the descriptor name neither, so no
+/// toolkit offers them to a user or an agent, and the engine's socket is the
+/// host's alone. `delete_graph` deletes one toolkit's graph (the platform
+/// calls it when an Inventory toolkit is deleted), `delete_project_graphs`
+/// every graph of the project (project deletion).
+pub const PLATFORM_TOOLS: [&str; 2] = [DELETE_GRAPH, DELETE_PROJECT_GRAPHS];
+
+/// The family's name, as the host sends it.
+pub const PLATFORM_FAMILY: &str = "platform";
+/// Delete one `(project_id, application_id)` graph.
+pub const DELETE_GRAPH: &str = "delete_graph";
+/// Delete every graph of `project_id`.
+pub const DELETE_PROJECT_GRAPHS: &str = "delete_project_graphs";
+
 /// The tools of a family, or `None` for a family that does not exist.
 #[must_use]
 pub fn family(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "inventory" => Some(&INVENTORY_TOOLS),
         "inventory_search" => Some(&SEARCH_TOOLS),
+        PLATFORM_FAMILY => Some(&PLATFORM_TOOLS),
         _ => None,
     }
 }
@@ -66,5 +83,7 @@ pub fn family(name: &str) -> Option<&'static [&'static str]> {
 /// Whether any family routes `tool` — what the socket admits.
 #[must_use]
 pub fn serves(tool: &str) -> bool {
-    INVENTORY_TOOLS.contains(&tool) || SEARCH_TOOLS.contains(&tool)
+    INVENTORY_TOOLS.contains(&tool)
+        || SEARCH_TOOLS.contains(&tool)
+        || PLATFORM_TOOLS.contains(&tool)
 }

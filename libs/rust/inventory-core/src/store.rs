@@ -125,6 +125,16 @@ pub struct Completion<'a> {
     pub commit_sha: Option<&'a str>,
 }
 
+/// A stored graph for reading ([`GraphStore::load_view`]).
+#[derive(Debug, Clone)]
+pub struct GraphRead {
+    /// The graph, no node carrying an `embedding`.
+    pub graph: Graph,
+    pub revision: i64,
+    /// The entities that have a non-empty vector, in node order.
+    pub embedded: Vec<String>,
+}
+
 /// A similarity ranking: `(entity id, cosine similarity)` best first, or
 /// numpy's message when an entity's vector has another width than the
 /// query's (Python's `semantic_search` raised it, the wrapper printed it).
@@ -155,6 +165,16 @@ pub trait GraphStore: Send + Sync {
         &self,
         key: GraphKey,
     ) -> impl Future<Output = Result<Option<(Graph, i64)>, Self::Error>> + Send;
+
+    /// The stored graph as a reader needs it ([`GraphRead`]): the graph
+    /// [`GraphStore::load`] returns without the entity vectors (the bulk of
+    /// its bytes), and the ids of the entities that have one. A reader
+    /// that only asks whether and how many entities are embedded
+    /// ([`GraphStore::rank`] does the comparing) never holds a vector.
+    fn load_view(
+        &self,
+        key: GraphKey,
+    ) -> impl Future<Output = Result<Option<GraphRead>, Self::Error>> + Send;
 
     /// The stored graph's revision, or `None` when there is no graph: a
     /// cheap check of whether a cached copy is still current.
@@ -224,7 +244,75 @@ pub trait GraphStore: Send + Sync {
 
     /// Delete the graph and its sources' state; `true` when there was a
     /// graph.
+    ///
+    /// This is the bare delete, atomic on its own. A caller that must not
+    /// race an ingestion takes the [`GraphStore::lease`] first.
     fn delete(&self, key: GraphKey) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    /// Replace the graph with `graph` in one transaction (its revision
+    /// moves), leaving the sources' status and document versions alone: the
+    /// write of an administrative edit such as type normalisation. Returns
+    /// the new revision. The caller holds the [`GraphStore::lease`].
+    fn save(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+    ) -> impl Future<Output = Result<i64, Self::Error>> + Send;
+
+    /// Commit a source's removal in ONE transaction: `graph` (already
+    /// without the source), and the source's status row and document
+    /// versions gone. Returns the new revision. The caller holds the
+    /// [`GraphStore::lease`].
+    fn remove_source(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        toolkit_id: &str,
+        source_name: &str,
+    ) -> impl Future<Output = Result<i64, Self::Error>> + Send;
+
+    /// Store an imported graph in one transaction: refused
+    /// ([`Imported::HasIngestionState`]) while the graph has native
+    /// ingestion state, unless `replace_state`, which deletes that state
+    /// with the old graph. The caller holds the [`GraphStore::lease`].
+    fn import(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        replace_state: bool,
+    ) -> impl Future<Output = Result<Imported, Self::Error>> + Send;
+}
+
+/// Delete the graph `key` unless an ingestion (or an import, a source
+/// removal, a type normalisation: every writer holds the lease) has it:
+/// `None` then, and nothing is deleted; else whether there was a graph.
+///
+/// [`GraphStore::delete`] alone does not wait for a run that has already
+/// loaded the graph, which would write it back; the lease is what makes a
+/// delete leave nothing, or leave the graph as it was.
+///
+/// # Errors
+///
+/// The store failed.
+pub async fn delete_graph<S: GraphStore>(
+    store: &S,
+    key: GraphKey,
+) -> Result<Option<bool>, S::Error> {
+    let Some(_lease) = store.lease(key).await? else {
+        return Ok(None);
+    };
+    store.delete(key).await.map(Some)
+}
+
+/// What [`GraphStore::import`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Imported {
+    /// The graph was saved at this revision.
+    Saved { revision: i64 },
+    /// Nothing was written: native ingestion state exists for the graph
+    /// (source status rows, document versions) and replacing it was not
+    /// asked for.
+    HasIngestionState { sources: i64, documents: i64 },
 }
 
 #[cfg(test)]

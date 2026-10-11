@@ -5,13 +5,16 @@
 //! the retrieval tools alike over the same graph.
 //!
 //! [`run`] takes a FRESH, EMPTY store and panics on the first broken
-//! promise, naming it. It uses the graphs `(1, 1)` to `(1, 8)` and
+//! promise, naming it. It uses the graphs `(1, 1)` to `(1, 11)` and
 //! `(1, 105)`, and deletes each graph it wrote.
 
 #![allow(clippy::missing_panics_doc, clippy::too_many_lines)]
 
 use crate::graph::{Citation, Graph};
-use crate::store::{Completion, DocumentState, GraphKey, GraphStore, RunCounts, SourceStatus};
+use crate::store::{
+    Completion, DocumentState, GraphKey, GraphStore, Imported, RunCounts, SourceStatus,
+    delete_graph,
+};
 use elitea_content_source::Acl;
 use elitea_content_source::acl::{Principal, PrincipalKind};
 use serde_json::{Map, json};
@@ -27,6 +30,9 @@ pub async fn run<S: GraphStore>(store: &S) {
     one_lease_holder_at_a_time(store, key(5)).await;
     ranking(store, key(6)).await;
     graphs_are_apart(store).await;
+    the_administrative_writers(store, key(9)).await;
+    the_view_holds_no_vectors(store, key(10)).await;
+    a_delete_waits_for_no_one(store, key(11)).await;
 }
 
 fn key(application_id: i64) -> GraphKey {
@@ -429,4 +435,247 @@ async fn graphs_are_apart<S: GraphStore>(store: &S) {
         1
     );
     ok("delete", store.delete(one).await);
+}
+
+/// `save`, `remove_source` and `import`: the writes that are not a run's
+/// completion. Each is one transaction that moves the revision, and each
+/// leaves exactly the state it is documented to leave.
+async fn the_administrative_writers<S: GraphStore>(store: &S, key: GraphKey) {
+    let graph = sample();
+    let documents = BTreeMap::from([("src/a.py".to_owned(), document("v1"))]);
+    let first = ok(
+        "complete",
+        commit(store, key, &graph, "repo", &documents).await,
+    );
+
+    // save: the graph is replaced, the sources' state is not touched.
+    let mut changed = graph.clone();
+    changed.add_entity("saved", "Saved", "class", None, None);
+    let saved = ok("save", store.save(key, &changed).await);
+    assert!(
+        saved > first,
+        "a save bumps the revision ({first} -> {saved})"
+    );
+    assert_eq!(ok("revision", store.revision(key).await), Some(saved));
+    let Some((loaded, _)) = ok("load", store.load(key).await) else {
+        panic!("the saved graph loads");
+    };
+    assert_same_graph(&loaded, &changed, "saved graph");
+    assert_eq!(
+        ok("versions", store.document_versions(key, "repo").await),
+        BTreeMap::from([("src/a.py".to_owned(), "v1".to_owned())]),
+        "a save keeps the document versions"
+    );
+    let status = ok("status", store.status_document(key).await);
+    assert_eq!(status["sources"]["repo"]["status"], json!("completed"));
+
+    // import: refused while native state exists, and it writes nothing.
+    let mut imported = Graph::new();
+    imported.add_entity("imp", "Imp", "class", None, None);
+    assert!(
+        matches!(
+            ok("import", store.import(key, &imported, false).await),
+            Imported::HasIngestionState {
+                sources: 1,
+                documents: 1
+            }
+        ),
+        "an import over ingestion state is refused"
+    );
+    assert_eq!(
+        ok("revision", store.revision(key).await),
+        Some(saved),
+        "a refused import writes nothing"
+    );
+    // ... and with replace_state it takes the state with the old graph.
+    let Imported::Saved { revision } = ok("import", store.import(key, &imported, true).await)
+    else {
+        panic!("an import that replaces the state is stored");
+    };
+    assert!(revision > saved, "an import bumps the revision");
+    let Some((loaded, _)) = ok("load", store.load(key).await) else {
+        panic!("the imported graph loads");
+    };
+    assert_same_graph(&loaded, &imported, "imported graph");
+    assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
+    assert_eq!(
+        ok("status", store.status_document(key).await)["sources"],
+        json!({}),
+        "replacing the state removed the sources"
+    );
+    // An import over a graph with no state needs no flag.
+    assert!(matches!(
+        ok("import", store.import(key, &graph, false).await),
+        Imported::Saved { .. }
+    ));
+
+    // remove_source: the graph without the source, and its state gone,
+    // while another source's state stays.
+    ok(
+        "complete",
+        commit(store, key, &graph, "repo", &documents).await,
+    );
+    let mirror = BTreeMap::from([("m.py".to_owned(), document("m1"))]);
+    ok(
+        "complete",
+        commit(store, key, &graph, "mirror", &mirror).await,
+    );
+    let removed_at = ok(
+        "remove_source",
+        store.remove_source(key, &graph, "repo", "repo").await,
+    );
+    assert_eq!(ok("revision", store.revision(key).await), Some(removed_at));
+    assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
+    assert_eq!(
+        ok("versions", store.document_versions(key, "mirror").await).len(),
+        1,
+        "another source's versions stay"
+    );
+    let status = ok("status", store.status_document(key).await);
+    assert!(status["sources"]["repo"].is_null(), "{status}");
+    assert!(status["sources"]["mirror"].is_object(), "{status}");
+    ok("delete", store.delete(key).await);
+}
+
+/// `load_view` is `load` without the vectors, plus the ids that have one:
+/// a non-empty vector counts, an empty one and none do not. The revision is
+/// the stored one, and the vectors stay stored (`load` and `rank` see them).
+async fn the_view_holds_no_vectors<S: GraphStore>(store: &S, key: GraphKey) {
+    assert!(
+        ok("load_view", store.load_view(key).await).is_none(),
+        "no graph, no view"
+    );
+    let mut graph = sample();
+    graph.add_entity("blank", "Blank", "class", None, None);
+    assert!(graph.set_embedding("blank", &[]));
+    // The hash of the text a vector was made from is kept with the vector;
+    // one recorded for an entity without a vector describes nothing.
+    graph.set_embedding_hash("alpha", "hash-alpha".to_owned());
+    graph.set_embedding_hash("mid", "stale".to_owned());
+    let revision = ok(
+        "complete",
+        commit(store, key, &graph, "repo", &BTreeMap::new()).await,
+    );
+    let Some(read) = ok("load_view", store.load_view(key).await) else {
+        panic!("the committed graph has a view");
+    };
+    assert_eq!(read.revision, revision, "the view reports the revision");
+    assert_eq!(
+        read.embedded,
+        vec!["alpha".to_owned()],
+        "only the non-empty vector counts"
+    );
+    assert_eq!(ids(&read.graph), ids(&graph), "node order");
+    assert_eq!(edges(&read.graph), edges(&graph), "edge order");
+    for (id, node) in graph.nodes() {
+        let mut expected = node.clone();
+        expected.remove("embedding");
+        assert_eq!(read.graph.node(id), Some(&expected), "view node {id}");
+    }
+    assert_eq!(read.graph.metadata, graph.metadata, "the stamp stays");
+    // The vectors are still stored.
+    let Some((full, _)) = ok("load", store.load(key).await) else {
+        panic!("the graph loads");
+    };
+    assert_eq!(
+        full.node("alpha").and_then(|node| node.get("embedding")),
+        Some(&json!([0.25, -0.5, 1.0, 0.125]))
+    );
+    assert_eq!(full.embedding_hash("alpha"), Some("hash-alpha"));
+    assert_eq!(full.embedding_hash("mid"), None, "no vector, no hash");
+    assert_eq!(full.embedding_hash("zeta"), None);
+    assert!(
+        !ok(
+            "rank",
+            store.rank(key, &[0.25, -0.5, 1.0, 0.125], 0.9).await
+        )
+        .unwrap_or_default()
+        .is_empty(),
+        "rank still sees the vector"
+    );
+    ok("delete", store.delete(key).await);
+}
+
+/// `delete_graph` leaves nothing of a graph, and of no other: every table's
+/// rows for the key are gone (the graph, its sources, its documents), a
+/// neighbour's are not, and it is REFUSED while a writer holds the lease,
+/// leaving the graph as it was.
+async fn a_delete_waits_for_no_one<S: GraphStore>(store: &S, key: GraphKey) {
+    let neighbour = GraphKey {
+        application_id: key.application_id + 100,
+        ..key
+    };
+    let graph = sample();
+    let documents = BTreeMap::from([
+        ("src/a.py".to_owned(), document("v1")),
+        ("docs/secret.md".to_owned(), restricted("v1")),
+    ]);
+    let revision = ok(
+        "complete",
+        commit(store, key, &graph, "repo", &documents).await,
+    );
+    ok(
+        "complete",
+        commit(store, neighbour, &graph, "repo", &documents).await,
+    );
+
+    // A writer has the graph: the delete is refused and nothing moves.
+    let Some(writer) = ok("lease", store.lease(key).await) else {
+        panic!("the lease of a free graph is granted");
+    };
+    assert_eq!(
+        ok("delete_graph", delete_graph(store, key).await),
+        None,
+        "a delete while a run holds the graph is refused"
+    );
+    assert_eq!(ok("revision", store.revision(key).await), Some(revision));
+    assert_eq!(
+        ok("versions", store.document_versions(key, "repo").await).len(),
+        2,
+        "a refused delete keeps the document versions"
+    );
+    assert_eq!(
+        ok("status", store.status_document(key).await)["sources"]["repo"]["status"],
+        json!("completed"),
+        "and the sources"
+    );
+    drop(writer);
+
+    // Free, it deletes every table's rows for the key, and the lease is
+    // released afterwards.
+    assert_eq!(
+        ok("delete_graph", delete_graph(store, key).await),
+        Some(true)
+    );
+    assert!(ok("load", store.load(key).await).is_none());
+    assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
+    assert!(ok("restricted", store.restricted_documents(key).await).is_empty());
+    assert_eq!(
+        ok("status", store.status_document(key).await)["sources"],
+        json!({})
+    );
+    assert_eq!(
+        ok("delete_graph", delete_graph(store, key).await),
+        Some(false),
+        "deleting what is gone is not an error"
+    );
+    assert!(
+        ok("lease", store.lease(key).await).is_some(),
+        "the delete released its lease"
+    );
+
+    // The neighbour is untouched.
+    let Some((kept, _)) = ok("load", store.load(neighbour).await) else {
+        panic!("deleting one graph keeps the other");
+    };
+    assert_same_graph(&kept, &graph, "the neighbour");
+    assert_eq!(
+        ok("versions", store.document_versions(neighbour, "repo").await).len(),
+        2
+    );
+    assert_eq!(
+        ok("restricted", store.restricted_documents(neighbour).await).len(),
+        1
+    );
+    ok("delete", store.delete(neighbour).await);
 }

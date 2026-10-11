@@ -18,17 +18,32 @@ option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elite
 // buf:lint:ignore SERVICE_SUFFIX
 service PlatformOperations {
   // DeleteProject removes everything the application holds for one project:
-  // for DeepWiki, the search index of every wiki of the project. It is
-  // idempotent: a project with nothing left answers an empty success.
+  // for DeepWiki, the search index of every wiki of the project; for
+  // Inventory, every graph of the project. It is idempotent: a project with
+  // nothing left answers an empty success.
   //
-  // It stops the project's running generations first and waits a bounded
-  // time for them to end. When one is still running it answers
-  // FAILED_PRECONDITION ("a generation is still running; retry") and
-  // deletes nothing; when a publish holds a wiki past the bounded wait it
-  // answers ABORTED ("being published; retry"). It deletes the application's
-  // own data only; the project's artifacts belong to the platform's project
+  // It stops the project's running generations (DeepWiki) or ingests
+  // (Inventory) first and waits a bounded time for them to end. When one is
+  // still running it answers FAILED_PRECONDITION ("a generation is still
+  // running; retry" / "an ingest is still running; retry") and deletes
+  // nothing; when a publish holds a wiki past the bounded wait it answers
+  // ABORTED ("being published; retry"). It deletes the application's own
+  // data only; the project's artifacts belong to the platform's project
   // deletion.
   rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse);
+
+  // DeleteToolkit removes what the application holds for ONE toolkit of a
+  // project: for Inventory, that toolkit's graph, when the toolkit is
+  // deleted. It is idempotent: a toolkit with no graph answers an empty
+  // success (deleted = false).
+  //
+  // It stops the toolkit's running ingests first and waits a bounded time;
+  // an ingest still running answers FAILED_PRECONDITION ("an ingest is still
+  // running; retry") and deletes nothing.
+  //
+  // An application with nothing per toolkit to delete (DeepWiki: its index is
+  // per wiki, and a wiki is deleted by its own tool) answers UNIMPLEMENTED.
+  rpc DeleteToolkit(DeleteToolkitRequest) returns (DeleteToolkitResponse);
 }
 
 message DeleteProjectRequest {
@@ -48,6 +63,33 @@ message DeleteProjectResponse {
   // Problems that did not stop the deletion, one human-readable line each.
   // Empty on a clean deletion.
   repeated string errors = 5;
+  // Inventory: the toolkits whose graph was deleted, and what the deletion
+  // removed in all. Empty for an application that has no graphs.
+  repeated int64 graph_toolkit_ids = 6;
+  GraphDeletion graphs = 7;
+}
+
+message DeleteToolkitRequest {
+  // The platform project id; a positive integer.
+  int32 project_id = 1;
+  // The toolkit (application) id within the project; a positive integer.
+  int32 toolkit_id = 2;
+}
+
+message DeleteToolkitResponse {
+  int32 project_id = 1;
+  int32 toolkit_id = 2;
+  // False when the toolkit had no graph, so there was nothing to delete.
+  bool deleted = 3;
+  GraphDeletion removed = 4;
+}
+
+// GraphDeletion is what the deletion of Inventory graphs removed.
+message GraphDeletion {
+  int64 entities = 1;
+  int64 relations = 2;
+  int64 sources = 3;
+  int64 documents = 4;
 }
 
 // WikiDeletion is what one wiki's deletion removed.

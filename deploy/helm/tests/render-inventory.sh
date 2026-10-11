@@ -354,6 +354,40 @@ else
   fail "the chart refuses an install cmd/elitea-main supports: an empty callback origin mounts the facade WITHOUT source expansion and logs which of the two it built"
 fi
 
+# ── The platform gRPC service (elitea.subapp.v1.PlatformOperations) ─────────
+#
+# Graph deletion for a deleted toolkit and a deleted project (issue #1244).
+# Off (every render above): no port, no env, nothing exposed. On: a second
+# listener, its allowlist and address in the HOST container's environment (not
+# the engine's), a Service port, and a NetworkPolicy rule that admits
+# elitea-main only. Refused: the allowlist without mutual TLS, a port that
+# collides with the SPI's, and the two settings written by hand.
+
+echo "== the platform gRPC service is off unless clients are named =="
+expect() { # expect <what> <got> <want>
+  if [ "$2" = "$3" ]; then note "$1"; else fail "$1: got '$2', want '$3'"; fi
+}
+expect "off: no gRPC container port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-inventory") | .spec.template.spec.containers[0].ports[].name' - | tr '\n' ' ')" "http "
+expect "off: no gRPC env" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-inventory") | .spec.template.spec.containers[].env[].name' - | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
+expect "off: the Service exposes the SPI only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[].name' - | tr '\n' ' ')" "https "
+expect "the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress | length' -)" "1"
+
+echo "== the platform gRPC service is configured, exposed and admitted together =="
+grpc="$(render $COMPLETE --set 'inventory.platformGrpc.clients={elitea-main,elitea-main.ns.svc}' --set inventory.platformGrpc.port=9555)" \
+  || fail "the platform gRPC service does not render: $grpc"
+gp() { printf '%s' "$grpc" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-inventory\") | $1" -; }
+expect "gRPC container port" "$(gp '.spec.template.spec.containers[0].ports[] | select(.name == "platform-grpc") | .containerPort')" "9555"
+expect "gRPC allowlist" "$(gp '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_PLATFORM_CLIENTS") | .value')" "elitea-main,elitea-main.ns.svc"
+expect "gRPC address" "$(gp '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") | .value')" ":9555"
+expect "the engine container gets neither" "$(gp '.spec.template.spec.containers[1].env[].name' | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
+expect "the Service port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | select(.name == "platform-grpc") | .port' -)" "9555"
+expect "the Service targets the named port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | select(.name == "platform-grpc") | .targetPort' -)" "platform-grpc"
+expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "8080 9555 "
+expect "NetworkPolicy peers on the gRPC port: elitea-main only" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[] | select(.ports[0].port == 9555) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | tr '\n' ' ')" "elitea-main "
+refuses "platform clients without mutual TLS" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.mtls.enabled=false
+refuses "a platform port that is the SPI's" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.platformGrpc.port=8080
+refuses "the platform env set by hand beside the values" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.env.ELITEA_INVENTORY_PLATFORM_CLIENTS=elitea-main
+
 if [ "$failures" -ne 0 ]; then
   echo "render-inventory: $failures assertion(s) failed" >&2
   exit 1

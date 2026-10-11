@@ -29,7 +29,8 @@
 //! writes the endpoint there again.
 
 use crate::graph::Graph;
-use crate::store::{self, GraphKey, Imported, sources};
+use crate::store::{self, GraphKey, PgGraphStore};
+use elitea_inventory_core::store::{GraphStore as _, Imported};
 use serde_json::Value;
 use sqlx::postgres::PgPool;
 
@@ -124,12 +125,13 @@ pub async fn import_graph(
     replace_state: bool,
 ) -> Result<ImportReport, TransferError> {
     let graph = parse_document(text)?;
-    let Some(_lease) = sources::lease(pool, key).await? else {
+    let graphs = PgGraphStore::new(pool.clone());
+    let Some(_lease) = graphs.lease(key).await? else {
         return Err(TransferError::Refused(
             "an ingestion of this Inventory toolkit is running; import when it finishes".to_owned(),
         ));
     };
-    match store::import(pool, key, &graph, replace_state).await? {
+    match graphs.import(key, &graph, replace_state).await? {
         Imported::Saved { revision } => Ok(ImportReport {
             entities: graph.node_count(),
             relations: graph.edge_count(),

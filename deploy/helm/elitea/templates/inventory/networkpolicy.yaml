@@ -1,0 +1,49 @@
+{{- if and .Values.inventory.enabled .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+{{- $grpc := include "elitea-inventory.platformGrpc" . }}
+# Ingress to the Inventory provider pods. elitea-main is the only door
+# (ADR-0022 decision 5): the provider trusts a client certificate from the
+# internal CA, and this policy keeps every other pod from even attempting the
+# handshake.
+#
+#   8080 (http)         the SPI, over mutual TLS: elitea-main's facade.
+{{- if $grpc }}
+#   {{ .Values.inventory.platformGrpc.port }} (platform-grpc)  the platform service
+#                       (inventory.platformGrpc): elitea-main, and only the
+#                       identities in platformGrpc.clients may call it.
+{{- end }}
+#
+# The engine sidecar has no port: it answers on a Unix socket in the pod.
+# Kubelet probes are not subject to the policy on the CNIs this chart is tested
+# with; networkPolicies.probeFrom is for those that apply it to them. Egress is
+# not restricted here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-inventory.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-inventory.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-inventory.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+      from:
+        {{- include "elitea.netpol.mainPeer" . | nindent 8 }}
+        {{- with $np.probeFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    {{- if $grpc }}
+    - ports:
+        - port: {{ .Values.inventory.platformGrpc.port }}
+          protocol: TCP
+      from:
+        {{- include "elitea.netpol.mainPeer" . | nindent 8 }}
+    {{- end }}
+{{- end }}

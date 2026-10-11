@@ -67,17 +67,23 @@ func EngineTools() []string {
 // would look like an egress control while being none.
 func NewEngineRunner(settings spi.Settings) *Runner {
 	client := NewEngineClient(settings.EngineSocket)
+	call := func(name string) Tool {
+		return func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
+			return client.Invoke(ctx, name, arguments, tc)
+		}
+	}
 	tools := map[string]Tool{}
 	for _, name := range EngineTools() {
-		tool := name
-		tools[tool] = func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
-			return client.Invoke(ctx, tool, arguments, tc)
-		}
+		tools[name] = call(name)
 	}
 	return &Runner{
 		RunnerName: "sidecar",
 		Tools:      tools,
-		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
+		// The graph deletions are the platform service's alone (platform.go);
+		// they are not in Tools.
+		DeleteGraph:         call(DeleteGraphTool),
+		DeleteProjectGraphs: call(DeleteProjectGraphsTool),
+		Artifacts:           ArtifactClientFrom(settings.CallbackCA()),
 		// The native engine keys every graph by the project: only the
 		// verified identity may name it (see Runner.RequireVerifiedProject).
 		RequireVerifiedProject: true,

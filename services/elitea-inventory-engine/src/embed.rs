@@ -6,11 +6,17 @@
 //! the dimension, which retrieval later checks before comparing a query's
 //! vector with the graph's.
 //!
-//! One difference, deliberately: when the graph is stamped with another
-//! model than this run's, every entity is embedded again. The Python step
-//! skipped every entity that already had a vector, so a changed model left
-//! old vectors in one space and new ones in another, and the stamp named
-//! only the new one.
+//! Two differences, deliberately:
+//!
+//! * when the graph is stamped with another model than this run's, every
+//!   entity is embedded again. The Python step skipped every entity that
+//!   already had a vector, so a changed model left old vectors in one space
+//!   and new ones in another, and the stamp named only the new one.
+//! * an entity whose composed text changed since its vector was made is
+//!   embedded again. The graph records a hash of that text beside the
+//!   vector ([`text_hash`]); Python kept the old vector for good. An entity
+//!   with a vector and no recorded hash (embedded before the hash existed)
+//!   is embedded once more, which records it.
 
 use crate::graph::Graph;
 use elitea_engine_core::errors::EngineError;
@@ -22,7 +28,7 @@ use serde_json::{Value, json};
 // the shared core (ADR-0029 decision 7); re-exported so every path in this
 // crate stays the same.
 pub use elitea_inventory_core::embed::{
-    DIMENSION_KEY, MODEL_KEY, QUERY_TASK, compose_text, instruction_tuned, query_text,
+    DIMENSION_KEY, MODEL_KEY, QUERY_TASK, compose_text, instruction_tuned, query_text, text_hash,
 };
 
 /// An `f32` from the gateway as the decimal it was sent as (`0.1`, not
@@ -57,26 +63,30 @@ pub async fn embed_graph(
     let rebuild = stamped.is_some_and(|stamped| stamped != model);
     let mut ids = Vec::new();
     let mut texts = Vec::new();
+    let mut hashes = Vec::new();
     for (id, node) in graph.nodes() {
-        if !rebuild && has_vector(node) {
-            continue;
-        }
         let text = compose_text(node);
         if text.is_empty() {
             continue;
         }
+        let hash = text_hash(&text);
+        if !rebuild && has_vector(node) && graph.embedding_hash(id) == Some(hash.as_str()) {
+            continue;
+        }
         ids.push(id.to_owned());
         texts.push(text);
+        hashes.push(hash);
     }
     if ids.is_empty() {
         return Ok(0);
     }
     let vectors = client.embed_documents(&texts, stop).await?;
     let mut dimension = None;
-    for (id, vector) in ids.iter().zip(vectors) {
+    for ((id, hash), vector) in ids.iter().zip(hashes).zip(vectors) {
         dimension = Some(vector.len());
         let widened: Vec<f64> = vector.into_iter().map(widen).collect();
         graph.set_embedding(id, &widened);
+        graph.set_embedding_hash(id, hash);
     }
     graph.metadata.insert(MODEL_KEY.to_owned(), json!(model));
     if let Some(dimension) = dimension.or_else(|| client.dimension()) {

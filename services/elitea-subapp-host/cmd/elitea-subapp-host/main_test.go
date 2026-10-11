@@ -354,6 +354,75 @@ func TestThePlatformServiceIsOffWithoutClientsAndOnBehindMutualTLS(t *testing.T)
 	}
 }
 
+// Inventory serves the same platform service on its own prefix, and its runner
+// adds DeleteToolkit (DeepWiki answers it Unimplemented).
+func TestInventoryServesTheGraphDeletionsOnItsOwnPrefix(t *testing.T) {
+	p := mintPKI(t)
+	addr := freeAddr(t)
+	app, settings, err := compose(lookup(map[string]string{
+		"ELITEA_SUBAPP": "inventory", "ELITEA_INVENTORY_RUNNER": "sidecar",
+		"ELITEA_INVENTORY_ENGINE_SOCKET": filepath.Join(t.TempDir(), "none.sock"),
+		"ELITEA_INVENTORY_TLS_CERTFILE":  p.serverCert, "ELITEA_INVENTORY_TLS_KEYFILE": p.serverKey, "ELITEA_INVENTORY_TLS_CA_FILE": p.ca,
+		"ELITEA_INVENTORY_PLATFORM_CLIENTS": "client", "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR": addr,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.PlatformClients; len(got) != 1 || got[0] != "client" || settings.PlatformGRPCAddr != addr {
+		t.Fatalf("settings: %v %q", got, settings.PlatformGRPCAddr)
+	}
+	server, err := spi.NewServer(settings, app, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsConfig, err := listenerTLS(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform, err := startPlatformGRPC(server, settings, tlsConfig, nil, make(chan error, 2))
+	if err != nil || platform == nil {
+		t.Fatalf("%v %v", platform, err)
+	}
+	defer platform.Stop()
+
+	caPEM, _ := os.ReadFile(p.ca)
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	clientPair, _ := tls.LoadX509KeyPair(p.clientCert, p.clientKey)
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(
+		&tls.Config{RootCAs: roots, Certificates: []tls.Certificate{clientPair}, MinVersion: tls.VersionTLS12})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := subappv1.NewPlatformOperationsClient(conn)
+	// The allowed client reaches both operations; the engine is not running,
+	// so they FAIL (not Unauthenticated, not PermissionDenied, and for
+	// DeleteToolkit not Unimplemented).
+	if _, err := client.DeleteToolkit(ctx, &subappv1.DeleteToolkitRequest{ProjectId: 7, ToolkitId: 70}); status.Code(err) != codes.Internal {
+		t.Fatalf("DeleteToolkit: %v", err)
+	}
+	if _, err := client.DeleteProject(ctx, &subappv1.DeleteProjectRequest{ProjectId: 7}); status.Code(err) != codes.Internal {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+
+	// With no clients, the service is off.
+	app, settings, err = compose(lookup(map[string]string{
+		"ELITEA_SUBAPP": "inventory", "ELITEA_INVENTORY_RUNNER": "sidecar",
+		"ELITEA_INVENTORY_ENGINE_SOCKET":      filepath.Join(t.TempDir(), "none.sock"),
+		"ELITEA_INVENTORY_PLATFORM_GRPC_ADDR": freeAddr(t),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	off, _ := spi.NewServer(settings, app, nil)
+	if platform, err := startPlatformGRPC(off, settings, nil, nil, make(chan error, 2)); err != nil || platform != nil {
+		t.Fatalf("with no clients: %v %v", platform, err)
+	}
+}
+
 func freeAddr(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

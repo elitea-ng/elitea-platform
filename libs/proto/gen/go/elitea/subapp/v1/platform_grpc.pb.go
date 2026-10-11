@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	PlatformOperations_DeleteProject_FullMethodName = "/elitea.subapp.v1.PlatformOperations/DeleteProject"
+	PlatformOperations_DeleteToolkit_FullMethodName = "/elitea.subapp.v1.PlatformOperations/DeleteToolkit"
 )
 
 // PlatformOperationsClient is the client API for PlatformOperations service.
@@ -40,17 +41,31 @@ const (
 // buf:lint:ignore SERVICE_SUFFIX
 type PlatformOperationsClient interface {
 	// DeleteProject removes everything the application holds for one project:
-	// for DeepWiki, the search index of every wiki of the project. It is
-	// idempotent: a project with nothing left answers an empty success.
+	// for DeepWiki, the search index of every wiki of the project; for
+	// Inventory, every graph of the project. It is idempotent: a project with
+	// nothing left answers an empty success.
 	//
-	// It stops the project's running generations first and waits a bounded
-	// time for them to end. When one is still running it answers
-	// FAILED_PRECONDITION ("a generation is still running; retry") and
-	// deletes nothing; when a publish holds a wiki past the bounded wait it
-	// answers ABORTED ("being published; retry"). It deletes the application's
-	// own data only; the project's artifacts belong to the platform's project
+	// It stops the project's running generations (DeepWiki) or ingests
+	// (Inventory) first and waits a bounded time for them to end. When one is
+	// still running it answers FAILED_PRECONDITION ("a generation is still
+	// running; retry" / "an ingest is still running; retry") and deletes
+	// nothing; when a publish holds a wiki past the bounded wait it answers
+	// ABORTED ("being published; retry"). It deletes the application's own
+	// data only; the project's artifacts belong to the platform's project
 	// deletion.
 	DeleteProject(ctx context.Context, in *DeleteProjectRequest, opts ...grpc.CallOption) (*DeleteProjectResponse, error)
+	// DeleteToolkit removes what the application holds for ONE toolkit of a
+	// project: for Inventory, that toolkit's graph, when the toolkit is
+	// deleted. It is idempotent: a toolkit with no graph answers an empty
+	// success (deleted = false).
+	//
+	// It stops the toolkit's running ingests first and waits a bounded time;
+	// an ingest still running answers FAILED_PRECONDITION ("an ingest is still
+	// running; retry") and deletes nothing.
+	//
+	// An application with nothing per toolkit to delete (DeepWiki: its index is
+	// per wiki, and a wiki is deleted by its own tool) answers UNIMPLEMENTED.
+	DeleteToolkit(ctx context.Context, in *DeleteToolkitRequest, opts ...grpc.CallOption) (*DeleteToolkitResponse, error)
 }
 
 type platformOperationsClient struct {
@@ -65,6 +80,16 @@ func (c *platformOperationsClient) DeleteProject(ctx context.Context, in *Delete
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteProjectResponse)
 	err := c.cc.Invoke(ctx, PlatformOperations_DeleteProject_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *platformOperationsClient) DeleteToolkit(ctx context.Context, in *DeleteToolkitRequest, opts ...grpc.CallOption) (*DeleteToolkitResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteToolkitResponse)
+	err := c.cc.Invoke(ctx, PlatformOperations_DeleteToolkit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -89,17 +114,31 @@ func (c *platformOperationsClient) DeleteProject(ctx context.Context, in *Delete
 // buf:lint:ignore SERVICE_SUFFIX
 type PlatformOperationsServer interface {
 	// DeleteProject removes everything the application holds for one project:
-	// for DeepWiki, the search index of every wiki of the project. It is
-	// idempotent: a project with nothing left answers an empty success.
+	// for DeepWiki, the search index of every wiki of the project; for
+	// Inventory, every graph of the project. It is idempotent: a project with
+	// nothing left answers an empty success.
 	//
-	// It stops the project's running generations first and waits a bounded
-	// time for them to end. When one is still running it answers
-	// FAILED_PRECONDITION ("a generation is still running; retry") and
-	// deletes nothing; when a publish holds a wiki past the bounded wait it
-	// answers ABORTED ("being published; retry"). It deletes the application's
-	// own data only; the project's artifacts belong to the platform's project
+	// It stops the project's running generations (DeepWiki) or ingests
+	// (Inventory) first and waits a bounded time for them to end. When one is
+	// still running it answers FAILED_PRECONDITION ("a generation is still
+	// running; retry" / "an ingest is still running; retry") and deletes
+	// nothing; when a publish holds a wiki past the bounded wait it answers
+	// ABORTED ("being published; retry"). It deletes the application's own
+	// data only; the project's artifacts belong to the platform's project
 	// deletion.
 	DeleteProject(context.Context, *DeleteProjectRequest) (*DeleteProjectResponse, error)
+	// DeleteToolkit removes what the application holds for ONE toolkit of a
+	// project: for Inventory, that toolkit's graph, when the toolkit is
+	// deleted. It is idempotent: a toolkit with no graph answers an empty
+	// success (deleted = false).
+	//
+	// It stops the toolkit's running ingests first and waits a bounded time;
+	// an ingest still running answers FAILED_PRECONDITION ("an ingest is still
+	// running; retry") and deletes nothing.
+	//
+	// An application with nothing per toolkit to delete (DeepWiki: its index is
+	// per wiki, and a wiki is deleted by its own tool) answers UNIMPLEMENTED.
+	DeleteToolkit(context.Context, *DeleteToolkitRequest) (*DeleteToolkitResponse, error)
 	mustEmbedUnimplementedPlatformOperationsServer()
 }
 
@@ -112,6 +151,9 @@ type UnimplementedPlatformOperationsServer struct{}
 
 func (UnimplementedPlatformOperationsServer) DeleteProject(context.Context, *DeleteProjectRequest) (*DeleteProjectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteProject not implemented")
+}
+func (UnimplementedPlatformOperationsServer) DeleteToolkit(context.Context, *DeleteToolkitRequest) (*DeleteToolkitResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteToolkit not implemented")
 }
 func (UnimplementedPlatformOperationsServer) mustEmbedUnimplementedPlatformOperationsServer() {}
 func (UnimplementedPlatformOperationsServer) testEmbeddedByValue()                            {}
@@ -152,6 +194,24 @@ func _PlatformOperations_DeleteProject_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PlatformOperations_DeleteToolkit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteToolkitRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlatformOperationsServer).DeleteToolkit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlatformOperations_DeleteToolkit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlatformOperationsServer).DeleteToolkit(ctx, req.(*DeleteToolkitRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PlatformOperations_ServiceDesc is the grpc.ServiceDesc for PlatformOperations service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -162,6 +222,10 @@ var PlatformOperations_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteProject",
 			Handler:    _PlatformOperations_DeleteProject_Handler,
+		},
+		{
+			MethodName: "DeleteToolkit",
+			Handler:    _PlatformOperations_DeleteToolkit_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

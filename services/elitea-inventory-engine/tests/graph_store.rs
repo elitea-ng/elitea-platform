@@ -187,7 +187,9 @@ async fn database(name: &str) -> Option<PgPool> {
     let applied = store::migrate(&pool).await.expect("migrate");
     assert_eq!(
         applied,
-        ["0001", "0002", "0003", "0004"].map(str::to_owned).to_vec()
+        ["0001", "0002", "0003", "0004", "0005"]
+            .map(str::to_owned)
+            .to_vec()
     );
     Some(pool)
 }
@@ -341,7 +343,7 @@ async fn migrating_twice_applies_nothing_the_second_time() {
     .fetch_all(&pool)
     .await
     .expect("ledger");
-    assert_eq!(ledger, ["0001", "0002", "0003", "0004"]);
+    assert_eq!(ledger, ["0001", "0002", "0003", "0004", "0005"]);
 }
 
 /// The shared `GraphStore` contract (libs/rust/inventory-core
@@ -380,4 +382,83 @@ async fn the_view_cache_reloads_when_the_revision_moves() {
     assert_eq!(fresh.revision, second);
     assert!(store::delete(&pool, key).await.expect("delete"));
     assert!(views.view(key).await.expect("view").is_none());
+}
+
+/// The cached view holds no vectors (they are most of a graph's bytes),
+/// and nothing a reader sees changes: `get_stats` answers what the view of
+/// the full graph answers, and `rank` still ranks over the stored vectors.
+#[tokio::test]
+async fn the_cached_view_holds_no_vectors_and_the_answers_do_not_change() {
+    use elitea_inventory_core::store::GraphStore as _;
+    use elitea_inventory_engine::retrieval::{Call, ViewCache, dispatch, view::GraphView};
+    let Some(pool) = database("view_vectors").await else {
+        return;
+    };
+    let key = key(1, 1);
+    let mut graph = replay();
+    let ids: Vec<String> = graph.nodes().map(|(id, _)| id.to_owned()).collect();
+    assert!(ids.len() > 3, "the replayed graph has entities");
+    for (index, id) in ids.iter().take(3).enumerate() {
+        let hot = f64::from(u8::try_from(index).expect("small"));
+        assert!(graph.set_embedding(id, &[1.0, hot, 0.5, 0.25]));
+    }
+    // An empty vector is not an embedding, as `get_stats` always counted it.
+    assert!(graph.set_embedding(&ids[3], &[]));
+    graph
+        .metadata
+        .insert("embeddings_model".to_owned(), json!("text-embed-x"));
+    graph
+        .metadata
+        .insert("embeddings_dimension".to_owned(), json!(4));
+    store::save(&pool, key, &graph).await.expect("save");
+
+    let views = ViewCache::new(store::PgGraphStore::new(pool.clone()));
+    let cached = views.view(key).await.expect("view").expect("a graph");
+    assert!(
+        cached
+            .graph
+            .nodes()
+            .all(|(_, node)| !node.contains_key("embedding")),
+        "no vector in the view"
+    );
+    assert_eq!(cached.embedded_count(), 3);
+    assert!(cached.has_embeddings());
+    assert!(cached.is_embedded(&ids[0]) && !cached.is_embedded(&ids[3]));
+
+    // The stats are those of the view that holds every vector.
+    let (stored, revision) = store::load(&pool, key).await.expect("load").expect("graph");
+    let full = GraphView::new(stored, revision);
+    let mut params = Map::new();
+    params.insert("output_format".to_owned(), json!("json"));
+    let stats = |view: &GraphView| {
+        dispatch(&Call {
+            tool: "get_stats",
+            family: "inventory",
+            params: &params,
+            view,
+        })
+        .expect("served")
+        .expect("answers")
+    };
+    assert_eq!(stats(&cached), stats(&full));
+    assert_eq!(
+        stats(&cached)["result"]
+            .as_str()
+            .map(|text| text.contains("\"embeddings_count\": 3")
+                && text.contains("\"has_embeddings\": true")),
+        Some(true),
+        "{}",
+        stats(&cached)
+    );
+
+    // The vectors are stored: rank compares them there.
+    let ranked = store::PgGraphStore::new(pool.clone())
+        .rank(key, &[1.0, 0.0, 0.5, 0.25], 0.99)
+        .await
+        .expect("rank")
+        .expect("same width");
+    assert_eq!(
+        ranked.first().map(|(id, _)| id.as_str()),
+        Some(ids[0].as_str())
+    );
 }

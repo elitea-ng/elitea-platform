@@ -1522,6 +1522,17 @@ services:
       ELITEA_INVENTORY_IDENTITY_SECRET: "standalone-inventory-identity"
       ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
       ELITEA_INVENTORY_SERVICE_LOCATION_URL: "https://elitea-inventory:8080"
+      # The platform gRPC service (elitea.subapp.v1.PlatformOperations):
+      # deleting an Inventory toolkit's graph and a project's graphs (issue
+      # #1244), authorised by the verified client certificate alone. The
+      # certificate elitea-main presents is CN=elitea-main
+      # (gen-inventory-certs.sh). A second listener behind the same TLS
+      # configuration, reachable on the compose network only (no published
+      # port). Remove PLATFORM_CLIENTS to turn the service off.
+      ELITEA_INVENTORY_PLATFORM_CLIENTS: "elitea-main"
+      ELITEA_INVENTORY_PLATFORM_GRPC_ADDR: ":9443"
+    expose:
+      - "9443"
     volumes:
       - inventory-engine-sock:/run/inventory
       - ./certs/inventory-server.crt:/certs/inventory-server.crt:ro

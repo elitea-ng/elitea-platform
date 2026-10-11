@@ -32,13 +32,14 @@ pub use elitea_inventory_core::ingest::{
 
 use crate::extract;
 use crate::graph::Graph;
-use crate::store::sources::{self as source_store, Completion, RunCounts, SourceStatus};
-use crate::store::{self, GraphKey, StoreError};
+use crate::store::sources::{Completion, RunCounts, SourceStatus};
+use crate::store::{GraphKey, PgGraphStore, StoreError};
 use elitea_content_source::ContentSource;
 use elitea_content_source::git::GitSource;
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::Context;
 use elitea_inventory_core::ingest as core;
+use elitea_inventory_core::store::GraphStore as _;
 use elitea_repo_ingest::IngestSettings;
 use source::Source;
 use sqlx::postgres::PgPool;
@@ -436,10 +437,9 @@ pub async fn run(
     options: &RunOptions,
     context: &Context,
 ) -> Result<Outcome, EngineError> {
-    let Some(_lease) = source_store::lease(pool, key)
-        .await
-        .map_err(|e| store_error(&e))?
-    else {
+    // Every store access of a run goes through the `GraphStore` trait.
+    let graphs = PgGraphStore::new(pool.clone());
+    let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
         return Err(EngineError::new(
             ErrorType::Runtime,
             "another ingestion of this Inventory toolkit is running; wait for it to finish",
@@ -460,15 +460,15 @@ pub async fn run(
     // all. The rebuild is scoped to the source run_ingestion names: Python
     // deleted the whole graph.json, every other source's entities,
     // relations and state with it.
-    source_store::start(pool, key, &status)
+    graphs
+        .start(key, &status)
         .await
         .map_err(|e| store_error(&e))?;
-    let outcome = run_started(pool, key, source, settings, options, context).await;
+    let outcome = run_started(&graphs, key, source, settings, options, context).await;
     if let Err(error) = &outcome {
         // The run's own error is what the caller sees; a failure to record
         // it as well is only logged.
-        if let Err(store) = source_store::fail(pool, key, &status.toolkit_id, &error.message).await
-        {
+        if let Err(store) = graphs.fail(key, &status.toolkit_id, &error.message).await {
             tracing::warn!(%store, "the failed ingestion's status was not recorded");
         }
     }
@@ -514,7 +514,7 @@ async fn clone(
 }
 
 async fn run_started(
-    pool: &PgPool,
+    graphs: &PgGraphStore,
     key: GraphKey,
     source: &Source,
     settings: &IngestSettings,
@@ -527,7 +527,8 @@ async fn run_started(
         source.kind.name(),
         source.name
     ));
-    let mut graph = store::load(pool, key)
+    let mut graph = graphs
+        .load(key)
         .await
         .map_err(|e| store_error(&e))?
         .map(|(graph, _)| graph)
@@ -539,7 +540,8 @@ async fn run_started(
         graph.remove_source(&source.name);
         BTreeMap::new()
     } else {
-        source_store::document_versions(pool, key, &source.name)
+        graphs
+            .document_versions(key, &source.name)
             .await
             .map_err(|e| store_error(&e))?
     };
@@ -598,7 +600,8 @@ async fn run_started(
     };
     // A rebuild commits as any run does: the graph, and this source's
     // documents (all replaced) and status.
-    source_store::complete(pool, key, &graph, &completion)
+    graphs
+        .complete(key, &graph, &completion)
         .await
         .map_err(|e| store_error(&e))?;
     context.thinking(format!(
