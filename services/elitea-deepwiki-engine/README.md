@@ -36,7 +36,7 @@ are absent or meaningless. Generation is model-bound on both. The harness is
 ## The socket protocol
 
 The server is the shared crate `libs/rust/engine-sidecar` (ADR-0027): this
-engine's `runner::Runner` implements its `Engine` trait (the four tools in
+engine's `runner::Runner` implements its `Engine` trait (the six tools in
 `ENGINE_TOOLS`, and the `generate_wiki` publish hook), and the crate owns
 the protocol below.
 
@@ -45,10 +45,17 @@ POST /engine/invoke                  {invocation_id, tool, arguments}
   → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,
     then {"result": {…}} | {"error": {message, error_type, error_category}}
 POST /engine/invocations/{id}/stop   a cooperative stop → 202 {"stopped": bool}
-GET  /engine/health                  {"status": "UP", "runner": …, "active": n}
+GET  /engine/health                  {"status": "UP", "runner": …, "active": n, "tools": […]}
 ```
 
-Tools: `generate_wiki`, `ask`, `deep_research`, `resolve_wiki`.
+`tools` lists the tools this engine serves (`runner::ENGINE_TOOLS`). The host
+reads it at start and every minute and decides from it what the engine can do
+(a newer host against an older engine during a rolling deploy: an engine whose
+list lacks `delete_wiki_index` is not asked for it). An engine of a release
+from before the field has no `tools`; the host then tries the call and
+recognises the refusal.
+
+Tools: `generate_wiki`, `ask`, `deep_research`, `resolve_wiki`, and the two index deletions `delete_wiki_index` (`wiki_id`) and `delete_project_wikis` (the host exposes the second only on its mTLS gRPC platform service, never as a toolkit tool; see [Deleting an index](#deleting-an-index)). Both read the project from the host's reserved `_elitea_project_id` argument and nothing else.
 
 The wire is the retired Python sidecar's wherever the host can see it:
 
@@ -688,7 +695,7 @@ replica must use the same number); set `statement_timeout`
 publishes take together); upsert the `wikis` row (`registry_from_result`'s
 fields; an absent field keeps the stored value), refuse an empty build,
 delete the wiki's live rows of THIS project, `INSERT … SELECT` nodes, edges and vectors,
-write both `wiki_bm25_*` branches, delete the build, commit. A reader sees
+write the `wiki_bm25_*` statistics of the `'fts'` branch, delete the build, commit. A reader sees
 the old index or the new one. After the commit the live tables are
 `ANALYZE`d one by one, best effort, each with a short `lock_timeout`
 (`…_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS`, default 5): a table that another
@@ -699,12 +706,30 @@ strict-parsed.
 `publish` takes `&mut self`: on an error the transaction rolled back, the
 build keeps its rows and its heartbeat, and the caller retries the publish
 (a timeout, a lost connection), stages more and retries, or calls
-`abandon`. After a success the build is gone. The BM25 statistics are `publish.py`'s: the `'bm25'` branch from
-Python `str.split()` tokens of the document text (tokenised in Rust while
-staging, because a PostgreSQL regular expression is not Python's
-whitespace), k1 1.5, b 0.75; the `'fts'` branch from the lexemes and
-position counts of the published tsvectors, k1 1.2, b 0.75; a document
-without tokens takes no `doc_idx`.
+`abandon`. After a success the build is gone. The BM25 statistics are the `'fts'` branch only:
+the lexemes and position counts of the published tsvectors, k1 1.2, b 0.75;
+a document without tokens takes no `doc_idx`. (The legacy standalone `'bm25'`
+branch, `str.split()` tokens with k1 1.5, was written on every publish and
+read only by the parity tool and the tests. It is no longer written or
+searched. Migration 0007 is a no-op; the engine removes its rows in the
+background (`storage::cleanup`: wiki by wiki, from `wiki_bm25_meta`'s list,
+through the primary key in batches of 10 000 rows with a pause, at start and
+then hourly until two passes in a row are QUIET: removed nothing AND an
+`EXISTS` that ignores row locks finds no `'bm25'` row left, so rows a publish
+holds locked keep the task going). The build space's
+`bm25_docs` / `bm25_postings` staging tables stay, empty, because a replica
+of the previous release may still write them during a rolling deploy.)
+
+The publish also records the embedding model and dimension on the `wikis`
+row (migration 0006, `embedding_model` / `embedding_dim`; NULL for a wiki
+published before it, or by a build that embedded nothing), so that `ask` can
+read the model from the wiki (ADR-0031 decision 6). `ask` embeds the question
+with the recorded model (a different model named by the caller is refused). The
+model is chosen from one read of the row and checked again INSIDE the dense
+search's own `REPEATABLE READ` snapshot (a scalar subquery on the same
+statement, no extra round trip): a wiki republished with another model in
+between is refused ("re-indexed with the embedding model …; ask again") instead
+of being ranked by a distance between vectors of different spaces.
 
 **Reconciliation.** `ELITEA_DEEPWIKI_BUILD_OWNER` (default `HOSTNAME`, the
 pod name) is the owner a build is recorded under, together with the boot id
@@ -728,12 +753,64 @@ swept build cannot heartbeat, stage or publish.
 **Read path** (`storage::search`, `storage::adapter`). Ports of
 `PostgresBackend`'s searches with the same SQL — dense exact `<->` (no HNSW
 index), the folded `plainto_tsquery` FTS ranked by the `'fts'` statistics
-and negated, BM25 from the `'bm25'` statistics — and of `base.rrf_fuse`
+and negated — and of `base.rrf_fuse`
 (weights 0.4 / 0.6, k 60, pools of 30, stable on ties). `UnifiedDb` is
 `PostgresUnifiedDB`: `search_hybrid`, `get_node`, `get_nodes_by_ids`,
 `get_edges_from`, `get_edges_to`, `vec_available`, `get_meta`, with the
 legacy row shapes. Every multi-statement read runs in one `REPEATABLE READ
 READ ONLY` transaction.
+
+### Deleting an index
+
+Issue #1243, ADR-0031 phase D0. Before it nothing deleted a wiki's rows: the
+host's `delete_wiki` removed the artifact objects and the index stayed.
+`storage::delete` and the two tools in `runner::maintenance`:
+
+- `delete_wiki_index` deletes one `(project_id, wiki_id)`: the `wikis` row and
+  every row of `wiki_nodes`, `wiki_edges`, `wiki_node_embeddings` and
+  `wiki_bm25_*`, in ONE transaction that first takes the publish's per-wiki
+  advisory lock (`elitea_deepwiki.publish_wiki`). It queues behind a publish
+  of that wiki and a publish queues behind it, so the wiki ends whole or
+  absent, never half. The queue is BOUNDED: past
+  `ELITEA_DEEPWIKI_PUBLISH_DELETE_LOCK_WAIT_SECONDS` (default 30) the tool
+  answers "wiki … is being published … retry the deletion" and deletes
+  nothing. A stop of the invocation (the host cancelled it, or its reader
+  went away) cancels the transaction in the database too, so a deletion never
+  waits on a lock for a caller that left. Deleting a wiki that is not indexed
+  succeeds with `deleted: false`. A generation that is still running is not
+  touched (its build row is locked by a publish and deleting it would
+  deadlock on the advisory lock); the host stops the wiki's or project's
+  `generate_wiki` invocations and waits for them before it asks for the
+  deletion, otherwise their publish brings the wiki back.
+- `delete_project_wikis` deletes every wiki of the stamped project, one
+  transaction per wiki (a project can hold thousands, and one transaction
+  would hold as many advisory locks), listing again until none is left; if
+  the round cap is hit it fails naming how many wikis remain. It deletes only
+  builds whose heartbeat is stale (older than `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS`);
+  a live build belongs to a running generation, whose publish afterwards
+  recreates its wiki (publish is an upsert and the engine cannot know the
+  project is gone), so the caller stops a project's generations first.
+  Idempotent: call it again after a failure. It answers the per-wiki row
+  counts (`per_wiki`), the builds removed and the live builds left. The host
+  reaches it through the gRPC service `elitea.subapp.v1.PlatformOperations`
+  (`DeleteProject`; mTLS client certificate of elitea-main matched against
+  `ELITEA_DEEPWIKI_PLATFORM_CLIENTS`, on `ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR`),
+  not as a toolkit tool.
+- `elitea-deepwiki-engine orphans --existing-projects FILE|- [--listed-at T] [--delete --listed-at T [--allow-stale-list]]`
+  lists the projects that have indexed wikis here and are not in the list of
+  existing projects the caller supplies (one id per line; the product
+  database is not readable from here). A dry run unless `--delete`. An empty
+  list is refused. `--delete` needs `--listed-at` (RFC 3339: when the list was
+  taken), refuses a list older than 10 minutes unless `--allow-stale-list`,
+  and skips and prints every project with a wiki or build created or
+  published after that time (a project made after the list was taken looks
+  orphaned). The check is made again immediately before EACH wiki's deletion,
+  inside that wiki's transaction and under its lock: a wiki published while
+  the sweep runs stops it for that project (printed as skipped, with the wiki
+  that appeared) and survives. It reads the server's `ELITEA_DEEPWIKI_PUBLISH_*` and
+  `BUILD_STALE_SECONDS`, and exits non-zero if any project could not be
+  cleared. For example:
+  `T=$(date -u +%Y-%m-%dT%H:%M:%SZ); psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' | elitea-deepwiki-engine orphans --existing-projects - --listed-at "$T" --delete`.
 
 ### Tenancy: the index is scoped by project
 
@@ -805,9 +882,10 @@ reads no index (the candidates come from the caller's artifact bucket) and
 - **The `path_prefix` filter escapes `_` and `\`** as well as `%`.
 - **A NUL in text** is stored as U+FFFD. Python's publish failed on it in
   psycopg; the elitea-platform corpus has such a node (a PDF fixture).
-- **A `'bm25'` term over 1 kB gets no posting** (it still counts in its
-  document's length, so lengths and `avgdl` stay exact). The term is in
-  0001's B-tree keys, which cannot hold it; the corpus has a 108 kB token.
+- **A word over 2046 bytes gets no lexeme**, because PostgreSQL's parser
+  drops it from the tsvector, so it gets no `'fts'` posting either; the
+  corpus has a 108 kB token. (The legacy `'bm25'` branch counted it in the
+  document's length; that branch is gone.)
 - **The migrator holds an advisory lock** while it runs, so two replicas
   cannot apply one file twice. The ledger is unchanged.
 
@@ -821,7 +899,6 @@ than direct inserts:
 | Branch | Result |
 | --- | --- |
 | dense | exact: order (up to recorded ties) and L2 distances within 1e-6, 11/11 queries |
-| bm25 | exact: order and scores within 1e-6, 11/11; `doc_count` 20, `avgdl` 36.25, 279 terms, k1 1.5, b 0.75 |
 | fts | match set 11/11, no recorded ordering crossed, 0 inversions over the 4 discriminating queries |
 | fused | equals the frozen RRF over the components for 11/11; equals the recording for the 8 queries without a dense tie in the top 10 |
 
@@ -1683,6 +1760,7 @@ not parse refuses the start (and the probe) with a message naming it.
 | `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` | `7200` | at least 300; the sweep runs every quarter of it (10 s–10 min) |
 | `ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS` | `1800` | above 0, at most a day |
 | `ELITEA_DEEPWIKI_PUBLISH_LOCK_TIMEOUT_SECONDS` | `30` | above 0, at most a day |
+| `ELITEA_DEEPWIKI_PUBLISH_DELETE_LOCK_WAIT_SECONDS` | `30` | above 0, at most a day; how long a wiki deletion waits for a publish of the same wiki before it answers "being published; retry" |
 | `ELITEA_DEEPWIKI_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS` | `5` | the best-effort `ANALYZE` after a publish |
 | `ELITEA_DEEPWIKI_PUBLISH_WORK_MEM_MB` | `64` | 1–4096 |
 | `ELITEA_DEEPWIKI_PUBLISH_SLOTS` | `2` | 1–64 concurrent publishes per database |

@@ -1358,6 +1358,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-connectors"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "elitea-content-source"
 version = "0.1.0"
 dependencies = [
@@ -1380,7 +1392,9 @@ dependencies = [
 name = "elitea-doc-extract"
 version = "0.1.0"
 dependencies = [
+ "chardetng",
  "elitea-content-source",
+ "encoding_rs",
  "tokio",
  "xberg",
 ]
@@ -1511,6 +1525,7 @@ name = "elitea-repo-ingest"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "elitea-connectors",
  "elitea-engine-core",
  "gix",
  "regex",

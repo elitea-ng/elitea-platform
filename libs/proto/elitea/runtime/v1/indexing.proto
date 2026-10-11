@@ -24,6 +24,23 @@ message IndexIngestCommandV1 {
   reserved 10 to 15;
   // Durable admission origin. Consumers accept only user, llm, or schedule.
   string initiator = 16;
+
+  // The embedding space the index is already stamped with (ADR-0030 decision
+  // 2), set by elitea-main from the index registry under
+  // ELITEA_INDEXING_RUNTIME=rust. Both are empty (""/0) when the index is not
+  // stamped yet (its first run stamps it) and always on the Python path; they
+  // are set together or not at all. They are a non-secret fence on the run,
+  // not an input: the embedding inputs stay in the input bundle.
+  //
+  // A worker that receives them MUST compare them with the model and
+  // dimension its embedding client actually produces BEFORE it writes any
+  // vector, and on any difference write nothing and propose FAILED with a
+  // terminal summary that says so. elitea-main records a terminal result that
+  // names another space as failed regardless, but only in the registry and the
+  // notification: the settlement and the stored projection keep the worker's
+  // outcome, and vectors already written would sit in the wrong collection.
+  string expected_embedding_model = 17;
+  uint32 expected_embedding_dimension = 18;
 }
 
 // IndexIngestInputBindingV1 identifies one exact input value consumed by the SDK
@@ -82,7 +99,29 @@ message IndexIngestSummaryV1 {
   uint64 indexed = 4;
   uint64 updated = 5;
   optional bool reindex = 6;
-  reserved 7 to 15;
+
+  // Typed counts and the embedding stamp of the Rust indexing runtime
+  // (ADR-0030 decision 2). elitea-main is the only writer of index metadata:
+  // it applies these fields to the index_registry row in its terminal
+  // transition, so no English result sentence is parsed. All of them are
+  // absent (zero, empty) on the Python SDK path, which keeps writing its own
+  // index_meta row; a summary that carries any of them describes a Rust run.
+  //
+  // Documents written by this run, chunks written, and chunks whose embedding
+  // or write failed.
+  uint64 indexed_documents = 7;
+  uint64 indexed_chunks = 8;
+  uint64 failed_chunks = 9;
+  // Documents the run did not index, by closed reason (for example
+  // "unsupported_type", "too_large", "needs_model"). Keys are bounded lower
+  // snake_case tokens; a reason is never free text.
+  map<string, uint64> skipped = 10;
+  // The model that produced the vectors and the dimension it returned. The
+  // first terminal result stamps them on the index; a later result with a
+  // different dimension fails the run (ADR-0030 decision 2).
+  string embedding_model = 11;
+  uint32 embedding_dimension = 12;
+  reserved 13 to 15;
 }
 
 // IndexIngestResultV1 binds one terminal result to the exact immutable inputs

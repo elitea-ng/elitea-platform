@@ -1,11 +1,17 @@
 package engine
 
 import (
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"testing"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // TestExportBoundMirrorsTheEngine pins MaxExportDocumentBytes to the
@@ -30,5 +36,43 @@ func TestExportBoundMirrorsTheEngine(t *testing.T) {
 	if MaxStreamLineBytes < MaxExportDocumentBytes+streamLineOverhead {
 		t.Fatalf("MaxStreamLineBytes (%d) leaves less than %d bytes above the export bound (%d)",
 			MaxStreamLineBytes, streamLineOverhead, MaxExportDocumentBytes)
+	}
+}
+
+// An engine of an older release answers HTTP 400 "Unknown tool" for a tool it
+// does not serve; the host tells that apart from every other refusal.
+func TestAnUnknownToolIsRecognisedAndOtherRefusalsAreNot(t *testing.T) {
+	status, body := http.StatusBadRequest, `{"detail":"Unknown tool: delete_wiki_index"}`
+	dir, err := os.MkdirTemp("/tmp", "eng")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "e.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+
+	client := NewClient(socket, "DeepWiki")
+	tc := spi.DetachedContext("test")
+	_, err = client.Invoke(t.Context(), "delete_wiki_index", map[string]any{}, tc)
+	if !errors.Is(err, ErrUnknownTool) {
+		t.Fatalf("an unknown tool was not recognised: %v", err)
+	}
+	status, body = http.StatusBadRequest, `{"detail":"arguments must be an object"}`
+	if _, err = client.Invoke(t.Context(), "x", map[string]any{}, tc); err == nil || errors.Is(err, ErrUnknownTool) {
+		t.Fatalf("another 400 was taken for an unknown tool: %v", err)
+	}
+	status, body = http.StatusInternalServerError, `Unknown tool`
+	if _, err = client.Invoke(t.Context(), "x", map[string]any{}, tc); err == nil || errors.Is(err, ErrUnknownTool) {
+		t.Fatalf("a 500 was taken for an unknown tool: %v", err)
 	}
 }

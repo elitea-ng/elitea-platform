@@ -1,0 +1,30 @@
+[package]
+name = "elitea-doc-chunk"
+description = "Document text to index chunks with the SDK's chunkers' defaults (markdown, text, json, code, and the extension router), ADR-0030 decision 4."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The one extension table (kind and media type), shared with the engines.
+elitea-content-source = { path = "../content-source" }
+# The tree-sitter grammars (`grammar_for`), shared with the Inventory engine
+# so a method boundary is the same tree whoever asks.
+elitea-code-parsers = { path = "../code-parsers" }
+serde = { version = "1.0.228", features = ["derive"] }
+# Default features only, like code-parsers: this crate does not need
+# `preserve_order` (the JSON chunker keeps key order in its own value type),
+# so the desktop host can link it without turning that feature on.
+serde_json = "1.0.151"
+# The oversized-piece split of the code chunker, as the Inventory engine
+# chunks a file (services/elitea-inventory-engine/src/extract/chunk.rs).
+text-splitter = { version = "0.33.0", features = ["code"] }
+# cl100k_base, and r50k_base (the SDK's "gpt2" encoding) for the
+# unknown-language token split. Compiled in: no runtime download.
+tiktoken-rs = "0.12.1"
+# The syntax tree the method walk reads; the version code-parsers pins.
+tree-sitter = "=0.27.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+{
+  "service": "elitea-main",
+  "owner": {"team": "platform", "oncall": ["ann", "bob", "carol"]},
+  "limits": {"requests_per_minute": 600, "burst": 50, "timeout_seconds": 30, "max_body_bytes": 1048576},
+  "routes": [
+    {"path": "/api/v2/agents", "methods": ["GET", "POST"], "auth": "session"},
+    {"path": "/api/v2/chat", "methods": ["POST"], "auth": "session"},
+    {"path": "/api/v2/files", "methods": ["GET", "PUT", "DELETE"], "auth": "token"},
+    {"path": "/healthz", "methods": ["GET"], "auth": "none"}
+  ],
+  "notes": "Résumé: déjà vu — the café supports ünïcödé keys and a long note that pads this document so that a small chunk size has to cut it into several pieces."
+}

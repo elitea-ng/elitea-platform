@@ -19,7 +19,7 @@ import (
 // SidecarTools are the tools the Python sidecar runs itself: the three that
 // need the analysis engine, plus the wiki resolver, which needs a model.
 // Everything else is refused at the door, as the fixture table does.
-var SidecarTools = []string{"generate_wiki", "ask", "deep_research", ResolveWikiTool}
+var SidecarTools = []string{"generate_wiki", "ask", "deep_research", ResolveWikiTool, DeleteWikiIndexTool, DeleteProjectWikisTool}
 
 // EngineTools are the tools a wired engine runner SERVES — the admission
 // table's whole tool set (deepwiki.go), which until the wiki_query family
@@ -54,6 +54,7 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 // GET /health.
 func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	client := NewEngineClient(settings.EngineSocket)
+	runner := &Runner{engine: client}
 	sidecar := map[string]Tool{}
 	for _, name := range SidecarTools {
 		tool := name
@@ -70,8 +71,9 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	transport := ArtifactClientFrom(settings.CallbackCA())
 	tools := map[string]Tool{}
 	for name, tool := range sidecar {
-		if name == ResolveWikiTool {
-			// Reachable only through the two resolve_and_* tools.
+		if name == ResolveWikiTool || name == DeleteWikiIndexTool || name == DeleteProjectWikisTool {
+			// Reachable only through the two resolve_and_* tools and the
+			// wiki_query delete tools, which wrap them.
 			continue
 		}
 		tools[name] = tool
@@ -82,14 +84,21 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 		Resolve:      sidecar[ResolveWikiTool],
 		Ask:          sidecar["ask"],
 		DeepResearch: sidecar["deep_research"],
+		DeleteIndex:  sidecar[DeleteWikiIndexTool],
+		// delete_wiki stops the wiki's running generations before it
+		// deletes anything, and asks the engine what it serves.
+		StopGenerations: runner.StopGenerations,
+		IndexDeletionServed: func(ctx context.Context) (bool, bool) {
+			return client.Serves(ctx, DeleteWikiIndexTool)
+		},
 	}) {
 		tools[name] = tool
 	}
-	return &Runner{
-		RunnerName:       name,
-		Tools:            tools,
-		Egress:           spi.ParseEgressPolicy(settings.GitAllowlist),
-		Artifacts:        transport,
-		VerifiedIdentity: settings.IdentitySecret != "",
-	}
+	runner.RunnerName = name
+	runner.Tools = tools
+	runner.Egress = spi.ParseEgressPolicy(settings.GitAllowlist)
+	runner.Artifacts = transport
+	runner.VerifiedIdentity = settings.IdentitySecret != ""
+	runner.deleteProject = sidecar[DeleteProjectWikisTool]
+	return runner
 }

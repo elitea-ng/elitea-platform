@@ -57,7 +57,7 @@ impl AdoWikiClient {
     pub(crate) fn new(config: AdoToolkitConfig) -> Result<Self, AdoClientError> {
         let (connection, settings) = config.into_parts();
         Ok(Self::with_client(
-            AdoClient::new(connection)?,
+            crate::toolkits::families::ado::client::client(connection)?,
             settings.default_wiki_identifier,
         ))
     }

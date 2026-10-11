@@ -2,10 +2,12 @@ package output
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"mime"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -144,9 +146,110 @@ type IndexIngestSummary struct {
 	Updated        uint64
 	ReindexPresent bool
 	Reindex        bool
+
+	// The typed result of the Rust indexing runtime (ADR-0030 decision 2).
+	// Main applies these to the index_registry row, so no result sentence is
+	// parsed. All of them are zero on the Python SDK path.
+	IndexedDocuments uint64
+	IndexedChunks    uint64
+	FailedChunks     uint64
+	// SkippedJSON is the closed skip breakdown as canonical JSON (an object of
+	// reason to count, keys sorted), or "" when nothing was skipped. A string
+	// and not a map keeps the summary comparable: the projection tells "no
+	// summary" from "a summary" with ==.
+	SkippedJSON        string
+	EmbeddingModel     string
+	EmbeddingDimension uint32
+}
+
+const (
+	// MaxIndexSkipReasons and MaxIndexSkipReasonBytes bound the skip breakdown.
+	// A reason is a closed lower snake_case token, never free text.
+	MaxIndexSkipReasons     = 32
+	MaxIndexSkipReasonBytes = 64
+	// MaxIndexEmbeddingModelBytes and MaxIndexEmbeddingDimension bound the
+	// embedding stamp. 65535 is far above any model in use (768-3072).
+	MaxIndexEmbeddingModelBytes = 256
+	MaxIndexEmbeddingDimension  = 65535
+)
+
+var indexSkipReasonPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// NewIndexSkipped encodes a skip breakdown as the canonical JSON the summary
+// carries. An empty breakdown is "". It is the only constructor of
+// SkippedJSON, so a value that reached a summary is sorted and bounded.
+func NewIndexSkipped(skipped map[string]uint64) (string, error) {
+	if len(skipped) == 0 {
+		return "", nil
+	}
+	if len(skipped) > MaxIndexSkipReasons {
+		return "", ErrInvalidIndexIngestOutput
+	}
+	for reason, count := range skipped {
+		if reason == "" || len(reason) > MaxIndexSkipReasonBytes ||
+			!indexSkipReasonPattern.MatchString(reason) || count > math.MaxInt64 {
+			return "", ErrInvalidIndexIngestOutput
+		}
+	}
+	// encoding/json sorts map keys, which is the canonical order.
+	encoded, err := json.Marshal(skipped)
+	if err != nil {
+		return "", ErrInvalidIndexIngestOutput
+	}
+	return string(encoded), nil
+}
+
+// Skipped decodes the breakdown. A summary that passed Validate always decodes.
+func (s IndexIngestSummary) Skipped() map[string]uint64 {
+	if s.SkippedJSON == "" {
+		return map[string]uint64{}
+	}
+	skipped := map[string]uint64{}
+	if err := json.Unmarshal([]byte(s.SkippedJSON), &skipped); err != nil {
+		return map[string]uint64{}
+	}
+	return skipped
+}
+
+func (s IndexIngestSummary) validateTyped() error {
+	if s.IndexedDocuments > math.MaxInt64 || s.IndexedChunks > math.MaxInt64 ||
+		s.FailedChunks > math.MaxInt64 {
+		return ErrInvalidIndexIngestOutput
+	}
+	if s.SkippedJSON != "" {
+		var decoded map[string]uint64
+		if err := json.Unmarshal([]byte(s.SkippedJSON), &decoded); err != nil || len(decoded) == 0 {
+			return ErrInvalidIndexIngestOutput
+		}
+		canonical, err := NewIndexSkipped(decoded)
+		if err != nil || canonical != s.SkippedJSON {
+			return ErrInvalidIndexIngestOutput
+		}
+	}
+	// The stamp is a pair: a model without a dimension, or the reverse, would
+	// let the registry record half an embedding space.
+	if (s.EmbeddingModel == "") != (s.EmbeddingDimension == 0) {
+		return ErrInvalidIndexIngestOutput
+	}
+	if s.EmbeddingDimension > MaxIndexEmbeddingDimension ||
+		len(s.EmbeddingModel) > MaxIndexEmbeddingModelBytes ||
+		!utf8.ValidString(s.EmbeddingModel) || strings.ContainsRune(s.EmbeddingModel, '\x00') {
+		return ErrInvalidIndexIngestOutput
+	}
+	return nil
+}
+
+// HasTypedResult reports whether the summary describes a Rust run: any typed
+// field set. The Python SDK path never sets one.
+func (s IndexIngestSummary) HasTypedResult() bool {
+	return s.IndexedDocuments != 0 || s.IndexedChunks != 0 || s.FailedChunks != 0 ||
+		s.SkippedJSON != "" || s.EmbeddingModel != ""
 }
 
 func (s IndexIngestSummary) Validate() error {
+	if err := s.validateTyped(); err != nil {
+		return err
+	}
 	switch s.Status {
 	case IndexIngestStatusOK, IndexIngestStatusPartlyIndexed, IndexIngestStatusError:
 	default:

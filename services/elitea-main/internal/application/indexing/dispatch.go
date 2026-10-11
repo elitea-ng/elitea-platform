@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -51,7 +52,17 @@ type IndexIngestDispatch struct {
 	ClientMessageID             string
 	SIOEvent                    string
 	Initiator                   executiondomain.IndexIngestInitiator
+	// ExpectedEmbeddingModel and ExpectedEmbeddingDimension are the embedding
+	// space the index registry has stamped on the index (rust indexing runtime
+	// only; empty when the index is not stamped yet, and always on the Python
+	// path). The worker must refuse to write vectors of another space.
+	ExpectedEmbeddingModel     string
+	ExpectedEmbeddingDimension uint32
 }
+
+// MaxExpectedEmbeddingModelBytes bounds the expected model name: the limit the
+// output plane applies to the stamp a result reports.
+const MaxExpectedEmbeddingModelBytes = 256
 
 func (d IndexIngestDispatch) Validate() error {
 	required := []string{
@@ -109,6 +120,11 @@ func (d IndexIngestDispatch) Validate() error {
 		}
 	}
 	if (d.EmbeddingBindingEntryID == "") != d.EmbeddingBindingDigest.IsZero() {
+		return ErrInvalidIndexIngestDispatch
+	}
+	if (d.ExpectedEmbeddingModel == "") != (d.ExpectedEmbeddingDimension == 0) ||
+		(d.ExpectedEmbeddingModel != "" && !validDispatchTextWithLimit(d.ExpectedEmbeddingModel, MaxExpectedEmbeddingModelBytes)) ||
+		d.ExpectedEmbeddingDimension > math.MaxUint16 {
 		return ErrInvalidIndexIngestDispatch
 	}
 	return nil

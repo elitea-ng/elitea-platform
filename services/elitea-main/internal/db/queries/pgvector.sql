@@ -57,3 +57,18 @@ WHERE project_id = sqlc.arg('project_id')::integer
   AND type = 'pgvector'
   AND section = 'vectorstorage'
   AND source = 'system';
+
+-- Whether the project's system PgVector row exists. It reads the same four
+-- identity predicates the upsert and the delete above use, so a user-created
+-- configuration that happens to carry the title does not count. The project
+-- delete asks it inside its deciding transaction (#1211).
+
+-- name: ExistsCurrentProjectPgvectorConfiguration :one
+SELECT EXISTS (
+    SELECT 1 FROM configuration
+    WHERE project_id = sqlc.arg('project_id')::integer
+      AND elitea_title = sqlc.arg('elitea_title')::text
+      AND type = 'pgvector'
+      AND section = 'vectorstorage'
+      AND source = 'system'
+) AS present;

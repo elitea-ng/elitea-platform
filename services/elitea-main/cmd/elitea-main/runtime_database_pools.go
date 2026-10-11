@@ -18,6 +18,8 @@ type runtimeDatabasePools struct {
 	Replay          *pgxpool.Pool
 	TerminalEffects *pgxpool.Pool
 	Content         *pgxpool.Pool
+	// VectorIntrospection is nil until openVectorIntrospection runs.
+	VectorIntrospection *pgxpool.Pool
 
 	resources []runtimePoolResource
 	closeOnce sync.Once
@@ -79,6 +81,34 @@ func openRuntimeDatabasePoolsWithFactory(ctx context.Context, dsn string, limits
 		Content:         resources[5].pool,
 		resources:       resources,
 	}, nil
+}
+
+// openVectorIntrospection opens the seventh pool, the one elitea-vector's
+// token introspection reads on, and hands its ownership to p (closed with
+// the other six, first). Called only when vector introspection is served.
+func (p *runtimeDatabasePools) openVectorIntrospection(ctx context.Context, dsn string, limits runtimecomposition.DatabasePoolLimits, factory runtimePoolFactory) error {
+	if p == nil || ctx == nil || dsn == "" || factory == nil {
+		return errors.New("runtime database pool dependencies are incomplete")
+	}
+	if err := limits.Validate(); err != nil {
+		return err
+	}
+	if p.VectorIntrospection != nil {
+		return errors.New("the vector introspection database pool is already open")
+	}
+	resource, err := factory(ctx, dsn, runtimePoolSpec{role: "vector-introspection", maxConns: limits.VectorIntrospection})
+	if err != nil {
+		return fmt.Errorf("open runtime vector-introspection database pool: %w", err)
+	}
+	if resource.pool == nil || resource.close == nil {
+		if resource.close != nil {
+			resource.close()
+		}
+		return errors.New("open runtime vector-introspection database pool: incomplete resource")
+	}
+	p.resources = append(p.resources, resource)
+	p.VectorIntrospection = resource.pool
+	return nil
 }
 
 func openRuntimePostgresPool(ctx context.Context, dsn string, spec runtimePoolSpec) (runtimePoolResource, error) {

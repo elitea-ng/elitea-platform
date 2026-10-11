@@ -379,8 +379,13 @@ type ClaimReceiptV1 struct {
 	ClaimStartedAtUnixMicros int64 `protobuf:"varint,12,opt,name=claim_started_at_unix_micros,json=claimStartedAtUnixMicros,proto3" json:"claim_started_at_unix_micros,omitempty"`
 	// Exact strict JSON owned by node-recovery-v1.md, never caller metadata.
 	NodeRecoveryReceiptJson []byte `protobuf:"bytes,16,opt,name=node_recovery_receipt_json,json=nodeRecoveryReceiptJson,proto3" json:"node_recovery_receipt_json,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// A bearer for elitea-vector, minted for this claim (ADR-0031 decision 1).
+	// Carried only by ACCEPTED, RECOVER_AGENT_MODEL_CHECKPOINT and
+	// RECOVER_NODE_VISIT receipts of a capability that may use vectors, and
+	// only where Main serves vector token introspection. Absent otherwise.
+	VectorToken   *VectorClaimTokenV1 `protobuf:"bytes,17,opt,name=vector_token,json=vectorToken,proto3" json:"vector_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ClaimReceiptV1) Reset() {
@@ -504,6 +509,84 @@ func (x *ClaimReceiptV1) GetNodeRecoveryReceiptJson() []byte {
 	return nil
 }
 
+func (x *ClaimReceiptV1) GetVectorToken() *VectorClaimTokenV1 {
+	if x != nil {
+		return x.VectorToken
+	}
+	return nil
+}
+
+// VectorClaimTokenV1 is a short-lived bearer bound to one claim: its
+// execution, the execution's resource project and actor, and the vector
+// sources it may read and write. Main stores only its SHA-256. Introspection
+// answers it inactive as soon as the claim is released (settled, aborted or
+// taken over), its lease lapses, the execution is settling or terminal, or
+// its desired state is no longer RUNNING. The worker keeps it in memory
+// only; it never logs or spools it, and sends it only to elitea-vector.
+type VectorClaimTokenV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The bearer string: "elvc_" followed by 43 base64url characters.
+	Bearer string `protobuf:"bytes,1,opt,name=bearer,proto3" json:"bearer,omitempty"`
+	// The latest instant it can be valid: the command deadline, capped.
+	ExpiresAtUnixMillis int64 `protobuf:"varint,2,opt,name=expires_at_unix_millis,json=expiresAtUnixMillis,proto3" json:"expires_at_unix_millis,omitempty"`
+	// The vector sources it is admitted for, by payload keyword
+	// ("toolkit_index").
+	AllowedSources []string `protobuf:"bytes,3,rep,name=allowed_sources,json=allowedSources,proto3" json:"allowed_sources,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *VectorClaimTokenV1) Reset() {
+	*x = VectorClaimTokenV1{}
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VectorClaimTokenV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VectorClaimTokenV1) ProtoMessage() {}
+
+func (x *VectorClaimTokenV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VectorClaimTokenV1.ProtoReflect.Descriptor instead.
+func (*VectorClaimTokenV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *VectorClaimTokenV1) GetBearer() string {
+	if x != nil {
+		return x.Bearer
+	}
+	return ""
+}
+
+func (x *VectorClaimTokenV1) GetExpiresAtUnixMillis() int64 {
+	if x != nil {
+		return x.ExpiresAtUnixMillis
+	}
+	return 0
+}
+
+func (x *VectorClaimTokenV1) GetAllowedSources() []string {
+	if x != nil {
+		return x.AllowedSources
+	}
+	return nil
+}
+
 type ClaimCommandResponseV1 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Receipt       *ClaimReceiptV1        `protobuf:"bytes,1,opt,name=receipt,proto3" json:"receipt,omitempty"`
@@ -514,7 +597,7 @@ type ClaimCommandResponseV1 struct {
 
 func (x *ClaimCommandResponseV1) Reset() {
 	*x = ClaimCommandResponseV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -526,7 +609,7 @@ func (x *ClaimCommandResponseV1) String() string {
 func (*ClaimCommandResponseV1) ProtoMessage() {}
 
 func (x *ClaimCommandResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -539,7 +622,7 @@ func (x *ClaimCommandResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimCommandResponseV1.ProtoReflect.Descriptor instead.
 func (*ClaimCommandResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{3}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ClaimCommandResponseV1) GetReceipt() *ClaimReceiptV1 {
@@ -568,7 +651,7 @@ type BeginExecutionRequestV1 struct {
 
 func (x *BeginExecutionRequestV1) Reset() {
 	*x = BeginExecutionRequestV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -580,7 +663,7 @@ func (x *BeginExecutionRequestV1) String() string {
 func (*BeginExecutionRequestV1) ProtoMessage() {}
 
 func (x *BeginExecutionRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -593,7 +676,7 @@ func (x *BeginExecutionRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginExecutionRequestV1.ProtoReflect.Descriptor instead.
 func (*BeginExecutionRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{4}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *BeginExecutionRequestV1) GetIdentity() *ExecutionIdentityV1 {
@@ -620,7 +703,7 @@ type BeginExecutionResponseV1 struct {
 
 func (x *BeginExecutionResponseV1) Reset() {
 	*x = BeginExecutionResponseV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -632,7 +715,7 @@ func (x *BeginExecutionResponseV1) String() string {
 func (*BeginExecutionResponseV1) ProtoMessage() {}
 
 func (x *BeginExecutionResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -645,7 +728,7 @@ func (x *BeginExecutionResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginExecutionResponseV1.ProtoReflect.Descriptor instead.
 func (*BeginExecutionResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{5}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *BeginExecutionResponseV1) GetDisposition() BeginExecutionDispositionV1 {
@@ -676,7 +759,7 @@ type AuthorizeInvocationRequestV1 struct {
 
 func (x *AuthorizeInvocationRequestV1) Reset() {
 	*x = AuthorizeInvocationRequestV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -688,7 +771,7 @@ func (x *AuthorizeInvocationRequestV1) String() string {
 func (*AuthorizeInvocationRequestV1) ProtoMessage() {}
 
 func (x *AuthorizeInvocationRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -701,7 +784,7 @@ func (x *AuthorizeInvocationRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorizeInvocationRequestV1.ProtoReflect.Descriptor instead.
 func (*AuthorizeInvocationRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{6}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AuthorizeInvocationRequestV1) GetIdentity() *ExecutionIdentityV1 {
@@ -728,7 +811,7 @@ type AuthorizeInvocationResponseV1 struct {
 
 func (x *AuthorizeInvocationResponseV1) Reset() {
 	*x = AuthorizeInvocationResponseV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[7]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -740,7 +823,7 @@ func (x *AuthorizeInvocationResponseV1) String() string {
 func (*AuthorizeInvocationResponseV1) ProtoMessage() {}
 
 func (x *AuthorizeInvocationResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[7]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -753,7 +836,7 @@ func (x *AuthorizeInvocationResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorizeInvocationResponseV1.ProtoReflect.Descriptor instead.
 func (*AuthorizeInvocationResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{7}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AuthorizeInvocationResponseV1) GetDisposition() AuthorizeInvocationDispositionV1 {
@@ -783,7 +866,7 @@ type AuthorizeAgentModelCheckpointRequestV1 struct {
 
 func (x *AuthorizeAgentModelCheckpointRequestV1) Reset() {
 	*x = AuthorizeAgentModelCheckpointRequestV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[8]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -795,7 +878,7 @@ func (x *AuthorizeAgentModelCheckpointRequestV1) String() string {
 func (*AuthorizeAgentModelCheckpointRequestV1) ProtoMessage() {}
 
 func (x *AuthorizeAgentModelCheckpointRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[8]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -808,7 +891,7 @@ func (x *AuthorizeAgentModelCheckpointRequestV1) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use AuthorizeAgentModelCheckpointRequestV1.ProtoReflect.Descriptor instead.
 func (*AuthorizeAgentModelCheckpointRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{8}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AuthorizeAgentModelCheckpointRequestV1) GetIdentity() *ExecutionIdentityV1 {
@@ -842,7 +925,7 @@ type AuthorizeAgentModelCheckpointResponseV1 struct {
 
 func (x *AuthorizeAgentModelCheckpointResponseV1) Reset() {
 	*x = AuthorizeAgentModelCheckpointResponseV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[9]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -854,7 +937,7 @@ func (x *AuthorizeAgentModelCheckpointResponseV1) String() string {
 func (*AuthorizeAgentModelCheckpointResponseV1) ProtoMessage() {}
 
 func (x *AuthorizeAgentModelCheckpointResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[9]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -867,7 +950,7 @@ func (x *AuthorizeAgentModelCheckpointResponseV1) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use AuthorizeAgentModelCheckpointResponseV1.ProtoReflect.Descriptor instead.
 func (*AuthorizeAgentModelCheckpointResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{9}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AuthorizeAgentModelCheckpointResponseV1) GetDisposition() AuthorizeInvocationDispositionV1 {
@@ -895,7 +978,7 @@ type RenewLeaseRequestV1 struct {
 
 func (x *RenewLeaseRequestV1) Reset() {
 	*x = RenewLeaseRequestV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[10]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -907,7 +990,7 @@ func (x *RenewLeaseRequestV1) String() string {
 func (*RenewLeaseRequestV1) ProtoMessage() {}
 
 func (x *RenewLeaseRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[10]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -920,7 +1003,7 @@ func (x *RenewLeaseRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewLeaseRequestV1.ProtoReflect.Descriptor instead.
 func (*RenewLeaseRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{10}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RenewLeaseRequestV1) GetIdentity() *ExecutionIdentityV1 {
@@ -955,7 +1038,7 @@ type RenewLeaseResponseV1 struct {
 
 func (x *RenewLeaseResponseV1) Reset() {
 	*x = RenewLeaseResponseV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[11]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -967,7 +1050,7 @@ func (x *RenewLeaseResponseV1) String() string {
 func (*RenewLeaseResponseV1) ProtoMessage() {}
 
 func (x *RenewLeaseResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[11]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -980,7 +1063,7 @@ func (x *RenewLeaseResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewLeaseResponseV1.ProtoReflect.Descriptor instead.
 func (*RenewLeaseResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{11}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RenewLeaseResponseV1) GetLeaseExpiresAtUnixMillis() int64 {
@@ -1014,7 +1097,7 @@ type ObserveDesiredStateRequestV1 struct {
 
 func (x *ObserveDesiredStateRequestV1) Reset() {
 	*x = ObserveDesiredStateRequestV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[12]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1026,7 +1109,7 @@ func (x *ObserveDesiredStateRequestV1) String() string {
 func (*ObserveDesiredStateRequestV1) ProtoMessage() {}
 
 func (x *ObserveDesiredStateRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[12]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1039,7 +1122,7 @@ func (x *ObserveDesiredStateRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserveDesiredStateRequestV1.ProtoReflect.Descriptor instead.
 func (*ObserveDesiredStateRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{12}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ObserveDesiredStateRequestV1) GetIdentity() *ExecutionIdentityV1 {
@@ -1066,7 +1149,7 @@ type ObserveDesiredStateResponseV1 struct {
 
 func (x *ObserveDesiredStateResponseV1) Reset() {
 	*x = ObserveDesiredStateResponseV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[13]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1078,7 +1161,7 @@ func (x *ObserveDesiredStateResponseV1) String() string {
 func (*ObserveDesiredStateResponseV1) ProtoMessage() {}
 
 func (x *ObserveDesiredStateResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[13]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1091,7 +1174,7 @@ func (x *ObserveDesiredStateResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserveDesiredStateResponseV1.ProtoReflect.Descriptor instead.
 func (*ObserveDesiredStateResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{13}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ObserveDesiredStateResponseV1) GetDesiredState() DesiredExecutionStateV1 {
@@ -1121,7 +1204,7 @@ type PrepareSettlementRequestV1 struct {
 
 func (x *PrepareSettlementRequestV1) Reset() {
 	*x = PrepareSettlementRequestV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[14]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1133,7 +1216,7 @@ func (x *PrepareSettlementRequestV1) String() string {
 func (*PrepareSettlementRequestV1) ProtoMessage() {}
 
 func (x *PrepareSettlementRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[14]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1146,7 +1229,7 @@ func (x *PrepareSettlementRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareSettlementRequestV1.ProtoReflect.Descriptor instead.
 func (*PrepareSettlementRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{14}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PrepareSettlementRequestV1) GetIdentity() *ExecutionIdentityV1 {
@@ -1195,7 +1278,7 @@ type PrepareSettlementResponseV1 struct {
 
 func (x *PrepareSettlementResponseV1) Reset() {
 	*x = PrepareSettlementResponseV1{}
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[15]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1207,7 +1290,7 @@ func (x *PrepareSettlementResponseV1) String() string {
 func (*PrepareSettlementResponseV1) ProtoMessage() {}
 
 func (x *PrepareSettlementResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_control_proto_msgTypes[15]
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1220,7 +1303,7 @@ func (x *PrepareSettlementResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareSettlementResponseV1.ProtoReflect.Descriptor instead.
 func (*PrepareSettlementResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{15}
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PrepareSettlementResponseV1) GetSettlementReceiptId() string {
@@ -1261,7 +1344,7 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x0fproposal_digest\x18\x02 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x0eproposalDigest\x12'\n" +
 	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x122\n" +
 	"\x15settlement_receipt_id\x18\x04 \x01(\tR\x13settlementReceiptId\x12?\n" +
-	"\aoutcome\x18\x05 \x01(\x0e2%.elitea.runtime.v1.ExecutionOutcomeV1R\aoutcomeJ\x04\b\x06\x10\x10\"\x88\a\n" +
+	"\aoutcome\x18\x05 \x01(\x0e2%.elitea.runtime.v1.ExecutionOutcomeV1R\aoutcomeJ\x04\b\x06\x10\x10\"\xd2\a\n" +
 	"\x0eClaimReceiptV1\x12G\n" +
 	"\vdisposition\x18\x01 \x01(\x0e2%.elitea.runtime.v1.ClaimDispositionV1R\vdisposition\x12B\n" +
 	"\bidentity\x18\x02 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
@@ -1278,7 +1361,12 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"retirement\x18\v \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\n" +
 	"retirement\x12>\n" +
 	"\x1cclaim_started_at_unix_micros\x18\f \x01(\x03R\x18claimStartedAtUnixMicros\x12;\n" +
-	"\x1anode_recovery_receipt_json\x18\x10 \x01(\fR\x17nodeRecoveryReceiptJsonJ\x04\b\r\x10\x10\"\x9c\x01\n" +
+	"\x1anode_recovery_receipt_json\x18\x10 \x01(\fR\x17nodeRecoveryReceiptJson\x12H\n" +
+	"\fvector_token\x18\x11 \x01(\v2%.elitea.runtime.v1.VectorClaimTokenV1R\vvectorTokenJ\x04\b\r\x10\x10\"\x90\x01\n" +
+	"\x12VectorClaimTokenV1\x12\x16\n" +
+	"\x06bearer\x18\x01 \x01(\tR\x06bearer\x123\n" +
+	"\x16expires_at_unix_millis\x18\x02 \x01(\x03R\x13expiresAtUnixMillis\x12'\n" +
+	"\x0fallowed_sources\x18\x03 \x03(\tR\x0eallowedSourcesJ\x04\b\x04\x10\x10\"\x9c\x01\n" +
 	"\x16ClaimCommandResponseV1\x12;\n" +
 	"\areceipt\x18\x01 \x01(\v2!.elitea.runtime.v1.ClaimReceiptV1R\areceipt\x12?\n" +
 	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10\"\x9e\x01\n" +
@@ -1373,7 +1461,7 @@ func file_elitea_runtime_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_elitea_runtime_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_elitea_runtime_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_elitea_runtime_v1_control_proto_goTypes = []any{
 	(ClaimDispositionV1)(0),                         // 0: elitea.runtime.v1.ClaimDispositionV1
 	(BeginExecutionDispositionV1)(0),                // 1: elitea.runtime.v1.BeginExecutionDispositionV1
@@ -1381,99 +1469,101 @@ var file_elitea_runtime_v1_control_proto_goTypes = []any{
 	(*ClaimCommandRequestV1)(nil),                   // 3: elitea.runtime.v1.ClaimCommandRequestV1
 	(*SettlementRecoveryV1)(nil),                    // 4: elitea.runtime.v1.SettlementRecoveryV1
 	(*ClaimReceiptV1)(nil),                          // 5: elitea.runtime.v1.ClaimReceiptV1
-	(*ClaimCommandResponseV1)(nil),                  // 6: elitea.runtime.v1.ClaimCommandResponseV1
-	(*BeginExecutionRequestV1)(nil),                 // 7: elitea.runtime.v1.BeginExecutionRequestV1
-	(*BeginExecutionResponseV1)(nil),                // 8: elitea.runtime.v1.BeginExecutionResponseV1
-	(*AuthorizeInvocationRequestV1)(nil),            // 9: elitea.runtime.v1.AuthorizeInvocationRequestV1
-	(*AuthorizeInvocationResponseV1)(nil),           // 10: elitea.runtime.v1.AuthorizeInvocationResponseV1
-	(*AuthorizeAgentModelCheckpointRequestV1)(nil),  // 11: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1
-	(*AuthorizeAgentModelCheckpointResponseV1)(nil), // 12: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1
-	(*RenewLeaseRequestV1)(nil),                     // 13: elitea.runtime.v1.RenewLeaseRequestV1
-	(*RenewLeaseResponseV1)(nil),                    // 14: elitea.runtime.v1.RenewLeaseResponseV1
-	(*ObserveDesiredStateRequestV1)(nil),            // 15: elitea.runtime.v1.ObserveDesiredStateRequestV1
-	(*ObserveDesiredStateResponseV1)(nil),           // 16: elitea.runtime.v1.ObserveDesiredStateResponseV1
-	(*PrepareSettlementRequestV1)(nil),              // 17: elitea.runtime.v1.PrepareSettlementRequestV1
-	(*PrepareSettlementResponseV1)(nil),             // 18: elitea.runtime.v1.PrepareSettlementResponseV1
-	(*SignedWorkerCommandEnvelopeV1)(nil),           // 19: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	(*SettlementProposalV1)(nil),                    // 20: elitea.runtime.v1.SettlementProposalV1
-	(*DigestV1)(nil),                                // 21: elitea.runtime.v1.DigestV1
-	(ExecutionOutcomeV1)(0),                         // 22: elitea.runtime.v1.ExecutionOutcomeV1
-	(*ExecutionIdentityV1)(nil),                     // 23: elitea.runtime.v1.ExecutionIdentityV1
-	(*ExecutionFenceV1)(nil),                        // 24: elitea.runtime.v1.ExecutionFenceV1
-	(*ExecutionInputBundleReferenceV1)(nil),         // 25: elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	(*ExecutionInputBundleV1)(nil),                  // 26: elitea.runtime.v1.ExecutionInputBundleV1
-	(DesiredExecutionStateV1)(0),                    // 27: elitea.runtime.v1.DesiredExecutionStateV1
-	(*RuntimeErrorV1)(nil),                          // 28: elitea.runtime.v1.RuntimeErrorV1
-	(*AuthorizeSandboxJobRequestV1)(nil),            // 29: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
-	(*AuthorizeRustCompiledSnapshotRequestV1)(nil),  // 30: elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1
-	(*AuthorizeSandboxJobResponseV1)(nil),           // 31: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
-	(*AuthorizeRustCompiledSnapshotResponseV1)(nil), // 32: elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1
+	(*VectorClaimTokenV1)(nil),                      // 6: elitea.runtime.v1.VectorClaimTokenV1
+	(*ClaimCommandResponseV1)(nil),                  // 7: elitea.runtime.v1.ClaimCommandResponseV1
+	(*BeginExecutionRequestV1)(nil),                 // 8: elitea.runtime.v1.BeginExecutionRequestV1
+	(*BeginExecutionResponseV1)(nil),                // 9: elitea.runtime.v1.BeginExecutionResponseV1
+	(*AuthorizeInvocationRequestV1)(nil),            // 10: elitea.runtime.v1.AuthorizeInvocationRequestV1
+	(*AuthorizeInvocationResponseV1)(nil),           // 11: elitea.runtime.v1.AuthorizeInvocationResponseV1
+	(*AuthorizeAgentModelCheckpointRequestV1)(nil),  // 12: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1
+	(*AuthorizeAgentModelCheckpointResponseV1)(nil), // 13: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1
+	(*RenewLeaseRequestV1)(nil),                     // 14: elitea.runtime.v1.RenewLeaseRequestV1
+	(*RenewLeaseResponseV1)(nil),                    // 15: elitea.runtime.v1.RenewLeaseResponseV1
+	(*ObserveDesiredStateRequestV1)(nil),            // 16: elitea.runtime.v1.ObserveDesiredStateRequestV1
+	(*ObserveDesiredStateResponseV1)(nil),           // 17: elitea.runtime.v1.ObserveDesiredStateResponseV1
+	(*PrepareSettlementRequestV1)(nil),              // 18: elitea.runtime.v1.PrepareSettlementRequestV1
+	(*PrepareSettlementResponseV1)(nil),             // 19: elitea.runtime.v1.PrepareSettlementResponseV1
+	(*SignedWorkerCommandEnvelopeV1)(nil),           // 20: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	(*SettlementProposalV1)(nil),                    // 21: elitea.runtime.v1.SettlementProposalV1
+	(*DigestV1)(nil),                                // 22: elitea.runtime.v1.DigestV1
+	(ExecutionOutcomeV1)(0),                         // 23: elitea.runtime.v1.ExecutionOutcomeV1
+	(*ExecutionIdentityV1)(nil),                     // 24: elitea.runtime.v1.ExecutionIdentityV1
+	(*ExecutionFenceV1)(nil),                        // 25: elitea.runtime.v1.ExecutionFenceV1
+	(*ExecutionInputBundleReferenceV1)(nil),         // 26: elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	(*ExecutionInputBundleV1)(nil),                  // 27: elitea.runtime.v1.ExecutionInputBundleV1
+	(DesiredExecutionStateV1)(0),                    // 28: elitea.runtime.v1.DesiredExecutionStateV1
+	(*RuntimeErrorV1)(nil),                          // 29: elitea.runtime.v1.RuntimeErrorV1
+	(*AuthorizeSandboxJobRequestV1)(nil),            // 30: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
+	(*AuthorizeRustCompiledSnapshotRequestV1)(nil),  // 31: elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1
+	(*AuthorizeSandboxJobResponseV1)(nil),           // 32: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
+	(*AuthorizeRustCompiledSnapshotResponseV1)(nil), // 33: elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1
 }
 var file_elitea_runtime_v1_control_proto_depIdxs = []int32{
-	19, // 0: elitea.runtime.v1.ClaimCommandRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	20, // 1: elitea.runtime.v1.SettlementRecoveryV1.proposal:type_name -> elitea.runtime.v1.SettlementProposalV1
-	21, // 2: elitea.runtime.v1.SettlementRecoveryV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
-	22, // 3: elitea.runtime.v1.SettlementRecoveryV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
+	20, // 0: elitea.runtime.v1.ClaimCommandRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	21, // 1: elitea.runtime.v1.SettlementRecoveryV1.proposal:type_name -> elitea.runtime.v1.SettlementProposalV1
+	22, // 2: elitea.runtime.v1.SettlementRecoveryV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
+	23, // 3: elitea.runtime.v1.SettlementRecoveryV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
 	0,  // 4: elitea.runtime.v1.ClaimReceiptV1.disposition:type_name -> elitea.runtime.v1.ClaimDispositionV1
-	23, // 5: elitea.runtime.v1.ClaimReceiptV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	24, // 6: elitea.runtime.v1.ClaimReceiptV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	25, // 7: elitea.runtime.v1.ClaimReceiptV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	26, // 8: elitea.runtime.v1.ClaimReceiptV1.input_bundle:type_name -> elitea.runtime.v1.ExecutionInputBundleV1
-	27, // 9: elitea.runtime.v1.ClaimReceiptV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
+	24, // 5: elitea.runtime.v1.ClaimReceiptV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	25, // 6: elitea.runtime.v1.ClaimReceiptV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	26, // 7: elitea.runtime.v1.ClaimReceiptV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	27, // 8: elitea.runtime.v1.ClaimReceiptV1.input_bundle:type_name -> elitea.runtime.v1.ExecutionInputBundleV1
+	28, // 9: elitea.runtime.v1.ClaimReceiptV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
 	4,  // 10: elitea.runtime.v1.ClaimReceiptV1.settlement_recovery:type_name -> elitea.runtime.v1.SettlementRecoveryV1
-	28, // 11: elitea.runtime.v1.ClaimReceiptV1.retirement:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	5,  // 12: elitea.runtime.v1.ClaimCommandResponseV1.receipt:type_name -> elitea.runtime.v1.ClaimReceiptV1
-	28, // 13: elitea.runtime.v1.ClaimCommandResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	23, // 14: elitea.runtime.v1.BeginExecutionRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	24, // 15: elitea.runtime.v1.BeginExecutionRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	1,  // 16: elitea.runtime.v1.BeginExecutionResponseV1.disposition:type_name -> elitea.runtime.v1.BeginExecutionDispositionV1
-	28, // 17: elitea.runtime.v1.BeginExecutionResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	23, // 18: elitea.runtime.v1.AuthorizeInvocationRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	24, // 19: elitea.runtime.v1.AuthorizeInvocationRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	2,  // 20: elitea.runtime.v1.AuthorizeInvocationResponseV1.disposition:type_name -> elitea.runtime.v1.AuthorizeInvocationDispositionV1
-	28, // 21: elitea.runtime.v1.AuthorizeInvocationResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	23, // 22: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	24, // 23: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	21, // 24: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.checkpoint_digest:type_name -> elitea.runtime.v1.DigestV1
-	2,  // 25: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1.disposition:type_name -> elitea.runtime.v1.AuthorizeInvocationDispositionV1
-	28, // 26: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	23, // 27: elitea.runtime.v1.RenewLeaseRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	24, // 28: elitea.runtime.v1.RenewLeaseRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	27, // 29: elitea.runtime.v1.RenewLeaseResponseV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
-	28, // 30: elitea.runtime.v1.RenewLeaseResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	23, // 31: elitea.runtime.v1.ObserveDesiredStateRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	24, // 32: elitea.runtime.v1.ObserveDesiredStateRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	27, // 33: elitea.runtime.v1.ObserveDesiredStateResponseV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
-	28, // 34: elitea.runtime.v1.ObserveDesiredStateResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	23, // 35: elitea.runtime.v1.PrepareSettlementRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	24, // 36: elitea.runtime.v1.PrepareSettlementRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	20, // 37: elitea.runtime.v1.PrepareSettlementRequestV1.proposal:type_name -> elitea.runtime.v1.SettlementProposalV1
-	21, // 38: elitea.runtime.v1.PrepareSettlementRequestV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
-	22, // 39: elitea.runtime.v1.PrepareSettlementResponseV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
-	28, // 40: elitea.runtime.v1.PrepareSettlementResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	29, // 41: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:input_type -> elitea.runtime.v1.AuthorizeSandboxJobRequestV1
-	30, // 42: elitea.runtime.v1.RuntimeControlService.AuthorizeRustCompiledSnapshot:input_type -> elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1
-	3,  // 43: elitea.runtime.v1.RuntimeControlService.ClaimCommand:input_type -> elitea.runtime.v1.ClaimCommandRequestV1
-	7,  // 44: elitea.runtime.v1.RuntimeControlService.BeginExecution:input_type -> elitea.runtime.v1.BeginExecutionRequestV1
-	9,  // 45: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:input_type -> elitea.runtime.v1.AuthorizeInvocationRequestV1
-	11, // 46: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:input_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1
-	13, // 47: elitea.runtime.v1.RuntimeControlService.RenewLease:input_type -> elitea.runtime.v1.RenewLeaseRequestV1
-	15, // 48: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:input_type -> elitea.runtime.v1.ObserveDesiredStateRequestV1
-	17, // 49: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:input_type -> elitea.runtime.v1.PrepareSettlementRequestV1
-	31, // 50: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:output_type -> elitea.runtime.v1.AuthorizeSandboxJobResponseV1
-	32, // 51: elitea.runtime.v1.RuntimeControlService.AuthorizeRustCompiledSnapshot:output_type -> elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1
-	6,  // 52: elitea.runtime.v1.RuntimeControlService.ClaimCommand:output_type -> elitea.runtime.v1.ClaimCommandResponseV1
-	8,  // 53: elitea.runtime.v1.RuntimeControlService.BeginExecution:output_type -> elitea.runtime.v1.BeginExecutionResponseV1
-	10, // 54: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:output_type -> elitea.runtime.v1.AuthorizeInvocationResponseV1
-	12, // 55: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:output_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1
-	14, // 56: elitea.runtime.v1.RuntimeControlService.RenewLease:output_type -> elitea.runtime.v1.RenewLeaseResponseV1
-	16, // 57: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:output_type -> elitea.runtime.v1.ObserveDesiredStateResponseV1
-	18, // 58: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:output_type -> elitea.runtime.v1.PrepareSettlementResponseV1
-	50, // [50:59] is the sub-list for method output_type
-	41, // [41:50] is the sub-list for method input_type
-	41, // [41:41] is the sub-list for extension type_name
-	41, // [41:41] is the sub-list for extension extendee
-	0,  // [0:41] is the sub-list for field type_name
+	29, // 11: elitea.runtime.v1.ClaimReceiptV1.retirement:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	6,  // 12: elitea.runtime.v1.ClaimReceiptV1.vector_token:type_name -> elitea.runtime.v1.VectorClaimTokenV1
+	5,  // 13: elitea.runtime.v1.ClaimCommandResponseV1.receipt:type_name -> elitea.runtime.v1.ClaimReceiptV1
+	29, // 14: elitea.runtime.v1.ClaimCommandResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	24, // 15: elitea.runtime.v1.BeginExecutionRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	25, // 16: elitea.runtime.v1.BeginExecutionRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	1,  // 17: elitea.runtime.v1.BeginExecutionResponseV1.disposition:type_name -> elitea.runtime.v1.BeginExecutionDispositionV1
+	29, // 18: elitea.runtime.v1.BeginExecutionResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	24, // 19: elitea.runtime.v1.AuthorizeInvocationRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	25, // 20: elitea.runtime.v1.AuthorizeInvocationRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	2,  // 21: elitea.runtime.v1.AuthorizeInvocationResponseV1.disposition:type_name -> elitea.runtime.v1.AuthorizeInvocationDispositionV1
+	29, // 22: elitea.runtime.v1.AuthorizeInvocationResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	24, // 23: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	25, // 24: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	22, // 25: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.checkpoint_digest:type_name -> elitea.runtime.v1.DigestV1
+	2,  // 26: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1.disposition:type_name -> elitea.runtime.v1.AuthorizeInvocationDispositionV1
+	29, // 27: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	24, // 28: elitea.runtime.v1.RenewLeaseRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	25, // 29: elitea.runtime.v1.RenewLeaseRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	28, // 30: elitea.runtime.v1.RenewLeaseResponseV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
+	29, // 31: elitea.runtime.v1.RenewLeaseResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	24, // 32: elitea.runtime.v1.ObserveDesiredStateRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	25, // 33: elitea.runtime.v1.ObserveDesiredStateRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	28, // 34: elitea.runtime.v1.ObserveDesiredStateResponseV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
+	29, // 35: elitea.runtime.v1.ObserveDesiredStateResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	24, // 36: elitea.runtime.v1.PrepareSettlementRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	25, // 37: elitea.runtime.v1.PrepareSettlementRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	21, // 38: elitea.runtime.v1.PrepareSettlementRequestV1.proposal:type_name -> elitea.runtime.v1.SettlementProposalV1
+	22, // 39: elitea.runtime.v1.PrepareSettlementRequestV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
+	23, // 40: elitea.runtime.v1.PrepareSettlementResponseV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
+	29, // 41: elitea.runtime.v1.PrepareSettlementResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	30, // 42: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:input_type -> elitea.runtime.v1.AuthorizeSandboxJobRequestV1
+	31, // 43: elitea.runtime.v1.RuntimeControlService.AuthorizeRustCompiledSnapshot:input_type -> elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1
+	3,  // 44: elitea.runtime.v1.RuntimeControlService.ClaimCommand:input_type -> elitea.runtime.v1.ClaimCommandRequestV1
+	8,  // 45: elitea.runtime.v1.RuntimeControlService.BeginExecution:input_type -> elitea.runtime.v1.BeginExecutionRequestV1
+	10, // 46: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:input_type -> elitea.runtime.v1.AuthorizeInvocationRequestV1
+	12, // 47: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:input_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1
+	14, // 48: elitea.runtime.v1.RuntimeControlService.RenewLease:input_type -> elitea.runtime.v1.RenewLeaseRequestV1
+	16, // 49: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:input_type -> elitea.runtime.v1.ObserveDesiredStateRequestV1
+	18, // 50: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:input_type -> elitea.runtime.v1.PrepareSettlementRequestV1
+	32, // 51: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:output_type -> elitea.runtime.v1.AuthorizeSandboxJobResponseV1
+	33, // 52: elitea.runtime.v1.RuntimeControlService.AuthorizeRustCompiledSnapshot:output_type -> elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1
+	7,  // 53: elitea.runtime.v1.RuntimeControlService.ClaimCommand:output_type -> elitea.runtime.v1.ClaimCommandResponseV1
+	9,  // 54: elitea.runtime.v1.RuntimeControlService.BeginExecution:output_type -> elitea.runtime.v1.BeginExecutionResponseV1
+	11, // 55: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:output_type -> elitea.runtime.v1.AuthorizeInvocationResponseV1
+	13, // 56: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:output_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1
+	15, // 57: elitea.runtime.v1.RuntimeControlService.RenewLease:output_type -> elitea.runtime.v1.RenewLeaseResponseV1
+	17, // 58: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:output_type -> elitea.runtime.v1.ObserveDesiredStateResponseV1
+	19, // 59: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:output_type -> elitea.runtime.v1.PrepareSettlementResponseV1
+	51, // [51:60] is the sub-list for method output_type
+	42, // [42:51] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_control_proto_init() }
@@ -1494,7 +1584,7 @@ func file_elitea_runtime_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_control_proto_rawDesc), len(file_elitea_runtime_v1_control_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

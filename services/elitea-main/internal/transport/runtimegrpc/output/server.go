@@ -935,14 +935,28 @@ func indexIngestSummaryDomain(summary *runtimev1.IndexIngestSummaryV1) (outputap
 	default:
 		return outputapp.IndexIngestSummary{}, outputapp.ErrInvalidIndexIngestOutput
 	}
+	skipped := make(map[string]uint64, len(summary.GetSkipped()))
+	for reason, count := range summary.GetSkipped() {
+		skipped[reason] = count
+	}
+	skippedJSON, err := outputapp.NewIndexSkipped(skipped)
+	if err != nil {
+		return outputapp.IndexIngestSummary{}, err
+	}
 	mapped := outputapp.IndexIngestSummary{
-		Status:         status,
-		Message:        summary.GetMessage(),
-		TerminalState:  terminalState,
-		Indexed:        summary.GetIndexed(),
-		Updated:        summary.GetUpdated(),
-		ReindexPresent: summary.Reindex != nil,
-		Reindex:        summary.GetReindex(),
+		Status:             status,
+		Message:            summary.GetMessage(),
+		TerminalState:      terminalState,
+		Indexed:            summary.GetIndexed(),
+		Updated:            summary.GetUpdated(),
+		ReindexPresent:     summary.Reindex != nil,
+		Reindex:            summary.GetReindex(),
+		IndexedDocuments:   summary.GetIndexedDocuments(),
+		IndexedChunks:      summary.GetIndexedChunks(),
+		FailedChunks:       summary.GetFailedChunks(),
+		SkippedJSON:        skippedJSON,
+		EmbeddingModel:     summary.GetEmbeddingModel(),
+		EmbeddingDimension: summary.GetEmbeddingDimension(),
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.IndexIngestSummary{}, err
@@ -1223,6 +1237,20 @@ func hasUnknown(message protoreflect.Message) bool {
 	}
 	found := false
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		if field.IsMap() {
+			// A map field reports MessageKind (its entry type) but its value
+			// is a Map, and value.Message() panics on it. No map field of
+			// this protocol holds a message value, so there is nothing
+			// further to inspect; one that does is walked here.
+			if field.MapValue().Kind() != protoreflect.MessageKind {
+				return true
+			}
+			value.Map().Range(func(_ protoreflect.MapKey, entry protoreflect.Value) bool {
+				found = hasUnknown(entry.Message())
+				return !found
+			})
+			return !found
+		}
 		if field.Kind() != protoreflect.MessageKind {
 			return true
 		}

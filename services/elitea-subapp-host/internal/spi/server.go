@@ -77,6 +77,11 @@ func NewServer(settings Settings, app App, logger *slog.Logger, options ...Optio
 	for _, option := range options {
 		option(s)
 	}
+	// A runner that wants the registry (to find and stop its own running
+	// invocations) is handed it once, after the options have chosen the store.
+	if aware, ok := app.Runner.(ManagerAware); ok {
+		aware.AttachManager(s.manager)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /descriptor", s.descriptor)
 	mux.HandleFunc("GET /health", s.health)
@@ -93,8 +98,30 @@ func NewServer(settings Settings, app App, logger *slog.Logger, options ...Optio
 func (s *Server) Manager() *Manager { return s.manager }
 
 // Start begins housekeeping; Stop ends every in-flight invocation.
-func (s *Server) Start(ctx context.Context) { s.manager.Start(ctx) }
-func (s *Server) Stop()                     { s.manager.Stop() }
+func (s *Server) Start(ctx context.Context) {
+	s.manager.Start(ctx)
+	if starter, ok := s.app.Runner.(Starter); ok {
+		starter.Start(ctx)
+	}
+}
+func (s *Server) Stop() { s.manager.Stop() }
+
+// ManagerAware is a runner that wants the invocation registry.
+type ManagerAware interface{ AttachManager(*Manager) }
+
+// Starter is a runner with background work (refreshing what the engine can
+// do, say) that runs until the context ends.
+type Starter interface{ Start(ctx context.Context) }
+
+// Settings are the host's settings, for the code that starts its listeners.
+func (s *Server) Settings() Settings { return s.settings }
+
+// PlatformOps is the application's platform operations, when its runner has
+// any (platform.go).
+func (s *Server) PlatformOps() (PlatformOps, bool) {
+	ops, ok := s.app.Runner.(PlatformOps)
+	return ops, ok
+}
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }
 

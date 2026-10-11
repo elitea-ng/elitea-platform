@@ -67,7 +67,7 @@ func TestLoadPendingIndexIngestJoinsMetadataWithoutEntryContent(t *testing.T) {
 		"1", "indexing", "project", int32(1), deadline, "index-limits-v1", "", "",
 		"toolkit-configuration", "tool-parameters", "llm-model", "llm-configuration", "mcp-credential-references",
 		"embedding-binding", embeddingBindingDigest[:], int64(1),
-		"stream-1", "message-1", "chat_predict", "schedule",
+		"stream-1", "message-1", "chat_predict", "schedule", "", int32(0),
 	}}}}
 	repository, err := newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:index:commands")
 	if err != nil {
@@ -108,6 +108,60 @@ func TestLoadPendingIndexIngestJoinsMetadataWithoutEntryContent(t *testing.T) {
 			t.Fatalf("index dispatch query loads data-plane field %q", forbidden)
 		}
 	}
+	// Python mode: the registry is never read, and the command carries no
+	// expected embedding space.
+	if args := executor.rowCalls[0].args; len(args) != 3 || args[2] != false {
+		t.Fatalf("python-mode dispatch args = %#v, want the registry gate off", args)
+	}
+	if dispatch.ExpectedEmbeddingModel != "" || dispatch.ExpectedEmbeddingDimension != 0 {
+		t.Fatalf("python-mode dispatch carries an expected embedding: %+v", dispatch)
+	}
+}
+
+// Rust mode: the dispatch reads the stamp of the run's registry row and the
+// command carries it as the expected embedding space.
+func TestLoadPendingIndexIngestCarriesTheRegistryStampInRustMode(t *testing.T) {
+	manifestDigest := runtimedomain.SHA256([]byte("index-manifest"))
+	deadline := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	row := func(model string, dimension int32) []scriptedRow {
+		return []scriptedRow{{values: []any{
+			"index-outbox-1", "index-command-1", "index-execution-1", int64(1), int64(1),
+			"tenant-1", "1", "1", "actor-1",
+			"index-bundle-1", "admission:index-bundle-1", "application/x-protobuf", int64(256), manifestDigest[:],
+			"1", "indexing", "project", int32(1), deadline, "index-limits-v1", "", "",
+			"toolkit-configuration", "tool-parameters", "", "", "",
+			"", []byte{}, int64(0),
+			"", "", "", "user", model, dimension,
+		}}}
+	}
+	executor := &scriptedExecutor{rowResults: row("Org/Model.A", 1536)}
+	repository, err := newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:index:commands")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.WithIndexRegistry()
+	dispatch, err := repository.LoadPendingIndexIngest(context.Background(), "index-outbox-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatch.ExpectedEmbeddingModel != "Org/Model.A" || dispatch.ExpectedEmbeddingDimension != 1536 {
+		t.Fatalf("expected embedding = %q/%d", dispatch.ExpectedEmbeddingModel, dispatch.ExpectedEmbeddingDimension)
+	}
+	call := executor.rowCalls[0]
+	if len(call.args) != 3 || call.args[2] != true ||
+		!strings.Contains(call.sql, "FROM elitea_runtime.index_registry AS r") ||
+		!strings.Contains(call.sql, "r.execution_id = j.execution_id") {
+		t.Fatalf("rust-mode dispatch query/args = %#v", call.args)
+	}
+
+	// An unstamped index (its first run) carries none.
+	executor = &scriptedExecutor{rowResults: row("", 0)}
+	repository, _ = newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:index:commands")
+	repository.WithIndexRegistry()
+	if dispatch, err := repository.LoadPendingIndexIngest(context.Background(), "index-outbox-1"); err != nil ||
+		dispatch.ExpectedEmbeddingModel != "" || dispatch.ExpectedEmbeddingDimension != 0 {
+		t.Fatalf("unstamped dispatch = %+v err=%v", dispatch, err)
+	}
 }
 
 func TestLoadPendingIndexIngestRejectsAmbiguousEmbeddingBindings(t *testing.T) {
@@ -121,7 +175,7 @@ func TestLoadPendingIndexIngestRejectsAmbiguousEmbeddingBindings(t *testing.T) {
 		"1", "indexing", "project", int32(1), deadline, "index-limits-v1", "", "",
 		"toolkit-configuration", "tool-parameters", "llm-model", "llm-configuration", "mcp-credential-references",
 		"embedding-binding", embeddingBindingDigest[:], int64(2),
-		"stream-1", "message-1", "chat_predict", "user",
+		"stream-1", "message-1", "chat_predict", "user", "", int32(0),
 	}}}}
 	repository, err := newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:index:commands")
 	if err != nil {

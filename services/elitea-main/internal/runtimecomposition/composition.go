@@ -17,6 +17,7 @@ import (
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	recoveryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
@@ -41,6 +42,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/output"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -98,6 +100,11 @@ type Dependencies struct {
 	ReplayPool                    *pgxpool.Pool
 	TerminalEffectsPool           *pgxpool.Pool
 	ContentPool                   *pgxpool.Pool
+	// VectorIntrospectionPool is the seventh, optional pool: the claim-token
+	// reads of elitea-vector's token introspection. Required when
+	// Config.VectorIntrospectionClients is set, and never ControlPool or any
+	// other pool (validateDependencies).
+	VectorIntrospectionPool *pgxpool.Pool
 	// Optional original supervisor state DB, owned and closed by the calling command.
 	CompiledSnapshotStatePool        *pgxpool.Pool
 	CurrentConfigurations            *CurrentConfigurationsRuntime
@@ -105,8 +112,13 @@ type Dependencies struct {
 	ActorTokenIssuer                 storage.ActorTokenIssuer
 	ProjectTokenValidator            storage.ProjectTokenValidator
 	ProjectSystemTokenSource         ProjectSystemTokenSource
-	PermissionResolver               auth.PermissionResolver
-	Logger                           *slog.Logger
+	// CallbackTokenFacts reads callback token grants for elitea-vector's
+	// token introspection (ADR-0031). Required only when
+	// Config.VectorIntrospectionClients is set; ProjectTokenValidator then
+	// checks the signature.
+	CallbackTokenFacts vectorintrospection.CallbackFacts
+	PermissionResolver auth.PermissionResolver
+	Logger             *slog.Logger
 
 	// ObjectStore backs the artifact retention sweeper (S14). A nil store
 	// leaves current index scheduling enabled but omits that separate
@@ -363,7 +375,53 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var indexMetaTerminalEffect *currentIndexMetaTerminalProcessor
 	var indexManualStopCleanupEffect *currentIndexManualStopCleanupProcessor
 	var currentIndexMetaWriter *pgvector.CurrentIndexMetaWriter
-	if config.IndexIngestDispatchEnabled {
+	// rustIndexing selects the registry for every index-metadata effect below
+	// (ELITEA_INDEXING_RUNTIME=rust). The python writer is then never built, so
+	// a rust deployment holds no pgvector connection code path at all.
+	rustIndexing := config.IndexIngestDispatchEnabled && config.IndexingRuntime == IndexingRuntimeRust
+	// Until elitea-main has an elitea-vector client, deleting an index's
+	// vectors is a deferred hook (ADR-0031 decision 4): the registry keeps the
+	// tombstone, and nothing is reported as deleted that was not.
+	var indexVectors indexingapp.IndexVectorDeleter = indexingapp.DeferredIndexVectorDeleter{}
+	var indexRegistry *indexRegistryComposition
+	if rustIndexing {
+		indexRegistry, err = newIndexRegistryComposition(
+			dependencies.AdmissionPool,
+			indexVectors,
+			func(err error) {
+				dependencies.Logger.Error("index registry maintenance failed", "err", err)
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("construct index registry: %w", err)
+		}
+		indexRegistry.repo.WithLogger(dependencies.Logger)
+		terminalRegistry, registryErr := repos.NewIndexRegistryRepository(dependencies.TerminalEffectsPool)
+		if registryErr != nil {
+			return nil, fmt.Errorf("construct index registry terminal repository: %w", registryErr)
+		}
+		terminalRegistry.WithLogger(dependencies.Logger)
+		indexMetaTerminalEffect, err = newRegistryIndexMetaTerminalProcessor(
+			dependencies.TerminalEffectsPool,
+			terminalRegistry,
+			func(err error) {
+				dependencies.Logger.Error("index registry terminal item requeued", "err", err)
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("construct index registry terminal effect: %w", err)
+		}
+		indexManualStopCleanupEffect, err = newRegistryIndexManualStopCleanupProcessor(
+			dependencies.TerminalEffectsPool,
+			terminalRegistry,
+			func(err error) {
+				dependencies.Logger.Error("index registry manual Stop cleanup item requeued", "err", err)
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("construct index registry manual Stop cleanup effect: %w", err)
+		}
+	} else if config.IndexIngestDispatchEnabled {
 		currentIndexMetaWriter = pgvector.NewCurrentIndexMetaWriter()
 		indexMetaTerminalEffect, err = newCurrentIndexMetaTerminalProcessor(
 			dependencies.TerminalEffectsPool,
@@ -402,7 +460,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	indexMetaTaskRestampReconciler, err :=
 		newConfiguredCurrentIndexMetaTaskRestampReconciler(
-			config.IndexIngestDispatchEnabled,
+			config.IndexIngestDispatchEnabled && !rustIndexing,
 			dependencies.TerminalEffectsPool,
 			dependencies.CurrentConfigurations,
 			currentIndexMetaWriter,
@@ -469,6 +527,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		indexOutbox, err := repos.NewCommandOutboxRepository(dependencies.AdmissionPool, config.IndexIngestCommandStream)
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest command outbox: %w", err)
+		}
+		if config.IndexingRuntime == IndexingRuntimeRust {
+			// Each index command carries the embedding space its index is
+			// stamped with, so the worker refuses another before it writes.
+			indexOutbox.WithIndexRegistry()
 		}
 		indexDispatcher, err := indexingapp.NewIndexIngestDispatcher(indexOutbox, indexProducer)
 		if err != nil {
@@ -994,15 +1057,43 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 					err,
 				)
 			}
-			publisherRoot, err = newPublisherSet(
-				publisherRoot,
-				indexMetaTaskRestampReconciler,
-			)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"compose current index metadata task restamp reconciler: %w",
-					err,
+			// The registry's tombstone sweeper finishes the vector deletion of
+			// deleted indexes. It runs only in rust mode.
+			if indexRegistry != nil {
+				sweeper, sweeperErr := indexregistryapp.NewTombstoneSweeper(
+					indexRegistry.repo,
+					indexRegistry.vectors,
+					indexRegistry.report,
+					DefaultIndexTombstoneBatch,
 				)
+				if sweeperErr != nil {
+					return nil, fmt.Errorf("construct index tombstone sweeper: %w", sweeperErr)
+				}
+				tombstoneReconciler, reconcileErr := newIndexTombstoneReconciler(
+					sweeper, DefaultIndexTombstoneInterval, dependencies.Logger,
+				)
+				if reconcileErr != nil {
+					return nil, fmt.Errorf("construct index tombstone reconciler: %w", reconcileErr)
+				}
+				publisherRoot, err = newPublisherSet(publisherRoot, tombstoneReconciler)
+				if err != nil {
+					return nil, fmt.Errorf("compose index tombstone reconciler: %w", err)
+				}
+			}
+			// The task-id restamp repairs a field the Python SDK overwrites in
+			// its own index_meta row. The rust runtime has no such writer, so
+			// its reconciler is not composed.
+			if indexMetaTaskRestampReconciler != nil {
+				publisherRoot, err = newPublisherSet(
+					publisherRoot,
+					indexMetaTaskRestampReconciler,
+				)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"compose current index metadata task restamp reconciler: %w",
+						err,
+					)
+				}
 			}
 		}
 	}
@@ -1106,7 +1197,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if compiledSnapshots != nil {
 		compiledAuthority = compiledSnapshots
 	}
+	vectorTokens, err := newVectorClaimTokenIssuer(config, dependencies)
+	if err != nil {
+		return nil, err
+	}
 	controlServer, err := control.NewServer(control.ServerConfig{
+		VectorTokens:           vectorTokens,
 		SandboxGrants:          sandboxGrants,
 		CompiledSnapshots:      compiledAuthority,
 		CompiledProfiles:       compiledProfiles,
@@ -1246,6 +1342,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			})
 			if err != nil {
 				return nil, fmt.Errorf("construct index ingest result repository: %w", err)
+			}
+			if rustIndexing {
+				// The worker reports, Main records: the typed result is applied
+				// to the index registry in the transaction that projects it.
+				indexResults.WithIndexRegistry()
 			}
 			indexOutput, err = outputapp.NewIndexIngestService(indexResults, outputClaims, indexResults, indexResults)
 			if err != nil {
@@ -1494,12 +1595,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 	}
 	if config.IndexIngestDispatchEnabled {
+		// A typed nil *CurrentIndexMetaWriter in an interface is not nil, so
+		// the rust runtime passes an untyped nil.
+		var indexMetaWriter indexingapp.CurrentIndexMetaWriter
+		if currentIndexMetaWriter != nil {
+			indexMetaWriter = currentIndexMetaWriter
+		}
 		currentIndex, err = newCurrentIndexRuntime(
 			dependencies.AdmissionPool,
 			dependencies.CurrentConfigurations,
 			config,
 			indexDispatchPolicy,
-			currentIndexMetaWriter,
+			indexMetaWriter,
+			indexRegistry,
 			func(err error) {
 				dependencies.Logger.Error(
 					"current index metadata initialization requeued",
@@ -1615,14 +1723,23 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if notificationErr != nil {
 				return nil, notificationErr
 			}
-			failures, failureErr := newCurrentIndexScheduleFailureRecorder(
-				currentIndex.toolkits,
-				currentIndex.settings,
-				currentIndexMetaWriter,
-				notifications,
-			)
-			if failureErr != nil {
-				return nil, failureErr
+			var failures indexscheduleapp.FailureRecorder
+			if rustIndexing {
+				failures, err = newRegistryIndexScheduleFailureRecorder(
+					currentIndex.toolkits,
+					indexRegistry.repo,
+					notifications,
+				)
+			} else {
+				failures, err = newCurrentIndexScheduleFailureRecorder(
+					currentIndex.toolkits,
+					currentIndex.settings,
+					currentIndexMetaWriter,
+					notifications,
+				)
+			}
+			if err != nil {
+				return nil, err
 			}
 			indexRunner, runnerErr := indexscheduleapp.NewRunner(
 				catalog,
@@ -1639,10 +1756,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if dueWorkErr != nil {
 				return nil, dueWorkErr
 			}
-			patchRepository, patchErr :=
-				repos.NewCurrentIndexSchedulePatchRepository(
-					dependencies.AdmissionPool,
-				)
+			newPatchRepository := repos.NewCurrentIndexSchedulePatchRepository
+			if rustIndexing {
+				newPatchRepository = repos.NewIndexRegistrySchedulePatchRepository
+			}
+			patchRepository, patchErr := newPatchRepository(
+				dependencies.AdmissionPool,
+			)
 			if patchErr != nil {
 				return nil, patchErr
 			}
@@ -1941,6 +2061,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 	}
 
+	vectorIntrospection, err := newVectorIntrospection(config, dependencies)
+	if err != nil {
+		return nil, err
+	}
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:                  config.ControlAddress,
 		OutputAddress:                   config.OutputAddress,
@@ -1963,9 +2087,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		ContentMaxHeaderBytes:           16 * 1024,
 		ShutdownTimeout:                 15 * time.Second,
 	}, runtimegrpc.PrivateServices{
-		Control: controlServer,
-		Output:  outputServer,
-		Content: contentServer.Routes(),
+		Control:             controlServer,
+		Output:              outputServer,
+		Content:             contentServer.Routes(),
+		VectorIntrospection: vectorIntrospection,
 	})
 	if err != nil {
 		return nil, err

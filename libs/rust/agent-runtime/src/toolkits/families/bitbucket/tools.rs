@@ -14,6 +14,7 @@ use super::client::{
     BitbucketApi, BitbucketClient, BitbucketClientError, BitbucketOperation, CREATE_PR_DATA,
 };
 use super::config::{BitbucketConfigError, BitbucketConfigErrorCode, BitbucketToolkitConfig};
+use crate::toolkits::families::connector_client::IntoAdk;
 
 const MAX_ARGUMENT_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
