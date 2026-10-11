@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked, ParallelCheckpointAppender,
-    ParallelChildOrigin, ParallelDecision, ParallelPauseCard, business_state, is_lease_lost,
-    parallel_error, validate_state, validate_values,
+    ParallelChildOrigin, ParallelDecision, ParallelPauseCard, ParentHead, business_state,
+    is_lease_lost, parallel_error, validate_state, validate_values,
 };
 
 pub(super) const OCCURRENCE_KEY: &str = "elitea.graph.parallel.occurrence.v2";
@@ -43,15 +43,77 @@ pub(super) struct FrozenOccurrence {
     pub(super) blocked: Option<ParallelBlocked>,
 }
 
+pub(crate) use elitea_agent_runtime::graph::fanout_budget::MAX_PARENT_ROWS_PER_VISIT;
+
+/// One node visit's parent-write accounting, owned by the wrapper.
+struct ParentVisit {
+    activation: ParallelActivation,
+    rows: usize,
+    /// Pause cards waiting for the pause row, bound to the parent they extend.
+    staged: Option<(String, FrozenOccurrence)>,
+}
+
 /// Give this wrapper to both the parent graph and the branch runtime.
 /// The inner store must supply atomic expected-parent append and writer fencing.
 pub(crate) struct ParallelOccurrenceCheckpointer {
     inner: Arc<dyn ParallelCheckpointAppender>,
+    visit: Mutex<Option<ParentVisit>>,
 }
 
 impl ParallelOccurrenceCheckpointer {
     pub(crate) fn new(inner: Arc<dyn ParallelCheckpointAppender>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            visit: Mutex::new(None),
+        }
+    }
+
+    fn open_visit(&self, activation: &ParallelActivation, rows: usize) -> Result<(), GraphError> {
+        *self.visit.lock().map_err(|_| occurrence_error())? = Some(ParentVisit {
+            activation: activation.clone(),
+            rows,
+            staged: None,
+        });
+        Ok(())
+    }
+
+    /// Count one parent row against the open visit, refusing it past the budget.
+    fn charge_row(&self, activation: &ParallelActivation, closes: bool) -> Result<(), GraphError> {
+        let mut visit = self.visit.lock().map_err(|_| occurrence_error())?;
+        if let Some(open) = visit.as_mut().filter(|open| open.activation == *activation) {
+            if open.rows >= MAX_PARENT_ROWS_PER_VISIT {
+                return Err(parallel_error(
+                    "graph.parallel.parent_write_budget_exhausted",
+                    "the parallel activation exceeded its parent checkpoint write budget",
+                ));
+            }
+            open.rows += 1;
+            if closes {
+                *visit = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// The pause cards staged for this exact parent row, if any.
+    fn staged_for(
+        &self,
+        activation: &ParallelActivation,
+        parent_id: &str,
+    ) -> Result<Option<FrozenOccurrence>, GraphError> {
+        let visit = self.visit.lock().map_err(|_| occurrence_error())?;
+        let Some((staged_parent, staged)) = visit
+            .as_ref()
+            .filter(|open| open.activation == *activation)
+            .and_then(|open| open.staged.as_ref())
+        else {
+            return Ok(None);
+        };
+        if staged_parent != parent_id {
+            // The parent moved after the cards were staged: they are stale.
+            return Err(occurrence_error());
+        }
+        Ok(Some(staged.clone()))
     }
 
     pub(super) async fn freeze(
@@ -87,6 +149,7 @@ impl ParallelOccurrenceCheckpointer {
                 {
                     return Err(occurrence_error());
                 }
+                self.open_visit(activation, 0)?;
                 return Ok(frozen);
             }
         }
@@ -109,6 +172,7 @@ impl ParallelOccurrenceCheckpointer {
         self.inner
             .append_after(latest.as_ref(), &checkpoint)
             .await?;
+        self.open_visit(activation, 1)?;
         Ok(expected)
     }
 
@@ -127,18 +191,34 @@ impl ParallelOccurrenceCheckpointer {
         occurrence.cards = cards;
         occurrence.decisions = None;
         occurrence.resume_inputs.clear();
-        self.save_occurrence(&parent, occurrence, None).await
+        // The cards ride on the ADK pause row that follows at this frontier.
+        // If the process dies first, replay derives the same cards from the
+        // child pause receipts.
+        let mut visit = self.visit.lock().map_err(|_| occurrence_error())?;
+        let open = visit
+            .as_mut()
+            .filter(|open| open.activation == *activation)
+            .ok_or_else(occurrence_error)?;
+        open.staged = Some((parent.checkpoint_id, occurrence));
+        Ok(())
     }
 
     pub(super) async fn record_decisions(
         &self,
         occurrence: &FrozenOccurrence,
+        published: &[(usize, ParallelPauseCard)],
         decisions: Vec<ParallelDecision>,
         resume_inputs: BTreeMap<usize, State>,
         context: &NodeContext,
     ) -> Result<(), GraphError> {
         let (parent, mut current) = self.latest_occurrence(&occurrence.activation).await?;
         if current != *occurrence || current.decisions.is_some() || current.blocked.is_some() {
+            return Err(occurrence_error());
+        }
+        // The decision row records the exact cards the decisions answered.
+        if current.cards.is_empty() {
+            current.cards = published.to_vec();
+        } else if current.cards != published {
             return Err(occurrence_error());
         }
         if context.config.thread_id != parent.thread_id
@@ -149,6 +229,7 @@ impl ParallelOccurrenceCheckpointer {
         }
         current.decisions = Some(decisions);
         current.resume_inputs = resume_inputs;
+        self.charge_row(&occurrence.activation, false)?;
         self.save_occurrence(&parent, current, Some(&context.state))
             .await
     }
@@ -167,6 +248,7 @@ impl ParallelOccurrenceCheckpointer {
             };
         }
         occurrence.blocked = Some(blocked);
+        self.charge_row(activation, false)?;
         self.save_occurrence(&parent, occurrence, None).await
     }
 
@@ -233,6 +315,24 @@ impl ParallelOccurrenceCheckpointer {
     }
 }
 
+impl ParallelOccurrenceCheckpointer {
+    async fn head_state(&self, head: &ParentHead) -> Result<State, GraphError> {
+        if let Some(snapshot) = head.snapshot.as_deref() {
+            return Ok(snapshot.state.clone());
+        }
+        let parent = self
+            .inner
+            .load_by_id(&head.checkpoint_id)
+            .await?
+            .filter(|parent| {
+                parent.checkpoint_id == head.checkpoint_id && parent.thread_id == head.thread_id
+            })
+            .ok_or_else(occurrence_error)?;
+        super::structure::validate_checkpoint(&parent)?;
+        Ok(parent.state)
+    }
+}
+
 fn validate_freeze_parent(
     checkpoint: &Checkpoint,
     activation: &ParallelActivation,
@@ -254,17 +354,45 @@ pub(super) fn occurrence_from(
     activation: &ParallelActivation,
 ) -> Result<FrozenOccurrence, GraphError> {
     super::structure::validate_checkpoint(checkpoint)?;
-    refuse_legacy(checkpoint)?;
-    let raw = checkpoint
-        .metadata
-        .get(OCCURRENCE_KEY)
-        .ok_or_else(occurrence_error)?;
+    occurrence_in(
+        &checkpoint.thread_id,
+        checkpoint.step,
+        &checkpoint.pending_nodes,
+        &checkpoint.metadata,
+        activation,
+    )
+}
+
+/// The same proof from a parent head, which carries no business state.
+fn occurrence_from_head(
+    head: &ParentHead,
+    activation: &ParallelActivation,
+) -> Result<FrozenOccurrence, GraphError> {
+    validate_values(head.metadata.values())?;
+    occurrence_in(
+        &head.thread_id,
+        head.step,
+        &head.pending_nodes,
+        &head.metadata,
+        activation,
+    )
+}
+
+fn occurrence_in(
+    thread_id: &str,
+    step: usize,
+    pending_nodes: &[String],
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+    activation: &ParallelActivation,
+) -> Result<FrozenOccurrence, GraphError> {
+    refuse_legacy_metadata(metadata)?;
+    let raw = metadata.get(OCCURRENCE_KEY).ok_or_else(occurrence_error)?;
     let occurrence: FrozenOccurrence =
         serde_json::from_value(raw.clone()).map_err(|_| occurrence_error())?;
-    if checkpoint.thread_id != activation.root_thread_id
+    if thread_id != activation.root_thread_id
         || occurrence.activation != *activation
-        || u64::try_from(checkpoint.step).map_err(|_| occurrence_error())? != activation.step
-        || checkpoint.pending_nodes.as_slice() != [activation.node_id.as_str()]
+        || u64::try_from(step).map_err(|_| occurrence_error())? != activation.step
+        || pending_nodes != [activation.node_id.as_str()]
     {
         return Err(occurrence_error());
     }
@@ -283,7 +411,13 @@ pub(super) fn occurrence_from(
 
 /// The previous occurrence format froze no child identity. Refuse it by type.
 fn refuse_legacy(checkpoint: &Checkpoint) -> Result<(), GraphError> {
-    if checkpoint.metadata.contains_key(LEGACY_OCCURRENCE_KEY) {
+    refuse_legacy_metadata(&checkpoint.metadata)
+}
+
+fn refuse_legacy_metadata(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<(), GraphError> {
+    if metadata.contains_key(LEGACY_OCCURRENCE_KEY) {
         return Err(parallel_error(
             "graph.parallel.unsupported_occurrence",
             "the parallel occurrence format is no longer supported",
@@ -334,49 +468,64 @@ fn refresh_identity(checkpoint: &mut Checkpoint) {
 #[async_trait]
 impl Checkpointer for ParallelOccurrenceCheckpointer {
     async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
+        // One head read replaces the by-id probe and full latest load.
+        let probe = self
+            .inner
+            .probe_parent(&checkpoint.thread_id, &checkpoint.checkpoint_id)
+            .await?;
         // An exact immutable replay must retain its original bytes. In particular,
         // do not attach a later occurrence envelope to a pre-freeze checkpoint ID.
-        if self
-            .inner
-            .load_by_id(&checkpoint.checkpoint_id)
-            .await?
-            .is_some()
-        {
+        if probe.candidate_exists {
             return self.inner.append_after(None, checkpoint).await;
         }
         super::structure::validate_checkpoint(checkpoint)?;
         let mut candidate = checkpoint.clone();
-        let latest = self.inner.load(&checkpoint.thread_id).await?;
+        let latest = probe.latest;
         if let Some(previous) = latest.as_ref() {
-            super::structure::validate_checkpoint(previous)?;
+            validate_values(previous.metadata.values())?;
             if previous.thread_id != checkpoint.thread_id || checkpoint.step < previous.step {
                 return Err(occurrence_error());
             }
             if let Some(raw) = previous.metadata.get(OCCURRENCE_KEY) {
                 let occurrence: FrozenOccurrence =
                     serde_json::from_value(raw.clone()).map_err(|_| occurrence_error())?;
-                occurrence_from(previous, &occurrence.activation)?;
+                occurrence_from_head(previous, &occurrence.activation)?;
                 let step =
                     usize::try_from(occurrence.activation.step).map_err(|_| occurrence_error())?;
                 if checkpoint.step == step
                     && checkpoint.pending_nodes.as_slice()
                         == [occurrence.activation.node_id.as_str()]
                 {
-                    if business_state(&checkpoint.state) != business_state(&previous.state) {
+                    // A re-save at the activation frontier (a pause) must keep the
+                    // parent's business state. Only this rare path reads state.
+                    let parent_state = self.head_state(previous).await?;
+                    if business_state(&checkpoint.state) != business_state(&parent_state) {
                         return Err(occurrence_error());
                     }
+                    let envelope =
+                        match self.staged_for(&occurrence.activation, &previous.checkpoint_id)? {
+                            Some(staged) => {
+                                serde_json::to_value(staged).map_err(|_| occurrence_error())?
+                            }
+                            None => raw.clone(),
+                        };
+                    self.charge_row(&occurrence.activation, false)?;
                     candidate
                         .metadata
-                        .insert(OCCURRENCE_KEY.to_owned(), raw.clone());
+                        .insert(OCCURRENCE_KEY.to_owned(), envelope);
                 } else if occurrence.blocked.is_some() {
                     return Err(occurrence_error());
                 } else {
+                    // The join row closes the visit.
+                    self.charge_row(&occurrence.activation, true)?;
                     candidate.metadata.remove(OCCURRENCE_KEY);
                 }
             }
         }
         super::structure::validate_checkpoint(&candidate)?;
-        self.inner.append_after(latest.as_ref(), &candidate).await
+        self.inner
+            .append_after_head(latest.as_ref(), &candidate)
+            .await
     }
 
     async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
@@ -408,10 +557,24 @@ pub(super) enum BranchReceipt {
     Failed { code: String },
 }
 
+/// The last row this wrapper saved on its own thread. Saves are writer-fenced,
+/// so a successful save proves the child's frontier without a reload.
+#[derive(Clone)]
+pub(super) struct SavedBranchRow {
+    pub(super) checkpoint_id: String,
+    pub(super) terminal: bool,
+    pub(super) receipt: Option<BranchReceipt>,
+}
+
 pub(super) struct BranchReceiptCheckpointer {
     inner: Arc<dyn Checkpointer>,
     thread_id: String,
     captured: Mutex<Option<BranchReceipt>>,
+    saved: Mutex<Option<SavedBranchRow>>,
+    /// ADK probes an empty thread twice before its first save (resume probe,
+    /// then state initialisation). The second probe reuses the first, fenced
+    /// answer once; any save clears it.
+    empty_probe: Mutex<bool>,
 }
 
 impl BranchReceiptCheckpointer {
@@ -420,7 +583,13 @@ impl BranchReceiptCheckpointer {
             inner,
             thread_id,
             captured: Mutex::new(None),
+            saved: Mutex::new(None),
+            empty_probe: Mutex::new(false),
         }
+    }
+
+    pub(super) fn last_saved(&self) -> Result<Option<SavedBranchRow>, GraphError> {
+        Ok(self.saved.lock().map_err(|_| receipt_error())?.clone())
     }
 
     fn capture(&self, receipt: BranchReceipt) -> Result<(), GraphError> {
@@ -447,7 +616,7 @@ impl Checkpointer for BranchReceiptCheckpointer {
         super::structure::validate_checkpoint(checkpoint)?;
         let receipt = self.captured.lock().map_err(|_| receipt_error())?.clone();
         let mut checkpoint = checkpoint.clone();
-        if let Some(receipt) = receipt {
+        if let Some(receipt) = receipt.as_ref() {
             if matches!(receipt, BranchReceipt::Completed) && !checkpoint.pending_nodes.is_empty() {
                 return Err(receipt_error());
             }
@@ -459,11 +628,26 @@ impl Checkpointer for BranchReceiptCheckpointer {
         // Typed receipt wrappers add depth and values around pause data.
         // Validate what is actually saved, as replay validates the full metadata.
         super::structure::validate_checkpoint(&checkpoint)?;
-        self.inner.save(&checkpoint).await
+        *self.empty_probe.lock().map_err(|_| receipt_error())? = false;
+        let saved_id = self.inner.save(&checkpoint).await?;
+        *self.saved.lock().map_err(|_| receipt_error())? = Some(SavedBranchRow {
+            checkpoint_id: saved_id.clone(),
+            terminal: checkpoint.pending_nodes.is_empty(),
+            receipt,
+        });
+        Ok(saved_id)
     }
 
     async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
-        self.inner.load(thread).await
+        if thread != self.thread_id {
+            return self.inner.load(thread).await;
+        }
+        if std::mem::take(&mut *self.empty_probe.lock().map_err(|_| receipt_error())?) {
+            return Ok(None);
+        }
+        let loaded = self.inner.load(thread).await?;
+        *self.empty_probe.lock().map_err(|_| receipt_error())? = loaded.is_none();
+        Ok(loaded)
     }
 
     async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {

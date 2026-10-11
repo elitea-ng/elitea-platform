@@ -1,7 +1,11 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::future::Future;
 use std::io::{self, Write};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::time::Instant;
 
 use adk_rust::graph::checkpoint::RetentionPolicy;
 use adk_rust::graph::{Checkpoint, Checkpointer, GraphError, State};
@@ -16,6 +20,7 @@ use zeroize::Zeroizing;
 use super::StateWriterLease;
 
 mod application_children;
+mod child_batch;
 mod map_children;
 mod node_attempts;
 mod parallel_append;
@@ -324,6 +329,8 @@ pub struct PostgresCheckpointer {
     state_writer_lease: Arc<dyn StateWriterLease>,
     // Every thread opened below this one is fenced by the run's root writer.
     run_root_thread_id: String,
+    // Shared by a root writer and every child it activates.
+    io: Arc<CheckpointIoCounters>,
 }
 
 impl PostgresCheckpointer {
@@ -339,7 +346,11 @@ impl PostgresCheckpointer {
         limits: CheckpointLimits,
         state_writer_lease: Arc<dyn StateWriterLease>,
     ) -> Result<Self, PostgresCheckpointError> {
-        Self::activate_fenced(pool, authority, limits, state_writer_lease, None).await
+        let io = Arc::new(CheckpointIoCounters::default());
+        persist_scoped("activate", &io, async {
+            Self::activate_fenced(pool, authority, limits, state_writer_lease, None, &io).await
+        })
+        .await
     }
 
     /// Activate a thread owned by this claim's run only while the claim still holds
@@ -353,14 +364,19 @@ impl PostgresCheckpointer {
         root_thread_id: &str,
         limits: CheckpointLimits,
         state_writer_lease: Arc<dyn StateWriterLease>,
+        io: &Arc<CheckpointIoCounters>,
     ) -> Result<Self, PostgresCheckpointError> {
-        Self::activate_fenced(
-            pool,
-            authority,
-            limits,
-            state_writer_lease,
-            Some(root_thread_id),
-        )
+        persist_scoped("activate", io, async {
+            Self::activate_fenced(
+                pool,
+                authority,
+                limits,
+                state_writer_lease,
+                Some(root_thread_id),
+                io,
+            )
+            .await
+        })
         .await
     }
 
@@ -370,13 +386,14 @@ impl PostgresCheckpointer {
         limits: CheckpointLimits,
         state_writer_lease: Arc<dyn StateWriterLease>,
         root_thread_id: Option<&str>,
+        io: &Arc<CheckpointIoCounters>,
     ) -> Result<Self, PostgresCheckpointError> {
         authority.validate()?;
         let limits = limits.validate()?;
         state_writer_lease
             .ensure_current()
             .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
-        let mut transaction = pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_transaction(&pool).await?;
         if let Some(root_thread_id) = root_thread_id {
             let root_writer = sqlx::query_scalar::<_, String>(
                 r"
@@ -402,6 +419,7 @@ FOR SHARE
             .fetch_optional(&mut *transaction)
             .await
             .map_err(storage_error)?;
+            note_round_trip();
             if root_writer.as_deref() != Some(authority.claim_id.as_str()) {
                 return Err(PostgresCheckpointError::WriterNotCurrent);
             }
@@ -448,6 +466,7 @@ RETURNING writer_claim_id
         .fetch_optional(&mut *transaction)
         .await
         .map_err(storage_error)?;
+        note_round_trip();
         if activated.as_deref() != Some(authority.claim_id.as_str()) {
             return Err(PostgresCheckpointError::WriterNotCurrent);
         }
@@ -455,6 +474,7 @@ RETURNING writer_claim_id
             .ensure_current()
             .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
         transaction.commit().await.map_err(storage_error)?;
+        note_round_trip();
         let run_root_thread_id =
             root_thread_id.map_or_else(|| authority.thread_id.clone(), ToOwned::to_owned);
         Ok(Self {
@@ -463,7 +483,14 @@ RETURNING writer_claim_id
             limits,
             state_writer_lease,
             run_root_thread_id,
+            io: Arc::clone(io),
         })
+    }
+
+    /// Cumulative transaction and round-trip counts of this writer family.
+    #[cfg(test)]
+    pub(crate) fn io_counters(&self) -> &CheckpointIoCounters {
+        &self.io
     }
 
     async fn save_checkpoint(
@@ -480,12 +507,12 @@ RETURNING writer_claim_id
         condition: CheckpointAppendCondition<'_>,
     ) -> Result<String, PostgresCheckpointError> {
         self.scope.require_thread(&checkpoint.thread_id)?;
-        if let CheckpointAppendCondition::Latest(Some(expected)) = condition {
-            self.scope.require_thread(&expected.thread_id)?;
-            SerializedCheckpoint::new(expected, self.limits)?;
+        if let CheckpointAppendCondition::Latest(Some(expected)) = &condition {
+            expected.validate()?;
         }
         let serialized = SerializedCheckpoint::new(checkpoint, self.limits)?;
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        note_payload_bytes(serialized.total_bytes);
+        let mut transaction = begin_transaction(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Exclusive)
             .await?;
 
@@ -531,6 +558,7 @@ WHERE tenant_id = $1
         .fetch_optional(&mut *transaction)
         .await
         .map_err(storage_error)?;
+        note_round_trip();
         match exact_existing {
             Some(true) => {
                 self.commit_current(transaction).await?;
@@ -575,7 +603,7 @@ WHERE tenant_id = $1
         let row = sqlx::query(
             r"
 SELECT checkpoint_id, thread_id, state, step, pending_nodes, metadata,
-       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger
+       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger, payload_bytes
 FROM elitea_runtime.agent_graph_checkpoints
 WHERE tenant_id=$1 AND resource_project_id=$2 AND projection_project_id=$3
   AND capability_id=$4 AND checkpoint_family=$5 AND definition_digest=$6 AND thread_id=$7
@@ -593,6 +621,7 @@ ORDER BY save_ordinal DESC LIMIT 1
         .await
         .map_err(storage_error)?
         .ok_or(PostgresCheckpointError::CheckpointConflict)?;
+        note_round_trip();
         let parent = self.decode_row(&row)?;
         validate_graph_call_revision(&parent, candidate)
             .map_err(|_| PostgresCheckpointError::CheckpointConflict)
@@ -626,6 +655,7 @@ WHERE tenant_id = $1
         .fetch_one(&mut **transaction)
         .await
         .map_err(storage_error)?;
+        note_round_trip();
         if usize::try_from(count)
             .ok()
             .is_none_or(|count| count >= self.limits.max_checkpoints_per_thread)
@@ -696,6 +726,7 @@ INSERT INTO elitea_runtime.agent_graph_checkpoints (
         .execute(&mut **transaction)
         .await
         .map_err(storage_error)?;
+        note_round_trip();
         Ok(())
     }
 
@@ -728,6 +759,7 @@ RETURNING next_save_ordinal - 1
         .fetch_optional(&mut **transaction)
         .await
         .map_err(storage_error)?
+        .inspect(|_| note_round_trip())
         .ok_or(PostgresCheckpointError::ResourceExhausted(
             "the checkpoint save ordinal reached PostgreSQL BIGINT",
         ))
@@ -742,14 +774,14 @@ RETURNING next_save_ordinal - 1
                 "the requested checkpoint ID is malformed",
             ));
         }
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_transaction(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Shared)
             .await?;
         let row = if let Some(checkpoint_id) = checkpoint_id {
             sqlx::query(
                 r"
 SELECT checkpoint_id, thread_id, state, step, pending_nodes, metadata,
-       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger
+       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger, payload_bytes
 FROM elitea_runtime.agent_graph_checkpoints
 WHERE tenant_id = $1
   AND resource_project_id = $2
@@ -776,7 +808,7 @@ WHERE tenant_id = $1
             sqlx::query(
                 r"
 SELECT checkpoint_id, thread_id, state, step, pending_nodes, metadata,
-       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger
+       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger, payload_bytes
 FROM elitea_runtime.agent_graph_checkpoints
 WHERE tenant_id = $1
   AND resource_project_id = $2
@@ -800,13 +832,14 @@ LIMIT 1
             .await
             .map_err(storage_error)?
         };
+        note_round_trip();
         let checkpoint = row.map(|row| self.decode_row(&row)).transpose()?;
         self.commit_current(transaction).await?;
         Ok(checkpoint)
     }
 
     async fn list_checkpoints(&self) -> Result<Vec<Checkpoint>, PostgresCheckpointError> {
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_transaction(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Shared)
             .await?;
         let (stored_count, stored_bytes) = sqlx::query_as::<_, (i64, i64)>(
@@ -832,6 +865,7 @@ WHERE tenant_id = $1
         .fetch_one(&mut *transaction)
         .await
         .map_err(storage_error)?;
+        note_round_trip();
         if usize::try_from(stored_count)
             .ok()
             .is_none_or(|count| count > self.limits.max_checkpoints_per_thread)
@@ -851,7 +885,7 @@ WHERE tenant_id = $1
         let rows = sqlx::query(
             r"
 SELECT checkpoint_id, thread_id, state, step, pending_nodes, metadata,
-       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger
+       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger, payload_bytes
 FROM elitea_runtime.agent_graph_checkpoints
 WHERE tenant_id = $1
   AND resource_project_id = $2
@@ -875,6 +909,7 @@ LIMIT $8
         .fetch_all(&mut *transaction)
         .await
         .map_err(storage_error)?;
+        note_round_trip();
         if rows.len() > self.limits.max_checkpoints_per_thread {
             return Err(PostgresCheckpointError::ResourceExhausted(
                 "the stored thread checkpoint count exceeds its configured limit",
@@ -889,7 +924,7 @@ LIMIT $8
     }
 
     async fn delete_checkpoints(&self) -> Result<(), PostgresCheckpointError> {
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_transaction(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Exclusive)
             .await?;
         sqlx::query(
@@ -914,6 +949,7 @@ WHERE tenant_id = $1
         .execute(&mut *transaction)
         .await
         .map_err(storage_error)?;
+        note_round_trip();
         self.commit_current(transaction).await?;
         Ok(())
     }
@@ -935,7 +971,7 @@ WHERE tenant_id = $1
                 )
             })?;
         let max_age_micros = policy.max_age.map(duration_micros_ceil).transpose()?;
-        let mut transaction = self.pool.begin().await.map_err(storage_error)?;
+        let mut transaction = begin_transaction(&self.pool).await?;
         self.lock_current_writer(&mut transaction, WriterLock::Exclusive)
             .await?;
         let result = sqlx::query(
@@ -999,6 +1035,7 @@ WHERE checkpoint.tenant_id = $1
         .execute(&mut *transaction)
         .await
         .map_err(storage_error)?;
+        note_round_trip();
         self.commit_current(transaction).await?;
         usize::try_from(result.rows_affected()).map_err(|_| {
             PostgresCheckpointError::ResourceExhausted(
@@ -1035,6 +1072,7 @@ WHERE checkpoint.tenant_id = $1
             .fetch_optional(&mut **transaction)
             .await
             .map_err(storage_error)?;
+        note_round_trip();
         if current_writer != Some(1) {
             return Err(PostgresCheckpointError::WriterNotCurrent);
         }
@@ -1048,7 +1086,9 @@ WHERE checkpoint.tenant_id = $1
         self.state_writer_lease
             .ensure_current()
             .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
-        transaction.commit().await.map_err(storage_error)
+        transaction.commit().await.map_err(storage_error)?;
+        note_round_trip();
+        Ok(())
     }
 
     fn decode_row(
@@ -1086,6 +1126,13 @@ WHERE checkpoint.tenant_id = $1
             .map_err(storage_error)?;
         let attempts = decode_json::<HashMap<String, u32>>(row, "attempts")?;
         let child_ledger = decode_json::<HashMap<String, Value>>(row, "child_ledger")?;
+        note_payload_bytes(
+            usize::try_from(
+                row.try_get::<i64, _>("payload_bytes")
+                    .map_err(storage_error)?,
+            )
+            .map_err(|_| PostgresCheckpointError::CorruptStoredState)?,
+        );
         let checkpoint = Checkpoint {
             thread_id,
             checkpoint_id,
@@ -1108,58 +1155,141 @@ WHERE checkpoint.tenant_id = $1
 #[async_trait]
 impl Checkpointer for PostgresCheckpointer {
     async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
-        let span = checkpoint_operation_span("save");
-        let result = self
-            .save_checkpoint(checkpoint)
-            .instrument(span.clone())
-            .await;
-        record_checkpoint_result(&span, &result);
-        result.map_err(Into::into)
+        self.persist("save", self.save_checkpoint(checkpoint)).await
     }
 
     async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>, GraphError> {
         self.scope.require_thread(thread_id)?;
-        let span = checkpoint_operation_span("load");
-        let result = self.load_checkpoint(None).instrument(span.clone()).await;
-        record_checkpoint_result(&span, &result);
-        result.map_err(Into::into)
+        self.persist("load", self.load_checkpoint(None)).await
     }
 
     async fn load_by_id(&self, checkpoint_id: &str) -> Result<Option<Checkpoint>, GraphError> {
-        let span = checkpoint_operation_span("load_by_id");
-        let result = self
-            .load_checkpoint(Some(checkpoint_id))
-            .instrument(span.clone())
-            .await;
-        record_checkpoint_result(&span, &result);
-        result.map_err(Into::into)
+        self.persist("load_by_id", self.load_checkpoint(Some(checkpoint_id)))
+            .await
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<Checkpoint>, GraphError> {
         self.scope.require_thread(thread_id)?;
-        let span = checkpoint_operation_span("list");
-        let result = self.list_checkpoints().instrument(span.clone()).await;
-        record_checkpoint_result(&span, &result);
-        result.map_err(Into::into)
+        self.persist("list", self.list_checkpoints()).await
     }
 
     async fn delete(&self, thread_id: &str) -> Result<(), GraphError> {
         self.scope.require_thread(thread_id)?;
-        let span = checkpoint_operation_span("delete");
-        let result = self.delete_checkpoints().instrument(span.clone()).await;
-        record_checkpoint_result(&span, &result);
-        result.map_err(Into::into)
+        self.persist("delete", self.delete_checkpoints()).await
     }
 
     async fn prune(&self, thread_id: &str, policy: &RetentionPolicy) -> Result<usize, GraphError> {
         self.scope.require_thread(thread_id)?;
-        let span = checkpoint_operation_span("prune");
-        let result = self
-            .prune_checkpoints(policy)
-            .instrument(span.clone())
-            .await;
-        record_checkpoint_result(&span, &result);
-        result.map_err(Into::into)
+        self.persist("prune", self.prune_checkpoints(policy)).await
+    }
+}
+
+impl PostgresCheckpointer {
+    async fn persist<T>(
+        &self,
+        operation: &'static str,
+        future: impl Future<Output = Result<T, PostgresCheckpointError>>,
+    ) -> Result<T, GraphError> {
+        persist_scoped(operation, &self.io, future)
+            .await
+            .map_err(Into::into)
+    }
+}
+
+/// Run one checkpoint operation under its `agent.checkpoint.persist` span and
+/// record counts only: never row content, identifiers or SQL.
+async fn persist_scoped<T>(
+    operation: &'static str,
+    counters: &CheckpointIoCounters,
+    future: impl Future<Output = Result<T, PostgresCheckpointError>>,
+) -> Result<T, PostgresCheckpointError> {
+    let span = checkpoint_operation_span(operation);
+    let (result, io) = OPERATION_IO
+        .scope(Cell::new(OperationIo::default()), async {
+            let result = future.await;
+            (result, OPERATION_IO.with(Cell::get))
+        })
+        .instrument(span.clone())
+        .await;
+    record_checkpoint_result(&span, &result);
+    span.record("payload_bytes", io.payload_bytes);
+    span.record("round_trips", io.round_trips);
+    span.record("pool_wait_ms", io.pool_wait_micros / 1_000);
+    counters.add(io);
+    result
+}
+
+/// Per-operation I/O. `pool_wait_micros` is the time to obtain a pooled
+/// connection and open its transaction (acquire plus `BEGIN`).
+#[derive(Clone, Copy, Default)]
+struct OperationIo {
+    transactions: u64,
+    round_trips: u64,
+    pool_wait_micros: u64,
+    payload_bytes: u64,
+}
+
+tokio::task_local! {
+    static OPERATION_IO: Cell<OperationIo>;
+}
+
+fn note_io(update: impl FnOnce(&mut OperationIo)) {
+    let _ = OPERATION_IO.try_with(|cell| {
+        let mut io = cell.get();
+        update(&mut io);
+        cell.set(io);
+    });
+}
+
+fn note_round_trip() {
+    note_io(|io| io.round_trips = io.round_trips.saturating_add(1));
+}
+
+fn note_payload_bytes(bytes: usize) {
+    note_io(|io| {
+        io.payload_bytes = io
+            .payload_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+    });
+}
+
+async fn begin_transaction(
+    pool: &PgPool,
+) -> Result<Transaction<'static, Postgres>, PostgresCheckpointError> {
+    let started = Instant::now();
+    let transaction = pool.begin().await.map_err(storage_error)?;
+    let waited = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    note_io(|io| {
+        io.transactions = io.transactions.saturating_add(1);
+        io.round_trips = io.round_trips.saturating_add(1);
+        io.pool_wait_micros = io.pool_wait_micros.saturating_add(waited);
+    });
+    Ok(transaction)
+}
+
+/// Cumulative counters of one root writer and every child it activates.
+#[derive(Default)]
+pub(crate) struct CheckpointIoCounters {
+    transactions: AtomicU64,
+    round_trips: AtomicU64,
+}
+
+impl CheckpointIoCounters {
+    fn add(&self, io: OperationIo) {
+        self.transactions
+            .fetch_add(io.transactions, AtomicOrdering::Relaxed);
+        self.round_trips
+            .fetch_add(io.round_trips, AtomicOrdering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transactions(&self) -> u64 {
+        self.transactions.load(AtomicOrdering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn round_trips(&self) -> u64 {
+        self.round_trips.load(AtomicOrdering::Relaxed)
     }
 }
 
@@ -1171,6 +1301,9 @@ fn checkpoint_operation_span(operation: &'static str) -> tracing::Span {
         outcome = tracing::field::Empty,
         error_code = tracing::field::Empty,
         retryable = tracing::field::Empty,
+        payload_bytes = tracing::field::Empty,
+        round_trips = tracing::field::Empty,
+        pool_wait_ms = tracing::field::Empty,
     )
 }
 
@@ -1230,7 +1363,28 @@ FOR UPDATE OF writer
 
 enum CheckpointAppendCondition<'a> {
     Unconditional,
-    Latest(Option<&'a Checkpoint>),
+    Latest(Option<LatestIdentity<'a>>),
+}
+
+/// Rows are immutable per `checkpoint_id`, so the latest row's identity proves
+/// its content. `save_ordinal` additionally refuses a deleted-and-reinserted row.
+#[derive(Clone, Copy)]
+struct LatestIdentity<'a> {
+    checkpoint_id: &'a str,
+    save_ordinal: Option<i64>,
+}
+
+impl LatestIdentity<'_> {
+    fn validate(&self) -> Result<(), PostgresCheckpointError> {
+        if !bounded_identity(self.checkpoint_id, MAX_IDENTITY_BYTES)
+            || self.save_ordinal.is_some_and(|ordinal| ordinal <= 0)
+        {
+            return Err(PostgresCheckpointError::InvalidScope(
+                "the expected parent checkpoint identity is malformed",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Eq, PartialEq)]
