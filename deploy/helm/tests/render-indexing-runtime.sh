@@ -3,11 +3,14 @@
 # ELITEA_INDEXING_RUNTIME, defaults to python, and the combinations that cannot
 # work are refused at render time (ADR-0030 decision 6, ADR-0031 V1).
 #
-# elitea-main refuses an unrecognised value at startup, and refuses "rust"
-# without the index ingest dispatch plane. The chart owns the other two facts:
-# the value is always written explicitly (as ELITEA_WORKER_IMPLEMENTATION is),
-# and "rust" needs the Rust worker, because only that worker searches the vector
-# store the Rust runtime writes.
+# elitea-main refuses an unrecognised value at startup, and selects the registry
+# only when index ingest dispatch is composed (a dark plane leaves the setting
+# dead). The chart owns the facts around that: the value is always written
+# explicitly (as ELITEA_WORKER_IMPLEMENTATION is), "rust" needs the Rust worker,
+# because only that worker searches the vector store the Rust runtime writes,
+# and "rust" needs main.runtime.enabled and main.runtime.indexIngestDispatch.enabled,
+# the values that set ELITEA_RUNTIME_ENABLED and
+# ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED.
 #
 # Run: deploy/helm/tests/render-indexing-runtime.sh   (requires helm + python3 + PyYAML)
 set -euo pipefail
@@ -85,6 +88,16 @@ refuses 'worker.indexingRuntime must be' --set worker.indexingRuntime=golang \
 refuses 'worker.indexingRuntime=rust needs' --set worker.implementation=python --set worker.indexingRuntime=rust \
   && ok "indexingRuntime=rust with the Python worker is refused" \
   || bad "indexingRuntime=rust with the Python worker is not refused"
+
+# The runtime plane itself (main.runtime.enabled) is already required by the
+# worker.enabled guard that indexingRuntime=rust implies, so only the dispatch
+# plane is a new refusal. The stream is cleared so that the settings guard of the
+# configmap does not refuse first.
+refuses 'worker.indexingRuntime=rust needs main.runtime.enabled' \
+  --set worker.implementation=rust --set worker.indexingRuntime=rust \
+  --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
+  && ok "indexingRuntime=rust without index ingest dispatch is refused" \
+  || bad "indexingRuntime=rust without index ingest dispatch is not refused"
 
 echo
 RAN=$((PASS+FAIL))

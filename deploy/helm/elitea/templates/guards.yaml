@@ -80,6 +80,9 @@
 {{- if and (eq (default "python" .Values.worker.indexingRuntime) "rust") (not (and .Values.worker.enabled (eq .Values.worker.implementation "rust"))) }}
 {{- fail "worker.indexingRuntime=rust needs worker.enabled=true and worker.implementation=rust. Indexes written under the Rust runtime live in the vector store that only the Rust worker searches (ADR-0031); with the Python worker the index tab would list indexes no agent can search." }}
 {{- end }}
+{{- if and (eq (default "python" .Values.worker.indexingRuntime) "rust") (not (and .Values.main.runtime.enabled ((.Values.main.runtime.indexIngestDispatch | default dict).enabled))) }}
+{{- fail "worker.indexingRuntime=rust needs main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true (they set ELITEA_RUNTIME_ENABLED and ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED). elitea-main selects the registry only when index ingest dispatch is composed: without it the setting is silently dead, ELITEA_INDEXING_RUNTIME=rust is ignored, and the index routes keep reading the per-project pgvector index_meta rows a Rust worker never writes." }}
+{{- end }}
 
 {{- /*
   Guarded, and this one is easy to get wrong from a values file that predates
