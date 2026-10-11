@@ -931,6 +931,133 @@ async fn stepback_tools_use_the_model_twice_for_a_summary() {
     assert_eq!(model.prompts.lock().unwrap().len(), calls);
 }
 
+#[tokio::test]
+async fn remove_index_deletes_the_index_in_every_embedding_space() {
+    // The index was built once with the catalog's model and once, earlier,
+    // with another: both collections hold its points, and remove_index
+    // removes both, not only the space the registry currently names.
+    let (client, fake) = connect().await;
+    seed(&client).await;
+    let old_space = pb::EmbeddingSpace {
+        model_slug: "older-model".to_owned(),
+        dimension: 3,
+    };
+    client
+        .upsert(
+            &token(TOKEN_A),
+            old_space.clone(),
+            toolkit_namespace(NS),
+            vec![point(
+                "readme-old",
+                "0",
+                "document",
+                "an older embedding",
+                &json!({}),
+                [0.0, 0.0, 1.0],
+            )],
+        )
+        .await
+        .expect("upsert into the old space");
+    // Another index in the old space is not touched.
+    client
+        .upsert(
+            &token(TOKEN_A),
+            old_space,
+            toolkit_namespace(OTHER_NS),
+            vec![point(
+                "other",
+                "0",
+                "document",
+                "t",
+                &json!({}),
+                [0.0, 0.0, 1.0],
+            )],
+        )
+        .await
+        .expect("upsert the other index");
+    assert_eq!(fake.point_count(), 6);
+    let session_token = token(TOKEN_A);
+    let session = VectorSession::new(&client, &session_token);
+    let catalog = catalog();
+    let tools = IndexTools::new(&session, &KeywordEmbedder, &catalog, Doctype::Document);
+    tools.remove_index("docs").await.unwrap();
+    assert_eq!(fake.point_count(), 1, "the other index's point stays");
+    assert_eq!(
+        client
+            .count(
+                &token(TOKEN_A),
+                toolkit_scope(vec![OTHER_NS.to_owned()], None),
+                None,
+                None
+            )
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+/// A step-back model whose reply holds no text (an empty reply, or only
+/// thinking blocks).
+struct SilentModel {
+    calls: std::sync::atomic::AtomicUsize,
+    reply: Value,
+}
+
+impl StepbackModel for SilentModel {
+    async fn invoke(&self, prompt: &str) -> Result<Value, Error> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if prompt.starts_with("Your task is to convert") {
+            Ok(self.reply.clone())
+        } else {
+            Ok(json!("## Answer\nfallback\n"))
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_empty_step_back_reply_searches_the_original_question() {
+    let (client, _fake) = connect().await;
+    seed(&client).await;
+    let session_token = token(TOKEN_A);
+    let session = VectorSession::new(&client, &session_token);
+    let catalog = catalog();
+    let tools = IndexTools::new(&session, &KeywordEmbedder, &catalog, Doctype::Document);
+    for reply in [
+        json!(""),
+        json!("   \n"),
+        json!([{"type": "thinking", "thinking": "..."}]),
+        json!([{"type": "text", "text": "  "}]),
+        json!(null),
+    ] {
+        let model = SilentModel {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            reply: reply.clone(),
+        };
+        // The question itself embeds to the kubernetes document.
+        let text = tools
+            .stepback_search_index(
+                &args(json!({"query": "how to install kubernetes", "index_name": "docs", "search_top": 1})),
+                &model,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{reply}: {error}"));
+        assert!(
+            text.contains("install the platform on kubernetes"),
+            "{reply}: {text}"
+        );
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let summary = tools
+            .stepback_summary_index(
+                &args(json!({"query": "how to install kubernetes", "index_name": "docs", "search_top": 1})),
+                &model,
+            )
+            .await
+            .unwrap();
+        assert_eq!(summary, "## Answer\nfallback\n");
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+}
+
 // ── review round 1 ─────────────────────────────────────────────────────────
 
 /// SQL's three-valued reading of an SDK filter over one metadata object, as

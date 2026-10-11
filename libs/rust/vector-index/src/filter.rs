@@ -21,7 +21,11 @@
 //! `metadata.config.timeout`. A key that is already written
 //! `metadata.<path>` is taken as it is. Six point fields are filterable
 //! without the prefix (`document_key`, `document_version`, `parent_id`,
-//! `chunk_id`, `chunk_type`, `acl`) because they are real payload keys. Five
+//! `chunk_id`, `chunk_type`, `acl`) because they are real payload keys. They
+//! hold text, so an integer compared with one of them (`{"chunk_id": 3}`,
+//! the SDK's chunkers number chunks) is matched as its decimal string, in
+//! `$eq`, `$in`, `$ne` and `$nin` alike; a boolean or a decimal is refused,
+//! since no stored value could equal it. Five
 //! keys are the facade's own scope and are refused: `project_id`, `source`,
 //! `namespace_id`, `generation` and `text` (so is a `text` match: BM25 over
 //! the chunk text is `full_text_search`'s, not a filter's).
@@ -68,7 +72,7 @@ use serde_json::Value;
 use crate::pb;
 
 /// The most conditions `elitea-vector` accepts in one list.
-const MAX_CONDITIONS: usize = 64;
+pub const MAX_CONDITIONS: usize = 64;
 /// The most values `elitea-vector` accepts in one `any` match.
 const MAX_ANY_VALUES: usize = 1024;
 /// The deepest filter `elitea-vector` accepts, counting the filter itself.
@@ -433,18 +437,19 @@ fn in_node(key: &str, operand: &Value, operator: &str) -> Result<Node, FilterErr
             "{operator} needs at least one value"
         )));
     }
-    if items.iter().all(Value::is_string) {
+    if items.iter().all(Value::is_string) || is_point_field(key) {
         if items.len() > MAX_ANY_VALUES {
             return Err(FilterError::NotExpressible(format!(
                 "{operator} lists {} values, and the vector service accepts at most {MAX_ANY_VALUES}",
                 items.len()
             )));
         }
+        // On a point field every value is text: an integer is its decimal
+        // string, anything else is refused.
         let values = items
             .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect();
+            .map(|item| point_field_text(key, item))
+            .collect::<Result<Vec<_>, _>>()?;
         return Ok(Node::Leaf(any(key, values)));
     }
     let leaves = items
@@ -454,7 +459,42 @@ fn in_node(key: &str, operand: &Value, operator: &str) -> Result<Node, FilterErr
     Ok(Node::Or(leaves))
 }
 
+/// Whether `key` (as [`qualify_key`] returned it) is one of the point fields
+/// a filter may name without the `metadata.` prefix. They hold text.
+fn is_point_field(key: &str) -> bool {
+    POINT_KEYS.contains(&key)
+}
+
+/// The text a value matches against a point field: a string as it is, an
+/// integer as its decimal string. A boolean or a decimal can equal no stored
+/// value and is refused rather than matched (or, under `$ne`, matched by
+/// everything).
+fn point_field_text(key: &str, value: &Value) -> Result<String, FilterError> {
+    match value {
+        Value::String(text) => Ok(text.clone()),
+        Value::Number(number) if number.is_i64() || number.is_u64() => Ok(number.to_string()),
+        Value::Number(_) | Value::Bool(_) => Err(unsupported_value(
+            key,
+            value,
+            "this point field holds text; compare it with a string, or a whole number which is matched as its decimal string",
+        )),
+        Value::Null => Err(unsupported_value(
+            key,
+            value,
+            "null is never equal to anything in the SDK's SQL; use $exists",
+        )),
+        Value::Array(_) | Value::Object(_) => Err(unsupported_value(
+            key,
+            value,
+            "only a string or a whole number can be matched against a point field",
+        )),
+    }
+}
+
 fn eq_leaf(key: &str, value: &Value) -> Result<Node, FilterError> {
+    if is_point_field(key) {
+        return Ok(Node::Leaf(keyword(key, &point_field_text(key, value)?)));
+    }
     let matched = match value {
         Value::String(text) => pb::condition::Match::Keyword(text.clone()),
         Value::Bool(flag) => pb::condition::Match::Boolean(*flag),
@@ -603,10 +643,18 @@ fn or_of(mut parts: Vec<pb::Filter>) -> pb::Filter {
     }
 }
 
-/// Refuses a filter beyond `elitea-vector`'s limits.
-fn check_limits(filter: &pb::Filter) -> Result<(), FilterError> {
+/// Refuses a filter beyond `elitea-vector`'s limits: more than
+/// [`MAX_CONDITIONS`] in one list, more than [`MAX_TOTAL_CONDITIONS`] in
+/// all, or deeper than [`MAX_DEPTH`]. [`translate`] runs it on the caller's
+/// filter; a search that adds conditions of its own (`extended_search`)
+/// runs it again on the filter it finally sends.
+///
+/// # Errors
+///
+/// [`FilterError::NotExpressible`], naming the limit.
+pub fn check_limits(filter: &pb::Filter) -> Result<(), FilterError> {
     let mut total = 0;
-    walk(filter, 1, &mut total)?;
+    walk(filter, 1, &mut total, true)?;
     if total > MAX_TOTAL_CONDITIONS {
         return Err(FilterError::NotExpressible(format!(
             "it needs {total} conditions, and the vector service accepts at most {MAX_TOTAL_CONDITIONS}"
@@ -615,8 +663,23 @@ fn check_limits(filter: &pb::Filter) -> Result<(), FilterError> {
     Ok(())
 }
 
-fn walk(filter: &pb::Filter, depth: usize, total: &mut usize) -> Result<(), FilterError> {
-    if depth > MAX_DEPTH {
+/// How many conditions a filter holds in all, nested ones included: what
+/// [`MAX_TOTAL_CONDITIONS`] bounds.
+#[must_use]
+pub fn condition_count(filter: &pb::Filter) -> usize {
+    let mut total = 0;
+    // Without the checks the walk cannot fail.
+    let _ = walk(filter, 1, &mut total, false);
+    total
+}
+
+fn walk(
+    filter: &pb::Filter,
+    depth: usize,
+    total: &mut usize,
+    check: bool,
+) -> Result<(), FilterError> {
+    if check && depth > MAX_DEPTH {
         return Err(FilterError::NotExpressible(format!(
             "it nests deeper than the {MAX_DEPTH} levels the vector service accepts"
         )));
@@ -626,7 +689,7 @@ fn walk(filter: &pb::Filter, depth: usize, total: &mut usize) -> Result<(), Filt
         ("should", &filter.should),
         ("must_not", &filter.must_not),
     ] {
-        if list.len() > MAX_CONDITIONS {
+        if check && list.len() > MAX_CONDITIONS {
             return Err(FilterError::NotExpressible(format!(
                 "it needs {} conditions in one {name} list, and the vector service accepts at most {MAX_CONDITIONS}",
                 list.len()
@@ -635,7 +698,7 @@ fn walk(filter: &pb::Filter, depth: usize, total: &mut usize) -> Result<(), Filt
         for condition in list {
             *total += 1;
             if let Some(pb::condition::Match::Filter(inner)) = &condition.r#match {
-                walk(inner, depth + 1, total)?;
+                walk(inner, depth + 1, total, check)?;
             }
         }
     }
@@ -775,6 +838,94 @@ mod tests {
         assert_eq!(numbers.must_not.len(), 3);
         assert_eq!(numbers.must_not[0], is_empty("metadata.year"));
         assert!(numbers.should.is_empty() && numbers.must.is_empty());
+    }
+
+    /// A stored point with `chunk_id` and `document_key`, for checking a
+    /// translated filter against Qdrant's semantics.
+    fn stored(chunk_id: &str) -> pb::Point {
+        pb::Point {
+            document_key: "d".to_owned(),
+            chunk_id: chunk_id.to_owned(),
+            chunk_type: "document".to_owned(),
+            metadata_json: "{}".to_owned(),
+            ..pb::Point::default()
+        }
+    }
+
+    #[test]
+    fn integers_on_point_fields_match_their_decimal_strings() {
+        use crate::testing::matches_filter;
+        let points: Vec<pb::Point> = ["1", "2", "3", "4"].into_iter().map(stored).collect();
+        let found = |filter: &pb::Filter| -> Vec<&str> {
+            points
+                .iter()
+                .filter(|point| matches_filter(point, Some(filter)))
+                .map(|point| point.chunk_id.as_str())
+                .collect()
+        };
+        let eq = translated(&json!({"chunk_id": 3}));
+        assert_eq!(eq.must, vec![kw("chunk_id", "3")]);
+        assert_eq!(found(&eq), ["3"]);
+        let explicit = translated(&json!({"chunk_id": {"$eq": 3}}));
+        assert_eq!(explicit, eq);
+        let in_list = translated(&json!({"chunk_id": {"$in": [1, 2]}}));
+        assert_eq!(
+            in_list.must,
+            vec![any("chunk_id", vec!["1".into(), "2".into()])]
+        );
+        assert_eq!(found(&in_list), ["1", "2"]);
+        // Mixed strings and integers are one keyword set.
+        let mixed = translated(&json!({"chunk_id": {"$in": ["1", 2]}}));
+        assert_eq!(found(&mixed), ["1", "2"]);
+        // The negations get the same conversion, so they no longer match
+        // every point.
+        let ne = translated(&json!({"chunk_id": {"$ne": 3}}));
+        assert_eq!(ne, present_not(kw("chunk_id", "3")));
+        assert_eq!(found(&ne), ["1", "2", "4"]);
+        let nin = translated(&json!({"chunk_id": {"$nin": [1, 2]}}));
+        assert_eq!(
+            nin,
+            present_not(any("chunk_id", vec!["1".into(), "2".into()]))
+        );
+        assert_eq!(found(&nin), ["3", "4"]);
+        for key in POINT_KEYS {
+            assert_eq!(
+                translated(&json!({key: 7})).must,
+                vec![kw(key, "7")],
+                "{key}"
+            );
+        }
+        // A metadata key keeps its integer match.
+        assert_eq!(
+            translated(&json!({"chunk": 3})).must[0].r#match,
+            Some(pb::condition::Match::Integer(3))
+        );
+    }
+
+    #[test]
+    fn booleans_and_decimals_on_point_fields_are_refused() {
+        for (filter, value) in [
+            (json!({"chunk_id": true}), "true"),
+            (json!({"chunk_id": 1.5}), "1.5"),
+            (json!({"chunk_id": {"$eq": false}}), "false"),
+            (json!({"chunk_id": {"$ne": true}}), "true"),
+            (json!({"chunk_id": {"$in": [1, 2.5]}}), "2.5"),
+            (json!({"chunk_id": {"$nin": [false]}}), "false"),
+            (json!({"chunk_type": {"$in": ["document", true]}}), "true"),
+        ] {
+            match refused(&filter) {
+                FilterError::UnsupportedValue {
+                    key,
+                    value: shown,
+                    reason,
+                } => {
+                    assert_eq!(&key, filter.as_object().unwrap().keys().next().unwrap());
+                    assert_eq!(shown, value, "{filter}");
+                    assert!(reason.contains("holds text"), "{reason}");
+                }
+                other => panic!("{filter}: {other}"),
+            }
+        }
     }
 
     #[test]

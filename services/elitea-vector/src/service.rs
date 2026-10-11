@@ -17,9 +17,9 @@ use qdrant_client::Payload;
 use qdrant_client::qdrant::point_id::PointIdOptions;
 use qdrant_client::qdrant::value::Kind;
 use qdrant_client::qdrant::{
-    Condition, CountPointsBuilder, DeletePointsBuilder, Document, FacetCountsBuilder, NamedVectors,
-    PointId, PointStruct, PrefetchQueryBuilder, Query, QueryPointsBuilder, Rrf,
-    SearchParamsBuilder, UpsertPointsBuilder, Value, Vector,
+    Condition, CountPointsBuilder, DeletePointsBuilder, Document, FacetCountsBuilder, Filter,
+    NamedVectors, PointId, PointStruct, PrefetchQueryBuilder, Query, QueryPointsBuilder, Rrf,
+    UpsertPointsBuilder, Value, Vector, VectorsSelector, vector_output, with_vectors_selector,
 };
 use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
@@ -263,7 +263,13 @@ impl pb::vector_service_server::VectorService for VectorService {
             Some(pb::delete_request::Selector::GenerationsExcept(except)) => {
                 let keep = layout::generation(&except.keep)?
                     .ok_or_else(|| Status::invalid_argument("keep is required"))?;
-                scope.without(Condition::matches(key::GENERATION, keep.to_owned()))
+                // Only points that HAVE a generation other than `keep`: a
+                // point written without one (an incremental update) is not
+                // a superseded build and stays.
+                scope.with(Condition::from(Filter::must_not([
+                    Condition::is_empty(key::GENERATION),
+                    Condition::matches(key::GENERATION, keep.to_owned()),
+                ])))
             }
             None => return Err(Status::invalid_argument("a selector is required")),
         };
@@ -392,26 +398,45 @@ impl pb::vector_service_server::VectorService for VectorService {
                 weights: vec![dense_weight, text_weight],
             }))
             // The scope again on the fused stage: defence in depth.
-            .filter(filter.clone())
+            .filter(filter)
             .limit(u64::from(limit))
-            .with_payload(true);
+            .with_payload(true)
+            // The fused result carries only the fused score, and a
+            // prefetch's own score cannot be read back from a fusion query
+            // (Qdrant 1.19). The dense vector comes back with each point
+            // instead, and its cosine against the query is computed here:
+            // no second round trip. The vector is not returned to the
+            // caller.
+            .with_vectors(with_vectors_selector::SelectorOptions::Include(
+                VectorsSelector {
+                    names: vec![DENSE_VECTOR.to_owned()],
+                },
+            ));
         let response = self
             .store
             .client()
             .query(query)
             .await
             .map_err(|error| unavailable("query", &error))?;
-        let mut points: Vec<pb::ScoredPoint> =
-            response.result.into_iter().map(scored_point).collect();
-        let scores = self
-            .dense_scores(&collection, &filter, request.vector, &points)
-            .await?;
-        // A point deleted between the two queries has no dense score; it is
-        // dropped, so every returned point carries one.
-        points.retain_mut(|point| {
-            point.dense_score = scores.get(&point.id).copied();
-            point.dense_score.is_some()
-        });
+        let points = response
+            .result
+            .into_iter()
+            .filter_map(|point| {
+                let Some(dense) = dense_vector(&point) else {
+                    // Every point is written with a dense vector; a fused
+                    // point without one is not a result the caller can cut
+                    // by dense score, so it is left out and logged.
+                    tracing::warn!(
+                        point = point_id_text(point.id.clone()),
+                        "a fused point came back without its dense vector"
+                    );
+                    return None;
+                };
+                let mut scored = scored_point(point);
+                scored.dense_score = Some(cosine(&request.vector, &dense));
+                Some(scored)
+            })
+            .collect();
         Ok(Response::new(pb::HybridSearchResponse { points }))
     }
 
@@ -531,49 +556,31 @@ impl pb::vector_service_server::VectorService for VectorService {
     }
 }
 
-impl VectorService {
-    /// The dense cosine score of each of `points`, by point id.
-    ///
-    /// Qdrant's fused result carries only the fused score, and a prefetch's
-    /// own score cannot be read back from a fusion query (Qdrant 1.19). So
-    /// this is a second query: the same query vector, exact (no HNSW), over
-    /// the same scoped filter narrowed to the fused points' ids.
-    async fn dense_scores(
-        &self,
-        collection: &str,
-        filter: &qdrant_client::qdrant::Filter,
-        vector: Vec<f32>,
-        points: &[pb::ScoredPoint],
-    ) -> Result<HashMap<String, f32>, Status> {
-        if points.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let ids: Vec<PointId> = points
-            .iter()
-            .map(|point| PointId::from(point.id.clone()))
-            .collect();
-        let mut narrowed = filter.clone();
-        narrowed.must.push(Condition::has_id(ids));
-        let query = QueryPointsBuilder::new(collection)
-            .query(Query::new_nearest(vector))
-            .using(DENSE_VECTOR)
-            .filter(narrowed)
-            .params(SearchParamsBuilder::default().exact(true))
-            .limit(u64::try_from(points.len()).unwrap_or(u64::MAX))
-            .with_payload(false);
-        let response = self
-            .store
-            .client()
-            .query(query)
-            .await
-            .map_err(|error| unavailable("query", &error))?;
-        Ok(response
-            .result
-            .into_iter()
-            .map(|point| (point_id_text(point.id), point.score))
-            .collect())
+/// The point's stored dense vector, when the query asked for it.
+fn dense_vector(point: &qdrant_client::qdrant::ScoredPoint) -> Option<Vec<f32>> {
+    match point.vectors.as_ref()?.get_vector_by_name(DENSE_VECTOR)? {
+        vector_output::Vector::Dense(dense) => Some(dense.data),
+        vector_output::Vector::Sparse(_) | vector_output::Vector::MultiDense(_) => None,
     }
+}
 
+/// The cosine similarity of two vectors, each normalised here. Collections
+/// use cosine distance, so Qdrant normalises what it stores (and a float16
+/// round trip moves the norm a little); the query vector arrives as the
+/// caller made it. Dividing by both norms is right in every case. Zero
+/// vectors (refused on write and on query, so only a damaged point) score 0.
+fn cosine(query: &[f32], stored: &[f32]) -> f32 {
+    let dot: f32 = query.iter().zip(stored).map(|(q, s)| q * s).sum();
+    let norm = |vector: &[f32]| vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norms = norm(query) * norm(stored);
+    if norms == 0.0 || !norms.is_finite() {
+        0.0
+    } else {
+        (dot / norms).clamp(-1.0, 1.0)
+    }
+}
+
+impl VectorService {
     async fn delete_where(&self, collections: &[String], scope: &Scope) -> Result<(), Status> {
         let filter = scope.filter(None);
         for collection in collections {
@@ -841,6 +848,20 @@ mod tests {
         assert!(check_vector(&[1.0, 0.0], 3).is_err());
         assert!(check_vector(&[1.0, f32::NAN, 0.0], 3).is_err());
         assert!(check_vector(&[0.0, 0.0, 0.0], 3).is_err());
+    }
+
+    #[test]
+    fn cosine_normalises_both_sides() {
+        // Stored normalised or not, query normalised or not: the same answer.
+        let query = [3.0, 0.0, 0.0];
+        assert!((cosine(&query, &[1.0, 0.0, 0.0]) - 1.0).abs() < 1e-6);
+        assert!((cosine(&query, &[5.0, 0.0, 0.0]) - 1.0).abs() < 1e-6);
+        let half = cosine(&[2.0, 2.0, 0.0], &[0.5, 0.0, 0.0]);
+        assert!((half - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+        assert!((cosine(&query, &[0.0, 4.0, 0.0])).abs() < 1e-6);
+        assert!((cosine(&query, &[-1.0, 0.0, 0.0]) + 1.0).abs() < 1e-6);
+        assert!(cosine(&query, &[0.0, 0.0, 0.0]).abs() < f32::EPSILON);
+        assert!(cosine(&query, &[f32::NAN, 0.0, 0.0]).abs() < f32::EPSILON);
     }
 
     #[test]

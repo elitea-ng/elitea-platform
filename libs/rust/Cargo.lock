@@ -1815,6 +1815,7 @@ version = "0.1.0"
 dependencies = [
  "elitea-engine-core",
  "elitea-vector-index",
+ "futures-util",
  "prost",
  "protoc-bin-vendored",
  "serde",

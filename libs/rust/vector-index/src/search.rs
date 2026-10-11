@@ -6,11 +6,15 @@
 //!   keeps `search_top`.
 //! * **`extended_search`.** Searches `chunk_type = document` and each listed
 //!   type (`title`, `summary`, `propositions`, `keywords`), `search_top`
-//!   results each. A hit on a non-document chunk brings in its document
-//!   chunk (same document and chunk id), scored by the query; the
-//!   non-document chunk itself is not returned. The document chunks of all
-//!   new hits are read together, [`DOCUMENT_BATCH`] (document, chunk) pairs
-//!   per call, not one call per hit.
+//!   results each, concurrently; the results are merged in the listed
+//!   order, so the answer does not depend on which search finished first. A
+//!   hit on a non-document chunk brings in its document chunk (same document
+//!   and chunk id), scored by the query; the non-document chunk itself is
+//!   not returned. The document chunks of all new hits are read together,
+//!   up to [`DOCUMENT_BATCH`] (document, chunk) pairs per call (fewer when
+//!   the caller's filter leaves less room under the service's condition
+//!   limits), not one call per hit. The conditions the search adds are
+//!   checked against those limits on the filter actually sent.
 //! * **Duplicates.** Results are keyed `{document_key}_{chunk_id}`. When a
 //!   key repeats, the **better** score is kept (the SDK kept the worse).
 //! * **Rerank, cut-off, truncate.** See [`crate::rerank`]. The cut-off is
@@ -28,13 +32,17 @@ use std::collections::HashSet;
 use std::future::Future;
 
 use elitea_engine_core::pyvalue::py_truthy;
+use futures_util::future::try_join_all;
 use serde_json::Value;
 
 use crate::client::{
     ClaimToken, HybridSearchParams, MAX_LIMIT, SearchParams, VectorClient, toolkit_namespace,
 };
 use crate::error::{Error, Result};
-use crate::filter::{keyword, nest, with_must};
+use crate::filter::{
+    FilterError, MAX_CONDITIONS, MAX_TOTAL_CONDITIONS, check_limits, condition_count, keyword,
+    nest, with_must,
+};
 use crate::hit::Hit;
 use crate::pb;
 use crate::rerank::{self, FieldRerank};
@@ -46,8 +54,15 @@ const EXTENDED_CHUNK_TYPES: [&str; 4] = ["title", "summary", "propositions", "ke
 /// The SDK's default text weight of a full-text search.
 const DEFAULT_TEXT_WEIGHT: f64 = 0.3;
 /// The most (document, chunk) pairs one document-chunk read of
-/// `extended_search` asks for.
+/// `extended_search` asks for. A caller's filter that leaves less room under
+/// the service's condition limits lowers it (`batch_size`).
 pub const DOCUMENT_BATCH: usize = 32;
+/// The results one document-chunk read asks for, per pair and per searched
+/// namespace: a pair can match one point per namespace, and the
+/// active-generation and the unversioned copy of a chunk both pass the
+/// scope, so a read asks for twice that and a pair's duplicates cannot push
+/// another pair out.
+const PAIR_HEADROOM: usize = 2;
 
 /// What the search needs from `elitea-vector`. [`VectorSession`] is the real
 /// one; tests use fakes.
@@ -62,12 +77,10 @@ pub trait VectorBackend: Send + Sync {
         &self,
         params: HybridSearchParams,
     ) -> impl Future<Output = Result<Vec<pb::ScoredPoint>>> + Send;
-    /// Removes every point of one toolkit-index namespace.
-    fn delete_namespace(
-        &self,
-        space: pb::EmbeddingSpace,
-        namespace_id: &str,
-    ) -> impl Future<Output = Result<()>> + Send;
+    /// Removes every point of one toolkit-index namespace, in every
+    /// embedding space: an index re-embedded with another model leaves
+    /// points in the old model's collection, and they go too.
+    fn delete_namespace(&self, namespace_id: &str) -> impl Future<Output = Result<()>> + Send;
 }
 
 /// Embeds a search query with the model of an index's embedding space.
@@ -104,11 +117,11 @@ impl VectorBackend for VectorSession<'_> {
         self.client.hybrid_search(self.token, params).await
     }
 
-    async fn delete_namespace(&self, space: pb::EmbeddingSpace, namespace_id: &str) -> Result<()> {
+    async fn delete_namespace(&self, namespace_id: &str) -> Result<()> {
         self.client
             .delete(
                 self.token,
-                Some(space),
+                None,
                 toolkit_namespace(namespace_id),
                 crate::client::DeleteSelector::WholeNamespace,
             )
@@ -222,9 +235,6 @@ pub async fn search_documents<B: VectorBackend>(
         let k = OVERFETCH_CEILING.min(plan.top.saturating_mul(3));
         raw = fetch(backend, plan, plan.filter.as_ref(), k).await?;
     } else {
-        let document_filter = with_must(plan.filter.as_ref(), keyword("chunk_type", "document"));
-        raw = fetch(backend, plan, Some(&document_filter), plan.top).await?;
-        let mut seen: HashSet<String> = raw.iter().map(|hit| hit.key.clone()).collect();
         let mut types: Vec<&str> = Vec::new();
         for chunk_type in &plan.extended {
             if EXTENDED_CHUNK_TYPES.contains(&chunk_type.as_str())
@@ -233,25 +243,40 @@ pub async fn search_documents<B: VectorBackend>(
                 types.push(chunk_type);
             }
         }
+        // One filter per sub-search, each checked against the service's
+        // limits as it will be sent: the caller's filter passed them alone,
+        // and the chunk-type condition may be the one too many.
+        let filters = std::iter::once("document")
+            .chain(types.iter().copied())
+            .map(|chunk_type| narrowed(plan.filter.as_ref(), keyword("chunk_type", chunk_type)))
+            .collect::<Result<Vec<_>>>()?;
+        // The sub-searches run together; their results are merged in the
+        // listed order, so the outcome is the same as one after the other.
+        let mut results = try_join_all(
+            filters
+                .iter()
+                .map(|filter| fetch(backend, plan, Some(filter), plan.top)),
+        )
+        .await?
+        .into_iter();
+        raw = results.next().unwrap_or_default();
+        let mut seen: HashSet<String> = raw.iter().map(|hit| hit.key.clone()).collect();
         // The (document, chunk) of every new non-document hit, in the order
         // found, once each (a title and a summary of the same chunk name
         // the same document chunk).
         let mut wanted: Vec<(String, String)> = Vec::new();
-        for chunk_type in types {
-            let type_filter = with_must(plan.filter.as_ref(), keyword("chunk_type", chunk_type));
-            for found in fetch(backend, plan, Some(&type_filter), plan.top).await? {
-                if seen.insert(found.key.clone()) {
-                    let pair = (found.document_key, found.chunk_id);
-                    if !wanted.contains(&pair) {
-                        wanted.push(pair);
-                    }
+        for found in results.flatten() {
+            if seen.insert(found.key.clone()) {
+                let pair = (found.document_key, found.chunk_id);
+                if !wanted.contains(&pair) {
+                    wanted.push(pair);
                 }
             }
         }
         raw.extend(document_chunks(backend, plan, &wanted).await?);
     }
-    let mut hits = keep_best_duplicates(raw);
-    hits.sort_by(|left, right| right.score.total_cmp(&left.score));
+    // `rerank::apply` orders the hits (by score, or as a `sort` rule says).
+    let hits = keep_best_duplicates(raw);
     let mut hits = rerank::apply(hits, &plan.rerank)?;
     if plan.cut_off != 0.0 {
         hits.retain(|hit| hit.dense_score.abs() >= plan.cut_off);
@@ -260,13 +285,41 @@ pub async fn search_documents<B: VectorBackend>(
     Ok(hits)
 }
 
-/// The document chunk of each `(document_key, chunk_id)` pair, read
+/// The caller's filter plus one `must` condition, checked against the
+/// service's limits as it will be sent. The caller's filter passed them on
+/// its own ([`crate::filter::translate`]); the added condition can be the
+/// one too many, and the refusal says so instead of the service's.
+fn narrowed(filter: Option<&pb::Filter>, condition: pb::Condition) -> Result<pb::Filter> {
+    let filter = with_must(filter, condition);
+    check_limits(&filter).map_err(added_conditions)?;
+    Ok(filter)
+}
+
+/// Rewords a limit refusal for a filter the search extended.
+fn added_conditions(error: FilterError) -> Error {
+    match error {
+        FilterError::NotExpressible(reason) => Error::Filter(FilterError::NotExpressible(format!(
+            "with the conditions extended_search adds, {reason}"
+        ))),
+        other => Error::Filter(other),
+    }
+}
+
+/// The document chunk of each `(document_key, chunk_id)` pair, read up to
 /// [`DOCUMENT_BATCH`] pairs per call: the caller's filter, `chunk_type =
-/// document`, and "at least one of" the pairs. A pair can match one point
-/// per searched namespace, so a call asks for pairs x namespaces results
-/// and keeps, per pair, the first (best) one, as the SDK's per-hit fetch of
-/// limit 1 did. A pair without a chunk id (elitea-vector requires one, so
-/// only a foreign point) matches its document's best document chunk.
+/// document`, and "at least one of" the pairs. Per pair the first (best)
+/// point is kept, as the SDK's per-hit fetch of limit 1 did. A pair without
+/// a chunk id (elitea-vector requires one, so only a foreign point) matches
+/// its document's best document chunk.
+///
+/// A pair can match one point per searched namespace, and within a
+/// namespace both the active-generation and the unversioned copy of a chunk
+/// pass the scope. So a read asks for pairs x namespaces x
+/// [`PAIR_HEADROOM`] results, collapses the copies of one chunk (the
+/// active-generation one wins, as the scope's publish semantics say), and
+/// when the answer was full and a pair is still unresolved, reads that pair
+/// on its own: at most one extra call per missing pair, and none when the
+/// answer had room left (then the chunk does not exist).
 ///
 /// The batch is keyed by pairs, not by `document_key` alone: the SDK's
 /// chunkers give a title, summary, propositions and document chunk of one
@@ -281,53 +334,160 @@ async fn document_chunks<B: VectorBackend>(
     wanted: &[(String, String)],
 ) -> Result<Vec<Hit>> {
     let namespaces = plan.scope.namespace_ids.len().max(1);
+    let per_pair = namespaces.saturating_mul(PAIR_HEADROOM);
+    let base = with_must(plan.filter.as_ref(), keyword("chunk_type", "document"));
     let mut found = Vec::with_capacity(wanted.len());
-    for batch in wanted.chunks(DOCUMENT_BATCH) {
-        let pairs = batch
-            .iter()
-            .map(|(document_key, chunk_id)| {
-                let mut must = vec![keyword("document_key", document_key)];
-                if !chunk_id.is_empty() {
-                    must.push(keyword("chunk_id", chunk_id));
+    let mut rest = wanted;
+    while !rest.is_empty() {
+        let (batch, remaining) = rest.split_at(batch_size(&base, rest)?);
+        rest = remaining;
+        let limit = batch.len().saturating_mul(per_pair);
+        let points = fetch_points(backend, plan, Some(&pairs_filter(&base, batch)?), limit).await?;
+        // The answer could hold no more: a pair not in it may have been
+        // pushed out by another pair's copies.
+        let full = points.len() >= limit.min(MAX_LIMIT as usize);
+        let points = prefer_active(points);
+        for pair in batch {
+            if let Some(point) = points.iter().find(|point| pair_matches(point, pair)) {
+                found.push(Hit::from_point(point));
+            } else if full {
+                let alone = fetch_points(
+                    backend,
+                    plan,
+                    Some(&pairs_filter(&base, std::slice::from_ref(pair))?),
+                    per_pair,
+                )
+                .await?;
+                if let Some(point) = prefer_active(alone)
+                    .iter()
+                    .find(|point| pair_matches(point, pair))
+                {
+                    found.push(Hit::from_point(point));
                 }
-                nest(pb::Filter {
-                    must,
-                    ..pb::Filter::default()
-                })
-            })
-            .collect();
-        let mut filter = with_must(plan.filter.as_ref(), keyword("chunk_type", "document"));
-        filter.must.push(nest(pb::Filter {
-            should: pairs,
-            ..pb::Filter::default()
-        }));
-        let hits = fetch(
-            backend,
-            plan,
-            Some(&filter),
-            batch.len().saturating_mul(namespaces),
-        )
-        .await?;
-        for (document_key, chunk_id) in batch {
-            if let Some(hit) = hits.iter().find(|hit| {
-                hit.document_key == *document_key
-                    && (chunk_id.is_empty() || hit.chunk_id == *chunk_id)
-            }) {
-                found.push(hit.clone());
             }
         }
     }
     Ok(found)
 }
 
-/// One backend call: dense, or hybrid when the plan has full-text weights.
-/// No score threshold is sent: the cut-off is the caller's, after reranking.
+/// How many of `pairs` the next document-chunk read can name: at most
+/// [`DOCUMENT_BATCH`], and no more than fit under the service's limits
+/// beside `base` (the caller's filter with the `chunk_type` condition). The
+/// pairs group is one nested condition in `base`'s `must`; each pair costs
+/// one condition (a bare `document_key` match) or three (a nested filter
+/// holding `document_key` and `chunk_id`).
+///
+/// # Errors
+///
+/// [`FilterError::NotExpressible`] when not even one pair fits.
+fn batch_size(base: &pb::Filter, pairs: &[(String, String)]) -> Result<usize> {
+    if base.must.len() >= MAX_CONDITIONS {
+        return Err(added_conditions(FilterError::NotExpressible(format!(
+            "it needs {} conditions in one must list, and the vector service accepts at most {MAX_CONDITIONS}",
+            base.must.len() + 1
+        ))));
+    }
+    let used = condition_count(base) + 1;
+    let mut budget = MAX_TOTAL_CONDITIONS.saturating_sub(used);
+    let mut size = 0;
+    for (_, chunk_id) in pairs.iter().take(DOCUMENT_BATCH) {
+        let cost = if chunk_id.is_empty() { 1 } else { 3 };
+        if cost > budget {
+            break;
+        }
+        budget -= cost;
+        size += 1;
+    }
+    if size == 0 {
+        return Err(added_conditions(FilterError::NotExpressible(format!(
+            "it holds {used} conditions and the document-chunk read of extended_search needs {} more, and the vector service accepts at most {MAX_TOTAL_CONDITIONS}",
+            if pairs
+                .first()
+                .is_some_and(|(_, chunk_id)| chunk_id.is_empty())
+            {
+                1
+            } else {
+                3
+            }
+        ))));
+    }
+    Ok(size)
+}
+
+/// `base` and "at least one of `pairs`", checked against the limits.
+fn pairs_filter(base: &pb::Filter, pairs: &[(String, String)]) -> Result<pb::Filter> {
+    let group = pairs
+        .iter()
+        .map(|(document_key, chunk_id)| {
+            let mut must = vec![keyword("document_key", document_key)];
+            if !chunk_id.is_empty() {
+                must.push(keyword("chunk_id", chunk_id));
+            }
+            nest(pb::Filter {
+                must,
+                ..pb::Filter::default()
+            })
+        })
+        .collect();
+    let filter = with_must(
+        Some(base),
+        nest(pb::Filter {
+            should: group,
+            ..pb::Filter::default()
+        }),
+    );
+    check_limits(&filter).map_err(added_conditions)?;
+    Ok(filter)
+}
+
+fn pair_matches(point: &pb::ScoredPoint, (document_key, chunk_id): &(String, String)) -> bool {
+    point.document_key == *document_key && (chunk_id.is_empty() || point.chunk_id == *chunk_id)
+}
+
+/// Collapses the copies of one chunk: points of the same namespace,
+/// document and chunk id. The first (best-scoring) copy stays unless a later
+/// one has a generation and it has none: the scope reads a namespace's
+/// active generation plus its unversioned points, and where both hold the
+/// chunk the published one is the index's.
+fn prefer_active(points: Vec<pb::ScoredPoint>) -> Vec<pb::ScoredPoint> {
+    let mut kept: Vec<pb::ScoredPoint> = Vec::with_capacity(points.len());
+    for point in points {
+        let same = kept.iter_mut().find(|existing| {
+            existing.namespace_id == point.namespace_id
+                && existing.document_key == point.document_key
+                && existing.chunk_id == point.chunk_id
+        });
+        match same {
+            Some(existing) => {
+                if existing.generation.is_empty() && !point.generation.is_empty() {
+                    *existing = point;
+                }
+            }
+            None => kept.push(point),
+        }
+    }
+    kept
+}
+
+/// One backend call, as hits.
 async fn fetch<B: VectorBackend>(
     backend: &B,
     plan: &SearchPlan,
     filter: Option<&pb::Filter>,
     k: usize,
 ) -> Result<Vec<Hit>> {
+    let points = prefer_active(fetch_points(backend, plan, filter, k).await?);
+    Ok(points.iter().map(Hit::from_point).collect())
+}
+
+/// One backend call: dense, or hybrid when the plan has full-text weights.
+/// No score threshold is sent: the cut-off is the caller's, after reranking.
+async fn fetch_points<B: VectorBackend>(
+    backend: &B,
+    plan: &SearchPlan,
+    filter: Option<&pb::Filter>,
+    k: usize,
+) -> Result<Vec<pb::ScoredPoint>> {
     let limit = u32::try_from(k.clamp(1, MAX_LIMIT as usize)).unwrap_or(MAX_LIMIT);
     let search = SearchParams {
         scope: plan.scope.clone(),
@@ -350,7 +510,7 @@ async fn fetch<B: VectorBackend>(
         }
         None => backend.search(search).await?,
     };
-    Ok(points.iter().map(Hit::from_point).collect())
+    Ok(points)
 }
 
 /// Collapses repeated keys, keeping the better score. Each key stays at the
@@ -391,6 +551,8 @@ mod tests {
         /// The score the fake returns for every query.
         score: f32,
         metadata: &'static str,
+        /// The point's generation, `""` for an unversioned point.
+        generation: &'static str,
     }
 
     /// A recorded call: kind, limit, filter, score threshold.
@@ -445,6 +607,8 @@ mod tests {
                         c.score
                     },
                     dense_score: Some(c.score),
+                    namespace_id: "ns".to_owned(),
+                    generation: c.generation.to_owned(),
                     document_key: c.document_key.to_owned(),
                     chunk_id: c.chunk_id.to_owned(),
                     chunk_type: c.chunk_type.to_owned(),
@@ -477,7 +641,7 @@ mod tests {
                 search.score_threshold,
             ))
         }
-        async fn delete_namespace(&self, _: pb::EmbeddingSpace, _: &str) -> Result<()> {
+        async fn delete_namespace(&self, _: &str) -> Result<()> {
             Ok(())
         }
     }
@@ -495,6 +659,7 @@ mod tests {
             text: "text",
             score,
             metadata: "{}",
+            generation: "",
         }
     }
 
@@ -695,7 +860,10 @@ mod tests {
         let calls = fake.calls.lock().unwrap();
         assert_eq!(calls.len(), 1 + 2 + 1);
         assert!(calls.iter().all(|call| call.1 <= 6));
-        assert_eq!(calls[3].1, 2, "two pairs in one namespace");
+        assert_eq!(
+            calls[3].1, 4,
+            "two pairs x one namespace x the headroom for their copies"
+        );
     }
 
     #[tokio::test]
@@ -779,7 +947,11 @@ mod tests {
         // document search, title search, then ceil(40 / 32) = 2 reads; never
         // one per hit.
         assert_eq!(calls.len(), 2 + 40_usize.div_ceil(DOCUMENT_BATCH));
-        assert_eq!((calls[2].1, calls[3].1), (32, 8));
+        assert_eq!(
+            (calls[2].1, calls[3].1),
+            (64, 16),
+            "pairs x 1 namespace x 2"
+        );
     }
 
     #[tokio::test]
@@ -893,5 +1065,316 @@ mod tests {
         p.rerank = rerank::parse(&json!({"year": {"rules": {"sort": "desc"}}})).unwrap();
         let hits = search_documents(&fake, &p).await.unwrap();
         assert_eq!(keys(&hits), ["b_0", "c_0"]);
+    }
+
+    #[tokio::test]
+    async fn extended_search_merges_sub_searches_in_the_listed_type_order() {
+        // Each type finds a different document; the document search finds
+        // only the filler. The pairs read must list the keywords hit before
+        // the title hit because the caller listed keywords first, whatever
+        // order the concurrent sub-searches finished in.
+        let fake = Fake {
+            chunks: vec![
+                chunk("filler", "0", "document", 0.9),
+                chunk("by-title", "0", "title", 0.8),
+                chunk("by-title", "0", "document", 0.2),
+                chunk("by-keywords", "0", "keywords", 0.7),
+                chunk("by-keywords", "0", "document", 0.3),
+                chunk("by-summary", "0", "summary", 0.6),
+                chunk("by-summary", "0", "document", 0.1),
+            ],
+            ..Fake::default()
+        };
+        let mut p = plan();
+        p.cut_off = 0.0;
+        p.top = 1;
+        p.extended = vec!["keywords".into(), "title".into(), "summary".into()];
+        let hits = search_documents(&fake, &p).await.unwrap();
+        assert_eq!(keys(&hits), ["filler_0"]);
+        let calls = fake.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1 + 3 + 1);
+        let read = calls.last().unwrap().2.as_ref().unwrap();
+        let Some(pb::condition::Match::Filter(pairs)) = &read.must.last().unwrap().r#match else {
+            panic!("the pairs group: {read:?}");
+        };
+        let pair_keys: Vec<&str> = pairs
+            .should
+            .iter()
+            .map(|condition| match &condition.r#match {
+                Some(pb::condition::Match::Filter(pair)) => pair.must[0].r#match.as_ref(),
+                _ => None,
+            })
+            .map(|m| match m {
+                Some(pb::condition::Match::Keyword(key)) => key.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(pair_keys, ["by-keywords", "by-title", "by-summary"]);
+        // And the same with the types the other way round.
+        drop(calls);
+        fake.calls.lock().unwrap().clear();
+        p.extended = vec!["summary".into(), "title".into(), "keywords".into()];
+        search_documents(&fake, &p).await.unwrap();
+        let calls = fake.calls.lock().unwrap();
+        let read = calls.last().unwrap().2.as_ref().unwrap();
+        let Some(pb::condition::Match::Filter(pairs)) = &read.must.last().unwrap().r#match else {
+            panic!("the pairs group: {read:?}");
+        };
+        let first = match &pairs.should[0].r#match {
+            Some(pb::condition::Match::Filter(pair)) => pair.must[0].clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(first, keyword("document_key", "by-summary"));
+    }
+
+    #[tokio::test]
+    async fn copies_of_one_pair_no_longer_starve_the_other_pairs() {
+        // Document a's chunk 0 is stored five times (five copies pass the
+        // filter and all outscore b's chunk); a and b were both found
+        // through their titles.
+        let mut chunks = vec![chunk("b", "0", "document", 0.1)];
+        for n in 0_u8..5 {
+            chunks.push(chunk("a", "0", "document", 0.5 - f32::from(n) * 0.01));
+        }
+        let fake = Fake {
+            chunks,
+            ..Fake::default()
+        };
+        let wanted = [
+            ("a".to_owned(), "0".to_owned()),
+            ("b".to_owned(), "0".to_owned()),
+        ];
+        let hits = document_chunks(&fake, &plan(), &wanted).await.unwrap();
+        assert_eq!(
+            keys(&hits),
+            ["a_0", "b_0"],
+            "b's document chunk was starved"
+        );
+        let calls = fake.calls.lock().unwrap();
+        // The pairs read (2 pairs x 1 ns x 2, full of a's copies), then b
+        // alone.
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[0].1, 4);
+        assert_eq!(calls[1].1, 2);
+        let alone = calls[1].2.as_ref().unwrap();
+        assert!(
+            alone.must.contains(&keyword("chunk_type", "document")),
+            "{alone:?}"
+        );
+        assert_eq!(
+            alone.must.last().unwrap(),
+            &nest(pb::Filter {
+                should: vec![nest(pb::Filter {
+                    must: vec![keyword("document_key", "b"), keyword("chunk_id", "0")],
+                    ..pb::Filter::default()
+                })],
+                ..pb::Filter::default()
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_document_chunk_costs_no_extra_read_when_the_answer_had_room() {
+        // A title whose document chunk does not exist: the pairs read comes
+        // back short, so nothing was starved and no second read is made.
+        let fake = Fake {
+            chunks: vec![
+                chunk("filler", "0", "document", 0.99),
+                chunk("orphan", "0", "title", 0.9),
+            ],
+            ..Fake::default()
+        };
+        let mut p = plan();
+        p.cut_off = 0.0;
+        p.top = 2;
+        p.extended = vec!["title".into()];
+        let hits = search_documents(&fake, &p).await.unwrap();
+        assert_eq!(keys(&hits), ["filler_0"]);
+        assert_eq!(fake.calls.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn the_published_copy_of_a_document_chunk_beats_the_unversioned_one() {
+        let fake = Fake {
+            chunks: vec![
+                // The unversioned copy scores higher, the published one is
+                // the index's.
+                Chunk {
+                    text: "stale",
+                    ..chunk("d", "0", "document", 0.6)
+                },
+                Chunk {
+                    text: "published",
+                    generation: "g7",
+                    ..chunk("d", "0", "document", 0.5)
+                },
+            ],
+            ..Fake::default()
+        };
+        let wanted = [("d".to_owned(), "0".to_owned())];
+        let hits = document_chunks(&fake, &plan(), &wanted).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].page_content, "published");
+        assert!((hits[0].score - 0.5).abs() < 1e-6);
+        // The same holds for a plain search that reads both copies.
+        let mut p = plan();
+        p.cut_off = 0.0;
+        let hits = search_documents(&fake, &p).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].page_content, "published");
+    }
+
+    #[test]
+    fn copies_collapse_per_namespace_document_and_chunk() {
+        let point = |namespace: &str, generation: &str, score: f32| pb::ScoredPoint {
+            namespace_id: namespace.to_owned(),
+            generation: generation.to_owned(),
+            document_key: "d".to_owned(),
+            chunk_id: "0".to_owned(),
+            score,
+            ..pb::ScoredPoint::default()
+        };
+        let kept = prefer_active(vec![
+            point("n1", "", 0.9),
+            point("n2", "", 0.8),
+            point("n1", "g", 0.7),
+            point("n1", "", 0.6),
+        ]);
+        assert_eq!(kept.len(), 2);
+        assert_eq!((kept[0].namespace_id.as_str(), kept[0].score), ("n1", 0.7));
+        assert_eq!((kept[1].namespace_id.as_str(), kept[1].score), ("n2", 0.8));
+        // A published copy already kept stays over a later unversioned one.
+        let kept = prefer_active(vec![point("n1", "g", 0.9), point("n1", "", 0.95)]);
+        assert_eq!((kept.len(), kept[0].generation.as_str()), (1, "g"));
+    }
+
+    /// A filter of exactly `total` conditions (nested groups of up to 63
+    /// keyword matches, each on `metadata.k == v`), with a short `must`.
+    fn filter_with_total(total: usize) -> pb::Filter {
+        let mut must = Vec::new();
+        let mut remaining = total;
+        while remaining > 0 {
+            let take = remaining.min(MAX_CONDITIONS);
+            if take <= 2 {
+                must.push(keyword("metadata.k", "v"));
+                remaining -= 1;
+            } else {
+                must.push(nest(pb::Filter {
+                    must: vec![keyword("metadata.k", "v"); take - 1],
+                    ..pb::Filter::default()
+                }));
+                remaining -= take;
+            }
+        }
+        let filter = pb::Filter {
+            must,
+            ..pb::Filter::default()
+        };
+        assert_eq!(condition_count(&filter), total);
+        check_limits(&filter).unwrap();
+        filter
+    }
+
+    /// 20 documents found only through their titles (their document chunks
+    /// score below the fillers'), all carrying `k: v`.
+    fn twenty_titled_documents() -> Fake {
+        let mut chunks = Vec::new();
+        for n in 0_u8..20 {
+            let key: &'static str = Box::leak(format!("t{n}").into_boxed_str());
+            chunks.push(Chunk {
+                metadata: r#"{"k": "v"}"#,
+                ..chunk(key, "0", "title", 0.9 - f32::from(n) * 0.01)
+            });
+            chunks.push(Chunk {
+                metadata: r#"{"k": "v"}"#,
+                ..chunk(key, "0", "document", 0.3 - f32::from(n) * 0.001)
+            });
+            let filler: &'static str = Box::leak(format!("f{n}").into_boxed_str());
+            chunks.push(Chunk {
+                metadata: r#"{"k": "v"}"#,
+                ..chunk(filler, "0", "document", 0.5 - f32::from(n) * 0.001)
+            });
+        }
+        Fake {
+            chunks,
+            ..Fake::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn document_chunk_batches_shrink_to_fit_the_condition_limits() {
+        // 977 conditions + chunk_type + the pairs group leaves 45: 15 pairs
+        // of 3 conditions per read instead of 32.
+        let fake = twenty_titled_documents();
+        let mut p = plan();
+        p.cut_off = 0.0;
+        p.top = 20;
+        p.extended = vec!["title".into()];
+        p.filter = Some(filter_with_total(977));
+        let hits = search_documents(&fake, &p).await.unwrap();
+        assert_eq!(hits.len(), 20);
+        let calls = fake.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2 + 2, "{}", calls.len());
+        assert_eq!((calls[2].1, calls[3].1), (30, 10), "15 and 5 pairs x 2");
+        for call in &calls[2..] {
+            let sent = call.2.as_ref().unwrap();
+            check_limits(sent).unwrap();
+            assert!(condition_count(sent) <= MAX_TOTAL_CONDITIONS);
+        }
+        assert_eq!(condition_count(calls[2].2.as_ref().unwrap()), 977 + 2 + 45);
+    }
+
+    #[tokio::test]
+    async fn a_filter_leaving_no_room_for_one_pair_is_refused_readably() {
+        // 1022 conditions: the sub-searches still fit (1023), the read of
+        // even one pair (3 more) does not.
+        let fake = twenty_titled_documents();
+        let mut p = plan();
+        p.cut_off = 0.0;
+        p.top = 2;
+        p.extended = vec!["title".into()];
+        p.filter = Some(filter_with_total(1022));
+        let error = search_documents(&fake, &p).await.expect_err("refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("cannot be expressed")
+                && message.contains("extended_search")
+                && message.contains("1024"),
+            "{message}"
+        );
+        // The sub-searches did run; the read did not.
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        // Without extended_search the same filter searches fine.
+        p.extended = Vec::new();
+        search_documents(&fake, &p).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_chunk_type_condition_is_counted_against_the_must_list_limit() {
+        // Exactly 64 must conditions pass translation; with the chunk_type
+        // condition extended_search adds the list would hold 65.
+        let fake = twenty_titled_documents();
+        let mut p = plan();
+        p.cut_off = 0.0;
+        p.extended = vec!["title".into()];
+        p.filter = Some(pb::Filter {
+            must: (0..MAX_CONDITIONS)
+                .map(|n| keyword("metadata.k", if n == 0 { "v" } else { "w" }))
+                .collect(),
+            ..pb::Filter::default()
+        });
+        check_limits(p.filter.as_ref().unwrap()).unwrap();
+        let error = search_documents(&fake, &p).await.expect_err("refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("extended_search") && message.contains("must list"),
+            "{message}"
+        );
+        assert!(
+            fake.calls.lock().unwrap().is_empty(),
+            "refused before any call"
+        );
+        p.extended = Vec::new();
+        search_documents(&fake, &p).await.unwrap();
     }
 }

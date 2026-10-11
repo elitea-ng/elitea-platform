@@ -277,7 +277,8 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
     /// query, then the index is searched with it. An unknown index name
     /// returns the `Index '...' not found` message, as `search_index` does,
     /// without calling the model. (The SDK called it and then searched
-    /// nothing.)
+    /// nothing.) A model reply with no text falls back to the question
+    /// itself, with a warning.
     ///
     /// # Errors
     ///
@@ -318,7 +319,10 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
         Ok(extract_completion_text(&model.invoke(&prompt).await?))
     }
 
-    /// `remove_index`: deletes every point of the named index.
+    /// `remove_index`: deletes every point of the named index, in every
+    /// embedding space. The registry knows the index's current space, but
+    /// an index re-embedded with another model left its points in the old
+    /// model's collection too, and they are removed with it.
     ///
     /// An empty name is refused. The SDK deleted every row without an
     /// index, reported "All indexes have been removed" and left the named
@@ -341,9 +345,7 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
                 &self.catalog.list_indexes(),
             )));
         };
-        self.backend
-            .delete_namespace(entry.space.clone(), &entry.namespace_id)
-            .await?;
+        self.backend.delete_namespace(&entry.namespace_id).await?;
         Ok(format!(
             "Index '{index_name}' has been removed from the vector store.\nAvailable indexes: {}",
             self.catalog.without(index_name).list_indexes()
@@ -364,7 +366,15 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
             return Ok(Vec::new());
         }
         let reply = model.invoke(&stepback_prompt(&args.query)).await?;
-        let query = extract_completion_text(&reply);
+        let mut query = extract_completion_text(&reply);
+        if query.trim().is_empty() {
+            // The model gave nothing to search with: the user's own question
+            // is searched instead of refusing the whole call.
+            tracing::warn!(
+                "the step-back model returned an empty query; searching with the original question"
+            );
+            query.clone_from(&args.query);
+        }
         let hits = self.run(&prepared, &query, &target).await?;
         Ok(format_hits(&hits, self.doctype))
     }

@@ -345,8 +345,11 @@ impl VectorService for FakeVector {
                         "the vector has the wrong dimension",
                     ));
                 }
+                // One collection per embedding space: a copy in another
+                // space is a different point.
                 state.points.retain(|stored| {
-                    !(stored.project_id == project
+                    !(stored.space == space
+                        && stored.project_id == project
                         && stored.namespace_id == namespace.namespace_id
                         && stored.generation == namespace.generation
                         && stored.point.document_key == point.document_key
@@ -398,8 +401,11 @@ impl VectorService for FakeVector {
                 pb::delete_request::Selector::Generations(list) => {
                     list.generations.contains(&stored.generation)
                 }
+                // Only versioned points of another generation: an
+                // unversioned (incremental) point is kept, as the service
+                // keeps it.
                 pb::delete_request::Selector::GenerationsExcept(keep) => {
-                    stored.generation != keep.keep
+                    !stored.generation.is_empty() && stored.generation != keep.keep
                 }
             };
             !(in_namespace && selected)

@@ -998,12 +998,120 @@ async fn hybrid_results_carry_their_dense_cosine_score() {
             "the fused score is rank-based: {point:?}"
         );
     }
-    // A dense search reports the same score twice.
+    // A dense search reports the same score twice, and the hybrid dense
+    // score equals it for every point: both are the cosine of the stored
+    // (float16, normalised) vector against the query, one computed by
+    // Qdrant and one by the service from the returned vector.
     let dense = h
         .search(TOKEN_A, Harness::scope(&[NAMESPACE_A]), None)
         .await
         .expect("search");
+    assert_eq!(dense.len(), 3);
     assert!(dense.iter().all(|p| p.dense_score == Some(p.score)));
+    for point in &points {
+        let reference = dense
+            .iter()
+            .find(|p| p.id == point.id)
+            .unwrap_or_else(|| panic!("{} not in the dense search", point.document_key));
+        let delta = (point.dense_score.expect("dense") - reference.score).abs();
+        assert!(delta < 1e-3, "{}: {delta} off", point.document_key);
+    }
+}
+
+#[tokio::test]
+async fn a_point_with_a_numeric_id_gets_its_hybrid_dense_score() {
+    // Points the service writes have UUID ids, but Qdrant also allows
+    // integer ids and the facade must not depend on the id's form: the
+    // dense score comes from the point's own vector, not from a second
+    // query by id.
+    let url = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point(
+            "written",
+            "ordinary words",
+            [1.0, 0.0, 0.0, 0.0],
+        )],
+    )
+    .await
+    .expect("upsert");
+    let qdrant = raw_qdrant(&url);
+    let collection = format!("emb_{}_{DIMENSION}", h.slug);
+    let mut payload = qdrant_client::Payload::new();
+    payload.insert("project_id", PROJECT_A.to_string());
+    payload.insert("source", "toolkit_index");
+    payload.insert("namespace_id", NAMESPACE_A);
+    payload.insert("document_key", "numeric");
+    payload.insert("document_version", "1");
+    payload.insert("parent_id", "");
+    payload.insert("chunk_id", "0");
+    payload.insert("chunk_type", "text");
+    payload.insert(
+        "acl",
+        qdrant_client::qdrant::Value::from(serde_json::json!(["group:all"])),
+    );
+    payload.insert("text", "zebra quartz");
+    payload.insert(
+        "metadata",
+        qdrant_client::qdrant::Value::from(serde_json::json!({})),
+    );
+    let vectors = qdrant_client::qdrant::NamedVectors::default()
+        .add_vector(
+            "dense",
+            qdrant_client::qdrant::Vector::new_dense(vec![1.0, 1.0, 0.0, 0.0]),
+        )
+        .add_vector(
+            "bm25",
+            qdrant_client::qdrant::Document::new("zebra quartz", "qdrant/bm25"),
+        );
+    qdrant
+        .upsert_points(
+            qdrant_client::qdrant::UpsertPointsBuilder::new(
+                &collection,
+                vec![qdrant_client::qdrant::PointStruct::new(
+                    7_u64, vectors, payload,
+                )],
+            )
+            .wait(true),
+        )
+        .await
+        .expect("raw upsert");
+    let points = h
+        .worker
+        .hybrid_search(with_token(
+            TOKEN_A,
+            pb::HybridSearchRequest {
+                scope: Some(Harness::scope(&[NAMESPACE_A])),
+                space: Some(h.space()),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                text: "zebra".to_owned(),
+                limit: 10,
+                ..pb::HybridSearchRequest::default()
+            },
+        ))
+        .await
+        .expect("hybrid")
+        .into_inner()
+        .points;
+    assert_eq!(points.len(), 2, "{points:?}");
+    let numeric = points
+        .iter()
+        .find(|p| p.document_key == "numeric")
+        .expect("the numeric-id point");
+    assert_eq!(numeric.id, "7");
+    let dense = numeric.dense_score.expect("dense score");
+    assert!(
+        (dense - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01,
+        "{numeric:?}"
+    );
+    let written = points
+        .iter()
+        .find(|p| p.document_key == "written")
+        .expect("the written point");
+    assert!((written.dense_score.expect("dense") - 1.0).abs() < 0.01);
 }
 
 // ── the forged project field ────────────────────────────────────────────────
@@ -1352,6 +1460,16 @@ async fn generations_publish_atomically_and_clean_up_lazily() {
         .await
         .expect("upsert");
     }
+    // An incremental update written without a generation, before the
+    // clean-up: it belongs to no build and the clean-up must keep it.
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point("incremental", "plain", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("upsert");
     let read = |generation: &str| pb::Scope {
         generation: generation.to_owned(),
         ..Harness::scope(&[NAMESPACE_A])
@@ -1359,6 +1477,7 @@ async fn generations_publish_atomically_and_clean_up_lazily() {
     let g1 = h.search(TOKEN_A, read("g1"), None).await.expect("g1");
     assert_eq!(g1.len(), 1);
     assert_eq!(g1[0].text, "g1");
+    assert_eq!(h.truth(PROJECT_A).await, 3);
     h.worker
         .delete(with_token(
             TOKEN_A,
@@ -1385,6 +1504,26 @@ async fn generations_publish_atomically_and_clean_up_lazily() {
         h.search(TOKEN_A, read("g2"), None).await.expect("g2").len(),
         1
     );
+    // The unversioned point survived: the toolkit scope (active generation
+    // g2 plus unversioned points) reads both, and the collection holds
+    // exactly those two.
+    let published = pb::Scope {
+        active_generations: vec![pb::ActiveGeneration {
+            namespace_id: NAMESPACE_A.to_owned(),
+            generation: "g2".to_owned(),
+        }],
+        ..Harness::scope(&[NAMESPACE_A])
+    };
+    let mut texts: Vec<String> = h
+        .search(TOKEN_A, published, None)
+        .await
+        .expect("published")
+        .into_iter()
+        .map(|p| p.text)
+        .collect();
+    texts.sort();
+    assert_eq!(texts, ["g2", "plain"]);
+    assert_eq!(h.truth(PROJECT_A).await, 2, "g1 alone was removed");
 }
 
 // ── sources ─────────────────────────────────────────────────────────────────

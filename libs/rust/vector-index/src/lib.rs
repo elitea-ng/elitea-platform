@@ -7,7 +7,7 @@
 //! * [`filter`]: the SDK's filter JSON (langchain-postgres operators)
 //!   translated into the facade's filters, refusing what Qdrant cannot
 //!   express.
-//! * [`search`], [`rerank`], [`format`], [`stepback`], [`tools`]: the SDK's
+//! * [`search`], [`rerank`], [`mod@format`], [`stepback`], [`tools`]: the SDK's
 //!   index tools on top of the client, with the three fixes ADR-0030
 //!   decision 5 lists (better score kept on duplicate keys, `full_text_search`
 //!   works, `remove_index("")` is refused).
@@ -36,7 +36,13 @@ pub mod testing;
 pub mod tools;
 
 mod proto {
-    #![allow(clippy::all, clippy::pedantic, missing_docs, reason = "generated code")]
+    #![allow(
+        clippy::all,
+        clippy::pedantic,
+        missing_docs,
+        rustdoc::invalid_html_tags,
+        reason = "generated code: the proto comments are not rustdoc"
+    )]
     include!(concat!(env!("OUT_DIR"), "/elitea.rs"));
 }
 

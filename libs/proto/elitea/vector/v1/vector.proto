@@ -191,7 +191,7 @@ message StringList {
 // Condition is one match on a payload key, or a nested filter.
 //
 // key is one of `document_key`, `document_version`, `parent_id`, `chunk_id`,
-// `chunk_type`, `acl`, or `metadata.<path>` where <path> matches
+// `chunk_type`, `acl`, or `metadata.<path>` where `<path>` matches
 // ^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$. Every other key, `project_id`
 // included, is refused with INVALID_ARGUMENT, at any nesting depth. A
 // `filter` condition has no key (key must be empty).
