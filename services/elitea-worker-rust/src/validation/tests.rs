@@ -168,25 +168,19 @@ fn binding_checks_identity_catalog_and_schema_in_python_order() {
     let catalog = catalog();
     assert!(catalog.bind(&command_for("jira")).is_ok());
 
-    let mut empty = command_for("jira");
-    empty.settings_entry_id.clear();
-    assert_eq!(
-        catalog.bind(&empty).unwrap_err(),
-        BindingRefusal::InvalidInput
-    );
-
-    let mut short = command_for("jira");
-    short.schema_digest.as_mut().unwrap().value.pop();
-    assert_eq!(
-        catalog.bind(&short).unwrap_err(),
-        BindingRefusal::InvalidInput
-    );
-
+    // Input shape (empty identities, short or missing digests) belongs to
+    // command verification; here a missing digest simply cannot match.
     let mut missing = command_for("jira");
     missing.catalog_digest = None;
     assert_eq!(
         catalog.bind(&missing).unwrap_err(),
-        BindingRefusal::InvalidInput
+        BindingRefusal::IncompatibleVersion
+    );
+    let mut short = command_for("jira");
+    short.schema_digest.as_mut().unwrap().value.pop();
+    assert_eq!(
+        catalog.bind(&short).unwrap_err(),
+        BindingRefusal::IncompatibleVersion
     );
 
     let mut revision = command_for("jira");
@@ -378,4 +372,95 @@ fn canonical_messages_are_main_s_exact_text() {
         assert_eq!(parsed.safe_message(), message);
     }
     assert!(IssueCode::from_wire("SOMETHING_ELSE").is_none());
+}
+
+fn jira_issues(settings: &str) -> Result<Vec<(String, String)>, SettingsRefusal> {
+    let rules = catalog().bind(&command_for("jira")).unwrap();
+    rules.evaluate(settings.as_bytes()).map(|issues| {
+        issues
+            .into_iter()
+            .map(|issue| (issue.code.code().to_owned(), issue.json_pointer))
+            .collect()
+    })
+}
+
+fn sql_issues(settings: &str) -> Result<Vec<(String, String)>, SettingsRefusal> {
+    let rules = catalog().bind(&command_for("sql")).unwrap();
+    rules.evaluate(settings.as_bytes()).map(|issues| {
+        issues
+            .into_iter()
+            .map(|issue| (issue.code.code().to_owned(), issue.json_pointer))
+            .collect()
+    })
+}
+
+#[test]
+fn integer_strings_obey_pydantic_s_digit_limit() {
+    // Recorded with pydantic 2.12.5 on Python 3.13 (`int_parsing_size` or
+    // `int_parsing` for the refused spellings, both INVALID_VALUE here).
+    let port = |text: String| {
+        sql_issues(&format!(
+            r#"{{"host":"h","username":"u","password":"p","port":"{text}"}}"#
+        ))
+        .unwrap()
+    };
+    let invalid = vec![("INVALID_VALUE".to_owned(), "/port".to_owned())];
+    let nines = |count: usize| "9".repeat(count);
+    assert!(port(nines(4300)).is_empty());
+    assert_eq!(port(nines(4301)), invalid);
+    assert!(port(format!("+{}", nines(4300))).is_empty());
+    assert_eq!(port(format!("+{}", nines(4301))), invalid);
+    // The sign counts toward the limit only when it is `-`.
+    assert!(port(format!("-{}", nines(4299))).is_empty());
+    assert_eq!(port(format!("-{}", nines(4300))), invalid);
+    // Whitespace, a zero fraction, leading zeros and underscores do not count.
+    assert!(port(format!(" {} ", nines(4300))).is_empty());
+    assert!(port(format!("{}.000", nines(4300))).is_empty());
+    assert_eq!(port(format!("{}.0", nines(4301))), invalid);
+    assert!(port(format!("{}{}", "0".repeat(5000), nines(4300))).is_empty());
+    assert!(port(format!("{}_{}", nines(2000), nines(2300))).is_empty());
+    assert_eq!(port(format!("{}_{}", nines(2000), nines(2301))), invalid);
+}
+
+#[test]
+fn integer_literals_beyond_f64_are_valid_ints_up_to_python_s_limit() {
+    let big = "7".repeat(400);
+    // In an int field, and in an extra key the models do not declare.
+    assert_eq!(
+        sql_issues(&format!(
+            r#"{{"host":"h","username":"u","password":"p","port":{big}}}"#
+        )),
+        Ok(vec![])
+    );
+    assert_eq!(
+        sql_issues(&format!(
+            r#"{{"host":"h","username":"u","password":"p","port":-{big},"extra":{big}}}"#
+        )),
+        Ok(vec![])
+    );
+    // A string field still refuses the number, with a verdict not a failure.
+    assert_eq!(
+        jira_issues(&format!(r#"{{"base_url":{big}}}"#)),
+        Ok(vec![("INVALID_VALUE".to_owned(), "/base_url".to_owned())])
+    );
+    // Python's json refuses a literal over 4300 digits as malformed.
+    let limit = "7".repeat(4300);
+    assert_eq!(
+        jira_issues(&format!(r#"{{"base_url":"u","extra":{limit}}}"#)),
+        Ok(vec![])
+    );
+    let over = "7".repeat(4301);
+    assert_eq!(
+        jira_issues(&format!(r#"{{"base_url":"u","extra":{over}}}"#)),
+        Err(SettingsRefusal::InvalidInput)
+    );
+    assert_eq!(
+        jira_issues(&format!(r#"{{"base_url":"u","extra":-{over}}}"#)),
+        Err(SettingsRefusal::InvalidInput)
+    );
+    // Non-finite floats stay refused.
+    assert_eq!(
+        jira_issues(&format!(r#"{{"base_url":"u","extra":{big}.5e999}}"#)),
+        Err(SettingsRefusal::InvalidInput)
+    );
 }

@@ -37,7 +37,7 @@ pub(super) fn select_rules(
                     "this worker cannot validate the configuration type"
                 );
             }
-            BindingRefusal::InvalidInput | BindingRefusal::IncompatibleVersion => {
+            BindingRefusal::IncompatibleVersion => {
                 tracing::warn!(
                     event = "configuration_validation_binding_refused",
                     refusal = ?refusal,

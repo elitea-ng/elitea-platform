@@ -57,14 +57,32 @@ fn is_integer_literal(text: &str) -> bool {
     !text.contains(['.', 'e', 'E'])
 }
 
+/// pydantic-core refuses an integer string whose significant digits, plus a
+/// leading `-`, exceed Python's `int` parsing limit (`int_parsing_size`, which
+/// the issue list reports as `INVALID_VALUE` like any unparsable text).
+/// Leading zeros, underscores, a `+` and the fraction do not count; the sign
+/// is counted only when it is `-`. Read off pydantic 2.12.5 on Python 3.13.
+const MAX_INT_TEXT_DIGITS: usize = 4300;
+
 fn integer_text(text: &str) -> bool {
+    let negative = text.starts_with('-');
     let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
     let (whole, fraction) = match unsigned.split_once('.') {
         Some((whole, fraction)) => (whole, Some(fraction)),
         None => (unsigned, None),
     };
     underscored_digits(whole)
+        && significant_digits(whole) + usize::from(negative) <= MAX_INT_TEXT_DIGITS
         && fraction.is_none_or(|digits| !digits.is_empty() && digits.bytes().all(|b| b == b'0'))
+}
+
+/// Digits of an already validated run, without underscores or leading zeros.
+fn significant_digits(whole: &str) -> usize {
+    whole
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .skip_while(|digit| *digit == b'0')
+        .count()
 }
 
 /// ASCII digits with at most single underscores strictly between them.

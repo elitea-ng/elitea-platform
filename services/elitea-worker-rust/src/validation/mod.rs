@@ -91,8 +91,6 @@ pub(crate) struct Issue {
 /// Why a command was refused before any settings were read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BindingRefusal {
-    /// A required identity is empty or a digest is not 32 bytes.
-    InvalidInput,
     /// The catalog or per-type schema is not the one this worker carries.
     IncompatibleVersion,
     /// The type is outside the table this worker can validate. The name is
@@ -104,7 +102,6 @@ pub(crate) enum BindingRefusal {
 impl BindingRefusal {
     pub(crate) const fn failure(&self) -> RuntimeFailureKind {
         match self {
-            Self::InvalidInput => RuntimeFailureKind::InvalidInput,
             Self::IncompatibleVersion => RuntimeFailureKind::IncompatibleVersion,
             Self::UnsupportedConfigurationType { .. } => RuntimeFailureKind::UnsupportedCapability,
         }
@@ -258,19 +255,13 @@ impl ConfigurationCatalog {
         &self,
         command: &ConfigurationValidationCommandV1,
     ) -> Result<&TypeRules, BindingRefusal> {
+        // Input shape (non-empty identities, 32-byte digests) is verified by
+        // command verification (`configuration_validation_identities` in
+        // protocol/command.rs) before a command reaches this point; it is not
+        // re-checked here. A missing or short digest still fails closed below,
+        // as an incompatible version, because the comparison cannot match.
         let catalog_digest = command.catalog_digest.as_ref().map(|d| d.value.as_slice());
         let schema_digest = command.schema_digest.as_ref().map(|d| d.value.as_slice());
-        if command.configuration_revision_id.is_empty()
-            || command.settings_entry_id.is_empty()
-            || command.configuration_type.is_empty()
-            || command.catalog_revision.is_empty()
-            || command.schema_id.is_empty()
-            || command.schema_revision.is_empty()
-            || catalog_digest.is_none_or(|digest| digest.len() != 32)
-            || schema_digest.is_none_or(|digest| digest.len() != 32)
-        {
-            return Err(BindingRefusal::InvalidInput);
-        }
         if command.catalog_revision != self.revision
             || !constant_time_eq(catalog_digest.unwrap_or_default(), &self.digest)
         {
@@ -465,14 +456,23 @@ fn parse_settings(raw: &[u8]) -> Result<Map<String, Value>, SettingsRefusal> {
     if raw.len() > MAX_SETTINGS_BYTES {
         return Err(SettingsRefusal::ResourceExhausted);
     }
-    strict_json::reject_duplicate_members(raw).map_err(|()| SettingsRefusal::InvalidInput)?;
-    let value: Value = serde_json::from_slice(raw).map_err(|_| SettingsRefusal::InvalidInput)?;
-    let Value::Object(settings) = value else {
+    // One parse: duplicate members and syntax errors are malformed input.
+    let value =
+        strict_json::parse_without_duplicates(raw).map_err(|()| SettingsRefusal::InvalidInput)?;
+    let Value::Object(_) = &value else {
         return Err(SettingsRefusal::InvalidInput);
     };
-    check_limits(&Value::Object(settings.clone()), 0)?;
-    Ok(settings)
+    check_limits(&value, 0)?;
+    match value {
+        Value::Object(settings) => Ok(settings),
+        _ => Err(SettingsRefusal::InvalidInput),
+    }
 }
+
+/// Python's `sys.get_int_max_str_digits()` default: `json.loads` raises
+/// `ValueError` (reported as malformed input) for an integer literal with more
+/// digits than this.
+const MAX_INTEGER_LITERAL_DIGITS: usize = 4300;
 
 fn check_limits(value: &Value, depth: usize) -> Result<(), SettingsRefusal> {
     if depth > MAX_JSON_DEPTH {
@@ -480,7 +480,15 @@ fn check_limits(value: &Value, depth: usize) -> Result<(), SettingsRefusal> {
     }
     match value {
         Value::Number(number) => {
-            if number.as_f64().is_none_or(|float| !float.is_finite()) {
+            let text = number.to_string();
+            if text.contains(['.', 'e', 'E']) {
+                // A float: Python's json yields inf for an overflowing one.
+                if number.as_f64().is_none_or(|float| !float.is_finite()) {
+                    return Err(SettingsRefusal::InvalidInput);
+                }
+            } else if text.trim_start_matches('-').len() > MAX_INTEGER_LITERAL_DIGITS {
+                // An integer literal of any size that fits the digit limit is
+                // a valid Python int, whether or not it fits an f64.
                 return Err(SettingsRefusal::InvalidInput);
             }
         }

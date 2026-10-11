@@ -76,6 +76,11 @@ NUMERIC_PROBES = [
     "TRUE", "True", "T", "OFF", "On", " true ", "true\n", "2", "-1", "0.0",
     9223372036854775807, -9223372036854775808, 9.2e18, 9.3e18, 1e18, 1e19,
     -9.2e18, -9.3e18, 0.5, -0.0, 1.0000000000000001,
+    # Integers beyond f64, and pydantic-core's 4300-digit text limit: a `-`
+    # counts toward it, a `+`, leading zeros and a zero fraction do not.
+    10**399, -(10**399), "9" * 4300, "9" * 4301, "-" + "9" * 4299,
+    "-" + "9" * 4300, "+" + "9" * 4300, "0" * 5000 + "9" * 4300,
+    "9" * 4300 + ".0", "9" * 4301 + ".0",
 ]
 # Probes that exercise a rule, not a field name: the full set runs once per
 # distinct rule shape, a short set on every later field of that shape.
