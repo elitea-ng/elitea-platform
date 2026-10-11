@@ -61,6 +61,15 @@
 {{- $env = merge (deepCopy $env) (dict "ELITEA_WORKER_IMPLEMENTATION" $.Values.worker.implementation) }}
 {{- end }}
 {{- /*
+  ELITEA_INDEXING_RUNTIME (ADR-0030 decision 6, ADR-0031 V1) is stated the same
+  way, from worker.indexingRuntime, so elitea-main never guesses which store its
+  index routes read: the per-project pgvector index_meta rows (python) or the
+  elitea_runtime.index_registry table (rust). An explicit env entry still wins.
+*/ -}}
+{{- if not (get $env "ELITEA_INDEXING_RUNTIME") }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $.Values.worker.indexingRuntime) }}
+{{- end }}
+{{- /*
   ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are DERIVED
   the same way (issues #394 and #395). Each route is now the ONLY handler for
   its path — the prototype fallbacks in internal/api/router.go are deleted — so

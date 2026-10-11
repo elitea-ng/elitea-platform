@@ -93,6 +93,40 @@ func TestConformanceVerifierAcceptsStrictReferenceOnlyIndexIngestCommand(t *test
 	}
 }
 
+// The expected embedding space (rust indexing runtime) is a pair: both set,
+// or neither.
+func TestConformanceVerifierChecksTheExpectedEmbeddingSpacePair(t *testing.T) {
+	verifier := newTestVerifier(t)
+	withExpected := func(model string, dimension uint32) []byte {
+		t.Helper()
+		command := &runtimev1.WorkerCommandV1{}
+		if err := proto.Unmarshal(validRawIndexWorkerCommand(t), command); err != nil {
+			t.Fatal(err)
+		}
+		command.GetIndexIngest().ExpectedEmbeddingModel = model
+		command.GetIndexIngest().ExpectedEmbeddingDimension = dimension
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	verified, err := verifier.Verify(context.Background(), signedEnvelope(withExpected("Org/Model.A", 1536)))
+	if err != nil || verified.GetIndexIngest().GetExpectedEmbeddingModel() != "Org/Model.A" ||
+		verified.GetIndexIngest().GetExpectedEmbeddingDimension() != 1536 {
+		t.Fatalf("a command with an expected space: %v err=%v", verified, err)
+	}
+	for name, raw := range map[string][]byte{
+		"model only":     withExpected("m", 0),
+		"dimension only": withExpected("", 8),
+		"too wide":       withExpected("m", 70000),
+	} {
+		if _, err := verifier.Verify(context.Background(), signedEnvelope(raw)); !errors.Is(err, ErrMalformedWorkerCommand) {
+			t.Fatalf("%s: %v, want ErrMalformedWorkerCommand", name, err)
+		}
+	}
+}
+
 func moveFirstFieldToEnd(t *testing.T, raw []byte) []byte {
 	t.Helper()
 	number, wireType, tagLength := protowire.ConsumeTag(raw)

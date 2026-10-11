@@ -1691,6 +1691,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return openErr
 		}
 		defer runtimePools.Close()
+		if len(runtimeConfig.VectorIntrospectionClients) > 0 {
+			if err := runtimePools.openVectorIntrospection(ctx, dbDSN, databasePoolLimits, openRuntimePostgresPool); err != nil {
+				return err
+			}
+		}
 		compiledState, compiledStateErr := openCompiledSnapshotStatePool(ctx, runtimeConfig)
 		if compiledStateErr != nil {
 			return compiledStateErr
@@ -1726,6 +1731,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ReplayPool:                       runtimePools.Replay,
 			TerminalEffectsPool:              runtimePools.TerminalEffects,
 			ContentPool:                      runtimePools.Content,
+			VectorIntrospectionPool:          runtimePools.VectorIntrospection,
 			CompiledSnapshotStatePool:        compiledState.pool,
 			CodeWorkspaceCapabilities:        codeConsumers.workspaceCapabilities,
 			CodeWorkspacePolicy:              codeConsumers.workspacePolicy,
@@ -1737,11 +1743,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ActorTokenIssuer:                 formGraph,
 			ProjectTokenValidator:            formGraph,
 			ProjectSystemTokenSource:         formGraph,
-			PermissionResolver:               legacyrbac.NewPostgresResolver(pool),
-			Logger:                           logger,
-			ObjectStore:                      objectStore,
-			ToolkitCatalogue:                 toolkitCatalogue,
-			WorkerToolkitCapability:          workerToolkitCapability,
+			// elitea-vector's token introspection (ADR-0031) reads callback
+			// grants over the main pool, where the minting facades write them.
+			CallbackTokenFacts:      dbrepos.NewCallbackTokenGrants(pool),
+			PermissionResolver:      legacyrbac.NewPostgresResolver(pool),
+			Logger:                  logger,
+			ObjectStore:             objectStore,
+			ToolkitCatalogue:        toolkitCatalogue,
+			WorkerToolkitCapability: workerToolkitCapability,
 			// pipeline.run.succeeded/failed — see
 			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
 			PipelineRuns: pipelineRunsRepo,
@@ -2348,7 +2357,28 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
 
+	// The project-deletion reconciler (#1211) drains the cleanup journal over
+	// the one provisioner the router builds, so it is started from the router's
+	// hook. A failure to construct it
+	// is carried out of the hook and stops startup like the other composition
+	// errors.
+	deletionReconciler, err := projectDeletionReconcilerFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load project deletion reconciler settings: %w", err)
+	}
+	projectDeleteBudget, err := projectDeleteBudgetFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load project delete budget: %w", err)
+	}
+	var deletionReconcilerErr error
+	startDeletionReconciler := func(provisioner *projectprovisioning.Provisioner) {
+		deletionReconcilerErr = startProjectDeletionReconciler(ctx, deletionReconciler, provisioner, logger)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
+		OnProjectProvisioner:         startDeletionReconciler,
+		ProjectCleanupContext:        ctx,
+		ProjectDeleteBudget:          projectDeleteBudget,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,
@@ -2510,6 +2540,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		WebhookDestinationGuard:     webhookDestinationGuard,
 		MCPAuthorizationEgressGuard: mcpAuthorizationEgressGuard,
 	})
+	if deletionReconcilerErr != nil {
+		return fmt.Errorf("start project deletion reconciler: %w", deletionReconcilerErr)
+	}
 
 	// NOTE(#126): the Socket.IO prototype server (internal/api/socketio) is
 	// gone. It was never mounted — the comment that stood here said it stayed

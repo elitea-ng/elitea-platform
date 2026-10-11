@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"log/slog"
 	"time"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -11,6 +12,8 @@ import (
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -47,7 +50,28 @@ type ClaimInputResolver interface {
 	ResolveClaimInput(ctx context.Context, fence runtimedomain.Fence, reference *runtimev1.ExecutionInputBundleReferenceV1) (*runtimev1.ExecutionInputBundleV1, error)
 }
 
+// VectorTokenIssuer mints the per-claim elitea-vector token (ADR-0031
+// decision 1; vectorintrospection.ClaimTokenIssuer). It returns nil and no
+// error for an execution that gets no token, and runtimedomain.ErrStaleFence
+// when the claim is no longer live.
+type VectorTokenIssuer interface {
+	// QualifiesForVectorClaimToken reports whether an execution of
+	// capabilityID can get a token, so the claim path skips the mint's
+	// database round trip for every other capability. It is a pre-filter
+	// only: the mint's SQL stays the authority.
+	QualifiesForVectorClaimToken(capabilityID string) bool
+	IssueVectorClaimToken(ctx context.Context, fence runtimedomain.Fence) (*runtimev1.VectorClaimTokenV1, error)
+}
+
 type ServerConfig struct {
+	// VectorTokens, when set, mints a vector token into every receipt that
+	// grants executable authority. Nil leaves receipts without one. A mint
+	// that fails does not fail the claim: the receipt carries no token, the
+	// failure is logged and counted, and only the worker's vector calls fail.
+	VectorTokens VectorTokenIssuer
+	// Meter creates the control service's instruments; nil uses the global
+	// "elitea-main" meter.
+	Meter                  metric.Meter
 	SandboxGrants          *SandboxGrantIssuer
 	OriginalCodeWorkspaces storage.OriginalCodeWorkspaceCompileAuthorizer
 	SandboxBundles         bool
@@ -68,6 +92,10 @@ type Server struct {
 	claims      ClaimController
 	inputs      ClaimInputResolver
 	settlements SettlementController
+
+	// vectorMintFailures counts receipts delivered without a vector token
+	// because minting failed (a store error, not an ineligible execution).
+	vectorMintFailures metric.Int64Counter
 }
 
 func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, verifier CommandVerifier, claims ClaimController, inputs ClaimInputResolver, settlements SettlementController) (*Server, error) {
@@ -77,7 +105,18 @@ func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, verifier Comm
 	if config.MaxInputManifestBytes <= 0 || config.MaxInputEntries <= 0 || config.MaxInputContentBytes == 0 || config.MaxStringBytes <= 0 {
 		return nil, errors.New("control input limits must be positive")
 	}
-	return &Server{config: config, authorizer: authorizer, verifier: verifier, claims: claims, inputs: inputs, settlements: settlements}, nil
+	meter := config.Meter
+	if meter == nil {
+		meter = otel.Meter("elitea-main")
+	}
+	failures, err := meter.Int64Counter(
+		"elitea.runtime.vector_token.mint_failures",
+		metric.WithDescription("Claims delivered without a vector token because minting it failed."),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{config: config, authorizer: authorizer, verifier: verifier, claims: claims, inputs: inputs, settlements: settlements, vectorMintFailures: failures}, nil
 }
 
 func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimCommandRequestV1) (*runtimev1.ClaimCommandResponseV1, error) {
@@ -178,9 +217,43 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The immutable input manifest does not match the admitted command.", false), nil
 	}
 
+	if s.config.VectorTokens != nil && s.config.VectorTokens.QualifiesForVectorClaimToken(command.GetCapabilityId()) {
+		// Minted last, after every check that can abort the claim, so a
+		// refused claim leaves no token row behind it. The token dies with
+		// the claim (vectorintrospection), so a lost response needs no
+		// revocation either.
+		token, err := s.config.VectorTokens.IssueVectorClaimToken(ctx, lease.Fence)
+		if err != nil {
+			if errors.Is(err, runtimedomain.ErrStaleFence) || errors.Is(err, runtimedomain.ErrLeaseExpired) {
+				// The claim itself is gone; there is nothing to deliver.
+				return claimRejectionFor(err), nil
+			}
+			s.degradeVectorToken(ctx, lease.Fence, err)
+		} else {
+			receipt.VectorToken = token
+		}
+	}
+
 	receipt.InputBundleRef = proto.Clone(command.GetInputBundleRef()).(*runtimev1.ExecutionInputBundleReferenceV1)
 	receipt.InputBundle = proto.Clone(manifest).(*runtimev1.ExecutionInputBundleV1)
 	return &runtimev1.ClaimCommandResponseV1{Receipt: receipt}, nil
+}
+
+// degradeVectorToken records that a live claim's vector token could not be
+// minted and lets the claim proceed without one. The token only gates calls to
+// elitea-vector, so a mint failure must not burn the input-resolution retry
+// budget or abort an execution that may never touch a vector: a vector call
+// made without a token is refused UNAUTHENTICATED by elitea-vector, which is
+// the failure the worker reports.
+func (s *Server) degradeVectorToken(ctx context.Context, fence runtimedomain.Fence, cause error) {
+	s.vectorMintFailures.Add(ctx, 1)
+	slog.WarnContext(ctx, "vector claim token not minted; delivering the claim without it",
+		slog.String("execution_id", fence.ExecutionID),
+		slog.String("command_id", fence.CommandID),
+		slog.Uint64("generation", fence.Generation),
+		slog.Uint64("claim_attempt", fence.ClaimAttempt),
+		slog.Any("error", cause),
+	)
 }
 
 func (s *Server) abortInputResolution(ctx context.Context, fence runtimedomain.Fence, cause error) *runtimev1.ClaimCommandResponseV1 {

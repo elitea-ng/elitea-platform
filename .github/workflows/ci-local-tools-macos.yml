@@ -22,6 +22,8 @@ on:
       - "libs/rust/agent-runtime/**"
       - "libs/rust/doc-extract/**"
       - "libs/rust/content-source/**"
+      # The provider clients the toolkit families share (ADR-0030 decision 3).
+      - "libs/rust/connectors/**"
       - "libs/rust/Cargo.lock"
       - "libs/rust/Cargo.toml"
       - "libs/rust/rust-toolchain.toml"
@@ -34,6 +36,8 @@ on:
       - "libs/rust/agent-runtime/**"
       - "libs/rust/doc-extract/**"
       - "libs/rust/content-source/**"
+      # The provider clients the toolkit families share (ADR-0030 decision 3).
+      - "libs/rust/connectors/**"
       - "libs/rust/Cargo.lock"
       - "libs/rust/Cargo.toml"
       - "libs/rust/rust-toolchain.toml"

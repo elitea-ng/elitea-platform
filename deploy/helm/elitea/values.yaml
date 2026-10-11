@@ -3434,6 +3434,206 @@ inventory:
   tolerations: []
   affinity: {}
 
+# ── elitea-vector and Qdrant (ADR-0031) ─────────────────────────────────────
+#
+# elitea-vector is the only Qdrant client: a stateless gRPC facade over mTLS.
+# Callers (the workers, later the engines) present a short-lived,
+# project-bound token. elitea-vector verifies it through elitea-main's
+# TokenIntrospectionService on the private control listener and injects the
+# project into every Qdrant filter and write. elitea-main itself is admitted
+# without a token by its client-certificate identity, for deletion and admin
+# reads only.
+#
+# OFF by default, like the providers. Turning it on NEEDS main.runtime.enabled:
+# introspection is served on the runtime control listener, so without it every
+# request is refused (fail closed). templates/guards.yaml refuses that render.
+#
+# TRUST. Every certificate below is issued by mtls.issuerRef, which MUST be an
+# issuer backed by the RUNTIME CA — the CA whose certificate is runtime-ca.crt
+# in main's runtime material and in worker.materialSecretName:
+#   * elitea-main's control listener verifies the introspection client
+#     certificate against runtime-ca.crt;
+#   * the workers' agent-worker-client certificate is a runtime-CA identity,
+#     and elitea-vector verifies callers against the issuer's ca.crt;
+#   * elitea-vector verifies elitea-main's control-server certificate against
+#     the same ca.crt.
+vector:
+  enabled: false
+
+  image:
+    repository: ghcr.io/elitea-ng/elitea-vector
+    # Empty means the chart-wide image.tag.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  # ADR-0031 decision 8: minimum 2 replicas, an HPA on CPU. (An in-flight-RPC
+  # metric needs a metrics adapter this chart does not install; CPU only.)
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  service:
+    # Named explicitly: the server certificate's DNS SANs name this Service.
+    name: elitea-vector
+    port: 9470
+  # The plain-HTTP health listener (/healthz, /readyz). Probe-only: it is not
+  # on the Service, and the NetworkPolicy admits nobody to it.
+  healthPort: 9471
+
+  # The client-certificate identities admitted as ADMINISTRATOR without a
+  # token (Delete, DropProject, Count, ListIndexes only), in the canonical form
+  # of elitea-main's workloadidentity: "dns:<the one DNS SAN>" or a spiffe://
+  # URI. elitea-main has no elitea-vector client in V0, so this is empty by
+  # default; the phase that adds that client issues its certificate and lists
+  # it here.
+  adminIdentities: []
+
+  # Token introspection on elitea-main's control listener.
+  introspection:
+    # Empty: https://<main fullname>.<namespace>.svc:<control port>.
+    url: ""
+    # The SAN of elitea-main's control-server certificate. Empty: the URL's
+    # host.
+    serverName: ""
+    timeoutMs: 2000
+
+  # The embedding spaces ("<model-slug>:<dimension>") elitea-vector may
+  # create; a request for any other space is refused. THIS is the hard bound
+  # on how many Qdrant collections exist. RECOMMENDED IN PRODUCTION: list the
+  # models you run. Empty (the default) allows any space up to
+  # ELITEA_VECTOR_MAX_COLLECTIONS, which is only a soft cap: concurrent
+  # creators can overshoot it by their number.
+  # Example: ["text-embedding-3-small:1536", "bge-m3:1024"]
+  allowedSpaces: []
+
+  collection:
+    # Applied when elitea-vector creates a collection on demand. Keep it at or
+    # below qdrant.internal.replicas: a factor above the node count leaves
+    # every shard under-replicated.
+    replicationFactor: 2
+    shardNumber: 1
+
+  mtls:
+    serverSecretName: elitea-vector-server-tls
+    # The certificate elitea-vector presents to elitea-main. It carries
+    # EXACTLY ONE DNS SAN (clientDnsName): workloadidentity admits a client
+    # certificate only with one DNS SAN or one SPIFFE URI SAN, and the server
+    # certificate carries several service names. elitea-main admits it as
+    # "dns:<clientDnsName>" (ELITEA_VECTOR_INTROSPECTION_CLIENTS, rendered by
+    # this chart).
+    clientSecretName: elitea-vector-client-tls
+    clientDnsName: elitea-vector
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    issuerRef:
+      # NOT created by this chart. An issuer backed by the RUNTIME CA (see
+      # TRUST above), not the provider hops' elitea-internal-ca.
+      name: elitea-runtime-ca
+      kind: ClusterIssuer
+    mountPath: /etc/elitea-vector/tls
+    clientMountPath: /etc/elitea-vector/client-tls
+
+  # Qdrant. `internal` runs a StatefulSet of the official image in this
+  # release; `external` points at a cluster you run. Either way elitea-vector
+  # is its only client and holds its API key.
+  qdrant:
+    mode: internal
+    # REQUIRED. The Secret and key that hold the Qdrant API key. Not created
+    # by this chart: a generated key would change on every upgrade. The
+    # internal StatefulSet reads the same Secret.
+    apiKeySecret:
+      name: ""
+      key: api-key
+    external:
+      # The gRPC URL, e.g. https://qdrant.example.internal:6334.
+      url: ""
+      # OPTIONAL. A Secret with a ca.crt key for a private Qdrant CA. The Rust
+      # client trusts the native roots, so the chart points SSL_CERT_FILE at
+      # this file, which then is the ONLY trusted root.
+      caSecretName: ""
+    internal:
+      image:
+        repository: docker.io/qdrant/qdrant
+        # The -unprivileged build runs as uid 1000 / gid 2000, which the
+        # podSecurityContext below requires; the plain tag runs as root and
+        # writes its init marker into the root-owned /qdrant.
+        tag: v1.19.2-unprivileged
+        pullPolicy: IfNotPresent
+      # ADR-0031 decision 8: three nodes, with collection.replicationFactor 2.
+      # One disables clustering. Peer, REST and gRPC TLS (also decision 8) is
+      # not rendered yet: in-cluster traffic is plaintext, restricted by the
+      # NetworkPolicy to elitea-vector and the peers.
+      replicas: 3
+      storage:
+        size: 50Gi
+        # Empty: the cluster's default StorageClass.
+        storageClassName: ""
+      resources:
+        requests:
+          cpu: 500m
+          memory: 2Gi
+        limits:
+          memory: 8Gi
+      podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 2000
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+
+  # Extra plain env for elitea-vector (RUST_LOG, OTEL_EXPORTER_OTLP_ENDPOINT).
+  # The chart sets every ELITEA_VECTOR_* variable itself.
+  env:
+    RUST_LOG: info
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  terminationGracePeriodSeconds: 30
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    # The Secret volumes are mounted 0440; fsGroup makes them readable by the
+    # container's group and by nobody else.
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 worker:
   # The agent worker: the ONLY producer of an answer. Requires main.runtime.enabled.
   enabled: false
@@ -3517,6 +3717,20 @@ worker:
   # multi-sprint programme (umbrella #247); this default is the honest
   # near-term answer, not a statement that the port is done.
   implementation: python
+
+  # Which implementation indexes toolkit content (ADR-0030 decision 6,
+  # ADR-0031). Written to elitea-main as ELITEA_INDEXING_RUNTIME. A deployment
+  # runs indexing entirely on one side; there is no per-toolkit routing.
+  #
+  #   python (default) -- unchanged. Index metadata is the `index_meta` row in
+  #     the project's pgvector database, written by the SDK and by elitea-main.
+  #   rust -- the index routes (list, delete, configuration save) and the
+  #     admission initializer read and write elitea_runtime.index_registry, a
+  #     table only elitea-main writes. NOTHING IS MIGRATED: indexes created
+  #     under python are not listed, and users create their indexes again.
+  #     Requires worker.implementation=rust (only the Rust worker searches the
+  #     new vector store) and the index ingest dispatch plane.
+  indexingRuntime: python
 
   image:
     # Built, signed and published by this repository's own release workflow

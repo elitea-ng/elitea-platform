@@ -1,5 +1,13 @@
 package projectprovisioning
 
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
 // ReferencingTables names every table the delete path clears before it removes
 // the project row.
 //
@@ -20,3 +28,32 @@ func ReferencingTables() []string {
 // The delete tests assert on it, so that a step reported as "did not complete"
 // cannot pass as a step that was deliberately not started.
 func HeldBackStepMessage(step string) string { return heldBackStepMessage(step) }
+
+// SetCommitForTest replaces the function that ends a delete's deciding
+// transaction, to simulate a commit that reports an error. Exported to the test
+// binary only.
+func SetCommitForTest(p *Provisioner, commit func(context.Context, pgx.Tx) error) {
+	p.commit = commit
+}
+
+// SetCleanupTimeoutForTest shrinks the bound of one cleanup run until the test
+// ends. Detached runs read it, so a test that changes it waits for its runs
+// (WaitForCleanups) before it returns.
+func SetCleanupTimeoutForTest(t testing.TB, timeout time.Duration) {
+	t.Helper()
+	previous := cleanupTimeout
+	cleanupTimeout = timeout
+	t.Cleanup(func() { cleanupTimeout = previous })
+}
+
+// SetLeaseMarginForTest changes the margin added to a run's bound to make its
+// lease, until the test ends.
+func SetLeaseMarginForTest(t testing.TB, margin time.Duration) {
+	t.Helper()
+	previous := leaseMargin
+	leaseMargin = margin
+	t.Cleanup(func() { leaseMargin = previous })
+}
+
+// CleanupLeaseForTest is the lease a run of the current bound holds.
+func CleanupLeaseForTest() time.Duration { return cleanupLease(cleanupTimeout) }

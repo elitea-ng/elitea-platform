@@ -94,6 +94,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Step names, as they appear in a Result's status records.
@@ -106,7 +108,12 @@ const (
 	StepProjectSecrets     = "project_secrets"
 	StepArtifactBuckets    = "artifact_buckets"
 	StepProjectPgvector    = "project_pgvector"
-	StepProjectAdmin       = "project_admin"
+	// StepProjectPgvectorDrop is reported by Deprovision only: the irreversible
+	// drop of the PgVector database, a cleanup-journal step run after the
+	// transaction that removed the project row committed. It is
+	// not in createSteps and has no create or rollback.
+	StepProjectPgvectorDrop = "project_pgvector_drop"
+	StepProjectAdmin        = "project_admin"
 )
 
 // systemProjectRole is the project role the per-project system identity holds.
@@ -154,8 +161,7 @@ func createSteps() []step {
 		{name: StepSystemToken, create: createSystemToken, remove: removeSystemToken},
 		// project_secrets sits where pylon puts it: after system_token and
 		// before the bucket step. The position is load-bearing in the OTHER
-		// direction — compensation and Deprovision both walk this list in
-		// reverse — but nothing in the vault depends on a later step, and no
+		// direction — compensation walks this list in reverse — but nothing in the vault depends on a later step, and no
 		// later step reads the vault, so the placement is parity rather than a
 		// constraint.
 		{name: StepProjectSecrets, create: createProjectSecrets, remove: removeProjectSecrets},
@@ -196,6 +202,30 @@ RETURNING id`,
 		state.request.Name, state.request.OwnerID, plugins,
 	).Scan(&state.projectID); err != nil {
 		return fmt.Errorf("insert project: %w", err)
+	}
+
+	// A project id whose delete has not finished cleaning up is not ours to
+	// reuse (explicit ids and restored sequences make it possible): the cleanup
+	// still owes that id's tenant schema, buckets and vector database, and a new
+	// project would start on top of them while the cleanup then destroys it.
+	// runCleanup refuses to touch a project that exists; this refuses to create
+	// one that the cleanup still owns. Read after the insert, in the same
+	// transaction, so either side of a race sees the other.
+	var owed bool
+	if err := transaction.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM centry.project_deletions
+               WHERE project_id = $1 AND completed_at IS NULL)`,
+		state.projectID,
+	).Scan(&owed); err != nil {
+		return fmt.Errorf("check cleanup journal: %w", err)
+	}
+	if owed {
+		// Forget the id: the compensation of a failed create runs every remove
+		// step for state.projectID, and those must not touch the schema, buckets
+		// and vector database that belong to the earlier project's cleanup.
+		reused := state.projectID
+		state.projectID = 0
+		return fmt.Errorf("%w: project id %d", ErrProjectIDInCleanup, reused)
 	}
 
 	limits := state.request.Limits
@@ -253,7 +283,21 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 	}
 	defer func() { _ = transaction.Rollback(context.WithoutCancel(ctx)) }()
 
-	for _, cleanup := range referencingDeletes() {
+	if err := deleteProjectRows(ctx, transaction, state.projectID); err != nil {
+		return err
+	}
+	return transaction.Commit(ctx)
+}
+
+// deleteProjectRows deletes the project row, its two companion rows and every
+// shared row that points at it, inside the caller's transaction. The
+// create-failure rollback (removeProjectModel) and the delete's decision
+// transaction (decideDeletion) both use it, so the two cannot drift apart.
+func deleteProjectRows(ctx context.Context, transaction pgx.Tx, projectID int64) error {
+	// The referencing rows (#374) first, then the project-owned rows that no
+	// foreign key ties to the project (C1). See referencingDeletes and
+	// projectOwnedDeletes for what each list holds and what stays.
+	for _, cleanup := range append(referencingDeletes(), projectOwnedDeletes()...) {
 		// A deployment that has not applied the shared history yet does not
 		// have these tables. deleteTenantLedger guards the same way, and an
 		// undefined table would abort the whole transaction.
@@ -266,25 +310,7 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 		if !present {
 			continue
 		}
-		if _, err := transaction.Exec(ctx, cleanup.statement, state.projectID); err != nil {
-			return fmt.Errorf("delete rows in %s: %w", cleanup.table, err)
-		}
-	}
-
-	// The project-owned rows that no foreign key ties to the project (C1).
-	// Nothing blocked the delete on them, so the project row went and they
-	// stayed behind as orphans. See projectOwnedDeletes for what stays.
-	for _, cleanup := range projectOwnedDeletes() {
-		var present bool
-		if err := transaction.QueryRow(ctx,
-			`SELECT to_regclass($1) IS NOT NULL`, cleanup.table,
-		).Scan(&present); err != nil {
-			return fmt.Errorf("resolve %s: %w", cleanup.table, err)
-		}
-		if !present {
-			continue
-		}
-		if _, err := transaction.Exec(ctx, cleanup.statement, state.projectID); err != nil {
+		if _, err := transaction.Exec(ctx, cleanup.statement, projectID); err != nil {
 			return fmt.Errorf("delete rows in %s: %w", cleanup.table, err)
 		}
 	}
@@ -294,11 +320,11 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 		`DELETE FROM centry.project_quota WHERE project_id = $1`,
 		`DELETE FROM centry.project WHERE id = $1`,
 	} {
-		if _, err := transaction.Exec(ctx, statement, state.projectID); err != nil {
+		if _, err := transaction.Exec(ctx, statement, projectID); err != nil {
 			return fmt.Errorf("delete project rows: %w", err)
 		}
 	}
-	return transaction.Commit(ctx)
+	return nil
 }
 
 // referencingDelete is one table to clear before the project row goes.
@@ -490,13 +516,13 @@ DELETE FROM elitea_runtime.index_generation_counters WHERE resource_project_id =
 //
 // The artifact bucket rows go here only when they are soft-deleted; the
 // delete cascades to their object rows and transfer grants. The physical
-// objects are purged before this, by the artifact_buckets step
-// (TeardownProjectBuckets), which runs earlier in the reverse walk and
-// soft-deletes a bucket only after its purge succeeded. A LIVE row is a bucket
-// whose purge failed or never ran (no object store is configured). That row is
-// the only handle on the bytes under p/<id>/<bucket>/, so it stays: Deprovision
-// then reports ErrArtifactsNotRemoved, and another delete of the same id
-// retries the purge.
+// objects are purged by TeardownProjectBuckets, which soft-deletes a bucket
+// only after its purge succeeded. A LIVE row is a bucket whose purge failed,
+// never ran (no object store is configured), or has not run yet: a project
+// delete removes the project row FIRST and purges afterwards, from its cleanup
+// journal (#1211). That row is the only handle on the bytes under
+// p/<id>/<bucket>/, so it stays; the journal's artifact_buckets step purges it
+// and then removes the soft-deleted rows itself (cleanupArtifactBuckets).
 //
 // Request logs, usage events, audit events and the budget accumulators
 // (gateway.llm_budget_accumulators) are deliberately NOT here. They are the
@@ -637,20 +663,37 @@ func removeProjectPermissions(ctx context.Context, p *Provisioner, state *provis
 	}
 	defer func() { _ = transaction.Rollback(context.WithoutCancel(ctx)) }()
 
-	if _, err := transaction.Exec(ctx,
-		`DELETE FROM elitea_identity.token_project_binding WHERE project_id = $1`,
-		state.projectID,
-	); err != nil {
-		return fmt.Errorf("delete token project bindings: %w", err)
-	}
-	if _, err := transaction.Exec(ctx,
-		`DELETE FROM public.auth_core__project_role WHERE project_id = $1`,
-		state.projectID,
-	); err != nil {
-		return fmt.Errorf("delete project roles: %w", err)
+	if err := deleteProjectPermissions(ctx, transaction, state.projectID); err != nil {
+		return err
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// execer is the write half of a pgx pool, connection or transaction. The remove
+// statements take one so the same SQL runs on its own connection (the create
+// compensation) and inside the transaction that decides a delete (#1211).
+type execer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+// deleteProjectPermissions is removeProjectPermissions' two statements on a
+// connection or transaction the caller owns. Run on a pool they are two
+// statements; the caller wraps them in a transaction when they must be one.
+func deleteProjectPermissions(ctx context.Context, db execer, projectID int64) error {
+	if _, err := db.Exec(ctx,
+		`DELETE FROM elitea_identity.token_project_binding WHERE project_id = $1`,
+		projectID,
+	); err != nil {
+		return fmt.Errorf("delete token project bindings: %w", err)
+	}
+	if _, err := db.Exec(ctx,
+		`DELETE FROM public.auth_core__project_role WHERE project_id = $1`,
+		projectID,
+	); err != nil {
+		return fmt.Errorf("delete project roles: %w", err)
 	}
 	return nil
 }
@@ -707,13 +750,17 @@ ON CONFLICT (project_id, user_id, role_id) DO NOTHING`,
 }
 
 func removeSystemUser(ctx context.Context, p *Provisioner, state *provisionState) error {
-	if state.systemUserID == 0 {
+	return deleteSystemUser(ctx, p.pool, state.systemUserID)
+}
+
+func deleteSystemUser(ctx context.Context, db execer, systemUserID int64) error {
+	if systemUserID == 0 {
 		return nil
 	}
 	// auth_core__token and auth_core__project_user_role both cascade from the
 	// user row, so this also removes the PAT created by the next step.
-	if _, err := p.pool.Exec(ctx,
-		`DELETE FROM public.auth_core__user WHERE id = $1`, state.systemUserID,
+	if _, err := db.Exec(ctx,
+		`DELETE FROM public.auth_core__user WHERE id = $1`, systemUserID,
 	); err != nil {
 		return fmt.Errorf("delete system user: %w", err)
 	}
@@ -762,12 +809,16 @@ WHERE NOT EXISTS (
 }
 
 func removeSystemToken(ctx context.Context, p *Provisioner, state *provisionState) error {
-	if state.systemUserID == 0 {
+	return deleteSystemToken(ctx, p.pool, state.systemUserID)
+}
+
+func deleteSystemToken(ctx context.Context, db execer, systemUserID int64) error {
+	if systemUserID == 0 {
 		return nil
 	}
-	if _, err := p.pool.Exec(ctx,
+	if _, err := db.Exec(ctx,
 		`DELETE FROM public.auth_core__token WHERE user_id = $1 AND name = $2`,
-		state.systemUserID, systemTokenName,
+		systemUserID, systemTokenName,
 	); err != nil {
 		return fmt.Errorf("delete system token: %w", err)
 	}
@@ -1009,15 +1060,22 @@ func createProjectVectorStore(ctx context.Context, p *Provisioner, state *provis
 	return nil
 }
 
-// removeProjectVectorStore undoes what the step wrote to this platform.
+// removeProjectVectorStore is the create-failure ROLLBACK of the step.
 //
-// It removes the configuration row and the two vault entries. It does NOT drop
-// the PgVector role or database. That is deliberate and bounded:
-// internal/infra/pgvector has no drop path at all, pylon's own project delete
-// has no pgvector step either, and dropping a database that may already hold a
-// project's vectors is a destructive operation that belongs to an explicit
-// decision rather than to a compensation. The role and database are converged
-// idempotently, so a retry reuses them rather than leaking a second pair.
+// It removes the configuration row only (the project's vault goes with the
+// project_secrets step). It does NOT drop the PgVector role or database, and
+// that is deliberate for THIS path: a rollback is a compensation, not a
+// decision. The role and database are converged idempotently by the create
+// step, so a retry reuses them rather than leaking a second pair, and a failed
+// create must never destroy a database that may already hold a project's
+// vectors.
+//
+// An explicit project delete drops the database too, but not from this step
+// (#1211): Deprovision runs the drop from its cleanup journal, after the
+// transaction that removed the project row committed, so a failed row delete
+// can never leave a surviving project without its vectors. Nothing in
+// Provision's rollback can reach it. The delete does not call this step either:
+// the configuration row lives in the tenant schema, which the delete drops.
 //
 // The compensation still leaves nothing behind on THIS side, which is what the
 // create path needs: no row an index run could resolve, and no vault entry

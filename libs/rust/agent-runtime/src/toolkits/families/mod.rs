@@ -15,6 +15,7 @@ pub(crate) mod bigquery;
 pub(crate) mod bitbucket;
 pub(crate) mod carrier;
 pub(crate) mod confluence;
+pub(crate) mod connector_client;
 pub(crate) mod elastic;
 pub(crate) mod figma;
 pub(crate) mod gcp;

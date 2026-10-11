@@ -185,13 +185,35 @@ const DeleteProjectPermission = "projects.projects.project.delete"
 // the key `steps`.
 type deleteProjectResponse struct {
 	Steps []projectprovisioning.StepStatus `json:"steps"`
+	// Pending and Message appear with a 202: the cleanup steps still to finish,
+	// and what happens to them. Message also carries the reason of a 500.
+	Pending []string `json:"pending,omitempty"`
+	Message string   `json:"message,omitempty"`
+	// Database names the PgVector database a delete has not dropped yet, when
+	// the project was recorded as having one (#1211).
+	Database string `json:"database,omitempty"`
 }
 
 // DeleteProject serves `DELETE /api/v2/projects/project/{mode}/{projectID}`.
 //
-// Destructive and irreversible: it drops the tenant schema with CASCADE. It is
-// gated on the same administration-mode permission the reference declares, and
-// answers 404 for any other `{mode}`.
+// Destructive and irreversible: it removes the project row and revokes its
+// credentials in one transaction, then cleans up what is slow or external
+// (artifact bytes, the tenant schema with CASCADE, the PgVector database) from
+// the cleanup journal. It is gated on the same administration-mode permission
+// the reference declares, and answers 404 for any other `{mode}`.
+//
+// The answers:
+//
+//   - 200: the project is gone and every cleanup step finished within the
+//     request's budget.
+//   - 202: the project is gone and its credentials are revoked, but some cleanup
+//     steps are still pending or failed. The body lists them under `pending`.
+//     The cleanup run is not bound to this request or its budget: it continues
+//     in the background, and the cleanup journal's reconciler retries whatever it
+//     leaves. A retry of the delete answers 404.
+//   - 404: no such project (also a repeated delete).
+//   - 409: the project has active runs; nothing changed.
+//   - 500: the delete did not happen; the project is unchanged.
 func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	if chi.URLParam(r, "mode") != administrationMode {
 		apierr.WriteStatus(w, http.StatusNotFound, "not found")
@@ -207,17 +229,42 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.provisioner.Deprovision(r.Context(), projectID)
+	budget := h.deleteBudget
+	if budget <= 0 {
+		budget = DefaultDeleteBudget
+	}
+	result, err := h.provisioner.Deprovision(r.Context(), projectID, projectprovisioning.WithCleanupBudget(budget))
 	switch {
 	case errors.Is(err, projectprovisioning.ErrProjectNotFound):
 		apierr.WriteStatus(w, http.StatusNotFound, "project not found")
 		return
-	case err != nil:
+	case errors.Is(err, projectprovisioning.ErrProjectWorkActive):
+		// The deciding transaction's refusal, and only that: it rolls back
+		// before anything changes, so "retry later" is true. A cleanup leftover
+		// can never be this.
+		apierr.WriteStatus(w, http.StatusConflict,
+			"project has active runs; stop them or wait for them to finish, then retry the delete")
+		return
+	case errors.Is(err, projectprovisioning.ErrProjectNotRemoved), err != nil && result.ProjectID == 0:
 		// The reference answers 200 even when every step failed. Reporting a
 		// project that still exists as deleted is the failure mode this route
 		// exists to avoid, so the per-step detail is returned with a 500.
-		writeJSON(w, http.StatusInternalServerError,
-			deleteProjectResponse{Steps: nonNilSteps(result.RollbackSteps)})
+		writeJSON(w, http.StatusInternalServerError, deleteProjectResponse{
+			Steps:   nonNilSteps(result.RollbackSteps),
+			Message: "the project was not removed and is unchanged; retry the delete",
+		})
+		return
+	case err != nil || len(result.Pending) > 0:
+		// The project row and every credential are gone; only cleanup is left.
+		// That is accepted work, not a failure and not a finished delete: the
+		// journal retries it with backoff. The body names what is pending, never
+		// the underlying error, which can hold SQL or addresses.
+		writeJSON(w, http.StatusAccepted, deleteProjectResponse{
+			Steps:    nonNilSteps(result.RollbackSteps),
+			Pending:  result.Pending,
+			Message:  "the project was deleted and its access revoked; cleanup of the remaining steps continues in the background",
+			Database: result.VectorDatabase,
+		})
 		return
 	}
 	writeJSON(w, http.StatusOK, deleteProjectResponse{Steps: nonNilSteps(result.RollbackSteps)})

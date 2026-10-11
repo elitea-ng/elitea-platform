@@ -4,7 +4,7 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
-use crate::toolkits::families::ado::client::AdoClientError;
+use crate::toolkits::families::ado::client::{AdoClientError, IntoAdk};
 use crate::toolkits::families::ado::toolset::{
     AdoToolExecutor, AdoToolKind, AdoToolsetError, MAX_IDENTIFIER_BYTES, MAX_TEXT_BYTES,
     build_toolset, invalid_arguments, optional_i64, optional_id, optional_str, reject_unknown_keys,

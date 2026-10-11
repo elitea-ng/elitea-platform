@@ -11,7 +11,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -126,6 +128,65 @@ SELECT EXISTS (
 		return false, fmt.Errorf("check callback token grant: %w", err)
 	}
 	return ok, nil
+}
+
+// ErrCallbackTokenFactsNotFound reports a token that is not a live callback
+// token: no such row, no project binding, no recorded grant, a grant for
+// another project, no expiry, or an expiry in the past.
+var ErrCallbackTokenFactsNotFound = errors.New("callback token facts not found")
+
+// CallbackTokenFacts is what elitea-vector's token introspection
+// (ADR-0031) needs about a callback token beyond its signature.
+type CallbackTokenFacts struct {
+	UserID    int64
+	ProjectID int64
+	ExpiresAt time.Time
+	Provider  string
+}
+
+// Facts reads the facts of tokenID — the token that the signature check
+// resolved, never one a request names. Only a live callback token answers:
+// one with a project binding, a grant recorded for that same project, and
+// an expiry in the future. A personal access token with the same name,
+// binding and expiry has no grant, so it answers ErrCallbackTokenFactsNotFound.
+func (g *CallbackTokenGrants) Facts(ctx context.Context, tokenID int64) (CallbackTokenFacts, error) {
+	if g == nil || g.pool == nil {
+		return CallbackTokenFacts{}, fmt.Errorf("%w: no database", ErrCallbackTokenFactsNotFound)
+	}
+	token, ok := narrowPositive(tokenID)
+	if !ok {
+		return CallbackTokenFacts{}, ErrCallbackTokenFactsNotFound
+	}
+	var (
+		userID, projectID int32
+		expires           time.Time
+		provider          string
+	)
+	err := g.pool.QueryRow(ctx, `
+SELECT t.user_id, b.project_id, t.expires, g.provider
+FROM public.auth_core__token AS t
+JOIN elitea_identity.token_project_binding AS b ON b.token_id = t.id
+JOIN elitea_identity.callback_token_grant AS g ON g.token_id = t.id
+WHERE t.id = $1
+  AND g.project_id = b.project_id
+  AND t.user_id IS NOT NULL
+  AND t.expires IS NOT NULL
+  AND t.expires > (clock_timestamp() AT TIME ZONE 'UTC')`, token).
+		Scan(&userID, &projectID, &expires, &provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CallbackTokenFacts{}, ErrCallbackTokenFactsNotFound
+	}
+	if err != nil {
+		return CallbackTokenFacts{}, fmt.Errorf("read callback token facts: %w", err)
+	}
+	return CallbackTokenFacts{
+		UserID:    int64(userID),
+		ProjectID: int64(projectID),
+		// auth_core__token.expires is a UTC wall clock without a zone.
+		ExpiresAt: time.Date(expires.Year(), expires.Month(), expires.Day(),
+			expires.Hour(), expires.Minute(), expires.Second(), expires.Nanosecond(), time.UTC),
+		Provider: provider,
+	}, nil
 }
 
 func narrowPositive(value int64) (int32, bool) {

@@ -332,6 +332,13 @@ func validateIndexIngestCommand(command *runtimev1.WorkerCommandV1, config comma
 	default:
 		return ErrMalformedWorkerCommand
 	}
+	// The expected embedding space is a pair, set from the index registry's
+	// stamp or absent; a half is malformed.
+	model, dimension := indexing.GetExpectedEmbeddingModel(), indexing.GetExpectedEmbeddingDimension()
+	if (model == "") != (dimension == 0) || dimension > 65535 ||
+		len(model) > 256 || len(model) > config.MaxStringBytes || strings.ContainsAny(model, "\x00\r\n") {
+		return ErrMalformedWorkerCommand
+	}
 	return nil
 }
 

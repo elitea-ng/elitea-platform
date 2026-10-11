@@ -820,7 +820,7 @@ jobs:
             exit 0
           fi
           changed="$(git diff --name-only "${BASE_SHA}...HEAD")"
-          pattern='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|services/elitea-worker-python/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-web-e2e\.yml)'
+          pattern='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|libs/rust/connectors/|services/elitea-worker-python/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-web-e2e\.yml)'
           if printf '%s\n' "$changed" | grep -qE "$pattern"; then
             echo "reaches-model=true" >> "$GITHUB_OUTPUT"
             echo "model path touched:"; printf '%s\n' "$changed" | grep -E "$pattern"

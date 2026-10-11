@@ -1,0 +1,182 @@
+{{- if and .Values.vector.enabled (eq (.Values.vector.qdrant.mode | toString) "internal") }}
+{{- $q := .Values.vector.qdrant.internal }}
+{{- $name := include "elitea-vector.qdrantName" . }}
+{{- $headless := printf "%s-headless" $name }}
+{{- $clustered := gt (int $q.replicas) 1 }}
+# Qdrant (ADR-0031 decision 8), the official image as a minimal StatefulSet.
+# The chart takes no dependencies (Chart.yaml), so this is not the upstream
+# qdrant chart. For anything beyond it — TLS on REST, gRPC and peer traffic,
+# snapshots to object storage — run Qdrant yourself and set
+# vector.qdrant.mode=external.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "elitea-vector.qdrantLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: 6334
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc
+  selector:
+    {{- include "elitea-vector.qdrantSelectorLabels" . | nindent 4 }}
+---
+# Stable per-pod names for the Raft peers (port 6335).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $headless }}
+  labels:
+    {{- include "elitea-vector.qdrantLabels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: grpc
+      port: 6334
+      targetPort: grpc
+    - name: p2p
+      port: 6335
+      targetPort: p2p
+  selector:
+    {{- include "elitea-vector.qdrantSelectorLabels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "elitea-vector.qdrantLabels" . | nindent 4 }}
+spec:
+  serviceName: {{ $headless }}
+  replicas: {{ $q.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "elitea-vector.qdrantSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "elitea-vector.qdrantSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with $q.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      {{- include "elitea.imagePullSecrets" (dict "local" .Values.vector.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
+      containers:
+        - name: qdrant
+          image: "{{ $q.image.repository }}:{{ $q.image.tag }}"
+          imagePullPolicy: {{ $q.image.pullPolicy }}
+          {{- with $q.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if $clustered }}
+          # Pod 0 starts the cluster; every other pod joins through it. The
+          # image's entrypoint passes these arguments to the server.
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              self="http://${HOSTNAME}.{{ $headless }}.{{ .Release.Namespace }}.svc:6335"
+              if [ "${HOSTNAME##*-}" = "0" ]; then
+                exec ./entrypoint.sh --uri "$self"
+              fi
+              exec ./entrypoint.sh --bootstrap "http://{{ $name }}-0.{{ $headless }}.{{ .Release.Namespace }}.svc:6335" --uri "$self"
+          {{- end }}
+          env:
+            - name: QDRANT__SERVICE__API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.vector.qdrant.apiKeySecret.name }}
+                  key: {{ .Values.vector.qdrant.apiKeySecret.key }}
+            - name: QDRANT__TELEMETRY_DISABLED
+              value: "true"
+            - name: QDRANT__CLUSTER__ENABLED
+              value: {{ $clustered | toString | quote }}
+          ports:
+            - name: http
+              containerPort: 6333
+              protocol: TCP
+            - name: grpc
+              containerPort: 6334
+              protocol: TCP
+            - name: p2p
+              containerPort: 6335
+              protocol: TCP
+          # The health endpoints need no API key.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+            - name: snapshots
+              mountPath: /qdrant/snapshots
+          {{- with $q.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: snapshots
+          emptyDir: {}
+      {{- with $q.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $q.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $q.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+        labels:
+          {{- include "elitea-vector.qdrantSelectorLabels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $q.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $q.storage.size }}
+{{- if $clustered }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "elitea-vector.qdrantLabels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "elitea-vector.qdrantSelectorLabels" . | nindent 6 }}
+{{- end }}
+{{- end }}

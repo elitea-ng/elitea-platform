@@ -78,7 +78,24 @@ pub(crate) fn read(workspace: &Workspace, ledger: &ReadLedger, args: Value) -> T
     let args: ReadArgs = parse(args)?;
     let path = workspace.resolve(&args.path, Intent::Read)?;
     let file = workspace.read(&path, MAX_FILE_BYTES)?;
-    let text = text_of(&file)?;
+    // Read as ingestion indexes it (a legacy encoding is decoded), so a file
+    // the index holds can be read back. Editing stays UTF-8 only: writing a
+    // decoded legacy file back would change its encoding.
+    let has_nul = file.bytes[..file.bytes.len().min(8192)].contains(&0);
+    let text = if has_nul || is_text(&file.bytes) {
+        // UTF-8, or a NUL byte: binary, as before.
+        text_of(&file)?.to_owned()
+    } else {
+        elitea_doc_extract::decode_text(&file.bytes).map_err(|reason| {
+            ToolError::new(
+                ErrorCode::Binary,
+                format!(
+                    "`{}` is not text ({reason}); use read_document for documents",
+                    file.path
+                ),
+            )
+        })?
+    };
     ledger.record(&file.path, file.stamp.clone());
     let lines: Vec<&str> = text.lines().collect();
     let start = args.offset.unwrap_or(1).max(1);
@@ -679,6 +696,26 @@ mod tests {
                 .code(),
             ErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn read_decodes_a_legacy_encoding_and_refuses_binary_without_a_nul() {
+        let (dir, ws, ledger) = setup(&[]);
+        let (sjis, _, _) = encoding_rs::SHIFT_JIS
+            .encode("これは日本語の文章です。\n返金は三十日以内に受け付けます。\n");
+        std::fs::write(dir.path().join("jp.txt"), &*sjis).expect("write");
+        let shown = read(&ws, &ledger, json!({ "path": "jp.txt" })).expect("read");
+        assert!(
+            shown["content"].as_str().unwrap_or("").contains("返金"),
+            "{shown}"
+        );
+        // Binary with no NUL byte is still refused.
+        let noise: Vec<u8> = (0..2000_usize)
+            .map(|i| [1_u8, 2, 3, 0x81, 4][i % 5])
+            .collect();
+        std::fs::write(dir.path().join("noise"), noise).expect("noise");
+        let refused = read(&ws, &ledger, json!({ "path": "noise" })).expect_err("noise");
+        assert_eq!(refused.code(), ErrorCode::Binary);
     }
 
     #[test]

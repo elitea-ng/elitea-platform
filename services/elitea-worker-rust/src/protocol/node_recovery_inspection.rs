@@ -245,6 +245,10 @@ impl NodeRecoveryControlAuthority {
             input_bundle: claim.input_bundle.clone(),
             request_entry: claim.request_entry.clone(),
             arguments_entry: claim.arguments_entry.clone(),
+            vector_token: claim
+                .vector_token
+                .as_ref()
+                .map(super::super::vector_token::VectorClaimToken::duplicate),
         }
     }
     /// The ACK reply can only be produced by the authenticated content client.

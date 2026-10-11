@@ -12,6 +12,7 @@ import (
 	"time"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
@@ -61,6 +62,10 @@ type PrivateServices struct {
 	Control runtimev1.RuntimeControlServiceServer
 	Output  runtimev1.ExecutionOutputServiceServer
 	Content http.Handler
+	// VectorIntrospection is optional. When set, it is served on the control
+	// listener, which already requires a verified client certificate; the
+	// service itself admits only its configured client identities (ADR-0031).
+	VectorIntrospection vectorv1.TokenIntrospectionServiceServer
 }
 
 // PrivateServerSet owns the three deliberately separate authenticated data
@@ -129,6 +134,9 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 	controlServer := grpc.NewServer(controlOptions...)
 	outputServer := grpc.NewServer(outputOptions...)
 	runtimev1.RegisterRuntimeControlServiceServer(controlServer, services.Control)
+	if services.VectorIntrospection != nil {
+		vectorv1.RegisterTokenIntrospectionServiceServer(controlServer, services.VectorIntrospection)
+	}
 	runtimev1.RegisterExecutionOutputServiceServer(outputServer, services.Output)
 	contentServer := &http.Server{
 		Handler:           services.Content,
