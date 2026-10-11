@@ -1,7 +1,7 @@
 //! Deleting graphs (issue #1244, ADR-0031 decision 7, phase C0): a graph's
 //! rows go from every table and only that graph's, a delete never
 //! interleaves with a writer, a project's delete covers every toolkit of
-//! the project and no other, the `inventory_admin` tools do it, and the
+//! the project and no other, the `platform` engine tools do it, and the
 //! orphans query finds what the platform no longer has.
 //!
 //! Needs `INVENTORY_TEST_DSN` (see `graph_store.rs`).
@@ -371,10 +371,10 @@ async fn call(runner: &NativeRunner, tool: &str, arguments: Value) -> Result<Val
         .map_err(|e| e.message)
 }
 
-/// The `inventory_admin` tools: what the host sends the engine on a toolkit
+/// The `platform` tools: what the host sends the engine on a toolkit
 /// deletion and on a project deletion.
 #[tokio::test]
-async fn the_admin_tools_delete_a_graph_and_a_projects_graphs() {
+async fn the_platform_tools_delete_a_graph_and_a_projects_graphs() {
     let Some(pool) = common::database("delete_tools").await else {
         return;
     };
@@ -392,7 +392,7 @@ async fn the_admin_tools_delete_a_graph_and_a_projects_graphs() {
     let answer = call(
         &runner,
         "delete_graph",
-        json!({"family": "inventory_admin", "project_id": 7, "application_id": "70", "params": {}}),
+        json!({"family": "platform", "project_id": 7, "application_id": "70", "params": {}}),
     )
     .await
     .expect("deletes");
@@ -410,7 +410,7 @@ async fn the_admin_tools_delete_a_graph_and_a_projects_graphs() {
     let answer = call(
         &runner,
         "delete_graph",
-        json!({"family": "inventory_admin", "project_id": 7, "application_id": 70,
+        json!({"family": "platform", "project_id": 7, "application_id": 70,
                "params": {"output_format": "json"}}),
     )
     .await
@@ -429,7 +429,7 @@ async fn the_admin_tools_delete_a_graph_and_a_projects_graphs() {
     let refused = call(
         &runner,
         "delete_graph",
-        json!({"family": "inventory_admin", "project_id": 7, "application_id": 71}),
+        json!({"family": "platform", "project_id": 7, "application_id": 71}),
     )
     .await
     .expect_err("refused");
@@ -439,7 +439,7 @@ async fn the_admin_tools_delete_a_graph_and_a_projects_graphs() {
     let refused = call(
         &runner,
         "delete_project_graphs",
-        json!({"family": "inventory_admin", "project_id": "7"}),
+        json!({"family": "platform", "project_id": "7"}),
     )
     .await
     .expect_err("refused");
@@ -448,7 +448,7 @@ async fn the_admin_tools_delete_a_graph_and_a_projects_graphs() {
     let answer = call(
         &runner,
         "delete_project_graphs",
-        json!({"family": "inventory_admin", "project_id": 7}),
+        json!({"family": "platform", "project_id": 7}),
     )
     .await
     .expect("deletes");
@@ -469,15 +469,12 @@ async fn the_admin_tools_delete_a_graph_and_a_projects_graphs() {
     for (tool, arguments) in [
         (
             "delete_graph",
-            json!({"family": "inventory_admin", "project_id": 7}),
+            json!({"family": "platform", "project_id": 7}),
         ),
+        ("delete_project_graphs", json!({"family": "platform"})),
         (
             "delete_project_graphs",
-            json!({"family": "inventory_admin"}),
-        ),
-        (
-            "delete_project_graphs",
-            json!({"family": "inventory_admin", "project_id": 0}),
+            json!({"family": "platform", "project_id": 0}),
         ),
     ] {
         let refused = call(&runner, tool, arguments.clone()).await;
@@ -546,7 +543,13 @@ async fn the_orphans_command_is_a_dry_run_unless_asked() {
     );
     assert_eq!(rows(&pool, key(3, 30)).await, [1, 3, 2, 1, 2]);
 
-    let (ok, out, err) = orphans("1\n", &["--delete"]);
+    // A deletion needs the time the list was taken.
+    let (ok, _, err) = orphans("1\n", &["--delete"]);
+    assert!(!ok && err.contains("--delete needs --listed-at"), "{err}");
+    assert_eq!(rows(&pool, key(3, 30)).await, [1, 3, 2, 1, 2]);
+
+    let listed_at = now(&pool).await;
+    let (ok, out, err) = orphans("1\n", &["--delete", "--listed-at", &listed_at]);
     assert!(ok, "{err}");
     assert!(
         out.contains("deleted project 3 toolkit 30: 3 entities"),
@@ -561,4 +564,254 @@ async fn the_orphans_command_is_a_dry_run_unless_asked() {
     );
     let (ok, out, _) = orphans("1\n", &[]);
     assert!(ok && out.contains("no orphaned Inventory graph"), "{out}");
+}
+
+/// The database's clock as an RFC 3339 time, `offset` seconds from now.
+async fn clock(pool: &PgPool, offset: i32) -> String {
+    sqlx::query_scalar(
+        "SELECT to_char((clock_timestamp() + make_interval(secs => $1)) AT TIME ZONE 'UTC',
+                        'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
+    )
+    .bind(f64::from(offset))
+    .fetch_one(pool)
+    .await
+    .expect("clock")
+}
+
+async fn now(pool: &PgPool) -> String {
+    clock(pool, 0).await
+}
+
+fn orphans_command(database: &str, list: &str, extra: &[&str]) -> (Option<i32>, String, String) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(env!("CARGO_BIN_EXE_elitea-inventory-engine"))
+        .args(["orphans", "--existing-projects", "-"])
+        .args(extra)
+        .env(
+            "ELITEA_INVENTORY_DATABASE_URL",
+            common::database_url(database),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(list.as_bytes())
+        .expect("write");
+    let output = child.wait_with_output().expect("run");
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A graph written after the list was taken is not an orphan, however the
+/// list reads: the deletion skips it, in the transaction under the graph's
+/// lock, and removes the older one.
+#[tokio::test]
+async fn a_deletion_by_a_list_skips_what_was_written_after_the_list() {
+    let Some(pool) = common::database("delete_listed_at").await else {
+        return;
+    };
+    let graphs = PgGraphStore::new(pool.clone());
+    commit(&graphs, key(3, 30), &graph("old")).await;
+    let before = now(&pool).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    commit(&graphs, key(3, 31), &graph("new")).await;
+
+    // The guarded delete itself.
+    assert!(matches!(
+        delete::delete_graph_guarded(&pool, key(3, 31), Some(&before))
+            .await
+            .expect("guarded"),
+        delete::GuardedDeletion::Newer(reason) if reason.contains("after")
+    ));
+    assert_eq!(
+        rows(&pool, key(3, 31)).await,
+        [1, 3, 2, 1, 2],
+        "a graph written after the list stays"
+    );
+    let after = clock(&pool, 1).await;
+    assert!(
+        matches!(
+            delete::delete_graph_guarded(&pool, key(3, 30), Some(&before))
+                .await
+                .expect("guarded"),
+            delete::GuardedDeletion::Deleted { existed: true, .. }
+        ),
+        "a graph untouched since the list goes"
+    );
+    assert!(matches!(
+        delete::delete_graph_guarded(&pool, key(3, 31), Some(&after))
+            .await
+            .expect("guarded"),
+        delete::GuardedDeletion::Deleted { existed: true, .. }
+    ));
+    assert_eq!(rows(&pool, key(3, 31)).await, [0; 5]);
+}
+
+/// A source ingested after the list guards a graph whose own row is old.
+#[tokio::test]
+async fn a_source_ingested_after_the_list_guards_its_graph() {
+    let Some(pool) = common::database("delete_listed_source").await else {
+        return;
+    };
+    let graphs = PgGraphStore::new(pool.clone());
+    commit(&graphs, key(4, 40), &graph("g")).await;
+    sqlx::query(
+        "UPDATE inventory_graph.graphs SET updated_at = now() - interval '1 hour'
+          WHERE project_id = 4 AND application_id = 40",
+    )
+    .execute(&pool)
+    .await
+    .expect("age the graph");
+    let listed = clock(&pool, -600).await;
+    // The graph row is older than the list; the source status is not.
+    let reason = delete::activity_since(&pool, key(4, 40), &listed)
+        .await
+        .expect("activity");
+    assert!(
+        reason.is_some_and(|r| r.contains("source")),
+        "the source row should guard the graph"
+    );
+    assert!(matches!(
+        delete::delete_graph_guarded(&pool, key(4, 40), Some(&listed))
+            .await
+            .expect("guarded"),
+        delete::GuardedDeletion::Newer(_)
+    ));
+    assert_eq!(rows(&pool, key(4, 40)).await, [1, 3, 2, 1, 2]);
+}
+
+#[tokio::test]
+async fn the_orphans_command_refuses_a_stale_or_future_list_and_skips_newer_graphs() {
+    let Some(pool) = common::database("delete_cli_listed").await else {
+        return;
+    };
+    let graphs = PgGraphStore::new(pool.clone());
+    commit(&graphs, key(1, 10), &graph("live")).await;
+    commit(&graphs, key(3, 30), &graph("old")).await;
+    let listed_at = now(&pool).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    commit(&graphs, key(3, 31), &graph("new")).await;
+    let database = "delete_cli_listed";
+
+    // Stale: an hour old, refused unless allowed; nothing deleted.
+    let hour_old = clock(&pool, -3600).await;
+    let (code, _, err) = orphans_command(database, "1\n", &["--delete", "--listed-at", &hour_old]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("--allow-stale-list"), "{err}");
+    assert_eq!(rows(&pool, key(3, 30)).await, [1, 3, 2, 1, 2]);
+    // The future is always refused.
+    let future = clock(&pool, 3600).await;
+    let (code, _, err) = orphans_command(
+        database,
+        "1\n",
+        &["--delete", "--listed-at", &future, "--allow-stale-list"],
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("in the future"), "{err}");
+    // The override only applies to a deletion, and --listed-at must be a time.
+    let (code, _, err) = orphans_command(database, "1\n", &["--allow-stale-list"]);
+    assert_eq!(code, Some(2), "{err}");
+    let (code, _, err) =
+        orphans_command(database, "1\n", &["--delete", "--listed-at", "yesterday"]);
+    assert_eq!(code, Some(2), "{err}");
+
+    // A dry run with the time lists the older graph and skips the newer.
+    let (code, out, err) = orphans_command(database, "1\n", &["--listed-at", &listed_at]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(out.contains("3\t30\tproject\t3\t"), "{out}");
+    assert!(
+        out.contains("3\t31\tproject") && out.contains("SKIPPED"),
+        "{out}"
+    );
+    assert!(
+        out.contains("dry run: 1 orphaned graph(s) would be deleted, 1 skipped"),
+        "{out}"
+    );
+
+    // The deletion removes the older one and leaves the newer.
+    let (code, out, err) =
+        orphans_command(database, "1\n", &["--delete", "--listed-at", &listed_at]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(out.contains("deleted project 3 toolkit 30"), "{out}");
+    assert_eq!(rows(&pool, key(3, 30)).await, [0; 5]);
+    assert_eq!(
+        rows(&pool, key(3, 31)).await,
+        [1, 3, 2, 1, 2],
+        "newer than the list"
+    );
+    assert_eq!(
+        rows(&pool, key(1, 10)).await,
+        [1, 3, 2, 1, 2],
+        "a live project"
+    );
+
+    // An hour-old list goes with --allow-stale-list; the graph is then older
+    // than the list's time only if it really was: here it is not, so skipped.
+    let (code, out, err) = orphans_command(
+        database,
+        "1\n",
+        &["--delete", "--listed-at", &hour_old, "--allow-stale-list"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        out.contains("SKIPPED") && !out.contains("deleted project"),
+        "{out}"
+    );
+    assert_eq!(rows(&pool, key(3, 31)).await, [1, 3, 2, 1, 2]);
+}
+
+/// A graph whose deletion fails makes the command exit non-zero; the others
+/// still go.
+#[tokio::test]
+async fn the_orphans_command_exits_non_zero_when_a_deletion_fails() {
+    let Some(pool) = common::database("delete_cli_failure").await else {
+        return;
+    };
+    let graphs = PgGraphStore::new(pool.clone());
+    commit(&graphs, key(3, 30), &graph("a")).await;
+    commit(&graphs, key(3, 31), &graph("b")).await;
+    sqlx::query(
+        "CREATE FUNCTION inventory_graph.refuse_31() RETURNS trigger LANGUAGE plpgsql AS
+         $$ BEGIN IF OLD.application_id = 31 THEN RAISE EXCEPTION 'refused by the test'; END IF; RETURN OLD; END $$",
+    )
+    .execute(&pool)
+    .await
+    .expect("function");
+    sqlx::query(
+        "CREATE TRIGGER refuse_31 BEFORE DELETE ON inventory_graph.graphs
+         FOR EACH ROW EXECUTE FUNCTION inventory_graph.refuse_31()",
+    )
+    .execute(&pool)
+    .await
+    .expect("trigger");
+    let listed_at = clock(&pool, 1).await;
+    let (code, out, err) = orphans_command(
+        "delete_cli_failure",
+        "1\n",
+        &["--delete", "--listed-at", &listed_at],
+    );
+    assert_eq!(code, Some(1), "{out} {err}");
+    assert!(
+        err.contains("toolkit 31") && err.contains("refused by the test"),
+        "{err}"
+    );
+    assert_eq!(
+        rows(&pool, key(3, 30)).await,
+        [0; 5],
+        "the other graph still went"
+    );
+    assert_eq!(
+        rows(&pool, key(3, 31)).await,
+        [1, 3, 2, 1, 2],
+        "the failed delete rolled back"
+    );
 }

@@ -88,6 +88,10 @@ pub enum StoreError {
     /// A graph that cannot be stored as it is.
     #[error("{0}")]
     Unstorable(String),
+    /// A list of existing ids that cannot be deleted by (stale, from the
+    /// future, or not a time).
+    #[error("{0}")]
+    Listing(String),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -573,7 +577,11 @@ pub async fn revision(pool: &PgPool, key: GraphKey) -> Result<Option<i64>> {
 ///
 /// [`StoreError::Database`].
 pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
-    Ok(delete::remove(pool, key).await?.0)
+    match delete::remove(pool, key, None).await? {
+        delete::Removal::Done { existed, .. } => Ok(existed),
+        // Without a list time nothing can be newer than it.
+        delete::Removal::Newer(_) => Ok(false),
+    }
 }
 
 /// What [`import`] did (the shared core's type, ADR-0029 decision 7).

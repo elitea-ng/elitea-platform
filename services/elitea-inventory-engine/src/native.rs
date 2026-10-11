@@ -202,9 +202,9 @@ impl NativeRunner {
             .get("params")
             .and_then(Value::as_object)
             .unwrap_or(&empty);
-        if family == tools::ADMIN_FAMILY {
+        if family == tools::PLATFORM_FAMILY {
             context.thinking(format!("Running {tool}"));
-            return self.admin(tool, arguments, params, context).await;
+            return self.platform_tools(tool, arguments, params, context).await;
         }
         let key = GraphKey::from_arguments(arguments).map_err(|e| invalid(e.to_string()))?;
         context.thinking(format!("Running {tool}"));
@@ -227,9 +227,9 @@ impl NativeRunner {
         }
     }
 
-    /// The `inventory_admin` tools (issue #1244): the platform deleting what
+    /// The `platform` tools (issue #1244, the host's gRPC platform service): the platform deleting what
     /// a deleted toolkit or project left behind.
-    async fn admin(
+    async fn platform_tools(
         &self,
         tool: &str,
         arguments: &Map<String, Value>,

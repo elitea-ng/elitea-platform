@@ -18,11 +18,15 @@
 //!   idempotent, so it is repeated after the run ends.
 //! * [`orphans`] lists the graphs whose project (or toolkit) is not in the
 //!   lists of existing ids the CALLER supplies: this database does not hold
-//!   the platform's projects.
+//!   the platform's projects. A project or toolkit created after the list
+//!   was taken is not in it and looks orphaned, so a deletion by a list is
+//!   guarded by the time the list was taken ([`delete_graph_guarded`],
+//!   [`check_listing_fresh`]): nothing written after that time is deleted.
 
 use super::{GraphKey, Result, lock, sources};
 use sqlx::postgres::PgPool;
 use std::collections::HashSet;
+use std::time::Duration;
 
 /// The rows a delete removed (the `graphs` row is not counted: `existed`
 /// says whether there was one).
@@ -54,11 +58,37 @@ pub enum GraphDeletion {
     Busy,
 }
 
-/// The delete in one transaction: the write lock, the counts, then the
+/// What [`remove`] did.
+pub(super) enum Removal {
+    Done {
+        existed: bool,
+        removed: Removed,
+    },
+    /// Written after the list the deletion went by; nothing was deleted.
+    Newer(String),
+}
+
+/// The delete in one transaction: the write lock, (with `listed_at`) the
+/// check that nothing was written after that time, the counts, then the
 /// rows. Callers that must not race a run hold the lease ([`delete_graph`]).
-pub(super) async fn remove(pool: &PgPool, key: GraphKey) -> Result<(bool, Removed)> {
+///
+/// The check is made INSIDE the transaction, after the graph's write lock is
+/// held: a write that committed before it is seen, and one that comes after
+/// queues behind this deletion, so a graph the list did not know about is
+/// never deleted by it.
+pub(super) async fn remove(
+    pool: &PgPool,
+    key: GraphKey,
+    listed_at: Option<&str>,
+) -> Result<Removal> {
     let mut transaction = pool.begin().await?;
     lock(&mut transaction, key).await?;
+    if let Some(listed_at) = listed_at
+        && let Some(reason) = activity_since_conn(&mut transaction, key, listed_at).await?
+    {
+        // Dropped, so rolled back: nothing was changed.
+        return Ok(Removal::Newer(reason));
+    }
     let (graphs, entities, relations, sources, documents): (i64, i64, i64, i64, i64) =
         sqlx::query_as(
             "SELECT
@@ -94,15 +124,15 @@ pub(super) async fn remove(pool: &PgPool, key: GraphKey) -> Result<(bool, Remove
         .await?;
     }
     transaction.commit().await?;
-    Ok((
-        graphs > 0,
-        Removed {
+    Ok(Removal::Done {
+        existed: graphs > 0,
+        removed: Removed {
             entities,
             relations,
             sources,
             documents,
         },
-    ))
+    })
 }
 
 /// Delete the graph `key` and every row that belongs to it, unless an
@@ -112,11 +142,148 @@ pub(super) async fn remove(pool: &PgPool, key: GraphKey) -> Result<(bool, Remove
 ///
 /// [`super::StoreError::Database`].
 pub async fn delete_graph(pool: &PgPool, key: GraphKey) -> Result<GraphDeletion> {
+    match delete_graph_guarded(pool, key, None).await? {
+        GuardedDeletion::Deleted { existed, removed } => {
+            Ok(GraphDeletion::Deleted { existed, removed })
+        }
+        // Without `listed_at` nothing can be newer than it.
+        GuardedDeletion::Busy | GuardedDeletion::Newer(_) => Ok(GraphDeletion::Busy),
+    }
+}
+
+/// What [`delete_graph_guarded`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuardedDeletion {
+    /// Nothing is left of the graph.
+    Deleted { existed: bool, removed: Removed },
+    /// A write holds the graph; nothing was deleted.
+    Busy,
+    /// The graph was written after the list the deletion went by (the
+    /// reason says what and when); nothing was deleted.
+    Newer(String),
+}
+
+/// [`delete_graph`], optionally guarded by the time a list of existing
+/// projects or toolkits was taken. With `listed_at` the graph is checked for
+/// activity newer than it inside the deletion's own transaction, under the
+/// graph's lock ([`remove`]), immediately before the rows go.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`]; a `listed_at` PostgreSQL cannot read is
+/// a database error too.
+pub async fn delete_graph_guarded(
+    pool: &PgPool,
+    key: GraphKey,
+    listed_at: Option<&str>,
+) -> Result<GuardedDeletion> {
     let Some(_lease) = sources::lease(pool, key).await? else {
-        return Ok(GraphDeletion::Busy);
+        return Ok(GuardedDeletion::Busy);
     };
-    let (existed, removed) = remove(pool, key).await?;
-    Ok(GraphDeletion::Deleted { existed, removed })
+    Ok(match remove(pool, key, listed_at).await? {
+        Removal::Done { existed, removed } => GuardedDeletion::Deleted { existed, removed },
+        Removal::Newer(reason) => GuardedDeletion::Newer(reason),
+    })
+}
+
+/// The oldest list `orphans --delete` accepts, without `--allow-stale-list`.
+pub const MAX_LISTING_AGE: Duration = Duration::from_mins(10);
+
+/// How far in the future a listing time may be (clock skew between the host
+/// that took the list and the database).
+const MAX_LISTING_SKEW: Duration = Duration::from_mins(1);
+
+/// Check that a list taken at `listed_at` (RFC 3339, validated by the
+/// caller) is fresh enough to delete by.
+///
+/// A project or toolkit created after the list was taken is not in it, so
+/// its graph looks like an orphan; the older the list, the more there are.
+/// A list older than [`MAX_LISTING_AGE`] is refused unless `allow_stale`; one
+/// from the future is always refused (the time is wrong).
+///
+/// # Errors
+///
+/// [`super::StoreError::Listing`] for a stale or future list or a time
+/// PostgreSQL cannot read; [`super::StoreError::Database`].
+pub async fn check_listing_fresh(pool: &PgPool, listed_at: &str, allow_stale: bool) -> Result<()> {
+    let age: f64 = sqlx::query_scalar("SELECT extract(epoch FROM now() - $1::timestamptz)::float8")
+        .bind(listed_at)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| match error {
+            sqlx::Error::Database(_) => {
+                super::StoreError::Listing(format!("--listed-at {listed_at:?} is not a valid time"))
+            }
+            other => super::StoreError::Database(other),
+        })?;
+    if age < -MAX_LISTING_SKEW.as_secs_f64() {
+        return Err(super::StoreError::Listing(format!(
+            "--listed-at {listed_at} is in the future; the list cannot have been taken then"
+        )));
+    }
+    if age > MAX_LISTING_AGE.as_secs_f64() && !allow_stale {
+        return Err(super::StoreError::Listing(format!(
+            "the list was taken {:.0} minute(s) ago (--listed-at {listed_at}); a project or toolkit created since is not in it and would look orphaned. Take a fresh list, or pass --allow-stale-list to delete by this one",
+            age / 60.0
+        )));
+    }
+    Ok(())
+}
+
+/// Why a graph must not be treated as an orphan by a list taken at
+/// `listed_at`: it was written (created or ingested into), or a source of it
+/// started or changed status, after that time. `None` when it has no such
+/// activity.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn activity_since(
+    pool: &PgPool,
+    key: GraphKey,
+    listed_at: &str,
+) -> Result<Option<String>> {
+    let mut connection = pool.acquire().await?;
+    activity_since_conn(&mut connection, key, listed_at).await
+}
+
+/// [`activity_since`] on a given connection, so it can run inside the
+/// deletion's own transaction, under the graph's lock.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn activity_since_conn(
+    connection: &mut sqlx::PgConnection,
+    key: GraphKey,
+    listed_at: &str,
+) -> Result<Option<String>> {
+    let graph: Option<String> = sqlx::query_scalar(
+        "SELECT updated_at::text FROM inventory_graph.graphs
+          WHERE project_id = $1 AND application_id = $2 AND updated_at > $3::timestamptz",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(listed_at)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if let Some(at) = graph {
+        return Ok(Some(format!(
+            "the graph was written at {at}, after {listed_at}"
+        )));
+    }
+    let source: Option<String> = sqlx::query_scalar(
+        "SELECT greatest(started_at, last_updated)::text FROM inventory_graph.sources
+          WHERE project_id = $1 AND application_id = $2
+            AND (started_at > $3::timestamptz OR last_updated > $3::timestamptz)
+          ORDER BY last_updated DESC LIMIT 1",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(listed_at)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(source.map(|at| format!("a source was ingested at {at}, after {listed_at}")))
 }
 
 /// What [`delete_project`] did.
