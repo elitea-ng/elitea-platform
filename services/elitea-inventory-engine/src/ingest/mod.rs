@@ -322,6 +322,12 @@ impl Drop for JobScratch {
 }
 
 fn store_error(error: &StoreError) -> EngineError {
+    if let StoreError::Deleted(message) = error {
+        // The toolkit was deleted (the lease's fence): not a store failure,
+        // a refusal, and the host reads the code.
+        return EngineError::new(ErrorType::Runtime, message.clone())
+            .with_code(elitea_engine_core::errors::codes::TOOLKIT_DELETED);
+    }
     EngineError::new(
         ErrorType::Runtime,
         format!("the graph store failed: {error}"),
@@ -439,11 +445,14 @@ pub async fn run(
 ) -> Result<Outcome, EngineError> {
     // Every store access of a run goes through the `GraphStore` trait.
     let graphs = PgGraphStore::new(pool.clone());
+    // The lease is also the deletion fence: a toolkit deleted meanwhile is
+    // refused here (`code: toolkit_deleted`), before anything is written.
     let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
         return Err(EngineError::new(
             ErrorType::Runtime,
             "another ingestion of this Inventory toolkit is running; wait for it to finish",
-        ));
+        )
+        .with_code(elitea_engine_core::errors::codes::BUSY));
     };
     let status = SourceStatus {
         toolkit_id: source.status_key(),

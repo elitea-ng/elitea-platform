@@ -194,12 +194,26 @@ deleted. `store::delete` (`src/store/delete.rs`) and two engine tools of the
 * `delete_graph` (`project_id`, `application_id`) deletes one graph. It takes
   the graph's **ingestion lease** first, the session advisory lock a run, an
   import, a source removal and a type normalisation hold, and **refuses**
-  (an error: "an ingestion of this Inventory toolkit is running") while
-  another holds it. Then one transaction, under the graph's write lock,
-  removes the rows of `graphs` (with their `entities` and `relations`),
-  `sources` and `documents`. So a delete never interleaves with a write; the
-  graph ends whole or absent. Deleting a graph that is not there succeeds
-  and says so; a failed first ingestion's status row goes too.
+  (an error with `code: busy`; the text says "an ingestion of this Inventory
+  toolkit is running") while another holds it. Then one transaction, under
+  the graph's write lock, removes the rows of `graphs` (with their `entities`
+  and `relations`), `sources` and `documents`, each count taken from its own
+  `DELETE … RETURNING`, and writes the toolkit's **tombstone**
+  (`deleted_toolkits`, migration 0007). So a delete never interleaves with a
+  write; the graph ends whole or absent. The answer says `deleted: true` when
+  ANY row went (a failed first ingestion's status row without a graph is
+  still something the toolkit left) and "nothing to delete" only when none
+  did; deleting again is an idempotent success.
+* **A deleted toolkit is never resurrected.** Every write that takes the
+  ingestion lease (a run, an import, a source removal, a type normalisation)
+  checks for the tombstone under that same lease and refuses a deleted
+  toolkit (`code: toolkit_deleted`, "was deleted") before it writes
+  anything. The order is safe: a writer that held the lease first keeps the
+  deletion out (busy) until it is done, and one that takes it afterwards sees
+  the committed tombstone. The platform never reuses a toolkit id, so a
+  tombstone never refuses a legitimately new toolkit; tombstones older than
+  30 days are purged by the next deletion (the engine has no maintenance
+  loop of its own; one would be the place for the purge if it is ever added).
 * `delete_project_graphs` (`project_id`) deletes every toolkit's graph of
   the project, one transaction each, listing the project's toolkits again
   after each pass (up to five times) so a toolkit created or ingested into
@@ -221,14 +235,18 @@ them through the host's gRPC service `elitea.subapp.v1.PlatformOperations`
 project is), on its own mTLS listener (`ELITEA_INVENTORY_PLATFORM_GRPC_ADDR`),
 authorised by the client certificate of elitea-main alone
 (`ELITEA_INVENTORY_PLATFORM_CLIENTS`; empty means no listener). Before it
-deletes, the host stops the toolkit's (or project's) running ingests and waits
-up to 30 s; one still running refuses the deletion with `FAILED_PRECONDITION`
-("an ingest is still running; retry") and nothing is deleted: that code
-always means nothing was deleted. The lease above is the final guard: for
-one toolkit the engine's refusal is mapped to the same code (the wording "an
-ingestion ... running" is the contract the host matches); for a project the
-host answers OK with `complete = false` and `busy_toolkit_ids`, and the
-platform calls again.
+deletes, the host stops the toolkit's (or project's) running ingests — found
+by labels the host puts on every ingest invocation when it is registered, so
+one registered mid-deletion is found too — and waits up to 30 s; one still
+running refuses the deletion with `FAILED_PRECONDITION` ("an ingest is still
+running; retry") and nothing is deleted: that code always means nothing was
+deleted. The lease above is the next guard: for one toolkit the engine's
+refusal is mapped to the same code by its `code: busy` (the host matches the
+code; the wording is matched only for an engine of the previous release,
+which sent none); for a project the host answers OK with `incomplete = true`
+and `busy_toolkit_ids`, and the platform calls again. The tombstone is the
+last: an ingest that slips past both is refused by the engine and writes
+nothing.
 
 ### Orphans
 

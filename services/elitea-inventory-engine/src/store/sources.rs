@@ -2,7 +2,7 @@
 //! `sources_status.json` held, the file hashes the checkpoint held, and the
 //! lease that keeps two ingestions of one graph apart.
 
-use super::{GraphKey, Result, write_graph};
+use super::{GraphKey, Result, StoreError, write_graph};
 use crate::graph::Graph;
 use elitea_content_source::Acl;
 use serde_json::{Map, Value, json};
@@ -340,10 +340,60 @@ impl Drop for Lease {
 
 /// Take the ingestion lease of `key`, or `None` when another run holds it.
 ///
+/// The lease is also the **deletion fence** (migration 0007): once held,
+/// the toolkit's tombstone is looked for on the same connection, and a
+/// deleted toolkit is refused with [`StoreError::Deleted`] before the
+/// caller writes anything. The order is safe because a deletion writes the
+/// tombstone while IT holds this lease ([`super::delete::delete_graph`]): a
+/// writer that took the lease first keeps the deletion out (busy) until it
+/// is done, and one that takes it afterwards sees the committed tombstone.
+/// So a run registered as the deletion began, or on another replica, can
+/// never create the deleted graph again.
+///
+/// # Errors
+///
+/// [`StoreError::Deleted`] for a deleted toolkit;
+/// [`StoreError::Database`](super::StoreError::Database).
+pub async fn lease(pool: &PgPool, key: GraphKey) -> Result<Option<Lease>> {
+    let Some(mut connection) = take_lock(pool, key).await? else {
+        return Ok(None);
+    };
+    let deleted_at: Option<String> = sqlx::query_scalar(
+        "SELECT deleted_at::text FROM inventory_graph.deleted_toolkits
+          WHERE project_id = $1 AND application_id = $2",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if let Some(deleted_at) = deleted_at {
+        // Closed, not returned to the pool: the lock goes with the connection.
+        drop(connection.detach());
+        return Err(StoreError::Deleted(format!(
+            "Inventory toolkit {} of project {} was deleted (at {deleted_at}); its graph cannot be written again",
+            key.application_id, key.project_id
+        )));
+    }
+    Ok(Some(Lease {
+        connection: Some(connection),
+    }))
+}
+
+/// [`lease`] without the deletion fence: what a deletion itself takes, so
+/// that deleting a deleted toolkit again stays an idempotent success.
+///
 /// # Errors
 ///
 /// [`StoreError::Database`](super::StoreError::Database).
-pub async fn lease(pool: &PgPool, key: GraphKey) -> Result<Option<Lease>> {
+pub(super) async fn lease_unfenced(pool: &PgPool, key: GraphKey) -> Result<Option<Lease>> {
+    Ok(take_lock(pool, key).await?.map(|connection| Lease {
+        connection: Some(connection),
+    }))
+}
+
+/// The connection that holds the ingestion lock of `key`, or `None` when
+/// another holder has it.
+async fn take_lock(pool: &PgPool, key: GraphKey) -> Result<Option<PoolConnection<Postgres>>> {
     let mut connection = pool.acquire().await?;
     let taken: bool = sqlx::query_scalar(
         "SELECT pg_try_advisory_lock(hashtext('elitea_inventory.ingest'), hashtext($1 || '/' || $2))",
@@ -353,9 +403,7 @@ pub async fn lease(pool: &PgPool, key: GraphKey) -> Result<Option<Lease>> {
     .fetch_one(&mut *connection)
     .await?;
     if taken {
-        Ok(Some(Lease {
-            connection: Some(connection),
-        }))
+        Ok(Some(connection))
     } else {
         Ok(None)
     }

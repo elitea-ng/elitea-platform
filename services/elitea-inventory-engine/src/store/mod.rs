@@ -68,6 +68,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0006_graph_incarnation.sql",
         include_str!("../../migrations/0006_graph_incarnation.sql"),
     ),
+    (
+        "0007_deleted_toolkits.sql",
+        include_str!("../../migrations/0007_deleted_toolkits.sql"),
+    ),
 ];
 
 /// Rows per multi-row INSERT: 7 bound columns a row stay far below the 65535
@@ -96,6 +100,11 @@ pub enum StoreError {
     /// future, or not a time).
     #[error("{0}")]
     Listing(String),
+    /// The toolkit was deleted (its tombstone is in
+    /// `inventory_graph.deleted_toolkits`, migration 0007): nothing may
+    /// write its graph again. Nothing was changed.
+    #[error("{0}")]
+    Deleted(String),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -592,18 +601,20 @@ pub async fn stamp(pool: &PgPool, key: GraphKey) -> Result<Option<GraphStamp>> {
     }))
 }
 
-/// Delete the stored graph `key` and its sources' state; `true` when there
-/// was a graph. Atomic, and serialised against every writer by the graph's
+/// Delete the stored graph `key` and its sources' state; `true` when any
+/// row went. Atomic, and serialised against every writer by the graph's
 /// write lock, but it does not wait for or refuse a running ingestion (a
-/// run that has loaded the graph would write it back): that is
-/// [`delete::delete_graph`], which holds the ingestion lease.
+/// run that has loaded the graph would write it back) and leaves no
+/// tombstone (the graph may be created again): that is
+/// [`delete::delete_graph`], which holds the ingestion lease and fences
+/// later writes.
 ///
 /// # Errors
 ///
 /// [`StoreError::Database`].
 pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
-    match delete::remove(pool, key, None).await? {
-        delete::Removal::Done { existed, .. } => Ok(existed),
+    match delete::remove(pool, key, None, delete::Tombstone::No).await? {
+        delete::Removal::Done { removed } => Ok(!removed.is_empty()),
         // Without a list time nothing can be newer than it.
         delete::Removal::Newer(_) => Ok(false),
     }

@@ -20,7 +20,7 @@ use crate::ingest::source::Source;
 use crate::ingest::{self, ModelOptions, Outcome, RunOptions};
 use crate::store::{self, GraphKey, sources};
 use crate::tools;
-use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::errors::{EngineError, ErrorType, codes};
 use elitea_engine_core::stream::{Context, StopSignal};
 use elitea_inventory_core::store::GraphStore as _;
 use elitea_model_client::chat::ChatClient;
@@ -54,6 +54,23 @@ fn invalid(message: impl Into<String>) -> EngineError {
     EngineError::new(ErrorType::Value, message.into())
 }
 
+/// A store failure as the host reads it. A deleted toolkit (the lease's
+/// fence, migration 0007) carries its code, so the refusal is recognised
+/// without reading the text.
+fn store_error(error: &crate::store::StoreError) -> EngineError {
+    let failure = EngineError::new(ErrorType::Runtime, error.to_string());
+    match error {
+        crate::store::StoreError::Deleted(_) => failure.with_code(codes::TOOLKIT_DELETED),
+        _ => failure,
+    }
+}
+
+/// The refusal every lease-holding write answers while a run holds the
+/// graph: `code: busy`, so the host can tell it from a failure.
+fn busy(message: &str) -> EngineError {
+    EngineError::new(ErrorType::Runtime, message).with_code(codes::BUSY)
+}
+
 /// The stored graph, for a write that must not create one: a graph
 /// deleted since the caller planned its work is a refusal (nothing is
 /// saved), not an empty graph to write back.
@@ -81,7 +98,8 @@ fn import_error(error: crate::transfer::TransferError) -> EngineError {
     use crate::transfer::TransferError;
     match error {
         TransferError::Document(_) | TransferError::Refused(_) => invalid(error.to_string()),
-        other => EngineError::new(ErrorType::Runtime, other.to_string()),
+        TransferError::Store(error) => store_error(&error),
+        TransferError::NotFound { .. } => EngineError::new(ErrorType::Runtime, error.to_string()),
     }
 }
 
@@ -304,8 +322,6 @@ impl NativeRunner {
         context: &Context,
     ) -> Result<Value, EngineError> {
         use crate::store::delete::{self, GraphDeletion};
-        let store_error =
-            |e: crate::store::StoreError| EngineError::new(ErrorType::Runtime, e.to_string());
         let json = json_format(params);
         if tool == tools::DELETE_PROJECT_GRAPHS {
             let project_id = project_id_of(arguments).map_err(|e| invalid(e.to_string()))?;
@@ -316,17 +332,25 @@ impl NativeRunner {
         context.checkpoint()?;
         match delete::delete_graph(&self.pool, key)
             .await
-            .map_err(store_error)?
+            .map_err(|e| store_error(&e))?
         {
+            // The code is what the host acts on (retry); the text is for
+            // a reader.
             GraphDeletion::Busy => Err(EngineError::new(
                 ErrorType::Runtime,
                 "an ingestion of this Inventory toolkit is running; stop it and delete the graph again",
-            )),
-            GraphDeletion::Deleted { existed, removed } => {
+            )
+            .with_code(codes::BUSY)),
+            GraphDeletion::Deleted { removed } => {
                 // This replica's cached view of the graph goes with it (the
                 // stamp's incarnation covers every other replica's).
                 self.views.forget(key);
-                let text = if existed {
+                // "deleted" when ANY row went — a source status or a
+                // document version without a graph row is still something
+                // the toolkit left — and "nothing to delete" only when none
+                // did.
+                let deleted = !removed.is_empty();
+                let text = if deleted {
                     format!(
                         "Deleted the Inventory graph of toolkit {} in project {}: {} entities, {} relations, {} sources, {} documents.",
                         key.application_id,
@@ -344,7 +368,7 @@ impl NativeRunner {
                 };
                 Ok(crate::retrieval::answer(if json {
                     elitea_engine_core::pyjson::dumps(&json!({
-                        "deleted": existed,
+                        "deleted": deleted,
                         "project_id": key.project_id,
                         "application_id": key.application_id,
                         "entities": removed.entities,
@@ -372,27 +396,24 @@ impl NativeRunner {
         key: GraphKey,
         params: &Map<String, Value>,
     ) -> Result<Value, EngineError> {
-        let store_error =
-            |e: crate::store::StoreError| EngineError::new(ErrorType::Runtime, e.to_string());
         let (toolkit_id, name) = Self::source_identity(params)?;
         let graphs = self.views.store();
-        let Some(_lease) = graphs.lease(key).await.map_err(store_error)? else {
-            return Err(EngineError::new(
-                ErrorType::Runtime,
+        let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
+            return Err(busy(
                 "an ingestion of this Inventory toolkit is running; remove the source when it finishes",
             ));
         };
         let mut graph = graphs
             .load(key)
             .await
-            .map_err(store_error)?
+            .map_err(|e| store_error(&e))?
             .map(|(graph, _)| graph)
             .unwrap_or_default();
         let removed = graph.remove_source(&name);
         graphs
             .remove_source(key, &graph, &toolkit_id, &name)
             .await
-            .map_err(store_error)?;
+            .map_err(|e| store_error(&e))?;
         Ok(crate::retrieval::answer(format!(
             "Removed {removed} entities from toolkit {toolkit_id}"
         )))
@@ -502,14 +523,12 @@ impl NativeRunner {
         context: &Context,
     ) -> Result<Value, EngineError> {
         use crate::retrieval::admin_tools::{self as admin, Applied, SmartStep};
-        let store_error =
-            |e: crate::store::StoreError| EngineError::new(ErrorType::Runtime, e.to_string());
         context.thinking("Loading graph and analyzing types...");
         let stored = self
             .views
             .view(key)
             .await
-            .map_err(store_error)?
+            .map_err(|e| store_error(&e))?
             .unwrap_or_default();
         let plan = match admin::smart_plan(&stored.graph, params)? {
             SmartStep::Answer(text) => return Ok(crate::retrieval::answer(text)),
@@ -557,16 +576,18 @@ impl NativeRunner {
         context.checkpoint()?;
         context.thinking("Applying type mappings to graph...");
         let graphs = self.views.store();
-        let Some(_lease) = graphs.lease(key).await.map_err(store_error)? else {
-            return Err(EngineError::new(
-                ErrorType::Runtime,
+        let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
+            return Err(busy(
                 "an ingestion of this Inventory toolkit is running; normalise the types when it finishes",
             ));
         };
         // The graph as stored now, not as planned: a run may have saved since.
         let mut graph = load_existing(&self.pool, key).await?;
         let entities_normalized = admin::apply_mappings(&mut graph, &mappings);
-        graphs.save(key, &graph).await.map_err(store_error)?;
+        graphs
+            .save(key, &graph)
+            .await
+            .map_err(|e| store_error(&e))?;
         let applied = Applied {
             types_after: admin::graph_entity_types(&graph).len(),
             entities_normalized,

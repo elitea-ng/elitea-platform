@@ -22,16 +22,29 @@
 //!   was taken is not in it and looks orphaned, so a deletion by a list is
 //!   guarded by the time the list was taken ([`delete_graph_guarded`],
 //!   [`check_listing_fresh`]): nothing written after that time is deleted.
+//! * Every deletion above leaves the toolkit's **tombstone**
+//!   (`inventory_graph.deleted_toolkits`, migration 0007) in the same
+//!   transaction as the rows it removes, and every write that takes the
+//!   ingestion lease refuses a tombstoned toolkit under that lease
+//!   ([`sources::lease`]): an ingestion that was registered as the deletion
+//!   began, or runs on another replica, can never create the graph again.
+//!   Toolkit ids are never reused by the platform (they are a serial), so a
+//!   tombstone never refuses a legitimately new toolkit; tombstones older
+//!   than [`TOMBSTONE_RETENTION`] are purged by [`purge_tombstones`], which
+//!   every deletion runs first (the engine has no maintenance loop of its
+//!   own; the host stops an ingest within seconds, not days).
 
 use super::{GraphKey, Result, lock, sources};
 use sqlx::postgres::PgPool;
 use std::collections::HashSet;
 use std::time::Duration;
 
-/// The rows a delete removed (the `graphs` row is not counted: `existed`
-/// says whether there was one).
+/// The rows a delete removed, per table. `graphs` is 1 when the graph's own
+/// row went (0 for state without a graph: a failed first ingestion's
+/// status), so [`Removed::is_empty`] says whether there was anything at all.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Removed {
+    pub graphs: i64,
     pub entities: i64,
     pub relations: i64,
     pub sources: i64,
@@ -40,19 +53,27 @@ pub struct Removed {
 
 impl Removed {
     fn add(&mut self, other: Self) {
+        self.graphs += other.graphs;
         self.entities += other.entities;
         self.relations += other.relations;
         self.sources += other.sources;
         self.documents += other.documents;
+    }
+
+    /// Whether no row at all went: there was nothing to delete.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
     }
 }
 
 /// What deleting one graph did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphDeletion {
-    /// Nothing is left of the graph. `existed` is false when there was no
-    /// graph (there may still have been a source status row, which went).
-    Deleted { existed: bool, removed: Removed },
+    /// Nothing is left of the graph. `removed` says what went, and
+    /// [`Removed::is_empty`] whether anything did (a toolkit with no graph
+    /// and no state).
+    Deleted { removed: Removed },
     /// An ingestion, import or other write holds the graph; nothing was
     /// deleted.
     Busy,
@@ -61,16 +82,32 @@ pub enum GraphDeletion {
 /// What [`remove`] did.
 pub(super) enum Removal {
     Done {
-        existed: bool,
         removed: Removed,
     },
     /// Written after the list the deletion went by; nothing was deleted.
     Newer(String),
 }
 
+/// Whether [`remove`] leaves the toolkit's tombstone (migration 0007).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tombstone {
+    /// The toolkit is gone from the platform: fence every later write.
+    Write,
+    /// A plain store delete ([`super::delete`]): the graph may be created
+    /// again.
+    No,
+}
+
+/// How long a tombstone stays before [`purge_tombstones`] removes it: far
+/// longer than any write the host registered before the deletion can take,
+/// and short enough that the table never grows with the platform's history.
+pub const TOMBSTONE_RETENTION: Duration = Duration::from_hours(30 * 24);
+
 /// The delete in one transaction: the write lock, (with `listed_at`) the
-/// check that nothing was written after that time, the counts, then the
-/// rows. Callers that must not race a run hold the lease ([`delete_graph`]).
+/// check that nothing was written after that time, then the rows, each
+/// table's count taken from its own `DELETE … RETURNING` (one pass per
+/// table, no count scan), then the tombstone. Callers that must not race a
+/// run hold the lease ([`delete_graph`]).
 ///
 /// The check is made INSIDE the transaction, after the graph's write lock is
 /// held: a write that committed before it is seen, and one that comes after
@@ -80,6 +117,7 @@ pub(super) async fn remove(
     pool: &PgPool,
     key: GraphKey,
     listed_at: Option<&str>,
+    tombstone: Tombstone,
 ) -> Result<Removal> {
     let mut transaction = pool.begin().await?;
     lock(&mut transaction, key).await?;
@@ -89,44 +127,44 @@ pub(super) async fn remove(
         // Dropped, so rolled back: nothing was changed.
         return Ok(Removal::Newer(reason));
     }
-    let (graphs, entities, relations, sources, documents): (i64, i64, i64, i64, i64) =
-        sqlx::query_as(
-            "SELECT
-                 (SELECT count(*) FROM inventory_graph.graphs
-                   WHERE project_id = $1 AND application_id = $2),
-                 (SELECT count(*) FROM inventory_graph.entities
-                   WHERE project_id = $1 AND application_id = $2),
-                 (SELECT count(*) FROM inventory_graph.relations
-                   WHERE project_id = $1 AND application_id = $2),
-                 (SELECT count(*) FROM inventory_graph.sources
-                   WHERE project_id = $1 AND application_id = $2),
-                 (SELECT count(*) FROM inventory_graph.documents
-                   WHERE project_id = $1 AND application_id = $2)",
-        )
+    // Relations before entities before the graph row, each explicitly, so
+    // every table's count is its own DELETE's (the cascades from graphs to
+    // entities to relations then have nothing left to do); sources and
+    // documents reference no graph, as a first ingestion's status exists
+    // before its graph does.
+    let mut counts = [0i64; 5];
+    for (count, table) in counts.iter_mut().zip([
+        "inventory_graph.relations",
+        "inventory_graph.entities",
+        "inventory_graph.graphs",
+        "inventory_graph.sources",
+        "inventory_graph.documents",
+    ]) {
+        *count = sqlx::query_scalar(&format!(
+            "WITH d AS (DELETE FROM {table} WHERE project_id = $1 AND application_id = $2 RETURNING 1)
+             SELECT count(*) FROM d"
+        ))
         .bind(key.project_id)
         .bind(key.application_id)
         .fetch_one(&mut *transaction)
         .await?;
-    // The graph row takes its entities with it, and their relations
-    // (ON DELETE CASCADE); sources and documents reference no graph, as a
-    // first ingestion's status exists before its graph does.
-    for table in [
-        "inventory_graph.graphs",
-        "inventory_graph.sources",
-        "inventory_graph.documents",
-    ] {
-        sqlx::query(&format!(
-            "DELETE FROM {table} WHERE project_id = $1 AND application_id = $2"
-        ))
+    }
+    if tombstone == Tombstone::Write {
+        sqlx::query(
+            "INSERT INTO inventory_graph.deleted_toolkits (project_id, application_id)
+             VALUES ($1, $2)
+             ON CONFLICT (project_id, application_id) DO UPDATE SET deleted_at = clock_timestamp()",
+        )
         .bind(key.project_id)
         .bind(key.application_id)
         .execute(&mut *transaction)
         .await?;
     }
     transaction.commit().await?;
+    let [relations, entities, graphs, sources, documents] = counts;
     Ok(Removal::Done {
-        existed: graphs > 0,
         removed: Removed {
+            graphs,
             entities,
             relations,
             sources,
@@ -135,17 +173,50 @@ pub(super) async fn remove(
     })
 }
 
+/// Remove the tombstones older than [`TOMBSTONE_RETENTION`]; returns how
+/// many went. Run by every deletion before it starts, since the engine has
+/// no maintenance loop of its own.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn purge_tombstones(pool: &PgPool) -> Result<u64> {
+    Ok(sqlx::query(
+        "DELETE FROM inventory_graph.deleted_toolkits
+          WHERE deleted_at < clock_timestamp() - make_interval(secs => $1)",
+    )
+    .bind(TOMBSTONE_RETENTION.as_secs_f64())
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
+/// Whether the toolkit `key` has a tombstone (migration 0007).
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn is_tombstoned(pool: &PgPool, key: GraphKey) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM inventory_graph.deleted_toolkits
+                         WHERE project_id = $1 AND application_id = $2)",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// Delete the graph `key` and every row that belongs to it, unless an
-/// ingestion (or an import, source removal or normalisation) holds it.
+/// ingestion (or an import, source removal or normalisation) holds it, and
+/// leave the toolkit's tombstone so that no later write creates it again.
 ///
 /// # Errors
 ///
 /// [`super::StoreError::Database`].
 pub async fn delete_graph(pool: &PgPool, key: GraphKey) -> Result<GraphDeletion> {
     match delete_graph_guarded(pool, key, None).await? {
-        GuardedDeletion::Deleted { existed, removed } => {
-            Ok(GraphDeletion::Deleted { existed, removed })
-        }
+        GuardedDeletion::Deleted { removed } => Ok(GraphDeletion::Deleted { removed }),
         // Without `listed_at` nothing can be newer than it.
         GuardedDeletion::Busy | GuardedDeletion::Newer(_) => Ok(GraphDeletion::Busy),
     }
@@ -154,8 +225,9 @@ pub async fn delete_graph(pool: &PgPool, key: GraphKey) -> Result<GraphDeletion>
 /// What [`delete_graph_guarded`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardedDeletion {
-    /// Nothing is left of the graph.
-    Deleted { existed: bool, removed: Removed },
+    /// Nothing is left of the graph ([`Removed::is_empty`] when there was
+    /// nothing to begin with).
+    Deleted { removed: Removed },
     /// A write holds the graph; nothing was deleted.
     Busy,
     /// The graph was written after the list the deletion went by (the
@@ -168,6 +240,9 @@ pub enum GuardedDeletion {
 /// activity newer than it inside the deletion's own transaction, under the
 /// graph's lock ([`remove`]), immediately before the rows go.
 ///
+/// The lease it takes is the unfenced one: deleting a toolkit that is
+/// already tombstoned is an idempotent success, not a refusal.
+///
 /// # Errors
 ///
 /// [`super::StoreError::Database`]; a `listed_at` PostgreSQL cannot read is
@@ -177,13 +252,16 @@ pub async fn delete_graph_guarded(
     key: GraphKey,
     listed_at: Option<&str>,
 ) -> Result<GuardedDeletion> {
-    let Some(_lease) = sources::lease(pool, key).await? else {
+    purge_tombstones(pool).await?;
+    let Some(_lease) = sources::lease_unfenced(pool, key).await? else {
         return Ok(GuardedDeletion::Busy);
     };
-    Ok(match remove(pool, key, listed_at).await? {
-        Removal::Done { existed, removed } => GuardedDeletion::Deleted { existed, removed },
-        Removal::Newer(reason) => GuardedDeletion::Newer(reason),
-    })
+    Ok(
+        match remove(pool, key, listed_at, Tombstone::Write).await? {
+            Removal::Done { removed } => GuardedDeletion::Deleted { removed },
+            Removal::Newer(reason) => GuardedDeletion::Newer(reason),
+        },
+    )
 }
 
 /// The oldest list `orphans --delete` accepts, without `--allow-stale-list`.
@@ -393,7 +471,8 @@ pub async fn project_toolkits(pool: &PgPool, project_id: i64) -> Result<Vec<i64>
 }
 
 /// Delete every graph of `project_id` (and only that project's), one
-/// transaction per graph. A graph a write holds is skipped and named in
+/// transaction per graph, each leaving its toolkit's tombstone with the rows
+/// it removes. A graph a write holds is skipped and named in
 /// [`ProjectDeletion::busy`]; call again once it ends.
 ///
 /// The project's toolkits are listed again after each pass, up to
@@ -450,7 +529,7 @@ where
                 application_id,
             };
             match delete_graph(pool, key).await? {
-                GraphDeletion::Deleted { removed, .. } => {
+                GraphDeletion::Deleted { removed } => {
                     done.deleted.push(application_id);
                     done.by_toolkit.push((application_id, removed));
                     done.removed.add(removed);

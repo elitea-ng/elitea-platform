@@ -137,8 +137,8 @@ async fn a_delete_removes_every_table_for_that_graph_only() {
     assert_eq!(
         outcome,
         GraphDeletion::Deleted {
-            existed: true,
             removed: Removed {
+                graphs: 1,
                 entities: 3,
                 relations: 2,
                 sources: 1,
@@ -155,10 +155,17 @@ async fn a_delete_removes_every_table_for_that_graph_only() {
     assert_eq!(
         delete::delete_graph(&pool, doomed).await.expect("delete"),
         GraphDeletion::Deleted {
-            existed: false,
             removed: Removed::default()
         }
     );
+    // The toolkit is tombstoned (and stays so through the second delete):
+    // nothing may write its graph again.
+    assert!(
+        delete::is_tombstoned(&pool, doomed)
+            .await
+            .expect("tombstone")
+    );
+    assert!(!delete::is_tombstoned(&pool, kept).await.expect("tombstone"));
 }
 
 #[tokio::test]
@@ -180,13 +187,17 @@ async fn a_failed_first_ingestions_status_goes_too() {
         .await
         .expect("start");
     assert_eq!(rows(&pool, key).await, [0, 0, 0, 1, 0]);
-    let GraphDeletion::Deleted { existed, removed } =
+    let GraphDeletion::Deleted { removed } =
         delete::delete_graph(&pool, key).await.expect("delete")
     else {
         panic!("nothing holds it");
     };
-    assert!(!existed, "there was no graph");
+    assert_eq!(removed.graphs, 0, "there was no graph row");
     assert_eq!(removed.sources, 1);
+    assert!(
+        !removed.is_empty(),
+        "a row went, so something WAS deleted: the answer must not say 'nothing to delete'"
+    );
     assert_eq!(rows(&pool, key).await, [0; 5]);
 }
 
@@ -209,7 +220,7 @@ async fn a_delete_during_an_ingestion_is_refused_and_leaves_the_graph_whole() {
     drop(run);
     assert!(matches!(
         delete::delete_graph(&pool, key).await.expect("delete"),
-        GraphDeletion::Deleted { existed: true, .. }
+        GraphDeletion::Deleted { removed } if removed.graphs == 1
     ));
     assert_eq!(rows(&pool, key).await, [0; 5]);
 }
@@ -282,6 +293,7 @@ async fn a_project_delete_covers_every_toolkit_of_the_project_and_no_other() {
     assert_eq!(
         done.removed,
         Removed {
+            graphs: 1,
             entities: 3,
             relations: 2,
             sources: 1,
@@ -294,7 +306,19 @@ async fn a_project_delete_covers_every_toolkit_of_the_project_and_no_other() {
             [0; 5],
             "toolkit {toolkit}"
         );
+        // Each toolkit's tombstone went in with its rows.
+        assert!(
+            delete::is_tombstoned(&pool, key(5, toolkit))
+                .await
+                .expect("tombstone"),
+            "toolkit {toolkit}"
+        );
     }
+    assert!(
+        !delete::is_tombstoned(&pool, key(6, 1))
+            .await
+            .expect("tombstone")
+    );
     assert_eq!(
         rows(&pool, key(6, 1)).await,
         [1, 3, 2, 1, 2],
@@ -428,11 +452,224 @@ fn context() -> (Context, tokio::sync::mpsc::UnboundedReceiver<Line>) {
 }
 
 async fn call(runner: &NativeRunner, tool: &str, arguments: Value) -> Result<Value, String> {
+    call_error(runner, tool, arguments)
+        .await
+        .map_err(|e| e.message)
+}
+
+/// [`call`], keeping the whole engine error (its code included).
+async fn call_error(
+    runner: &NativeRunner,
+    tool: &str,
+    arguments: Value,
+) -> Result<Value, elitea_engine_core::errors::EngineError> {
     let (context, _lines) = context();
     runner
         .run(tool, arguments.as_object().expect("an object"), &context)
         .await
-        .map_err(|e| e.message)
+}
+
+/// A toolkit that has source state and document versions but no graph row
+/// (its first ingestion failed after `start`) is still something to delete:
+/// the tool says "deleted", the JSON says `deleted: true`, and the counts
+/// name what went. Only a toolkit with nothing at all is "nothing to delete".
+#[tokio::test]
+async fn deleting_sources_without_a_graph_is_a_deletion_not_nothing() {
+    let Some(pool) = common::database("delete_sources_only").await else {
+        return;
+    };
+    let runner = runner("delete_sources_only");
+    let graphs = PgGraphStore::new(pool.clone());
+    let key = key(9, 90);
+    graphs
+        .start(
+            key,
+            &elitea_inventory_core::store::SourceStatus {
+                toolkit_id: "5".to_owned(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start");
+    assert_eq!(rows(&pool, key).await, [0, 0, 0, 1, 0]);
+
+    let answer = call(
+        &runner,
+        "delete_graph",
+        json!({"family": "platform", "project_id": 9, "application_id": 90,
+               "params": {"output_format": "json"}}),
+    )
+    .await
+    .expect("deletes");
+    let report: Value =
+        serde_json::from_str(answer["result"].as_str().expect("text")).expect("json");
+    assert_eq!(report["deleted"], json!(true), "{report}");
+    assert_eq!(report["sources"], json!(1));
+    assert_eq!(report["entities"], json!(0));
+    assert_eq!(rows(&pool, key).await, [0; 5]);
+
+    // Nothing at all left: the text says so, and deleted is false.
+    let answer = call(
+        &runner,
+        "delete_graph",
+        json!({"family": "platform", "project_id": 9, "application_id": 90}),
+    )
+    .await
+    .expect("idempotent");
+    assert_eq!(
+        answer["result"],
+        json!("Toolkit 90 in project 9 has no Inventory graph; nothing to delete.")
+    );
+    let answer = call(
+        &runner,
+        "delete_graph",
+        json!({"family": "platform", "project_id": 9, "application_id": 90,
+               "params": {"output_format": "json"}}),
+    )
+    .await
+    .expect("idempotent");
+    let report: Value =
+        serde_json::from_str(answer["result"].as_str().expect("text")).expect("json");
+    assert_eq!(report["deleted"], json!(false));
+}
+
+/// A deleted toolkit is never resurrected: the deletion leaves a tombstone
+/// in its own transaction, and every write that takes the ingestion lease
+/// — a run, an import, a source removal, a type normalisation — is refused
+/// under that lease, writes nothing, and says the toolkit was deleted (with
+/// `code: toolkit_deleted`). Deleting again stays an idempotent success;
+/// a tombstone older than the retention is purged by the next deletion.
+#[tokio::test]
+async fn an_ingest_after_the_delete_is_refused_by_the_tombstone_and_writes_nothing() {
+    use elitea_inventory_engine::config::INGEST_NAMES;
+    use elitea_inventory_engine::ingest::{self, source::Source};
+    use elitea_inventory_engine::store::StoreError;
+    use elitea_repo_ingest::IngestSettings;
+    use elitea_repo_ingest::artifact::ArtifactCaps;
+    use elitea_repo_ingest::egress::EgressPolicy;
+    use elitea_repo_ingest::limits::IngestLimits;
+
+    let Some(pool) = common::database("delete_tombstone").await else {
+        return;
+    };
+    let runner = runner("delete_tombstone");
+    let graphs = PgGraphStore::new(pool.clone());
+    let gone = key(11, 110);
+    let alive = key(11, 111);
+    commit(&graphs, gone, &graph("gone")).await;
+    commit(&graphs, alive, &graph("alive")).await;
+
+    // The platform's deletion.
+    let answer = call(
+        &runner,
+        "delete_graph",
+        json!({"family": "platform", "project_id": 11, "application_id": 110}),
+    )
+    .await
+    .expect("deletes");
+    assert_eq!(answer["success"], json!(true));
+    assert_eq!(rows(&pool, gone).await, [0; 5]);
+    assert!(delete::is_tombstoned(&pool, gone).await.expect("tombstone"));
+
+    // The lease itself refuses, and the lock is not left behind.
+    let refused = graphs.lease(gone).await;
+    assert!(
+        matches!(refused, Err(StoreError::Deleted(ref message)) if message.contains("was deleted")),
+        "{refused:?}"
+    );
+    drop(refused);
+    assert!(
+        matches!(
+            delete::delete_graph(&pool, gone).await,
+            Ok(GraphDeletion::Deleted { .. })
+        ),
+        "the refused lease released its lock, and deleting again is idempotent"
+    );
+    // The living toolkit of the same project is untouched by all of it.
+    assert!(graphs.lease(alive).await.expect("lease").is_some());
+
+    // An ingestion arriving after the delete: refused before it clones,
+    // before it records a source status, with the code and the words.
+    let scratch = common::scratch("tombstone-ingest");
+    let settings = IngestSettings {
+        git_allowlist: EgressPolicy::parse(Some("127.0.0.1")).named(&INGEST_NAMES),
+        limits: IngestLimits {
+            names: &INGEST_NAMES,
+            ..IngestLimits::default()
+        },
+        scratch_path: scratch.clone(),
+        artifact: ArtifactCaps::default(),
+    };
+    let source = Source::parse(
+        Some(&json!({
+            "toolkit_id": 5, "type": "github", "name": "repo",
+            "github_configuration": {"base_url": "http://127.0.0.1:9"},
+            "repository": "o/r",
+        })),
+        &["github".to_owned()],
+    )
+    .expect("a source");
+    let (context, _lines) = context();
+    let refused = ingest::run(
+        &pool,
+        gone,
+        &source,
+        &settings,
+        &ingest::RunOptions::default(),
+        &context,
+    )
+    .await
+    .expect_err("refused");
+    assert!(
+        refused.message.contains("was deleted"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(refused.code, Some("toolkit_deleted"));
+    assert_eq!(rows(&pool, gone).await, [0; 5], "nothing was written");
+    assert_eq!(
+        store::load(&pool, gone).await.expect("load").map(|_| ()),
+        None
+    );
+
+    // The other lease-holding writes, through the engine's tools.
+    let document = graph("again").to_json_text("2026-01-01T00:00:00Z");
+    for (tool, params) in [
+        (
+            "import_graph",
+            json!({"graph_document": document, "output_format": "json"}),
+        ),
+        ("remove_source_entities", json!({"toolkit_id": "5"})),
+    ] {
+        let refused = call_error(
+            &runner,
+            tool,
+            json!({"project_id": 11, "application_id": 110, "params": params}),
+        )
+        .await
+        .expect_err(tool);
+        assert!(
+            refused.message.contains("was deleted"),
+            "{tool}: {}",
+            refused.message
+        );
+        assert_eq!(refused.code, Some("toolkit_deleted"), "{tool}");
+        assert_eq!(rows(&pool, gone).await, [0; 5], "{tool} wrote nothing");
+    }
+
+    // Aged past the retention, the tombstone is purged by the next deletion
+    // and the key may be written again (the platform never reuses an id, so
+    // this is only the table staying small).
+    sqlx::query(
+        "UPDATE inventory_graph.deleted_toolkits SET deleted_at = clock_timestamp() - interval '31 days'
+          WHERE project_id = 11 AND application_id = 110",
+    )
+    .execute(&pool)
+    .await
+    .expect("age");
+    assert_eq!(delete::purge_tombstones(&pool).await.expect("purge"), 1);
+    assert!(!delete::is_tombstoned(&pool, gone).await.expect("tombstone"));
+    assert!(graphs.lease(gone).await.expect("lease").is_some());
 }
 
 /// The `platform` tools: what the host sends the engine on a toolkit
@@ -490,14 +727,17 @@ async fn the_platform_tools_delete_a_graph_and_a_projects_graphs() {
         .await
         .expect("lease")
         .expect("free");
-    let refused = call(
+    let refused = call_error(
         &runner,
         "delete_graph",
         json!({"family": "platform", "project_id": 7, "application_id": 71}),
     )
     .await
     .expect_err("refused");
-    assert!(refused.contains("ingestion"), "{refused}");
+    assert!(refused.message.contains("ingestion"), "{}", refused.message);
+    // The host maps the CODE, not the words.
+    assert_eq!(refused.code, Some("busy"));
+    assert_eq!(refused.to_line()["error"]["code"], json!("busy"));
     assert_eq!(rows(&pool, key(7, 71)).await, [1, 3, 2, 1, 2]);
     // A project delete deletes what it can and SUCCEEDS, saying that it is
     // not complete and which toolkits are held: the platform's cleanup
@@ -827,7 +1067,7 @@ async fn a_deletion_by_a_list_skips_what_was_written_after_the_list() {
             delete::delete_graph_guarded(&pool, key(3, 30), Some(&before))
                 .await
                 .expect("guarded"),
-            delete::GuardedDeletion::Deleted { existed: true, .. }
+            delete::GuardedDeletion::Deleted { removed } if removed.graphs == 1
         ),
         "a graph untouched since the list goes"
     );
@@ -835,7 +1075,7 @@ async fn a_deletion_by_a_list_skips_what_was_written_after_the_list() {
         delete::delete_graph_guarded(&pool, key(3, 31), Some(&after))
             .await
             .expect("guarded"),
-        delete::GuardedDeletion::Deleted { existed: true, .. }
+        delete::GuardedDeletion::Deleted { removed } if removed.graphs == 1
     ));
     assert_eq!(rows(&pool, key(3, 31)).await, [0; 5]);
 }
