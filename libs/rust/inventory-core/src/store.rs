@@ -131,8 +131,24 @@ pub struct GraphRead {
     /// The graph, no node carrying an `embedding`.
     pub graph: Graph,
     pub revision: i64,
+    /// Which incarnation of the graph this is ([`GraphStamp`]).
+    pub incarnation: String,
     /// The entities that have a non-empty vector, in node order.
     pub embedded: Vec<String>,
+}
+
+/// What identifies one state of a stored graph: which incarnation of it
+/// (a graph deleted and created again is a new one) and which revision
+/// within that incarnation. A revision alone is not enough: a re-created
+/// graph starts again at revision 1, so a reader that cached the deleted
+/// graph's revision 1 would serve it for the new graph. Equal stamps mean
+/// an unchanged graph, on this replica or another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphStamp {
+    /// Opaque; empty for a store whose revisions never repeat (the local
+    /// index numbers every write from one counter).
+    pub incarnation: String,
+    pub revision: i64,
 }
 
 /// A similarity ranking: `(entity id, cosine similarity)` best first, or
@@ -182,6 +198,22 @@ pub trait GraphStore: Send + Sync {
         &self,
         key: GraphKey,
     ) -> impl Future<Output = Result<Option<i64>, Self::Error>> + Send;
+
+    /// The stored graph's [`GraphStamp`], or `None` when there is no graph:
+    /// what a cache compares to know that its copy is still the graph. The
+    /// default is the revision with no incarnation, right for a store whose
+    /// revisions never repeat.
+    fn stamp(
+        &self,
+        key: GraphKey,
+    ) -> impl Future<Output = Result<Option<GraphStamp>, Self::Error>> + Send {
+        async move {
+            Ok(self.revision(key).await?.map(|revision| GraphStamp {
+                incarnation: String::new(),
+                revision,
+            }))
+        }
+    }
 
     /// The version of every document the source's last completed run read,
     /// by key.
@@ -281,27 +313,6 @@ pub trait GraphStore: Send + Sync {
         graph: &Graph,
         replace_state: bool,
     ) -> impl Future<Output = Result<Imported, Self::Error>> + Send;
-}
-
-/// Delete the graph `key` unless an ingestion (or an import, a source
-/// removal, a type normalisation: every writer holds the lease) has it:
-/// `None` then, and nothing is deleted; else whether there was a graph.
-///
-/// [`GraphStore::delete`] alone does not wait for a run that has already
-/// loaded the graph, which would write it back; the lease is what makes a
-/// delete leave nothing, or leave the graph as it was.
-///
-/// # Errors
-///
-/// The store failed.
-pub async fn delete_graph<S: GraphStore>(
-    store: &S,
-    key: GraphKey,
-) -> Result<Option<bool>, S::Error> {
-    let Some(_lease) = store.lease(key).await? else {
-        return Ok(None);
-    };
-    store.delete(key).await.map(Some)
 }
 
 /// What [`GraphStore::import`] did.

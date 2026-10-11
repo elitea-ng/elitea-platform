@@ -41,17 +41,21 @@ impl<S: GraphStore> ViewCache<S> {
     }
 
     /// The current view of `key`, or `None` when the graph does not exist.
-    /// A cached view is reused while the stored revision is unchanged.
+    /// A cached view is reused while the stored (incarnation, revision) is
+    /// unchanged: a graph deleted and created again never matches a view of
+    /// the deleted one, whichever replica cached it.
     ///
     /// # Errors
     ///
     /// The store failed.
     pub async fn view(&self, key: GraphKey) -> Result<Option<Arc<GraphView>>, S::Error> {
-        let Some(revision) = self.store.revision(key).await? else {
+        let Some(stamp) = self.store.stamp(key).await? else {
             self.forget(key);
             return Ok(None);
         };
-        if let Some(view) = self.cached(key).filter(|view| view.revision == revision) {
+        if let Some(view) = self.cached(key).filter(|view| {
+            view.revision == stamp.revision && view.incarnation == stamp.incarnation
+        }) {
             return Ok(Some(view));
         }
         let Some(read) = self.store.load_view(key).await? else {
@@ -73,7 +77,8 @@ impl<S: GraphStore> ViewCache<S> {
         self.views.lock().ok()?.get(&key).cloned()
     }
 
-    fn forget(&self, key: GraphKey) {
+    /// Drop the cached view of `key` (the graph was deleted here).
+    pub fn forget(&self, key: GraphKey) {
         if let Ok(mut views) = self.views.lock() {
             views.remove(&key);
         }

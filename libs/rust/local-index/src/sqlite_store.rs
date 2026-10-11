@@ -1279,6 +1279,9 @@ fn load_read(conn: &mut Connection, key: GraphKey, vectors: bool) -> Result<Opti
     Ok(Some(GraphRead {
         graph,
         revision,
+        // Every write draws a revision from one counter, which never
+        // repeats, so a revision alone identifies a state of any graph.
+        incarnation: String::new(),
         embedded,
     }))
 }
@@ -1607,6 +1610,14 @@ impl GraphStore for SqliteGraphStore {
                     sources: counts[0],
                     documents: counts[1],
                 });
+            }
+            if replace_state {
+                // The run history belongs to the ingestion state being
+                // replaced, as `delete` clears it.
+                transaction.execute(
+                    "DELETE FROM runs WHERE project_id = ?1 AND application_id = ?2",
+                    params![key.project_id, key.application_id],
+                )?;
             }
             let (revision, _) = write_graph(&transaction, key, graph, &entities, &relations, None)?;
             transaction.commit()?;

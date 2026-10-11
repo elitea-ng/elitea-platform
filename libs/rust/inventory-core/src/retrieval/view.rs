@@ -25,6 +25,9 @@ pub struct GraphView {
     by_type: HashMap<String, Vec<String>>,
     /// The graph's revision in the store.
     pub revision: i64,
+    /// The graph's incarnation in the store ([`crate::store::GraphStamp`]);
+    /// empty when the store's revisions never repeat.
+    pub incarnation: String,
     /// The graph's restricted documents (ADR-0028 D3): `(source name,
     /// document key)` → readers. Empty for a graph of project-wide sources.
     pub restricted: HashMap<(String, String), elitea_content_source::Acl>,
@@ -79,6 +82,7 @@ impl GraphView {
             by_name,
             by_type,
             revision,
+            incarnation: String::new(),
             restricted: HashMap::new(),
             embedded,
         }
@@ -89,6 +93,7 @@ impl GraphView {
     #[must_use]
     pub fn from_read(read: GraphRead) -> Self {
         let mut view = Self::new(read.graph, read.revision);
+        view.incarnation = read.incarnation;
         view.embedded = read.embedded.into_iter().collect();
         view
     }

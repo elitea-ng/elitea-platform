@@ -13,7 +13,6 @@
 use crate::graph::{Citation, Graph};
 use crate::store::{
     Completion, DocumentState, GraphKey, GraphStore, Imported, RunCounts, SourceStatus,
-    delete_graph,
 };
 use elitea_content_source::Acl;
 use elitea_content_source::acl::{Principal, PrincipalKind};
@@ -596,7 +595,22 @@ async fn the_view_holds_no_vectors<S: GraphStore>(store: &S, key: GraphKey) {
     ok("delete", store.delete(key).await);
 }
 
-/// `delete_graph` leaves nothing of a graph, and of no other: every table's
+/// What a deleter does, spelled out as the engine's `delete_graph` does it:
+/// take the ingestion lease, REFUSE (`None`) while a writer holds it, else
+/// `store.delete` with the lease held. There is no shared helper for it;
+/// the PostgreSQL store's one implementation is
+/// `elitea_inventory_engine::store::delete::delete_graph_guarded`.
+async fn delete_under_lease<S: GraphStore>(
+    store: &S,
+    key: GraphKey,
+) -> Result<Option<bool>, S::Error> {
+    let Some(_lease) = store.lease(key).await? else {
+        return Ok(None);
+    };
+    store.delete(key).await.map(Some)
+}
+
+/// A delete under the lease leaves nothing of a graph, and of no other: every table's
 /// rows for the key are gone (the graph, its sources, its documents), a
 /// neighbour's are not, and it is REFUSED while a writer holds the lease,
 /// leaving the graph as it was.
@@ -624,7 +638,7 @@ async fn a_delete_waits_for_no_one<S: GraphStore>(store: &S, key: GraphKey) {
         panic!("the lease of a free graph is granted");
     };
     assert_eq!(
-        ok("delete_graph", delete_graph(store, key).await),
+        ok("delete", delete_under_lease(store, key).await),
         None,
         "a delete while a run holds the graph is refused"
     );
@@ -644,7 +658,7 @@ async fn a_delete_waits_for_no_one<S: GraphStore>(store: &S, key: GraphKey) {
     // Free, it deletes every table's rows for the key, and the lease is
     // released afterwards.
     assert_eq!(
-        ok("delete_graph", delete_graph(store, key).await),
+        ok("delete", delete_under_lease(store, key).await),
         Some(true)
     );
     assert!(ok("load", store.load(key).await).is_none());
@@ -655,7 +669,7 @@ async fn a_delete_waits_for_no_one<S: GraphStore>(store: &S, key: GraphKey) {
         json!({})
     );
     assert_eq!(
-        ok("delete_graph", delete_graph(store, key).await),
+        ok("delete", delete_under_lease(store, key).await),
         Some(false),
         "deleting what is gone is not an error"
     );

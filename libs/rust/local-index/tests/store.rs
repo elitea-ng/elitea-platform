@@ -208,6 +208,32 @@ async fn the_stat_cache_is_committed_with_the_versions() {
     );
 }
 
+#[tokio::test]
+async fn an_import_that_replaces_the_state_clears_the_runs_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteGraphStore::open(&dir.path().join("index")).unwrap();
+    commit(&store, &graph_of(2, 1), 2).await;
+    assert_eq!(store.runs(GraphKey::LOCAL).unwrap().len(), 1);
+    // Refused without the flag, and nothing is cleared.
+    let refused = store
+        .import(GraphKey::LOCAL, &graph_of(1, 1), false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        refused,
+        elitea_inventory_core::store::Imported::HasIngestionState { .. }
+    ));
+    assert_eq!(store.runs(GraphKey::LOCAL).unwrap().len(), 1);
+    store
+        .import(GraphKey::LOCAL, &graph_of(1, 1), true)
+        .await
+        .unwrap();
+    assert!(
+        store.runs(GraphKey::LOCAL).unwrap().is_empty(),
+        "the replaced state's runs are gone"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn the_directory_database_and_sidecars_are_owner_only() {
