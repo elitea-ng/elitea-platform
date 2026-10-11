@@ -1029,7 +1029,7 @@ pub(crate) async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<
     Ok(removed)
 }
 
-/// The live rows [`delete_live`] removed, by kind.
+/// The live rows `delete_live` removed, by kind.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LiveRows {
     pub nodes: u64,
