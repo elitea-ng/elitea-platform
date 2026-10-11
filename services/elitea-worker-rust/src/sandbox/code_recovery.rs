@@ -371,6 +371,19 @@ pub(crate) fn hex_id(value: &str, len: usize, nonzero: bool) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         && (!nonzero || !value.bytes().all(|b| b == b'0'))
 }
+/// The 32 bytes of a 64-character lowercase hex string (the inverse of [`hex`]
+/// for a SHA-256 digest or an owner id); `None` for any other text. Shared by
+/// configuration validation's rule table and graph node recovery.
+pub(crate) fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
+    if !hex_id(value, 64, false) {
+        return None;
+    }
+    let mut out = [0_u8; 32];
+    for (slot, pair) in out.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(out)
+}
 pub(crate) fn identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 256
@@ -380,6 +393,18 @@ pub(crate) fn identity(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn decode_hex_32_is_the_inverse_of_hex_for_lowercase_text_only() {
+        let bytes: [u8; 32] = std::array::from_fn(|index| u8::try_from(index * 8).unwrap() ^ 0xa5);
+        let text = hex(&bytes);
+        assert_eq!(decode_hex_32(&text), Some(bytes));
+        assert_eq!(decode_hex_32(&"00".repeat(32)), Some([0; 32]));
+        assert_eq!(decode_hex_32(&text.to_ascii_uppercase()), None);
+        assert_eq!(decode_hex_32(&text[1..]), None);
+        assert_eq!(decode_hex_32(&format!("{text}00")), None);
+        assert_eq!(decode_hex_32(&format!("0g{}", &text[2..])), None);
+        assert_eq!(decode_hex_32(""), None);
+    }
     fn fixture() -> (WholeCodeBinding, CodeRecoveryVisit) {
         let execution = "1".repeat(32);
         let activation = "2".repeat(64);

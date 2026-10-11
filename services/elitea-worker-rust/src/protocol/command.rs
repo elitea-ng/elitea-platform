@@ -48,25 +48,6 @@ impl ToolkitCommandKind {
             Self::ConfigurationValidate => "configuration-validation",
         }
     }
-
-    /// The direct-execution kind a command's capability payload selects;
-    /// `None` for agent executions.
-    #[must_use]
-    pub(crate) const fn of_command(command: &WorkerCommandV1) -> Option<Self> {
-        match command.capability_command {
-            Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)) => {
-                Some(Self::ExecuteRead)
-            }
-            Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(_)) => Some(Self::CallTool),
-            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
-                Some(Self::AvailableTools)
-            }
-            Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(_)) => {
-                Some(Self::ConfigurationValidate)
-            }
-            _ => None,
-        }
-    }
 }
 
 /// The logical output id Main expects for a command's terminal frame
@@ -75,21 +56,27 @@ impl ToolkitCommandKind {
 /// agent executions by theirs. This is the one place the rule lives.
 #[must_use]
 pub(crate) fn terminal_logical_output_id(command: &WorkerCommandV1) -> String {
-    match (
-        ToolkitCommandKind::of_command(command),
-        command.capability_command.as_ref(),
-    ) {
-        (
-            Some(kind),
-            Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)),
-        ) => format!(
-            "{}:{}",
-            kind.output_prefix(),
-            validation.configuration_revision_id
+    use worker_command_v1::CapabilityCommand;
+    let (prefix, key) = match command.capability_command.as_ref() {
+        Some(CapabilityCommand::ConfigurationValidation(validation)) => (
+            ToolkitCommandKind::ConfigurationValidate.output_prefix(),
+            validation.configuration_revision_id.as_str(),
         ),
-        (Some(kind), _) => format!("{}:{}", kind.output_prefix(), command.execution_id),
-        (None, _) => format!("agent-execution:{}", command.execution_id),
-    }
+        Some(CapabilityCommand::ToolkitExecuteRead(_)) => (
+            ToolkitCommandKind::ExecuteRead.output_prefix(),
+            command.execution_id.as_str(),
+        ),
+        Some(CapabilityCommand::ToolkitCallTool(_)) => (
+            ToolkitCommandKind::CallTool.output_prefix(),
+            command.execution_id.as_str(),
+        ),
+        Some(CapabilityCommand::ToolkitAvailableTools(_)) => (
+            ToolkitCommandKind::AvailableTools.output_prefix(),
+            command.execution_id.as_str(),
+        ),
+        _ => ("agent-execution", command.execution_id.as_str()),
+    };
+    format!("{prefix}:{key}")
 }
 
 const MAX_SIGNED_ENVELOPE_BYTES: usize = 48 * 1024;
