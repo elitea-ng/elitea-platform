@@ -39,12 +39,6 @@
 // import_graph (run.ResolveGraphDocument), because the host holds the
 // artifact transport.
 //
-// The inventory_admin family (issue #1244, ADR-0031 phase C0) is in the
-// admission table and NOT in the descriptor: delete_graph and
-// delete_project_graphs are the platform's own calls (an Inventory toolkit's
-// deletion, a project's deprovisioning), so nothing offers them to a user or
-// an agent. See run/admin.go for who may call them.
-//
 // The ENGINE reaches this host as a sidecar (services/elitea-inventory-engine) over a
 // Unix socket; internal/apps/inventory/run is the runner in front of it. A host
 // with no socket configured runs the unavailable runner (the default), so
@@ -135,15 +129,6 @@ var Toolkits = spi.Toolkits{
 			},
 			UnknownToolIsInvalidInput: true,
 			Label:                     "inventory_search",
-		},
-		{
-			// Not advertised (Advertised below lists the two families the
-			// descriptor declares): the platform's own calls.
-			Name:                      "inventory_admin",
-			Aliases:                   []string{"inventory_admin"},
-			Tools:                     []string{"delete_graph", "delete_project_graphs"},
-			UnknownToolIsInvalidInput: true,
-			Label:                     "inventory_admin",
 		},
 	},
 	Advertised: []string{"inventory", "inventory_search"},

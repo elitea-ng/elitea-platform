@@ -275,26 +275,9 @@ func TestTheInventoryApplicationWalksTheWholeSuite(t *testing.T) {
 		if err := json.Unmarshal(inventoryFixture(t, "descriptor", DescriptorRevision, "provider_descriptor.json"), &document); err != nil {
 			t.Fatal(err)
 		}
-		// The table also holds the platform's own family (issue #1244), which
-		// the descriptor does not advertise: every OTHER family is advertised,
-		// and the one that is not is the admin family, not in Advertised.
-		advertisedFamilies := map[string]bool{}
-		for _, toolkit := range document.ProvidedToolkits {
-			advertisedFamilies[toolkit.Name] = true
-		}
-		var unadvertised []string
-		for _, family := range inventory.Toolkits.Families {
-			if !advertisedFamilies[family.Name] {
-				unadvertised = append(unadvertised, family.Name)
-			}
-		}
-		if len(unadvertised) != 1 || unadvertised[0] != "inventory_admin" {
-			t.Fatalf("the table has families the descriptor does not advertise: %v, want only inventory_admin", unadvertised)
-		}
-		for _, name := range inventory.Toolkits.Advertised {
-			if name == "inventory_admin" {
-				t.Fatal("inventory_admin is advertised")
-			}
+		if len(document.ProvidedToolkits) != len(inventory.Toolkits.Families) {
+			t.Fatalf("the descriptor advertises %d toolkits, the table has %d families",
+				len(document.ProvidedToolkits), len(inventory.Toolkits.Families))
 		}
 		for _, toolkit := range document.ProvidedToolkits {
 			family, err := inventory.Toolkits.Resolve(toolkit.Name)

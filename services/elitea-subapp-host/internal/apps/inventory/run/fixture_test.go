@@ -119,10 +119,6 @@ func TestEveryFixtureToolAnswersSomething(t *testing.T) {
 				continue
 			}
 			h := fixtureHarness(t)
-			if family.Name == run.AdminFamily {
-				// The platform's calls need the platform's identity (admin.go).
-				h.identity = spi.Identity{ProjectID: "7"}
-			}
 			request := read(map[string]any{
 				"entity_id": "code:place-order", "preset": "code",
 				"query": "checkout", "question": "what places an order?",

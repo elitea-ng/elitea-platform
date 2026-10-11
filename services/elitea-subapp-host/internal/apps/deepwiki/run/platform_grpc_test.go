@@ -195,6 +195,29 @@ func TestProjectDeprovisioningIsAGRPCServiceAuthorisedByTheMainCertificate(t *te
 	}
 }
 
+// DeepWiki keeps nothing per toolkit that the platform deletes with the
+// toolkit (its index is per wiki, deleted by its own tool), so its service
+// does not implement DeleteToolkit: the generated Unimplemented server
+// answers, to an authorised caller; an unauthorised one is refused first.
+func TestDeepWikiAnswersDeleteToolkitUnimplemented(t *testing.T) {
+	sidecar := newFakeSidecar(t, []string{`{"result": {"success": true, "wikis": []}}`}, 0)
+	pki := newPKI(t, "platform ca")
+	addr, _ := platformHost(t, sidecar, pki, "elitea-main")
+	main, other := pki.client(t, "elitea-main"), pki.client(t, "somebody-else")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	request := &subappv1.DeleteToolkitRequest{ProjectId: 17, ToolkitId: 3}
+	if _, err := dial(t, addr, pki, &main).DeleteToolkit(ctx, request); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("an authorised caller got %v, want Unimplemented", err)
+	}
+	if _, err := dial(t, addr, pki, &other).DeleteToolkit(ctx, request); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("an unauthorised caller got %v, want PermissionDenied", err)
+	}
+	if n := engineCalls(sidecar); n != 0 {
+		t.Fatalf("the engine was called %d time(s)", n)
+	}
+}
+
 // The allowlist matches a DNS SAN as well as a common name.
 func TestTheAllowlistMatchesADNSSANToo(t *testing.T) {
 	sidecar := newFakeSidecar(t, []string{`{"result": {"success": true, "wikis": []}}`}, 0)
