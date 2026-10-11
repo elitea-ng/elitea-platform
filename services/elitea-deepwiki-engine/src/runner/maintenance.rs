@@ -122,6 +122,19 @@ async fn run_tool(
                     "embeddings": deleted.rows.embeddings,
                     "statistics": deleted.rows.statistics,
                 },
+                // What each deleted wiki lost, in the order of `wikis`.
+                "per_wiki": deleted
+                    .wikis
+                    .iter()
+                    .zip(&deleted.per_wiki)
+                    .map(|(wiki, rows)| json!({
+                        "wiki_id": wiki,
+                        "nodes": rows.nodes,
+                        "edges": rows.edges,
+                        "embeddings": rows.embeddings,
+                        "statistics": rows.statistics,
+                    }))
+                    .collect::<Vec<_>>(),
                 "builds": deleted.builds,
                 "live_builds": deleted.live_builds,
             }))

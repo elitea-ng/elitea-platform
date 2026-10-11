@@ -117,6 +117,8 @@ impl WikiDeletion {
 pub struct ProjectDeletion {
     /// The wiki ids that were deleted, in deletion order.
     pub wikis: Vec<String>,
+    /// What each of [`Self::wikis`] lost, in the same order.
+    pub per_wiki: Vec<LiveRows>,
     pub rows: LiveRows,
     /// Stale builds that were removed: staged rows of generations whose
     /// heartbeat stopped.
@@ -433,6 +435,7 @@ pub async fn delete_project_guarded(
                     outcome.rows.statistics += deleted.rows.statistics;
                     if deleted.existed {
                         outcome.wikis.push(wiki);
+                        outcome.per_wiki.push(deleted.rows);
                     }
                 }
                 WikiOutcome::Newer(reason) => {

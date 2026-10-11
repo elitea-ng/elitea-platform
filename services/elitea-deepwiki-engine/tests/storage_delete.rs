@@ -347,6 +347,9 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
     .await
     .expect("run");
     assert_eq!(all["wikis"], json!(["w-b"]));
+    // The per-wiki counts, in the order of `wikis`.
+    assert_eq!(all["per_wiki"][0]["wiki_id"], "w-b");
+    assert!(all["per_wiki"][0]["nodes"].as_u64().unwrap_or(0) > 0, "{all}");
     assert!(populated(&rows(&pool, 2, "w-a").await));
 
     // No project, no wiki id: refused.

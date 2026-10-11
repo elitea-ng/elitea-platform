@@ -144,6 +144,10 @@ impl elitea_engine_sidecar::Engine for Runner {
         ENGINE_TOOLS.contains(&tool)
     }
 
+    fn tools(&self) -> &'static [&'static str] {
+        &ENGINE_TOOLS
+    }
+
     async fn run(
         &self,
         tool: &str,

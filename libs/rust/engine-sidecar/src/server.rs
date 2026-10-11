@@ -5,7 +5,7 @@
 //!   → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,
 //!     then {"result": …} | {"error": …}
 //! POST /engine/invocations/{id}/stop   a cooperative stop → 202 {"stopped": bool}
-//! GET  /engine/health                  {"status": "UP", "runner": …, "active": n}
+//! GET  /engine/health                  {"status": "UP", "runner": …, "active": n[, "tools": […]]}
 //! ```
 //!
 //! The wire is the Python sidecars' (`elitea_deepwiki/sidecar.py`, the
@@ -54,6 +54,16 @@ pub trait Engine: Send + Sync + 'static {
     /// with `400 Unknown tool` before a run starts; the host serves every
     /// other tool of the application itself.
     fn serves(&self, tool: &str) -> bool;
+
+    /// The names of the tools this socket serves, listed in
+    /// `GET /engine/health` as `tools` so the host can tell what an engine
+    /// of any release can do before it asks (a rolling deploy runs a newer
+    /// host against an older engine). Empty by default, and an empty list is
+    /// left out of the document, so an engine that does not list its tools
+    /// answers byte for byte what it always did.
+    fn tools(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// Run one tool with the arguments the host derived, reporting progress
     /// and answer fragments through `context`.
@@ -138,10 +148,13 @@ fn detail(status: StatusCode, message: &str) -> Response {
 
 async fn health<E: Engine>(State(shared): State<Arc<Shared<E>>>) -> Response {
     let active = shared.running().len();
-    json_response(
-        StatusCode::OK,
-        &json!({"status": "UP", "runner": shared.engine.runner_name(), "active": active}),
-    )
+    let mut body =
+        json!({"status": "UP", "runner": shared.engine.runner_name(), "active": active});
+    let tools = shared.engine.tools();
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
+    json_response(StatusCode::OK, &body)
 }
 
 async fn stop<E: Engine>(
