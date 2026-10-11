@@ -1667,7 +1667,7 @@ fn application_resume_history(
         if let Some(previous) = child_routes.insert(event.invocation_id.clone(), route.clone())
             && previous != route
         {
-            return Err(invalid_configuration());
+            return Err(ambiguous_child_invocation());
         }
     }
     let mut invocations = HashSet::from([owned_invocation_id.to_owned()]);
@@ -4849,7 +4849,6 @@ impl ApplicationToolInvocationContext {
         mut run_config: RunConfig,
         mut history: Vec<Content>,
     ) -> Self {
-        static NEXT_INVOCATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         // Match Runner's current-input history boundary. LlmAgent replaces the last
         // user entry with user_content; on resume that entry must be the private
         // replay marker, not the original child task which the model still needs.
@@ -4858,8 +4857,11 @@ impl ApplicationToolInvocationContext {
         // SSE config for root callers; retain its decisions but use the same
         // accumulated-event contract as a fresh child, not its final token delta.
         run_config.streaming_mode = StreamingMode::None;
-        let ordinal = NEXT_INVOCATION.fetch_add(1, Ordering::Relaxed);
-        let invocation_id = format!("elitea-child-{ordinal}");
+        // Every child activation, including each resume of the same parent call, needs an id no
+        // other activation in the session ever had. The persisted history joins a child's events
+        // by this id across turns, and later turns may run in a replacement Worker process or on
+        // another Worker, so a per-process counter would hand out ids already persisted.
+        let invocation_id = format!("elitea-child-{}", uuid::Uuid::new_v4());
         let branch = nested_application_branch(parent_ctx.branch());
         let instruction_session_id = format!(
             "elitea-child-{}",
@@ -5215,6 +5217,19 @@ fn invalid_configuration() -> NativeAgentAssemblyError {
         NativeAgentAssemblyErrorCode::InvalidConfiguration,
         "the nested application graph is invalid",
     )
+}
+
+const AMBIGUOUS_CHILD_INVOCATION_CODE: &str = "nested_application.ambiguous_child_invocation";
+
+/// One child invocation id persisted under two different parent calls. Its history cannot be
+/// joined to either call, so the continuation fails closed with its own typed reason. Histories
+/// written before child ids were unique across processes can still carry such a collision.
+fn ambiguous_child_invocation() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::InvalidConfiguration,
+        "a nested application invocation is bound to two parent calls",
+    )
+    .with_cause(AMBIGUOUS_CHILD_INVOCATION_CODE, None)
 }
 
 fn unsupported_capability() -> NativeAgentAssemblyError {
@@ -5642,6 +5657,60 @@ mod tests {
         assert_eq!(
             error.code(),
             NativeAgentAssemblyErrorCode::InvalidConfiguration
+        );
+    }
+
+    /// One agent child persisted under a parent call, then a later turn's child under its own
+    /// re-persisted parent call (pipeline nodes re-persist their call each turn).
+    fn child_under_turn(turn: &str, call_event_id: &str, child_invocation: &str) -> [Event; 2] {
+        let call = application_call_event(
+            call_event_id,
+            turn,
+            APPLICATION_BRANCH_ROOT,
+            "pipeline:override_call:0",
+            "elitea_agent_31_v_41",
+        );
+        let mut child = Event::with_id(format!("{call_event_id}-child"), child_invocation);
+        child.branch = format!("{APPLICATION_BRANCH_ROOT}.application_1");
+        child.llm_response.content = Some(Content::new("model").with_text("child turn"));
+        child.provider_metadata.insert(
+            DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+            turn.to_owned(),
+        );
+        child.provider_metadata.insert(
+            DESCENDANT_PARENT_CALL_KEY.to_owned(),
+            "pipeline:override_call:0".to_owned(),
+        );
+        [call, child]
+    }
+
+    #[test]
+    fn a_child_invocation_id_under_two_parent_calls_fails_closed_with_its_reason() {
+        let mut distinct = child_under_turn("turn-1", "call-turn-1", "elitea-child-a").to_vec();
+        distinct.extend(child_under_turn("turn-2", "call-turn-2", "elitea-child-b"));
+        assert_eq!(
+            application_resume_history(&distinct, "elitea-child-b")
+                .expect("distinct child ids each keep their own parent-call route")
+                .len(),
+            1
+        );
+
+        // A Worker that named children from a per-process counter reused `elitea-child-1` for
+        // the resumed child after a restart: one id under two persisted parent-call events.
+        let mut reused = child_under_turn("turn-1", "call-turn-1", "elitea-child-1").to_vec();
+        reused.extend(child_under_turn("turn-2", "call-turn-2", "elitea-child-1"));
+        let Err(error) = application_resume_history(&reused, "elitea-child-2") else {
+            panic!("a reused child invocation id must fail closed");
+        };
+        assert_eq!(
+            error.code(),
+            NativeAgentAssemblyErrorCode::InvalidConfiguration
+        );
+        assert_eq!(
+            error
+                .cause()
+                .map(super::super::runtime::NativeAgentAssemblyCause::code),
+            Some(AMBIGUOUS_CHILD_INVOCATION_CODE)
         );
     }
 

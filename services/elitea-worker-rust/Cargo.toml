@@ -78,6 +78,9 @@ tower = { version = "=0.5.3", features = ["util"] }
 tracing = "=0.1.44"
 tracing-opentelemetry = { version = "=0.34.0", default-features = false }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "registry", "smallvec", "std", "tracing-log"] }
+# Already locked through adk-runner, which names root invocations `inv-<uuid v4>`; nested
+# agent children use the same scheme so an invocation id never repeats across processes.
+uuid = { version = "=1.24.0", default-features = false, features = ["v4"] }
 x509-parser = { version = "=0.18.1", optional = true, default-features = false }
 zeroize = "=1.9.0"
 toml = { version = "=1.1.6", default-features = false, features = ["parse", "serde", "std"] }

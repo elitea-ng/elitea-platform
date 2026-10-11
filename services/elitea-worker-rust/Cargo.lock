@@ -1167,6 +1167,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "uuid",
  "x509-parser",
  "zeroize",
 ]

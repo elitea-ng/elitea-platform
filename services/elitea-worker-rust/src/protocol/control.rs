@@ -1566,6 +1566,23 @@ pub(crate) fn test_session_authority_for(
     }
 }
 
+/// The session authority of a later execution's own claim on the same session, as a new Worker
+/// process presents it for the next turn: its own claim id and fence and a strictly later claim
+/// start.
+#[cfg(test)]
+pub(crate) fn test_session_authority_for_claim(
+    execution_id: &str,
+    generation: u64,
+    claim_ordinal: u8,
+) -> ClaimBoundSessionAuthority {
+    ClaimBoundSessionAuthority {
+        claim_id: format!("claim-{claim_ordinal}"),
+        claim_started_at_unix_micros: 1_700_000_000_123_456 + i64::from(claim_ordinal) * 1_000_000,
+        fence_token: Zeroizing::new(vec![claim_ordinal; 32]),
+        ..test_session_authority_for(execution_id, generation)
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_lease_starting_execution(
     lease_expires_at_unix_millis: i64,
