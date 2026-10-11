@@ -4,11 +4,12 @@ use crate::protocol::command::{
     parse_and_verify_execution_command, parse_and_verify_toolkit_execute_read_command,
 };
 use crate::protocol::elitea::runtime::v1::{
-    SignedWorkerCommandEnvelopeV1, ToolkitAuthorizationRequiredV1,
-    ToolkitAvailableToolsArtifactReferenceV1, ToolkitAvailableToolsCommandV1,
-    ToolkitAvailableToolsResultV1, ToolkitCallToolCommandV1, ToolkitCallToolResultV1,
-    ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, VectorClaimTokenV1, WorkerCommandTypeV1,
-    WorkerCommandV1, execution_output_frame_v1,
+    ConfigurationValidationCommandV1, ConfigurationValidationIssueV1,
+    ConfigurationValidationResultV1, ExecutionOutputEventTypeV1, SignedWorkerCommandEnvelopeV1,
+    ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsArtifactReferenceV1,
+    ToolkitAvailableToolsCommandV1, ToolkitAvailableToolsResultV1, ToolkitCallToolCommandV1,
+    ToolkitCallToolResultV1, ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, VectorClaimTokenV1,
+    WorkerCommandTypeV1, WorkerCommandV1, execution_output_frame_v1,
 };
 use crate::protocol::output::validate_restored_toolkit_execute_read_output_frame;
 use ring::hmac;
@@ -106,6 +107,21 @@ fn fixture(kind: ToolkitCommandKind) -> (WorkerCommandV1, ClaimCommandResponseV1
                         settings_entry_id: "toolkit-settings".into(),
                     },
                 ));
+        }
+        ToolkitCommandKind::ConfigurationValidate => {
+            settings.entry_id = "settings".into();
+            settings.semantic_role = "configuration.settings".into();
+            manifest.entries = vec![settings];
+            command.command_type = WorkerCommandTypeV1::ConfigurationValidate as i32;
+            command.capability_id = "configuration.validate.v1".into();
+            command.capability_command = Some(
+                worker_command_v1::CapabilityCommand::ConfigurationValidation(
+                    crate::validation::ConfigurationCatalog::pinned()
+                        .unwrap()
+                        .command_for("jira")
+                        .unwrap(),
+                ),
+            );
         }
         ToolkitCommandKind::ExecuteRead => unreachable!(),
     }
@@ -654,6 +670,471 @@ fn shared_toolkit_authorization_result_bounds_metadata_urls_and_identity() {
             "bound mutation {mutation}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// configuration.validate.v1
+// ---------------------------------------------------------------------------
+
+const CASES_JSON: &str = include_str!("../../tests/fixtures/configuration_validation_cases.json");
+
+fn catalog() -> &'static crate::validation::ConfigurationCatalog {
+    crate::validation::ConfigurationCatalog::pinned().expect("embedded rules")
+}
+
+fn validation_command(configuration_type: &str) -> (WorkerCommandV1, ClaimCommandResponseV1) {
+    let (mut command, response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    command.capability_command = Some(
+        worker_command_v1::CapabilityCommand::ConfigurationValidation(
+            catalog().command_for(configuration_type).unwrap(),
+        ),
+    );
+    (command, response)
+}
+
+fn validation_result(
+    claim: &AcceptedAgentClaim,
+    command: &ConfigurationValidationCommandV1,
+    issues: &[crate::validation::Issue],
+) -> ConfigurationValidationResultV1 {
+    ConfigurationValidationResultV1 {
+        configuration_revision_id: command.configuration_revision_id.clone(),
+        configuration_type: command.configuration_type.clone(),
+        catalog_revision: command.catalog_revision.clone(),
+        catalog_digest: command.catalog_digest.clone(),
+        schema_id: command.schema_id.clone(),
+        schema_revision: command.schema_revision.clone(),
+        schema_digest: command.schema_digest.clone(),
+        input_bundle_id: claim.input_bundle_ref.input_bundle_id.clone(),
+        input_bundle_digest: claim.input_bundle_ref.digest.clone(),
+        settings_entry_id: claim.request_entry.entry_id.clone(),
+        settings_entry_version: claim.request_entry.immutable_version.clone(),
+        settings_content_digest: claim.request_entry.content.as_ref().unwrap().digest.clone(),
+        valid: issues.is_empty(),
+        issues: issues
+            .iter()
+            .map(|issue| ConfigurationValidationIssueV1 {
+                code: issue.code.code().to_owned(),
+                json_pointer: issue.json_pointer.clone(),
+                safe_message: issue.code.safe_message().to_owned(),
+            })
+            .collect(),
+    }
+}
+
+fn validation_command_message(command: &WorkerCommandV1) -> &ConfigurationValidationCommandV1 {
+    let Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)) =
+        command.capability_command.as_ref()
+    else {
+        panic!("validation command")
+    };
+    validation
+}
+
+#[test]
+fn configuration_validation_command_is_a_verified_kind_with_its_own_output_identity() {
+    let (command, response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    let VerifiedExecutionCommandKind::ToolkitExecuteRead(verified) =
+        parse_and_verify_execution_command(
+            &signed_bytes(&command),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .unwrap()
+    else {
+        panic!("validation rides the direct-execution wrapper")
+    };
+    assert_eq!(verified.kind(), ToolkitCommandKind::ConfigurationValidate);
+    assert_eq!(verified.request_entry_id(), "settings");
+    // Main expects the revision-keyed id, not an execution-keyed one.
+    assert_eq!(
+        verified.logical_output_id(),
+        "configuration-validation:revision-1"
+    );
+    assert_eq!(
+        terminal_logical_output_id(&command),
+        "configuration-validation:revision-1"
+    );
+    let execution = LeaseMonitoredAgentExecution {
+        claim: claim(&command, response),
+    };
+    assert_eq!(execution.request_entry().entry_id, "settings");
+    assert!(execution.arguments_entry().is_none());
+    assert!(
+        execution
+            .input_content_authority_for_entry("toolkit-runtime-context")
+            .is_none()
+    );
+}
+
+#[test]
+fn configuration_validation_command_rejects_malformed_and_ambiguous_wire() {
+    let accepts = |command: &WorkerCommandV1| {
+        parse_and_verify_execution_command(
+            &signed_bytes(command),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .is_ok()
+    };
+    let (good, _) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    assert!(accepts(&good));
+    for mutation in 0..9 {
+        let mut command = good.clone();
+        let Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)) =
+            command.capability_command.as_mut()
+        else {
+            unreachable!()
+        };
+        match mutation {
+            0 => command.capability_id = "toolkit.available_tools.v1".into(),
+            1 => command.command_type = WorkerCommandTypeV1::ToolkitAvailableTools as i32,
+            2 => command.capability_version = "2".into(),
+            3 => {
+                validation.catalog_digest.as_mut().unwrap().value.pop();
+            }
+            4 => validation.schema_digest = None,
+            5 => validation.configuration_type.clear(),
+            6 => validation.settings_entry_id.clear(),
+            7 => validation.configuration_revision_id = "bad\nrevision".into(),
+            8 => validation.schema_id = "x".repeat(257),
+            _ => unreachable!(),
+        }
+        assert!(!accepts(&command), "mutation {mutation}");
+    }
+    // Wire-level: a second capability payload, and an unknown field inside it.
+    let mut raw = good.encode_to_vec();
+    raw.extend_from_slice(&[0x8a, 0x02, 0x00]);
+    assert!(
+        parse_and_verify_execution_command(
+            &sign_raw(raw),
+            Some(&TestOnlyConformanceHmacAuthenticator)
+        )
+        .is_err()
+    );
+    let mut with_unknown = validation_command_message(&good).encode_to_vec();
+    with_unknown.extend_from_slice(&[0x4a, 0x00]); // field 9: reserved in v1
+    let mut raw = good.clone();
+    raw.capability_command = None;
+    let mut raw = raw.encode_to_vec();
+    raw.extend_from_slice(&[0x82, 0x02, u8::try_from(with_unknown.len()).unwrap()]);
+    raw.extend_from_slice(&with_unknown);
+    assert!(
+        parse_and_verify_execution_command(
+            &sign_raw(raw),
+            Some(&TestOnlyConformanceHmacAuthenticator)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn configuration_validation_claim_admits_exactly_the_settings_entry() {
+    for mutation in 0..5 {
+        let (mut command, mut response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+        let entries = &mut response
+            .receipt
+            .as_mut()
+            .unwrap()
+            .input_bundle
+            .as_mut()
+            .unwrap()
+            .entries;
+        match mutation {
+            0 => entries[0].semantic_role = "toolkit.available_tools.settings".into(),
+            1 => entries[0].content.as_mut().unwrap().media_type = "text/plain".into(),
+            2 => {
+                let mut context = entries[0].clone();
+                context.entry_id = "toolkit-runtime-context".into();
+                entries.push(context);
+            }
+            3 => entries[0].content.as_mut().unwrap().byte_length = 256 * 1024 + 1,
+            4 => entries[0].content.as_mut().unwrap().required_grant_audience = "other".into(),
+            _ => unreachable!(),
+        }
+        rebind_manifest(&mut command, &mut response);
+        assert!(
+            parse_accepted_agent_claim(
+                &verified(&command),
+                response,
+                "workload-1",
+                "worker-1",
+                NOW
+            )
+            .is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn configuration_validation_output_binds_the_admitted_input_and_succeeds_when_invalid() {
+    let (command, response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    let claim = claim(&command, response);
+    let verified = verified(&command);
+    let message = validation_command_message(&command).clone();
+    let invalid = [
+        crate::validation::Issue {
+            code: crate::validation::IssueCode::InvalidValue,
+            json_pointer: "/base_url".into(),
+        },
+        crate::validation::Issue {
+            code: crate::validation::IssueCode::RequiredField,
+            json_pointer: "/token".into(),
+        },
+    ];
+    for issues in [&invalid[..], &[]] {
+        let result = validation_result(&claim, &message, issues);
+        assert!(claim.matches_configuration_validation_result_binding(&result));
+        let frame = build_toolkit_execute_read_terminal_output_frame(
+            &verified,
+            &claim.fence,
+            ToolkitExecuteReadTerminalOutput::ConfigurationValidation(Box::new(result)),
+            1,
+            NOW,
+            0,
+        )
+        .unwrap();
+        validate_restored_toolkit_execute_read_output_frame(&verified, &frame).unwrap();
+        assert_eq!(
+            frame.logical_output_id,
+            "configuration-validation:revision-1"
+        );
+        assert_eq!(
+            frame.event_type,
+            ExecutionOutputEventTypeV1::ConfigurationValidationResult as i32
+        );
+        assert!(frame.terminal);
+        let proposal = frame.settlement_proposal.as_ref().unwrap();
+        // An invalid configuration is a completed validation, not a failure.
+        assert_eq!(
+            proposal.requested_outcome,
+            ExecutionOutcomeV1::Succeeded as i32
+        );
+        assert_eq!(proposal.terminal_logical_output_id, frame.logical_output_id);
+    }
+}
+
+#[test]
+fn configuration_validation_output_rejects_every_unbound_or_noncanonical_result() {
+    use crate::validation::IssueCode::{InvalidValue, RequiredField};
+    let (command, response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    let claim = claim(&command, response);
+    let verified = verified(&command);
+    let message = validation_command_message(&command).clone();
+    let issue = |code, pointer: &str| crate::validation::Issue {
+        code,
+        json_pointer: pointer.to_owned(),
+    };
+    for mutation in 0..16 {
+        let mut result = validation_result(&claim, &message, &[issue(InvalidValue, "/a")]);
+        match mutation {
+            0 => result.configuration_revision_id = "other".into(),
+            1 => result.configuration_type = "confluence".into(),
+            2 => result.catalog_revision = "other".into(),
+            3 => result.schema_digest = Some(sha256(b"substitute")),
+            4 => result.input_bundle_id = "other".into(),
+            5 => result.input_bundle_digest = Some(sha256(b"substitute")),
+            6 => result.settings_entry_id = "other".into(),
+            7 => result.settings_entry_version.clear(),
+            8 => result.valid = true,
+            9 => result.issues.clear(),
+            10 => result.issues[0].code = "FREE_TEXT".into(),
+            11 => result.issues[0].safe_message = "token abc was rejected".into(),
+            12 => result.issues.push(result.issues[0].clone()),
+            13 => {
+                result.issues = vec![
+                    ConfigurationValidationIssueV1 {
+                        code: "INVALID_VALUE".into(),
+                        json_pointer: "/b".into(),
+                        safe_message: InvalidValue.safe_message().into(),
+                    },
+                    ConfigurationValidationIssueV1 {
+                        code: "INVALID_VALUE".into(),
+                        json_pointer: "/a".into(),
+                        safe_message: InvalidValue.safe_message().into(),
+                    },
+                ];
+            }
+            14 => result.issues[0].json_pointer = "/".to_owned() + &"x".repeat(256),
+            15 => {
+                result.issues = (0..65)
+                    .map(|index| ConfigurationValidationIssueV1 {
+                        code: RequiredField.code().into(),
+                        json_pointer: format!("/f{index:03}"),
+                        safe_message: RequiredField.safe_message().into(),
+                    })
+                    .collect();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            build_toolkit_execute_read_terminal_output_frame(
+                &verified,
+                &claim.fence,
+                ToolkitExecuteReadTerminalOutput::ConfigurationValidation(Box::new(result)),
+                1,
+                NOW,
+                0,
+            )
+            .is_err(),
+            "mutation {mutation}"
+        );
+    }
+    // The authority layer additionally pins the result to the admitted claim.
+    let mut result = validation_result(&claim, &message, &[]);
+    result.settings_content_digest = Some(sha256(b"changed-settings"));
+    assert!(matches!(
+        AgentExecutionOutputAuthority { claim }.bind_toolkit_execute_read_terminal(
+            &verified,
+            ToolkitExecuteReadTerminalOutput::ConfigurationValidation(Box::new(result)),
+            NOW
+        ),
+        Err(ProtocolError::AuthorizationFailed(_))
+    ));
+}
+
+#[test]
+fn configuration_validation_output_does_not_replay_across_capabilities_or_revisions() {
+    let (command, response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    let claim = claim(&command, response);
+    let verified = verified(&command);
+    let message = validation_command_message(&command).clone();
+    let frame = build_toolkit_execute_read_terminal_output_frame(
+        &verified,
+        &claim.fence,
+        ToolkitExecuteReadTerminalOutput::ConfigurationValidation(Box::new(validation_result(
+            &claim,
+            &message,
+            &[],
+        ))),
+        1,
+        NOW,
+        0,
+    )
+    .unwrap();
+    let (other, _) = fixture(ToolkitCommandKind::AvailableTools);
+    assert!(
+        validate_restored_toolkit_execute_read_output_frame(
+            &super::shared_toolkit_tests::verified(&other),
+            &frame
+        )
+        .is_err()
+    );
+    let (mut other_revision, _) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    let Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)) =
+        other_revision.capability_command.as_mut()
+    else {
+        unreachable!()
+    };
+    validation.configuration_revision_id = "revision-2".into();
+    assert!(
+        validate_restored_toolkit_execute_read_output_frame(&verified_for(&other_revision), &frame)
+            .is_err()
+    );
+}
+
+fn verified_for(command: &WorkerCommandV1) -> VerifiedToolkitExecuteReadCommand {
+    verified(command)
+}
+
+#[test]
+fn configuration_validation_failure_output_keeps_the_revision_keyed_identity() {
+    let (command, response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    let claim = claim(&command, response);
+    let verified = verified(&command);
+    for failure in [
+        RuntimeFailureKind::UnsupportedCapability,
+        RuntimeFailureKind::IncompatibleVersion,
+        RuntimeFailureKind::InvalidInput,
+        RuntimeFailureKind::ResourceExhausted,
+        RuntimeFailureKind::DeadlineExceeded,
+        RuntimeFailureKind::Cancelled,
+    ] {
+        let frame = build_toolkit_execute_read_terminal_output_frame(
+            &verified,
+            &claim.fence,
+            ToolkitExecuteReadTerminalOutput::Failure(failure),
+            1,
+            NOW,
+            0,
+        )
+        .unwrap();
+        validate_restored_toolkit_execute_read_output_frame(&verified, &frame).unwrap();
+        assert_eq!(
+            frame.logical_output_id,
+            "configuration-validation:revision-1"
+        );
+        assert_eq!(
+            frame.event_type,
+            ExecutionOutputEventTypeV1::RuntimeError as i32
+        );
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RecordedCases {
+    cases: Vec<RecordedCase>,
+}
+
+#[derive(serde::Deserialize)]
+struct RecordedCase {
+    #[serde(rename = "type")]
+    configuration_type: String,
+    settings: String,
+    valid: bool,
+}
+
+/// The fixture transport for every covered type: a signed command bound to the
+/// pinned catalog, an admitted claim, the real evaluator over a recorded valid
+/// and a recorded invalid document, and a terminal frame that a restarted
+/// worker restores and Main would accept.
+#[test]
+fn every_covered_configuration_type_round_trips_through_the_wire() {
+    let recorded: RecordedCases = serde_json::from_str(CASES_JSON).unwrap();
+    let mut covered = 0;
+    for name in catalog().type_names() {
+        let (command, response) = validation_command(name);
+        let claim = claim(&command, response);
+        let verified = verified(&command);
+        let message = validation_command_message(&command).clone();
+        let rules = catalog().bind(&message).unwrap();
+        let mut outcomes = std::collections::BTreeSet::new();
+        for want_valid in [true, false] {
+            let case = recorded
+                .cases
+                .iter()
+                .find(|case| case.configuration_type == name && case.valid == want_valid)
+                .unwrap_or_else(|| panic!("{name} has no recorded valid={want_valid} case"));
+            let issues = rules.evaluate(case.settings.as_bytes()).unwrap();
+            assert_eq!(issues.is_empty(), want_valid, "{name}");
+            let result = validation_result(&claim, &message, &issues);
+            let frame = AgentExecutionOutputAuthority {
+                claim: claim_again(&command),
+            }
+            .bind_toolkit_execute_read_terminal(
+                &verified,
+                ToolkitExecuteReadTerminalOutput::ConfigurationValidation(Box::new(result)),
+                NOW,
+            )
+            .unwrap();
+            validate_restored_toolkit_execute_read_output_frame(&verified, &frame).unwrap();
+            let Some(execution_output_frame_v1::Payload::ConfigurationValidation(sent)) =
+                frame.payload
+            else {
+                panic!("validation payload")
+            };
+            assert_eq!(sent.valid, want_valid);
+            assert_eq!(sent.configuration_type, name);
+            outcomes.insert(sent.valid);
+        }
+        assert_eq!(outcomes.len(), 2, "{name} proves both verdicts");
+        covered += 1;
+    }
+    assert_eq!(covered, 32);
+}
+
+fn claim_again(command: &WorkerCommandV1) -> AcceptedAgentClaim {
+    let (_, response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    claim(command, response)
 }
 
 // ── the per-claim elitea-vector token (ADR-0031 decision 1) ────────────────

@@ -9,6 +9,7 @@ use super::agent_lease::{
     ClaimLeaseActivation, ClaimLeaseError, ClaimLeaseMonitor, UnixMillisClock,
 };
 use super::agent_preparation::{AgentInputMaterializer, AgentPreparationConfig};
+use super::configuration_validation;
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionError};
 use super::output_delivery::{
     AgentOutputPreflight, AgentOutputPreflightError, AgentTerminalRecoveryConfig,
@@ -31,9 +32,9 @@ use crate::protocol::control::{
     InvocationAuthorizationDecision, LeaseMonitoredAgentExecution, ToolkitInvocationPayload,
 };
 use crate::protocol::elitea::runtime::v1::{
-    DigestV1, ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsResultV1,
-    ToolkitCallToolResultV1, ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1,
-    ToolkitExecuteReadResultV1, worker_command_v1,
+    ConfigurationValidationResultV1, DigestV1, ToolkitAuthorizationRequiredV1,
+    ToolkitAvailableToolsResultV1, ToolkitCallToolResultV1, ToolkitCallToolStatusV1,
+    ToolkitCallToolSummaryV1, ToolkitExecuteReadResultV1, worker_command_v1,
 };
 use crate::protocol::output::{RuntimeFailureKind, ToolkitExecuteReadTerminalOutput};
 use crate::toolkits::{
@@ -43,7 +44,8 @@ use crate::toolkits::{
 use crate::transport::command_bus::{
     CommandBusError, CommandDelivery, CommandRetirementClient, CommandRetirer,
 };
-use crate::transport::{ControlRpc, InputContentError};
+use crate::transport::{ControlRpc, InputContentError, MaterializedInput};
+use crate::validation::SettingsRefusal;
 
 pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
     router: ToolkitDeliveryRouter<R, RC>,
@@ -248,6 +250,10 @@ where
         output: PreparedAgentOutput,
         mut lease: ClaimLeaseMonitor,
     ) -> Result<ToolkitProcessOutcome, ToolkitProcessError> {
+        if verified.kind() == ToolkitCommandKind::ConfigurationValidate {
+            return Box::pin(self.execute_validation(delivery, verified, execution, output, lease))
+                .await;
+        }
         let request = match self
             .materialize_request(&verified, &execution, &mut lease)
             .await
@@ -321,12 +327,114 @@ where
         ))
     }
 
+    /// Pure schema validation. It has no effect to guard, so unlike a tool
+    /// run it never records an invocation authorization: a worker lost
+    /// mid-validation leaves the job re-claimable (`BeginExecution` answers
+    /// `StartedNow` again while the invocation is still `PREPARING`) and the
+    /// repeat is harmless.
+    async fn execute_validation(
+        &self,
+        delivery: CommandDelivery,
+        verified: VerifiedToolkitExecuteReadCommand,
+        execution: LeaseMonitoredAgentExecution,
+        output: PreparedAgentOutput,
+        mut lease: ClaimLeaseMonitor,
+    ) -> Result<ToolkitProcessOutcome, ToolkitProcessError> {
+        let terminal = match self
+            .validate_configuration(&verified, &execution, &mut lease)
+            .await
+        {
+            Ok(result) => {
+                ToolkitExecuteReadTerminalOutput::ConfigurationValidation(Box::new(result))
+            }
+            Err(failure) => ToolkitExecuteReadTerminalOutput::Failure(failure),
+        };
+        Box::pin(self.publish_fresh_terminal(
+            delivery,
+            verified,
+            execution.into_output_authority(),
+            output,
+            lease,
+            terminal,
+        ))
+        .await?;
+        Ok(ToolkitProcessOutcome::completed(
+            "toolkit_delivery.validation_retired",
+        ))
+    }
+
+    async fn validate_configuration(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        execution: &LeaseMonitoredAgentExecution,
+        lease: &mut ClaimLeaseMonitor,
+    ) -> Result<ConfigurationValidationResultV1, RuntimeFailureKind> {
+        // Binding first, as the Python handler does: a command this worker
+        // cannot validate must not cost a settings fetch.
+        let rules = configuration_validation::select_rules(verified)?;
+        let settings = self.fetch_input(verified, execution, lease).await?;
+        let issues = rules.evaluate(settings.as_bytes()).map_err(|refusal| {
+            record_toolkit_execution_failure(
+                "settings_validation",
+                match refusal {
+                    SettingsRefusal::InvalidInput => "configuration_validation.invalid_input",
+                    SettingsRefusal::ResourceExhausted => {
+                        "configuration_validation.resource_exhausted"
+                    }
+                },
+                false,
+            );
+            refusal.failure()
+        })?;
+        lease
+            .check_now()
+            .await
+            .map_err(|error| lease_failure(&error))?;
+        if deadline_exceeded(verified, self.clock.as_ref()) {
+            record_toolkit_deadline("post_validation_deadline");
+            return Err(RuntimeFailureKind::DeadlineExceeded);
+        }
+        configuration_validation::bind_result(
+            verified,
+            execution.input_bundle_ref(),
+            execution.request_entry(),
+            &issues,
+        )
+    }
+
     async fn materialize_request(
         &self,
         verified: &VerifiedToolkitExecuteReadCommand,
         execution: &LeaseMonitoredAgentExecution,
         lease: &mut ClaimLeaseMonitor,
     ) -> Result<DirectToolkitRequest, RuntimeFailureKind> {
+        let materialized = self.fetch_input(verified, execution, lease).await?;
+        if verified.kind() != ToolkitCommandKind::ExecuteRead {
+            return self
+                .materialize_shared_request(verified, execution, lease, materialized.as_bytes())
+                .await;
+        }
+        let request = match DirectToolkitRequest::parse(materialized.as_bytes()) {
+            Ok(request) => request,
+            Err(error) => {
+                let code = error.code();
+                record_toolkit_execution_failure(
+                    "request_validation",
+                    request_error_code(code),
+                    false,
+                );
+                return Err(request_failure(code));
+            }
+        };
+        Ok(request)
+    }
+
+    async fn fetch_input(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        execution: &LeaseMonitoredAgentExecution,
+        lease: &mut ClaimLeaseMonitor,
+    ) -> Result<MaterializedInput, RuntimeFailureKind> {
         if deadline_exceeded(verified, self.clock.as_ref()) {
             record_toolkit_deadline("pre_materialization_deadline");
             return Err(RuntimeFailureKind::DeadlineExceeded);
@@ -349,24 +457,7 @@ where
                 return Err(lease_failure(&error));
             }
         };
-        if verified.kind() != ToolkitCommandKind::ExecuteRead {
-            return self
-                .materialize_shared_request(verified, execution, lease, materialized.as_bytes())
-                .await;
-        }
-        let request = match DirectToolkitRequest::parse(materialized.as_bytes()) {
-            Ok(request) => request,
-            Err(error) => {
-                let code = error.code();
-                record_toolkit_execution_failure(
-                    "request_validation",
-                    request_error_code(code),
-                    false,
-                );
-                return Err(request_failure(code));
-            }
-        };
-        Ok(request)
+        Ok(materialized)
     }
 
     async fn execute_authorized(
