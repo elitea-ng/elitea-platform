@@ -248,12 +248,18 @@ async fn locked_rows_do_not_count_as_quiet() {
     // The task does not give up while the rows exist.
     let task = tokio::spawn(cleanup::run(pool.clone(), quick(100)));
     tokio::time::sleep(Duration::from_millis(400)).await;
-    assert!(!task.is_finished(), "the task stopped with rows still there");
+    assert!(
+        !task.is_finished(),
+        "the task stopped with rows still there"
+    );
     holder.rollback().await.expect("release");
     let passes = tokio::time::timeout(Duration::from_secs(30), task)
         .await
         .expect("the task stops once the rows are gone")
         .expect("join");
-    assert!(passes >= 3, "removal pass plus two quiet ones, got {passes}");
+    assert!(
+        passes >= 3,
+        "removal pass plus two quiet ones, got {passes}"
+    );
     assert_eq!(count(&pool, "wiki_bm25_postings", "bm25").await, 0);
 }

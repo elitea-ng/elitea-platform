@@ -101,12 +101,7 @@ impl Default for Pacing {
 /// Delete at most `limit` `'bm25'` rows of `table` that belong to one wiki.
 /// The `WHERE` names the primary key's leading columns, so the statement
 /// walks the index range of that wiki and nothing else.
-async fn delete_batch(
-    pool: &PgPool,
-    table: &str,
-    wiki: &(i32, String),
-    limit: i64,
-) -> Result<u64> {
+async fn delete_batch(pool: &PgPool, table: &str, wiki: &(i32, String), limit: i64) -> Result<u64> {
     let statement = format!(
         "DELETE FROM {table} WHERE ctid IN ( \
              SELECT ctid FROM {table} \
@@ -137,7 +132,10 @@ async fn listed_wikis(pool: &PgPool) -> Result<Vec<(i32, String)>> {
 
 /// One wiki with `'bm25'` rows in a table other than `meta` (the probe for
 /// strays), skipping the wikis this pass already handled.
-async fn stray_wiki(pool: &PgPool, handled: &HashSet<(i32, String)>) -> Result<Option<(i32, String)>> {
+async fn stray_wiki(
+    pool: &PgPool,
+    handled: &HashSet<(i32, String)>,
+) -> Result<Option<(i32, String)>> {
     for table in &TABLES[..3] {
         let statement = format!(
             "SELECT DISTINCT project_id, wiki_id FROM {table} WHERE branch = $1 LIMIT {}",

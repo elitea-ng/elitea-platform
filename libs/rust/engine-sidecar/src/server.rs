@@ -148,8 +148,7 @@ fn detail(status: StatusCode, message: &str) -> Response {
 
 async fn health<E: Engine>(State(shared): State<Arc<Shared<E>>>) -> Response {
     let active = shared.running().len();
-    let mut body =
-        json!({"status": "UP", "runner": shared.engine.runner_name(), "active": active});
+    let mut body = json!({"status": "UP", "runner": shared.engine.runner_name(), "active": active});
     let tools = shared.engine.tools();
     if !tools.is_empty() {
         body["tools"] = json!(tools);

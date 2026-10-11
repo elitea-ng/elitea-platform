@@ -559,8 +559,8 @@ pub(crate) async fn search_dense(
     let mut scored = Vec::with_capacity(rows.len());
     for row in rows {
         if let Some(expected) = expected_model {
-            let stored: Option<String> = row.try_get("stored_model")?;
-            if let Some(stored) = stored
+            let recorded: Option<String> = row.try_get("stored_model")?;
+            if let Some(stored) = recorded
                 .as_deref()
                 .map(str::trim)
                 .filter(|model| !model.is_empty())

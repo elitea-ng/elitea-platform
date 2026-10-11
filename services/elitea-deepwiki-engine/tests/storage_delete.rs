@@ -349,7 +349,10 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
     assert_eq!(all["wikis"], json!(["w-b"]));
     // The per-wiki counts, in the order of `wikis`.
     assert_eq!(all["per_wiki"][0]["wiki_id"], "w-b");
-    assert!(all["per_wiki"][0]["nodes"].as_u64().unwrap_or(0) > 0, "{all}");
+    assert!(
+        all["per_wiki"][0]["nodes"].as_u64().unwrap_or(0) > 0,
+        "{all}"
+    );
     assert!(populated(&rows(&pool, 2, "w-a").await));
 
     // No project, no wiki id: refused.
@@ -807,7 +810,10 @@ async fn the_orphan_sweep_reports_a_project_it_could_not_clear() {
 
 /// Take a publish's per-wiki advisory lock in a transaction of its own, the
 /// way a publish in progress holds it.
-async fn hold_publish_lock(pool: &PgPool, key: &WikiKey) -> sqlx::Transaction<'static, sqlx::Postgres> {
+async fn hold_publish_lock(
+    pool: &PgPool,
+    key: &WikiKey,
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
     let mut holder = pool.begin().await.expect("holder");
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
         .bind(PUBLISH_WIKI_LOCK)
@@ -898,7 +904,11 @@ async fn a_wiki_published_mid_sweep_survives_and_the_project_is_reported_skipped
     // w-1 went before the newer wiki appeared; everything else survives.
     assert_eq!(rows(&pool, 2, "w-1").await, vec![0; TABLES.len()]);
     for wiki in ["w-2", "w-3", "w-fresh"] {
-        assert!(populated(&rows(&pool, 2, wiki).await), "{wiki} survives: {:?}", rows(&pool, 2, wiki).await);
+        assert!(
+            populated(&rows(&pool, 2, wiki).await),
+            "{wiki} survives: {:?}",
+            rows(&pool, 2, wiki).await
+        );
     }
 }
 
@@ -929,7 +939,10 @@ async fn a_deletion_gives_up_waiting_for_a_publish_and_deletes_nothing() {
         "waited {:?}",
         started.elapsed()
     );
-    assert!(populated(&rows(&pool, 1, "w-busy").await), "nothing deleted");
+    assert!(
+        populated(&rows(&pool, 1, "w-busy").await),
+        "nothing deleted"
+    );
 
     // As a tool: a runtime error a caller can read and retry.
     let refused = maintenance::run(
@@ -942,7 +955,10 @@ async fn a_deletion_gives_up_waiting_for_a_publish_and_deletes_nothing() {
     )
     .await
     .expect_err("busy");
-    assert!(refused.to_string().contains("retry"), "{refused}");
+    assert!(
+        refused.to_string().contains("is being published") && refused.to_string().contains("retry"),
+        "{refused}"
+    );
 
     // Released, the same deletion goes through.
     holder.rollback().await.expect("release");
@@ -968,9 +984,9 @@ async fn a_cancelled_deletion_stops_waiting_in_the_database() {
     let attempt = {
         let pool = pool.clone();
         let key = key.clone();
-        tokio::spawn(async move {
-            delete::delete_wiki(&pool, &key, &PublishSettings::default()).await
-        })
+        tokio::spawn(
+            async move { delete::delete_wiki(&pool, &key, &PublishSettings::default()).await },
+        )
     };
     for _ in 0..100 {
         if advisory_waiters(&pool).await > 0 {
@@ -1029,7 +1045,11 @@ async fn a_cancelled_deletion_stops_waiting_in_the_database() {
 
     // Nothing was deleted, and once the publish ends a deletion works.
     holder.rollback().await.expect("release");
-    assert!(populated(&rows(&pool, 1, "w-cancel").await), "{:?}", rows(&pool, 1, "w-cancel").await);
+    assert!(
+        populated(&rows(&pool, 1, "w-cancel").await),
+        "{:?}",
+        rows(&pool, 1, "w-cancel").await
+    );
     let deleted = delete::delete_wiki(&pool, &key, &PublishSettings::default())
         .await
         .expect("delete");
