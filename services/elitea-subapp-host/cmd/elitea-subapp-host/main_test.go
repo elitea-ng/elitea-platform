@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -19,7 +20,12 @@ import (
 	"testing"
 	"time"
 
+	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
 func lookup(pairs map[string]string) spi.Lookup {
@@ -236,4 +242,124 @@ func TestTheListenerRequiresAndVerifiesTheClientCertificate(t *testing.T) {
 	if _, err := listenerTLS(settings); !errors.Is(err, spi.ErrConfig) {
 		t.Fatalf("an empty CA was accepted: %v", err)
 	}
+}
+
+// The platform gRPC service is its own listener behind the SPI listener's TLS
+// configuration, and it is OFF unless the allowlist names a client.
+func TestThePlatformServiceIsOffWithoutClientsAndOnBehindMutualTLS(t *testing.T) {
+	p := mintPKI(t)
+	base := map[string]string{
+		"ELITEA_SUBAPP": "deepwiki", "ELITEA_DEEPWIKI_RUNNER": "native",
+		"ELITEA_DEEPWIKI_ENGINE_SOCKET": filepath.Join(t.TempDir(), "none.sock"),
+		"ELITEA_DEEPWIKI_GIT_ALLOWLIST": "github.com",
+		"ELITEA_DEEPWIKI_TLS_CERTFILE":  p.serverCert, "ELITEA_DEEPWIKI_TLS_KEYFILE": p.serverKey, "ELITEA_DEEPWIKI_TLS_CA_FILE": p.ca,
+	}
+	build := func(extra map[string]string) (*spi.Server, spi.Settings) {
+		t.Helper()
+		pairs := map[string]string{}
+		for k, v := range base {
+			pairs[k] = v
+		}
+		for k, v := range extra {
+			pairs[k] = v
+		}
+		app, settings, err := compose(lookup(pairs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := spi.NewServer(settings, app, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return server, settings
+	}
+	errs := make(chan error, 2)
+
+	// No clients: nothing is opened, even with an address configured.
+	server, settings := build(map[string]string{"ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR": "127.0.0.1:0"})
+	tlsConfig, err := listenerTLS(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if platform, err := startPlatformGRPC(server, settings, tlsConfig, nil, errs); err != nil || platform != nil {
+		t.Fatalf("with no clients: %v %v", platform, err)
+	}
+
+	// Clients, but no mutual TLS to authorise them by: a boot failure.
+	server, settings = build(map[string]string{"ELITEA_DEEPWIKI_PLATFORM_CLIENTS": "client", "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR": "127.0.0.1:0"})
+	if _, err := startPlatformGRPC(server, settings, nil, nil, errs); !errors.Is(err, spi.ErrConfig) {
+		t.Fatalf("clients without a TLS configuration: %v", err)
+	}
+
+	// An application with no platform operations serves none.
+	echoApp, echoSettings, err := compose(lookup(map[string]string{"ELITEA_SUBAPP": "echo", "ELITEA_ECHO_RUNNER": "echo", "ELITEA_ECHO_PLATFORM_CLIENTS": "client"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	echoServer, _ := spi.NewServer(echoSettings, echoApp, nil)
+	if platform, err := startPlatformGRPC(echoServer, echoSettings, tlsConfig, nil, errs); err != nil || platform != nil {
+		t.Fatalf("an application without platform operations: %v %v", platform, err)
+	}
+
+	// On: the listener is real, behind the same configuration.
+	addr := freeAddr(t)
+	server, settings = build(map[string]string{"ELITEA_DEEPWIKI_PLATFORM_CLIENTS": "client", "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR": addr})
+	tlsConfig, err = listenerTLS(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform, err := startPlatformGRPC(server, settings, tlsConfig, nil, errs)
+	if err != nil || platform == nil {
+		t.Fatalf("%v %v", platform, err)
+	}
+	defer platform.Stop()
+
+	caPEM, _ := os.ReadFile(p.ca)
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	clientPair, _ := tls.LoadX509KeyPair(p.clientCert, p.clientKey)
+	call := func(cfg *tls.Config) error {
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(cfg)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err = subappv1.NewPlatformOperationsClient(conn).DeleteProject(ctx, &subappv1.DeleteProjectRequest{ProjectId: 17})
+		return err
+	}
+	// No certificate: no handshake.
+	if err := call(&tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}); err == nil {
+		t.Fatal("a client with no certificate was served")
+	}
+	// The allowed client reaches the operation; the engine is not running, so
+	// the operation FAILS (not Unauthenticated, not PermissionDenied).
+	err = call(&tls.Config{RootCAs: roots, Certificates: []tls.Certificate{clientPair}, MinVersion: tls.VersionTLS12})
+	if code := status.Code(err); code != codes.Internal {
+		t.Fatalf("the allowed client got %v", err)
+	}
+	// An allowlist that names another identity refuses the same client.
+	other, otherSettings := build(map[string]string{"ELITEA_DEEPWIKI_PLATFORM_CLIENTS": "someone-else", "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR": freeAddr(t)})
+	otherTLS, _ := listenerTLS(otherSettings)
+	otherPlatform, err := startPlatformGRPC(other, otherSettings, otherTLS, nil, errs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherPlatform.Stop()
+	addr = otherSettings.PlatformGRPCAddr
+	err = call(&tls.Config{RootCAs: roots, Certificates: []tls.Certificate{clientPair}, MinVersion: tls.VersionTLS12})
+	if code := status.Code(err); code != codes.PermissionDenied {
+		t.Fatalf("a client not on the allowlist got %v", err)
+	}
+}
+
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	return listener.Addr().String()
 }

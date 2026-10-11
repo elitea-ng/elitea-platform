@@ -94,6 +94,8 @@ type Client struct {
 	Label      string
 	HTTP       *http.Client
 	StopPeriod time.Duration
+
+	caps capabilities
 }
 
 // NewClient dials the socket for every request; the URL host is a

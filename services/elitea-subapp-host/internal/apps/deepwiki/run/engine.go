@@ -54,6 +54,7 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 // GET /health.
 func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	client := NewEngineClient(settings.EngineSocket)
+	runner := &Runner{engine: client}
 	sidecar := map[string]Tool{}
 	for _, name := range SidecarTools {
 		tool := name
@@ -84,15 +85,20 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 		Ask:          sidecar["ask"],
 		DeepResearch: sidecar["deep_research"],
 		DeleteIndex:  sidecar[DeleteWikiIndexTool],
+		// delete_wiki stops the wiki's running generations before it
+		// deletes anything, and asks the engine what it serves.
+		StopGenerations: runner.StopGenerations,
+		IndexDeletionServed: func(ctx context.Context) (bool, bool) {
+			return client.Serves(ctx, DeleteWikiIndexTool)
+		},
 	}) {
 		tools[name] = tool
 	}
-	return &Runner{
-		RunnerName:       name,
-		Tools:            tools,
-		Egress:           spi.ParseEgressPolicy(settings.GitAllowlist),
-		Artifacts:        transport,
-		VerifiedIdentity: settings.IdentitySecret != "",
-		deleteProject:    sidecar[DeleteProjectWikisTool],
-	}
+	runner.RunnerName = name
+	runner.Tools = tools
+	runner.Egress = spi.ParseEgressPolicy(settings.GitAllowlist)
+	runner.Artifacts = transport
+	runner.VerifiedIdentity = settings.IdentitySecret != ""
+	runner.deleteProject = sidecar[DeleteProjectWikisTool]
+	return runner
 }

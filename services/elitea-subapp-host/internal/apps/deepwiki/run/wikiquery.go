@@ -76,6 +76,17 @@ type WikiQueryDeps struct {
 	// of an index. Deleting a whole project's indexes is NOT a toolkit tool;
 	// it is the platform route (Runner.DeleteProject, spi/platform.go).
 	DeleteIndex Tool
+	// StopGenerations stops the running generate_wiki invocations of the
+	// wiki in the invocation's project and waits a bounded time for them to
+	// end; it fails with spi.ErrGenerationRunning when one is still running.
+	// delete_wiki calls it BEFORE it deletes anything: a generation that
+	// outlives the deletion publishes the wiki back. Nil: nothing to stop
+	// (no engine, so no generation here).
+	StopGenerations func(ctx context.Context, wikiID string) error
+	// IndexDeletionServed reports whether the engine lists delete_wiki_index
+	// among the tools it serves (its health document). known is false when it
+	// does not say; the call is then tried and a refusal recognised.
+	IndexDeletionServed func(ctx context.Context) (served, known bool)
 }
 
 // WikiQueryTools builds the family over an artifact transport and those
@@ -202,6 +213,14 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 	if store == nil {
 		return nil, spi.Failf(spi.KindRuntime, "Could not access wiki registry: %s", unavailable)
 	}
+	// Stop the wiki's running generations FIRST, and delete nothing while one
+	// is still running: a generation that outlives the deletion publishes the
+	// wiki's index back, for artifacts that are gone.
+	if q.deps.StopGenerations != nil {
+		if err := q.deps.StopGenerations(ctx, wikiID); err != nil {
+			return nil, err
+		}
+	}
 
 	// The key set is READ AT DELETE TIME, not taken from a manifest: a
 	// manifest lists pages, and a wiki also holds analysis files, older
@@ -226,12 +245,15 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 		switch {
 		case index.unavailable:
 			// Nothing to clean here and the engine cannot say whether an
-			// index exists: the wiki is as absent as the bucket shows.
+			// index exists: the wiki is as absent as the bucket shows. No
+			// index is known to have existed, so this is not a failure.
 			return response("message", fmt.Sprintf("Wiki '%s' not found in registry.\n- Search index: %s", wikiID, indexUnavailable)), nil
 		case index.err != nil:
-			return response("message", fmt.Sprintf(
+			// The wiki's index may remain and the caller must know: an error,
+			// not a message a program reads as success.
+			return nil, spi.Failf(spi.KindRuntime,
 				"Wiki '%s' has no objects in the bucket, but removing its search index failed: %v\nRetry the delete to remove it.",
-				wikiID, index.err)), nil
+				wikiID, index.err)
 		case index.removed:
 			return response("message", fmt.Sprintf(
 				"Wiki '%s' has no objects in the bucket.\n- Search index removed: Yes (%d rows)", wikiID, index.rows)), nil
@@ -282,15 +304,22 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 	index := q.deleteIndex(ctx, wikiID, tc)
 	if index.err != nil {
 		// The artifacts are gone and the index is not: the half-deleted
-		// state this tool exists to avoid, so it is reported by name, with
-		// the way out.
-		return response("message", fmt.Sprintf(
+		// state this tool exists to avoid. It is an ERROR, so a caller that
+		// reads the status and not the text (an agent, a script) sees the
+		// failure; the text keeps what was done and the way out.
+		return nil, spi.Failf(spi.KindRuntime,
 			"Wiki '%s' deletion completed with errors:\n- Objects removed: %d\n- Registry updated: %s\n- Search index: removing it failed: %v\n\nRetry the delete to remove the search index.",
-			wikiID, len(deleted), yesNo(unregistered), index.err)), nil
+			wikiID, len(deleted), yesNo(unregistered), index.err)
 	}
 	if index.unavailable {
-		message += "\n- Search index: " + indexUnavailable
-	} else if index.removed {
+		// The wiki had objects, so an index very likely exists, and this
+		// engine cannot delete it (an older release during a rolling
+		// deploy). Reporting success would leave it there unseen.
+		return nil, spi.Failf(spi.KindRuntime,
+			"Wiki '%s' deletion completed with errors:\n- Objects removed: %d\n- Registry updated: %s\n- Search index: %s; the wiki's index may remain until the engine is upgraded\n\nRetry the delete once the engine is upgraded.",
+			wikiID, len(deleted), yesNo(unregistered), indexUnavailable)
+	}
+	if index.removed {
 		message += fmt.Sprintf("\n- Search index removed: Yes (%d rows)", index.rows)
 	} else {
 		message += "\n- Search index removed: No (the wiki had no search index)"
@@ -303,8 +332,9 @@ type indexOutcome struct {
 	removed bool // any index row was removed (a wikis row or stray statistics)
 	rows    int  // rows removed, as the engine counted them
 	// unavailable is set when the engine does not serve index deletion (an
-	// older release, during a rolling deploy). It is not a failure: such an
-	// engine never created an index to delete in this release's sense.
+	// older release, during a rolling deploy). Whether that is a failure
+	// depends on whether an index can exist: for a wiki that had objects it
+	// is (the delete reports an error), for a wiki that is nowhere it is not.
 	unavailable bool
 	err         error
 }
@@ -319,10 +349,20 @@ func (q *wikiQuery) deleteIndex(ctx context.Context, wikiID string, tc *spi.Cont
 	if q.deps.DeleteIndex == nil {
 		return indexOutcome{}
 	}
+	// The engine says what it serves (its health document): decide from that.
+	// Only an engine that does not list its tools is asked by trying the call.
+	if q.deps.IndexDeletionServed != nil {
+		if served, known := q.deps.IndexDeletionServed(ctx); known && !served {
+			slog.Warn("the engine does not list delete_wiki_index among its tools; its search index cannot be deleted by this host until the engine is upgraded", "wiki_id", wikiID)
+			return indexOutcome{unavailable: true}
+		}
+	}
 	if err := tc.Thinking(ctx, "Deleting the wiki's search index"); err != nil {
 		return indexOutcome{err: err}
 	}
 	result, err := q.deps.DeleteIndex(ctx, map[string]any{"wiki_id": wikiID}, tc)
+	// The last resort, for an engine that does not list its tools: the
+	// refusal of a tool it does not serve.
 	if errors.Is(err, engine.ErrUnknownTool) {
 		slog.Warn("the engine does not serve delete_wiki_index; its search index cannot be deleted by this host until the engine is upgraded", "wiki_id", wikiID)
 		return indexOutcome{unavailable: true}

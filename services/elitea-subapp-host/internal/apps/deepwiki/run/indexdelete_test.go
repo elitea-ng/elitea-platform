@@ -11,19 +11,9 @@ package run_test
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
-	"math/big"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,7 +96,14 @@ func TestDeleteWikiNamesAFailedIndexDeleteAndTheRetryFinishesIt(t *testing.T) {
 	engine := &engineIndex{err: errors.New("the index database refused it")}
 	store := indexedWiki()
 	runner := wikiRunner(store, run.WikiQueryDeps{DeleteIndex: engine.tool})
-	_, got := answer(t, runner, "delete_wiki", map[string]any{"wiki_id": "acme--gone--main"})
+	// A partial failure is an invocation ERROR, not a success with a message:
+	// a caller that reads the status and not the text must see it.
+	_, err := invokeFamily(t, runner, wikiQueryFamily(), "delete_wiki",
+		queryRequest(map[string]any{"wiki_id": "acme--gone--main"}))
+	if err == nil {
+		t.Fatal("artifacts deleted and the index not, yet the invocation succeeded")
+	}
+	got := err.Error()
 	for _, part := range []string{"deletion completed with errors", "Objects removed: 2", "Search index: removing it failed: the index database refused it", "Retry the delete"} {
 		if !strings.Contains(got, part) {
 			t.Errorf("missing %q in %q", part, got)
@@ -155,24 +152,101 @@ func TestDeleteWikiWithNeitherObjectsNorIndexIsNotFound(t *testing.T) {
 }
 
 // A rolling deploy: the host is newer than the engine, which answers
-// "Unknown tool" for delete_wiki_index. That is reported, with a warning,
-// not failed: the artifacts ARE deleted.
-func TestDeleteWikiReportsAnEngineThatCannotDeleteAnIndex(t *testing.T) {
+// "Unknown tool" for delete_wiki_index. The artifacts ARE deleted, but a wiki
+// that had objects had an index too, and this engine cannot delete it: that is
+// an ERROR (a caller reading only the status must not take it for a clean
+// delete), with the way out in its text. A wiki that exists nowhere is still
+// just "not found".
+func TestDeleteWikiFailsWhenAnOldEngineCannotDeleteTheIndexOfAWikiThatHadObjects(t *testing.T) {
 	old := func(context.Context, map[string]any, *spi.Context) (map[string]any, error) {
 		return nil, spi.NewFailure(spi.KindRuntime, fmt.Errorf("The DeepWiki engine refused the invocation: HTTP 400 Unknown tool: delete_wiki_index: %w", engine.ErrUnknownTool))
 	}
-	runner := wikiRunner(indexedWiki(), run.WikiQueryDeps{DeleteIndex: old})
-	_, got := answer(t, runner, "delete_wiki", map[string]any{"wiki_id": "acme--gone--main"})
-	want := "Wiki 'acme--gone--main' successfully deleted.\n- Objects removed: 2\n- Registry updated: No\n- Search index: search index cleanup unavailable on this engine version"
-	if got != want {
-		t.Fatalf("\n got %q\nwant %q", got, want)
+	store := indexedWiki()
+	runner := wikiRunner(store, run.WikiQueryDeps{DeleteIndex: old})
+	_, err := invokeFamily(t, runner, wikiQueryFamily(), "delete_wiki",
+		queryRequest(map[string]any{"wiki_id": "acme--gone--main"}))
+	if err == nil {
+		t.Fatal("objects deleted, index left, yet the invocation succeeded")
 	}
-	// And with no objects at all: not a failure either.
+	for _, part := range []string{"deletion completed with errors", "Objects removed: 2",
+		"search index cleanup unavailable on this engine version", "may remain", "upgraded"} {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("missing %q in %q", part, err)
+		}
+	}
+	if len(store.objects) != 0 {
+		t.Fatal("the artifacts are gone, as reported")
+	}
+	// No objects and no index anywhere: not found, and not a failure.
 	runner = wikiRunner(newStore(map[string]string{}), run.WikiQueryDeps{DeleteIndex: old})
-	_, got = answer(t, runner, "delete_wiki", map[string]any{"wiki_id": "acme--nope--main"})
+	_, got := answer(t, runner, "delete_wiki", map[string]any{"wiki_id": "acme--nope--main"})
 	if !strings.Contains(got, "not found in registry") || !strings.Contains(got, "search index cleanup unavailable on this engine version") ||
 		strings.Contains(got, "failed") {
 		t.Fatalf("%q", got)
+	}
+}
+
+// A no-objects delete whose index removal FAILS is an error too: the index may
+// remain.
+func TestDeleteWikiWithNoObjectsFailsWhenTheIndexRemovalFails(t *testing.T) {
+	broken := &engineIndex{err: errors.New("the index database refused it")}
+	runner := wikiRunner(newStore(map[string]string{}), run.WikiQueryDeps{DeleteIndex: broken.tool})
+	_, err := invokeFamily(t, runner, wikiQueryFamily(), "delete_wiki",
+		queryRequest(map[string]any{"wiki_id": "acme--gone--main"}))
+	if err == nil || !strings.Contains(err.Error(), "removing its search index failed: the index database refused it") ||
+		!strings.Contains(err.Error(), "Retry the delete") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// The engine says what it serves (its health document) and the host decides
+// from that: an engine that lists its tools without delete_wiki_index is not
+// asked, whatever its refusal would have said; one that lists it is; one that
+// lists nothing is asked and its refusal is the fallback.
+func TestDeleteWikiDecidesFromTheEnginesToolList(t *testing.T) {
+	deps := func(eng *engineIndex, served, known bool) run.WikiQueryDeps {
+		return run.WikiQueryDeps{
+			DeleteIndex:         eng.tool,
+			IndexDeletionServed: func(context.Context) (bool, bool) { return served, known },
+		}
+	}
+	remove := func(runner *run.Runner) (string, error) {
+		body, err := invokeFamily(t, runner, wikiQueryFamily(), "delete_wiki",
+			queryRequest(map[string]any{"wiki_id": "acme--gone--main"}))
+		if err != nil {
+			return "", err
+		}
+		var objects []map[string]any
+		_ = json.Unmarshal([]byte(body["result"].(string)), &objects)
+		return str(objects[0]["data"]), nil
+	}
+
+	// Listed without the tool: unavailable WITHOUT a call.
+	absent := &engineIndex{result: removed(40)}
+	_, err := remove(wikiRunner(indexedWiki(), deps(absent, false, true)))
+	if err == nil || !strings.Contains(err.Error(), "unavailable on this engine version") {
+		t.Fatalf("%v", err)
+	}
+	if calls := absent.calls(); len(calls) != 0 {
+		t.Fatalf("an engine that does not list the tool was asked for it: %v", calls)
+	}
+	// Listed with it: called.
+	present := &engineIndex{result: removed(40)}
+	got, err := remove(wikiRunner(indexedWiki(), deps(present, true, true)))
+	if err != nil || !strings.Contains(got, "Search index removed: Yes (41 rows)") {
+		t.Fatalf("%q %v", got, err)
+	}
+	if calls := present.calls(); len(calls) != 1 {
+		t.Fatalf("%v", calls)
+	}
+	// No list (an older release): tried, and the refusal is the fallback.
+	unknown := &engineIndex{err: spi.NewFailure(spi.KindRuntime, fmt.Errorf("Unknown tool: %w", engine.ErrUnknownTool))}
+	_, err = remove(wikiRunner(indexedWiki(), deps(unknown, false, false)))
+	if err == nil || !strings.Contains(err.Error(), "unavailable on this engine version") {
+		t.Fatalf("%v", err)
+	}
+	if calls := unknown.calls(); len(calls) != 1 {
+		t.Fatalf("an engine that lists nothing must be asked: %v", calls)
 	}
 }
 
@@ -254,210 +328,228 @@ func TestTheWikiQueryToolkitDoesNotListProjectDeletion(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The platform route: POST /internal/v1/projects/delete, over mTLS
+// delete_wiki stops the wiki's running generations before it deletes
 // ---------------------------------------------------------------------------
 
-type testPKI struct {
-	ca       *x509.Certificate
-	caKey    *ecdsa.PrivateKey
-	caPool   *x509.CertPool
-	serial   int64
-	serverTC tls.Certificate
-}
-
-func newPKI(t *testing.T, name string) *testPKI {
-	t.Helper()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: name},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true,
-		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, BasicConstraintsValid: true}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, _ := x509.ParseCertificate(der)
-	pool := x509.NewCertPool()
-	pool.AddCert(ca)
-	p := &testPKI{ca: ca, caKey: key, caPool: pool, serial: 1}
-	p.serverTC = p.leaf(t, "host", x509.ExtKeyUsageServerAuth)
-	return p
-}
-
-func (p *testPKI) leaf(t *testing.T, cn string, usage x509.ExtKeyUsage) tls.Certificate {
-	t.Helper()
-	p.serial++
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{SerialNumber: big.NewInt(p.serial), Subject: pkix.Name{CommonName: cn},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
-	der, err := x509.CreateCertificate(rand.Reader, template, p.ca, &key.PublicKey, p.caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
-}
-
-// platformHost serves the deepwiki host over mutual TLS, as the listener
-// does, with the given allowlist.
-func platformHost(t *testing.T, sidecar *fakeSidecar, pki *testPKI, clients string) *httptest.Server {
-	t.Helper()
-	settings, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", func(key string) (string, bool) {
-		switch key {
-		case "ELITEA_DEEPWIKI_ENGINE_SOCKET":
-			return sidecar.socket, true
-		case "ELITEA_DEEPWIKI_IDENTITY_SECRET":
-			return identitySecret, true
-		case "ELITEA_DEEPWIKI_PLATFORM_CLIENTS":
-			return clients, clients != ""
+// generationTool is a generate_wiki that runs until it is stopped (honouring
+// the checkpoint), or, with stubborn, until released (ignoring it).
+func generationTool(stubborn bool, release <-chan struct{}) run.Tool {
+	return func(ctx context.Context, _ map[string]any, tc *spi.Context) (map[string]any, error) {
+		for {
+			if stubborn {
+				select {
+				case <-release:
+					return map[string]any{"success": true, "result": "done"}, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			if err := tc.Checkpoint(); err != nil {
+				return nil, err
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		return "", false
+	}
+}
+
+// deleteRig is a runner with a generate_wiki tool and the real delete_wiki,
+// wired the way NewEngineRunner wires it (StopGenerations from the runner).
+type deleteRig struct {
+	runner  *run.Runner
+	manager *spi.Manager
+	store   *fakeStore
+	engine  *engineIndex
+	order   *orderLog
+}
+
+type orderLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (o *orderLog) add(event string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.events = append(o.events, event)
+}
+
+func (o *orderLog) all() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.events...)
+}
+
+func newDeleteRig(t *testing.T, stubborn bool, release <-chan struct{}) *deleteRig {
+	t.Helper()
+	rig := &deleteRig{store: newStore(map[string]string{
+		"acme--e2e-service--main/wiki_manifest_1.json": "{}",
+		"acme--e2e-service--main/wiki_pages/a.md":      "# a",
+	}), engine: &engineIndex{result: removed(40)}, order: &orderLog{}}
+	rig.runner = &run.Runner{Egress: spi.ParseEgressPolicy("*"), StopWait: 200 * time.Millisecond}
+	generate := generationTool(stubborn, release)
+	rig.runner.Tools = run.WikiQueryTools(storeFactory(rig.store), run.WikiQueryDeps{
+		DeleteIndex: func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
+			rig.order.add("index deleted")
+			return rig.engine.tool(ctx, arguments, tc)
+		},
+		StopGenerations: rig.runner.StopGenerations,
+	})
+	rig.runner.Tools["generate_wiki"] = func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
+		result, err := generate(ctx, arguments, tc)
+		rig.order.add("generation ended")
+		return result, err
+	}
+	rig.manager = spi.NewManager(nil, time.Hour, nil)
+	rig.manager.Start(t.Context())
+	t.Cleanup(rig.manager.Stop)
+	rig.runner.AttachManager(rig.manager)
+	return rig
+}
+
+// generate starts a generation of acme/e2e-service on main for the project
+// the organization names, and waits until it can be found by its labels.
+func (r *deleteRig) generate(t *testing.T, organization string) *spi.Invocation {
+	t.Helper()
+	settings := map[string]any{"api_base": "http://elitea-main:8080/llm/v1", "api_key": "minted", "organization": organization}
+	request := fixtureRequest("GO", settings)
+	invocation, err := r.manager.Submit(t.Context(), "Wikis", "generate_wiki", func(ctx context.Context, tc *spi.Context) (map[string]any, error) {
+		return r.runner.Invoke(ctx, spi.Invoke{Family: spi.Family{Name: "main"}, Toolkit: "Wikis", Tool: "generate_wiki", Request: request}, tc)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// What the listener's settings say when TLS_CERTFILE/KEYFILE/CA_FILE are set.
-	settings.TLSCertFile, settings.TLSKeyFile, settings.TLSCAFile = "cert", "key", "ca"
-	server, err := spi.NewServer(settings, deepwiki.App(run.NewEngineRunner(settings)), nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		found := false
+		r.manager.StopMatching(t.Context(), func(running spi.RunningInvocation) bool {
+			found = found || (running.ID == invocation.ID && running.Labels["project"] == organization && running.Labels["wiki"] != "")
+			return false
+		}, 0)
+		if found {
+			return invocation
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the generation never started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (r *deleteRig) deleteWiki(t *testing.T, wiki string) (string, error) {
+	t.Helper()
+	body, err := invokeThrough(t, r.runner, r.manager, "delete_wiki", queryRequest(map[string]any{"wiki_id": wiki}))
+	if err != nil {
+		return "", err
+	}
+	var objects []map[string]any
+	_ = json.Unmarshal([]byte(body["result"].(string)), &objects)
+	return str(objects[0]["data"]), nil
+}
+
+// invokeThrough runs a wiki_query tool on a given runner and manager.
+func invokeThrough(t *testing.T, runner *run.Runner, manager *spi.Manager, tool string, request map[string]any) (map[string]any, error) {
+	t.Helper()
+	invocation, err := manager.Submit(t.Context(), "Wikis", tool, func(ctx context.Context, tc *spi.Context) (map[string]any, error) {
+		return runner.Invoke(ctx, spi.Invoke{Family: wikiQueryFamily(), Toolkit: "Wikis", Tool: tool, Request: request}, tc)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(t.Context())
-	t.Cleanup(server.Stop)
-	host := httptest.NewUnstartedServer(server)
-	host.TLS = &tls.Config{Certificates: []tls.Certificate{pki.serverTC}, ClientCAs: pki.caPool, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12}
-	host.Config.ErrorLog = log.New(io.Discard, "", 0)
-	host.StartTLS()
-	t.Cleanup(host.Close)
-	return host
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		body, err := manager.Poll(t.Context(), "Wikis", tool, invocation.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch body["status"] {
+		case "Completed":
+			return body, nil
+		case "Error":
+			return body, fmt.Errorf("%s", body["result"])
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the invocation never settled")
+	return nil, nil
 }
 
-func callRoute(host *httptest.Server, pki *testPKI, cert *tls.Certificate, body string, headers http.Header) (int, string, error) {
-	cfg := &tls.Config{RootCAs: pki.caPool, MinVersion: tls.VersionTLS12}
-	if cert != nil {
-		cfg.Certificates = []tls.Certificate{*cert}
-	}
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: cfg}, Timeout: 10 * time.Second}
-	request, _ := http.NewRequest(http.MethodPost, host.URL+spi.DeleteProjectPath, strings.NewReader(body))
-	for k, v := range headers {
-		request.Header[k] = v
-	}
-	response, err := client.Do(request)
+func TestDeleteWikiStopsThatWikisGenerationBeforeDeletingAnything(t *testing.T) {
+	rig := newDeleteRig(t, false, nil)
+	// Project 90200 is the organization queryRequest and fixtureRequest share.
+	mine := rig.generate(t, "90200")
+	otherProject := rig.generate(t, "555")
+
+	got, err := rig.deleteWiki(t, "acme--e2e-service--main")
 	if err != nil {
-		return 0, "", err
+		t.Fatal(err)
 	}
-	defer func() { _ = response.Body.Close() }()
-	text, _ := io.ReadAll(response.Body)
-	return response.StatusCode, string(text), nil
-}
-
-func engineCalls(sidecar *fakeSidecar) int {
-	sidecar.mu.Lock()
-	defer sidecar.mu.Unlock()
-	return len(sidecar.requests)
-}
-
-func TestProjectDeprovisioningIsAPlatformRouteAuthorisedByTheMainCertificate(t *testing.T) {
-	sidecar := newFakeSidecar(t, []string{
-		`{"result": {"success": true, "project_id": 17, "wikis": ["acme--a--main", "acme--b--main"], "rows": {"nodes": 5, "wikis": 2}, "builds": 1, "live_builds": 0}}`,
-	}, 0)
-	pki := newPKI(t, "platform ca")
-	host := platformHost(t, sidecar, pki, "elitea-main")
-	main := pki.leaf(t, "elitea-main", x509.ExtKeyUsageClientAuth)
-
-	status, text, err := callRoute(host, pki, &main, `{"project_id": 17}`, nil)
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("%d %s %v", status, text, err)
+	if !strings.Contains(got, "successfully deleted") {
+		t.Fatalf("%q", got)
 	}
-	var got map[string]any
-	_ = json.Unmarshal([]byte(text), &got)
-	if got["project_id"] != "17" || got["wikis"] != float64(2) || got["builds"] != float64(1) {
-		t.Fatalf("%v", got)
+	// The generation ended BEFORE the engine was asked to delete the index.
+	order := rig.order.all()
+	if len(order) < 2 || order[0] != "generation ended" || order[len(order)-1] != "index deleted" {
+		t.Fatalf("order %v", order)
 	}
-	sidecar.mu.Lock()
-	call := sidecar.requests[0]
-	sidecar.mu.Unlock()
-	arguments, _ := call["arguments"].(map[string]any)
-	if call["tool"] != "delete_project_wikis" || arguments[run.ProjectArgument] != "17" {
-		t.Fatalf("the engine was called as %v", call)
+	if body, _ := rig.manager.Poll(t.Context(), "Wikis", "generate_wiki", mine.ID); body["status"] != "Error" {
+		t.Fatalf("the wiki's generation was not stopped: %v", body)
 	}
-	// The id as a string is accepted too (JSON clients differ).
-	if status, text, _ := callRoute(host, pki, &main, `{"project_id": "17"}`, nil); status != http.StatusOK {
-		t.Fatalf("%d %s", status, text)
+	// Another PROJECT's generation of the same repository is not touched.
+	if body, _ := rig.manager.Poll(t.Context(), "Wikis", "generate_wiki", otherProject.ID); body["status"] == "Error" || body["status"] == "Completed" {
+		t.Fatalf("another project's generation was stopped: %v", body)
+	}
+	if rig.manager.InFlight() != 1 {
+		t.Fatalf("%d running, want only the other project's", rig.manager.InFlight())
 	}
 }
 
-func TestOnlyTheMainCertificateMayDeleteAProject(t *testing.T) {
-	sidecar := newFakeSidecar(t, []string{`{"result": {"success": true, "wikis": []}}`}, 0)
-	pki := newPKI(t, "platform ca")
-	host := platformHost(t, sidecar, pki, "elitea-main")
-	body := `{"project_id": 17}`
-
-	// A certificate from the right CA but another service: refused (403).
-	facade := pki.leaf(t, "elitea-facade", x509.ExtKeyUsageClientAuth)
-	if status, _, err := callRoute(host, pki, &facade, body, nil); err != nil || status != http.StatusForbidden {
-		t.Fatalf("another platform service got %d %v", status, err)
+func TestDeleteWikiLeavesAnotherWikisGenerationAlone(t *testing.T) {
+	rig := newDeleteRig(t, false, nil)
+	mine := rig.generate(t, "90200")
+	if _, err := rig.deleteWiki(t, "acme--some-other-wiki--main"); err != nil {
+		t.Fatal(err)
 	}
-	// ... even when it signs a project and NO user: the old inference.
-	signed := http.Header{}
-	spi.SignHeaders(signed, spi.Identity{ProjectID: "17"}, []byte(identitySecret))
-	if status, _, err := callRoute(host, pki, &facade, body, signed); err != nil || status != http.StatusForbidden {
-		t.Fatalf("a signed call with no user id got %d %v", status, err)
-	}
-	// ... or a user session.
-	user := http.Header{}
-	spi.SignHeaders(user, spi.Identity{ProjectID: "17", UserID: "5"}, []byte(identitySecret))
-	if status, _, err := callRoute(host, pki, &facade, body, user); err != nil || status != http.StatusForbidden {
-		t.Fatalf("a user session got %d %v", status, err)
-	}
-	// No client certificate: the handshake fails.
-	if _, _, err := callRoute(host, pki, nil, body, nil); err == nil {
-		t.Fatal("a call with no client certificate was accepted")
-	}
-	// The right name from a CA the host does not trust: the handshake fails.
-	foreign := newPKI(t, "foreign ca")
-	impostor := foreign.leaf(t, "elitea-main", x509.ExtKeyUsageClientAuth)
-	if _, _, err := callRoute(host, pki, &impostor, body, nil); err == nil {
-		t.Fatal("a certificate from another CA was accepted")
-	}
-	if n := engineCalls(sidecar); n != 0 {
-		t.Fatalf("the engine was called %d time(s) for refused callers", n)
+	if body, _ := rig.manager.Poll(t.Context(), "Wikis", "generate_wiki", mine.ID); body["status"] == "Error" {
+		t.Fatalf("a generation of ANOTHER wiki was stopped: %v", body)
 	}
 }
 
-func TestThePlatformRouteIsClosedWithoutAnAllowlistAndWithoutTLS(t *testing.T) {
-	sidecar := newFakeSidecar(t, []string{`{"result": {"success": true, "wikis": []}}`}, 0)
-	pki := newPKI(t, "platform ca")
-	// No allowlist configured: even elitea-main's name is refused.
-	host := platformHost(t, sidecar, pki, "")
-	main := pki.leaf(t, "elitea-main", x509.ExtKeyUsageClientAuth)
-	if status, _, err := callRoute(host, pki, &main, `{"project_id": 17}`, nil); err != nil || status != http.StatusForbidden {
-		t.Fatalf("with no allowlist: %d %v", status, err)
-	}
-	// A cleartext in-process request (no TLS state at all) is refused.
-	plain := platformServer(t, sidecar)
-	request := httptest.NewRequest(http.MethodPost, spi.DeleteProjectPath, strings.NewReader(`{"project_id": 17}`))
-	recorder := httptest.NewRecorder()
-	plain.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("cleartext: %d", recorder.Code)
-	}
-	if n := engineCalls(sidecar); n != 0 {
-		t.Fatalf("the engine was called %d time(s)", n)
-	}
-}
-
-func TestThePlatformRouteValidatesTheProjectInTheBody(t *testing.T) {
-	sidecar := newFakeSidecar(t, []string{`{"result": {"success": true, "wikis": []}}`}, 0)
-	pki := newPKI(t, "platform ca")
-	host := platformHost(t, sidecar, pki, "elitea-main")
-	main := pki.leaf(t, "elitea-main", x509.ExtKeyUsageClientAuth)
-	for _, body := range []string{``, `{}`, `{"project_id": 0}`, `{"project_id": -4}`, `{"project_id": "abc"}`, `{"project_id": 1.5}`, `not json`} {
-		if status, _, err := callRoute(host, pki, &main, body, nil); err != nil || status != http.StatusBadRequest {
-			t.Errorf("%q: %d %v", body, status, err)
+func TestDeleteWikiIsRefusedAndDeletesNothingWhileAGenerationWillNotStop(t *testing.T) {
+	release := make(chan struct{})
+	rig := newDeleteRig(t, true, release)
+	released := false
+	releaseOnce := func() {
+		if !released {
+			released = true
+			close(release)
 		}
 	}
-	if n := engineCalls(sidecar); n != 0 {
-		t.Fatalf("the engine was called %d time(s)", n)
+	// Cleanups run last-in first-out: release the tool before the manager
+	// waits for it.
+	t.Cleanup(releaseOnce)
+	rig.generate(t, "90200")
+
+	_, err := rig.deleteWiki(t, "acme--e2e-service--main")
+	if err == nil || !strings.Contains(err.Error(), "a generation is still running; retry") {
+		t.Fatalf("%v", err)
+	}
+	if len(rig.store.objects) != 2 {
+		t.Fatalf("objects were deleted while a generation runs: %v", rig.store.objects)
+	}
+	if calls := rig.engine.calls(); len(calls) != 0 {
+		t.Fatalf("the index was deleted while a generation runs: %v", calls)
+	}
+	// Once the generation has ended, the same call goes through.
+	releaseOnce()
+	deadline := time.Now().Add(5 * time.Second)
+	for rig.manager.InFlight() > 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	got, err := rig.deleteWiki(t, "acme--e2e-service--main")
+	if err != nil || !strings.Contains(got, "successfully deleted") {
+		t.Fatalf("%q %v", got, err)
 	}
 }
