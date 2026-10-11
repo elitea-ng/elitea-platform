@@ -1470,6 +1470,14 @@ main:
     # (so the credential is never written into one). Two allowlists that could
     # disagree would mean an invocation that starts and then fails.
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: ""
+    # Where elitea-main deletes a project's wiki search indexes when the project
+    # is deprovisioned (#1243): the engine's platform gRPC listener, host:port.
+    # Normally LEFT EMPTY and derived by the chart as <deepwiki.service.name>:
+    # <deepwiki.platformGrpc.port> whenever deepwiki.platformGrpc.clients is
+    # set and this facade is on — the three are one feature. The hop presents
+    # the facade's client certificate (the three files above), so a target
+    # beside a facade that is off is refused, here and at boot.
+    ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: ""
 
     # --- Inventory facade (ADR-0023 H4c) -----------------------------------
     #
@@ -1493,6 +1501,15 @@ main:
     # from the certificate's subject. Empty means "use the base URL's host".
     ELITEA_INVENTORY_SERVER_NAME: ""
     ELITEA_INVENTORY_TIMEOUT_SECONDS: ""
+    # Where elitea-main deletes an Inventory toolkit's graph when the toolkit is
+    # deleted, and every graph of a project when the project is deprovisioned
+    # (#1244): the engine's platform gRPC listener, host:port. Normally LEFT
+    # EMPTY and derived by the chart as <inventory.service.name>:
+    # <inventory.platformGrpc.port> whenever inventory.platformGrpc.clients is
+    # set and this facade is on. The hop presents the facade's client
+    # certificate, so a target beside a facade that is off is refused, here and
+    # at boot.
+    ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: ""
 
     # --- The Inventory facade's source expansion (ADR-0023 H4c I2) ---
     #

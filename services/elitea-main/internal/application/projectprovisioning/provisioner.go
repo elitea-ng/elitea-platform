@@ -235,6 +235,10 @@ type Provisioner struct {
 	commit        func(context.Context, pgx.Tx) error
 	defaultModels ProjectDefaultModelSeeder
 	logger        *slog.Logger
+	// applications are the engines a delete removes the project's data from
+	// (a DeepWiki wiki index, an Inventory graph), one journal step each. See
+	// application_data.go. Empty where none is wired.
+	applications []applicationCleanup
 
 	// lifecycle is the context whose end means the process is shutting down.
 	// The detached cleanup runs of a delete derive from it, so a shutdown

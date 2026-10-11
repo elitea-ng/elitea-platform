@@ -411,6 +411,14 @@ type RouterConfig struct {
 	// the request has answered, and stops with this context, releasing its
 	// journal lease without counting an attempt. Nil: never cancelled.
 	ProjectCleanupContext context.Context
+	// ApplicationData are the application engines (DeepWiki, Inventory) whose
+	// platform gRPC service this process calls to delete a project's data when
+	// the project is deprovisioned (one cleanup-journal step each) and a
+	// toolkit's data when the toolkit is deleted (#1243, #1244). Composed from
+	// ELITEA_<APP>_PLATFORM_GRPC_TARGET beside each facade; an application that
+	// is not listed keeps its data, and the composition root logs which are
+	// wired. See application_data.go.
+	ApplicationData []ApplicationDataClient
 	// ProjectDeleteBudget is how long DELETE of a project waits for the slow
 	// cleanup before it answers 202 (zero: v2projects.DefaultDeleteBudget).
 	ProjectDeleteBudget time.Duration
@@ -753,6 +761,10 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	if cfg.PlatformModelDefaults != nil {
 		options = append(options, projectprovisioning.WithDefaultModelSeeder(cfg.PlatformModelDefaults))
 	}
+	// The application engines (#1243, #1244): one cleanup-journal step per
+	// wired engine. Optional in the same sense as the vector store — a
+	// deployment without an engine has no data there to delete.
+	options = append(options, applicationDataOptions(cfg.ApplicationData)...)
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)
 		objectsRepo, objectsErr := dbrepos.NewArtifactObjectsRepository(cfg.Pool)
@@ -1120,6 +1132,13 @@ func newToolkitHandler(
 	}
 	if guardrailPolicies, err := platformconfig.NewGuardrailPolicyAdapter(cfg.Pool); err == nil {
 		options = append(options, v2toolkits.WithGuardrails(guardrailPolicies))
+	}
+	// The application engines (#1244): a toolkit of an application whose engine
+	// keeps data per toolkit (Inventory's graph) has that data deleted in the
+	// engine before its row goes. See application_data.go.
+	if len(cfg.ApplicationData) > 0 {
+		options = append(options, v2toolkits.WithToolkitDataRemover(
+			newApplicationToolkitData(cfg.ApplicationData, nil)))
 	}
 	return v2toolkits.NewHandler(cfg.Pool, options...)
 }

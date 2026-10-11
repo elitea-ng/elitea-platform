@@ -1602,6 +1602,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
 		}
 	}
+	// The application engines' platform services (#1243, #1244): the gRPC
+	// clients that delete a project's (and a toolkit's) data in DeepWiki and
+	// Inventory, read beside the two facades whose mTLS material they present.
+	// They are shared by the project provisioner (one cleanup-journal step
+	// each) and the toolkit handler, through RouterConfig.ApplicationData.
+	applicationData, closePlatformOperations, err := composePlatformOperations(
+		logger, deepwikiConfig, inventoryConfig, os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("compose application platform operations: %w", err)
+	}
+	defer closePlatformOperations()
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -2379,6 +2390,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		OnProjectProvisioner:         startDeletionReconciler,
 		ProjectCleanupContext:        ctx,
 		ProjectDeleteBudget:          projectDeleteBudget,
+		ApplicationData:              applicationData,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,

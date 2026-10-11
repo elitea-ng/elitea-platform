@@ -373,6 +373,31 @@ expect "NetworkPolicy peers on the gRPC port: elitea-main only" "$(printf '%s' "
 refuses "platform clients without mutual TLS" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.mtls.enabled=false
 refuses "a platform port that is the SPI's" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.platformGrpc.port=8080
 refuses "the platform env set by hand beside the values" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.env.ELITEA_DEEPWIKI_PLATFORM_CLIENTS=elitea-main
+refuses "an allowlist that does not name elitea-main" --set 'deepwiki.platformGrpc.clients={someone-else}'
+
+# ── elitea-main's side of the platform service (#1243) ───────────────────────
+#
+# The caller is configured WITH the service: when the engine serves it and the
+# facade is on, elitea-main's ConfigMap carries the target (<service>:<port>)
+# without the operator stating it. Off, nothing is derived; an explicit value
+# wins; and a target beside a facade that is off is refused, as cmd/elitea-main
+# refuses it at boot.
+
+echo "== elitea-main is told where the platform service is =="
+main_env() { printf '%s' "$1" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$2" -; }
+expect "off: the shipped empty default, nothing derived" "$(main_env "$manifest" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
+expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-svc:9555"
+explicit="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=deepwiki.elsewhere:9443)" \
+  || fail "an explicit target does not render: $explicit"
+expect "an explicit target wins" "$(main_env "$explicit" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "deepwiki.elsewhere:9443"
+facade_off="$(render --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
+  || fail "the engine with its service on and the facade off does not render: $facade_off"
+expect "facade off: nothing derived for a caller that is not composed" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
+if render --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki-svc:9443 >/dev/null 2>&1; then
+  fail "a platform target beside a facade that is off renders"
+else
+  note "refused: a target with the facade off"
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "render-deepwiki: $failures assertion(s) failed" >&2

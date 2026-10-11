@@ -114,6 +114,14 @@ const (
 	// not in createSteps and has no create or rollback.
 	StepProjectPgvectorDrop = "project_pgvector_drop"
 	StepProjectAdmin        = "project_admin"
+	// StepDeepWikiData and StepInventoryData are reported by Deprovision only,
+	// and only where the application's engine is wired (WithApplicationData):
+	// the deletion of the project's wiki search indexes, or of its Inventory
+	// graphs, in that engine over its platform gRPC service (#1243, #1244).
+	// Cleanup-journal steps, like the PgVector drop; ApplicationDataStep
+	// derives them from the application's name.
+	StepDeepWikiData  = "deepwiki_data"
+	StepInventoryData = "inventory_data"
 )
 
 // systemProjectRole is the project role the per-project system identity holds.

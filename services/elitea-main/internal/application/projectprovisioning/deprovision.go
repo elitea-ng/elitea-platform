@@ -17,8 +17,10 @@ package projectprovisioning
 //     it fails the project is unchanged and fully usable, and the delete answers
 //     ErrProjectNotRemoved.
 //  2. THE SLOW AND EXTERNAL CLEANUP RUNS FROM THE JOURNAL (runCleanup), after
-//     the commit: the artifact bytes (object store), the tenant schema, and the
-//     PgVector database (another server). Every step is idempotent and marks
+//     the commit: the artifact bytes (object store), the tenant schema, the
+//     PgVector database (another server), and the project's data in every wired
+//     application engine (DeepWiki wiki indexes, Inventory graphs, over gRPC;
+//     application_data.go). Every step is idempotent and marks
 //     itself done in the journal row. The run is DETACHED from the request: it
 //     starts in a goroutine of its own, under its own deadline (cleanupTimeout)
 //     and holding the row's lease, and the request waits for it only for a short
@@ -277,20 +279,32 @@ type cleanupStep struct {
 	run     func(ctx context.Context, p *Provisioner, projectID int64, cleanup *deletionCleanup) (note string, err error)
 }
 
-// cleanupSteps is the journal's step list, in the order a run takes it. The
-// bytes go first (the bucket rows are their only handle), the tenant schema and
-// the PgVector database after.
+// cleanupSteps is the journal's base step list, in the order a run takes it.
+// The bytes go first (the bucket rows are their only handle), the tenant schema
+// and the PgVector database after.
 //
 // The identity steps (the vault, the system token and user, the project roles
 // and the memberships that cascade from them, the token bindings) are not here:
 // they ran in the deciding transaction. The PgVector configuration row lives in
 // the tenant schema and goes with it.
+//
+// A run takes the provisioner's list (Provisioner.cleanupSteps), which is this
+// plus one step per wired application (application_data.go).
 func cleanupSteps() []cleanupStep {
 	return []cleanupStep{
 		{name: StepArtifactBuckets, notDone: ErrArtifactsNotRemoved, run: cleanupArtifactBuckets},
 		{name: StepProjectSchema, notDone: ErrTenantSchemaNotRemoved, run: withState(removeProjectSchema)},
 		{name: StepProjectPgvectorDrop, notDone: ErrVectorStoreNotDropped, run: cleanupVectorStore},
 	}
+}
+
+// cleanupSteps is the step list a run of THIS provisioner takes: the base steps,
+// then the data of every wired application (#1243, #1244). The application
+// steps come last so a failing engine never delays the schema or the database
+// drop, and so the base list's indices are stable for the code and tests that
+// address them.
+func (p *Provisioner) cleanupSteps() []cleanupStep {
+	return append(cleanupSteps(), p.applicationSteps()...)
 }
 
 // decisionSteps are the steps the deciding transaction performs, in the order
@@ -495,7 +509,7 @@ func (p *Provisioner) Deprovision(ctx context.Context, projectID int64, options 
 		cleanupErr error
 	)
 	if config.handOff {
-		result = pendingResult(projectID, nil)
+		result = p.pendingResult(projectID, nil)
 	} else {
 		var expiry <-chan time.Time
 		if config.budget > 0 {
@@ -537,9 +551,9 @@ func (p *Provisioner) startCleanup(projectID int64, cleanup *deletionCleanup) <-
 
 // pendingResult builds the answer for a delete whose cleanup is still running:
 // the steps in done are reported OK, every other step pending.
-func pendingResult(projectID int64, done map[string]bool) Result {
+func (p *Provisioner) pendingResult(projectID int64, done map[string]bool) Result {
 	result := Result{ProjectID: projectID}
-	for _, step := range cleanupSteps() {
+	for _, step := range p.cleanupSteps() {
 		if done[step.name] {
 			status := StepStatus{Step: step.name, Initialized: true}
 			status.setOK()
@@ -566,20 +580,20 @@ func (p *Provisioner) pendingFromJournal(runCtx context.Context, projectID int64
 	if err := p.pool.QueryRow(ctx,
 		`SELECT cleanup, completed_at FROM centry.project_deletions WHERE project_id = $1`, projectID,
 	).Scan(&encoded, &completed); err != nil {
-		return pendingResult(projectID, nil)
+		return p.pendingResult(projectID, nil)
 	}
 	var cleanup deletionCleanup
 	if err := json.Unmarshal(encoded, &cleanup); err != nil {
-		return pendingResult(projectID, nil)
+		return p.pendingResult(projectID, nil)
 	}
 	done := cleanup.Done
 	if completed != nil {
 		done = map[string]bool{}
-		for _, step := range cleanupSteps() {
+		for _, step := range p.cleanupSteps() {
 			done[step.name] = true
 		}
 	}
-	return pendingResult(projectID, done)
+	return p.pendingResult(projectID, done)
 }
 
 // decideDeletion is the one transaction that decides a delete (#1211).
@@ -894,7 +908,7 @@ func (p *Provisioner) recordCleanup(ctx context.Context, transaction pgx.Tx, pro
 // and no error, and the journal row stays open for the next run.
 //
 // BEFORE EVERY STEP the run checks, on its own connection, that no project row
-// exists for the id. All three steps destroy data keyed by the id, and an id can
+// exists for the id. Every step destroys data keyed by the id, and an id can
 // come back (explicit ids, a restored database): if a project exists, the
 // journal row is closed as superseded and nothing is touched. Provision's own
 // check of the journal closes the race from the other side.
@@ -914,7 +928,7 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 		failedSteps []string
 		interrupted bool
 	)
-	for _, step := range cleanupSteps() {
+	for _, step := range p.cleanupSteps() {
 		status := StepStatus{Step: step.name, Initialized: true}
 		if cleanup.Done[step.name] {
 			status.setOK()

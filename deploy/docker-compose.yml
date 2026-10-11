@@ -234,7 +234,9 @@ services:
       #
       # Turn the whole thing on with:
       #     bash deploy/scripts/gen-deepwiki-certs.sh
-      #     ELITEA_DEEPWIKI_ENABLED=true podman compose --profile deepwiki up -d
+      #     ELITEA_DEEPWIKI_ENABLED=true \
+      #     ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki:9443 \
+      #     podman compose --profile deepwiki up -d
       ELITEA_DEEPWIKI_ENABLED: "${ELITEA_DEEPWIKI_ENABLED:-false}"
       # 8080: the port the provider listens on (the sub-application host's
       # default, EXPOSE in its Containerfile, the Helm chart). This said 8443 and nothing checked
@@ -250,6 +252,15 @@ services:
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "changeme"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+      # The engine's platform gRPC listener (#1243): where this service deletes
+      # a project's wiki search indexes when the project is deprovisioned. Set
+      # it to elitea-deepwiki:9443 TOGETHER with ELITEA_DEEPWIKI_ENABLED=true
+      # (see above): the hop presents the same client certificate as the
+      # facade, so a target beside a disabled facade is a boot error, and a
+      # facade without the target deletes projects while the engine keeps
+      # their indexes (logged at boot). The server certificate's SANs name
+      # elitea-deepwiki (gen-deepwiki-certs.sh), which is what this verifies.
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "${ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET:-}"
     volumes:
       # Read-only, and shared with the gateway hop: one dev CA signs both, and
       # `CN=elitea-main` is the same client on both.

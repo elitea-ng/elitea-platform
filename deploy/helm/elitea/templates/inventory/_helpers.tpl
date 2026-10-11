@@ -61,6 +61,19 @@ otherwise, and the service is then not configured, exposed or admitted at all.
 {{- end }}
 
 {{/*
+elitea-inventory.platformGrpcTarget — the host:port elitea-main dials for the
+platform gRPC service (#1244): the Service name (which the server certificate's
+SANs name, so the client verifies exactly that) and the platform port. Empty
+unless the component is rendered with the service on; templates/main/
+configmap.yaml derives ELITEA_INVENTORY_PLATFORM_GRPC_TARGET from it.
+*/}}
+{{- define "elitea-inventory.platformGrpcTarget" -}}
+{{- if and .Values.inventory.enabled (include "elitea-inventory.platformGrpc" .) -}}
+{{- printf "%s:%d" .Values.inventory.service.name (.Values.inventory.platformGrpc.port | int) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 elitea-inventory.databaseSecrets — the engine's database URL secret, as JSON:
 inventory.secrets.ELITEA_INVENTORY_DATABASE_URL, else postgresql.existingSecret
 (the shared define every provider uses). The Deployment's engine container and
@@ -98,6 +111,9 @@ for, and this is a message in the terminal that ran the command.
 {{- end -}}
 {{- if eq (.Values.inventory.platformGrpc.port | int) 8080 -}}
 {{- fail "inventory.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
+{{- end -}}
+{{- if not (has "elitea-main" .Values.inventory.platformGrpc.clients) -}}
+{{- fail (printf "inventory.platformGrpc.clients is %v, which does not name elitea-main. The facade client certificate this chart issues (inventory.mtls) has the common name elitea-main, and it is the certificate elitea-main presents on this hop too, so an allowlist without it refuses every call elitea-main makes and the service deletes nothing. Add elitea-main." .Values.inventory.platformGrpc.clients) -}}
 {{- end -}}
 {{- if or (hasKey $env "ELITEA_INVENTORY_PLATFORM_CLIENTS") (hasKey $env "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") -}}
 {{- fail "inventory.env sets ELITEA_INVENTORY_PLATFORM_CLIENTS or ELITEA_INVENTORY_PLATFORM_GRPC_ADDR; the chart renders both from inventory.platformGrpc (clients, port). Remove them from env." -}}

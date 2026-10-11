@@ -1005,6 +1005,13 @@ services:
       # service on the compose network, plain HTTP — the minted bearer is the
       # credential; mTLS is on the hop the other way.
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # The engine's platform gRPC listener (#1243): where this service
+      # deletes a project's wiki search indexes when the project is
+      # deprovisioned, presenting the same client certificate as the facade
+      # hop above. The host below allows CN=elitea-main
+      # (ELITEA_DEEPWIKI_PLATFORM_CLIENTS) and its server certificate's SANs
+      # name elitea-deepwiki, which is what this verifies.
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "elitea-deepwiki:9443"
 
       # ── The Inventory facade (ADR-0023 H4c) ────────────────────────────
       # The SECOND provider, composed the same way and from its own
@@ -1037,6 +1044,13 @@ services:
       # read-only tools would still work and the three that name a source
       # would get the provider's own refusal.
       ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # The engine's platform gRPC listener (#1244): where this service
+      # deletes an Inventory toolkit's graph when the toolkit is deleted and
+      # every graph of a project when the project is deprovisioned, presenting
+      # the same client certificate as the facade hop above. The host below
+      # allows CN=elitea-main (ELITEA_INVENTORY_PLATFORM_CLIENTS) and its
+      # server certificate's SANs name elitea-inventory.
+      ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: "elitea-inventory:9443"
       # The project whose configurations are treated as PUBLIC and merged into
       # every other project's option lookups.
       #

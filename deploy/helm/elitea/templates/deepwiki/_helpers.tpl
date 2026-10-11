@@ -70,6 +70,19 @@ otherwise, and the service is then not configured, exposed or admitted at all.
 {{- if (.Values.deepwiki.platformGrpc | default dict).clients -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+elitea-deepwiki.platformGrpcTarget — the host:port elitea-main dials for the
+platform gRPC service (#1243): the Service name (which the server certificate's
+SANs name, so the client verifies exactly that) and the platform port. Empty
+unless the component is rendered with the service on; templates/main/
+configmap.yaml derives ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET from it.
+*/}}
+{{- define "elitea-deepwiki.platformGrpcTarget" -}}
+{{- if and .Values.deepwiki.enabled (include "elitea-deepwiki.platformGrpc" .) -}}
+{{- printf "%s:%d" .Values.deepwiki.service.name (.Values.deepwiki.platformGrpc.port | int) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "elitea-deepwiki.validateGuards" -}}
 {{- $env := .Values.deepwiki.env | default dict -}}
 
@@ -84,6 +97,9 @@ otherwise, and the service is then not configured, exposed or admitted at all.
 {{- end -}}
 {{- if eq (.Values.deepwiki.platformGrpc.port | int) 8080 -}}
 {{- fail "deepwiki.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
+{{- end -}}
+{{- if not (has "elitea-main" .Values.deepwiki.platformGrpc.clients) -}}
+{{- fail (printf "deepwiki.platformGrpc.clients is %v, which does not name elitea-main. The facade client certificate this chart issues (deepwiki.mtls) has the common name elitea-main, and it is the certificate elitea-main presents on this hop too, so an allowlist without it refuses every call elitea-main makes and the service deletes nothing. Add elitea-main." .Values.deepwiki.platformGrpc.clients) -}}
 {{- end -}}
 {{- if or (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") -}}
 {{- fail "deepwiki.env sets ELITEA_DEEPWIKI_PLATFORM_CLIENTS or ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR; the chart renders both from deepwiki.platformGrpc (clients, port). Remove them from env." -}}

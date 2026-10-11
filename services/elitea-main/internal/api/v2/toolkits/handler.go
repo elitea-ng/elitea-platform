@@ -135,6 +135,10 @@ type Handler struct {
 	// composed.
 	toolRuns  toolkitrun.UseCase
 	discovery discovery.UseCase
+	// toolkitData deletes what an application engine holds for a toolkit
+	// (an Inventory graph) before its row goes. Nil deletes the row alone.
+	// See toolkit_data.go.
+	toolkitData ToolkitDataRemover
 }
 
 // WithToolRuns supplies the synchronous tool-run use case. Without it the two
@@ -1498,10 +1502,15 @@ func selectedToolsRelationInsertSQL(schema string, withSelectedTools bool) strin
 	return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools) VALUES ($1, $2, $3, $4, $5::jsonb) ON CONFLICT (entity_version_id, tool_id, entity_type) DO UPDATE SET selected_tools = EXCLUDED.selected_tools, updated_at = now()`, schema)
 }
 
-// Delete removes a toolkit instance.
+// Delete removes a toolkit instance. For a toolkit of an application whose
+// engine keeps data per toolkit (Inventory's graph), the engine's data goes
+// FIRST and a refusal leaves the row in place — see toolkit_data.go.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	toolkitID := chi.URLParam(r, "toolkitID")
+	if !h.removeToolkitData(w, r, projectID, toolkitID) {
+		return
+	}
 	if err := h.repo.DeleteToolkit(r.Context(), projectID, toolkitID); err != nil {
 		writeToolkitInternalError(w, r, "delete_toolkit", "failed to delete the toolkit", err)
 		return

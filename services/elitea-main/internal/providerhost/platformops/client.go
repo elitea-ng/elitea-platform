@@ -1,0 +1,345 @@
+// Package platformops is elitea-main's client of a sub-application's platform
+// service (elitea.subapp.v1.PlatformOperations, libs/proto): the operations the
+// platform itself runs against a DeepWiki or Inventory engine, as opposed to
+// the toolkit tools users reach through the facade. Today those are the two
+// deletions of issues #1243 and #1244: DeleteProject when a project is
+// deprovisioned, DeleteToolkit when a toolkit of the application is deleted.
+//
+// THE TRANSPORT IS gRPC OVER MUTUAL TLS, as AGENTS.md prescribes for internal
+// service-to-service calls, and the engine authorises a call by ONE thing: the
+// verified client certificate of this process, matched against its allowlist
+// (ELITEA_<APP>_PLATFORM_CLIENTS). This client therefore presents the SAME
+// client certificate the facade's HTTPS hop presents (ELITEA_<APP>_CLIENT_
+// CERT_FILE / _KEY_FILE), trusts the SAME CA, and verifies the SAME server
+// name: the engine serves both listeners behind one TLS configuration, so
+// one set of material covers both hops and nothing new has to be issued.
+//
+// THE ERRORS ARE CLASSIFIED FOR THE CALLERS, which are a cleanup journal and a
+// delete route and neither reads gRPC codes:
+//
+//   - ErrRetryLater: nothing (or not everything) was deleted and calling again
+//     later is the right thing: the engine is still stopping a generation or an
+//     ingest (FAILED_PRECONDITION), a publish holds the wiki (ABORTED), the
+//     engine is unreachable or slow (UNAVAILABLE, DEADLINE_EXCEEDED), or a
+//     project deletion answered OK with `incomplete` (what it deleted stays
+//     deleted; the rest is held by a run that started meanwhile).
+//   - ErrNotSupported: the application has nothing per toolkit to delete
+//     (UNIMPLEMENTED; DeepWiki's index is per wiki). A toolkit delete treats
+//     it as "nothing to do".
+//   - ErrNotAllowed: the engine refused this process's certificate
+//     (UNAUTHENTICATED, PERMISSION_DENIED). A retry cannot fix it; the
+//     allowlist or the material is wrong, and the message says so.
+//   - anything else: the engine failed (INTERNAL and the rest). The journal
+//     retries it, the route reports it.
+package platformops
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"strings"
+	"time"
+
+	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
+)
+
+// The two applications that serve the platform service today. App names are
+// the provider descriptors' own names, which are also the prefix of the toolkit
+// types they publish (see AppForToolkitType).
+const (
+	AppDeepWiki  = "deepwiki"
+	AppInventory = "inventory"
+)
+
+var (
+	// ErrRetryLater: nothing, or not everything, was deleted, and a later call
+	// may succeed. See the package comment.
+	ErrRetryLater = errors.New("platformops: the engine could not delete everything now; retry")
+	// ErrNotSupported: the application has nothing of this kind to delete.
+	ErrNotSupported = errors.New("platformops: the application does not support this operation")
+	// ErrNotAllowed: the engine refused this process's client certificate. The
+	// engine's ELITEA_<APP>_PLATFORM_CLIENTS allowlist must name the identity
+	// (subject CN or DNS SAN) of the certificate ELITEA_<APP>_CLIENT_CERT_FILE
+	// holds.
+	ErrNotAllowed = errors.New("platformops: the engine does not allow this client certificate to call platform operations")
+	// ErrConfig reports a Config that cannot build a client.
+	ErrConfig = errors.New("platformops: invalid configuration")
+)
+
+// DefaultCallTimeout bounds one call. The engine stops the project's running
+// generations or ingests first and waits a bounded time for them (30s by
+// default on the host), so the bound is well above that and well below the
+// cleanup journal's run bound (5 minutes).
+const DefaultCallTimeout = 2 * time.Minute
+
+// Config is what a client needs: where the engine's platform listener is and
+// the mutual-TLS material of the facade hop to the same engine.
+type Config struct {
+	// App is the application the engine serves: AppDeepWiki or AppInventory.
+	App string
+	// Target is the listener's host:port (e.g. elitea-deepwiki:9443). No
+	// scheme: the transport is always TLS.
+	Target string
+	// The client certificate this process presents, its key, and the CA that
+	// signed the engine's server certificate. The same three files as the
+	// facade's ELITEA_<APP>_CLIENT_CERT_FILE / _CLIENT_KEY_FILE / _CA_FILE.
+	ClientCertFile string
+	ClientKeyFile  string
+	CAFile         string
+	// ServerName is the name verified against the engine's certificate. Empty
+	// is the host of Target, which is what the facade does with its base URL.
+	ServerName string
+	// CallTimeout bounds one call; zero is DefaultCallTimeout.
+	CallTimeout time.Duration
+}
+
+// Validate reports the first thing that makes the configuration unusable.
+func (c Config) Validate() error {
+	switch {
+	case c.App != AppDeepWiki && c.App != AppInventory:
+		return fmt.Errorf("%w: unknown application %q", ErrConfig, c.App)
+	case strings.TrimSpace(c.Target) == "":
+		return fmt.Errorf("%w: the %s platform gRPC target is empty", ErrConfig, c.App)
+	case strings.Contains(c.Target, "://"):
+		return fmt.Errorf("%w: the %s platform gRPC target %q must be host:port, not a URL", ErrConfig, c.App, c.Target)
+	}
+	host, port, err := net.SplitHostPort(c.Target)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("%w: the %s platform gRPC target %q must be host:port", ErrConfig, c.App, c.Target)
+	}
+	for name, value := range map[string]string{"client certificate": c.ClientCertFile, "client key": c.ClientKeyFile, "CA bundle": c.CAFile} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%w: the %s platform gRPC client needs a %s file", ErrConfig, c.App, name)
+		}
+	}
+	return nil
+}
+
+// Client calls one application's platform service.
+type Client struct {
+	app     string
+	target  string
+	conn    *grpc.ClientConn
+	ops     subappv1.PlatformOperationsClient
+	timeout time.Duration
+	logger  *slog.Logger
+}
+
+// New builds a client. The material is loaded now (a missing file is a
+// construction error, not a per-call one); the connection is dialled lazily on
+// the first call, which is grpc.NewClient's behaviour.
+func New(cfg Config, logger *slog.Logger) (*Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	tlsConfig, err := mtlsConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s platform gRPC client: %w", ErrConfig, cfg.App, err)
+	}
+	conn, err := grpc.NewClient(cfg.Target,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		// A response is counts and ids; nothing legitimate is larger.
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1<<20)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s platform gRPC client: %w", ErrConfig, cfg.App, err)
+	}
+	timeout := cfg.CallTimeout
+	if timeout <= 0 {
+		timeout = DefaultCallTimeout
+	}
+	return &Client{
+		app: cfg.App, target: cfg.Target, conn: conn,
+		ops: subappv1.NewPlatformOperationsClient(conn), timeout: timeout,
+		logger: logger.With("app", cfg.App, "target", cfg.Target),
+	}, nil
+}
+
+// mtlsConfig is the facade hop's TLS configuration (llmproxy.NewMTLSTransport)
+// for gRPC: the same client certificate, the same CA, the same server name
+// rule, and h2 instead of http/1.1.
+func mtlsConfig(cfg Config) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(cfg.ClientCertFile, cfg.ClientKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert: %w", err)
+	}
+	caPEM, err := os.ReadFile(cfg.CAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read ca bundle: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("no certificates parsed from ca bundle %q", cfg.CAFile)
+	}
+	serverName := cfg.ServerName
+	if serverName == "" {
+		serverName, _, _ = net.SplitHostPort(cfg.Target)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      pool,
+		ServerName:   serverName,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
+
+// App is the application this client speaks to.
+func (c *Client) App() string { return c.app }
+
+// Target is the listener this client dials.
+func (c *Client) Target() string { return c.target }
+
+// Close releases the connection.
+func (c *Client) Close() error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
+}
+
+// ProjectDeletion is what DeleteProject removed, as the step note reports it.
+type ProjectDeletion struct {
+	Wikis         int
+	GraphToolkits int
+	LiveBuilds    int64
+	Incomplete    bool
+	BusyToolkits  []int64
+	Errors        []string
+}
+
+// Summary is a one-line account for a journal note or a log.
+func (d ProjectDeletion) Summary() string {
+	parts := []string{}
+	if d.Wikis > 0 {
+		parts = append(parts, fmt.Sprintf("%d wiki index(es)", d.Wikis))
+	}
+	if d.GraphToolkits > 0 {
+		parts = append(parts, fmt.Sprintf("%d graph(s)", d.GraphToolkits))
+	}
+	if len(parts) == 0 {
+		return "nothing to delete"
+	}
+	return "deleted " + strings.Join(parts, ", ")
+}
+
+// DeleteProjectData removes everything the application holds for the project
+// (the search index of every wiki, or every graph). It is idempotent on the
+// engine's side. It returns the summary of a COMPLETE deletion, or an error:
+// ErrRetryLater when the engine deleted nothing yet (a run is still stopping)
+// or not everything (`incomplete`), ErrNotAllowed when the certificate was
+// refused, and the engine's failure otherwise. The summary is also returned
+// with an ErrRetryLater for an incomplete deletion, so a caller can record
+// what went.
+func (c *Client) DeleteProjectData(ctx context.Context, projectID int64) (string, error) {
+	if projectID <= 0 || projectID > 1<<31-1 {
+		return "", fmt.Errorf("%w: project id %d is not a positive int32", ErrConfig, projectID)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	response, err := c.ops.DeleteProject(callCtx, &subappv1.DeleteProjectRequest{ProjectId: int32(projectID)})
+	if err != nil {
+		return "", c.classify("delete_project", err)
+	}
+	deletion := ProjectDeletion{
+		Wikis:         len(response.GetWikis()),
+		GraphToolkits: len(response.GetGraphToolkitIds()),
+		LiveBuilds:    response.GetLiveBuilds(),
+		Incomplete:    response.GetIncomplete(),
+		BusyToolkits:  response.GetBusyToolkitIds(),
+		Errors:        response.GetErrors(),
+	}
+	for _, line := range deletion.Errors {
+		c.logger.Warn("platform delete_project reported a problem that did not stop it",
+			"project_id", projectID, "problem", line)
+	}
+	if deletion.Incomplete {
+		return deletion.Summary(), fmt.Errorf("%w: %s project %d: %s; still held: %d busy toolkit(s), %d live build(s)",
+			ErrRetryLater, c.app, projectID, deletion.Summary(), len(deletion.BusyToolkits), deletion.LiveBuilds)
+	}
+	return deletion.Summary(), nil
+}
+
+// ToolkitDeletion is what DeleteToolkit removed.
+type ToolkitDeletion struct {
+	// Deleted is false when the toolkit had nothing in the engine.
+	Deleted bool
+}
+
+// DeleteToolkitData removes what the application holds for one toolkit of the
+// project (Inventory: its graph). ErrNotSupported is the application's answer
+// when it keeps nothing per toolkit (DeepWiki); the other errors are as for
+// DeleteProjectData.
+func (c *Client) DeleteToolkitData(ctx context.Context, projectID, toolkitID int64) (ToolkitDeletion, error) {
+	if projectID <= 0 || projectID > 1<<31-1 {
+		return ToolkitDeletion{}, fmt.Errorf("%w: project id %d is not a positive int32", ErrConfig, projectID)
+	}
+	if toolkitID <= 0 || toolkitID > 1<<31-1 {
+		return ToolkitDeletion{}, fmt.Errorf("%w: toolkit id %d is not a positive int32", ErrConfig, toolkitID)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	response, err := c.ops.DeleteToolkit(callCtx, &subappv1.DeleteToolkitRequest{
+		ProjectId: int32(projectID), ToolkitId: int32(toolkitID),
+	})
+	if err != nil {
+		return ToolkitDeletion{}, c.classify("delete_toolkit", err)
+	}
+	return ToolkitDeletion{Deleted: response.GetDeleted()}, nil
+}
+
+// classify turns a gRPC failure into one of the package's errors (see the
+// package comment). The status message is kept: the engine writes it without
+// statements or credentials.
+func (c *Client) classify(op string, err error) error {
+	code := status.Code(err)
+	message := status.Convert(err).Message()
+	switch code {
+	case codes.FailedPrecondition, codes.Aborted, codes.Unavailable, codes.DeadlineExceeded:
+		return fmt.Errorf("%w: %s %s: %s (%s)", ErrRetryLater, c.app, op, message, code)
+	case codes.Unimplemented:
+		return fmt.Errorf("%w: %s %s", ErrNotSupported, c.app, op)
+	case codes.Unauthenticated, codes.PermissionDenied:
+		return fmt.Errorf("%w: %s %s: %s (%s)", ErrNotAllowed, c.app, op, message, code)
+	case codes.Canceled:
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		return fmt.Errorf("%s %s: %s (%s)", c.app, op, message, code)
+	}
+	return fmt.Errorf("%s %s failed: %s (%s)", c.app, op, message, code)
+}
+
+// AppForToolkitType names the application whose engine holds data for a
+// toolkit of the given type, or "" for a type no platform service covers.
+//
+// A provider's toolkit types are projected as `<provider name>_<toolkit name>`
+// (internal/api/v2/toolkits.projectProviderToolkits), or the descriptor's own
+// type override. DeepWiki's descriptor has been named both `deepwiki` and
+// `wikis` (internal/api/v2/deepwiki.AdmittedWikisToolkitTypes lists the four
+// spellings), Inventory's is `inventory`. The bare provider name is accepted
+// too, for a type override that is just the name.
+func AppForToolkitType(toolkitType string) string {
+	name := strings.ToLower(strings.TrimSpace(toolkitType))
+	if at := strings.IndexByte(name, '_'); at > 0 {
+		name = name[:at]
+	}
+	switch name {
+	case AppDeepWiki, "wikis":
+		return AppDeepWiki
+	case AppInventory:
+		return AppInventory
+	}
+	return ""
+}
