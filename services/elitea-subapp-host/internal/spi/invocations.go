@@ -41,8 +41,12 @@ type Invocation struct {
 	CreatedAt   time.Time
 	FinishedAt  time.Time
 	StopRequest bool
-	Events      []map[string]any
-	Result      map[string]any
+	// Labels are facts a runner attaches to a running invocation so that
+	// others can find it (Manager.StopMatching): the project it works for and
+	// the wiki it builds, say. Guarded by the manager's lock.
+	Labels map[string]string
+	Events []map[string]any
+	Result map[string]any
 }
 
 // Terminal reports whether the invocation has a result.
@@ -135,6 +139,23 @@ func (s *MemoryStore) Count() int {
 type Context struct {
 	invocation *Invocation
 	manager    *Manager
+}
+
+// DetachedContext is the Context for work that is not an invocation (a
+// platform route, platform.go): it has an id for the engine's registry, its
+// progress goes nowhere, and nothing can stop it.
+func DetachedContext(id string) *Context {
+	return &Context{invocation: &Invocation{ID: id}, manager: NewManager(nil, 0, nil)}
+}
+
+// SetLabel attaches a fact to the running invocation (see Invocation.Labels).
+func (c *Context) SetLabel(key, value string) {
+	c.manager.mu.Lock()
+	defer c.manager.mu.Unlock()
+	if c.invocation.Labels == nil {
+		c.invocation.Labels = map[string]string{}
+	}
+	c.invocation.Labels[key] = value
 }
 
 // InvocationID names the invocation.
@@ -422,4 +443,67 @@ func (m *Manager) InFlight() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.inFlight)
+}
+
+// RunningInvocation describes an invocation this process is running.
+type RunningInvocation struct {
+	ID      string
+	Toolkit string
+	Tool    string
+	Labels  map[string]string
+}
+
+// StopMatching asks every invocation this process is running that `match`
+// selects to stop, then waits up to `wait` for them to leave. It returns how
+// many are still running afterwards (0 means they all stopped).
+//
+// The stop is the same cooperative one DELETE sends: the tool observes it at
+// its next checkpoint, and the engine call is stopped by the host's stop
+// watcher. A run owned by another replica cannot be stopped from here (the
+// limit Cancel documents).
+func (m *Manager) StopMatching(ctx context.Context, match func(RunningInvocation) bool, wait time.Duration) int {
+	m.mu.Lock()
+	var targets []RunningInvocation
+	for id, live := range m.inFlight {
+		info := RunningInvocation{ID: id, Toolkit: live.invocation.Toolkit, Tool: live.invocation.Tool, Labels: map[string]string{}}
+		for k, v := range live.invocation.Labels {
+			info.Labels[k] = v
+		}
+		if match(info) {
+			targets = append(targets, info)
+		}
+	}
+	m.mu.Unlock()
+	if len(targets) == 0 {
+		return 0
+	}
+	for _, target := range targets {
+		if _, err := m.Cancel(ctx, target.Toolkit, target.Tool, target.ID); err != nil {
+			m.logger.Warn("could not request a stop", "invocation", target.ID, "error", err)
+		}
+	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		m.mu.Lock()
+		remaining := 0
+		for _, target := range targets {
+			if _, running := m.inFlight[target.ID]; running {
+				remaining++
+			}
+		}
+		m.mu.Unlock()
+		if remaining == 0 {
+			return 0
+		}
+		select {
+		case <-ctx.Done():
+			return remaining
+		case <-deadline.C:
+			return remaining
+		case <-tick.C:
+		}
+	}
 }

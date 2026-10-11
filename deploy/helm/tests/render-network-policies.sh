@@ -13,6 +13,10 @@
 #                    to elitea-main's HTTP port and cluster DNS.
 #   worker           no inbound traffic at all; egress is not restricted.
 #   sandbox          the supervisor ports admit the worker and elitea-main only.
+#   deepwiki         the SPI port admits elitea-main only; the platform gRPC
+#                    port (deepwiki.platformGrpc.clients) is declared, served
+#                    and admitted if and only if the allowlist names a client,
+#                    and admits elitea-main only.
 #
 # A policy is only as good as the labels it selects, so every selector here is
 # matched against the labels of the pod templates the chart ACTUALLY renders:
@@ -89,10 +93,11 @@ render() { # render <name> <args...> -> $WORK/<name>.yaml
 # ── 1. The policies, against the pods the chart renders ──────────────────────
 # check <name> <edge> <worker> <supervisor> <deepwiki: none|direct|edge> <inventory: 0|1>
 check() {
-  python3 - "$WORK/$1.yaml" "$1" "$2" "$3" "$4" "$5" "$6" <<'PY'
+  python3 - "$WORK/$1.yaml" "$1" "$2" "$3" "$4" "$5" "$6" "${EXPECT_GRPC:-}" <<'PY'
 import sys, yaml
 
 path, name, edge, worker, sup, deepwiki, inventory = sys.argv[1:8]
+expect_grpc = sys.argv[8] if len(sys.argv) > 8 else ""
 edge, worker, sup, inventory = edge == "1", worker == "1", sup == "1", inventory == "1"
 docs = [d for d in yaml.safe_load_all(open(path)) if d]
 bad = []
@@ -132,6 +137,8 @@ if edge:
     expected["elitea-platform-edge-netpol"] = EDGE
 if sup:
     expected["elitea-sandbox-supervisor-netpol"] = SUP
+if deepwiki != "none":
+    expected["elitea-deepwiki-netpol"] = DW
 check(sorted(policies) == sorted(expected), f"policy set {sorted(policies)} != {sorted(expected)}")
 
 for pname, target in expected.items():
@@ -140,7 +147,10 @@ for pname, target in expected.items():
         continue
     sel = pol["spec"]["podSelector"].get("matchLabels") or {}
     check(bool(sel), f"{pname}: empty podSelector would select every pod")
-    check(selects(sel) == [target], f"{pname}: selects {selects(sel)}, want only {target}")
+    # A provider's one-shot migration Job carries the provider's selector
+    # labels: the same workload family, not a second pod to protect.
+    selected = [n for n in selects(sel) if not n.endswith("-migrate")]
+    check(selected == [target], f"{pname}: selects {selected}, want only {target}")
     check(pol["metadata"].get("namespace", "elitea") == "elitea", f"{pname}: wrong namespace")
 
 def peer_targets(rule, where):
@@ -216,6 +226,36 @@ if ep:
         check(sorted((p["protocol"], p["port"]) for p in dns[0]["ports"]) == [("TCP", 53), ("UDP", 53)], "edge: DNS ports")
         check(dns[0]["to"] == [{"namespaceSelector": {}, "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}], "edge: DNS peer shape")
 
+# ── deepwiki ─────────────────────────────────────────────────────────────────
+dp = policies.get("elitea-deepwiki-netpol")
+if dp:
+    spec = dp["spec"]
+    check(spec["policyTypes"] == ["Ingress"], "deepwiki: policyTypes must be Ingress only")
+    by = rules_by_ports(spec["ingress"], "deepwiki")
+    ctr = deployments["elitea-deepwiki"]["spec"]["template"]["spec"]["containers"][0]
+    declared = {p["name"]: p["containerPort"] for p in ctr["ports"]}
+    grpc_port = declared.get("platform-grpc")
+    check(declared.get("http") == 8080, f"deepwiki: the SPI port is {declared.get('http')}, not 8080")
+    want = [(8080,)] + ([(grpc_port,)] if grpc_port else [])
+    check(sorted(by) == sorted(want), f"deepwiki: ports admitted {sorted(by)}, want {sorted(want)}")
+    for key, rule in by.items():
+        check(peer_targets(rule, f"deepwiki:{key}") == [MAIN], f"deepwiki:{key} must admit elitea-main only")
+    # The platform gRPC port is declared, configured, exposed and admitted
+    # together, or not at all.
+    env = {e["name"]: e.get("value") for e in ctr.get("env", [])}
+    service = [d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == "elitea-deepwiki-svc"][0]
+    service_ports = {p["name"]: p for p in service["spec"]["ports"]}
+    if grpc_port:
+        check(env.get("ELITEA_DEEPWIKI_PLATFORM_CLIENTS"), "deepwiki: the gRPC port is declared with no allowed clients")
+        check(env.get("ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") == f":{grpc_port}", f"deepwiki: the gRPC address is {env.get('ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR')}")
+        check("platform-grpc" in service_ports and service_ports["platform-grpc"]["targetPort"] == "platform-grpc", "deepwiki: the Service does not expose the gRPC port")
+    else:
+        check("ELITEA_DEEPWIKI_PLATFORM_CLIENTS" not in env and "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR" not in env,
+              "deepwiki: the gRPC service is configured with no port")
+        check("platform-grpc" not in service_ports, "deepwiki: the Service exposes a gRPC port nothing listens on")
+    if expect_grpc:
+        check(bool(grpc_port) == (expect_grpc == "1"), f"deepwiki: gRPC port declared={bool(grpc_port)}, expected {expect_grpc}")
+
 # ── worker ───────────────────────────────────────────────────────────────────
 wp = policies.get("elitea-worker-netpol")
 if wp:
@@ -262,6 +302,9 @@ echo "== composed installs =="
 run worker-edge  1 1 0 none 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
 run full         1 1 1 direct 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" "${INVENTORY[@]}"
 run full-via-edge 1 1 1 edge 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL= "${INVENTORY[@]}"
+# The platform gRPC service: declared, configured, exposed and admitted together.
+EXPECT_GRPC=0 run deepwiki-no-grpc 0 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}"
+EXPECT_GRPC=1 run deepwiki-grpc 0 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}'
 
 # ── 2. Guards ────────────────────────────────────────────────────────────────
 echo "== guards =="
@@ -288,6 +331,8 @@ refuses "platform edge pointed at another Main Service" "worker.platformEdge.mai
 refuses "noExternalIngress with main.ingress.enabled (gateway-api)" "contradicts main.ingress.enabled" \
   "${STANDALONE[@]}" "${NOEXT[@]}" --set main.ingress.enabled=true --set networkPolicies.main.ingressFrom[0].podSelector.matchLabels.x=y --set main.ingress.gatewayApi=true \
   --set main.ingress.gateway.name=shared-gateway --set main.ingress.gateway.namespace=gateway-system
+refuses "platform gRPC clients without mutual TLS" "deepwiki.platformGrpc.clients is set, but deepwiki.mtls.enabled is false" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.mtls.enabled=false
 refuses "enabled=false without externallyManaged" "networkPolicies.externallyManaged" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set networkPolicies.enabled=false
 if render off-managed "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" --set networkPolicies.enabled=false --set networkPolicies.externallyManaged=true; then

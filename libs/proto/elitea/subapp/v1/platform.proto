@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package elitea.subapp.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1;subappv1";
+
+// PlatformOperations are the operations a sub-application host (ADR-0023)
+// offers the platform itself, as opposed to the toolkit tools it offers users
+// through the provider SPI. They are not a user's to run, so the service is
+// served on its own mutual-TLS listener and authorised by ONE thing: the
+// verified client certificate of the platform service (elitea-main), matched
+// against the host's allowlist of certificate identities. An identity
+// signature, a metadata entry or a request field authorises nothing.
+//
+// This is the internal service-to-service transport AGENTS.md prescribes
+// (gRPC over mTLS); the SPI's HTTP surface carries user traffic only.
+//
+// buf:lint:ignore SERVICE_SUFFIX
+service PlatformOperations {
+  // DeleteProject removes everything the application holds for one project:
+  // for DeepWiki, the search index of every wiki of the project. It is
+  // idempotent: a project with nothing left answers an empty success.
+  //
+  // It stops the project's running generations first and waits a bounded
+  // time for them to end. When one is still running it answers
+  // FAILED_PRECONDITION ("a generation is still running; retry") and
+  // deletes nothing; when a publish holds a wiki past the bounded wait it
+  // answers ABORTED ("being published; retry"). It deletes the application's
+  // own data only; the project's artifacts belong to the platform's project
+  // deletion.
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse);
+}
+
+message DeleteProjectRequest {
+  // The platform project id; a positive integer.
+  int32 project_id = 1;
+}
+
+message DeleteProjectResponse {
+  int32 project_id = 1;
+  // What was removed from each wiki that had an index, in deletion order.
+  repeated WikiDeletion wikis = 2;
+  // Builds in progress (staged rows of generations that have not published)
+  // that were left alone because their heartbeat is live.
+  int64 live_builds = 3;
+  // Stale builds that were removed.
+  int64 stale_builds_removed = 4;
+  // Problems that did not stop the deletion, one human-readable line each.
+  // Empty on a clean deletion.
+  repeated string errors = 5;
+}
+
+// WikiDeletion is what one wiki's deletion removed.
+message WikiDeletion {
+  string wiki_id = 1;
+  int64 nodes = 2;
+  int64 edges = 3;
+  int64 embeddings = 4;
+  int64 statistics = 5;
+}

@@ -22,6 +22,15 @@ spec:
       port: {{ .Values.deepwiki.service.port }}
       targetPort: http
       protocol: TCP
+    {{- if include "elitea-deepwiki.platformGrpc" . }}
+    # The platform gRPC service (values: deepwiki.platformGrpc). Same Service,
+    # so the server certificate's SANs cover it; the NetworkPolicy admits
+    # elitea-main only.
+    - name: platform-grpc
+      port: {{ .Values.deepwiki.platformGrpc.port }}
+      targetPort: platform-grpc
+      protocol: TCP
+    {{- end }}
   selector:
     {{- include "elitea-deepwiki.selectorLabels" . | nindent 4 }}
 {{- end }}

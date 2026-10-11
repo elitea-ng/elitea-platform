@@ -6,7 +6,6 @@
 //! | branch | score field | parity |
 //! | --- | --- | --- |
 //! | dense | `vec_distance` (L2, lower is better) | exact: an exact scan, no HNSW index |
-//! | bm25 | `bm25_score` (higher is better) | exact: `wiki_bm25_*` 'bm25', k1 1.5, b 0.75 |
 //! | fts | `fts_rank` (negated, lower is better), `score_norm` | match set and order: `plainto_tsquery` over the folded text, ranked by 'fts' statistics |
 //! | fused | `combined_score` (higher is better) | the frozen weighted RRF over fts + dense |
 //!
@@ -26,8 +25,8 @@
 //! autocommit statements; a publish between two of them could mix two
 //! indexes in one answer.
 
-use crate::storage::text::{self, BRANCH_BM25, BRANCH_FTS};
-use crate::storage::{Result, WikiKey};
+use crate::storage::text::{self, BRANCH_FTS};
+use crate::storage::{Result, StorageError, WikiKey};
 use indexmap::IndexMap;
 use sqlx::Row;
 use sqlx::postgres::{PgConnection, PgPool};
@@ -55,7 +54,6 @@ pub struct Scores {
     pub fts_rank: Option<f64>,
     pub score_norm: Option<f64>,
     pub vec_distance: Option<f64>,
-    pub bm25_score: Option<f64>,
     pub combined_score: Option<f64>,
 }
 
@@ -68,7 +66,6 @@ impl Scores {
             ("fts_rank", self.fts_rank),
             ("score_norm", self.score_norm),
             ("vec_distance", self.vec_distance),
-            ("bm25_score", self.bm25_score),
             ("combined_score", self.combined_score),
         ]
         .into_iter()
@@ -250,19 +247,7 @@ impl IndexReader {
     /// dimension differs from the stored ones.
     pub async fn search_dense(&self, embedding: &[f64], k: usize) -> Result<Vec<Hit>> {
         let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_dense(&mut tx, &self.key, embedding, k).await?;
-        tx.commit().await?;
-        Ok(hits)
-    }
-
-    /// Standalone BM25: hits carry `bm25_score`.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::storage::StorageError::Database`].
-    pub async fn search_bm25(&self, query: &str, k: usize) -> Result<Vec<Hit>> {
-        let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_bm25(&mut tx, &self.key, query, k).await?;
+        let hits = search_dense(&mut tx, &self.key, embedding, k, None).await?;
         tx.commit().await?;
         Ok(hits)
     }
@@ -280,7 +265,7 @@ impl IndexReader {
         params: &Hybrid,
     ) -> Result<Vec<Hit>> {
         let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_hybrid(&mut tx, &self.key, query, embedding, params).await?;
+        let hits = search_hybrid(&mut tx, &self.key, query, embedding, params, None).await?;
         tx.commit().await?;
         Ok(hits)
     }
@@ -540,14 +525,26 @@ pub(crate) async fn search_fts(
 /// `PostgresBackend.search_dense`: exact L2 KNN. The query vector is sent as
 /// pgvector's text form, as Python sent it, so it rounds to the same
 /// `float4` values.
+///
+/// With `expected_model`, the wiki's recorded embedding model is read in the
+/// SAME statement (a scalar subquery on each row, so no extra round trip) and
+/// therefore in the same snapshot as the vectors compared. A wiki
+/// republished with another model between the caller's model choice and this
+/// search has vectors from another space; the search then answers
+/// [`crate::storage::StorageError::EmbeddingModelChanged`] instead of
+/// ranking by a meaningless distance. A search that returns no vector row has
+/// compared nothing, so there is nothing to refuse.
 pub(crate) async fn search_dense(
     tx: &mut PgConnection,
     key: &WikiKey,
     embedding: &[f64],
     k: usize,
+    expected_model: Option<&str>,
 ) -> Result<Vec<Hit>> {
     let rows = sqlx::query(
-        "SELECT e.node_id, e.embedding <-> $1::text::vector AS distance \
+        "SELECT e.node_id, e.embedding <-> $1::text::vector AS distance, \
+                (SELECT w.embedding_model FROM wikis w \
+                 WHERE w.project_id = $4 AND w.wiki_id = $2) AS stored_model \
          FROM wiki_node_embeddings e \
          WHERE e.wiki_id = $2 AND e.project_id = $4 \
          ORDER BY distance, e.node_id \
@@ -561,6 +558,21 @@ pub(crate) async fn search_dense(
     .await?;
     let mut scored = Vec::with_capacity(rows.len());
     for row in rows {
+        if let Some(expected) = expected_model {
+            let recorded: Option<String> = row.try_get("stored_model")?;
+            if let Some(stored) = recorded
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                && stored != expected
+            {
+                return Err(StorageError::EmbeddingModelChanged {
+                    wiki_id: key.wiki_id().to_owned(),
+                    stored: stored.to_owned(),
+                    expected: expected.to_owned(),
+                });
+            }
+        }
         let distance: f64 = row.try_get("distance")?;
         scored.push((
             row.try_get("node_id")?,
@@ -573,33 +585,6 @@ pub(crate) async fn search_dense(
     hits(tx, key, scored).await
 }
 
-/// `PostgresBackend.search_bm25`.
-pub(crate) async fn search_bm25(
-    tx: &mut PgConnection,
-    key: &WikiKey,
-    query: &str,
-    k: usize,
-) -> Result<Vec<Hit>> {
-    let terms: Vec<String> = text::whitespace_tokens(query).map(str::to_owned).collect();
-    let scores = bm25_scores(tx, key, BRANCH_BM25, &terms).await?;
-    let mut ordered: Vec<(String, f64)> = scores.into_iter().collect();
-    ordered.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    ordered.truncate(k);
-    let ranked = ordered
-        .into_iter()
-        .map(|(node_id, score)| {
-            (
-                node_id,
-                Scores {
-                    bm25_score: Some(score),
-                    ..Scores::default()
-                },
-            )
-        })
-        .collect();
-    hits(tx, key, ranked).await
-}
-
 /// `PostgresBackend.search_hybrid`.
 pub(crate) async fn search_hybrid(
     tx: &mut PgConnection,
@@ -607,11 +592,12 @@ pub(crate) async fn search_hybrid(
     query: &str,
     embedding: Option<&[f64]>,
     params: &Hybrid,
+    expected_model: Option<&str>,
 ) -> Result<Vec<Hit>> {
     let fts = search_fts(tx, key, query, params.fts_pool).await?;
     let dense = match embedding {
         Some(vector) if !vector.is_empty() => {
-            search_dense(tx, key, vector, params.vec_pool).await?
+            search_dense(tx, key, vector, params.vec_pool, expected_model).await?
         }
         _ => Vec::new(),
     };

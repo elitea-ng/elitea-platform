@@ -183,6 +183,10 @@ pub(crate) const NODE_SELECT: &str = "SELECT node_id, rel_path, file_name, langu
 #[derive(Debug, Clone)]
 pub struct UnifiedDb {
     reader: IndexReader,
+    /// The embedding model the caller's question vectors were made with.
+    /// With it set, a dense search checks the wiki's recorded model inside
+    /// its own snapshot (see `search::search_dense`).
+    expected_model: Option<String>,
 }
 
 impl UnifiedDb {
@@ -191,7 +195,17 @@ impl UnifiedDb {
     pub fn new(pool: PgPool, key: WikiKey) -> Self {
         Self {
             reader: IndexReader::new(pool, key),
+            expected_model: None,
         }
+    }
+
+    /// The model the question vectors passed to [`Self::search_hybrid`] were
+    /// made with: a search over a wiki republished with another model is
+    /// refused ([`crate::storage::StorageError::EmbeddingModelChanged`]).
+    #[must_use]
+    pub fn expecting_embedding_model(mut self, model: impl Into<String>) -> Self {
+        self.expected_model = Some(model.into());
+        self
     }
 
     /// The branch searches.
@@ -240,7 +254,15 @@ impl UnifiedDb {
     ) -> Result<Vec<HybridRow>> {
         let mut tx = self.snapshot().await?;
         let key = self.key();
-        let mut hits = search::search_hybrid(&mut tx, key, query, embedding, params).await?;
+        let mut hits = search::search_hybrid(
+            &mut tx,
+            key,
+            query,
+            embedding,
+            params,
+            self.expected_model.as_deref(),
+        )
+        .await?;
         let filtered = scope.path_prefix.as_deref().is_some_and(|p| !p.is_empty())
             || scope.cluster_id.is_some();
         if filtered {

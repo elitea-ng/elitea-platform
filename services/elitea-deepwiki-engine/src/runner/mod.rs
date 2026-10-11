@@ -9,9 +9,11 @@
 //!
 //! * [`Runner::Native`] — the Rust engine (ADR-0026): `generate_wiki` in a
 //!   worker child process ([`native`]); `ask`, `deep_research` and
-//!   `resolve_wiki` in this process, over PostgreSQL.
+//!   `resolve_wiki` in this process, over PostgreSQL; the index deletions
+//!   (`delete_wiki_index`, `delete_project_wikis`, [`maintenance`]) the same.
 
 pub mod fixture;
+pub mod maintenance;
 pub mod native;
 
 use crate::errors::{EngineError, ErrorType};
@@ -20,7 +22,15 @@ use serde_json::{Map, Value};
 pub use elitea_engine_core::stream::{Context, Line, StopSignal};
 
 /// The tools the sidecar serves. The Go host serves everything else itself.
-pub const ENGINE_TOOLS: [&str; 4] = ["generate_wiki", "ask", "deep_research", "resolve_wiki"];
+pub const ENGINE_TOOLS: [&str; 6] = [
+    "generate_wiki",
+    "ask",
+    "deep_research",
+    "resolve_wiki",
+    // The index deletions (ADR-0031 phase D0, issue #1243).
+    "delete_wiki_index",
+    "delete_project_wikis",
+];
 
 /// Reader-selected wiki pages (`context_paths`) and their pinned version.
 pub const PATHS_PARAM: &str = "context_paths";
@@ -132,6 +142,10 @@ impl elitea_engine_sidecar::Engine for Runner {
 
     fn serves(&self, tool: &str) -> bool {
         ENGINE_TOOLS.contains(&tool)
+    }
+
+    fn tools(&self) -> &'static [&'static str] {
+        &ENGINE_TOOLS
     }
 
     async fn run(

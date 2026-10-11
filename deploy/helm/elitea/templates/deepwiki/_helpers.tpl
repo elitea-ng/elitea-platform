@@ -61,8 +61,34 @@ refuses for an enabled facade).
 {{/* Where both containers find the runtime CA for the callback hop. */}}
 {{- define "elitea-deepwiki.runtimeCaPath" -}}/run/elitea-runtime-ca{{- end -}}
 
+{{/*
+elitea-deepwiki.platformGrpc — "true" when the platform gRPC service is on:
+deepwiki.platformGrpc.clients names at least one certificate identity. Empty
+otherwise, and the service is then not configured, exposed or admitted at all.
+*/}}
+{{- define "elitea-deepwiki.platformGrpc" -}}
+{{- if (.Values.deepwiki.platformGrpc | default dict).clients -}}true{{- end -}}
+{{- end -}}
+
 {{- define "elitea-deepwiki.validateGuards" -}}
 {{- $env := .Values.deepwiki.env | default dict -}}
+
+{{/*
+  Guard: the platform gRPC service is authorised by the verified client
+  certificate, so it cannot exist without mutual TLS; and its port must not
+  collide with the SPI's.
+*/}}
+{{- if include "elitea-deepwiki.platformGrpc" . -}}
+{{- if not .Values.deepwiki.mtls.enabled -}}
+{{- fail "deepwiki.platformGrpc.clients is set, but deepwiki.mtls.enabled is false: the platform service authorises a caller by its verified client certificate and refuses to start without mutual TLS. Enable mtls, or empty platformGrpc.clients." -}}
+{{- end -}}
+{{- if eq (.Values.deepwiki.platformGrpc.port | int) 8080 -}}
+{{- fail "deepwiki.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
+{{- end -}}
+{{- if or (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") -}}
+{{- fail "deepwiki.env sets ELITEA_DEEPWIKI_PLATFORM_CLIENTS or ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR; the chart renders both from deepwiki.platformGrpc (clients, port). Remove them from env." -}}
+{{- end -}}
+{{- end -}}
 
 {{/*
   Guard #0: the callback hop through platform-edge (ADR-0027). The edge is a

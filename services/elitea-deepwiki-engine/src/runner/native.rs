@@ -338,6 +338,19 @@ impl NativeRunner {
             context.checkpoint()?;
             return self.query(tool, &arguments, context).await;
         }
+        if super::maintenance::MAINTENANCE_TOOLS.contains(&tool) {
+            let arguments = prepare_arguments(tool, arguments)?;
+            context.checkpoint()?;
+            return super::maintenance::run(
+                tool,
+                &arguments,
+                &self.pool,
+                &self.settings.publish,
+                self.settings.build_stale_after,
+                &context.stop_signal(),
+            )
+            .await;
+        }
         if tool != "generate_wiki" {
             return Err(EngineError::new(
                 ErrorType::Key,

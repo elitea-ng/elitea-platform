@@ -25,6 +25,8 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone, Default)]
 struct Toy {
     published: Arc<AtomicUsize>,
+    /// Whether the toy names its tools in the health document.
+    listed: bool,
 }
 
 impl Engine for Toy {
@@ -34,6 +36,14 @@ impl Engine for Toy {
 
     fn serves(&self, tool: &str) -> bool {
         matches!(tool, "echo" | "wait" | "fail")
+    }
+
+    fn tools(&self) -> &'static [&'static str] {
+        if self.listed {
+            &["echo", "wait", "fail"]
+        } else {
+            &[]
+        }
     }
 
     async fn run(
@@ -429,4 +439,23 @@ fn bind_refuses_to_delete_a_file_that_is_not_a_socket() {
     assert!(refused.is_err());
     assert_eq!(std::fs::read(&path).ok().as_deref(), Some(&b"keep me"[..]));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An engine that lists its tools has them in the health document; one that
+/// does not (the toy) keeps the document it always had.
+#[tokio::test]
+async fn health_lists_the_tools_an_engine_names() {
+    let sidecar = Sidecar::start(Toy {
+        listed: true,
+        ..Toy::default()
+    });
+    let (code, health) =
+        read_json(send(&sidecar.socket, "GET", "/engine/health", None).await).await;
+    assert_eq!(
+        (code, health),
+        (
+            200,
+            json!({"status": "UP", "runner": "toy", "active": 0, "tools": ["echo", "wait", "fail"]})
+        )
+    );
 }

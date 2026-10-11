@@ -3086,6 +3086,26 @@ deepwiki:
     port: 8443
     annotations: {}
 
+  # The platform gRPC service (elitea.subapp.v1.PlatformOperations, libs/proto):
+  # operations that are not a user's to run, such as deleting everything a
+  # project owns here when the project is deprovisioned. It is a second
+  # listener of the host container, behind the SAME server certificate and
+  # client CA as the SPI (mutual TLS is mandatory), and every call is
+  # authorised by the verified client certificate alone: its subject common
+  # name or a DNS SAN must be in `clients`.
+  #
+  #   clients  certificate identities allowed to call it. EMPTY (the default)
+  #            keeps the service OFF: no port is opened, rendered or admitted.
+  #            The facade client certificate this chart issues has the common
+  #            name elitea-main, so `[elitea-main]` is the usual value. Needs
+  #            mtls.enabled (the chart refuses it otherwise).
+  #   port     the container and Service port, exposed as `platform-grpc`.
+  #
+  # The NetworkPolicy admits elitea-main only on both ports.
+  platformGrpc:
+    clients: []
+    port: 9443
+
   env:
     # FAIL-CLOSED, and the chart refuses to render while it is empty — see
     # elitea-deepwiki.validateGuards. The SAME value belongs in

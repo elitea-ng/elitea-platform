@@ -367,8 +367,8 @@ impl Pipeline<'_> {
             .await
             .map_err(|e| storage_failure("staging the graph", &e))?;
         context.thinking(format!(
-            "Staged {} nodes, {} edges and {} BM25 documents",
-            staged.nodes, staged.edges, staged.bm25_documents
+            "Staged {} nodes and {} edges",
+            staged.nodes, staged.edges
         ));
         context.checkpoint()?;
         context.thinking(format!(
@@ -557,7 +557,7 @@ impl Pipeline<'_> {
         // the publish. A publish that committed reports its result; one
         // that did not reports the stop.
         (self.job.on_publishing)(true);
-        let committed = self.publish(&mut result, slot).await;
+        let committed = self.publish(&mut result, slot, &embeddings).await;
         (self.job.on_publishing)(false);
         if !committed && context.stop_signal().is_requested() {
             return Err(EngineError::cancelled());
@@ -684,7 +684,12 @@ impl Pipeline<'_> {
     /// manifest are genuine and land; what is lost is answering questions
     /// about the wiki. The build is left for the caller to abandon. Returns
     /// whether the publish committed.
-    async fn publish(&self, result: &mut Map<String, Value>, slot: &mut Option<Build>) -> bool {
+    async fn publish(
+        &self,
+        result: &mut Map<String, Value>,
+        slot: &mut Option<Build>,
+        embeddings: &EmbeddingClient,
+    ) -> bool {
         let context = self.context;
         context.thinking("Publishing the index for query replicas");
         let registry: Map<String, Value> = [
@@ -701,7 +706,14 @@ impl Pipeline<'_> {
         .iter()
         .filter_map(|key| result.get(*key).map(|v| ((*key).to_owned(), v.clone())))
         .collect();
-        let record = WikiRecord::from_result(&Value::Object(registry));
+        let mut record = WikiRecord::from_result(&Value::Object(registry));
+        // The model the vectors were made with, recorded on the wiki row
+        // (migration 0006). A build that embedded nothing has no dimension
+        // and records no model.
+        if let Some(dimension) = embeddings.dimension() {
+            record.embedding_model = Some(embeddings.model().to_owned());
+            record.embedding_dim = i32::try_from(dimension).ok();
+        }
         let published = match slot.as_mut() {
             Some(build) => build.publish(&record).await,
             None => Err(StorageError::Publish(

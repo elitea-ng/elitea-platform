@@ -7,6 +7,9 @@
 //	                                engine runner is sidecar (legacy = alias)
 //	ELITEA_<APP>_ENGINE_SOCKET      the engine sidecar's Unix socket (native, sidecar)
 //	ELITEA_<APP>_DATABASE_URL       the durable invocation store (else in memory)
+//	ELITEA_<APP>_PLATFORM_CLIENTS   certificate identities allowed to call the
+//	                                platform gRPC service (empty: service off)
+//	ELITEA_<APP>_PLATFORM_GRPC_ADDR where that service listens (default :9443)
 //	ELITEA_<APP>_*                  the host settings under the app's prefix
 //
 // One binary, one application per process; the prefix keeps each
@@ -36,6 +39,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -112,7 +116,11 @@ func run(logger *slog.Logger) error {
 		}
 		httpServer.TLSConfig = tlsConfig
 	}
-	errs := make(chan error, 1)
+	errs := make(chan error, 2)
+	platform, err := startPlatformGRPC(server, settings, httpServer.TLSConfig, logger, errs)
+	if err != nil {
+		return err
+	}
 	go func() {
 		logger.Info("elitea-subapp-host listening",
 			"app", app.Name, "runner", app.Runner.Name(), "addr", settings.ListenAddr,
@@ -127,12 +135,70 @@ func run(logger *slog.Logger) error {
 	case <-ctx.Done():
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
+		if platform != nil {
+			stopGRPC(platform, shutdownCtx)
+		}
 		return httpServer.Shutdown(shutdownCtx)
 	case err := <-errs:
+		if platform != nil {
+			platform.Stop()
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
+	}
+}
+
+// startPlatformGRPC serves the platform operations (spi/platform.go) on a
+// listener of its own, behind the SPI listener's TLS configuration, when the
+// runner has any AND <PREFIX>PLATFORM_CLIENTS names who may call them. With
+// no clients it does nothing: the service is off, no port is opened.
+//
+// Clients configured without mutual TLS is a boot failure, not a service that
+// silently refuses everyone or, worse, accepts anyone.
+func startPlatformGRPC(server *spi.Server, settings spi.Settings, tlsConfig *tls.Config, logger *slog.Logger, errs chan<- error) (*grpc.Server, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	addr := settings.PlatformGRPCAddr
+	if len(settings.PlatformClients) == 0 {
+		if addr != "" {
+			logger.Warn("the platform gRPC service is off: no platform clients are allowed (set PLATFORM_CLIENTS)", "addr", addr)
+		}
+		return nil, nil
+	}
+	ops, ok := server.PlatformOps()
+	if !ok {
+		logger.Warn("platform clients are configured but this application has no platform operations; the service is off")
+		return nil, nil
+	}
+	if addr == "" {
+		addr = spi.DefaultPlatformGRPCAddr
+	}
+	platform, err := spi.NewPlatformGRPCServer(ops, settings.PlatformClients, tlsConfig, logger)
+	if err != nil {
+		return nil, err
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen for the platform gRPC service on %s: %w", addr, err)
+	}
+	go func() {
+		logger.Info("platform gRPC service listening", "addr", listener.Addr().String(), "clients", len(settings.PlatformClients))
+		errs <- platform.Serve(listener)
+	}()
+	return platform, nil
+}
+
+// stopGRPC drains a gRPC server, then stops it at the deadline.
+func stopGRPC(server *grpc.Server, ctx context.Context) {
+	done := make(chan struct{})
+	go func() { server.GracefulStop(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		server.Stop()
 	}
 }
 

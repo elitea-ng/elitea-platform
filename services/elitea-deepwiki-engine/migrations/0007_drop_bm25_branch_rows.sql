@@ -1,0 +1,19 @@
+-- The standalone 'bm25' branch of the BM25 statistics is no longer written
+-- or read (ADR-0031 phase D0). Only the 'fts' branch, the one the live
+-- hybrid search ranks with, remains.
+--
+-- This migration deliberately changes NOTHING. The rows existing wikis carry
+-- for the dead branch (millions of postings for a large repository) are
+-- removed by the engine itself, in the background, 10 000 rows per statement
+-- with a pause between (src/storage/cleanup.rs). One unbatched DELETE here
+-- would hold its locks and write-ahead log for as long as the largest index
+-- takes, inside a migration Job that blocks the rollout. The engine repeats
+-- the cleanup on every start until two passes in a row find nothing, which
+-- also removes rows a replica of the previous release writes during a
+-- rolling deploy.
+--
+-- The tables stay: 'fts' uses them. The build space's staging tables
+-- `deepwiki_build.bm25_docs` and `bm25_postings` are left in place too
+-- (nothing writes them any more), so a replica of the previous release that
+-- is still running during a rolling deploy keeps working.
+SELECT 1;
