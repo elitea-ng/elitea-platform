@@ -38,6 +38,7 @@ use zeroize::Zeroizing;
 use super::ProtocolError;
 use super::command::{
     VerifiedAgentCommand, VerifiedExecutionCommand, VerifiedToolkitExecuteReadCommand,
+    terminal_logical_output_id,
 };
 use super::elitea::runtime::v1::{
     AgentExecutionResultV1, AuthorizeInvocationDispositionV1, AuthorizeInvocationRequestV1,
@@ -388,24 +389,40 @@ impl AcceptedAgentClaim {
             && result.request_content_digest.as_ref() == content.digest.as_ref()
     }
 
+    /// The settings entry a result names must be the one the claim admitted:
+    /// same entry id, immutable version and content digest. Shared by every
+    /// capability whose request entry is a settings document.
+    #[must_use]
+    fn matches_settings_entry_binding(
+        &self,
+        entry_id: &str,
+        entry_version: &str,
+        content_digest: Option<&DigestV1>,
+    ) -> bool {
+        let Some(settings) = self.request_entry.content.as_ref() else {
+            return false;
+        };
+        entry_id == self.request_entry.entry_id
+            && entry_version == self.request_entry.immutable_version
+            && content_digest == settings.digest.as_ref()
+    }
+
     #[must_use]
     pub(crate) fn matches_toolkit_call_tool_result_binding(
         &self,
         result: &super::elitea::runtime::v1::ToolkitCallToolResultV1,
     ) -> bool {
-        let Some(settings) = self.request_entry.content.as_ref() else {
-            return false;
-        };
         let Some(arguments) = self.arguments_entry.as_ref() else {
             return false;
         };
         let Some(content) = arguments.content.as_ref() else {
             return false;
         };
-        result.settings_entry_id == self.request_entry.entry_id
-            && result.settings_entry_version == self.request_entry.immutable_version
-            && result.settings_content_digest.as_ref() == settings.digest.as_ref()
-            && result.arguments_entry_id == arguments.entry_id
+        self.matches_settings_entry_binding(
+            &result.settings_entry_id,
+            &result.settings_entry_version,
+            result.settings_content_digest.as_ref(),
+        ) && result.arguments_entry_id == arguments.entry_id
             && result.arguments_content_digest.as_ref() == content.digest.as_ref()
     }
 
@@ -414,29 +431,28 @@ impl AcceptedAgentClaim {
         &self,
         result: &super::elitea::runtime::v1::ToolkitAvailableToolsResultV1,
     ) -> bool {
-        let Some(content) = self.request_entry.content.as_ref() else {
-            return false;
-        };
-        result.settings_entry_id == self.request_entry.entry_id
-            && result.settings_entry_version == self.request_entry.immutable_version
-            && result.settings_content_digest.as_ref() == content.digest.as_ref()
+        self.matches_settings_entry_binding(
+            &result.settings_entry_id,
+            &result.settings_entry_version,
+            result.settings_content_digest.as_ref(),
+        )
     }
 
     /// A validation result must name the very bundle, entry version and
-    /// content the claim admitted, not merely carry well-formed digests.
+    /// content the claim admitted, not merely carry well-formed digests: the
+    /// settings-entry binding plus the input bundle id and digest.
     #[must_use]
     pub(crate) fn matches_configuration_validation_result_binding(
         &self,
         result: &super::elitea::runtime::v1::ConfigurationValidationResultV1,
     ) -> bool {
-        let Some(content) = self.request_entry.content.as_ref() else {
-            return false;
-        };
         result.input_bundle_id == self.input_bundle_ref.input_bundle_id
             && result.input_bundle_digest.as_ref() == self.input_bundle_ref.digest.as_ref()
-            && result.settings_entry_id == self.request_entry.entry_id
-            && result.settings_entry_version == self.request_entry.immutable_version
-            && result.settings_content_digest.as_ref() == content.digest.as_ref()
+            && self.matches_settings_entry_binding(
+                &result.settings_entry_id,
+                &result.settings_entry_version,
+                result.settings_content_digest.as_ref(),
+            )
     }
 
     /// Bind a validated terminal to the replacement claim without invocation.
@@ -3292,27 +3308,6 @@ fn terminal_command_ack(
     TerminalCommandAck {
         kind,
         retirement: command_retirement_binding(verified),
-    }
-}
-
-fn terminal_logical_output_id(command: &super::elitea::runtime::v1::WorkerCommandV1) -> String {
-    match command.capability_command.as_ref() {
-        Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)) => {
-            format!("toolkit-execute-read:{}", command.execution_id)
-        }
-        Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(_)) => {
-            format!("toolkit-call-tool:{}", command.execution_id)
-        }
-        Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
-            format!("toolkit-available-tools:{}", command.execution_id)
-        }
-        Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)) => {
-            format!(
-                "configuration-validation:{}",
-                validation.configuration_revision_id
-            )
-        }
-        _ => format!("agent-execution:{}", command.execution_id),
     }
 }
 

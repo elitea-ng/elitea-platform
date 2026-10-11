@@ -48,6 +48,48 @@ impl ToolkitCommandKind {
             Self::ConfigurationValidate => "configuration-validation",
         }
     }
+
+    /// The direct-execution kind a command's capability payload selects;
+    /// `None` for agent executions.
+    #[must_use]
+    pub(crate) const fn of_command(command: &WorkerCommandV1) -> Option<Self> {
+        match command.capability_command {
+            Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)) => {
+                Some(Self::ExecuteRead)
+            }
+            Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(_)) => Some(Self::CallTool),
+            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
+                Some(Self::AvailableTools)
+            }
+            Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(_)) => {
+                Some(Self::ConfigurationValidate)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The logical output id Main expects for a command's terminal frame
+/// (`ExpectedRuntimeFailure` in the output inbox). Configuration validation is
+/// keyed by its configuration revision; every toolkit kind by its execution;
+/// agent executions by theirs. This is the one place the rule lives.
+#[must_use]
+pub(crate) fn terminal_logical_output_id(command: &WorkerCommandV1) -> String {
+    match (
+        ToolkitCommandKind::of_command(command),
+        command.capability_command.as_ref(),
+    ) {
+        (
+            Some(kind),
+            Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)),
+        ) => format!(
+            "{}:{}",
+            kind.output_prefix(),
+            validation.configuration_revision_id
+        ),
+        (Some(kind), _) => format!("{}:{}", kind.output_prefix(), command.execution_id),
+        (None, _) => format!("agent-execution:{}", command.execution_id),
+    }
 }
 
 const MAX_SIGNED_ENVELOPE_BYTES: usize = 48 * 1024;
@@ -180,25 +222,11 @@ impl VerifiedToolkitExecuteReadCommand {
         }
     }
 
-    /// The logical output id Main expects for this command's terminal frame
-    /// (`ExpectedRuntimeFailure` in the output inbox). Validation is keyed by
-    /// its configuration revision; every other kind by its execution.
+    /// The logical output id Main expects for this command's terminal frame;
+    /// see [`terminal_logical_output_id`].
     #[must_use]
     pub fn logical_output_id(&self) -> String {
-        match self.common.command.capability_command.as_ref() {
-            Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(command)) => {
-                format!(
-                    "{}:{}",
-                    self.kind.output_prefix(),
-                    command.configuration_revision_id
-                )
-            }
-            _ => format!(
-                "{}:{}",
-                self.kind.output_prefix(),
-                self.common.command.execution_id
-            ),
-        }
+        terminal_logical_output_id(&self.common.command)
     }
 }
 
