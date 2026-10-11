@@ -19,6 +19,7 @@ use super::client::{
     GitHubFileScope, validate_repository,
 };
 use super::config::{GitHubToolkitConfig, GitHubToolkitConfigError};
+use crate::toolkits::families::connector_client::IntoAdk;
 
 const GET_ME: &str = "get_me";
 const LIST_BRANCHES: &str = "list_branches_in_repo";

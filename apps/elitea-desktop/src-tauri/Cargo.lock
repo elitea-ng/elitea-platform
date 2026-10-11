@@ -1276,6 +1276,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "elitea-connectors",
  "fancy-regex",
  "futures",
  "hmac",
@@ -1329,6 +1330,24 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-swift",
  "tree-sitter-typescript",
+]
+
+[[package]]
+name = "elitea-connectors"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "http",
+ "reqwest 0.12.28",
+ "ring",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

@@ -99,7 +99,9 @@ pub(crate) struct AdoPlansClient {
 impl AdoPlansClient {
     pub(crate) fn new(config: AdoToolkitConfig) -> Result<Self, AdoClientError> {
         let (connection, _) = config.into_parts();
-        Ok(Self::with_client(AdoClient::new(connection)?))
+        Ok(Self::with_client(
+            crate::toolkits::families::ado::client::client(connection)?,
+        ))
     }
 
     pub(crate) fn with_client(ado: AdoClient) -> Self {

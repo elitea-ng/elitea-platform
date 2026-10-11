@@ -7,7 +7,7 @@ use super::ado_test_support::{
     FixtureTransport, TOKEN, client, collection, context, expected_authorization, ok, policy,
     settings, status, tool, tools,
 };
-use super::families::ado::client::{AdoClientError, AdoClientErrorCode};
+use super::families::ado::client::{AdoClientError, AdoClientErrorCode, IntoAdk};
 use super::families::ado::config::{AdoConfigErrorCode, AdoToolkitConfig};
 use super::families::ado::toolset::AdoToolsetErrorCode;
 use super::families::ado_boards::client::{AdoBoardsClient, GetComments, SearchWorkItems};

@@ -64,7 +64,10 @@ impl AdoReposClient {
         connection: AdoConnection,
         repository: AdoRepository,
     ) -> Result<Self, AdoClientError> {
-        Ok(Self::with_client(AdoClient::new(connection)?, repository))
+        Ok(Self::with_client(
+            crate::toolkits::families::ado::client::client(connection)?,
+            repository,
+        ))
     }
 
     pub(crate) fn with_client(ado: AdoClient, repository: AdoRepository) -> Self {

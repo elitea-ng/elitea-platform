@@ -16,6 +16,9 @@ loopback-git-http = []
 [dependencies]
 base64 = "0.22.1"
 elitea-engine-core = { path = "../engine-core" }
+# The shared host allowlist rule only (`egress::HostAllowlist`); no provider
+# client, no reqwest.
+elitea-connectors = { path = "../connectors", default-features = false }
 # HTTPS shallow clone in process, no git binary. The minimal feature set:
 # the blocking reqwest transport with rustls, checkout, SHA-1, and the
 # parallel pack resolution. The ssh and file transports compile in with

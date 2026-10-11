@@ -35,6 +35,10 @@ pub enum SourceError {
     /// No document has this key.
     #[error("no document '{0}' in this source")]
     NotFound(String),
+    /// The document changed after it was listed, so the bytes it would
+    /// return are not the listed version. List the source again.
+    #[error("'{0}' changed since it was listed; list the source again")]
+    Changed(String),
 }
 
 /// A document as listed: enough to decide whether to fetch it.
