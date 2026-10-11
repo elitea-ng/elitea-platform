@@ -18,8 +18,8 @@ use qdrant_client::qdrant::point_id::PointIdOptions;
 use qdrant_client::qdrant::value::Kind;
 use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, DeletePointsBuilder, Document, FacetCountsBuilder, NamedVectors,
-    PointStruct, PrefetchQueryBuilder, Query, QueryPointsBuilder, Rrf, UpsertPointsBuilder, Value,
-    Vector,
+    PointId, PointStruct, PrefetchQueryBuilder, Query, QueryPointsBuilder, Rrf,
+    SearchParamsBuilder, UpsertPointsBuilder, Value, Vector,
 };
 use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
@@ -331,7 +331,15 @@ impl pb::vector_service_server::VectorService for VectorService {
             .await
             .map_err(|error| unavailable("query", &error))?;
         Ok(Response::new(pb::SearchResponse {
-            points: response.result.into_iter().map(scored_point).collect(),
+            points: response
+                .result
+                .into_iter()
+                .map(|point| {
+                    let mut scored = scored_point(point);
+                    scored.dense_score = Some(scored.score);
+                    scored
+                })
+                .collect(),
         }))
     }
 
@@ -364,7 +372,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             return Ok(Response::new(pb::HybridSearchResponse::default()));
         };
         let mut dense = PrefetchQueryBuilder::default()
-            .query(Query::new_nearest(request.vector))
+            .query(Query::new_nearest(request.vector.clone()))
             .using(DENSE_VECTOR)
             .filter(filter.clone())
             .limit(u64::from(prefetch_limit));
@@ -376,7 +384,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             .using(BM25_VECTOR)
             .filter(filter.clone())
             .limit(u64::from(prefetch_limit));
-        let query = QueryPointsBuilder::new(collection)
+        let query = QueryPointsBuilder::new(collection.clone())
             .add_prefetch(dense)
             .add_prefetch(text)
             .query(Query::new_rrf(Rrf {
@@ -384,7 +392,7 @@ impl pb::vector_service_server::VectorService for VectorService {
                 weights: vec![dense_weight, text_weight],
             }))
             // The scope again on the fused stage: defence in depth.
-            .filter(filter)
+            .filter(filter.clone())
             .limit(u64::from(limit))
             .with_payload(true);
         let response = self
@@ -393,9 +401,18 @@ impl pb::vector_service_server::VectorService for VectorService {
             .query(query)
             .await
             .map_err(|error| unavailable("query", &error))?;
-        Ok(Response::new(pb::HybridSearchResponse {
-            points: response.result.into_iter().map(scored_point).collect(),
-        }))
+        let mut points: Vec<pb::ScoredPoint> =
+            response.result.into_iter().map(scored_point).collect();
+        let scores = self
+            .dense_scores(&collection, &filter, request.vector, &points)
+            .await?;
+        // A point deleted between the two queries has no dense score; it is
+        // dropped, so every returned point carries one.
+        points.retain_mut(|point| {
+            point.dense_score = scores.get(&point.id).copied();
+            point.dense_score.is_some()
+        });
+        Ok(Response::new(pb::HybridSearchResponse { points }))
     }
 
     async fn count(
@@ -515,6 +532,48 @@ impl pb::vector_service_server::VectorService for VectorService {
 }
 
 impl VectorService {
+    /// The dense cosine score of each of `points`, by point id.
+    ///
+    /// Qdrant's fused result carries only the fused score, and a prefetch's
+    /// own score cannot be read back from a fusion query (Qdrant 1.19). So
+    /// this is a second query: the same query vector, exact (no HNSW), over
+    /// the same scoped filter narrowed to the fused points' ids.
+    async fn dense_scores(
+        &self,
+        collection: &str,
+        filter: &qdrant_client::qdrant::Filter,
+        vector: Vec<f32>,
+        points: &[pb::ScoredPoint],
+    ) -> Result<HashMap<String, f32>, Status> {
+        if points.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids: Vec<PointId> = points
+            .iter()
+            .map(|point| PointId::from(point.id.clone()))
+            .collect();
+        let mut narrowed = filter.clone();
+        narrowed.must.push(Condition::has_id(ids));
+        let query = QueryPointsBuilder::new(collection)
+            .query(Query::new_nearest(vector))
+            .using(DENSE_VECTOR)
+            .filter(narrowed)
+            .params(SearchParamsBuilder::default().exact(true))
+            .limit(u64::try_from(points.len()).unwrap_or(u64::MAX))
+            .with_payload(false);
+        let response = self
+            .store
+            .client()
+            .query(query)
+            .await
+            .map_err(|error| unavailable("query", &error))?;
+        Ok(response
+            .result
+            .into_iter()
+            .map(|point| (point_id_text(point.id), point.score))
+            .collect())
+    }
+
     async fn delete_where(&self, collections: &[String], scope: &Scope) -> Result<(), Status> {
         let filter = scope.filter(None);
         for collection in collections {
@@ -727,13 +786,17 @@ fn string(payload: &HashMap<String, Value>, name: &str) -> String {
     }
 }
 
-fn scored_point(point: qdrant_client::qdrant::ScoredPoint) -> pb::ScoredPoint {
-    let payload = &point.payload;
-    let id = match point.id.and_then(|id| id.point_id_options) {
+fn point_id_text(id: Option<PointId>) -> String {
+    match id.and_then(|id| id.point_id_options) {
         Some(PointIdOptions::Uuid(uuid)) => uuid,
         Some(PointIdOptions::Num(number)) => number.to_string(),
         None => String::new(),
-    };
+    }
+}
+
+fn scored_point(point: qdrant_client::qdrant::ScoredPoint) -> pb::ScoredPoint {
+    let payload = &point.payload;
+    let id = point_id_text(point.id);
     let acl = match payload.get(key::ACL).and_then(|value| value.kind.as_ref()) {
         Some(Kind::ListValue(list)) => list
             .values
@@ -764,6 +827,7 @@ fn scored_point(point: qdrant_client::qdrant::ScoredPoint) -> pb::ScoredPoint {
         acl,
         text: string(payload, key::TEXT),
         metadata_json,
+        dense_score: None,
     }
 }
 

@@ -53,7 +53,8 @@ service VectorService {
   // Search is a dense nearest-neighbour search by cosine similarity.
   rpc Search(SearchRequest) returns (SearchResponse);
   // HybridSearch fuses a dense search and a BM25 search over `text` by
-  // weighted reciprocal rank fusion.
+  // weighted reciprocal rank fusion. Each point also carries its dense
+  // cosine score.
   rpc HybridSearch(HybridSearchRequest) returns (HybridSearchResponse);
   // Count counts the points that match a scope and a filter.
   rpc Count(CountRequest) returns (CountResponse);
@@ -187,12 +188,13 @@ message StringList {
   repeated string values = 1;
 }
 
-// Condition is one match on a payload key.
+// Condition is one match on a payload key, or a nested filter.
 //
 // key is one of `document_key`, `document_version`, `parent_id`, `chunk_id`,
 // `chunk_type`, `acl`, or `metadata.<path>` where <path> matches
 // ^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$. Every other key, `project_id`
-// included, is refused with INVALID_ARGUMENT.
+// included, is refused with INVALID_ARGUMENT, at any nesting depth. A
+// `filter` condition has no key (key must be empty).
 message Condition {
   string key = 1;
   oneof match {
@@ -200,15 +202,52 @@ message Condition {
     StringList any = 3;
     int64 integer = 4;
     bool boolean = 5;
+    // range compares a number. Only `metadata.<path>` keys take it: the
+    // point fields are keywords.
+    Range range = 6;
+    // is_empty matches when the key is missing, null or an empty array.
+    IsEmpty is_empty = 7;
+    // is_null matches when the key is present and null.
+    IsNull is_null = 8;
+    // filter is a nested filter: it matches when the whole filter does.
+    Filter filter = 9;
   }
 }
 
+// Range bounds a number. At least one bound is set; every bound is finite.
+message Range {
+  optional double gt = 1;
+  optional double gte = 2;
+  optional double lt = 3;
+  optional double lte = 4;
+}
+
+// IsEmpty selects a presence check: missing, null or [].
+message IsEmpty {}
+
+// IsNull selects a null check: present and null.
+message IsNull {}
+
 // Filter narrows a scope. elitea-vector adds it to the injected scope; it
 // never replaces the scope.
+//
+// A filter may nest other filters through Condition.filter, at most 8
+// levels deep counting this one, with at most 64 conditions per list and
+// at most 1024 conditions in the whole tree (nested filter conditions
+// included). An empty nested filter is refused; an empty top-level filter
+// narrows nothing.
 message Filter {
   repeated Condition must = 1;
   repeated Condition should = 2;
   repeated Condition must_not = 3;
+}
+
+// ActiveGeneration pins one namespace of a read to its published build.
+message ActiveGeneration {
+  // namespace_id is one of the scope's namespace_ids.
+  string namespace_id = 1;
+  // generation is the namespace's active build id.
+  string generation = 2;
 }
 
 // Scope selects the namespaces a read works in.
@@ -219,6 +258,12 @@ message Scope {
   repeated string namespace_ids = 3;
   // generation, when set, narrows the read to one generation.
   string generation = 4;
+  // active_generations narrows some namespaces to their active build: a
+  // point of a listed namespace matches when its generation is the listed
+  // one, or when it was written without a generation (an incremental
+  // index). A build in progress (another generation) is excluded. At most
+  // one entry per namespace; it cannot be combined with `generation`.
+  repeated ActiveGeneration active_generations = 5;
 }
 
 message ScoredPoint {
@@ -237,6 +282,10 @@ message ScoredPoint {
   repeated string acl = 12;
   string text = 13;
   string metadata_json = 14;
+  // dense_score is the point's cosine similarity to the query vector. In
+  // Search it equals score; in HybridSearch score is the fused score and
+  // this is the dense side's, for every returned point.
+  optional float dense_score = 15;
 }
 
 message SearchRequest {
@@ -270,12 +319,14 @@ message HybridSearchRequest {
   // prefetch_limit is how many candidates each side returns before fusion.
   // Zero means 4 x limit, at most 1000.
   uint32 prefetch_limit = 9;
-  // score_threshold applies to the dense side only.
+  // score_threshold applies to the dense side only, before fusion.
   optional float score_threshold = 10;
 }
 
 message HybridSearchResponse {
-  // points are ordered by fused score; ScoredPoint.score is the fused score.
+  // points are ordered by fused score; ScoredPoint.score is the fused score
+  // and ScoredPoint.dense_score the cosine similarity (read by a second,
+  // exact dense query over the fused points' ids).
   repeated ScoredPoint points = 1;
 }
 

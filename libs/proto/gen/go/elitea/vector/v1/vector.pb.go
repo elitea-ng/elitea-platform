@@ -1078,12 +1078,13 @@ func (x *StringList) GetValues() []string {
 	return nil
 }
 
-// Condition is one match on a payload key.
+// Condition is one match on a payload key, or a nested filter.
 //
 // key is one of `document_key`, `document_version`, `parent_id`, `chunk_id`,
 // `chunk_type`, `acl`, or `metadata.<path>` where <path> matches
 // ^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$. Every other key, `project_id`
-// included, is refused with INVALID_ARGUMENT.
+// included, is refused with INVALID_ARGUMENT, at any nesting depth. A
+// `filter` condition has no key (key must be empty).
 type Condition struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Key   string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -1093,6 +1094,10 @@ type Condition struct {
 	//	*Condition_Any
 	//	*Condition_Integer
 	//	*Condition_Boolean
+	//	*Condition_Range
+	//	*Condition_IsEmpty
+	//	*Condition_IsNull
+	//	*Condition_Filter
 	Match         isCondition_Match `protobuf_oneof:"match"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1178,6 +1183,42 @@ func (x *Condition) GetBoolean() bool {
 	return false
 }
 
+func (x *Condition) GetRange() *Range {
+	if x != nil {
+		if x, ok := x.Match.(*Condition_Range); ok {
+			return x.Range
+		}
+	}
+	return nil
+}
+
+func (x *Condition) GetIsEmpty() *IsEmpty {
+	if x != nil {
+		if x, ok := x.Match.(*Condition_IsEmpty); ok {
+			return x.IsEmpty
+		}
+	}
+	return nil
+}
+
+func (x *Condition) GetIsNull() *IsNull {
+	if x != nil {
+		if x, ok := x.Match.(*Condition_IsNull); ok {
+			return x.IsNull
+		}
+	}
+	return nil
+}
+
+func (x *Condition) GetFilter() *Filter {
+	if x != nil {
+		if x, ok := x.Match.(*Condition_Filter); ok {
+			return x.Filter
+		}
+	}
+	return nil
+}
+
 type isCondition_Match interface {
 	isCondition_Match()
 }
@@ -1198,6 +1239,27 @@ type Condition_Boolean struct {
 	Boolean bool `protobuf:"varint,5,opt,name=boolean,proto3,oneof"`
 }
 
+type Condition_Range struct {
+	// range compares a number. Only `metadata.<path>` keys take it: the
+	// point fields are keywords.
+	Range *Range `protobuf:"bytes,6,opt,name=range,proto3,oneof"`
+}
+
+type Condition_IsEmpty struct {
+	// is_empty matches when the key is missing, null or an empty array.
+	IsEmpty *IsEmpty `protobuf:"bytes,7,opt,name=is_empty,json=isEmpty,proto3,oneof"`
+}
+
+type Condition_IsNull struct {
+	// is_null matches when the key is present and null.
+	IsNull *IsNull `protobuf:"bytes,8,opt,name=is_null,json=isNull,proto3,oneof"`
+}
+
+type Condition_Filter struct {
+	// filter is a nested filter: it matches when the whole filter does.
+	Filter *Filter `protobuf:"bytes,9,opt,name=filter,proto3,oneof"`
+}
+
 func (*Condition_Keyword) isCondition_Match() {}
 
 func (*Condition_Any) isCondition_Match() {}
@@ -1206,8 +1268,165 @@ func (*Condition_Integer) isCondition_Match() {}
 
 func (*Condition_Boolean) isCondition_Match() {}
 
+func (*Condition_Range) isCondition_Match() {}
+
+func (*Condition_IsEmpty) isCondition_Match() {}
+
+func (*Condition_IsNull) isCondition_Match() {}
+
+func (*Condition_Filter) isCondition_Match() {}
+
+// Range bounds a number. At least one bound is set; every bound is finite.
+type Range struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Gt            *float64               `protobuf:"fixed64,1,opt,name=gt,proto3,oneof" json:"gt,omitempty"`
+	Gte           *float64               `protobuf:"fixed64,2,opt,name=gte,proto3,oneof" json:"gte,omitempty"`
+	Lt            *float64               `protobuf:"fixed64,3,opt,name=lt,proto3,oneof" json:"lt,omitempty"`
+	Lte           *float64               `protobuf:"fixed64,4,opt,name=lte,proto3,oneof" json:"lte,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Range) Reset() {
+	*x = Range{}
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Range) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Range) ProtoMessage() {}
+
+func (x *Range) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Range.ProtoReflect.Descriptor instead.
+func (*Range) Descriptor() ([]byte, []int) {
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *Range) GetGt() float64 {
+	if x != nil && x.Gt != nil {
+		return *x.Gt
+	}
+	return 0
+}
+
+func (x *Range) GetGte() float64 {
+	if x != nil && x.Gte != nil {
+		return *x.Gte
+	}
+	return 0
+}
+
+func (x *Range) GetLt() float64 {
+	if x != nil && x.Lt != nil {
+		return *x.Lt
+	}
+	return 0
+}
+
+func (x *Range) GetLte() float64 {
+	if x != nil && x.Lte != nil {
+		return *x.Lte
+	}
+	return 0
+}
+
+// IsEmpty selects a presence check: missing, null or [].
+type IsEmpty struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IsEmpty) Reset() {
+	*x = IsEmpty{}
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IsEmpty) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IsEmpty) ProtoMessage() {}
+
+func (x *IsEmpty) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IsEmpty.ProtoReflect.Descriptor instead.
+func (*IsEmpty) Descriptor() ([]byte, []int) {
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{18}
+}
+
+// IsNull selects a null check: present and null.
+type IsNull struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IsNull) Reset() {
+	*x = IsNull{}
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IsNull) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IsNull) ProtoMessage() {}
+
+func (x *IsNull) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IsNull.ProtoReflect.Descriptor instead.
+func (*IsNull) Descriptor() ([]byte, []int) {
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{19}
+}
+
 // Filter narrows a scope. elitea-vector adds it to the injected scope; it
 // never replaces the scope.
+//
+// A filter may nest other filters through Condition.filter, at most 8
+// levels deep counting this one, with at most 64 conditions per list and
+// at most 1024 conditions in the whole tree (nested filter conditions
+// included). An empty nested filter is refused; an empty top-level filter
+// narrows nothing.
 type Filter struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Must          []*Condition           `protobuf:"bytes,1,rep,name=must,proto3" json:"must,omitempty"`
@@ -1219,7 +1438,7 @@ type Filter struct {
 
 func (x *Filter) Reset() {
 	*x = Filter{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[17]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1231,7 +1450,7 @@ func (x *Filter) String() string {
 func (*Filter) ProtoMessage() {}
 
 func (x *Filter) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[17]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1244,7 +1463,7 @@ func (x *Filter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Filter.ProtoReflect.Descriptor instead.
 func (*Filter) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{17}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Filter) GetMust() []*Condition {
@@ -1268,6 +1487,61 @@ func (x *Filter) GetMustNot() []*Condition {
 	return nil
 }
 
+// ActiveGeneration pins one namespace of a read to its published build.
+type ActiveGeneration struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// namespace_id is one of the scope's namespace_ids.
+	NamespaceId string `protobuf:"bytes,1,opt,name=namespace_id,json=namespaceId,proto3" json:"namespace_id,omitempty"`
+	// generation is the namespace's active build id.
+	Generation    string `protobuf:"bytes,2,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActiveGeneration) Reset() {
+	*x = ActiveGeneration{}
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActiveGeneration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActiveGeneration) ProtoMessage() {}
+
+func (x *ActiveGeneration) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActiveGeneration.ProtoReflect.Descriptor instead.
+func (*ActiveGeneration) Descriptor() ([]byte, []int) {
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ActiveGeneration) GetNamespaceId() string {
+	if x != nil {
+		return x.NamespaceId
+	}
+	return ""
+}
+
+func (x *ActiveGeneration) GetGeneration() string {
+	if x != nil {
+		return x.Generation
+	}
+	return ""
+}
+
 // Scope selects the namespaces a read works in.
 type Scope struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
@@ -1276,14 +1550,20 @@ type Scope struct {
 	// namespace_ids holds 1 to 64 UUIDs.
 	NamespaceIds []string `protobuf:"bytes,3,rep,name=namespace_ids,json=namespaceIds,proto3" json:"namespace_ids,omitempty"`
 	// generation, when set, narrows the read to one generation.
-	Generation    string `protobuf:"bytes,4,opt,name=generation,proto3" json:"generation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Generation string `protobuf:"bytes,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	// active_generations narrows some namespaces to their active build: a
+	// point of a listed namespace matches when its generation is the listed
+	// one, or when it was written without a generation (an incremental
+	// index). A build in progress (another generation) is excluded. At most
+	// one entry per namespace; it cannot be combined with `generation`.
+	ActiveGenerations []*ActiveGeneration `protobuf:"bytes,5,rep,name=active_generations,json=activeGenerations,proto3" json:"active_generations,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Scope) Reset() {
 	*x = Scope{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[18]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1295,7 +1575,7 @@ func (x *Scope) String() string {
 func (*Scope) ProtoMessage() {}
 
 func (x *Scope) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[18]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1308,7 +1588,7 @@ func (x *Scope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Scope.ProtoReflect.Descriptor instead.
 func (*Scope) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{18}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Scope) GetProjectId() int64 {
@@ -1339,6 +1619,13 @@ func (x *Scope) GetGeneration() string {
 	return ""
 }
 
+func (x *Scope) GetActiveGenerations() []*ActiveGeneration {
+	if x != nil {
+		return x.ActiveGenerations
+	}
+	return nil
+}
+
 type ScoredPoint struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// id is the point's UUID.
@@ -1356,13 +1643,17 @@ type ScoredPoint struct {
 	Acl             []string `protobuf:"bytes,12,rep,name=acl,proto3" json:"acl,omitempty"`
 	Text            string   `protobuf:"bytes,13,opt,name=text,proto3" json:"text,omitempty"`
 	MetadataJson    string   `protobuf:"bytes,14,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// dense_score is the point's cosine similarity to the query vector. In
+	// Search it equals score; in HybridSearch score is the fused score and
+	// this is the dense side's, for every returned point.
+	DenseScore    *float32 `protobuf:"fixed32,15,opt,name=dense_score,json=denseScore,proto3,oneof" json:"dense_score,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ScoredPoint) Reset() {
 	*x = ScoredPoint{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[19]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1374,7 +1665,7 @@ func (x *ScoredPoint) String() string {
 func (*ScoredPoint) ProtoMessage() {}
 
 func (x *ScoredPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[19]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1387,7 +1678,7 @@ func (x *ScoredPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScoredPoint.ProtoReflect.Descriptor instead.
 func (*ScoredPoint) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{19}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ScoredPoint) GetId() string {
@@ -1488,6 +1779,13 @@ func (x *ScoredPoint) GetMetadataJson() string {
 	return ""
 }
 
+func (x *ScoredPoint) GetDenseScore() float32 {
+	if x != nil && x.DenseScore != nil {
+		return *x.DenseScore
+	}
+	return 0
+}
+
 type SearchRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Scope *Scope                 `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
@@ -1505,7 +1803,7 @@ type SearchRequest struct {
 
 func (x *SearchRequest) Reset() {
 	*x = SearchRequest{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[20]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1517,7 +1815,7 @@ func (x *SearchRequest) String() string {
 func (*SearchRequest) ProtoMessage() {}
 
 func (x *SearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[20]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1530,7 +1828,7 @@ func (x *SearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchRequest.ProtoReflect.Descriptor instead.
 func (*SearchRequest) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{20}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SearchRequest) GetScope() *Scope {
@@ -1584,7 +1882,7 @@ type SearchResponse struct {
 
 func (x *SearchResponse) Reset() {
 	*x = SearchResponse{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[21]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1596,7 +1894,7 @@ func (x *SearchResponse) String() string {
 func (*SearchResponse) ProtoMessage() {}
 
 func (x *SearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[21]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1609,7 +1907,7 @@ func (x *SearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchResponse.ProtoReflect.Descriptor instead.
 func (*SearchResponse) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{21}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SearchResponse) GetPoints() []*ScoredPoint {
@@ -1635,7 +1933,7 @@ type HybridSearchRequest struct {
 	// prefetch_limit is how many candidates each side returns before fusion.
 	// Zero means 4 x limit, at most 1000.
 	PrefetchLimit uint32 `protobuf:"varint,9,opt,name=prefetch_limit,json=prefetchLimit,proto3" json:"prefetch_limit,omitempty"`
-	// score_threshold applies to the dense side only.
+	// score_threshold applies to the dense side only, before fusion.
 	ScoreThreshold *float32 `protobuf:"fixed32,10,opt,name=score_threshold,json=scoreThreshold,proto3,oneof" json:"score_threshold,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -1643,7 +1941,7 @@ type HybridSearchRequest struct {
 
 func (x *HybridSearchRequest) Reset() {
 	*x = HybridSearchRequest{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[22]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1655,7 +1953,7 @@ func (x *HybridSearchRequest) String() string {
 func (*HybridSearchRequest) ProtoMessage() {}
 
 func (x *HybridSearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[22]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1668,7 +1966,7 @@ func (x *HybridSearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HybridSearchRequest.ProtoReflect.Descriptor instead.
 func (*HybridSearchRequest) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{22}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *HybridSearchRequest) GetScope() *Scope {
@@ -1743,7 +2041,9 @@ func (x *HybridSearchRequest) GetScoreThreshold() float32 {
 
 type HybridSearchResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// points are ordered by fused score; ScoredPoint.score is the fused score.
+	// points are ordered by fused score; ScoredPoint.score is the fused score
+	// and ScoredPoint.dense_score the cosine similarity (read by a second,
+	// exact dense query over the fused points' ids).
 	Points        []*ScoredPoint `protobuf:"bytes,1,rep,name=points,proto3" json:"points,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1751,7 +2051,7 @@ type HybridSearchResponse struct {
 
 func (x *HybridSearchResponse) Reset() {
 	*x = HybridSearchResponse{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[23]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1763,7 +2063,7 @@ func (x *HybridSearchResponse) String() string {
 func (*HybridSearchResponse) ProtoMessage() {}
 
 func (x *HybridSearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[23]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1776,7 +2076,7 @@ func (x *HybridSearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HybridSearchResponse.ProtoReflect.Descriptor instead.
 func (*HybridSearchResponse) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{23}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *HybridSearchResponse) GetPoints() []*ScoredPoint {
@@ -1799,7 +2099,7 @@ type CountRequest struct {
 
 func (x *CountRequest) Reset() {
 	*x = CountRequest{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[24]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1811,7 +2111,7 @@ func (x *CountRequest) String() string {
 func (*CountRequest) ProtoMessage() {}
 
 func (x *CountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[24]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1824,7 +2124,7 @@ func (x *CountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CountRequest.ProtoReflect.Descriptor instead.
 func (*CountRequest) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{24}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *CountRequest) GetScope() *Scope {
@@ -1857,7 +2157,7 @@ type CountResponse struct {
 
 func (x *CountResponse) Reset() {
 	*x = CountResponse{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[25]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1869,7 +2169,7 @@ func (x *CountResponse) String() string {
 func (*CountResponse) ProtoMessage() {}
 
 func (x *CountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[25]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1882,7 +2182,7 @@ func (x *CountResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CountResponse.ProtoReflect.Descriptor instead.
 func (*CountResponse) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{25}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *CountResponse) GetCount() uint64 {
@@ -1903,7 +2203,7 @@ type ListIndexesRequest struct {
 
 func (x *ListIndexesRequest) Reset() {
 	*x = ListIndexesRequest{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[26]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1915,7 +2215,7 @@ func (x *ListIndexesRequest) String() string {
 func (*ListIndexesRequest) ProtoMessage() {}
 
 func (x *ListIndexesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[26]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1928,7 +2228,7 @@ func (x *ListIndexesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIndexesRequest.ProtoReflect.Descriptor instead.
 func (*ListIndexesRequest) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{26}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ListIndexesRequest) GetProjectId() int64 {
@@ -1958,7 +2258,7 @@ type IndexInfo struct {
 
 func (x *IndexInfo) Reset() {
 	*x = IndexInfo{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[27]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1970,7 +2270,7 @@ func (x *IndexInfo) String() string {
 func (*IndexInfo) ProtoMessage() {}
 
 func (x *IndexInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[27]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1983,7 +2283,7 @@ func (x *IndexInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexInfo.ProtoReflect.Descriptor instead.
 func (*IndexInfo) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{27}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *IndexInfo) GetSpace() *EmbeddingSpace {
@@ -2030,7 +2330,7 @@ type ListIndexesResponse struct {
 
 func (x *ListIndexesResponse) Reset() {
 	*x = ListIndexesResponse{}
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[28]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2042,7 +2342,7 @@ func (x *ListIndexesResponse) String() string {
 func (*ListIndexesResponse) ProtoMessage() {}
 
 func (x *ListIndexesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_vector_v1_vector_proto_msgTypes[28]
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2055,7 +2355,7 @@ func (x *ListIndexesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIndexesResponse.ProtoReflect.Descriptor instead.
 func (*ListIndexesResponse) Descriptor() ([]byte, []int) {
-	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{28}
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ListIndexesResponse) GetIndexes() []*IndexInfo {
@@ -2134,18 +2434,38 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\vcollections\x18\x01 \x01(\rR\vcollections\"$\n" +
 	"\n" +
 	"StringList\x12\x16\n" +
-	"\x06values\x18\x01 \x03(\tR\x06values\"\xac\x01\n" +
+	"\x06values\x18\x01 \x03(\tR\x06values\"\xfe\x02\n" +
 	"\tCondition\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1a\n" +
 	"\akeyword\x18\x02 \x01(\tH\x00R\akeyword\x120\n" +
 	"\x03any\x18\x03 \x01(\v2\x1c.elitea.vector.v1.StringListH\x00R\x03any\x12\x1a\n" +
 	"\ainteger\x18\x04 \x01(\x03H\x00R\ainteger\x12\x1a\n" +
-	"\aboolean\x18\x05 \x01(\bH\x00R\abooleanB\a\n" +
-	"\x05match\"\xa6\x01\n" +
+	"\aboolean\x18\x05 \x01(\bH\x00R\aboolean\x12/\n" +
+	"\x05range\x18\x06 \x01(\v2\x17.elitea.vector.v1.RangeH\x00R\x05range\x126\n" +
+	"\bis_empty\x18\a \x01(\v2\x19.elitea.vector.v1.IsEmptyH\x00R\aisEmpty\x123\n" +
+	"\ais_null\x18\b \x01(\v2\x18.elitea.vector.v1.IsNullH\x00R\x06isNull\x122\n" +
+	"\x06filter\x18\t \x01(\v2\x18.elitea.vector.v1.FilterH\x00R\x06filterB\a\n" +
+	"\x05match\"}\n" +
+	"\x05Range\x12\x13\n" +
+	"\x02gt\x18\x01 \x01(\x01H\x00R\x02gt\x88\x01\x01\x12\x15\n" +
+	"\x03gte\x18\x02 \x01(\x01H\x01R\x03gte\x88\x01\x01\x12\x13\n" +
+	"\x02lt\x18\x03 \x01(\x01H\x02R\x02lt\x88\x01\x01\x12\x15\n" +
+	"\x03lte\x18\x04 \x01(\x01H\x03R\x03lte\x88\x01\x01B\x05\n" +
+	"\x03_gtB\x06\n" +
+	"\x04_gteB\x05\n" +
+	"\x03_ltB\x06\n" +
+	"\x04_lte\"\t\n" +
+	"\aIsEmpty\"\b\n" +
+	"\x06IsNull\"\xa6\x01\n" +
 	"\x06Filter\x12/\n" +
 	"\x04must\x18\x01 \x03(\v2\x1b.elitea.vector.v1.ConditionR\x04must\x123\n" +
 	"\x06should\x18\x02 \x03(\v2\x1b.elitea.vector.v1.ConditionR\x06should\x126\n" +
-	"\bmust_not\x18\x03 \x03(\v2\x1b.elitea.vector.v1.ConditionR\amustNot\"\x9d\x01\n" +
+	"\bmust_not\x18\x03 \x03(\v2\x1b.elitea.vector.v1.ConditionR\amustNot\"U\n" +
+	"\x10ActiveGeneration\x12!\n" +
+	"\fnamespace_id\x18\x01 \x01(\tR\vnamespaceId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x02 \x01(\tR\n" +
+	"generation\"\xf0\x01\n" +
 	"\x05Scope\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\x03R\tprojectId\x120\n" +
@@ -2153,7 +2473,8 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\rnamespace_ids\x18\x03 \x03(\tR\fnamespaceIds\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x04 \x01(\tR\n" +
-	"generation\"\xb7\x03\n" +
+	"generation\x12Q\n" +
+	"\x12active_generations\x18\x05 \x03(\v2\".elitea.vector.v1.ActiveGenerationR\x11activeGenerations\"\xed\x03\n" +
 	"\vScoredPoint\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05score\x18\x02 \x01(\x02R\x05score\x12\x1d\n" +
@@ -2173,7 +2494,10 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"chunk_type\x18\v \x01(\tR\tchunkType\x12\x10\n" +
 	"\x03acl\x18\f \x03(\tR\x03acl\x12\x12\n" +
 	"\x04text\x18\r \x01(\tR\x04text\x12#\n" +
-	"\rmetadata_json\x18\x0e \x01(\tR\fmetadataJson\"\x98\x02\n" +
+	"\rmetadata_json\x18\x0e \x01(\tR\fmetadataJson\x12$\n" +
+	"\vdense_score\x18\x0f \x01(\x02H\x00R\n" +
+	"denseScore\x88\x01\x01B\x0e\n" +
+	"\f_dense_score\"\x98\x02\n" +
 	"\rSearchRequest\x12-\n" +
 	"\x05scope\x18\x01 \x01(\v2\x17.elitea.vector.v1.ScopeR\x05scope\x126\n" +
 	"\x05space\x18\x02 \x01(\v2 .elitea.vector.v1.EmbeddingSpaceR\x05space\x12\x16\n" +
@@ -2248,7 +2572,7 @@ func file_elitea_vector_v1_vector_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_vector_v1_vector_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_vector_v1_vector_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_elitea_vector_v1_vector_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_elitea_vector_v1_vector_proto_goTypes = []any{
 	(Source)(0),                  // 0: elitea.vector.v1.Source
 	(*EmbeddingSpace)(nil),       // 1: elitea.vector.v1.EmbeddingSpace
@@ -2268,18 +2592,22 @@ var file_elitea_vector_v1_vector_proto_goTypes = []any{
 	(*DropProjectResponse)(nil),  // 15: elitea.vector.v1.DropProjectResponse
 	(*StringList)(nil),           // 16: elitea.vector.v1.StringList
 	(*Condition)(nil),            // 17: elitea.vector.v1.Condition
-	(*Filter)(nil),               // 18: elitea.vector.v1.Filter
-	(*Scope)(nil),                // 19: elitea.vector.v1.Scope
-	(*ScoredPoint)(nil),          // 20: elitea.vector.v1.ScoredPoint
-	(*SearchRequest)(nil),        // 21: elitea.vector.v1.SearchRequest
-	(*SearchResponse)(nil),       // 22: elitea.vector.v1.SearchResponse
-	(*HybridSearchRequest)(nil),  // 23: elitea.vector.v1.HybridSearchRequest
-	(*HybridSearchResponse)(nil), // 24: elitea.vector.v1.HybridSearchResponse
-	(*CountRequest)(nil),         // 25: elitea.vector.v1.CountRequest
-	(*CountResponse)(nil),        // 26: elitea.vector.v1.CountResponse
-	(*ListIndexesRequest)(nil),   // 27: elitea.vector.v1.ListIndexesRequest
-	(*IndexInfo)(nil),            // 28: elitea.vector.v1.IndexInfo
-	(*ListIndexesResponse)(nil),  // 29: elitea.vector.v1.ListIndexesResponse
+	(*Range)(nil),                // 18: elitea.vector.v1.Range
+	(*IsEmpty)(nil),              // 19: elitea.vector.v1.IsEmpty
+	(*IsNull)(nil),               // 20: elitea.vector.v1.IsNull
+	(*Filter)(nil),               // 21: elitea.vector.v1.Filter
+	(*ActiveGeneration)(nil),     // 22: elitea.vector.v1.ActiveGeneration
+	(*Scope)(nil),                // 23: elitea.vector.v1.Scope
+	(*ScoredPoint)(nil),          // 24: elitea.vector.v1.ScoredPoint
+	(*SearchRequest)(nil),        // 25: elitea.vector.v1.SearchRequest
+	(*SearchResponse)(nil),       // 26: elitea.vector.v1.SearchResponse
+	(*HybridSearchRequest)(nil),  // 27: elitea.vector.v1.HybridSearchRequest
+	(*HybridSearchResponse)(nil), // 28: elitea.vector.v1.HybridSearchResponse
+	(*CountRequest)(nil),         // 29: elitea.vector.v1.CountRequest
+	(*CountResponse)(nil),        // 30: elitea.vector.v1.CountResponse
+	(*ListIndexesRequest)(nil),   // 31: elitea.vector.v1.ListIndexesRequest
+	(*IndexInfo)(nil),            // 32: elitea.vector.v1.IndexInfo
+	(*ListIndexesResponse)(nil),  // 33: elitea.vector.v1.ListIndexesResponse
 }
 var file_elitea_vector_v1_vector_proto_depIdxs = []int32{
 	0,  // 0: elitea.vector.v1.Namespace.source:type_name -> elitea.vector.v1.Source
@@ -2295,45 +2623,50 @@ var file_elitea_vector_v1_vector_proto_depIdxs = []int32{
 	9,  // 10: elitea.vector.v1.DeleteRequest.generations:type_name -> elitea.vector.v1.Generations
 	10, // 11: elitea.vector.v1.DeleteRequest.generations_except:type_name -> elitea.vector.v1.GenerationsExcept
 	16, // 12: elitea.vector.v1.Condition.any:type_name -> elitea.vector.v1.StringList
-	17, // 13: elitea.vector.v1.Filter.must:type_name -> elitea.vector.v1.Condition
-	17, // 14: elitea.vector.v1.Filter.should:type_name -> elitea.vector.v1.Condition
-	17, // 15: elitea.vector.v1.Filter.must_not:type_name -> elitea.vector.v1.Condition
-	0,  // 16: elitea.vector.v1.Scope.source:type_name -> elitea.vector.v1.Source
-	0,  // 17: elitea.vector.v1.ScoredPoint.source:type_name -> elitea.vector.v1.Source
-	19, // 18: elitea.vector.v1.SearchRequest.scope:type_name -> elitea.vector.v1.Scope
-	1,  // 19: elitea.vector.v1.SearchRequest.space:type_name -> elitea.vector.v1.EmbeddingSpace
-	18, // 20: elitea.vector.v1.SearchRequest.filter:type_name -> elitea.vector.v1.Filter
-	20, // 21: elitea.vector.v1.SearchResponse.points:type_name -> elitea.vector.v1.ScoredPoint
-	19, // 22: elitea.vector.v1.HybridSearchRequest.scope:type_name -> elitea.vector.v1.Scope
-	1,  // 23: elitea.vector.v1.HybridSearchRequest.space:type_name -> elitea.vector.v1.EmbeddingSpace
-	18, // 24: elitea.vector.v1.HybridSearchRequest.filter:type_name -> elitea.vector.v1.Filter
-	20, // 25: elitea.vector.v1.HybridSearchResponse.points:type_name -> elitea.vector.v1.ScoredPoint
-	19, // 26: elitea.vector.v1.CountRequest.scope:type_name -> elitea.vector.v1.Scope
-	1,  // 27: elitea.vector.v1.CountRequest.space:type_name -> elitea.vector.v1.EmbeddingSpace
-	18, // 28: elitea.vector.v1.CountRequest.filter:type_name -> elitea.vector.v1.Filter
-	0,  // 29: elitea.vector.v1.ListIndexesRequest.source:type_name -> elitea.vector.v1.Source
-	1,  // 30: elitea.vector.v1.IndexInfo.space:type_name -> elitea.vector.v1.EmbeddingSpace
-	0,  // 31: elitea.vector.v1.IndexInfo.source:type_name -> elitea.vector.v1.Source
-	28, // 32: elitea.vector.v1.ListIndexesResponse.indexes:type_name -> elitea.vector.v1.IndexInfo
-	6,  // 33: elitea.vector.v1.VectorService.Upsert:input_type -> elitea.vector.v1.UpsertRequest
-	12, // 34: elitea.vector.v1.VectorService.Delete:input_type -> elitea.vector.v1.DeleteRequest
-	14, // 35: elitea.vector.v1.VectorService.DropProject:input_type -> elitea.vector.v1.DropProjectRequest
-	21, // 36: elitea.vector.v1.VectorService.Search:input_type -> elitea.vector.v1.SearchRequest
-	23, // 37: elitea.vector.v1.VectorService.HybridSearch:input_type -> elitea.vector.v1.HybridSearchRequest
-	25, // 38: elitea.vector.v1.VectorService.Count:input_type -> elitea.vector.v1.CountRequest
-	27, // 39: elitea.vector.v1.VectorService.ListIndexes:input_type -> elitea.vector.v1.ListIndexesRequest
-	7,  // 40: elitea.vector.v1.VectorService.Upsert:output_type -> elitea.vector.v1.UpsertResponse
-	13, // 41: elitea.vector.v1.VectorService.Delete:output_type -> elitea.vector.v1.DeleteResponse
-	15, // 42: elitea.vector.v1.VectorService.DropProject:output_type -> elitea.vector.v1.DropProjectResponse
-	22, // 43: elitea.vector.v1.VectorService.Search:output_type -> elitea.vector.v1.SearchResponse
-	24, // 44: elitea.vector.v1.VectorService.HybridSearch:output_type -> elitea.vector.v1.HybridSearchResponse
-	26, // 45: elitea.vector.v1.VectorService.Count:output_type -> elitea.vector.v1.CountResponse
-	29, // 46: elitea.vector.v1.VectorService.ListIndexes:output_type -> elitea.vector.v1.ListIndexesResponse
-	40, // [40:47] is the sub-list for method output_type
-	33, // [33:40] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	18, // 13: elitea.vector.v1.Condition.range:type_name -> elitea.vector.v1.Range
+	19, // 14: elitea.vector.v1.Condition.is_empty:type_name -> elitea.vector.v1.IsEmpty
+	20, // 15: elitea.vector.v1.Condition.is_null:type_name -> elitea.vector.v1.IsNull
+	21, // 16: elitea.vector.v1.Condition.filter:type_name -> elitea.vector.v1.Filter
+	17, // 17: elitea.vector.v1.Filter.must:type_name -> elitea.vector.v1.Condition
+	17, // 18: elitea.vector.v1.Filter.should:type_name -> elitea.vector.v1.Condition
+	17, // 19: elitea.vector.v1.Filter.must_not:type_name -> elitea.vector.v1.Condition
+	0,  // 20: elitea.vector.v1.Scope.source:type_name -> elitea.vector.v1.Source
+	22, // 21: elitea.vector.v1.Scope.active_generations:type_name -> elitea.vector.v1.ActiveGeneration
+	0,  // 22: elitea.vector.v1.ScoredPoint.source:type_name -> elitea.vector.v1.Source
+	23, // 23: elitea.vector.v1.SearchRequest.scope:type_name -> elitea.vector.v1.Scope
+	1,  // 24: elitea.vector.v1.SearchRequest.space:type_name -> elitea.vector.v1.EmbeddingSpace
+	21, // 25: elitea.vector.v1.SearchRequest.filter:type_name -> elitea.vector.v1.Filter
+	24, // 26: elitea.vector.v1.SearchResponse.points:type_name -> elitea.vector.v1.ScoredPoint
+	23, // 27: elitea.vector.v1.HybridSearchRequest.scope:type_name -> elitea.vector.v1.Scope
+	1,  // 28: elitea.vector.v1.HybridSearchRequest.space:type_name -> elitea.vector.v1.EmbeddingSpace
+	21, // 29: elitea.vector.v1.HybridSearchRequest.filter:type_name -> elitea.vector.v1.Filter
+	24, // 30: elitea.vector.v1.HybridSearchResponse.points:type_name -> elitea.vector.v1.ScoredPoint
+	23, // 31: elitea.vector.v1.CountRequest.scope:type_name -> elitea.vector.v1.Scope
+	1,  // 32: elitea.vector.v1.CountRequest.space:type_name -> elitea.vector.v1.EmbeddingSpace
+	21, // 33: elitea.vector.v1.CountRequest.filter:type_name -> elitea.vector.v1.Filter
+	0,  // 34: elitea.vector.v1.ListIndexesRequest.source:type_name -> elitea.vector.v1.Source
+	1,  // 35: elitea.vector.v1.IndexInfo.space:type_name -> elitea.vector.v1.EmbeddingSpace
+	0,  // 36: elitea.vector.v1.IndexInfo.source:type_name -> elitea.vector.v1.Source
+	32, // 37: elitea.vector.v1.ListIndexesResponse.indexes:type_name -> elitea.vector.v1.IndexInfo
+	6,  // 38: elitea.vector.v1.VectorService.Upsert:input_type -> elitea.vector.v1.UpsertRequest
+	12, // 39: elitea.vector.v1.VectorService.Delete:input_type -> elitea.vector.v1.DeleteRequest
+	14, // 40: elitea.vector.v1.VectorService.DropProject:input_type -> elitea.vector.v1.DropProjectRequest
+	25, // 41: elitea.vector.v1.VectorService.Search:input_type -> elitea.vector.v1.SearchRequest
+	27, // 42: elitea.vector.v1.VectorService.HybridSearch:input_type -> elitea.vector.v1.HybridSearchRequest
+	29, // 43: elitea.vector.v1.VectorService.Count:input_type -> elitea.vector.v1.CountRequest
+	31, // 44: elitea.vector.v1.VectorService.ListIndexes:input_type -> elitea.vector.v1.ListIndexesRequest
+	7,  // 45: elitea.vector.v1.VectorService.Upsert:output_type -> elitea.vector.v1.UpsertResponse
+	13, // 46: elitea.vector.v1.VectorService.Delete:output_type -> elitea.vector.v1.DeleteResponse
+	15, // 47: elitea.vector.v1.VectorService.DropProject:output_type -> elitea.vector.v1.DropProjectResponse
+	26, // 48: elitea.vector.v1.VectorService.Search:output_type -> elitea.vector.v1.SearchResponse
+	28, // 49: elitea.vector.v1.VectorService.HybridSearch:output_type -> elitea.vector.v1.HybridSearchResponse
+	30, // 50: elitea.vector.v1.VectorService.Count:output_type -> elitea.vector.v1.CountResponse
+	33, // 51: elitea.vector.v1.VectorService.ListIndexes:output_type -> elitea.vector.v1.ListIndexesResponse
+	45, // [45:52] is the sub-list for method output_type
+	38, // [38:45] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_elitea_vector_v1_vector_proto_init() }
@@ -2356,16 +2689,22 @@ func file_elitea_vector_v1_vector_proto_init() {
 		(*Condition_Any)(nil),
 		(*Condition_Integer)(nil),
 		(*Condition_Boolean)(nil),
+		(*Condition_Range)(nil),
+		(*Condition_IsEmpty)(nil),
+		(*Condition_IsNull)(nil),
+		(*Condition_Filter)(nil),
 	}
-	file_elitea_vector_v1_vector_proto_msgTypes[20].OneofWrappers = []any{}
-	file_elitea_vector_v1_vector_proto_msgTypes[22].OneofWrappers = []any{}
+	file_elitea_vector_v1_vector_proto_msgTypes[17].OneofWrappers = []any{}
+	file_elitea_vector_v1_vector_proto_msgTypes[23].OneofWrappers = []any{}
+	file_elitea_vector_v1_vector_proto_msgTypes[24].OneofWrappers = []any{}
+	file_elitea_vector_v1_vector_proto_msgTypes[26].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_vector_v1_vector_proto_rawDesc), len(file_elitea_vector_v1_vector_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   29,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
