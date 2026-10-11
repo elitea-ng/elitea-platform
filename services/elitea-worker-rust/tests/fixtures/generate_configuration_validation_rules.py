@@ -12,10 +12,11 @@ that table and records, per case, what pydantic itself says.
 Run it against an export of the pinned SDK (b5113a1) with the same pydantic the
 admitted catalog digests were computed under:
 
-  git -C <elitea-sdk> archive b5113a1 elitea_sdk/configurations | tar -x -C <root>
-  touch <root>/elitea_sdk/__init__.py
+  git -C <elitea-sdk> archive b5113a1 elitea_sdk/configurations \
+      elitea_sdk/tools/utils/__init__.py | tar -x -C <root>
+  touch <root>/elitea_sdk/__init__.py <root>/elitea_sdk/tools/__init__.py
   uv run --python 3.13 --with pydantic==2.12.5 --with langchain-core \
-      --with langgraph --no-project python \
+      --with langgraph --with requests --no-project python \
       services/elitea-worker-rust/tests/fixtures/generate_configuration_validation_rules.py \
       --sdk-root <root>
 
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -125,15 +127,57 @@ def expected(model, text: str) -> dict:
         return {"valid": False, "issues": [[code, at] for at, code, _ in mapped]}
 
 
+# JSON-schema keywords the rule table models, or that annotate a field without
+# constraining its value. Any other keyword on a field is a constraint pydantic
+# enforces and the Rust table cannot, so the generator stops rather than emit a
+# table that accepts more than the model does.
+MODELLED_KEYWORDS = {"type", "enum", "items", "anyOf", "default"}
+ANNOTATION_KEYWORDS = {"title", "description", "examples", "deprecated", "readOnly"}
+# Field(json_schema_extra=...) keys the SDK's configuration models use for the
+# UI; pydantic validates nothing for them.
+SDK_UI_KEYWORDS = {"hidden", "placeholder", "prefill_value", "secret", "visible_when"}
+# Constraint keywords pydantic enforces at validation time. Named so a new one
+# fails with its name, not as "unknown", and so none can be allowed by mistake.
+CONSTRAINT_KEYWORDS = {
+    "format", "minLength", "maxLength", "pattern",
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+    "minItems", "maxItems", "uniqueItems", "const",
+}
+# SecretStr: `format: password` + `writeOnly` mark a masked string; pydantic
+# validates it exactly like `str` (the schema is still `type: string`). It is
+# the one `format` the table admits, and only in that pair.
+SECRET_STR = {"format": "password", "writeOnly": True}
+
+
+def reject_unmodelled(name: str, schema: dict) -> None:
+    secret = schema.get("type") == "string" and all(
+        schema.get(key) == value for key, value in SECRET_STR.items()
+    )
+    for keyword in schema:
+        if keyword in MODELLED_KEYWORDS | ANNOTATION_KEYWORDS | SDK_UI_KEYWORDS:
+            continue
+        if secret and keyword in SECRET_STR:
+            continue
+        what = "constraint" if keyword in CONSTRAINT_KEYWORDS else "keyword"
+        sys.exit(
+            f"unmodelled JSON-schema {what} {keyword!r} on {name}: {schema}\n"
+            "model it in field_rule and add parity probes before regenerating"
+        )
+
+
 def field_rule(name: str, prop: dict, required: bool) -> dict:
     nullable = False
     base = prop
+    reject_unmodelled(name, prop)
     if "anyOf" in prop:
         options = [o for o in prop["anyOf"] if o != {"type": "null"}]
         nullable = len(options) != len(prop["anyOf"])
         if len(options) != 1:
             sys.exit(f"unsupported anyOf for {name}: {prop}")
         base = options[0]
+        reject_unmodelled(name, base)
+    if "items" in base:
+        reject_unmodelled(f"{name}[]", base["items"])
     rule = {"name": name, "nullable": nullable, "required": required}
     if "enum" in base:
         assert base.get("type") == "string", (name, base)
@@ -149,6 +193,11 @@ def field_rule(name: str, prop: dict, required: bool) -> dict:
     else:
         sys.exit(f"unsupported schema for {name}: {prop}")
     return rule
+
+
+def hook_digest(decorator) -> str:
+    source = inspect.getsource(decorator.func)
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
 def sample(rule: dict):
@@ -197,16 +246,16 @@ def main() -> None:
             field_rule(name, prop, name in required)
             for name, prop in schema["properties"].items()
         ]
-        before = [
-            d.cls_var_name
-            for d in model.__pydantic_decorators__.model_validators.values()
+        before_decorators = [
+            d for d in model.__pydantic_decorators__.model_validators.values()
             if d.info.mode == "before"
         ]
+        before = [d.cls_var_name for d in before_decorators]
         extra_hooks = [
             d for d in model.__pydantic_decorators__.model_validators.values()
             if d.info.mode != "before"
         ] + list(model.__pydantic_decorators__.field_validators.values())
-        if extra_hooks or bool(before) != (kind in HOOKS):
+        if extra_hooks or len(before) != (kind in HOOKS):
             sys.exit(f"unmodelled validators on {kind}")
         types.append({
             "type": kind,
@@ -214,6 +263,12 @@ def main() -> None:
             "schema_id": pinned[kind]["schema_id"],
             "schema_digest": schema_digest,
             "hook": HOOKS.get(kind),
+            # The Rust hook is a hand port of this source; its test fails when
+            # the pinned SDK's function no longer hashes to what it was ported
+            # from.
+            "hook_source_sha256": (
+                hook_digest(before_decorators[0]) if before_decorators else None
+            ),
             "fields": fields,
         })
 

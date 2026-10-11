@@ -914,6 +914,67 @@ fn configuration_validation_output_binds_the_admitted_input_and_succeeds_when_in
 }
 
 #[test]
+fn configuration_validation_restored_frame_accepts_every_code_main_accepts() {
+    // Main's vocabulary is six codes. This worker emits four of them, but a
+    // restored frame is validated against what Main accepts, not against what
+    // this build happens to emit.
+    let (command, response) = fixture(ToolkitCommandKind::ConfigurationValidate);
+    let claim = claim(&command, response);
+    let verified = verified(&command);
+    let message = validation_command_message(&command).clone();
+    let codes = crate::validation::IssueCode::ALL;
+    assert_eq!(codes.len(), 6);
+    for code in codes {
+        let result = validation_result(
+            &claim,
+            &message,
+            &[crate::validation::Issue {
+                code,
+                json_pointer: "/field".into(),
+            }],
+        );
+        let frame = build_toolkit_execute_read_terminal_output_frame(
+            &verified,
+            &claim.fence,
+            ToolkitExecuteReadTerminalOutput::ConfigurationValidation(Box::new(result)),
+            1,
+            NOW,
+            0,
+        )
+        .unwrap_or_else(|error| panic!("{}: {error:?}", code.code()));
+        validate_restored_toolkit_execute_read_output_frame(&verified, &frame)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", code.code()));
+        let Some(execution_output_frame_v1::Payload::ConfigurationValidation(restored)) =
+            frame.payload.as_ref()
+        else {
+            panic!("{}: not a validation payload", code.code());
+        };
+        assert_eq!(restored.issues[0].code, code.code());
+        assert_eq!(restored.issues[0].safe_message, code.safe_message());
+    }
+    // All six together, in canonical order, is one well-formed result.
+    let mut all: Vec<_> = codes
+        .iter()
+        .map(|code| crate::validation::Issue {
+            code: *code,
+            json_pointer: format!("/{}", code.code().to_ascii_lowercase()),
+        })
+        .collect();
+    all.sort_by(|a, b| (&a.json_pointer, a.code).cmp(&(&b.json_pointer, b.code)));
+    let result = validation_result(&claim, &message, &all);
+    let frame = build_toolkit_execute_read_terminal_output_frame(
+        &verified,
+        &claim.fence,
+        ToolkitExecuteReadTerminalOutput::ConfigurationValidation(Box::new(result)),
+        1,
+        NOW,
+        0,
+    )
+    .unwrap();
+    validate_restored_toolkit_execute_read_output_frame(&verified, &frame).unwrap();
+}
+
+#[test]
 fn configuration_validation_output_rejects_every_unbound_or_noncanonical_result() {
     use crate::validation::IssueCode::{InvalidValue, RequiredField};
     let (command, response) = fixture(ToolkitCommandKind::ConfigurationValidate);

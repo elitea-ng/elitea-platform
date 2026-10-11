@@ -1285,7 +1285,7 @@ fn validate_configuration_validation_result(
         || !valid_toolkit_identity(&result.settings_entry_version)
         || !valid_sha256(result.settings_content_digest.as_ref())
         || result.valid != result.issues.is_empty()
-        || result.issues.len() > 64
+        || result.issues.len() > crate::validation::MAX_ISSUES
     {
         return Err(malformed_restored_output());
     }

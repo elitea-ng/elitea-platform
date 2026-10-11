@@ -90,7 +90,9 @@ a signed command, claim, evaluated valid and invalid document and restored frame
 
 - Traversal order when a document has two different limit violations at once (Rust visits keys sorted, Python in
   insertion order): which of `INVALID_INPUT`/`RESOURCE_EXHAUSTED` wins can differ.
-- Nesting deeper than serde_json's 128-level parser limit is `INVALID_INPUT`, not `RESOURCE_EXHAUSTED`.
+- Nesting is parsed by the worker's own decoder (`strict_json.rs`), not serde_json's 128-level parser: a value
+  deeper than 64 is `RESOURCE_EXHAUSTED` as in Python, with a hard recursion ceiling of 1024 levels (same verdict).
+- A lone surrogate escape (`"\ud800"`), which Python admits into a `str`, is `INVALID_INPUT` here.
 - A VALIDATE-bound Rust worker still opens the agent-state database (`bootstrap.rs`), like the agent worker.
 
 ## Not done

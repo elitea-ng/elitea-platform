@@ -33,43 +33,61 @@ mod tests;
 const RULES_JSON: &str = include_str!("configuration_rules.json");
 const RULES_SCHEMA_VERSION: &str = "elitea.worker-configuration-validation-rules.v1";
 
-/// Bounds shared with the Python worker's `constants.py`.
-const MAX_ISSUES: usize = 64;
+/// Bounds shared with the Python worker's `constants.py`. `MAX_ISSUES` is also
+/// what Main accepts in a result frame (`protocol/output.rs`).
+pub(crate) const MAX_ISSUES: usize = 64;
 const MAX_JSON_DEPTH: usize = 64;
 const MAX_STRING_BYTES: usize = 64 * 1024;
 const MAX_SETTINGS_BYTES: usize = 256 * 1024;
 
-/// The closed issue vocabulary Main accepts, with its canonical messages.
+/// Python's `sys.get_int_max_str_digits()` default, which bounds two things
+/// the Python worker does: `json.loads` raises `ValueError` (malformed input)
+/// for an integer literal with more digits, and pydantic-core refuses an
+/// integer *string* with more significant digits (`int_parsing_size`, an
+/// `INVALID_VALUE` issue; see `lax.rs` for what counts).
+pub(crate) const MAX_INTEGER_LITERAL_DIGITS: usize = 4300;
+
+/// The closed issue vocabulary Main accepts, with its canonical messages
+/// (`domain/configurations/validation.go`). This worker emits the first four;
+/// `UnknownField` and `ValueOutOfRange` are produced by no pinned SDK model
+/// (none forbids extras or bounds a number) but are Main's codes all the same,
+/// so a restored frame carrying them is well formed.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum IssueCode {
     InvalidConfiguration,
     InvalidValue,
     RequiredField,
     ValueNotAllowed,
+    UnknownField,
+    ValueOutOfRange,
 }
 
 impl IssueCode {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::InvalidConfiguration,
+        Self::InvalidValue,
+        Self::RequiredField,
+        Self::ValueNotAllowed,
+        Self::UnknownField,
+        Self::ValueOutOfRange,
+    ];
+
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::InvalidConfiguration => "INVALID_CONFIGURATION",
             Self::InvalidValue => "INVALID_VALUE",
             Self::RequiredField => "REQUIRED_FIELD",
             Self::ValueNotAllowed => "VALUE_NOT_ALLOWED",
+            Self::UnknownField => "UNKNOWN_FIELD",
+            Self::ValueOutOfRange => "VALUE_OUT_OF_RANGE",
         }
     }
 
-    /// The codes this worker emits. Main also admits `UNKNOWN_FIELD` and
-    /// `VALUE_OUT_OF_RANGE`, which no SDK configuration model produces here
-    /// (none forbids extras or bounds a number).
+    /// Every code Main accepts; `None` for any other text.
     pub(crate) fn from_wire(code: &str) -> Option<Self> {
-        [
-            Self::InvalidConfiguration,
-            Self::InvalidValue,
-            Self::RequiredField,
-            Self::ValueNotAllowed,
-        ]
-        .into_iter()
-        .find(|candidate| candidate.code() == code)
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.code() == code)
     }
 
     pub(crate) const fn safe_message(self) -> &'static str {
@@ -78,6 +96,8 @@ impl IssueCode {
             Self::InvalidValue => "Value does not satisfy the configuration schema.",
             Self::RequiredField => "A required value is missing.",
             Self::ValueNotAllowed => "Value is not one of the allowed choices.",
+            Self::UnknownField => "This field is not allowed.",
+            Self::ValueOutOfRange => "Value is outside the allowed range.",
         }
     }
 }
@@ -152,6 +172,22 @@ enum Hook {
     OpenapiAuth,
 }
 
+impl Hook {
+    /// SHA-256 of the pinned SDK function each hand-written `accepts` arm was
+    /// ported from (`inspect.getsource` of the `model_validator` in the b5113a1
+    /// export, recorded by the generator as `hook_source_sha256`). The table
+    /// refuses to load when the generator saw a different function, so a
+    /// change to the SDK hook cannot ship behind an unchanged schema digest.
+    const fn ported_source_sha256(self) -> &'static str {
+        match self {
+            // github.py `GithubConfiguration.validate_auth_sections`
+            Self::GithubAuth => "c36d06e44c8c4a15a0299f25c3930407fc1a4f25a213be6fd52b92223ceef6ce",
+            // openapi.py `OpenApiConfiguration._validate_auth_consistency`
+            Self::OpenapiAuth => "a59a4aaf6b3ed3d10acd6556a064416c1750f59bda993f458e4dd2f917b20b62",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TypeRules {
@@ -162,6 +198,8 @@ pub(crate) struct TypeRules {
     schema_id: String,
     schema_digest: String,
     hook: Option<Hook>,
+    /// Digest of the SDK source of `hook`; `None` exactly when `hook` is.
+    hook_source_sha256: Option<String>,
     fields: Vec<FieldRule>,
 }
 
@@ -200,6 +238,7 @@ impl ConfigurationCatalog {
         for rules in document.types {
             if !seen.insert(rules.configuration_type.clone())
                 || rules.schema_id != format!("elitea.configuration.{}", rules.configuration_type)
+                || rules.hook.map(Hook::ported_source_sha256) != rules.hook_source_sha256.as_deref()
             {
                 return None;
             }
@@ -452,43 +491,39 @@ fn py_strip(text: &str) -> &str {
     text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
+/// `parse_settings_json` from the Python worker, in its order: size, decode
+/// (syntax, duplicates, constants), object shape, then the nesting walk and the
+/// per-value limits.
 fn parse_settings(raw: &[u8]) -> Result<Map<String, Value>, SettingsRefusal> {
     if raw.len() > MAX_SETTINGS_BYTES {
         return Err(SettingsRefusal::ResourceExhausted);
     }
-    // One parse: duplicate members and syntax errors are malformed input.
-    let value =
-        strict_json::parse_without_duplicates(raw).map_err(|()| SettingsRefusal::InvalidInput)?;
-    let Value::Object(_) = &value else {
+    let strict_json::Parsed { value, too_deep } = strict_json::parse(raw)?;
+    let Value::Object(settings) = value else {
         return Err(SettingsRefusal::InvalidInput);
     };
-    check_limits(&value, 0)?;
-    match value {
-        Value::Object(settings) => Ok(settings),
-        _ => Err(SettingsRefusal::InvalidInput),
-    }
-}
-
-/// Python's `sys.get_int_max_str_digits()` default: `json.loads` raises
-/// `ValueError` (reported as malformed input) for an integer literal with more
-/// digits than this.
-const MAX_INTEGER_LITERAL_DIGITS: usize = 4300;
-
-fn check_limits(value: &Value, depth: usize) -> Result<(), SettingsRefusal> {
-    if depth > MAX_JSON_DEPTH {
+    if too_deep {
         return Err(SettingsRefusal::ResourceExhausted);
     }
+    for (key, item) in &settings {
+        if key.len() > MAX_STRING_BYTES {
+            return Err(SettingsRefusal::ResourceExhausted);
+        }
+        check_limits(item)?;
+    }
+    Ok(settings)
+}
+
+/// `_check_json_limits` minus the nesting bound, which the parser applies.
+fn check_limits(value: &Value) -> Result<(), SettingsRefusal> {
     match value {
         Value::Number(number) => {
-            let text = number.to_string();
-            if text.contains(['.', 'e', 'E']) {
-                // A float: Python's json yields inf for an overflowing one.
-                if number.as_f64().is_none_or(|float| !float.is_finite()) {
-                    return Err(SettingsRefusal::InvalidInput);
-                }
-            } else if text.trim_start_matches('-').len() > MAX_INTEGER_LITERAL_DIGITS {
-                // An integer literal of any size that fits the digit limit is
-                // a valid Python int, whether or not it fits an f64.
+            // Integer literals of any size are valid Python ints (the digit
+            // bound was applied while decoding). A float that overflowed is
+            // Python's `inf`, which the limit walk refuses.
+            if number.to_string().contains(['.', 'e', 'E'])
+                && number.as_f64().is_none_or(|float| !float.is_finite())
+            {
                 return Err(SettingsRefusal::InvalidInput);
             }
         }
@@ -497,7 +532,7 @@ fn check_limits(value: &Value, depth: usize) -> Result<(), SettingsRefusal> {
         }
         Value::Array(items) => {
             for item in items {
-                check_limits(item, depth + 1)?;
+                check_limits(item)?;
             }
         }
         Value::Object(members) => {
@@ -505,7 +540,7 @@ fn check_limits(value: &Value, depth: usize) -> Result<(), SettingsRefusal> {
                 if key.len() > MAX_STRING_BYTES {
                     return Err(SettingsRefusal::ResourceExhausted);
                 }
-                check_limits(item, depth + 1)?;
+                check_limits(item)?;
             }
         }
         _ => {}
@@ -514,16 +549,7 @@ fn check_limits(value: &Value, depth: usize) -> Result<(), SettingsRefusal> {
 }
 
 fn decode_digest(hex: &str) -> Option<[u8; 32]> {
-    let hex = hex.strip_prefix("sha256:").unwrap_or(hex);
-    if hex.len() != 64 || !hex.is_ascii() {
-        return None;
-    }
-    let mut out = [0_u8; 32];
-    for (slot, pair) in out.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
-        let pair = std::str::from_utf8(pair).ok()?;
-        *slot = u8::from_str_radix(pair, 16).ok()?;
-    }
-    Some(out)
+    crate::sandbox::code_recovery::decode_hex_32(hex.strip_prefix("sha256:").unwrap_or(hex))
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {

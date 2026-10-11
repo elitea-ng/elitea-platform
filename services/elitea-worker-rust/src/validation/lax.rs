@@ -58,12 +58,11 @@ fn is_integer_literal(text: &str) -> bool {
 }
 
 /// pydantic-core refuses an integer string whose significant digits, plus a
-/// leading `-`, exceed Python's `int` parsing limit (`int_parsing_size`, which
-/// the issue list reports as `INVALID_VALUE` like any unparsable text).
-/// Leading zeros, underscores, a `+` and the fraction do not count; the sign
-/// is counted only when it is `-`. Read off pydantic 2.12.5 on Python 3.13.
-const MAX_INT_TEXT_DIGITS: usize = 4300;
-
+/// leading `-`, exceed Python's `int` parsing limit
+/// (`MAX_INTEGER_LITERAL_DIGITS`; the issue list reports `int_parsing_size` as
+/// `INVALID_VALUE` like any unparsable text). Leading zeros, underscores, a
+/// `+` and the fraction do not count; the sign is counted only when it is
+/// `-`. Read off pydantic 2.12.5 on Python 3.13.
 fn integer_text(text: &str) -> bool {
     let negative = text.starts_with('-');
     let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
@@ -72,7 +71,7 @@ fn integer_text(text: &str) -> bool {
         None => (unsigned, None),
     };
     underscored_digits(whole)
-        && significant_digits(whole) + usize::from(negative) <= MAX_INT_TEXT_DIGITS
+        && significant_digits(whole) + usize::from(negative) <= super::MAX_INTEGER_LITERAL_DIGITS
         && fraction.is_none_or(|digits| !digits.is_empty() && digits.bytes().all(|b| b == b'0'))
 }
 
