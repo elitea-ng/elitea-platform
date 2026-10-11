@@ -403,7 +403,7 @@ impl Harness {
             project_id: 0,
             source: pb::Source::ToolkitIndex as i32,
             namespace_ids: namespaces.iter().map(|n| (*n).to_owned()).collect(),
-            generation: String::new(),
+            ..pb::Scope::default()
         }
     }
 
@@ -633,6 +633,485 @@ async fn crafted_filters_cannot_widen_the_scope() {
             .count;
         assert!(counted <= 2, "{filter:?} counted {counted}");
     }
+}
+
+fn nested(filter: pb::Filter) -> pb::Condition {
+    pb::Condition {
+        key: String::new(),
+        r#match: Some(pb::condition::Match::Filter(filter)),
+    }
+}
+
+fn keyword(key: &str, value: &str) -> pb::Condition {
+    pb::Condition {
+        key: key.to_owned(),
+        r#match: Some(pb::condition::Match::Keyword(value.to_owned())),
+    }
+}
+
+/// Nested `should`/`must_not` shapes that would match every B point if they
+/// replaced the scope.
+fn crafted_nested_filters() -> Vec<pb::Filter> {
+    vec![
+        // (not a-doc-1) or (not anything): true for every point.
+        pb::Filter {
+            should: vec![
+                nested(pb::Filter {
+                    must_not: vec![keyword("document_key", "a-doc-1")],
+                    ..pb::Filter::default()
+                }),
+                nested(pb::Filter {
+                    must_not: vec![keyword("chunk_type", "text")],
+                    ..pb::Filter::default()
+                }),
+            ],
+            ..pb::Filter::default()
+        },
+        // not (not b-doc-1): only b-doc-1, which exists in A too.
+        pb::Filter {
+            must_not: vec![nested(pb::Filter {
+                must_not: vec![keyword("document_key", "b-doc-1")],
+                ..pb::Filter::default()
+            })],
+            ..pb::Filter::default()
+        },
+        // metadata is empty or not: always true.
+        pb::Filter {
+            should: vec![
+                pb::Condition {
+                    key: "metadata.owner".to_owned(),
+                    r#match: Some(pb::condition::Match::IsEmpty(pb::IsEmpty {})),
+                },
+                nested(pb::Filter {
+                    must_not: vec![pb::Condition {
+                        key: "metadata.owner".to_owned(),
+                        r#match: Some(pb::condition::Match::IsEmpty(pb::IsEmpty {})),
+                    }],
+                    ..pb::Filter::default()
+                }),
+            ],
+            ..pb::Filter::default()
+        },
+    ]
+}
+
+#[tokio::test]
+async fn nested_filters_cannot_widen_the_scope_or_name_a_scope_key() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed().await;
+    let scope = Harness::scope(&[NAMESPACE_A, NAMESPACE_B]);
+
+    // A scope key is refused at every depth, and as a presence check too.
+    for key in ["project_id", "source", "namespace_id", "generation", "text"] {
+        for leaf in [
+            keyword(key, &PROJECT_B.to_string()),
+            pb::Condition {
+                key: key.to_owned(),
+                r#match: Some(pb::condition::Match::IsEmpty(pb::IsEmpty {})),
+            },
+        ] {
+            let mut filter = pb::Filter {
+                should: vec![leaf],
+                ..pb::Filter::default()
+            };
+            for _ in 0..3 {
+                filter = pb::Filter {
+                    must_not: vec![nested(filter)],
+                    ..pb::Filter::default()
+                };
+                let status = h
+                    .search(TOKEN_A, scope.clone(), Some(filter.clone()))
+                    .await
+                    .expect_err(key);
+                assert_eq!(status.code(), Code::InvalidArgument, "{key}");
+            }
+        }
+    }
+
+    // Deeper than 8 levels is refused.
+    let mut deep = pb::Filter {
+        must: vec![keyword("chunk_type", "text")],
+        ..pb::Filter::default()
+    };
+    for _ in 0..8 {
+        deep = pb::Filter {
+            should: vec![nested(deep)],
+            ..pb::Filter::default()
+        };
+    }
+    let status = h
+        .search(TOKEN_A, scope.clone(), Some(deep))
+        .await
+        .expect_err("too deep");
+    assert_eq!(status.code(), Code::InvalidArgument);
+
+    // Nested should/must_not shapes that would match every B point if they
+    // replaced the scope: the scope still holds.
+    let crafted = crafted_nested_filters();
+    for filter in crafted {
+        let points = h
+            .search(TOKEN_A, scope.clone(), Some(filter.clone()))
+            .await
+            .expect("search");
+        for point in &points {
+            assert_eq!(point.project_id, PROJECT_A, "{filter:?} leaked {point:?}");
+        }
+        let counted = h
+            .worker
+            .count(with_token(
+                TOKEN_A,
+                pb::CountRequest {
+                    scope: Some(scope.clone()),
+                    space: Some(h.space()),
+                    filter: Some(filter.clone()),
+                },
+            ))
+            .await
+            .expect("count")
+            .into_inner()
+            .count;
+        assert!(counted <= 2, "{filter:?} counted {counted}");
+    }
+}
+
+/// Filters over `metadata.year` and `metadata.lang`, and the document keys
+/// each must select.
+fn range_cases() -> Vec<(pb::Filter, Vec<&'static str>)> {
+    let range = |range: pb::Range| pb::Condition {
+        key: "metadata.year".to_owned(),
+        r#match: Some(pb::condition::Match::Range(range)),
+    };
+    let empty = |key: &str| pb::Condition {
+        key: key.to_owned(),
+        r#match: Some(pb::condition::Match::IsEmpty(pb::IsEmpty {})),
+    };
+    vec![
+        (
+            pb::Filter {
+                must: vec![range(pb::Range {
+                    gte: Some(2024.0),
+                    ..pb::Range::default()
+                })],
+                ..pb::Filter::default()
+            },
+            vec!["y2024", "y2025"],
+        ),
+        (
+            pb::Filter {
+                must: vec![range(pb::Range {
+                    gt: Some(2020.0),
+                    lt: Some(2025.0),
+                    ..pb::Range::default()
+                })],
+                ..pb::Filter::default()
+            },
+            vec!["y2024"],
+        ),
+        // lang present and not "en": the SDK's $ne (a missing or null key
+        // never matches).
+        (
+            pb::Filter {
+                must_not: vec![empty("metadata.lang"), keyword("metadata.lang", "en")],
+                ..pb::Filter::default()
+            },
+            vec!["y2024"],
+        ),
+        // (year < 2021) or (lang == de and year >= 2024)
+        (
+            pb::Filter {
+                should: vec![
+                    range(pb::Range {
+                        lt: Some(2021.0),
+                        ..pb::Range::default()
+                    }),
+                    nested(pb::Filter {
+                        must: vec![
+                            keyword("metadata.lang", "de"),
+                            range(pb::Range {
+                                gte: Some(2024.0),
+                                ..pb::Range::default()
+                            }),
+                        ],
+                        ..pb::Filter::default()
+                    }),
+                ],
+                ..pb::Filter::default()
+            },
+            vec!["y2020", "y2024"],
+        ),
+        (
+            pb::Filter {
+                must: vec![pb::Condition {
+                    key: "metadata.lang".to_owned(),
+                    r#match: Some(pb::condition::Match::IsNull(pb::IsNull {})),
+                }],
+                ..pb::Filter::default()
+            },
+            vec!["none"],
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn range_presence_and_nested_conditions_match_like_qdrant() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    let point = |key: &str, metadata: &str| pb::Point {
+        metadata_json: metadata.to_owned(),
+        ..Harness::point(key, key, [1.0, 0.0, 0.0, 0.0])
+    };
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![
+            point("y2020", r#"{"year": 2020, "lang": "en"}"#),
+            point("y2024", r#"{"year": 2024, "lang": "de"}"#),
+            point("y2025", r#"{"year": 2025.5}"#),
+            point("none", r#"{"lang": null}"#),
+        ],
+    )
+    .await
+    .expect("upsert");
+    let scope = Harness::scope(&[NAMESPACE_A]);
+    for (filter, expected) in range_cases() {
+        let points = h
+            .worker
+            .search(with_token(
+                TOKEN_A,
+                pb::SearchRequest {
+                    scope: Some(scope.clone()),
+                    space: Some(h.space()),
+                    vector: vec![1.0, 0.0, 0.0, 0.0],
+                    filter: Some(filter.clone()),
+                    limit: 100,
+                    score_threshold: None,
+                },
+            ))
+            .await
+            .expect("search")
+            .into_inner()
+            .points;
+        let mut found: Vec<&str> = points.iter().map(|p| p.document_key.as_str()).collect();
+        found.sort_unstable();
+        assert_eq!(found, expected, "{filter:?}");
+    }
+}
+
+#[tokio::test]
+async fn active_generations_exclude_a_build_in_progress() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    for (generation, key) in [("g1", "published"), ("g2", "building"), ("", "plain")] {
+        h.upsert(
+            TOKEN_A,
+            0,
+            pb::Namespace {
+                generation: generation.to_owned(),
+                ..Harness::namespace(NAMESPACE_A)
+            },
+            vec![Harness::point(key, key, [1.0, 0.0, 0.0, 0.0])],
+        )
+        .await
+        .expect("upsert");
+    }
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_B),
+        vec![Harness::point("other", "other", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("upsert");
+    let scope = pb::Scope {
+        active_generations: vec![pb::ActiveGeneration {
+            namespace_id: NAMESPACE_A.to_owned(),
+            generation: "g1".to_owned(),
+        }],
+        ..Harness::scope(&[NAMESPACE_A, NAMESPACE_B])
+    };
+    let points = h
+        .search(TOKEN_A, scope.clone(), None)
+        .await
+        .expect("search");
+    let mut found: Vec<&str> = points.iter().map(|p| p.document_key.as_str()).collect();
+    found.sort_unstable();
+    assert_eq!(found, ["other", "plain", "published"]);
+    // An active generation for a namespace the scope does not list.
+    let stray = pb::Scope {
+        namespace_ids: vec![NAMESPACE_B.to_owned()],
+        ..scope
+    };
+    let status = h.search(TOKEN_A, stray, None).await.expect_err("stray");
+    assert_eq!(status.code(), Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn hybrid_results_carry_their_dense_cosine_score() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![
+            Harness::point("near", "nothing in common", [1.0, 0.0, 0.0, 0.0]),
+            Harness::point("half", "nothing either", [1.0, 1.0, 0.0, 0.0]),
+            Harness::point("far", "zebra quartz", [0.0, 0.0, 1.0, 0.0]),
+        ],
+    )
+    .await
+    .expect("upsert");
+    let points = h
+        .worker
+        .hybrid_search(with_token(
+            TOKEN_A,
+            pb::HybridSearchRequest {
+                scope: Some(Harness::scope(&[NAMESPACE_A])),
+                space: Some(h.space()),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                text: "zebra".to_owned(),
+                limit: 10,
+                ..pb::HybridSearchRequest::default()
+            },
+        ))
+        .await
+        .expect("hybrid")
+        .into_inner()
+        .points;
+    assert_eq!(points.len(), 3, "{points:?}");
+    for point in &points {
+        let dense = point
+            .dense_score
+            .expect("every hybrid point has a dense score");
+        let expected = match point.document_key.as_str() {
+            "near" => 1.0,
+            "half" => std::f32::consts::FRAC_1_SQRT_2,
+            _ => 0.0,
+        };
+        // float16 storage and int8 quantization are not used by exact search
+        // over the originals, but the originals are float16.
+        assert!((dense - expected).abs() < 0.01, "{point:?}");
+        assert!(
+            point.score < 0.1,
+            "the fused score is rank-based: {point:?}"
+        );
+    }
+    // A dense search reports the same score twice, and the hybrid dense
+    // score equals it for every point: both are the cosine of the stored
+    // (float16, normalised) vector against the query, one computed by
+    // Qdrant and one by the service from the returned vector.
+    let dense = h
+        .search(TOKEN_A, Harness::scope(&[NAMESPACE_A]), None)
+        .await
+        .expect("search");
+    assert_eq!(dense.len(), 3);
+    assert!(dense.iter().all(|p| p.dense_score == Some(p.score)));
+    for point in &points {
+        let reference = dense
+            .iter()
+            .find(|p| p.id == point.id)
+            .unwrap_or_else(|| panic!("{} not in the dense search", point.document_key));
+        let delta = (point.dense_score.expect("dense") - reference.score).abs();
+        assert!(delta < 1e-3, "{}: {delta} off", point.document_key);
+    }
+}
+
+#[tokio::test]
+async fn a_point_with_a_numeric_id_gets_its_hybrid_dense_score() {
+    // Points the service writes have UUID ids, but Qdrant also allows
+    // integer ids and the facade must not depend on the id's form: the
+    // dense score comes from the point's own vector, not from a second
+    // query by id.
+    let url = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point(
+            "written",
+            "ordinary words",
+            [1.0, 0.0, 0.0, 0.0],
+        )],
+    )
+    .await
+    .expect("upsert");
+    let qdrant = raw_qdrant(&url);
+    let collection = format!("emb_{}_{DIMENSION}", h.slug);
+    let mut payload = qdrant_client::Payload::new();
+    payload.insert("project_id", PROJECT_A.to_string());
+    payload.insert("source", "toolkit_index");
+    payload.insert("namespace_id", NAMESPACE_A);
+    payload.insert("document_key", "numeric");
+    payload.insert("document_version", "1");
+    payload.insert("parent_id", "");
+    payload.insert("chunk_id", "0");
+    payload.insert("chunk_type", "text");
+    payload.insert(
+        "acl",
+        qdrant_client::qdrant::Value::from(serde_json::json!(["group:all"])),
+    );
+    payload.insert("text", "zebra quartz");
+    payload.insert(
+        "metadata",
+        qdrant_client::qdrant::Value::from(serde_json::json!({})),
+    );
+    let vectors = qdrant_client::qdrant::NamedVectors::default()
+        .add_vector(
+            "dense",
+            qdrant_client::qdrant::Vector::new_dense(vec![1.0, 1.0, 0.0, 0.0]),
+        )
+        .add_vector(
+            "bm25",
+            qdrant_client::qdrant::Document::new("zebra quartz", "qdrant/bm25"),
+        );
+    qdrant
+        .upsert_points(
+            qdrant_client::qdrant::UpsertPointsBuilder::new(
+                &collection,
+                vec![qdrant_client::qdrant::PointStruct::new(
+                    7_u64, vectors, payload,
+                )],
+            )
+            .wait(true),
+        )
+        .await
+        .expect("raw upsert");
+    let points = h
+        .worker
+        .hybrid_search(with_token(
+            TOKEN_A,
+            pb::HybridSearchRequest {
+                scope: Some(Harness::scope(&[NAMESPACE_A])),
+                space: Some(h.space()),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                text: "zebra".to_owned(),
+                limit: 10,
+                ..pb::HybridSearchRequest::default()
+            },
+        ))
+        .await
+        .expect("hybrid")
+        .into_inner()
+        .points;
+    assert_eq!(points.len(), 2, "{points:?}");
+    let numeric = points
+        .iter()
+        .find(|p| p.document_key == "numeric")
+        .expect("the numeric-id point");
+    assert_eq!(numeric.id, "7");
+    let dense = numeric.dense_score.expect("dense score");
+    assert!(
+        (dense - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01,
+        "{numeric:?}"
+    );
+    let written = points
+        .iter()
+        .find(|p| p.document_key == "written")
+        .expect("the written point");
+    assert!((written.dense_score.expect("dense") - 1.0).abs() < 0.01);
 }
 
 // ── the forged project field ────────────────────────────────────────────────
@@ -981,6 +1460,16 @@ async fn generations_publish_atomically_and_clean_up_lazily() {
         .await
         .expect("upsert");
     }
+    // An incremental update written without a generation, before the
+    // clean-up: it belongs to no build and the clean-up must keep it.
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point("incremental", "plain", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("upsert");
     let read = |generation: &str| pb::Scope {
         generation: generation.to_owned(),
         ..Harness::scope(&[NAMESPACE_A])
@@ -988,6 +1477,7 @@ async fn generations_publish_atomically_and_clean_up_lazily() {
     let g1 = h.search(TOKEN_A, read("g1"), None).await.expect("g1");
     assert_eq!(g1.len(), 1);
     assert_eq!(g1[0].text, "g1");
+    assert_eq!(h.truth(PROJECT_A).await, 3);
     h.worker
         .delete(with_token(
             TOKEN_A,
@@ -1014,6 +1504,26 @@ async fn generations_publish_atomically_and_clean_up_lazily() {
         h.search(TOKEN_A, read("g2"), None).await.expect("g2").len(),
         1
     );
+    // The unversioned point survived: the toolkit scope (active generation
+    // g2 plus unversioned points) reads both, and the collection holds
+    // exactly those two.
+    let published = pb::Scope {
+        active_generations: vec![pb::ActiveGeneration {
+            namespace_id: NAMESPACE_A.to_owned(),
+            generation: "g2".to_owned(),
+        }],
+        ..Harness::scope(&[NAMESPACE_A])
+    };
+    let mut texts: Vec<String> = h
+        .search(TOKEN_A, published, None)
+        .await
+        .expect("published")
+        .into_iter()
+        .map(|p| p.text)
+        .collect();
+    texts.sort();
+    assert_eq!(texts, ["g2", "plain"]);
+    assert_eq!(h.truth(PROJECT_A).await, 2, "g1 alone was removed");
 }
 
 // ── sources ─────────────────────────────────────────────────────────────────

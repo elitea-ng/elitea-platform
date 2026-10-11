@@ -81,7 +81,8 @@ type VectorServiceClient interface {
 	// Search is a dense nearest-neighbour search by cosine similarity.
 	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
 	// HybridSearch fuses a dense search and a BM25 search over `text` by
-	// weighted reciprocal rank fusion.
+	// weighted reciprocal rank fusion. Each point also carries its dense
+	// cosine score.
 	HybridSearch(ctx context.Context, in *HybridSearchRequest, opts ...grpc.CallOption) (*HybridSearchResponse, error)
 	// Count counts the points that match a scope and a filter.
 	Count(ctx context.Context, in *CountRequest, opts ...grpc.CallOption) (*CountResponse, error)
@@ -190,7 +191,8 @@ type VectorServiceServer interface {
 	// Search is a dense nearest-neighbour search by cosine similarity.
 	Search(context.Context, *SearchRequest) (*SearchResponse, error)
 	// HybridSearch fuses a dense search and a BM25 search over `text` by
-	// weighted reciprocal rank fusion.
+	// weighted reciprocal rank fusion. Each point also carries its dense
+	// cosine score.
 	HybridSearch(context.Context, *HybridSearchRequest) (*HybridSearchResponse, error)
 	// Count counts the points that match a scope and a filter.
 	Count(context.Context, *CountRequest) (*CountResponse, error)
