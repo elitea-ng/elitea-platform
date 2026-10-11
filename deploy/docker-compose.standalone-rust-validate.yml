@@ -57,10 +57,10 @@ services:
       ELITEA_RUST_TRACE: "info"
     volumes:
       # The agent worker's document with the stream/durable pair of the
-      # VALIDATE route and its own connection name. The workload session and
-      # producer stay the agent worker's: runtime-session-init authorizes one
-      # certificate identity, and a second row would add nothing the claim
-      # fence does not already separate per command.
+      # VALIDATE route, its own connection name and its own workload session
+      # and producer (standalone-validate-worker-1), so the two workers never
+      # share a producer identity in the output ledger. The row that authorizes
+      # that session is written by validate-runtime-session-init below.
       - ./runtime/worker-runtime.rust-validate.json:/run/elitea/runtime.json:ro
       - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro
@@ -73,7 +73,7 @@ services:
         condition: service_completed_successfully
       nats-bootstrap:
         condition: service_completed_successfully
-      runtime-session-init:
+      validate-runtime-session-init:
         condition: service_completed_successfully
       elitea-agentstate-migrate:
         condition: service_completed_successfully
@@ -82,6 +82,33 @@ services:
       platform-edge:
         condition: service_started
     restart: unless-stopped
+
+  # A second elitea_runtime.workload_sessions row for the same certificate
+  # identity (the table keys on the session id, not on the identity), written by
+  # the same script as runtime-session-init. Keep SESSION_ID / PRODUCER_ID in
+  # sync with deploy/runtime/worker-runtime.rust-validate.json. The
+  # `standalone-stack.sh seed-runtime` fallback only re-stamps the agent
+  # worker's row; re-run this service to renew this one.
+  validate-runtime-session-init:
+    image: postgres:18
+    entrypoint: ["/bin/sh", "/opt/provision-runtime-session.sh"]
+    environment:
+      PGURL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
+      SESSION_ID: "${RUNTIME_VALIDATE_WORKER_SESSION_ID:-standalone-validate-worker-1}"
+      PRODUCER_ID: "${RUNTIME_VALIDATE_WORKER_PRODUCER_ID:-standalone-validate-worker-1}"
+      EXPECTED_IDENTITY: "${RUNTIME_WORKER_SPIFFE_ID:-spiffe://elitea.standalone/ns/default/sa/agent-worker}"
+      TTL: "${RUNTIME_WORKER_SESSION_TTL:-2160h}"
+      WAIT_ATTEMPTS: "${RUNTIME_WORKER_SESSION_WAIT_ATTEMPTS:-60}"
+      WAIT_INTERVAL: "${RUNTIME_WORKER_SESSION_WAIT_INTERVAL:-5}"
+    volumes:
+      - ./runtime/provision-runtime-session.sh:/opt/provision-runtime-session.sh:ro
+      - standalone_runtime_worker:/run/elitea-runtime:ro
+    depends_on:
+      runtime-material:
+        condition: service_completed_successfully
+      elitea-migrate:
+        condition: service_completed_successfully
+    restart: "no"
 
   validate-worker-spool-init:
     image: docker.io/library/debian:trixie-slim
