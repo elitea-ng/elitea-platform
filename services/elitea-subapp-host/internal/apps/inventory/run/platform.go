@@ -18,10 +18,14 @@ package run
 // Before either deletes a graph the host stops the project's (or toolkit's)
 // running run_ingestion invocations and waits a bounded time for them to end.
 // An ingest still running after the wait refuses the whole deletion
-// (spi.ErrIngestRunning, FAILED_PRECONDITION) and nothing is deleted. The
-// engine's own ingestion lease is the final guard: an ingest that starts
-// between the stop and the delete (or runs on another replica) holds the
-// graph, and the engine refuses; that refusal is the same retryable answer.
+// (spi.ErrIngestRunning, FAILED_PRECONDITION) and nothing is deleted: that
+// code always means nothing was deleted. The engine's own ingestion lease is
+// the final guard: an ingest that starts between the stop and the delete (or
+// runs on another replica) holds the graph. For one toolkit the engine
+// refuses, which is the same retryable answer. For a project the engine
+// deletes every graph it can and reports the held toolkits; that is answered
+// OK with Complete false and BusyToolkits, never as a failure that would hide
+// what was deleted, and the platform calls again.
 
 import (
 	"context"
@@ -164,6 +168,10 @@ func (r *Runner) DeleteToolkit(ctx context.Context, projectID, toolkitID int32) 
 // service's operation (spi.PlatformOps), called for elitea-main's project
 // deprovisioning. It deletes the graphs only; the project's artifacts are
 // purged by the platform's own project deletion.
+//
+// It fails (FAILED_PRECONDITION) only when the stop-ingests wait failed, so
+// nothing was deleted. A toolkit the engine found held is reported in
+// BusyToolkits with Complete false; what was deleted is reported too.
 func (r *Runner) DeleteProject(ctx context.Context, projectID int32) (*spi.ProjectDeletion, error) {
 	if r.DeleteProjectGraphs == nil {
 		return nil, spi.Failf(spi.KindRuntime, "this host has no Inventory engine, so there is no graph to delete")
@@ -180,14 +188,42 @@ func (r *Runner) DeleteProject(ctx context.Context, projectID int32) (*spi.Proje
 	if err != nil {
 		return nil, err
 	}
-	deletion := &spi.ProjectDeletion{ProjectID: projectID, Graphs: graphRemoved(document)}
-	toolkits, _ := document["toolkits"].([]any)
-	for _, entry := range toolkits {
-		if id, err := strconv.ParseInt(idLabel(entry), 10, 64); err == nil {
-			deletion.GraphToolkits = append(deletion.GraphToolkits, id)
+	deletion := &spi.ProjectDeletion{
+		ProjectID:     projectID,
+		Graphs:        graphRemoved(document),
+		GraphToolkits: idList(document["toolkits"]),
+		BusyToolkits:  idList(document["busy_toolkits"]),
+	}
+	perToolkit, _ := document["by_toolkit"].([]any)
+	for _, entry := range perToolkit {
+		counts, _ := entry.(map[string]any)
+		if id, err := strconv.ParseInt(idLabel(counts["toolkit_id"]), 10, 64); err == nil {
+			deletion.ToolkitGraphs = append(deletion.ToolkitGraphs, spi.ToolkitGraphDeletion{
+				ToolkitID: id, Removed: graphRemoved(counts),
+			})
 		}
 	}
+	// The engine says whether it is complete; an engine that does not is
+	// complete when it named no busy toolkit.
+	if complete, ok := document["complete"]; ok {
+		deletion.Complete = Truthy(complete)
+	} else {
+		deletion.Complete = len(deletion.BusyToolkits) == 0
+	}
 	return deletion, nil
+}
+
+// idList reads a JSON list of toolkit ids (numbers or digit strings), in
+// order, skipping what is not an id.
+func idList(value any) []int64 {
+	entries, _ := value.([]any)
+	var ids []int64
+	for _, entry := range entries {
+		if id, err := strconv.ParseInt(idLabel(entry), 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // callPlatformTool runs an engine delete tool with the project (and toolkit)

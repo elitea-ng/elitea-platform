@@ -83,8 +83,19 @@ type DeleteProjectResponse struct {
 	// removed in all. Empty for an application that has no graphs.
 	GraphToolkitIds []int64        `protobuf:"varint,6,rep,packed,name=graph_toolkit_ids,json=graphToolkitIds,proto3" json:"graph_toolkit_ids,omitempty"`
 	Graphs          *GraphDeletion `protobuf:"bytes,7,opt,name=graphs,proto3" json:"graphs,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// True when nothing of the project is left in the application. False when
+	// something was left alone: a toolkit's graph an ingest holds
+	// (busy_toolkit_ids) or a build whose heartbeat is live (live_builds). What
+	// was deleted stays deleted; call again once they end.
+	Complete bool `protobuf:"varint,8,opt,name=complete,proto3" json:"complete,omitempty"`
+	// Inventory: the toolkits whose graph was NOT deleted because an ingest
+	// (or another write) holds it. Empty when complete.
+	BusyToolkitIds []int64 `protobuf:"varint,9,rep,packed,name=busy_toolkit_ids,json=busyToolkitIds,proto3" json:"busy_toolkit_ids,omitempty"`
+	// Inventory: what each deleted toolkit's graph held, in deletion order;
+	// `graphs` is their sum.
+	ToolkitGraphs []*ToolkitGraphDeletion `protobuf:"bytes,10,rep,name=toolkit_graphs,json=toolkitGraphs,proto3" json:"toolkit_graphs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteProjectResponse) Reset() {
@@ -166,6 +177,81 @@ func (x *DeleteProjectResponse) GetGraphs() *GraphDeletion {
 	return nil
 }
 
+func (x *DeleteProjectResponse) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+func (x *DeleteProjectResponse) GetBusyToolkitIds() []int64 {
+	if x != nil {
+		return x.BusyToolkitIds
+	}
+	return nil
+}
+
+func (x *DeleteProjectResponse) GetToolkitGraphs() []*ToolkitGraphDeletion {
+	if x != nil {
+		return x.ToolkitGraphs
+	}
+	return nil
+}
+
+// ToolkitGraphDeletion is what the deletion of one toolkit's Inventory graph
+// removed, within a project deletion.
+type ToolkitGraphDeletion struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolkitId     int64                  `protobuf:"varint,1,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
+	Removed       *GraphDeletion         `protobuf:"bytes,2,opt,name=removed,proto3" json:"removed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolkitGraphDeletion) Reset() {
+	*x = ToolkitGraphDeletion{}
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolkitGraphDeletion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolkitGraphDeletion) ProtoMessage() {}
+
+func (x *ToolkitGraphDeletion) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolkitGraphDeletion.ProtoReflect.Descriptor instead.
+func (*ToolkitGraphDeletion) Descriptor() ([]byte, []int) {
+	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ToolkitGraphDeletion) GetToolkitId() int64 {
+	if x != nil {
+		return x.ToolkitId
+	}
+	return 0
+}
+
+func (x *ToolkitGraphDeletion) GetRemoved() *GraphDeletion {
+	if x != nil {
+		return x.Removed
+	}
+	return nil
+}
+
 type DeleteToolkitRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The platform project id; a positive integer.
@@ -178,7 +264,7 @@ type DeleteToolkitRequest struct {
 
 func (x *DeleteToolkitRequest) Reset() {
 	*x = DeleteToolkitRequest{}
-	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[2]
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -190,7 +276,7 @@ func (x *DeleteToolkitRequest) String() string {
 func (*DeleteToolkitRequest) ProtoMessage() {}
 
 func (x *DeleteToolkitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[2]
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -203,7 +289,7 @@ func (x *DeleteToolkitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteToolkitRequest.ProtoReflect.Descriptor instead.
 func (*DeleteToolkitRequest) Descriptor() ([]byte, []int) {
-	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{2}
+	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DeleteToolkitRequest) GetProjectId() int32 {
@@ -233,7 +319,7 @@ type DeleteToolkitResponse struct {
 
 func (x *DeleteToolkitResponse) Reset() {
 	*x = DeleteToolkitResponse{}
-	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[3]
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -245,7 +331,7 @@ func (x *DeleteToolkitResponse) String() string {
 func (*DeleteToolkitResponse) ProtoMessage() {}
 
 func (x *DeleteToolkitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[3]
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -258,7 +344,7 @@ func (x *DeleteToolkitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteToolkitResponse.ProtoReflect.Descriptor instead.
 func (*DeleteToolkitResponse) Descriptor() ([]byte, []int) {
-	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{3}
+	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DeleteToolkitResponse) GetProjectId() int32 {
@@ -302,7 +388,7 @@ type GraphDeletion struct {
 
 func (x *GraphDeletion) Reset() {
 	*x = GraphDeletion{}
-	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[4]
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -314,7 +400,7 @@ func (x *GraphDeletion) String() string {
 func (*GraphDeletion) ProtoMessage() {}
 
 func (x *GraphDeletion) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[4]
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -327,7 +413,7 @@ func (x *GraphDeletion) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GraphDeletion.ProtoReflect.Descriptor instead.
 func (*GraphDeletion) Descriptor() ([]byte, []int) {
-	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{4}
+	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GraphDeletion) GetEntities() int64 {
@@ -372,7 +458,7 @@ type WikiDeletion struct {
 
 func (x *WikiDeletion) Reset() {
 	*x = WikiDeletion{}
-	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[5]
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -384,7 +470,7 @@ func (x *WikiDeletion) String() string {
 func (*WikiDeletion) ProtoMessage() {}
 
 func (x *WikiDeletion) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[5]
+	mi := &file_elitea_subapp_v1_platform_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -397,7 +483,7 @@ func (x *WikiDeletion) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WikiDeletion.ProtoReflect.Descriptor instead.
 func (*WikiDeletion) Descriptor() ([]byte, []int) {
-	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{5}
+	return file_elitea_subapp_v1_platform_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *WikiDeletion) GetWikiId() string {
@@ -442,7 +528,7 @@ const file_elitea_subapp_v1_platform_proto_rawDesc = "" +
 	"\x1felitea/subapp/v1/platform.proto\x12\x10elitea.subapp.v1\"5\n" +
 	"\x14DeleteProjectRequest\x12\x1d\n" +
 	"\n" +
-	"project_id\x18\x01 \x01(\x05R\tprojectId\"\xbc\x02\n" +
+	"project_id\x18\x01 \x01(\x05R\tprojectId\"\xd1\x03\n" +
 	"\x15DeleteProjectResponse\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\x05R\tprojectId\x124\n" +
@@ -452,7 +538,15 @@ const file_elitea_subapp_v1_platform_proto_rawDesc = "" +
 	"\x14stale_builds_removed\x18\x04 \x01(\x03R\x12staleBuildsRemoved\x12\x16\n" +
 	"\x06errors\x18\x05 \x03(\tR\x06errors\x12*\n" +
 	"\x11graph_toolkit_ids\x18\x06 \x03(\x03R\x0fgraphToolkitIds\x127\n" +
-	"\x06graphs\x18\a \x01(\v2\x1f.elitea.subapp.v1.GraphDeletionR\x06graphs\"T\n" +
+	"\x06graphs\x18\a \x01(\v2\x1f.elitea.subapp.v1.GraphDeletionR\x06graphs\x12\x1a\n" +
+	"\bcomplete\x18\b \x01(\bR\bcomplete\x12(\n" +
+	"\x10busy_toolkit_ids\x18\t \x03(\x03R\x0ebusyToolkitIds\x12M\n" +
+	"\x0etoolkit_graphs\x18\n" +
+	" \x03(\v2&.elitea.subapp.v1.ToolkitGraphDeletionR\rtoolkitGraphs\"p\n" +
+	"\x14ToolkitGraphDeletion\x12\x1d\n" +
+	"\n" +
+	"toolkit_id\x18\x01 \x01(\x03R\ttoolkitId\x129\n" +
+	"\aremoved\x18\x02 \x01(\v2\x1f.elitea.subapp.v1.GraphDeletionR\aremoved\"T\n" +
 	"\x14DeleteToolkitRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\x05R\tprojectId\x12\x1d\n" +
@@ -496,28 +590,31 @@ func file_elitea_subapp_v1_platform_proto_rawDescGZIP() []byte {
 	return file_elitea_subapp_v1_platform_proto_rawDescData
 }
 
-var file_elitea_subapp_v1_platform_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_elitea_subapp_v1_platform_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_elitea_subapp_v1_platform_proto_goTypes = []any{
 	(*DeleteProjectRequest)(nil),  // 0: elitea.subapp.v1.DeleteProjectRequest
 	(*DeleteProjectResponse)(nil), // 1: elitea.subapp.v1.DeleteProjectResponse
-	(*DeleteToolkitRequest)(nil),  // 2: elitea.subapp.v1.DeleteToolkitRequest
-	(*DeleteToolkitResponse)(nil), // 3: elitea.subapp.v1.DeleteToolkitResponse
-	(*GraphDeletion)(nil),         // 4: elitea.subapp.v1.GraphDeletion
-	(*WikiDeletion)(nil),          // 5: elitea.subapp.v1.WikiDeletion
+	(*ToolkitGraphDeletion)(nil),  // 2: elitea.subapp.v1.ToolkitGraphDeletion
+	(*DeleteToolkitRequest)(nil),  // 3: elitea.subapp.v1.DeleteToolkitRequest
+	(*DeleteToolkitResponse)(nil), // 4: elitea.subapp.v1.DeleteToolkitResponse
+	(*GraphDeletion)(nil),         // 5: elitea.subapp.v1.GraphDeletion
+	(*WikiDeletion)(nil),          // 6: elitea.subapp.v1.WikiDeletion
 }
 var file_elitea_subapp_v1_platform_proto_depIdxs = []int32{
-	5, // 0: elitea.subapp.v1.DeleteProjectResponse.wikis:type_name -> elitea.subapp.v1.WikiDeletion
-	4, // 1: elitea.subapp.v1.DeleteProjectResponse.graphs:type_name -> elitea.subapp.v1.GraphDeletion
-	4, // 2: elitea.subapp.v1.DeleteToolkitResponse.removed:type_name -> elitea.subapp.v1.GraphDeletion
-	0, // 3: elitea.subapp.v1.PlatformOperations.DeleteProject:input_type -> elitea.subapp.v1.DeleteProjectRequest
-	2, // 4: elitea.subapp.v1.PlatformOperations.DeleteToolkit:input_type -> elitea.subapp.v1.DeleteToolkitRequest
-	1, // 5: elitea.subapp.v1.PlatformOperations.DeleteProject:output_type -> elitea.subapp.v1.DeleteProjectResponse
-	3, // 6: elitea.subapp.v1.PlatformOperations.DeleteToolkit:output_type -> elitea.subapp.v1.DeleteToolkitResponse
-	5, // [5:7] is the sub-list for method output_type
-	3, // [3:5] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	6, // 0: elitea.subapp.v1.DeleteProjectResponse.wikis:type_name -> elitea.subapp.v1.WikiDeletion
+	5, // 1: elitea.subapp.v1.DeleteProjectResponse.graphs:type_name -> elitea.subapp.v1.GraphDeletion
+	2, // 2: elitea.subapp.v1.DeleteProjectResponse.toolkit_graphs:type_name -> elitea.subapp.v1.ToolkitGraphDeletion
+	5, // 3: elitea.subapp.v1.ToolkitGraphDeletion.removed:type_name -> elitea.subapp.v1.GraphDeletion
+	5, // 4: elitea.subapp.v1.DeleteToolkitResponse.removed:type_name -> elitea.subapp.v1.GraphDeletion
+	0, // 5: elitea.subapp.v1.PlatformOperations.DeleteProject:input_type -> elitea.subapp.v1.DeleteProjectRequest
+	3, // 6: elitea.subapp.v1.PlatformOperations.DeleteToolkit:input_type -> elitea.subapp.v1.DeleteToolkitRequest
+	1, // 7: elitea.subapp.v1.PlatformOperations.DeleteProject:output_type -> elitea.subapp.v1.DeleteProjectResponse
+	4, // 8: elitea.subapp.v1.PlatformOperations.DeleteToolkit:output_type -> elitea.subapp.v1.DeleteToolkitResponse
+	7, // [7:9] is the sub-list for method output_type
+	5, // [5:7] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_elitea_subapp_v1_platform_proto_init() }
@@ -531,7 +628,7 @@ func file_elitea_subapp_v1_platform_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_subapp_v1_platform_proto_rawDesc), len(file_elitea_subapp_v1_platform_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

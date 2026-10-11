@@ -178,6 +178,11 @@ func TestProjectDeprovisioningIsAGRPCServiceAuthorisedByTheMainCertificate(t *te
 	if got.GetProjectId() != 17 || got.GetLiveBuilds() != 2 || got.GetStaleBuildsRemoved() != 1 || len(got.GetErrors()) != 0 {
 		t.Fatalf("%v", got)
 	}
+	// Two builds with a live heartbeat were left alone: not complete, and
+	// DeepWiki has no toolkits to report busy.
+	if got.GetComplete() || len(got.GetBusyToolkitIds()) != 0 || len(got.GetToolkitGraphs()) != 0 {
+		t.Fatalf("completeness: %v", got)
+	}
 	if len(got.GetWikis()) != 2 {
 		t.Fatalf("%v", got.GetWikis())
 	}

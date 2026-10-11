@@ -180,6 +180,9 @@ func projectDeletionOf(project int32, result map[string]any) *spi.ProjectDeletio
 		LiveBuilds:         int64(number(result["live_builds"])),
 		StaleBuildsRemoved: int64(number(result["builds"])),
 	}
+	// A build whose heartbeat is live was left alone: the project is not
+	// gone until it ends and the deletion is called again.
+	deletion.Complete = deletion.LiveBuilds == 0
 	perWiki, _ := result["per_wiki"].([]any)
 	listed := map[string]bool{}
 	for _, entry := range perWiki {

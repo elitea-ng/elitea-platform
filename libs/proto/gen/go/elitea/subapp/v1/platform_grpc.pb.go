@@ -47,12 +47,21 @@ type PlatformOperationsClient interface {
 	//
 	// It stops the project's running generations (DeepWiki) or ingests
 	// (Inventory) first and waits a bounded time for them to end. When one is
-	// still running it answers FAILED_PRECONDITION ("a generation is still
-	// running; retry" / "an ingest is still running; retry") and deletes
-	// nothing; when a publish holds a wiki past the bounded wait it answers
-	// ABORTED ("being published; retry"). It deletes the application's own
-	// data only; the project's artifacts belong to the platform's project
-	// deletion.
+	// still running after that wait it answers FAILED_PRECONDITION ("a
+	// generation is still running; retry" / "an ingest is still running;
+	// retry") and deletes NOTHING: that code always means nothing was deleted.
+	// When a publish holds a wiki past the bounded wait it answers ABORTED
+	// ("being published; retry").
+	//
+	// A deletion that went ahead but could not take everything (Inventory: a
+	// toolkit's graph held by an ingest that started meanwhile or runs on
+	// another replica; DeepWiki: a build whose heartbeat is live) is NOT a
+	// failure: it answers OK with `complete = false`, what it deleted, and what
+	// it left (`busy_toolkit_ids`, `live_builds`). The caller records that and
+	// calls again later; the call is idempotent.
+	//
+	// It deletes the application's own data only; the project's artifacts
+	// belong to the platform's project deletion.
 	DeleteProject(ctx context.Context, in *DeleteProjectRequest, opts ...grpc.CallOption) (*DeleteProjectResponse, error)
 	// DeleteToolkit removes what the application holds for ONE toolkit of a
 	// project: for Inventory, that toolkit's graph, when the toolkit is
@@ -120,12 +129,21 @@ type PlatformOperationsServer interface {
 	//
 	// It stops the project's running generations (DeepWiki) or ingests
 	// (Inventory) first and waits a bounded time for them to end. When one is
-	// still running it answers FAILED_PRECONDITION ("a generation is still
-	// running; retry" / "an ingest is still running; retry") and deletes
-	// nothing; when a publish holds a wiki past the bounded wait it answers
-	// ABORTED ("being published; retry"). It deletes the application's own
-	// data only; the project's artifacts belong to the platform's project
-	// deletion.
+	// still running after that wait it answers FAILED_PRECONDITION ("a
+	// generation is still running; retry" / "an ingest is still running;
+	// retry") and deletes NOTHING: that code always means nothing was deleted.
+	// When a publish holds a wiki past the bounded wait it answers ABORTED
+	// ("being published; retry").
+	//
+	// A deletion that went ahead but could not take everything (Inventory: a
+	// toolkit's graph held by an ingest that started meanwhile or runs on
+	// another replica; DeepWiki: a build whose heartbeat is live) is NOT a
+	// failure: it answers OK with `complete = false`, what it deleted, and what
+	// it left (`busy_toolkit_ids`, `live_builds`). The caller records that and
+	// calls again later; the call is idempotent.
+	//
+	// It deletes the application's own data only; the project's artifacts
+	// belong to the platform's project deletion.
 	DeleteProject(context.Context, *DeleteProjectRequest) (*DeleteProjectResponse, error)
 	// DeleteToolkit removes what the application holds for ONE toolkit of a
 	// project: for Inventory, that toolkit's graph, when the toolkit is

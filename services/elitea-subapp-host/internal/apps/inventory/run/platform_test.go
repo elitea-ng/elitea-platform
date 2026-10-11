@@ -387,19 +387,12 @@ func TestADeletionIsRefusedWhileAnIngestWillNotStop(t *testing.T) {
 func TestTheEnginesLeaseRefusalIsRetryable(t *testing.T) {
 	rig := newPlatformRig(t, []string{"elitea-main"})
 	main := rig.client(t, "elitea-main")
-	for _, message := range []string{
-		"an ingestion of this Inventory toolkit is running; stop it and delete the graph again",
-		"deleted the Inventory graphs of 1 toolkit(s) of project 7, but an ingestion is running on toolkit(s) 71; stop it and delete the project's graphs again",
-	} {
-		rig.engine.answer = func(string, map[string]any) (map[string]any, error) {
-			return map[string]any{"success": false, "error": message}, nil
-		}
-		if _, err := rig.deleteToolkit(main, 7, 70); status.Code(err) != codes.FailedPrecondition {
-			t.Errorf("toolkit %q: %v", message, err)
-		}
-		if _, err := rig.deleteProject(main, 7); status.Code(err) != codes.FailedPrecondition {
-			t.Errorf("project %q: %v", message, err)
-		}
+	message := "an ingestion of this Inventory toolkit is running; stop it and delete the graph again"
+	rig.engine.answer = func(string, map[string]any) (map[string]any, error) {
+		return map[string]any{"success": false, "error": message}, nil
+	}
+	if _, err := rig.deleteToolkit(main, 7, 70); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("toolkit %q: %v", message, err)
 	}
 	// Any other engine failure is internal, not retryable.
 	rig.engine.answer = func(string, map[string]any) (map[string]any, error) {
@@ -463,4 +456,88 @@ func adminHarness(t *testing.T) *harness {
 		return engineDocument(map[string]any{}), nil
 	}
 	return h
+}
+
+// A project deletion that met a held toolkit is not a failure: the engine
+// deleted what it could and says what it left, and the service answers OK
+// with complete = false and the busy toolkits, so the platform's cleanup
+// records what was deleted and calls again. FAILED_PRECONDITION is kept for
+// the case where nothing was deleted (the stop-ingests wait failed).
+func TestAPartialProjectDeletionIsOKAndNotComplete(t *testing.T) {
+	rig := newPlatformRig(t, []string{"elitea-main"})
+	main := rig.client(t, "elitea-main")
+	rig.engine.answer = func(tool string, arguments map[string]any) (map[string]any, error) {
+		if format, _ := arguments["params"].(map[string]any)["output_format"].(string); format != "json" {
+			t.Errorf("%s asked for %q, not json", tool, format)
+		}
+		return engineDocument(map[string]any{
+			"project_id": 7, "complete": false,
+			"toolkits": []int{70}, "busy_toolkits": []int{71, 72},
+			"by_toolkit": []map[string]any{{"toolkit_id": 70, "entities": 5, "relations": 4, "sources": 2, "documents": 3}},
+			"entities":   5, "relations": 4, "sources": 2, "documents": 3,
+		}), nil
+	}
+	got, err := rig.deleteProject(main, 7)
+	if err != nil {
+		t.Fatalf("a partial deletion is OK: %v", err)
+	}
+	if got.GetComplete() {
+		t.Error("complete, although two toolkits were held")
+	}
+	if fmt.Sprint(got.GetBusyToolkitIds()) != "[71 72]" || fmt.Sprint(got.GetGraphToolkitIds()) != "[70]" {
+		t.Errorf("busy %v deleted %v", got.GetBusyToolkitIds(), got.GetGraphToolkitIds())
+	}
+	if got.GetGraphs().GetEntities() != 5 || got.GetGraphs().GetDocuments() != 3 {
+		t.Errorf("totals %v", got.GetGraphs())
+	}
+	if len(got.GetToolkitGraphs()) != 1 || got.GetToolkitGraphs()[0].GetToolkitId() != 70 ||
+		got.GetToolkitGraphs()[0].GetRemoved().GetRelations() != 4 {
+		t.Errorf("per toolkit %v", got.GetToolkitGraphs())
+	}
+
+	// Complete, with two toolkits' counts.
+	rig.engine.answer = func(string, map[string]any) (map[string]any, error) {
+		return engineDocument(map[string]any{
+			"project_id": 7, "complete": true, "toolkits": []int{70, 71}, "busy_toolkits": []int{},
+			"by_toolkit": []map[string]any{
+				{"toolkit_id": 70, "entities": 5, "relations": 4, "sources": 2, "documents": 3},
+				{"toolkit_id": 71, "entities": 4, "relations": 4, "sources": 2, "documents": 3},
+			},
+			"entities": 9, "relations": 8, "sources": 4, "documents": 6,
+		}), nil
+	}
+	got, err = rig.deleteProject(main, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.GetComplete() || len(got.GetBusyToolkitIds()) != 0 || len(got.GetToolkitGraphs()) != 2 ||
+		got.GetToolkitGraphs()[1].GetRemoved().GetEntities() != 4 || got.GetGraphs().GetEntities() != 9 {
+		t.Errorf("%v", got)
+	}
+
+	// An engine that says nothing about completeness (no busy list either)
+	// is complete; a project with nothing left is complete too.
+	rig.engine.answer = func(string, map[string]any) (map[string]any, error) {
+		return engineDocument(map[string]any{"project_id": 7, "toolkits": []int{}, "entities": 0}), nil
+	}
+	got, err = rig.deleteProject(main, 7)
+	if err != nil || !got.GetComplete() || len(got.GetGraphToolkitIds()) != 0 {
+		t.Errorf("%v %v", got, err)
+	}
+
+	// The one failure left: nothing deleted because an ingest would not stop.
+	rig.runner.StopWait = 200 * time.Millisecond
+	rig.startIngest(t, "7", 70, false)
+	rig.engine.mu.Lock()
+	before := len(rig.engine.calls)
+	rig.engine.mu.Unlock()
+	_, err = rig.deleteProject(main, 7)
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "an ingest is still running; retry") {
+		t.Fatalf("%v", err)
+	}
+	rig.engine.mu.Lock()
+	defer rig.engine.mu.Unlock()
+	if len(rig.engine.calls) != before {
+		t.Errorf("the engine was asked to delete although the wait failed: %v", rig.engine.calls[before:])
+	}
 }
