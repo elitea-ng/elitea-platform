@@ -322,6 +322,16 @@ services:
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
       ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "https://elitea-deepwiki:8080"
+      # The platform gRPC service (elitea.subapp.v1.PlatformOperations):
+      # project deprovisioning, authorised by the verified client certificate
+      # alone. The certificate elitea-main presents is CN=elitea-main
+      # (gen-deepwiki-certs.sh). A second listener behind the same TLS
+      # configuration, reachable on the compose network only (no published
+      # port). Remove PLATFORM_CLIENTS to turn the service off.
+      ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+    expose:
+      - "9443"
     volumes:
       - ./certs:/certs:ro
       - deepwiki-engine-sock:/run/deepwiki
