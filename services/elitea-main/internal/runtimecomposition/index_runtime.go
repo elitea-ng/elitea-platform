@@ -279,7 +279,6 @@ func newCurrentIndexRuntime(
 		}
 		service, err := indexregistryapp.NewService(
 			toolkits,
-			indexMetaTimeouts,
 			registry.repo,
 			schedules,
 			registry.vectors,

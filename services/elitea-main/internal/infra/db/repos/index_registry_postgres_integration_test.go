@@ -4,9 +4,12 @@ package repos
 // Requires ELITEA_TEST_DATABASE_URL; every test skips without it.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +43,53 @@ func registryResult(n int, name string, summary outputapp.IndexIngestSummary) in
 	return indexregistryapp.Result{
 		ExecutionID: fmt.Sprintf("%s-exec-%d", name, n), Generation: uint64(n),
 		OccurredAt: time.Now().UTC(), Summary: summary,
+	}
+}
+
+// admitRegistryRun admits a real index ingest, so an execution_jobs row exists
+// (PENDING), and writes its registry row through the real initializer. It
+// returns the execution id the row names. indexGeneration orders runs of the
+// same index.
+func admitRegistryRun(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	repo *IndexRegistryRepository,
+	name, key string,
+	indexGeneration uint64,
+) (string, error) {
+	t.Helper()
+	jobs, err := NewIndexIngestJobsRepository(pool, IndexIngestDispatchPolicy{
+		StreamName: "elitea:runtime:index:commands", CapabilityVersion: "1", ResourceClass: "indexing",
+		IsolationClass: "project", Priority: 1, DeadlineTTL: time.Hour, LimitsRevision: "index-limits-v1", MaxOutstanding: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := postgresIndexSubmitRequest(key, name)
+	request.Identity.TenantID = "1"
+	admitted, err := newPostgresIndexAdmissionService(t, jobs, key).Submit(context.Background(), request)
+	if err != nil || !admitted.Created {
+		t.Fatalf("admit %s: %+v err=%v", key, admitted, err)
+	}
+	initializer, err := indexingapp.NewRegistryIndexMetaInitializer(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := indexingapp.AdmissionOutcome{
+		AdmissionOutcome: admitted.AdmissionOutcome, Generation: 1, IndexGeneration: indexGeneration,
+		IndexMetaID: admitted.IndexMetaID, IndexMetaCorrelationID: request.CorrelationID,
+	}
+	if outcome.AdmittedAt.IsZero() {
+		outcome.AdmittedAt = time.Now().UTC()
+	}
+	return admitted.ExecutionID, initializer.MaterializeInitialIndexMeta(context.Background(), request, outcome)
+}
+
+func setJobState(t *testing.T, pool *pgxpool.Pool, executionID, state string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE elitea_runtime.execution_jobs SET state = $2 WHERE execution_id = $1`, executionID, state); err != nil {
+		t.Fatalf("set job %s to %s: %v", executionID, state, err)
 	}
 }
 
@@ -81,11 +131,6 @@ func TestIndexRegistryInitializeCreatesRetriesAndStartsNextRun(t *testing.T) {
 	}
 	if again := mustFind(t, repo, "docs"); len(again.History) != 2 || again.IndexID != row.IndexID {
 		t.Fatalf("retry changed the row: %+v", again)
-	}
-
-	// A second run may not start while the first owns the row.
-	if err := repo.InitializeRegistryRun(ctx, registryRun(2, "docs")); !errors.Is(err, indexingapp.ErrCurrentIndexMetaConflict) {
-		t.Fatalf("second run over an active one = %v, want conflict", err)
 	}
 
 	if _, err := repo.ApplyResult(ctx, 1, registryResult(1, "docs", registrySummary(8, "m"))); err != nil {
@@ -245,12 +290,26 @@ func TestIndexRegistryTerminalEffects(t *testing.T) {
 		t.Fatalf("verify manual stop = %q err=%v", id, err)
 	}
 
-	// An effect for a run no row holds is a conflict; for a deleted index it is
-	// superseded, so the reconciler resolves it instead of retrying forever.
-	if err := repo.ApplyRegistryTerminal(ctx, terminal(1, "never", indexingapp.CurrentIndexMetaFailed, "x")); !errors.Is(err, indexingapp.ErrCurrentIndexMetaConflict) {
-		t.Fatalf("unknown run = %v, want conflict", err)
+	// An effect for a run no row holds (admitted under python before the mode
+	// switched) is acknowledged as a no-op, logged at info, and never requeued;
+	// for a deleted index it is superseded, so the reconciler resolves it
+	// instead of retrying forever.
+	var logs bytes.Buffer
+	repo.WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	if err := repo.ApplyRegistryTerminal(ctx, terminal(1, "never", indexingapp.CurrentIndexMetaFailed, "x")); err != nil {
+		t.Fatalf("a terminal effect with no registry row = %v, want a no-op", err)
 	}
-	if _, err := repo.MarkDeleted(ctx, 1, 19, cancelled.IndexID, time.Now()); err != nil {
+	ghostStop := indexingapp.RegistryManualStop{ProjectID: 1, CurrentManualStopCleanup: indexingapp.CurrentManualStopCleanup{
+		MetaID: "never-meta-1", ExecutionID: "never-exec-1", Generation: 1, IndexGeneration: 1, IndexName: "never", ToolkitID: 19,
+	}}
+	if id, err := repo.VerifyRegistryManualStop(ctx, ghostStop); err != nil || id != "" {
+		t.Fatalf("a manual stop with no registry row = %q, %v; want a no-op", id, err)
+	}
+	if got := logs.String(); strings.Count(got, "level=INFO") != 2 || !strings.Contains(got, "no-op") ||
+		!strings.Contains(got, "never-exec-1") {
+		t.Fatalf("the two no-ops must each log at info level: %s", got)
+	}
+	if _, err := repo.MarkDeleted(ctx, 1, 19, cancelled.IndexID); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.ApplyRegistryTerminal(ctx, terminal(1, "c", indexingapp.CurrentIndexMetaCancelled, "")); !errors.Is(err, indexingapp.ErrCurrentIndexMetaSuperseded) {
@@ -285,32 +344,32 @@ func TestIndexRegistrySaveConfigurationTouchesNothingElse(t *testing.T) {
 func TestIndexRegistryDeleteTombstonesFreesTheNameAndPurges(t *testing.T) {
 	repo, pool := newRegistryTestRepo(t)
 	ctx := context.Background()
+	// A synthetic run: no execution job is recorded for it, so it is not active.
 	if err := repo.InitializeRegistryRun(ctx, registryRun(1, "docs")); err != nil {
 		t.Fatal(err)
 	}
 	row := mustFind(t, repo, "docs")
-
-	// A fresh in-progress run is refused; a stale one is deletable.
-	if _, err := repo.MarkDeleted(ctx, 1, 19, row.IndexID, time.Now().Add(-time.Hour)); !errors.Is(err, indexregistryapp.ErrActiveRun) {
-		t.Fatalf("delete of an active run = %v", err)
+	if row.RunActive {
+		t.Fatal("a run whose job does not exist cannot be active")
 	}
-	if _, err := repo.MarkDeleted(ctx, 1, 19, "00000000-0000-4000-8000-000000000000", time.Now()); !errors.Is(err, indexregistryapp.ErrNotFound) {
+
+	if _, err := repo.MarkDeleted(ctx, 1, 19, "00000000-0000-4000-8000-000000000000"); !errors.Is(err, indexregistryapp.ErrNotFound) {
 		t.Fatalf("delete of an unknown id = %v", err)
 	}
-	if _, err := repo.MarkDeleted(ctx, 2, 19, row.IndexID, time.Now()); !errors.Is(err, indexregistryapp.ErrNotFound) {
+	if _, err := repo.MarkDeleted(ctx, 2, 19, row.IndexID); !errors.Is(err, indexregistryapp.ErrNotFound) {
 		t.Fatalf("delete from another project = %v", err)
 	}
 	if err := repo.UpsertDocuments(ctx, row.IndexID, []indexregistryapp.DocumentVersion{{Key: "a.md", Version: "v1", ChunkCount: 3}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.MarkDeleted(ctx, 1, 19, row.IndexID, time.Now().Add(time.Hour)); err != nil {
+	if _, err := repo.MarkDeleted(ctx, 1, 19, row.IndexID); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := repo.FindByName(ctx, 1, 19, "docs"); found {
 		t.Fatal("a tombstoned index is still found")
 	}
 	tombstones, err := repo.ListTombstones(ctx, 10)
-	if err != nil || len(tombstones) != 1 || tombstones[0].IndexID != row.IndexID {
+	if err != nil || len(tombstones) != 1 || tombstones[0].IndexID != row.IndexID || tombstones[0].Attempts != 0 {
 		t.Fatalf("tombstones = %+v err=%v", tombstones, err)
 	}
 	// The name is free again while the tombstone waits for its vectors.
@@ -335,6 +394,237 @@ func TestIndexRegistryDeleteTombstonesFreesTheNameAndPurges(t *testing.T) {
 	}
 	if left, _ := repo.ListTombstones(ctx, 10); len(left) != 0 {
 		t.Fatalf("tombstones after purge = %+v", left)
+	}
+}
+
+// A run is active exactly while the execution job it names is not terminal.
+// updated_at plays no part: a healthy run that reports rarely is neither
+// deletable nor restartable, and a run whose job ended is both.
+func TestIndexRegistryRunLivenessComesFromTheExecutionJob(t *testing.T) {
+	repo, pool := newRegistryTestRepo(t)
+	ctx := context.Background()
+
+	execution, err := admitRegistryRun(t, pool, repo, "long", "liveness-1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setJobState(t, pool, execution, "RUNNING")
+	if _, err := pool.Exec(ctx,
+		`UPDATE elitea_runtime.index_registry SET updated_at = now() - interval '48 hours' WHERE name = 'long'`); err != nil {
+		t.Fatal(err)
+	}
+	row := mustFind(t, repo, "long")
+	if !row.RunActive || !row.Active() || row.Abandoned() {
+		t.Fatalf("a RUNNING job with a 48h-old updated_at must be an active run: %+v", row)
+	}
+	if listed, _ := repo.List(ctx, 1, 19); len(listed) != 1 || !listed[0].RunActive {
+		t.Fatalf("the list does not read liveness: %+v", listed)
+	}
+	if _, err := repo.MarkDeleted(ctx, 1, 19, row.IndexID); !errors.Is(err, indexregistryapp.ErrActiveRun) {
+		t.Fatalf("delete of a healthy long run = %v, want ErrActiveRun", err)
+	}
+	if err := repo.InitializeRegistryRun(ctx, registryRun(2, "long")); !errors.Is(err, indexingapp.ErrCurrentIndexMetaConflict) {
+		t.Fatalf("starting a run over a healthy one = %v, want conflict", err)
+	}
+	for _, live := range []string{"PENDING", "DISPATCHED", "CLAIMED", "SETTLING"} {
+		setJobState(t, pool, execution, live)
+		if got := mustFind(t, repo, "long"); !got.RunActive {
+			t.Fatalf("job %s is not terminal, the run is active", live)
+		}
+	}
+
+	// Every terminal job state ends the run; the index is then deletable.
+	for _, terminal := range []string{"SUCCEEDED", "FAILED", "CANCELLED"} {
+		setJobState(t, pool, execution, terminal)
+		got := mustFind(t, repo, "long")
+		if got.RunActive || !got.Abandoned() || got.State != indexregistryapp.StateInProgress {
+			t.Fatalf("job %s: the run must be dead and its row still in_progress: %+v", terminal, got)
+		}
+	}
+
+	// A dead run does not block the next one: it is recorded as abandoned.
+	second, err := admitRegistryRun(t, pool, repo, "long", "liveness-2", 2)
+	if err != nil {
+		t.Fatalf("starting a run after a dead one: %v", err)
+	}
+	next := mustFind(t, repo, "long")
+	if next.State != indexregistryapp.StateInProgress || *next.TaskID != second || !next.RunActive {
+		t.Fatalf("the new run is not the row's: %+v", next)
+	}
+	if len(next.History) < 3 {
+		t.Fatalf("history = %+v", next.History)
+	}
+	previous := next.History[len(next.History)-2]
+	if previous["state"] != "failed" || previous["error"] != "abandoned" || previous["execution_id"] != execution {
+		t.Fatalf("the dead run is not recorded as abandoned: %+v", previous)
+	}
+
+	// ... and the dead run's index can be deleted.
+	setJobState(t, pool, second, "FAILED")
+	if _, err := repo.MarkDeleted(ctx, 1, 19, next.IndexID); err != nil {
+		t.Fatalf("delete of a run whose job is terminal: %v", err)
+	}
+}
+
+// The tombstone sweeper's claim: due rows only, never the same row twice while
+// leased, a failure backs off in the row.
+func TestIndexRegistryTombstoneClaimLeaseAndBackoff(t *testing.T) {
+	repo, pool := newRegistryTestRepo(t)
+	ctx := context.Background()
+	var ids []string
+	for _, name := range []string{"a", "b", "c"} {
+		if err := repo.InitializeRegistryRun(ctx, registryRun(1, name)); err != nil {
+			t.Fatal(err)
+		}
+		row := mustFind(t, repo, name)
+		if _, err := repo.MarkDeleted(ctx, 1, 19, row.IndexID); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, row.IndexID)
+	}
+
+	first, err := repo.ClaimTombstones(ctx, 2, time.Minute)
+	if err != nil || len(first) != 2 || first[0].IndexID != ids[0] || first[1].IndexID != ids[1] {
+		t.Fatalf("first claim = %+v err=%v", first, err)
+	}
+	// The claimed rows are leased: the next claim is the remaining one, then none.
+	second, err := repo.ClaimTombstones(ctx, 10, time.Minute)
+	if err != nil || len(second) != 1 || second[0].IndexID != ids[2] {
+		t.Fatalf("second claim = %+v err=%v", second, err)
+	}
+	if third, err := repo.ClaimTombstones(ctx, 10, time.Minute); err != nil || len(third) != 0 {
+		t.Fatalf("a leased tombstone was claimed again: %+v err=%v", third, err)
+	}
+
+	// A failure counts an attempt and waits; a deferral waits without counting.
+	if err := repo.RescheduleTombstone(ctx, ids[0], time.Now().Add(time.Hour), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RescheduleTombstone(ctx, ids[1], time.Now().Add(-time.Second), false); err != nil {
+		t.Fatal(err)
+	}
+	listed, _ := repo.ListTombstones(ctx, 10)
+	attempts := map[string]int32{}
+	for _, tombstone := range listed {
+		attempts[tombstone.IndexID] = tombstone.Attempts
+	}
+	if attempts[ids[0]] != 1 || attempts[ids[1]] != 0 {
+		t.Fatalf("attempts = %v", attempts)
+	}
+	due, err := repo.ClaimTombstones(ctx, 10, time.Minute)
+	if err != nil || len(due) != 1 || due[0].IndexID != ids[1] {
+		t.Fatalf("only the deferred, now-due tombstone is claimable: %+v err=%v", due, err)
+	}
+	// A live row is never rescheduled by id.
+	if err := repo.InitializeRegistryRun(ctx, registryRun(1, "live")); err != nil {
+		t.Fatal(err)
+	}
+	live := mustFind(t, repo, "live")
+	if err := repo.RescheduleTombstone(ctx, live.IndexID, time.Now(), true); err != nil {
+		t.Fatal(err)
+	}
+	var liveAttempts int
+	if err := pool.QueryRow(ctx, `SELECT attempts FROM elitea_runtime.index_registry WHERE index_id = $1::uuid`, live.IndexID).Scan(&liveAttempts); err != nil || liveAttempts != 0 {
+		t.Fatalf("a live row was rescheduled: attempts=%d err=%v", liveAttempts, err)
+	}
+}
+
+type flakyVectorDeleter struct {
+	failures int
+	calls    []string
+}
+
+func (d *flakyVectorDeleter) DeleteIndexVectors(_ context.Context, ns indexingapp.IndexVectorNamespace) error {
+	d.calls = append(d.calls, ns.IndexID)
+	if d.failures > 0 {
+		d.failures--
+		return errors.New("vector store unavailable")
+	}
+	return nil
+}
+
+// The sweeper against the real table: a transient failure keeps the tombstone
+// and backs it off in the row; once due and successful, the tombstone and its
+// documents are purged.
+func TestIndexRegistrySweeperRetriesWithBackoffThenPurges(t *testing.T) {
+	repo, pool := newRegistryTestRepo(t)
+	ctx := context.Background()
+	if err := repo.InitializeRegistryRun(ctx, registryRun(1, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	row := mustFind(t, repo, "gone")
+	if err := repo.UpsertDocuments(ctx, row.IndexID, []indexregistryapp.DocumentVersion{{Key: "a.md", Version: "v1", ChunkCount: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.MarkDeleted(ctx, 1, 19, row.IndexID); err != nil {
+		t.Fatal(err)
+	}
+
+	deleter := &flakyVectorDeleter{failures: 1}
+	var reported []error
+	sweeper, err := indexregistryapp.NewTombstoneSweeper(repo, deleter, func(err error) { reported = append(reported, err) }, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worked, err := sweeper.RunOnce(ctx); err != nil || worked != 1 {
+		t.Fatalf("first sweep: worked=%d err=%v", worked, err)
+	}
+	var attempts int
+	var next time.Time
+	if err := pool.QueryRow(ctx, `SELECT attempts, next_attempt_at FROM elitea_runtime.index_registry WHERE index_id = $1::uuid`, row.IndexID).Scan(&attempts, &next); err != nil {
+		t.Fatalf("the tombstone must survive a failed deletion: %v", err)
+	}
+	if attempts != 1 || !next.After(time.Now()) || len(reported) != 1 {
+		t.Fatalf("attempts=%d next=%v reported=%v", attempts, next, reported)
+	}
+	// Backing off: an immediate second sweep finds nothing due.
+	if worked, err := sweeper.RunOnce(ctx); err != nil || worked != 0 || len(deleter.calls) != 1 {
+		t.Fatalf("second sweep inside the backoff: worked=%d calls=%d err=%v", worked, len(deleter.calls), err)
+	}
+	// Once due, the retry deletes the vectors and purges the tombstone.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET next_attempt_at = now() - interval '1 second' WHERE index_id = $1::uuid`, row.IndexID); err != nil {
+		t.Fatal(err)
+	}
+	if worked, err := sweeper.RunOnce(ctx); err != nil || worked != 1 {
+		t.Fatalf("retry: worked=%d err=%v", worked, err)
+	}
+	var rows, documents int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.index_registry WHERE index_id = $1::uuid`, row.IndexID).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("tombstone rows after a successful deletion = %d err=%v", rows, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.index_registry_documents WHERE index_id = $1::uuid`, row.IndexID).Scan(&documents); err != nil || documents != 0 {
+		t.Fatalf("documents after purge = %d err=%v", documents, err)
+	}
+}
+
+// The installed placeholder: the tombstone stays exactly as it was, no attempt
+// is counted, and the sweeper does not even query.
+func TestIndexRegistrySweeperWithTheDeferredDeleterLeavesTombstonesAlone(t *testing.T) {
+	repo, pool := newRegistryTestRepo(t)
+	ctx := context.Background()
+	if err := repo.InitializeRegistryRun(ctx, registryRun(1, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	row := mustFind(t, repo, "gone")
+	if _, err := repo.MarkDeleted(ctx, 1, 19, row.IndexID); err != nil {
+		t.Fatal(err)
+	}
+	sweeper, err := indexregistryapp.NewTombstoneSweeper(repo, indexingapp.DeferredIndexVectorDeleter{}, func(error) { t.Fatal("nothing to report") }, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if worked, err := sweeper.RunOnce(ctx); err != nil || worked != 0 {
+			t.Fatalf("worked=%d err=%v", worked, err)
+		}
+	}
+	var attempts int
+	var next *time.Time
+	if err := pool.QueryRow(ctx, `SELECT attempts, next_attempt_at FROM elitea_runtime.index_registry WHERE index_id = $1::uuid`, row.IndexID).Scan(&attempts, &next); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 || next != nil {
+		t.Fatalf("the deferred sweeper touched the tombstone: attempts=%d next=%v", attempts, next)
 	}
 }
 

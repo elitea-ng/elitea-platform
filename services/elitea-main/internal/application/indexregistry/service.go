@@ -8,7 +8,6 @@ import (
 	"math"
 	"regexp"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
@@ -26,9 +25,9 @@ type Store interface {
 	// ErrNotFound when the index has no live row.
 	SaveConfiguration(ctx context.Context, projectID, toolkitID int32, name string, configuration []byte) error
 	// MarkDeleted tombstones the live row with this index id and returns it.
-	// ErrNotFound when there is none; ErrActiveRun when its run is in progress
-	// and was updated after activeAfter.
-	MarkDeleted(ctx context.Context, projectID, toolkitID int32, indexID string, activeAfter time.Time) (Row, error)
+	// ErrNotFound when there is none; ErrActiveRun when its run is active (its
+	// execution job is not terminal).
+	MarkDeleted(ctx context.Context, projectID, toolkitID int32, indexID string) (Row, error)
 	// PurgeDeleted removes a tombstone and its documents. It is only called
 	// once the vector store has deleted the index's points.
 	PurgeDeleted(ctx context.Context, indexID string) error
@@ -42,41 +41,24 @@ type Store interface {
 // see; what it no longer needs is the toolkit's pgvector_configuration.
 type Service struct {
 	toolkits  indexingapp.CurrentToolkitReader
-	timeouts  indexmetaapp.StaleTimeoutResolver
 	store     Store
 	schedules indexmetaapp.ScheduleCleaner
 	vectors   indexingapp.IndexVectorDeleter
 	report    func(error)
-	now       func() time.Time
 }
 
 func NewService(
 	toolkits indexingapp.CurrentToolkitReader,
-	timeouts indexmetaapp.StaleTimeoutResolver,
 	store Store,
 	schedules indexmetaapp.ScheduleCleaner,
 	vectors indexingapp.IndexVectorDeleter,
 	report func(error),
 ) (*Service, error) {
-	return newService(toolkits, timeouts, store, schedules, vectors, report, time.Now)
-}
-
-func newService(
-	toolkits indexingapp.CurrentToolkitReader,
-	timeouts indexmetaapp.StaleTimeoutResolver,
-	store Store,
-	schedules indexmetaapp.ScheduleCleaner,
-	vectors indexingapp.IndexVectorDeleter,
-	report func(error),
-	now func() time.Time,
-) (*Service, error) {
-	if toolkits == nil || timeouts == nil || store == nil || schedules == nil ||
-		vectors == nil || report == nil || now == nil {
+	if toolkits == nil || store == nil || schedules == nil || vectors == nil || report == nil {
 		return nil, errors.New("index registry service dependencies are required")
 	}
 	return &Service{
-		toolkits: toolkits, timeouts: timeouts, store: store, schedules: schedules,
-		vectors: vectors, report: report, now: now,
+		toolkits: toolkits, store: store, schedules: schedules, vectors: vectors, report: report,
 	}, nil
 }
 
@@ -124,10 +106,6 @@ func (s *Service) List(ctx context.Context, request indexmetaapp.Request) ([]ind
 	if err := s.requireToolkit(ctx, projectID, actorID, toolkitID); err != nil {
 		return nil, err
 	}
-	timeout, err := s.timeouts.ResolveCurrentIndexMetaStaleTimeout(ctx, projectID)
-	if err != nil {
-		return nil, dependencyError(ctx, indexmetaapp.ErrCurrentIndexMetaUnavailable, err)
-	}
 	rows, err := s.store.List(ctx, projectID, toolkitID)
 	if err != nil {
 		return nil, dependencyError(ctx, indexmetaapp.ErrCurrentIndexMetaUnavailable, err)
@@ -135,22 +113,19 @@ func (s *Service) List(ctx context.Context, request indexmetaapp.Request) ([]ind
 	if len(rows) > indexmetaapp.MaxCurrentIndexMetaRows {
 		return nil, indexmetaapp.ErrCurrentIndexMetaLimitExceeded
 	}
-	now := s.now()
 	items := make([]indexmetaapp.Item, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, item(row, now, timeout))
+		items = append(items, item(row))
 	}
 	return items, nil
 }
 
-func item(row Row, now time.Time, timeout time.Duration) indexmetaapp.Item {
-	stale := false
-	if row.State == StateInProgress {
-		updated := float64(row.UpdatedAt.Unix()) + float64(row.UpdatedAt.Nanosecond())/float64(time.Second)
-		current := float64(now.Unix()) + float64(now.Nanosecond())/float64(time.Second)
-		stale = current-updated > timeout.Seconds()
-	}
-	return indexmetaapp.Item{ID: row.IndexID, Metadata: Metadata(row), Stale: stale}
+// item projects one row. A run is shown as `in_progress` exactly while its
+// execution job is live; an `in_progress` row whose job ended is a dead run and
+// is flagged Stale, which is how the list tells the user it stopped reporting.
+// Nothing here depends on how long ago the row was last written.
+func item(row Row) indexmetaapp.Item {
+	return indexmetaapp.Item{ID: row.IndexID, Metadata: Metadata(row), Stale: row.Abandoned()}
 }
 
 // Find is the exact (single-index) read the schedule inspector uses.
@@ -202,15 +177,18 @@ var indexIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 // schedule entry in the toolkit row is removed, in that order and as separate
 // commits, like the Python path's two.
 //
-// An index whose run is still in progress is refused with
+// An index whose run is still active is refused with
 // indexing.ErrCurrentIndexMetaConflict: its worker is still writing vectors
-// that nothing would then own. A run that went stale (no update within the
-// project's disconnect timeout) is deletable, which is how a dead run is
-// cleared.
+// that nothing would then own. A run is active exactly while the execution job
+// recorded on the row is not terminal; a run whose job ended or is missing is
+// dead, and its index is deletable, which is how a dead run is cleared.
 //
-// The tombstone is purged only when the hook reports the vectors deleted. While
-// elitea-main has no elitea-vector client the hook defers, the row stays as a
-// tombstone, and the user-visible delete still succeeds.
+// The tombstone is purged only when the hook reports the vectors deleted. When
+// that first attempt does not delete them (the hook defers because
+// elitea-main has no elitea-vector client yet, or the call fails), the row
+// stays as a tombstone and the user-visible delete still succeeds; the
+// tombstone sweeper (TombstoneSweeper) repeats the idempotent deletion with a
+// backoff until it succeeds.
 func (s *Service) Delete(ctx context.Context, request indexmetaapp.DeleteRequest) error {
 	if s == nil || ctx == nil || !validText(request.IndexMetaID, indexmetaapp.MaxCurrentIndexMetaIDBytes) ||
 		request.ProjectID <= 0 || request.ProjectID > math.MaxInt32 ||
@@ -230,11 +208,7 @@ func (s *Service) Delete(ctx context.Context, request indexmetaapp.DeleteRequest
 	if !indexIDPattern.MatchString(request.IndexMetaID) {
 		return indexmetaapp.ErrCurrentIndexMetaNotFound
 	}
-	timeout, err := s.timeouts.ResolveCurrentIndexMetaStaleTimeout(ctx, projectID)
-	if err != nil {
-		return dependencyError(ctx, indexmetaapp.ErrCurrentIndexMetaUnavailable, err)
-	}
-	row, err := s.store.MarkDeleted(ctx, projectID, toolkitID, request.IndexMetaID, s.now().Add(-timeout))
+	row, err := s.store.MarkDeleted(ctx, projectID, toolkitID, request.IndexMetaID)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return indexmetaapp.ErrCurrentIndexMetaNotFound
@@ -249,11 +223,13 @@ func (s *Service) Delete(ctx context.Context, request indexmetaapp.DeleteRequest
 	}); {
 	case vectorErr == nil:
 		if err := s.store.PurgeDeleted(ctx, row.IndexID); err != nil {
-			// The tombstone stays; a sweeper repeats the (idempotent) deletion.
+			// The tombstone stays; the sweeper repeats the (idempotent) deletion
+			// of the vectors and the purge.
 			s.report(err)
 		}
 	case errors.Is(vectorErr, indexingapp.ErrIndexVectorDeletionDeferred):
-		// Pending, by design, until the vector store client exists.
+		// Pending, by design, until the vector store client exists; the
+		// sweeper skips tombstones while the hook is deferred.
 	default:
 		s.report(vectorErr)
 	}

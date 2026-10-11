@@ -40,6 +40,9 @@ func started(t *testing.T, existing *Row, n int) Row {
 	} else {
 		row.IndexID = "11111111-1111-1111-1111-111111111111"
 	}
+	// The run's execution job is live: the repository reads this from
+	// execution_jobs on every load.
+	row.RunActive = true
 	return row
 }
 
@@ -461,5 +464,165 @@ func TestCollectionName(t *testing.T) {
 		if got := CollectionName(model, 1536); got != want {
 			t.Fatalf("CollectionName(%q) = %q, want %q", model, got, want)
 		}
+	}
+}
+
+func TestStartRunAfterADeadRunRecordsItAbandonedAndStartsTheNext(t *testing.T) {
+	dead := started(t, nil, 1)
+	dead.RunActive = false // its execution job is terminal or missing
+	if !dead.Abandoned() || dead.Active() || !dead.CanStartNextRun() {
+		t.Fatalf("a row in progress with no live job must be abandoned: %+v", dead)
+	}
+	before := len(dead.History)
+	next := started(t, &dead, 2)
+	if next.State != StateInProgress || *next.TaskID != "exec-2" || next.Error != nil || next.ExecutionID != "exec-2" {
+		t.Fatalf("the new run did not start: %+v", next)
+	}
+	if len(next.History) != before+1 {
+		t.Fatalf("history = %+v", next.History)
+	}
+	previous := next.History[len(next.History)-2]
+	if previous["state"] != "failed" || previous["error"] != "abandoned" || previous["reason"] != "abandoned" ||
+		previous["execution_id"] != "exec-1" {
+		t.Fatalf("the dead run is not recorded as abandoned: %+v", previous)
+	}
+	if last := next.History[len(next.History)-1]; last["state"] != "in_progress" || last["execution_id"] != "exec-2" {
+		t.Fatalf("the new run's entry = %+v", last)
+	}
+	// The input row is untouched: StartRun returns a new row.
+	if dead.State != StateInProgress || dead.History[len(dead.History)-1]["state"] != "in_progress" {
+		t.Fatalf("StartRun changed the row it was given: %+v", dead)
+	}
+}
+
+func TestStartRunRefusesALiveRunHoweverOldItsUpdatedAt(t *testing.T) {
+	live := started(t, nil, 1)
+	live.UpdatedAt = t0.Add(-72 * time.Hour)
+	if !live.Active() || live.Abandoned() {
+		t.Fatalf("a row in progress with a live job is active: %+v", live)
+	}
+	if _, _, err := StartRun(&live, runFor(2)); !errors.Is(err, indexingapp.ErrCurrentIndexMetaConflict) {
+		t.Fatalf("a live run, old updated_at = %v, want conflict", err)
+	}
+}
+
+func TestTransitionsDoNotChangeTheConfigurationOrHistoryOfTheRowTheyAreGiven(t *testing.T) {
+	row := started(t, nil, 1)
+	chunking := func(r Row) bool { _, ok := r.IndexConf["chunking_config"]; return ok }
+	if !chunking(row) {
+		t.Fatal("the stored configuration lost its chunking_config")
+	}
+	entries := len(row.History)
+	next, _, _, err := ApplyResult(row, resultFor(1, okSummary(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !chunking(row) || !chunking(next) || len(row.History) != entries || row.State != StateInProgress {
+		t.Fatalf("a transition mutated its input: %+v", row)
+	}
+	// History entries drop the chunking configuration, the row keeps it.
+	last := next.History[len(next.History)-1]
+	if conf, _ := last["index_configuration"].(map[string]any); conf == nil || conf["chunking_config"] != nil {
+		t.Fatalf("history entry configuration = %v", last["index_configuration"])
+	}
+	// Reading allocates no copy of the configuration: it is the row's own map.
+	metadata := Metadata(next)
+	if conf, _ := metadata["index_configuration"].(map[string]any); conf == nil || conf["chunking_config"] == nil {
+		t.Fatalf("metadata configuration = %v", metadata["index_configuration"])
+	}
+}
+
+// A first run that failed has said nothing about the embedding space of the
+// vectors it may or may not have written: it must not lock the index to its
+// model.
+func TestAFailedFirstRunDoesNotStampAndALaterRunWithAnotherModelSucceeds(t *testing.T) {
+	row := started(t, nil, 1)
+	failed, _, mismatch, err := ApplyResult(row, resultFor(1, okSummary(func(s *outputapp.IndexIngestSummary) {
+		s.Status = outputapp.IndexIngestStatusError
+		s.TerminalState = outputapp.IndexIngestTerminalFailed
+		s.Message = "The source refused the credential."
+	})))
+	if err != nil || mismatch != nil || failed.State != StateFailed {
+		t.Fatalf("failed run: %+v mismatch=%v err=%v", failed, mismatch, err)
+	}
+	if failed.Stamped() || failed.Model != "" || failed.Collection != "" {
+		t.Fatalf("a failed run stamped the index: model %q dimension %d collection %q", failed.Model, failed.Dimension, failed.Collection)
+	}
+	if _, present := Metadata(failed)["embedding_model"]; present {
+		t.Fatal("a failed run's metadata carries an embedding stamp")
+	}
+
+	second := started(t, &failed, 2)
+	done, _, mismatch, err := ApplyResult(second, resultFor(2, okSummary(func(s *outputapp.IndexIngestSummary) {
+		s.EmbeddingModel, s.EmbeddingDimension = "another-model", 768
+	})))
+	if err != nil || mismatch != nil || done.State != StateCompleted {
+		t.Fatalf("later run with another model: %+v mismatch=%v err=%v", done, mismatch, err)
+	}
+	if done.Model != "another-model" || done.Dimension != 768 || done.Collection != "emb_another_model_768" {
+		t.Fatalf("the later run did not stamp: %q %d %q", done.Model, done.Dimension, done.Collection)
+	}
+}
+
+func TestOnlyASuccessWithChunksStampsOrIsChecked(t *testing.T) {
+	cases := map[string]func(*outputapp.IndexIngestSummary){
+		"no chunks written": func(s *outputapp.IndexIngestSummary) { s.IndexedChunks = 0 },
+		"error status": func(s *outputapp.IndexIngestSummary) {
+			s.Status = outputapp.IndexIngestStatusError
+			s.TerminalState = outputapp.IndexIngestTerminalFailed
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			next, _, mismatch, err := ApplyResult(started(t, nil, 1), resultFor(1, okSummary(mutate)))
+			if err != nil || mismatch != nil || next.Stamped() {
+				t.Fatalf("stamped=%v mismatch=%v err=%v", next.Stamped(), mismatch, err)
+			}
+			// ... and such a result never fails against an existing stamp either.
+			stamped, _, _, _ := ApplyResult(started(t, nil, 1), resultFor(1, okSummary(nil)))
+			stamped.State = StateInProgress
+			if got := CheckEmbedding(stamped, okSummary(func(s *outputapp.IndexIngestSummary) {
+				mutate(s)
+				s.EmbeddingModel = "other"
+			})); got != nil {
+				t.Fatalf("a result that stamps nothing was checked: %v", got)
+			}
+		})
+	}
+	// A partly indexed result with chunks stamps.
+	next, _, _, _ := ApplyResult(started(t, nil, 1), resultFor(1, okSummary(func(s *outputapp.IndexIngestSummary) {
+		s.Status = outputapp.IndexIngestStatusPartlyIndexed
+		s.TerminalState = outputapp.IndexIngestTerminalPartlyIndexed
+	})))
+	if !next.Stamped() {
+		t.Fatalf("a partly indexed result with chunks did not stamp: %+v", next)
+	}
+}
+
+func TestCheckEmbeddingNamesTheMismatchAndItsFailureSummary(t *testing.T) {
+	stamped, _, _, _ := ApplyResult(started(t, nil, 1), resultFor(1, okSummary(nil)))
+	row := started(t, &stamped, 2)
+	if CheckEmbedding(row, okSummary(nil)) != nil {
+		t.Fatal("the same embedding space is not a mismatch")
+	}
+	mismatch := CheckEmbedding(row, okSummary(func(s *outputapp.IndexIngestSummary) { s.EmbeddingDimension = 768 }))
+	if mismatch == nil {
+		t.Fatal("another dimension is a mismatch")
+	}
+	summary := mismatch.FailedSummary()
+	if summary.Status != outputapp.IndexIngestStatusError || summary.TerminalState != outputapp.IndexIngestTerminalFailed ||
+		summary.Message != mismatch.Error() || summary.HasTypedResult() {
+		t.Fatalf("failure summary = %+v", summary)
+	}
+	if err := summary.Validate(); err != nil {
+		t.Fatalf("the failure summary is not a valid summary: %v", err)
+	}
+	// Applying the failure summary instead of the result gives the same row
+	// state as applying the mismatching result does.
+	viaSummary, _, _, err := ApplyResult(row, resultFor(2, summary))
+	viaResult, _, _, _ := ApplyResult(row, resultFor(2, okSummary(func(s *outputapp.IndexIngestSummary) { s.EmbeddingDimension = 768 })))
+	if err != nil || viaSummary.State != StateFailed || viaSummary.State != viaResult.State ||
+		*viaSummary.Error != *viaResult.Error || viaSummary.Dimension != 1536 {
+		t.Fatalf("via summary %+v, via result %+v", viaSummary, viaResult)
 	}
 }

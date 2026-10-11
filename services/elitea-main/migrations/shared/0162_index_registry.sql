@@ -35,7 +35,14 @@
 -- NAME is unique per (project, toolkit) among rows that are not deleted. A
 -- delete sets deleted_at and the row waits as a TOMBSTONE for the vector
 -- deletion (elitea-vector Delete, ADR-0031 decision 4) before it is purged;
--- the partial index lets the name be created again meanwhile.
+-- the partial index lets the name be created again meanwhile. A sweeper retries
+-- the vector deletion of each tombstone with a backoff kept in the row
+-- (attempts, next_attempt_at).
+--
+-- RUN LIVENESS is not stored here. A run is active exactly when the execution
+-- job named by task_id/execution_generation is not terminal; the repository
+-- reads that from elitea_runtime.execution_jobs, so a long healthy run needs no
+-- heartbeat and a dead one is recognised the moment its job settles.
 --
 -- Idempotent throughout. No BEGIN/COMMIT: the ledgered runner wraps the file.
 
@@ -87,6 +94,11 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.index_registry (
     created_at          timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at          timestamptz NOT NULL DEFAULT clock_timestamp(),
     deleted_at          timestamptz,
+    -- The tombstone sweeper's backoff, stored in the row so a restart or
+    -- another replica keeps it. Only a tombstone (deleted_at IS NOT NULL) has a
+    -- meaning for either column.
+    attempts            integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at     timestamptz,
     CONSTRAINT index_registry_embedding_pair CHECK (
         (embedding_model IS NULL) = (embedding_dimension IS NULL)
         AND (embedding_model IS NULL) = (collection IS NULL)
@@ -109,7 +121,7 @@ CREATE INDEX IF NOT EXISTS index_registry_execution_idx
     WHERE execution_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS index_registry_tombstone_idx
-    ON elitea_runtime.index_registry (deleted_at)
+    ON elitea_runtime.index_registry (next_attempt_at NULLS FIRST, deleted_at)
     WHERE deleted_at IS NOT NULL;
 
 -- One row per indexed document, for the incremental sync of ADR-0030 decision 3:

@@ -22,7 +22,7 @@ func Metadata(row Row) map[string]any {
 		"indexed":              row.Indexed,
 		"updated":              row.Updated,
 		"state":                string(row.State),
-		"index_configuration":  cloneObject(row.IndexConf),
+		"index_configuration":  configurationObject(row.IndexConf),
 		"created_on":           currentRunCreatedOn(row),
 		"updated_on":           unixSeconds(row.UpdatedAt),
 		"task_id":              nullableString(row.TaskID),
@@ -50,6 +50,15 @@ func Metadata(row Row) map[string]any {
 	}
 	metadata["history"] = history
 	return metadata
+}
+
+// configurationObject is the stored configuration, shared and not copied: a
+// read only serializes it. A nil configuration reads as {}.
+func configurationObject(configuration map[string]any) map[string]any {
+	if configuration == nil {
+		return map[string]any{}
+	}
+	return configuration
 }
 
 func skippedAny(skipped map[string]uint64) map[string]any {
@@ -100,7 +109,11 @@ func snapshot(row Row) map[string]any {
 	entry := Metadata(row)
 	delete(entry, "history")
 	if configuration, ok := entry["index_configuration"].(map[string]any); ok {
+		// Copied first: the map is the row's own, and the row keeps its
+		// chunking configuration.
+		configuration = copyObject(configuration)
 		delete(configuration, "chunking_config")
+		entry["index_configuration"] = configuration
 	}
 	return entry
 }
@@ -166,9 +179,18 @@ func matchesRun(entry map[string]any, executionID string, generation int64) bool
 	return false
 }
 
+// abandonedReason is the history reason of a run that was still `in_progress`
+// when the next one started and whose execution job had already ended.
+const abandonedReason = "abandoned"
+
 // StartRun is the admission initializer's transition. existing is nil when the
 // index has no live row. It returns the row to store and whether anything
 // changed; a retry of the same admitted run changes nothing.
+//
+// A row `in_progress` refuses a new run only while its run is active (its
+// execution job is not terminal). When that job is terminal or missing the run
+// is dead: it is recorded in history as failed with reason "abandoned" and the
+// new run starts.
 func StartRun(existing *Row, run indexingapp.RegistryInitialRun) (Row, bool, error) {
 	if err := run.Validate(); err != nil {
 		return Row{}, false, err
@@ -208,6 +230,13 @@ func StartRun(existing *Row, run indexingapp.RegistryInitialRun) (Row, bool, err
 			return Row{}, false, indexingapp.ErrCurrentIndexMetaConflict
 		}
 		next = stored.clone()
+		if stored.Abandoned() {
+			next.State = StateFailed
+			next.Error = ptr(abandonedReason)
+			next.UpdatedAt = admitted
+			finishRun(&next)
+			next.History[len(next.History)-1]["reason"] = abandonedReason
+		}
 	}
 
 	next.State = StateInProgress
@@ -330,15 +359,56 @@ func (e *DimensionMismatchError) Error() string {
 	)
 }
 
+// stampsEmbedding reports whether a result may stamp (or must match) the
+// index's embedding space: it indexed something. An error result, and a result
+// that wrote no chunk, say nothing about the space the vectors live in, so a
+// failed first run never locks the index to a model it did not finish using.
+func stampsEmbedding(summary outputapp.IndexIngestSummary) bool {
+	return summary.EmbeddingDimension != 0 && summary.IndexedChunks > 0 &&
+		(summary.Status == outputapp.IndexIngestStatusOK ||
+			summary.Status == outputapp.IndexIngestStatusPartlyIndexed)
+}
+
+// CheckEmbedding returns the mismatch a result would be turned into a failure
+// for: it would stamp the index, the index is already stamped, and the two
+// differ. It reads nothing but its arguments, so the output projection can ask
+// it before it builds anything from the result.
+func CheckEmbedding(row Row, summary outputapp.IndexIngestSummary) *DimensionMismatchError {
+	if !stampsEmbedding(summary) || !row.Stamped() {
+		return nil
+	}
+	dimension := int32(summary.EmbeddingDimension)
+	if row.Dimension == dimension && row.Model == summary.EmbeddingModel {
+		return nil
+	}
+	return &DimensionMismatchError{
+		StampedModel: row.Model, StampedDimension: row.Dimension,
+		ResultModel: summary.EmbeddingModel, ResultDimension: dimension,
+	}
+}
+
+// FailedSummary is the summary a mismatching result is replaced with, wherever
+// it is projected: the failure the registry records.
+func (e *DimensionMismatchError) FailedSummary() outputapp.IndexIngestSummary {
+	return outputapp.IndexIngestSummary{
+		Status:        outputapp.IndexIngestStatusError,
+		Message:       e.Error(),
+		TerminalState: outputapp.IndexIngestTerminalFailed,
+	}
+}
+
 // ApplyResult applies the typed result of a run that reached the output
 // projection. It returns the row to store, whether anything changed, and a
 // non-nil mismatch when the result was turned into a failure because its
 // embedding space differs from the stamp. A row not `in_progress` is returned
 // unchanged: a cancel or an earlier terminal transition has already won.
 //
-// The first terminal result stamps the model and dimension (ADR-0030 decision
-// 2). A later result with another dimension, or another model, does not touch
-// the counts or the stamp: it fails the run with a message that says so.
+// The first result that indexed something (status ok or partly_indexed, at
+// least one chunk) stamps the model and dimension (ADR-0030 decision 2). A
+// later such result with another dimension, or another model, does not touch
+// the counts or the stamp: it fails the run with a message that says so. The
+// output projection asks CheckEmbedding first and hands the failure summary
+// here, so this path is the safety net for a caller that does not.
 func ApplyResult(row Row, result Result) (next Row, changed bool, mismatch *DimensionMismatchError, err error) {
 	summary := result.Summary
 	if err := summary.Validate(); err != nil || result.ExecutionID == "" || result.Generation == 0 ||
@@ -354,23 +424,16 @@ func ApplyResult(row Row, result Result) (next Row, changed bool, mismatch *Dime
 	next = row.clone()
 	next.UpdatedAt = result.OccurredAt.UTC()
 
-	if summary.EmbeddingDimension != 0 {
-		dimension := int32(summary.EmbeddingDimension)
-		switch {
-		case !next.Stamped():
-			next.Model = summary.EmbeddingModel
-			next.Dimension = dimension
-			next.Collection = CollectionName(summary.EmbeddingModel, dimension)
-		case next.Dimension != dimension || next.Model != summary.EmbeddingModel:
-			mismatch = &DimensionMismatchError{
-				StampedModel: next.Model, StampedDimension: next.Dimension,
-				ResultModel: summary.EmbeddingModel, ResultDimension: dimension,
-			}
-			next.State = StateFailed
-			next.Error = ptr(mismatch.Error())
-			finishRun(&next)
-			return next, true, mismatch, nil
-		}
+	if mismatch = CheckEmbedding(next, summary); mismatch != nil {
+		next.State = StateFailed
+		next.Error = ptr(mismatch.Error())
+		finishRun(&next)
+		return next, true, mismatch, nil
+	}
+	if stampsEmbedding(summary) && !next.Stamped() {
+		next.Model = summary.EmbeddingModel
+		next.Dimension = int32(summary.EmbeddingDimension)
+		next.Collection = CollectionName(summary.EmbeddingModel, next.Dimension)
 	}
 
 	if summary.HasTypedResult() {

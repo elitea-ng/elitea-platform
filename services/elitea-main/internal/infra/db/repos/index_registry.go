@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -22,6 +25,23 @@ import (
 // persists their outcome.
 type IndexRegistryRepository struct {
 	pool *pgxpool.Pool
+	log  *slog.Logger
+}
+
+// WithLogger sets the logger the repository reports no-ops with. The default is
+// slog.Default().
+func (r *IndexRegistryRepository) WithLogger(logger *slog.Logger) *IndexRegistryRepository {
+	if r != nil && logger != nil {
+		r.log = logger
+	}
+	return r
+}
+
+func (r *IndexRegistryRepository) logger() *slog.Logger {
+	if r == nil || r.log == nil {
+		return slog.Default()
+	}
+	return r.log
 }
 
 func NewIndexRegistryRepository(pool *pgxpool.Pool) (*IndexRegistryRepository, error) {
@@ -31,13 +51,29 @@ func NewIndexRegistryRepository(pool *pgxpool.Pool) (*IndexRegistryRepository, e
 	return &IndexRegistryRepository{pool: pool}, nil
 }
 
-const indexRegistryColumns = `
+// indexRegistryRunActive is the liveness of a run: the execution job the row
+// names (task_id, execution_generation) exists and is not terminal. It is the
+// only definition of "active"; nothing compares updated_at.
+var indexRegistryRunActive = func() string {
+	states := make([]string, 0, 5)
+	for _, state := range executiondomain.NonTerminalJobStates() {
+		states = append(states, "'"+string(state)+"'")
+	}
+	return `EXISTS (
+        SELECT 1 FROM elitea_runtime.execution_jobs AS job
+        WHERE job.execution_id = index_registry.task_id
+          AND job.generation = index_registry.execution_generation
+          AND job.state IN (` + strings.Join(states, ", ") + `))`
+}()
+
+var indexRegistryColumns = `
     index_id::text, project_id, toolkit_id, name, state, task_id, error, conversation_id,
     history, index_configuration,
     indexed_documents, updated_documents, indexed_chunks, failed_chunks, skipped,
     embedding_model, embedding_dimension, collection,
     execution_id, execution_generation, index_generation, meta_id, correlation_id,
-    created_at, updated_at`
+    created_at, updated_at,
+    ` + indexRegistryRunActive + ` AS run_active`
 
 func scanIndexRegistryRow(row sqlRow) (indexregistryapp.Row, error) {
 	var (
@@ -54,7 +90,7 @@ func scanIndexRegistryRow(row sqlRow) (indexregistryapp.Row, error) {
 		&out.Indexed, &out.Updated, &out.Chunks, &out.Failed, &skipped,
 		&model, &dimension, &collection,
 		&executionID, &executionGeneration, &out.IndexGeneration, &metaID, &correlID,
-		&out.CreatedAt, &out.UpdatedAt,
+		&out.CreatedAt, &out.UpdatedAt, &out.RunActive,
 	); err != nil {
 		return indexregistryapp.Row{}, err
 	}
@@ -357,7 +393,14 @@ func (r *IndexRegistryRepository) ApplyRegistryTerminal(ctx context.Context, ter
 			if tombstoned {
 				return indexingapp.ErrCurrentIndexMetaSuperseded
 			}
-			return indexingapp.ErrCurrentIndexMetaConflict
+			// No live and no deleted row names this run: it was admitted
+			// under the python runtime, before the mode switched (or its row
+			// never existed). There is nothing to write; acknowledge it, as
+			// ApplyIndexResult does.
+			r.logger().Info("index registry terminal effect has no registry row; acknowledged as a no-op",
+				"project_id", terminal.ProjectID, "toolkit_id", terminal.ToolkitID,
+				"index", terminal.IndexName, "execution_id", terminal.ExecutionID)
+			return nil
 		}
 		next, changed, err := indexregistryapp.ApplyTerminal(row, terminal)
 		if err != nil || !changed {
@@ -367,7 +410,8 @@ func (r *IndexRegistryRepository) ApplyRegistryTerminal(ctx context.Context, ter
 	})
 }
 
-// VerifyRegistryManualStop implements indexing.RegistryManualStopWriter.
+// VerifyRegistryManualStop implements indexing.RegistryManualStopWriter. It
+// returns an empty index id when no row names the run.
 func (r *IndexRegistryRepository) VerifyRegistryManualStop(
 	ctx context.Context,
 	stop indexingapp.RegistryManualStop,
@@ -392,7 +436,11 @@ func (r *IndexRegistryRepository) VerifyRegistryManualStop(
 			if tombstoned {
 				return indexingapp.ErrCurrentIndexMetaSuperseded
 			}
-			return indexingapp.ErrCurrentIndexMetaConflict
+			// See ApplyRegistryTerminal: no row means nothing to verify.
+			r.logger().Info("index registry manual Stop has no registry row; acknowledged as a no-op",
+				"project_id", stop.ProjectID, "toolkit_id", stop.ToolkitID,
+				"index", stop.IndexName, "execution_id", stop.ExecutionID)
+			return nil
 		}
 		if err := indexregistryapp.VerifyManualStop(row, stop); err != nil {
 			return err
@@ -445,6 +493,36 @@ FOR UPDATE`, projectID, result.ExecutionID, int64(result.Generation)))
 		return RegistryResultOutcome{}, err
 	}
 	return RegistryResultOutcome{Applied: true, Mismatch: mismatch}, nil
+}
+
+// PreviewIndexResultEmbedding is the embedding check of ApplyIndexResult,
+// without writing: the mismatch the run's row would turn this result into, or
+// nil. The output projection calls it in the projecting transaction BEFORE it
+// builds anything from the result, so the settlement, the replay event, the
+// notification and the registry all start from one effective summary. It locks
+// the row (FOR UPDATE, as ApplyIndexResult does), so the row cannot change
+// between the check and the write that follows in the same transaction.
+func PreviewIndexResultEmbedding(
+	ctx context.Context,
+	q sqlExecutor,
+	projectID int32,
+	result indexregistryapp.Result,
+) (*indexregistryapp.DimensionMismatchError, error) {
+	row, err := scanIndexRegistryRow(q.QueryRow(ctx, `
+SELECT `+indexRegistryColumns+`
+FROM elitea_runtime.index_registry
+WHERE project_id = $1 AND execution_id = $2 AND execution_generation = $3 AND deleted_at IS NULL
+FOR UPDATE`, projectID, result.ExecutionID, int64(result.Generation)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load index registry row for result: %w", err)
+	}
+	if row.State != indexregistryapp.StateInProgress {
+		return nil, nil
+	}
+	return indexregistryapp.CheckEmbedding(row, result.Summary), nil
 }
 
 // ApplyResult is ApplyIndexResult in its own transaction. The output
@@ -537,8 +615,8 @@ WHERE project_id = $1 AND toolkit_id = $2 AND name = $3 AND deleted_at IS NULL`,
 }
 
 // SaveConfiguration implements indexregistry.Store. It replaces
-// index_configuration and nothing else; in particular it does not touch
-// updated_at, which is how a run that stopped reporting goes stale.
+// index_configuration and nothing else: the state, run fence and updated_at
+// belong to the run path.
 func (r *IndexRegistryRepository) SaveConfiguration(
 	ctx context.Context,
 	projectID, toolkitID int32,
@@ -564,7 +642,6 @@ func (r *IndexRegistryRepository) MarkDeleted(
 	ctx context.Context,
 	projectID, toolkitID int32,
 	indexID string,
-	activeAfter time.Time,
 ) (indexregistryapp.Row, error) {
 	var deleted indexregistryapp.Row
 	err := r.withinTx(ctx, func(q sqlExecutor) error {
@@ -579,7 +656,7 @@ FOR UPDATE`, indexID, projectID, toolkitID))
 		if err != nil {
 			return fmt.Errorf("load index registry row: %w", err)
 		}
-		if row.State == indexregistryapp.StateInProgress && row.UpdatedAt.After(activeAfter) {
+		if row.Active() {
 			return indexregistryapp.ErrActiveRun
 		}
 		if _, err := q.Exec(ctx, `
@@ -606,14 +683,14 @@ WHERE index_id = $1::uuid AND deleted_at IS NOT NULL`, indexID); err != nil {
 }
 
 // ListTombstones returns tombstones waiting for their vectors to be deleted,
-// oldest first. It is the work list of the sweeper that calls the vector store
-// once elitea-main has a client for it.
+// oldest first, whether or not they are due. It is the inspection list; the
+// sweeper takes its work with ClaimTombstones.
 func (r *IndexRegistryRepository) ListTombstones(ctx context.Context, limit int) ([]indexregistryapp.Tombstone, error) {
 	if limit <= 0 || limit > 1000 {
 		return nil, errors.New("tombstone limit is invalid")
 	}
 	rows, err := r.pool.Query(ctx, `
-SELECT index_id::text, project_id, toolkit_id, name, deleted_at
+SELECT index_id::text, project_id, toolkit_id, name, deleted_at, attempts
 FROM elitea_runtime.index_registry
 WHERE deleted_at IS NOT NULL
 ORDER BY deleted_at, index_id
@@ -622,17 +699,84 @@ LIMIT $1`, limit)
 		return nil, fmt.Errorf("list index registry tombstones: %w", err)
 	}
 	defer rows.Close()
+	return scanTombstones(rows)
+}
+
+type tombstoneRows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+}
+
+func scanTombstones(rows tombstoneRows) ([]indexregistryapp.Tombstone, error) {
 	var out []indexregistryapp.Tombstone
 	for rows.Next() {
 		var tombstone indexregistryapp.Tombstone
 		if err := rows.Scan(
-			&tombstone.IndexID, &tombstone.ProjectID, &tombstone.ToolkitID, &tombstone.Name, &tombstone.DeletedAt,
+			&tombstone.IndexID, &tombstone.ProjectID, &tombstone.ToolkitID, &tombstone.Name,
+			&tombstone.DeletedAt, &tombstone.Attempts,
 		); err != nil {
 			return nil, err
 		}
 		out = append(out, tombstone)
 	}
 	return out, rows.Err()
+}
+
+// ClaimTombstones implements indexregistry.TombstoneSweeperStore. The claim is
+// one short statement: FOR UPDATE SKIP LOCKED picks due rows no other replica
+// is claiming, and the same statement pushes their next_attempt_at out by the
+// lease, so nothing is locked while the deletions run.
+func (r *IndexRegistryRepository) ClaimTombstones(
+	ctx context.Context,
+	limit int,
+	lease time.Duration,
+) ([]indexregistryapp.Tombstone, error) {
+	if limit <= 0 || limit > 1000 || lease <= 0 {
+		return nil, errors.New("tombstone claim is invalid")
+	}
+	rows, err := r.pool.Query(ctx, `
+WITH due AS (
+    SELECT index_id
+    FROM elitea_runtime.index_registry
+    WHERE deleted_at IS NOT NULL
+      AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp())
+    ORDER BY next_attempt_at NULLS FIRST, deleted_at, index_id
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE elitea_runtime.index_registry AS registry
+SET next_attempt_at = clock_timestamp() + make_interval(secs => $2)
+FROM due
+WHERE registry.index_id = due.index_id
+RETURNING registry.index_id::text, registry.project_id, registry.toolkit_id,
+          registry.name, registry.deleted_at, registry.attempts`, limit, lease.Seconds())
+	if err != nil {
+		return nil, fmt.Errorf("claim index registry tombstones: %w", err)
+	}
+	defer rows.Close()
+	return scanTombstones(rows)
+}
+
+// RescheduleTombstone implements indexregistry.TombstoneSweeperStore. It only
+// touches a tombstone, so a live index is never rescheduled by a stale id.
+func (r *IndexRegistryRepository) RescheduleTombstone(
+	ctx context.Context,
+	indexID string,
+	nextAttemptAt time.Time,
+	failed bool,
+) error {
+	increment := 0
+	if failed {
+		increment = 1
+	}
+	if _, err := r.pool.Exec(ctx, `
+UPDATE elitea_runtime.index_registry
+SET attempts = attempts + $3, next_attempt_at = $2
+WHERE index_id = $1::uuid AND deleted_at IS NOT NULL`, indexID, nextAttemptAt, increment); err != nil {
+		return fmt.Errorf("reschedule index registry tombstone: %w", err)
+	}
+	return nil
 }
 
 // UpsertDocuments records the (document_key, version) of documents a run has
@@ -700,8 +844,9 @@ ORDER BY document_key`, indexID)
 }
 
 var (
-	_ indexingapp.RegistryRunWriter        = (*IndexRegistryRepository)(nil)
-	_ indexingapp.RegistryTerminalWriter   = (*IndexRegistryRepository)(nil)
-	_ indexingapp.RegistryManualStopWriter = (*IndexRegistryRepository)(nil)
-	_ indexregistryapp.Store               = (*IndexRegistryRepository)(nil)
+	_ indexingapp.RegistryRunWriter          = (*IndexRegistryRepository)(nil)
+	_ indexingapp.RegistryTerminalWriter     = (*IndexRegistryRepository)(nil)
+	_ indexingapp.RegistryManualStopWriter   = (*IndexRegistryRepository)(nil)
+	_ indexregistryapp.Store                 = (*IndexRegistryRepository)(nil)
+	_ indexregistryapp.TombstoneSweeperStore = (*IndexRegistryRepository)(nil)
 )

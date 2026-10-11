@@ -55,9 +55,9 @@ const (
 
 var (
 	ErrNotFound = errors.New("index registry row was not found")
-	// ErrActiveRun reports a delete of an index whose run is still in progress
-	// and has not gone stale. The vectors of a run that is still writing would
-	// be orphaned, so the caller stops it first.
+	// ErrActiveRun reports a delete of an index whose run is still active: the
+	// execution job recorded on the row is not terminal. The vectors of a run
+	// that is still writing would be orphaned, so the caller stops it first.
 	ErrActiveRun = errors.New("index registry row has an active run")
 	// ErrInvalid reports a row or input this layer refuses to store.
 	ErrInvalid = errors.New("invalid index registry input")
@@ -93,6 +93,12 @@ type Row struct {
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// RunActive is read, never stored: it is true when the execution job the
+	// row names (TaskID, ExecutionGeneration) exists and is not terminal. It is
+	// the only liveness signal of a run (see Active). The repository fills it
+	// on every read; a Row built any other way is not active.
+	RunActive bool
 }
 
 // DocumentVersion is one indexed document's (document_key, version): the unit
@@ -119,23 +125,36 @@ type Tombstone struct {
 	ToolkitID int32
 	Name      string
 	DeletedAt time.Time
+	// Attempts is how many deletions the sweeper has tried and failed.
+	Attempts int32
 }
 
 // Stamped reports whether the first terminal result has stamped the embedding
 // space.
 func (r Row) Stamped() bool { return r.Dimension != 0 }
 
-// CanStartNextRun is index_meta's rule: only a row at rest may start its next
-// generation. A row still `in_progress` has a run that owns it.
-func (r Row) CanStartNextRun() bool { return r.State != StateInProgress }
+// Active reports whether a run owns the row right now: the row is `in_progress`
+// AND the execution job it names is not terminal. A row `in_progress` whose job
+// is terminal or missing is a dead run (its worker died or its result was never
+// applied), not an active one. No timestamp is involved, so a healthy run that
+// reports rarely is never mistaken for a dead one.
+func (r Row) Active() bool { return r.State == StateInProgress && r.RunActive }
 
+// Abandoned reports an `in_progress` row whose run is dead.
+func (r Row) Abandoned() bool { return r.State == StateInProgress && !r.RunActive }
+
+// CanStartNextRun is index_meta's rule, with liveness from the job: a row at
+// rest may start its next generation, and so may a row whose run is dead. Only
+// an active run owns the row.
+func (r Row) CanStartNextRun() bool { return !r.Active() }
+
+// clone is the copy a transition mutates. History entries and the
+// configuration are never changed in place by a transition (an entry is
+// replaced or appended, the configuration is replaced as a whole), so the
+// containers are copied and the values are shared; reads do not clone at all.
 func (r Row) clone() Row {
 	out := r
-	out.History = make([]map[string]any, len(r.History))
-	for i, entry := range r.History {
-		out.History[i] = cloneObject(entry)
-	}
-	out.IndexConf = cloneObject(r.IndexConf)
+	out.History = append(make([]map[string]any, 0, len(r.History)+1), r.History...)
 	out.Skipped = make(map[string]uint64, len(r.Skipped))
 	for reason, count := range r.Skipped {
 		out.Skipped[reason] = count
@@ -143,19 +162,13 @@ func (r Row) clone() Row {
 	return out
 }
 
-func cloneObject(source map[string]any) map[string]any {
-	if source == nil {
-		return map[string]any{}
+// copyObject is a shallow copy, for the one reader that removes a key.
+func copyObject(source map[string]any) map[string]any {
+	out := make(map[string]any, len(source))
+	for key, value := range source {
+		out[key] = value
 	}
-	encoded, err := json.Marshal(source)
-	if err != nil {
-		return map[string]any{}
-	}
-	decoded, err := decodeObject(encoded)
-	if err != nil {
-		return map[string]any{}
-	}
-	return decoded
+	return out
 }
 
 // decodeObject decodes one JSON object keeping numbers exact.

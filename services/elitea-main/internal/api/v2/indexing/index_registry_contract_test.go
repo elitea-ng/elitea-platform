@@ -72,12 +72,12 @@ func (s *registryMemoryStore) SaveConfiguration(_ context.Context, projectID, to
 	return indexregistryapp.ErrNotFound
 }
 
-func (s *registryMemoryStore) MarkDeleted(_ context.Context, projectID, toolkitID int32, indexID string, activeAfter time.Time) (indexregistryapp.Row, error) {
+func (s *registryMemoryStore) MarkDeleted(_ context.Context, projectID, toolkitID int32, indexID string) (indexregistryapp.Row, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, row := range s.rows {
 		if row.IndexID == indexID && row.ProjectID == projectID && row.ToolkitID == toolkitID {
-			if row.State == indexregistryapp.StateInProgress && row.UpdatedAt.After(activeAfter) {
+			if row.Active() {
 				return indexregistryapp.Row{}, indexregistryapp.ErrActiveRun
 			}
 			s.rows = append(s.rows[:i], s.rows[i+1:]...)
@@ -130,6 +130,9 @@ func (s *registryMemoryStore) add(t *testing.T, project, toolkit int32, name str
 			t.Fatal(err)
 		}
 	}
+	// The run's execution job is live until a test says otherwise (the real
+	// store reads this from execution_jobs).
+	row.RunActive = !complete
 	s.mu.Lock()
 	s.rows = append(s.rows, row)
 	s.mu.Unlock()
@@ -144,12 +147,6 @@ func (k registryToolkits) GetCurrentToolkit(_ context.Context, project, _, toolk
 	}
 	// No pgvector_configuration: a rust deployment's toolkit needs none.
 	return indexingapp.CurrentToolkitSnapshot{ID: toolkit, Type: "github", Settings: map[string]any{}}, true, nil
-}
-
-type registryTimeouts struct{}
-
-func (registryTimeouts) ResolveCurrentIndexMetaStaleTimeout(context.Context, int32) (time.Duration, error) {
-	return 2 * time.Hour, nil
 }
 
 type registrySchedules struct{ deleted []string }
@@ -180,7 +177,7 @@ type registryFixture struct {
 func newRegistryFixture(t *testing.T, toolkits registryToolkits) *registryFixture {
 	t.Helper()
 	f := &registryFixture{store: &registryMemoryStore{}, schedules: &registrySchedules{}, vectors: &registryVectors{err: indexingapp.ErrIndexVectorDeletionDeferred}}
-	service, err := indexregistryapp.NewService(toolkits, registryTimeouts{}, f.store, f.schedules, f.vectors, func(error) {})
+	service, err := indexregistryapp.NewService(toolkits, f.store, f.schedules, f.vectors, func(error) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,10 +351,12 @@ func TestRegistryIndexListOfAnEmptyToolkitIsAnEmptyArrayNotNull(t *testing.T) {
 	}
 }
 
-func TestRegistryIndexListFlagsAStaleRunWithoutChangingItsState(t *testing.T) {
+// A run is alive exactly while its execution job is: a dead run is flagged
+// stale and keeps its state, however recently it last wrote.
+func TestRegistryIndexListFlagsARunWhoseJobEndedWithoutChangingItsState(t *testing.T) {
 	f := newRegistryFixture(t, registryToolkits{})
 	row := f.store.add(t, 7, 9, "old", 1, false)
-	f.store.rows[0].UpdatedAt = time.Now().Add(-3 * time.Hour)
+	f.store.rows[0].RunActive = false
 	response := f.do(http.MethodGet, listPath, "")
 	var list []struct {
 		ID       string         `json:"id"`
@@ -368,6 +367,25 @@ func TestRegistryIndexListFlagsAStaleRunWithoutChangingItsState(t *testing.T) {
 		t.Fatalf("body=%s err=%v", response.Body, err)
 	}
 	if !list[0].Stale || list[0].Metadata["state"] != "in_progress" {
+		t.Fatalf("stale=%v state=%v", list[0].Stale, list[0].Metadata["state"])
+	}
+}
+
+// A long healthy run reports rarely: with its job RUNNING it is in progress and
+// not stale no matter how old updated_at is.
+func TestRegistryIndexListShowsALongHealthyRunAsInProgressNotStale(t *testing.T) {
+	f := newRegistryFixture(t, registryToolkits{})
+	f.store.add(t, 7, 9, "long", 1, false)
+	f.store.rows[0].UpdatedAt = time.Now().Add(-48 * time.Hour)
+	response := f.do(http.MethodGet, listPath, "")
+	var list []struct {
+		Metadata map[string]any `json:"metadata"`
+		Stale    bool           `json:"stale"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil || len(list) != 1 {
+		t.Fatalf("body=%s err=%v", response.Body, err)
+	}
+	if list[0].Stale || list[0].Metadata["state"] != "in_progress" {
 		t.Fatalf("stale=%v state=%v", list[0].Stale, list[0].Metadata["state"])
 	}
 }
@@ -450,6 +468,19 @@ func TestRegistryIndexDeleteRefusesARunStillWriting(t *testing.T) {
 	}
 	if len(f.vectors.deleted) != 0 || len(f.store.rows) != 1 {
 		t.Fatal("an active run's index was deleted")
+	}
+}
+
+func TestRegistryIndexDeleteRefusesALongHealthyRunButClearsADeadOne(t *testing.T) {
+	f := newRegistryFixture(t, registryToolkits{})
+	long := f.store.add(t, 7, 9, "long", 1, false)
+	f.store.rows[0].UpdatedAt = time.Now().Add(-48 * time.Hour)
+	if got := f.do(http.MethodDelete, listPath+"/"+long.IndexID, "").Code; got != http.StatusConflict {
+		t.Fatalf("a healthy run with an old updated_at: status = %d, want 409", got)
+	}
+	f.store.rows[0].RunActive = false // its job ended, or is missing
+	if got := f.do(http.MethodDelete, listPath+"/"+long.IndexID, "").Code; got != http.StatusOK {
+		t.Fatalf("a run whose job ended: status = %d, want 200", got)
 	}
 }
 
