@@ -21,7 +21,7 @@ pub use elitea_inventory_core::store::{Completion, RunCounts, SourceStatus};
 ///
 /// # Errors
 ///
-/// [`StoreError::Database`](super::StoreError::Database).
+/// [`StoreError::Database`].
 pub async fn start(pool: &PgPool, key: GraphKey, source: &SourceStatus) -> Result<()> {
     sqlx::query(
         "INSERT INTO inventory_graph.sources
@@ -55,7 +55,7 @@ pub async fn start(pool: &PgPool, key: GraphKey, source: &SourceStatus) -> Resul
 ///
 /// # Errors
 ///
-/// [`StoreError::Database`](super::StoreError::Database).
+/// [`StoreError::Database`].
 pub async fn progress(pool: &PgPool, key: GraphKey, toolkit_id: &str, message: &str) -> Result<()> {
     sqlx::query(
         "UPDATE inventory_graph.sources
@@ -75,7 +75,7 @@ pub async fn progress(pool: &PgPool, key: GraphKey, toolkit_id: &str, message: &
 ///
 /// # Errors
 ///
-/// [`StoreError::Database`](super::StoreError::Database).
+/// [`StoreError::Database`].
 pub async fn fail(pool: &PgPool, key: GraphKey, toolkit_id: &str, error: &str) -> Result<()> {
     sqlx::query(
         "UPDATE inventory_graph.sources
@@ -101,7 +101,7 @@ pub use elitea_inventory_core::store::DocumentState;
 ///
 /// # Errors
 ///
-/// [`StoreError::Database`](super::StoreError::Database).
+/// [`StoreError::Database`].
 pub async fn document_versions(
     pool: &PgPool,
     key: GraphKey,
@@ -126,7 +126,7 @@ pub async fn document_versions(
 ///
 /// # Errors
 ///
-/// [`StoreError::Database`](super::StoreError::Database).
+/// [`StoreError::Database`].
 pub async fn restricted_documents(
     pool: &PgPool,
     key: GraphKey,
@@ -272,7 +272,7 @@ pub async fn remove(
 ///
 /// # Errors
 ///
-/// [`StoreError::Database`](super::StoreError::Database).
+/// [`StoreError::Database`].
 pub async fn status_document(pool: &PgPool, key: GraphKey) -> Result<Value> {
     let rows = sqlx::query(
         "SELECT toolkit_id, toolkit_name, toolkit_type, status,
@@ -353,7 +353,7 @@ impl Drop for Lease {
 /// # Errors
 ///
 /// [`StoreError::Deleted`] for a deleted toolkit;
-/// [`StoreError::Database`](super::StoreError::Database).
+/// [`StoreError::Database`].
 pub async fn lease(pool: &PgPool, key: GraphKey) -> Result<Option<Lease>> {
     let Some(mut connection) = take_lock(pool, key).await? else {
         return Ok(None);
@@ -384,7 +384,7 @@ pub async fn lease(pool: &PgPool, key: GraphKey) -> Result<Option<Lease>> {
 ///
 /// # Errors
 ///
-/// [`StoreError::Database`](super::StoreError::Database).
+/// [`StoreError::Database`].
 pub(super) async fn lease_unfenced(pool: &PgPool, key: GraphKey) -> Result<Option<Lease>> {
     Ok(take_lock(pool, key).await?.map(|connection| Lease {
         connection: Some(connection),

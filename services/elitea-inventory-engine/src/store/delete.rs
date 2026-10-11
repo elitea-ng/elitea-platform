@@ -79,7 +79,7 @@ pub enum GraphDeletion {
     Busy,
 }
 
-/// What [`remove`] did.
+/// What `remove` did.
 pub(super) enum Removal {
     Done {
         removed: Removed,
@@ -88,7 +88,7 @@ pub(super) enum Removal {
     Newer(String),
 }
 
-/// Whether [`remove`] leaves the toolkit's tombstone (migration 0007).
+/// Whether `remove` leaves the toolkit's tombstone (migration 0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Tombstone {
     /// The toolkit is gone from the platform: fence every later write.
@@ -238,7 +238,7 @@ pub enum GuardedDeletion {
 /// [`delete_graph`], optionally guarded by the time a list of existing
 /// projects or toolkits was taken. With `listed_at` the graph is checked for
 /// activity newer than it inside the deletion's own transaction, under the
-/// graph's lock ([`remove`]), immediately before the rows go.
+/// graph's lock (`remove`), immediately before the rows go.
 ///
 /// The lease it takes is the unfenced one: deleting a toolkit that is
 /// already tombstoned is an idempotent success, not a refusal.
