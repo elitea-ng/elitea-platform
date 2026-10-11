@@ -61,6 +61,12 @@ services:
       # and producer (standalone-validate-worker-1), so the two workers never
       # share a producer identity in the output ledger. The row that authorizes
       # that session is written by validate-runtime-session-init below.
+      # The file is DERIVED: deploy/scripts/render-validate-worker-runtime.py
+      # renders it from worker-runtime.rust.json with exactly those five keys
+      # replaced, and CI (helm-lint.yml) fails when the committed copy drifts.
+      # Everything else, limits and the node-recovery flag included, is the
+      # agent worker's; the flag is inert here because no agent execution ever
+      # arrives on the VALIDATE stream.
       - ./runtime/worker-runtime.rust-validate.json:/run/elitea/runtime.json:ro
       - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro
@@ -86,7 +92,7 @@ services:
   # A second elitea_runtime.workload_sessions row for the same certificate
   # identity (the table keys on the session id, not on the identity), written by
   # the same script as runtime-session-init. Keep SESSION_ID / PRODUCER_ID in
-  # sync with deploy/runtime/worker-runtime.rust-validate.json. The
+  # sync with deploy/scripts/render-validate-worker-runtime.py OVERRIDES. The
   # `standalone-stack.sh seed-runtime` fallback only re-stamps the agent
   # worker's row; re-run this service to renew this one.
   validate-runtime-session-init:
