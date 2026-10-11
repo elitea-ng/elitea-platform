@@ -84,6 +84,9 @@ type lineError struct {
 	Message       string `json:"message"`
 	ErrorType     string `json:"error_type"`
 	ErrorCategory string `json:"error_category"`
+	// Code is the engine's machine-readable code (spi.CodeBusy, say);
+	// absent on most lines.
+	Code string `json:"code"`
 }
 
 // Client speaks the sidecar protocol over a Unix socket.
@@ -203,6 +206,9 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 			failure := fmt.Errorf("%s", next.Error.Message)
 			if next.Error.ErrorType == "KeyError" && strings.HasPrefix(next.Error.Message, "Unknown tool:") {
 				failure = unknownToolError{failure}
+			}
+			if next.Error.Code != "" {
+				return nil, spi.NewCodedFailure(KindOf(next.Error.ErrorType), next.Error.Code, failure)
 			}
 			return nil, spi.NewFailure(KindOf(next.Error.ErrorType), failure)
 		case next.Result != nil:

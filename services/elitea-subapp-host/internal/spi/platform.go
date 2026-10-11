@@ -53,6 +53,13 @@ var (
 	// ErrBusy: a publish holds the wiki past the bounded wait. Nothing was
 	// deleted; retry.
 	ErrBusy = errors.New("the wiki is being published; retry")
+	// ErrIngestRunning: an ingest of the project (or toolkit) is still
+	// running after the bounded wait for it to stop (nothing was deleted),
+	// or, for ONE toolkit, started meanwhile and holds its graph (nothing
+	// was deleted either). A project deletion that met such a toolkit is not
+	// a failure: it answers OK with Incomplete true and the toolkit in
+	// BusyToolkits. Retry.
+	ErrIngestRunning = errors.New("an ingest is still running; retry")
 )
 
 // WikiDeletion is what one wiki's deletion removed.
@@ -69,6 +76,42 @@ type ProjectDeletion struct {
 	StaleBuildsRemoved int64
 	// Errors are problems that did not stop the deletion.
 	Errors []string
+	// GraphToolkits are the toolkits whose Inventory graph was deleted, and
+	// Graphs what that removed in all. Empty for an application with no
+	// graphs. ToolkitGraphs is the same per toolkit, in deletion order.
+	GraphToolkits []int64
+	Graphs        GraphDeletion
+	ToolkitGraphs []ToolkitGraphDeletion
+	// Incomplete is true when something of the project was left alone: an
+	// Inventory toolkit's graph an ingest holds (BusyToolkits) or a
+	// DeepWiki build whose heartbeat is live (LiveBuilds). What was deleted
+	// stays deleted; the caller calls again. False — the zero value, and
+	// what an application with nothing to leave behind reports — means
+	// nothing of the project is left.
+	Incomplete bool
+	// BusyToolkits are the Inventory toolkits whose graph was not deleted
+	// because an ingest (or another write) holds it.
+	BusyToolkits []int64
+}
+
+// ToolkitGraphDeletion is what one toolkit's graph held, within a project
+// deletion.
+type ToolkitGraphDeletion struct {
+	ToolkitID int64
+	Removed   GraphDeletion
+}
+
+// GraphDeletion is what the deletion of Inventory graphs removed.
+type GraphDeletion struct {
+	Entities, Relations, Sources, Documents int64
+}
+
+// ToolkitDeletion is what DeleteToolkit removed.
+type ToolkitDeletion struct {
+	ProjectID, ToolkitID int32
+	// Deleted is false when the toolkit had no graph.
+	Deleted bool
+	Removed GraphDeletion
 }
 
 // PlatformOps is what a runner offers the platform service.
@@ -76,6 +119,17 @@ type PlatformOps interface {
 	// DeleteProject removes everything the application holds for the
 	// project, and answers what was removed. It must be idempotent.
 	DeleteProject(ctx context.Context, projectID int32) (*ProjectDeletion, error)
+}
+
+// ToolkitOps is what a runner offers when the application keeps something per
+// toolkit that the platform deletes with the toolkit (Inventory's graph).
+// A runner that does not implement it leaves DeleteToolkit to the generated
+// Unimplemented server, which answers UNIMPLEMENTED: DeepWiki's index is per
+// wiki, and a wiki is deleted by its own tool.
+type ToolkitOps interface {
+	// DeleteToolkit removes what the application holds for one toolkit of
+	// one project. It must be idempotent.
+	DeleteToolkit(ctx context.Context, projectID, toolkitID int32) (*ToolkitDeletion, error)
 }
 
 // PlatformClients parses <PREFIX>PLATFORM_CLIENTS: a comma-separated list of
@@ -168,6 +222,15 @@ type platformService struct {
 	logger *slog.Logger
 }
 
+// toolkitService adds DeleteToolkit to the platform service, for a runner
+// that has per-toolkit data (ToolkitOps). Without it the service is the
+// platformService alone and DeleteToolkit is the embedded generated
+// Unimplemented one.
+type toolkitService struct {
+	*platformService
+	toolkits ToolkitOps
+}
+
 // NewPlatformGRPCServer is the platform service over tlsConfig, which must
 // require and verify client certificates (the SPI listener's own
 // configuration), authorising every call by the verified client certificate
@@ -196,7 +259,7 @@ func NewPlatformGRPCServer(ops PlatformOps, clients []string, tlsConfig *tls.Con
 	}
 	server := grpc.NewServer(
 		grpc.Creds(credentials.NewTLS(tlsConfig)),
-		// A request is one project id; nothing legitimate is larger.
+		// A request is a project id and a toolkit id; nothing legitimate is larger.
 		grpc.MaxRecvMsgSize(4096),
 		grpc.ChainUnaryInterceptor(func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 			ctx, err := authorize(ctx, info.FullMethod)
@@ -214,7 +277,12 @@ func NewPlatformGRPCServer(ops PlatformOps, clients []string, tlsConfig *tls.Con
 			return handler(srv, stream)
 		}),
 	)
-	subappv1.RegisterPlatformOperationsServer(server, &platformService{ops: ops, logger: logger})
+	base := &platformService{ops: ops, logger: logger}
+	if toolkits, ok := ops.(ToolkitOps); ok {
+		subappv1.RegisterPlatformOperationsServer(server, &toolkitService{platformService: base, toolkits: toolkits})
+	} else {
+		subappv1.RegisterPlatformOperationsServer(server, base)
+	}
 	return server, nil
 }
 
@@ -235,6 +303,21 @@ func (p *platformService) DeleteProject(ctx context.Context, request *subappv1.D
 		LiveBuilds:         result.LiveBuilds,
 		StaleBuildsRemoved: result.StaleBuildsRemoved,
 		Errors:             result.Errors,
+		GraphToolkitIds:    result.GraphToolkits,
+		Incomplete:         result.Incomplete,
+		BusyToolkitIds:     result.BusyToolkits,
+	}
+	if len(result.GraphToolkits) > 0 {
+		response.Graphs = graphDeletionOf(result.Graphs)
+	}
+	for _, toolkit := range result.ToolkitGraphs {
+		response.ToolkitGraphs = append(response.ToolkitGraphs, &subappv1.ToolkitGraphDeletion{
+			ToolkitId: toolkit.ToolkitID, Removed: graphDeletionOf(toolkit.Removed),
+		})
+	}
+	if result.Incomplete {
+		p.logger.Warn("platform delete_project is not complete; the caller retries",
+			"project_id", project, "busy_toolkits", result.BusyToolkits, "live_builds", result.LiveBuilds)
 	}
 	for _, wiki := range result.Wikis {
 		response.Wikis = append(response.Wikis, &subappv1.WikiDeletion{
@@ -245,13 +328,41 @@ func (p *platformService) DeleteProject(ctx context.Context, request *subappv1.D
 	return response, nil
 }
 
+func graphDeletionOf(removed GraphDeletion) *subappv1.GraphDeletion {
+	return &subappv1.GraphDeletion{
+		Entities: removed.Entities, Relations: removed.Relations,
+		Sources: removed.Sources, Documents: removed.Documents,
+	}
+}
+
+func (t *toolkitService) DeleteToolkit(ctx context.Context, request *subappv1.DeleteToolkitRequest) (*subappv1.DeleteToolkitResponse, error) {
+	project, toolkit := request.GetProjectId(), request.GetToolkitId()
+	if project <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "project_id must be a positive integer")
+	}
+	if toolkit <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "toolkit_id must be a positive integer")
+	}
+	caller, _ := ctx.Value(platformCaller{}).(string)
+	t.logger.Info("platform operation", "op", "delete_toolkit", "project_id", project, "toolkit_id", toolkit, "caller", caller)
+	result, err := t.toolkits.DeleteToolkit(ctx, project, toolkit)
+	if err != nil {
+		t.logger.Error("platform delete_toolkit failed", "project_id", project, "toolkit_id", toolkit, "error", err)
+		return nil, platformStatus(err)
+	}
+	return &subappv1.DeleteToolkitResponse{
+		ProjectId: project, ToolkitId: toolkit,
+		Deleted: result.Deleted, Removed: graphDeletionOf(result.Removed),
+	}, nil
+}
+
 // platformStatus gives a failure the gRPC code a caller can act on: retry
 // for the two "not now" answers, a bad request for a bad value, a plain
 // internal error otherwise. The message is the failure's text, which never
 // carries a statement or a credential (the engine keeps those in its log).
 func platformStatus(err error) error {
 	switch {
-	case errors.Is(err, ErrGenerationRunning):
+	case errors.Is(err, ErrGenerationRunning), errors.Is(err, ErrIngestRunning):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, ErrBusy):
 		return status.Error(codes.Aborted, err.Error())

@@ -14,6 +14,7 @@
 //! that does not parse is reported without its text.
 
 use crate::graph::Graph;
+use elitea_inventory_core::store::{GraphRead, GraphStamp};
 use elitea_pg_migrate::{Ledger, MigrateError, Migration};
 use serde_json::{Map, Value};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
@@ -22,6 +23,7 @@ use sqlx::{QueryBuilder, Row};
 use std::str::FromStr;
 use std::time::Duration;
 
+pub mod delete;
 pub mod graph_store;
 pub mod sources;
 pub mod vectors;
@@ -58,6 +60,18 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0004_entity_vectors.sql",
         include_str!("../../migrations/0004_entity_vectors.sql"),
     ),
+    (
+        "0005_entity_embedding_hash.sql",
+        include_str!("../../migrations/0005_entity_embedding_hash.sql"),
+    ),
+    (
+        "0006_graph_incarnation.sql",
+        include_str!("../../migrations/0006_graph_incarnation.sql"),
+    ),
+    (
+        "0007_deleted_toolkits.sql",
+        include_str!("../../migrations/0007_deleted_toolkits.sql"),
+    ),
 ];
 
 /// Rows per multi-row INSERT: 7 bound columns a row stay far below the 65535
@@ -82,6 +96,15 @@ pub enum StoreError {
     /// A graph that cannot be stored as it is.
     #[error("{0}")]
     Unstorable(String),
+    /// A list of existing ids that cannot be deleted by (stale, from the
+    /// future, or not a time).
+    #[error("{0}")]
+    Listing(String),
+    /// The toolkit was deleted (its tombstone is in
+    /// `inventory_graph.deleted_toolkits`, migration 0007): nothing may
+    /// write its graph again. Nothing was changed.
+    #[error("{0}")]
+    Deleted(String),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -203,13 +226,15 @@ fn ordinal(index: usize) -> Result<i32> {
         .map_err(|_| StoreError::Unstorable("a graph holds at most 2^31 rows".to_owned()))
 }
 
-/// An entity row: id, ordinal, attributes, citations, embedding.
+/// An entity row: id, ordinal, attributes, citations, embedding, and the
+/// hash of the text the embedding was made from.
 type EntityRow = (
     String,
     i32,
     Json<Value>,
     Option<Json<Value>>,
     Option<Vec<f64>>,
+    Option<String>,
 );
 /// A relation row: source, target, ordinal within the source, attributes.
 type RelationRow = (String, String, i32, Json<Value>);
@@ -240,12 +265,18 @@ fn rows(graph: &Graph) -> Result<(Vec<EntityRow>, Vec<RelationRow>)> {
                 )));
             }
         };
+        // A hash describes a vector; without one it has nothing to say.
+        let hash = embedding
+            .as_ref()
+            .and_then(|_| graph.embedding_hash(id))
+            .map(str::to_owned);
         entities.push((
             id.to_owned(),
             ordinal(index)?,
             Json(Value::Object(attributes)),
             citations.map(Json),
             embedding,
+            hash,
         ));
     }
     let mut position_in_source: std::collections::HashMap<&str, usize> =
@@ -338,7 +369,8 @@ async fn insert_entities(
     for batch in entities.chunks(BATCH_ROWS) {
         let mut insert = QueryBuilder::new(
             "INSERT INTO inventory_graph.entities
-                 (project_id, application_id, entity_id, ordinal, attributes, citations, embedding) ",
+                 (project_id, application_id, entity_id, ordinal, attributes, citations, embedding,
+                  embedding_text_hash) ",
         );
         insert.push_values(batch, |mut row, entity| {
             row.push_bind(key.project_id)
@@ -347,7 +379,8 @@ async fn insert_entities(
                 .push_bind(entity.1)
                 .push_bind(&entity.2)
                 .push_bind(&entity.3)
-                .push_bind(&entity.4);
+                .push_bind(&entity.4)
+                .push_bind(&entity.5);
         });
         insert
             .build()
@@ -419,13 +452,32 @@ fn unstorable(error: sqlx::Error) -> StoreError {
 ///
 /// [`StoreError::Database`].
 pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> {
+    Ok(load_graph(pool, key, true)
+        .await?
+        .map(|read| (read.graph, read.revision)))
+}
+
+/// The stored graph `key` for reading: [`load`] without the entity
+/// vectors, which are most of a graph's bytes (a 747-entity graph at 2560
+/// dimensions is 15 MB, 97% of it vectors), and the ids of the entities
+/// that have one. The vectors are never selected, so they never leave the
+/// database.
+///
+/// # Errors
+///
+/// [`StoreError::Database`].
+pub async fn load_view(pool: &PgPool, key: GraphKey) -> Result<Option<GraphRead>> {
+    load_graph(pool, key, false).await
+}
+
+async fn load_graph(pool: &PgPool, key: GraphKey, vectors: bool) -> Result<Option<GraphRead>> {
     // One snapshot for the three reads: a concurrent save is all or nothing.
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *transaction)
         .await?;
     let Some(header) = sqlx::query(
-        "SELECT attributes, metadata, schema_document, revision
+        "SELECT attributes, metadata, schema_document, revision, graph_id::text AS incarnation
            FROM inventory_graph.graphs
           WHERE project_id = $1 AND application_id = $2",
     )
@@ -443,26 +495,43 @@ pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> 
         .try_get::<Option<Json<Value>>, _>("schema_document")?
         .map(|schema| schema.0);
     let revision: i64 = header.try_get("revision")?;
+    let incarnation: String = header.try_get("incarnation")?;
 
-    let entities = sqlx::query(
-        "SELECT entity_id, attributes, citations, embedding
+    // `embedded` is true for a non-empty vector: what `get_stats` counted.
+    let entities = sqlx::query(if vectors {
+        "SELECT entity_id, attributes, citations, embedding, embedding_text_hash,
+                (embedding IS NOT NULL AND cardinality(embedding) > 0) AS embedded
            FROM inventory_graph.entities
           WHERE project_id = $1 AND application_id = $2
-          ORDER BY ordinal",
-    )
+          ORDER BY ordinal"
+    } else {
+        "SELECT entity_id, attributes, citations,
+                (embedding IS NOT NULL AND cardinality(embedding) > 0) AS embedded
+           FROM inventory_graph.entities
+          WHERE project_id = $1 AND application_id = $2
+          ORDER BY ordinal"
+    })
     .bind(key.project_id)
     .bind(key.application_id)
     .fetch_all(&mut *transaction)
     .await?;
+    let mut embedded = Vec::new();
     for row in entities {
         let mut attributes = object(row.try_get::<Json<Value>, _>("attributes")?.0);
         if let Some(citations) = row.try_get::<Option<Json<Value>>, _>("citations")? {
             attributes.insert("citations".to_owned(), citations.0);
         }
-        if let Some(embedding) = row.try_get::<Option<Vec<f64>>, _>("embedding")? {
+        if vectors && let Some(embedding) = row.try_get::<Option<Vec<f64>>, _>("embedding")? {
             attributes.insert("embedding".to_owned(), Value::from(embedding));
         }
-        graph.insert_node(row.try_get("entity_id")?, attributes);
+        let id: String = row.try_get("entity_id")?;
+        if vectors && let Some(hash) = row.try_get::<Option<String>, _>("embedding_text_hash")? {
+            graph.set_embedding_hash(&id, hash);
+        }
+        if row.try_get::<bool, _>("embedded")? {
+            embedded.push(id.clone());
+        }
+        graph.insert_node(id, attributes);
     }
 
     let relations = sqlx::query(
@@ -489,65 +558,70 @@ pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> 
         );
     }
     transaction.commit().await?;
-    Ok(Some((graph, revision)))
+    Ok(Some(GraphRead {
+        graph,
+        revision,
+        incarnation,
+        embedded,
+    }))
 }
 
-/// The stored graph's revision, or `None` when there is no graph: a
-/// cheap check of whether a cached copy is still current.
+/// The stored graph's revision, or `None` when there is no graph. Not
+/// enough on its own to know that a cached copy is still current: a graph
+/// deleted and created again starts at revision 1 again ([`stamp`]).
 ///
 /// # Errors
 ///
 /// [`StoreError::Database`].
 pub async fn revision(pool: &PgPool, key: GraphKey) -> Result<Option<i64>> {
-    Ok(sqlx::query_scalar(
-        "SELECT revision FROM inventory_graph.graphs WHERE project_id = $1 AND application_id = $2",
+    Ok(stamp(pool, key).await?.map(|stamp| stamp.revision))
+}
+
+/// The stored graph's [`GraphStamp`], or `None` when there is no graph: a
+/// cheap check of whether a cached copy is still current. The incarnation is
+/// the `graphs` row's `graph_id` (migration 0006), drawn when the row is
+/// inserted and kept by every update, so a re-created graph never carries
+/// the deleted one's stamp.
+///
+/// # Errors
+///
+/// [`StoreError::Database`].
+pub async fn stamp(pool: &PgPool, key: GraphKey) -> Result<Option<GraphStamp>> {
+    let row: Option<(String, i64)> = sqlx::query_as(
+        "SELECT graph_id::text, revision FROM inventory_graph.graphs
+          WHERE project_id = $1 AND application_id = $2",
     )
     .bind(key.project_id)
     .bind(key.application_id)
     .fetch_optional(pool)
-    .await?)
+    .await?;
+    Ok(row.map(|(incarnation, revision)| GraphStamp {
+        incarnation,
+        revision,
+    }))
 }
 
-/// Delete the stored graph `key` and its sources' state; `true` when there
-/// was a graph.
+/// Delete the stored graph `key` and its sources' state; `true` when any
+/// row went. Atomic, and serialised against every writer by the graph's
+/// write lock, but it does not wait for or refuse a running ingestion (a
+/// run that has loaded the graph would write it back) and leaves no
+/// tombstone (the graph may be created again): that is
+/// [`delete::delete_graph`], which holds the ingestion lease and fences
+/// later writes.
 ///
 /// # Errors
 ///
 /// [`StoreError::Database`].
 pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
-    let mut transaction = pool.begin().await?;
-    lock(&mut transaction, key).await?;
-    let deleted = sqlx::query(
-        "DELETE FROM inventory_graph.graphs WHERE project_id = $1 AND application_id = $2",
-    )
-    .bind(key.project_id)
-    .bind(key.application_id)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected();
-    for table in ["inventory_graph.sources", "inventory_graph.documents"] {
-        sqlx::query(&format!(
-            "DELETE FROM {table} WHERE project_id = $1 AND application_id = $2"
-        ))
-        .bind(key.project_id)
-        .bind(key.application_id)
-        .execute(&mut *transaction)
-        .await?;
+    match delete::remove(pool, key, None, delete::Tombstone::No).await? {
+        delete::Removal::Done { removed } => Ok(!removed.is_empty()),
+        // Without a list time nothing can be newer than it.
+        delete::Removal::Newer(_) => Ok(false),
     }
-    transaction.commit().await?;
-    Ok(deleted > 0)
 }
 
-/// What [`import`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Imported {
-    /// The graph was saved at this revision.
-    Saved { revision: i64 },
-    /// Nothing was written: native ingestion state exists for the graph
-    /// (source status rows, document versions) and replacing it was not
-    /// asked for.
-    HasIngestionState { sources: i64, documents: i64 },
-}
+/// What [`import`] did (the shared core's type, ADR-0029 decision 7).
+pub use elitea_inventory_core::store::Imported;
 
 /// Store an imported graph (`import-graph`) in one transaction: refused
 /// while the graph has native ingestion state, unless `replace_state`, which

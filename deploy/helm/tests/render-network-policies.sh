@@ -17,6 +17,7 @@
 #                    port (deepwiki.platformGrpc.clients) is declared, served
 #                    and admitted if and only if the allowlist names a client,
 #                    and admits elitea-main only.
+#   inventory        the same shape as deepwiki, with inventory.platformGrpc.
 #
 # A policy is only as good as the labels it selects, so every selector here is
 # matched against the labels of the pod templates the chart ACTUALLY renders:
@@ -93,11 +94,12 @@ render() { # render <name> <args...> -> $WORK/<name>.yaml
 # ── 1. The policies, against the pods the chart renders ──────────────────────
 # check <name> <edge> <worker> <supervisor> <deepwiki: none|direct|edge> <inventory: 0|1>
 check() {
-  python3 - "$WORK/$1.yaml" "$1" "$2" "$3" "$4" "$5" "$6" "${EXPECT_GRPC:-}" <<'PY'
+  python3 - "$WORK/$1.yaml" "$1" "$2" "$3" "$4" "$5" "$6" "${EXPECT_GRPC:-}" "${EXPECT_INV_GRPC:-}" <<'PY'
 import sys, yaml
 
 path, name, edge, worker, sup, deepwiki, inventory = sys.argv[1:8]
 expect_grpc = sys.argv[8] if len(sys.argv) > 8 else ""
+expect_inv_grpc = sys.argv[9] if len(sys.argv) > 9 else ""
 edge, worker, sup, inventory = edge == "1", worker == "1", sup == "1", inventory == "1"
 docs = [d for d in yaml.safe_load_all(open(path)) if d]
 bad = []
@@ -139,6 +141,8 @@ if sup:
     expected["elitea-sandbox-supervisor-netpol"] = SUP
 if deepwiki != "none":
     expected["elitea-deepwiki-netpol"] = DW
+if inventory:
+    expected["elitea-inventory-netpol"] = INV
 check(sorted(policies) == sorted(expected), f"policy set {sorted(policies)} != {sorted(expected)}")
 
 for pname, target in expected.items():
@@ -256,6 +260,36 @@ if dp:
     if expect_grpc:
         check(bool(grpc_port) == (expect_grpc == "1"), f"deepwiki: gRPC port declared={bool(grpc_port)}, expected {expect_grpc}")
 
+# ── inventory ────────────────────────────────────────────────────────────────
+ip = policies.get("elitea-inventory-netpol")
+if ip:
+    spec = ip["spec"]
+    check(spec["policyTypes"] == ["Ingress"], "inventory: policyTypes must be Ingress only")
+    by = rules_by_ports(spec["ingress"], "inventory")
+    ctr = deployments["elitea-inventory"]["spec"]["template"]["spec"]["containers"][0]
+    declared = {p["name"]: p["containerPort"] for p in ctr["ports"]}
+    grpc_port = declared.get("platform-grpc")
+    check(declared.get("http") == 8080, f"inventory: the SPI port is {declared.get('http')}, not 8080")
+    want = [(8080,)] + ([(grpc_port,)] if grpc_port else [])
+    check(sorted(by) == sorted(want), f"inventory: ports admitted {sorted(by)}, want {sorted(want)}")
+    for key, rule in by.items():
+        check(peer_targets(rule, f"inventory:{key}") == [MAIN], f"inventory:{key} must admit elitea-main only")
+    # The platform gRPC port is declared, configured, exposed and admitted
+    # together, or not at all; and only the HOST container carries it.
+    env = {e["name"]: e.get("value") for e in ctr.get("env", [])}
+    service = [d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == "elitea-inventory-svc"][0]
+    service_ports = {p["name"]: p for p in service["spec"]["ports"]}
+    if grpc_port:
+        check(env.get("ELITEA_INVENTORY_PLATFORM_CLIENTS"), "inventory: the gRPC port is declared with no allowed clients")
+        check(env.get("ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") == f":{grpc_port}", f"inventory: the gRPC address is {env.get('ELITEA_INVENTORY_PLATFORM_GRPC_ADDR')}")
+        check("platform-grpc" in service_ports and service_ports["platform-grpc"]["targetPort"] == "platform-grpc", "inventory: the Service does not expose the gRPC port")
+    else:
+        check("ELITEA_INVENTORY_PLATFORM_CLIENTS" not in env and "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR" not in env,
+              "inventory: the gRPC service is configured with no port")
+        check("platform-grpc" not in service_ports, "inventory: the Service exposes a gRPC port nothing listens on")
+    if expect_inv_grpc:
+        check(bool(grpc_port) == (expect_inv_grpc == "1"), f"inventory: gRPC port declared={bool(grpc_port)}, expected {expect_inv_grpc}")
+
 # ── worker ───────────────────────────────────────────────────────────────────
 wp = policies.get("elitea-worker-netpol")
 if wp:
@@ -306,6 +340,9 @@ run full-via-edge 1 1 1 edge 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISO
 EXPECT_GRPC=0 run deepwiki-no-grpc 0 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}"
 EXPECT_GRPC=1 run deepwiki-grpc 0 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}'
 
+EXPECT_INV_GRPC=0 run inventory-no-grpc 0 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}"
+EXPECT_INV_GRPC=1 run inventory-grpc 0 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}" --set 'inventory.platformGrpc.clients={elitea-main}'
+
 # ── 2. Guards ────────────────────────────────────────────────────────────────
 echo "== guards =="
 refuses() { # refuses <label> <message fragment> <helm args...>
@@ -333,6 +370,8 @@ refuses "noExternalIngress with main.ingress.enabled (gateway-api)" "contradicts
   --set main.ingress.gateway.name=shared-gateway --set main.ingress.gateway.namespace=gateway-system
 refuses "platform gRPC clients without mutual TLS" "deepwiki.platformGrpc.clients is set, but deepwiki.mtls.enabled is false" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.mtls.enabled=false
+refuses "inventory platform gRPC clients without mutual TLS" "inventory.platformGrpc.clients is set, but inventory.mtls.enabled is false" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${INVENTORY[@]}" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.mtls.enabled=false
 refuses "enabled=false without externallyManaged" "networkPolicies.externallyManaged" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set networkPolicies.enabled=false
 if render off-managed "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" --set networkPolicies.enabled=false --set networkPolicies.externallyManaged=true; then

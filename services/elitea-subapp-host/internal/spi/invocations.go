@@ -331,7 +331,24 @@ func newInvocationID() string {
 // INSIDE the run so the caller learns of it by polling, as the fixtures
 // record.
 func (m *Manager) Submit(ctx context.Context, toolkit, tool string, call Call) (*Invocation, error) {
+	return m.SubmitLabelled(ctx, toolkit, tool, nil, call)
+}
+
+// SubmitLabelled is Submit with the invocation's labels (Invocation.Labels)
+// set at registration: they are on the invocation BEFORE it is in flight,
+// under the same lock StopMatching reads, so a StopMatching that runs at
+// any moment after Submit returns sees them. A label the runner would set
+// from inside the run (Context.SetLabel) is invisible until the run gets
+// there, and a deletion that stopped the matching invocations in between
+// would miss it. The server derives them from the runner (Labeler).
+func (m *Manager) SubmitLabelled(ctx context.Context, toolkit, tool string, labels map[string]string, call Call) (*Invocation, error) {
 	invocation := &Invocation{ID: newInvocationID(), Toolkit: toolkit, Tool: tool, Status: statusPending, CreatedAt: time.Now()}
+	if len(labels) > 0 {
+		invocation.Labels = make(map[string]string, len(labels))
+		for k, v := range labels {
+			invocation.Labels[k] = v
+		}
+	}
 	if err := m.store.Create(ctx, invocation); err != nil {
 		return nil, err
 	}

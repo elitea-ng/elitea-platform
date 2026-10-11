@@ -58,11 +58,27 @@ impl ErrorType {
     }
 }
 
+/// Machine-readable codes a failure may carry beside its type and message
+/// ([`EngineError::code`]). A host that must act on a failure (retry it,
+/// say) matches the code, never the message text, which is free to change.
+pub mod codes {
+    /// Another writer holds what the tool needed (an ingestion lease, a
+    /// wiki's publish lock): nothing was changed, and the call is
+    /// retryable once the holder is done.
+    pub const BUSY: &str = "busy";
+    /// The toolkit the tool would write into was deleted: the call is
+    /// refused for good, and nothing was changed.
+    pub const TOOLKIT_DELETED: &str = "toolkit_deleted";
+}
+
 /// One failed tool run, as the host will read it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineError {
     pub error_type: ErrorType,
     pub message: String,
+    /// A machine-readable code ([`codes`]), on the wire as `code`; `None`
+    /// (the usual case) leaves the line as it always was.
+    pub code: Option<&'static str>,
 }
 
 impl EngineError {
@@ -71,7 +87,15 @@ impl EngineError {
         Self {
             error_type,
             message: message.into(),
+            code: None,
         }
+    }
+
+    /// The same failure with a machine-readable code ([`codes`]).
+    #[must_use]
+    pub fn with_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
     }
 
     /// The stop line: the exact error the Python sidecar sent for a
@@ -100,13 +124,18 @@ impl EngineError {
     /// The NDJSON `error` object.
     #[must_use]
     pub fn to_line(&self) -> serde_json::Value {
-        serde_json::json!({
-            "error": {
-                "message": self.wire_message(),
-                "error_type": self.error_type.wire_name(),
-                "error_category": self.category(),
-            }
-        })
+        let mut error = serde_json::json!({
+            "message": self.wire_message(),
+            "error_type": self.error_type.wire_name(),
+            "error_category": self.category(),
+        });
+        if let (Some(code), Some(fields)) = (self.code, error.as_object_mut()) {
+            fields.insert(
+                "code".to_owned(),
+                serde_json::Value::String(code.to_owned()),
+            );
+        }
+        serde_json::json!({ "error": error })
     }
 }
 
@@ -239,6 +268,19 @@ mod tests {
     fn an_empty_message_reports_the_class_name() {
         let error = EngineError::new(ErrorType::Key, "");
         assert_eq!(error.wire_message(), "KeyError");
+    }
+
+    #[test]
+    fn a_code_travels_beside_the_message_and_only_when_set() {
+        let busy = EngineError::new(ErrorType::Runtime, "held").with_code(codes::BUSY);
+        assert_eq!(busy.to_line()["error"]["code"], "busy");
+        assert_eq!(busy.to_line()["error"]["message"], "held");
+        assert!(
+            EngineError::new(ErrorType::Runtime, "held").to_line()["error"]
+                .get("code")
+                .is_none(),
+            "no code, no field: the line is the one every host already reads"
+        );
     }
 
     #[test]

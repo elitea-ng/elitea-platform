@@ -2,8 +2,6 @@ package run
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -150,36 +148,32 @@ func (r *Runner) DeleteProject(ctx context.Context, projectID int32) (*spi.Proje
 	if err != nil {
 		return nil, err
 	}
-	var id [8]byte
-	_, _ = rand.Read(id[:])
-	tc := spi.DetachedContext("platform-delete-project-" + hex.EncodeToString(id[:]))
-	result, err := r.deleteProject(ctx, stamped, tc)
+	result, err := r.deleteProject(ctx, stamped, spi.PlatformContext("delete-project"))
+	result, err = spi.EngineOutcome(DeleteProjectWikisTool, result, err, EngineError)
 	if err != nil {
-		return nil, classifyEngineFailure(err)
-	}
-	if !Truthy(result["success"]) {
-		return nil, classifyEngineFailure(EngineError(result))
+		// The engine's "being published" refusal (storage::StorageError::Busy,
+		// code busy) is the retryable ErrBusy.
+		return nil, spi.ClassifyBusy(err, spi.ErrBusy, legacyBusyText)
 	}
 	return projectDeletionOf(projectID, result), nil
 }
 
-// classifyEngineFailure recognises the engine's "being published" refusal
-// (storage::StorageError::Busy; the message is its contract) and gives it
-// the sentinel the transport maps to a retryable code.
-func classifyEngineFailure(err error) error {
-	if err != nil && strings.Contains(err.Error(), "is being published") {
-		return fmt.Errorf("%w: %s", spi.ErrBusy, err.Error())
-	}
-	return err
-}
+// legacyBusyText recognises the publish-lock refusal of an engine from
+// BEFORE the error code existed (release N-1 of elitea-deepwiki-engine), by
+// its wording. Rollout fallback only: consulted when the error carries no
+// code, and gone once every engine sends codes.
+func legacyBusyText(text string) bool { return strings.Contains(text, "is being published") }
 
 // projectDeletionOf reads the engine's delete_project_wikis result.
 func projectDeletionOf(project int32, result map[string]any) *spi.ProjectDeletion {
 	deletion := &spi.ProjectDeletion{
 		ProjectID:          project,
-		LiveBuilds:         int64(number(result["live_builds"])),
-		StaleBuildsRemoved: int64(number(result["builds"])),
+		LiveBuilds:         spi.JSONInt(result["live_builds"]),
+		StaleBuildsRemoved: spi.JSONInt(result["builds"]),
 	}
+	// A build whose heartbeat is live was left alone: the project is not
+	// gone until it ends and the deletion is called again.
+	deletion.Incomplete = deletion.LiveBuilds > 0
 	perWiki, _ := result["per_wiki"].([]any)
 	listed := map[string]bool{}
 	for _, entry := range perWiki {
@@ -187,8 +181,8 @@ func projectDeletionOf(project int32, result map[string]any) *spi.ProjectDeletio
 		id := str(wiki["wiki_id"])
 		listed[id] = true
 		deletion.Wikis = append(deletion.Wikis, spi.WikiDeletion{
-			WikiID: id, Nodes: int64(number(wiki["nodes"])), Edges: int64(number(wiki["edges"])),
-			Embeddings: int64(number(wiki["embeddings"])), Statistics: int64(number(wiki["statistics"])),
+			WikiID: id, Nodes: spi.JSONInt(wiki["nodes"]), Edges: spi.JSONInt(wiki["edges"]),
+			Embeddings: spi.JSONInt(wiki["embeddings"]), Statistics: spi.JSONInt(wiki["statistics"]),
 		})
 	}
 	// An engine of an older release lists the wikis without counts.
@@ -201,20 +195,30 @@ func projectDeletionOf(project int32, result map[string]any) *spi.ProjectDeletio
 	return deletion
 }
 
-// number reads a JSON number (a float64) or an integer, 0 for anything else.
-func number(value any) float64 {
-	switch n := value.(type) {
-	case float64:
-		return n
-	case int:
-		return float64(n)
-	case int64:
-		return float64(n)
-	}
-	return 0
-}
-
 var _ spi.PlatformOps = (*Runner)(nil)
+var _ spi.Labeler = (*Runner)(nil)
+
+// Labels names the project and wiki a generation publishes into, for the
+// server to put on the invocation AT REGISTRATION (spi.Manager.SubmitLabelled),
+// so a deletion's StopGenerations finds it before the run has begun. Invoke
+// sets the same labels again once it has resolved the project (harmless:
+// the values are the same); a generation whose project cannot be resolved
+// here carries none and is refused by Invoke anyway.
+func (r *Runner) Labels(call spi.Invoke) map[string]string {
+	if call.Tool != generateTool || call.Family.Name == "query" {
+		return nil
+	}
+	params := MergeParameters(call.Request)
+	project, err := TrustedProject(call.Identity, r.VerifiedIdentity, params)
+	if err != nil || project == "" {
+		return nil
+	}
+	config := ExtractRepoConfig(params)
+	return map[string]string{
+		labelProject: project,
+		labelWiki:    GeneratedWikiID(config.Map(), config.BranchString()),
+	}
+}
 
 // Name is the runner's name as /health reports it.
 func (r *Runner) Name() string {

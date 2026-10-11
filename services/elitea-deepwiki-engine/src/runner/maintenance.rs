@@ -26,8 +26,10 @@ fn storage_failure(action: &str, error: &StorageError) -> EngineError {
     tracing::error!(%error, "{action} failed");
     if let StorageError::Busy(message) = error {
         // A publish of the wiki holds it: retryable, and the caller must be
-        // able to tell it from a failure of the database.
-        return EngineError::new(ErrorType::Runtime, format!("{action} failed: {message}"));
+        // able to tell it from a failure of the database — by the code,
+        // not the words (the host's spi.ClassifyBusy).
+        return EngineError::new(ErrorType::Runtime, format!("{action} failed: {message}"))
+            .with_code(crate::errors::codes::BUSY);
     }
     if let StorageError::Delete(message) = error {
         // Ours, and it quotes no statement: the caller needs to read it (a

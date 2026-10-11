@@ -178,6 +178,11 @@ func TestProjectDeprovisioningIsAGRPCServiceAuthorisedByTheMainCertificate(t *te
 	if got.GetProjectId() != 17 || got.GetLiveBuilds() != 2 || got.GetStaleBuildsRemoved() != 1 || len(got.GetErrors()) != 0 {
 		t.Fatalf("%v", got)
 	}
+	// Two builds with a live heartbeat were left alone: incomplete, and
+	// DeepWiki has no toolkits to report busy.
+	if !got.GetIncomplete() || len(got.GetBusyToolkitIds()) != 0 || len(got.GetToolkitGraphs()) != 0 {
+		t.Fatalf("completeness: %v", got)
+	}
 	if len(got.GetWikis()) != 2 {
 		t.Fatalf("%v", got.GetWikis())
 	}
@@ -192,6 +197,29 @@ func TestProjectDeprovisioningIsAGRPCServiceAuthorisedByTheMainCertificate(t *te
 	arguments, _ := call["arguments"].(map[string]any)
 	if call["tool"] != "delete_project_wikis" || arguments[run.ProjectArgument] != "17" {
 		t.Fatalf("the engine was called as %v", call)
+	}
+}
+
+// DeepWiki keeps nothing per toolkit that the platform deletes with the
+// toolkit (its index is per wiki, deleted by its own tool), so its service
+// does not implement DeleteToolkit: the generated Unimplemented server
+// answers, to an authorised caller; an unauthorised one is refused first.
+func TestDeepWikiAnswersDeleteToolkitUnimplemented(t *testing.T) {
+	sidecar := newFakeSidecar(t, []string{`{"result": {"success": true, "wikis": []}}`}, 0)
+	pki := newPKI(t, "platform ca")
+	addr, _ := platformHost(t, sidecar, pki, "elitea-main")
+	main, other := pki.client(t, "elitea-main"), pki.client(t, "somebody-else")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	request := &subappv1.DeleteToolkitRequest{ProjectId: 17, ToolkitId: 3}
+	if _, err := dial(t, addr, pki, &main).DeleteToolkit(ctx, request); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("an authorised caller got %v, want Unimplemented", err)
+	}
+	if _, err := dial(t, addr, pki, &other).DeleteToolkit(ctx, request); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("an unauthorised caller got %v, want PermissionDenied", err)
+	}
+	if n := engineCalls(sidecar); n != 0 {
+		t.Fatalf("the engine was called %d time(s)", n)
 	}
 }
 
@@ -306,20 +334,34 @@ func TestTheProjectInTheRequestIsValidated(t *testing.T) {
 	}
 }
 
-// The engine's "being published; retry" reaches the caller as ABORTED, an
-// engine failure as INTERNAL.
+// The engine's "being published; retry" reaches the caller as ABORTED by its
+// CODE (busy), whatever the wording; an engine of the previous release, which
+// sends no code, by its wording; an engine failure as INTERNAL.
 func TestTheEnginesBusyAnswerIsRetryable(t *testing.T) {
-	sidecar := newFakeSidecar(t, []string{`{"error": {"message": "Deleting the project's wiki indexes failed: wiki acme--a--main is being published (its lock was not released within 30s); retry the deletion", "error_type": "RuntimeError"}}`}, 0)
+	sidecar := newFakeSidecar(t, []string{`{"error": {"message": "Deleting the project's wiki indexes failed: the wiki is held; retry", "error_type": "RuntimeError", "code": "busy"}}`}, 0)
 	pki := newPKI(t, "platform ca")
 	addr, _ := platformHost(t, sidecar, pki, "elitea-main")
 	main := pki.client(t, "elitea-main")
 	_, err := deleteProject(dial(t, addr, pki, &main), 17)
-	if status.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "being published") {
-		t.Fatalf("%v", err)
+	if status.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "is held") {
+		t.Fatalf("coded busy: %v", err)
 	}
-	sidecar.mu.Lock()
-	sidecar.byTool = map[string][]string{"delete_project_wikis": {`{"error": {"message": "the index database refused it", "error_type": "RuntimeError"}}`}}
-	sidecar.mu.Unlock()
+	answer := func(line string) {
+		sidecar.mu.Lock()
+		sidecar.byTool = map[string][]string{"delete_project_wikis": {line}}
+		sidecar.mu.Unlock()
+	}
+	// Rollout fallback: no code, the previous release's wording.
+	answer(`{"error": {"message": "Deleting the project's wiki indexes failed: wiki acme--a--main is being published (its lock was not released within 30s); retry the deletion", "error_type": "RuntimeError"}}`)
+	if _, err := deleteProject(dial(t, addr, pki, &main), 17); status.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "being published") {
+		t.Fatalf("legacy wording: %v", err)
+	}
+	// The wording under some OTHER code is not busy.
+	answer(`{"error": {"message": "wiki acme--a--main is being published", "error_type": "RuntimeError", "code": "toolkit_deleted"}}`)
+	if _, err := deleteProject(dial(t, addr, pki, &main), 17); status.Code(err) != codes.Internal {
+		t.Fatalf("another code: %v", err)
+	}
+	answer(`{"error": {"message": "the index database refused it", "error_type": "RuntimeError"}}`)
 	if _, err := deleteProject(dial(t, addr, pki, &main), 17); status.Code(err) != codes.Internal {
 		t.Fatalf("%v", err)
 	}

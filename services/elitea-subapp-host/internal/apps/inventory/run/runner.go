@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
@@ -88,6 +89,19 @@ type Runner struct {
 	// tenant's graph. The fixture runner leaves it off: it serves one canned
 	// graph and reads no tenant data.
 	RequireVerifiedProject bool
+
+	// DeleteGraph and DeleteProjectGraphs are the engine's graph deletions.
+	// They are NOT in Tools, so no toolkit call reaches them: only the
+	// platform service does, through DeleteToolkit and DeleteProject
+	// (platform.go). Nil for a runner with no engine.
+	DeleteGraph         Tool
+	DeleteProjectGraphs Tool
+
+	// StopWait is how long a deletion waits for the ingests it stopped to
+	// end (default DefaultStopWait).
+	StopWait time.Duration
+
+	manager *spi.Manager
 }
 
 // Name is the runner's name as /health reports it.
@@ -146,6 +160,11 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 				"Run the tool through the platform rather than calling the provider directly.",
 			call.Tool)
 	}
+
+	// The labels a deletion of this toolkit or project finds the ingest by
+	// (StopIngests) were set when the invocation was registered (Labels),
+	// not here: set here they would be missing for the whole stretch before
+	// this line.
 
 	if err := tc.Checkpoint(); err != nil {
 		return nil, err

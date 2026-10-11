@@ -125,6 +125,32 @@ pub struct Completion<'a> {
     pub commit_sha: Option<&'a str>,
 }
 
+/// A stored graph for reading ([`GraphStore::load_view`]).
+#[derive(Debug, Clone)]
+pub struct GraphRead {
+    /// The graph, no node carrying an `embedding`.
+    pub graph: Graph,
+    pub revision: i64,
+    /// Which incarnation of the graph this is ([`GraphStamp`]).
+    pub incarnation: String,
+    /// The entities that have a non-empty vector, in node order.
+    pub embedded: Vec<String>,
+}
+
+/// What identifies one state of a stored graph: which incarnation of it
+/// (a graph deleted and created again is a new one) and which revision
+/// within that incarnation. A revision alone is not enough: a re-created
+/// graph starts again at revision 1, so a reader that cached the deleted
+/// graph's revision 1 would serve it for the new graph. Equal stamps mean
+/// an unchanged graph, on this replica or another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphStamp {
+    /// Opaque; empty for a store whose revisions never repeat (the local
+    /// index numbers every write from one counter).
+    pub incarnation: String,
+    pub revision: i64,
+}
+
 /// A similarity ranking: `(entity id, cosine similarity)` best first, or
 /// numpy's message when an entity's vector has another width than the
 /// query's (Python's `semantic_search` raised it, the wrapper printed it).
@@ -156,12 +182,38 @@ pub trait GraphStore: Send + Sync {
         key: GraphKey,
     ) -> impl Future<Output = Result<Option<(Graph, i64)>, Self::Error>> + Send;
 
+    /// The stored graph as a reader needs it ([`GraphRead`]): the graph
+    /// [`GraphStore::load`] returns without the entity vectors (the bulk of
+    /// its bytes), and the ids of the entities that have one. A reader
+    /// that only asks whether and how many entities are embedded
+    /// ([`GraphStore::rank`] does the comparing) never holds a vector.
+    fn load_view(
+        &self,
+        key: GraphKey,
+    ) -> impl Future<Output = Result<Option<GraphRead>, Self::Error>> + Send;
+
     /// The stored graph's revision, or `None` when there is no graph: a
     /// cheap check of whether a cached copy is still current.
     fn revision(
         &self,
         key: GraphKey,
     ) -> impl Future<Output = Result<Option<i64>, Self::Error>> + Send;
+
+    /// The stored graph's [`GraphStamp`], or `None` when there is no graph:
+    /// what a cache compares to know that its copy is still the graph. The
+    /// default is the revision with no incarnation, right for a store whose
+    /// revisions never repeat.
+    fn stamp(
+        &self,
+        key: GraphKey,
+    ) -> impl Future<Output = Result<Option<GraphStamp>, Self::Error>> + Send {
+        async move {
+            Ok(self.revision(key).await?.map(|revision| GraphStamp {
+                incarnation: String::new(),
+                revision,
+            }))
+        }
+    }
 
     /// The version of every document the source's last completed run read,
     /// by key.
@@ -224,7 +276,54 @@ pub trait GraphStore: Send + Sync {
 
     /// Delete the graph and its sources' state; `true` when there was a
     /// graph.
+    ///
+    /// This is the bare delete, atomic on its own. A caller that must not
+    /// race an ingestion takes the [`GraphStore::lease`] first.
     fn delete(&self, key: GraphKey) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    /// Replace the graph with `graph` in one transaction (its revision
+    /// moves), leaving the sources' status and document versions alone: the
+    /// write of an administrative edit such as type normalisation. Returns
+    /// the new revision. The caller holds the [`GraphStore::lease`].
+    fn save(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+    ) -> impl Future<Output = Result<i64, Self::Error>> + Send;
+
+    /// Commit a source's removal in ONE transaction: `graph` (already
+    /// without the source), and the source's status row and document
+    /// versions gone. Returns the new revision. The caller holds the
+    /// [`GraphStore::lease`].
+    fn remove_source(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        toolkit_id: &str,
+        source_name: &str,
+    ) -> impl Future<Output = Result<i64, Self::Error>> + Send;
+
+    /// Store an imported graph in one transaction: refused
+    /// ([`Imported::HasIngestionState`]) while the graph has native
+    /// ingestion state, unless `replace_state`, which deletes that state
+    /// with the old graph. The caller holds the [`GraphStore::lease`].
+    fn import(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        replace_state: bool,
+    ) -> impl Future<Output = Result<Imported, Self::Error>> + Send;
+}
+
+/// What [`GraphStore::import`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Imported {
+    /// The graph was saved at this revision.
+    Saved { revision: i64 },
+    /// Nothing was written: native ingestion state exists for the graph
+    /// (source status rows, document versions) and replacing it was not
+    /// asked for.
+    HasIngestionState { sources: i64, documents: i64 },
 }
 
 #[cfg(test)]

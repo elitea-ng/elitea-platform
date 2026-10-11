@@ -57,6 +57,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            {{- if include "elitea-inventory.platformGrpc" . }}
+            - name: platform-grpc
+              containerPort: {{ .Values.inventory.platformGrpc.port }}
+              protocol: TCP
+            {{- end }}
           env:
             {{- range $key, $value := $env }}
             {{- if not (hasKey $secrets $key) }}
@@ -76,6 +81,16 @@ spec:
               value: {{ .Values.inventory.mtls.mountPath }}/tls.key
             - name: ELITEA_INVENTORY_TLS_CA_FILE
               value: {{ .Values.inventory.mtls.mountPath }}/ca.crt
+            {{- end }}
+            {{- if include "elitea-inventory.platformGrpc" . }}
+            # The platform gRPC service: a second listener behind the TLS
+            # configuration above. Only the identities listed may call it, by
+            # their verified client certificate. Absent when the allowlist is
+            # empty, which keeps the service off.
+            - name: ELITEA_INVENTORY_PLATFORM_CLIENTS
+              value: {{ join "," .Values.inventory.platformGrpc.clients | quote }}
+            - name: ELITEA_INVENTORY_PLATFORM_GRPC_ADDR
+              value: {{ printf ":%d" (.Values.inventory.platformGrpc.port | int) | quote }}
             {{- end }}
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
           # tcpSocket, not httpGet, for the reason DeepWiki's deployment spells

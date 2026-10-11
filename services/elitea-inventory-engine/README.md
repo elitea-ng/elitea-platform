@@ -183,6 +183,114 @@ owner runs them without cluster access:
 
 `tests/transfer_tools.rs` drives both over the socket.
 
+## Deleting graphs (issue #1244, ADR-0031 phase C0)
+
+Before it nothing deleted a graph: a toolkit's entities (descriptions,
+citations, embeddings), relations, documents with their ACLs and source
+status stayed in `inventory_graph` after the toolkit or its project was
+deleted. `store::delete` (`src/store/delete.rs`) and two engine tools of the
+`platform` family now do:
+
+* `delete_graph` (`project_id`, `application_id`) deletes one graph. It takes
+  the graph's **ingestion lease** first, the session advisory lock a run, an
+  import, a source removal and a type normalisation hold, and **refuses**
+  (an error with `code: busy`; the text says "an ingestion of this Inventory
+  toolkit is running") while another holds it. Then one transaction, under
+  the graph's write lock, removes the rows of `graphs` (with their `entities`
+  and `relations`), `sources` and `documents`, each count taken from its own
+  `DELETE … RETURNING`, and writes the toolkit's **tombstone**
+  (`deleted_toolkits`, migration 0007). So a delete never interleaves with a
+  write; the graph ends whole or absent. The answer says `deleted: true` when
+  ANY row went (a failed first ingestion's status row without a graph is
+  still something the toolkit left) and "nothing to delete" only when none
+  did; deleting again is an idempotent success.
+* **A deleted toolkit is never resurrected.** Every write that takes the
+  ingestion lease (a run, an import, a source removal, a type normalisation)
+  checks for the tombstone under that same lease and refuses a deleted
+  toolkit (`code: toolkit_deleted`, "was deleted") before it writes
+  anything. The order is safe: a writer that held the lease first keeps the
+  deletion out (busy) until it is done, and one that takes it afterwards sees
+  the committed tombstone. The platform never reuses a toolkit id, so a
+  tombstone never refuses a legitimately new toolkit; tombstones older than
+  30 days are purged by the next deletion (the engine has no maintenance
+  loop of its own; one would be the place for the purge if it is ever added).
+* `delete_project_graphs` (`project_id`) deletes every toolkit's graph of
+  the project, one transaction each, listing the project's toolkits again
+  after each pass (up to five times) so a toolkit created or ingested into
+  while the project was being deleted does not survive a call that reported
+  success. It SUCCEEDS even when a toolkit being ingested is skipped: the
+  JSON result says `complete: false`, names the `busy_toolkits`, and lists
+  each deleted toolkit's counts (`by_toolkit`); what was deleted stays
+  deleted, and the call is repeated once the run ends. Only the one-toolkit
+  `delete_graph` answers a held graph with an error.
+* Deleting a graph forgets this replica's cached view of it, and the stored
+  graph's **incarnation** (`graphs.graph_id`, migration 0006) is part of the
+  stamp every replica's cache compares, so a graph deleted and created again
+  (revision 1 again) is never served from a cache of the deleted one.
+
+They are **not toolkit tools**. The host's admission table and the descriptor
+name neither, so no user or agent can see or call them. The platform reaches
+them through the host's gRPC service `elitea.subapp.v1.PlatformOperations`
+(`DeleteToolkit` when an Inventory toolkit is deleted, `DeleteProject` when a
+project is), on its own mTLS listener (`ELITEA_INVENTORY_PLATFORM_GRPC_ADDR`),
+authorised by the client certificate of elitea-main alone
+(`ELITEA_INVENTORY_PLATFORM_CLIENTS`; empty means no listener). Before it
+deletes, the host stops the toolkit's (or project's) running ingests — found
+by labels the host puts on every ingest invocation when it is registered, so
+one registered mid-deletion is found too — and waits up to 30 s; one still
+running refuses the deletion with `FAILED_PRECONDITION` ("an ingest is still
+running; retry") and nothing is deleted: that code always means nothing was
+deleted. The lease above is the next guard: for one toolkit the engine's
+refusal is mapped to the same code by its `code: busy` (the host matches the
+code; the wording is matched only for an engine of the previous release,
+which sent none); for a project the host answers OK with `incomplete = true`
+and `busy_toolkit_ids`, and the platform calls again. The tombstone is the
+last: an ingest that slips past both is refused by the engine and writes
+nothing.
+
+### Orphans
+
+`elitea-inventory-engine orphans --existing-projects FILE|-
+[--existing-toolkits FILE] [--listed-at RFC3339] [--delete --listed-at RFC3339
+[--allow-stale-list] [--max-orphan-fraction F] [--force-fraction]]` lists the graphs whose project is not in the list of
+existing project ids the caller supplies (one per line), and, with
+`--existing-toolkits` (lines of `project_id toolkit_id`), those of a live
+project whose toolkit is gone. The product database is not readable from
+here, so the lists are the caller's:
+
+```sh
+T=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+psql "$PRODUCT_DB" -Atc 'SELECT id FROM centry.project' \
+  | elitea-inventory-engine orphans --existing-projects - --listed-at "$T" --delete
+```
+
+A dry run unless `--delete`; an empty project list is refused, and so is an
+`--existing-toolkits` list that is given but empty (a broken export, which
+would call every toolkit of every live project an orphan); both lists are
+strict (a line that is not an id is an error, never skipped). The command
+prints how many graphs are stored, how many ids the lists hold and how many
+graphs are orphans. A project or
+toolkit created after the lists were taken is not in them and would look
+orphaned, so:
+
+* `--delete` needs `--listed-at`, the time the lists were taken, and refuses
+  lists older than 10 minutes unless `--allow-stale-list` (a time in the
+  future is always refused);
+* a graph written or ingested after `--listed-at` is skipped and printed
+  (`SKIPPED`), in a dry run too; so is a graph an ingestion holds;
+* the database is the server's (`ELITEA_INVENTORY_DATABASE_URL`, read through
+  the same `Settings` as `serve`);
+* `--delete` is refused when more than `--max-orphan-fraction` (default
+  `0.2`) of the stored graphs would be orphans, unless `--force-fraction`:
+  that many usually means a wrong or partial list (another database's
+  projects, a toolkit list missing a project), not a platform that deleted
+  most of its projects (the same guard as elitea-main's `pgvector-orphans`);
+* the graphs written after the list are found with one query for all
+  candidates, and the check is made again immediately before each graph's
+  deletion, inside its transaction and under its lock;
+* the exit code is non-zero if any graph's deletion failed (skipped graphs are
+  not failures).
+
 ## Settings
 
 | Variable | Default | |

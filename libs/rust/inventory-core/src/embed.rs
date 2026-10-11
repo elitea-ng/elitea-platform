@@ -41,6 +41,22 @@ pub fn query_text(model: &str, query: &str) -> String {
     }
 }
 
+/// The hash a graph records of the text an entity was embedded from
+/// ([`compose_text`]): SHA-256, lowercase hex. An entity whose text hashes
+/// differently from the recorded one has changed since its vector was
+/// made, and its vector is stale.
+#[must_use]
+pub fn text_hash(text: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
 /// `_metadata` keys of the embedding space.
 pub const MODEL_KEY: &str = "embeddings_model";
 pub const DIMENSION_KEY: &str = "embeddings_dimension";
@@ -101,6 +117,18 @@ mod tests {
             "f flat wins"
         );
         assert_eq!(compose_text(&serde_json::Map::new()), "");
+    }
+
+    #[test]
+    fn the_text_hash_is_sha256_hex_and_follows_the_text() {
+        assert_eq!(
+            text_hash("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_ne!(
+            text_hash("UserService users"),
+            text_hash("UserService user")
+        );
     }
 
     #[test]

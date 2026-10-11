@@ -340,8 +340,8 @@ impl IndexService {
         } else {
             let files = count(store.document_stats(KEY, SOURCE_NAME)?.len());
             let view = store
-                .load_now(KEY)?
-                .map(|(graph, revision)| Arc::new(GraphView::new(graph, revision)));
+                .load_view_now(KEY)?
+                .map(|read| Arc::new(GraphView::from_read(read)));
             // Turned on, never built yet, or built: not checked yet.
             (IndexState::Stale, view, files)
         };
@@ -730,7 +730,11 @@ impl IndexService {
         let view = self.inner().view.clone();
         let stored = self.store.revision_now(KEY)?;
         match view {
-            Some(view) if Some(view.revision) == stored => Ok(view.graph.clone()),
+            // The view holds no vectors: a graph that has any is read from
+            // the store, or the refresh would write it back without them.
+            Some(view) if Some(view.revision) == stored && !view.has_embeddings() => {
+                Ok(view.graph.clone())
+            }
             _ => Ok(self
                 .store
                 .load_now(KEY)?
@@ -808,7 +812,7 @@ impl IndexService {
                 hashed: count(source.hashed()),
             };
             Ok::<_, IndexError>((
-                Arc::new(GraphView::new(graph, revision)),
+                Arc::new(GraphView::without_vectors(graph, revision)),
                 count(outcome.documents.len()),
                 report,
             ))

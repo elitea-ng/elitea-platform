@@ -125,9 +125,7 @@ pub fn check_space(view: &GraphView, configured: Option<&str>) -> Result<(), Eng
 /// Whether any entity has a vector (`get_stats()['has_embeddings']`).
 #[must_use]
 pub fn has_embeddings(view: &GraphView) -> bool {
-    view.graph
-        .nodes()
-        .any(|(_, node)| node.get("embedding").is_some_and(py_truthy))
+    view.has_embeddings()
 }
 
 /// Python's glob-to-regex, searched anywhere in `text`, any case.

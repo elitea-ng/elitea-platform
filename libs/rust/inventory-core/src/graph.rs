@@ -54,6 +54,7 @@
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 
 /// A property never stored on a node: raw content stays in the source.
 const EXCLUDED_PROPERTIES: [&str; 5] = ["content", "text", "raw", "body", "source_content"];
@@ -350,6 +351,12 @@ pub struct Graph {
     pub metadata: Map<String, Value>,
     /// `_schema`, when one was discovered.
     pub schema: Option<Value>,
+    /// Entity id → the hash of the text its vector was embedded from
+    /// ([`crate::embed::text_hash`]). Beside the nodes, not in them, so no
+    /// answer and no `graph.json` export carries it; a store keeps it with
+    /// the vector. An entity with a vector and no entry here was embedded
+    /// before the hash existed, and is embedded once more.
+    embedding_hashes: HashMap<String, String>,
 }
 
 impl Graph {
@@ -598,6 +605,9 @@ impl Graph {
         for id in &orphaned {
             self.nodes.shift_remove(id);
             self.edges.shift_remove(id);
+            // The hash describes the removed entity's vector; left behind
+            // it would vouch for the vector of a later entity of that id.
+            self.embedding_hashes.remove(id);
         }
         // An edge loses this file's contribution; it goes only when no
         // other file or source still says it.
@@ -677,6 +687,18 @@ impl Graph {
             .filter(|(_, _, edge)| relation_sources(edge).iter().any(|s| s == source_toolkit))
             .count();
         (entities, relations)
+    }
+
+    /// The hash of the text the entity's vector was embedded from, if one
+    /// was recorded.
+    #[must_use]
+    pub fn embedding_hash(&self, entity_id: &str) -> Option<&str> {
+        self.embedding_hashes.get(entity_id).map(String::as_str)
+    }
+
+    /// Record the hash of the text the entity's vector was embedded from.
+    pub fn set_embedding_hash(&mut self, entity_id: &str, hash: String) {
+        self.embedding_hashes.insert(entity_id.to_owned(), hash);
     }
 
     /// Set a node's embedding vector; `false` for an unknown node.
@@ -1180,6 +1202,30 @@ mod tests {
         let edge = again.edge("a", "b").unwrap_or_else(|| panic!("the edge"));
         assert_eq!(relation_sources(edge), ["mirror", "repo"]);
         assert_eq!(edge["source_toolkit"], json!("repo"));
+    }
+
+    #[test]
+    fn removing_an_entity_forgets_its_embedding_hash() {
+        let mut graph = two_overlapping_sources();
+        graph.set_embedding_hash("a", "hash-a".to_owned());
+        graph.set_embedding_hash("b", "hash-b".to_owned());
+        // Another source still cites both: nothing is removed, hashes stay.
+        assert_eq!(graph.remove_source("mirror"), 0);
+        assert_eq!(graph.embedding_hash("a"), Some("hash-a"));
+        // Nobody cites them any more: the entities and their hashes go.
+        assert_eq!(graph.remove_source("repo"), 2);
+        assert_eq!(graph.embedding_hash("a"), None);
+        assert_eq!(graph.embedding_hash("b"), None);
+        // The same id added again with a vector is not vouched for by the
+        // old hash, so the embedding step embeds it again.
+        let cite = Citation {
+            file_path: "a.py".to_owned(),
+            source_toolkit: Some("repo".to_owned()),
+            ..Citation::default()
+        };
+        graph.add_entity("a", "A", "class", Some(&cite), None);
+        assert!(graph.set_embedding("a", &[1.0, 0.0]));
+        assert_eq!(graph.embedding_hash("a"), None, "re-embedded, not skipped");
     }
 
     #[test]

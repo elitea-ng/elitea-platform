@@ -945,11 +945,7 @@ pub fn stats(view: &GraphView) -> Map<String, Value> {
     let mut edge_types: Vec<String> = relation_types.keys().cloned().collect();
     edge_types.sort();
     let metadata = &view.graph.metadata;
-    let embedded = view
-        .graph
-        .nodes()
-        .filter(|(_, data)| data.get("embedding").is_some_and(py_truthy))
-        .count();
+    let embedded = view.embedded_count();
     let community_data = metadata.get("community_data");
     let mut stats = Map::new();
     stats.insert("node_count".to_owned(), json!(view.graph.node_count()));

@@ -3392,6 +3392,28 @@ inventory:
     mountPath: /var/scratch/inventory
     sizeLimit: 20Gi
 
+  # The platform gRPC service (elitea.subapp.v1.PlatformOperations, libs/proto):
+  # operations that are not a user's to run - deleting an Inventory toolkit's
+  # graph when the toolkit is deleted (DeleteToolkit), and every graph of a
+  # project when the project is deprovisioned (DeleteProject). They are not
+  # toolkit tools: no user or agent is offered them. It is a second listener of
+  # the host container, behind the SAME server certificate and client CA as the
+  # SPI (mutual TLS is mandatory), and every call is authorised by the verified
+  # client certificate alone: its subject common name or a DNS SAN must be in
+  # `clients`.
+  #
+  #   clients  certificate identities allowed to call it. EMPTY (the default)
+  #            keeps the service OFF: no port is opened, rendered or admitted.
+  #            The facade client certificate this chart issues has the common
+  #            name elitea-main, so `[elitea-main]` is the usual value. Needs
+  #            mtls.enabled (the chart refuses it otherwise).
+  #   port     the container and Service port, exposed as `platform-grpc`.
+  #
+  # The NetworkPolicy admits elitea-main only on both ports.
+  platformGrpc:
+    clients: []
+    port: 9443
+
   # mTLS for the elitea-main -> inventory hop. cert-manager issues a server
   # cert (this Deployment mounts it) and a facade client cert (elitea-main
   # mounts it) from the SAME internal CA issuer the DeepWiki hop uses — one
