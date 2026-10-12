@@ -559,16 +559,21 @@ impl Extractor {
             .name("doc-extract".to_owned())
             .stack_size(EXTRACTION_STACK_BYTES)
             .spawn(move || {
-                // Owned by the thread until it ends, however the request
-                // fares: the slot, and the body's place in the held total.
-                let _slot = permit;
+                // Owned by the thread until the extraction ends, however the
+                // request fares: the slot, and the body's place in the held
+                // total.
+                let slot = permit;
                 let bytes = body.take();
-                let _held = body;
+                let held = body;
                 if !delay.is_zero() {
                     std::thread::sleep(delay);
                 }
                 // The bytes move into the extractor: no copy is made here.
                 let result = extract_document_on_this_thread(&mime, bytes, &document_limits);
+                // Released BEFORE the answer is sent, so a request that holds
+                // its answer sees the body and the slot already given back.
+                drop(held);
+                drop(slot);
                 // Finished BEFORE the answer is sent: a request that reads
                 // AlreadyFinished knows the answer is a moment away at most.
                 thread_ledger.finished();
