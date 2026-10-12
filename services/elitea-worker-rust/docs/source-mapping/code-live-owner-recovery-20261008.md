@@ -429,7 +429,32 @@ Suites (2026-10-12): Main `go build ./...`, `go vet`, and `go test` for `interna
 
 **Recovery class.** Main x P06/P07, a HITL or authorization continuation with owner recovery on, for a turn containing a stored-`openai` application tool: was F with a generic refusal (the run stayed paused, no way forward); after the fix R, as for every other agent type. The refusal reason is now named in the Main log.
 
-**Real-browser proof: pending** on the rebuilt stack (pipeline 138, answer card 1, reload). Fixture: the existing pipeline 138 and agent 137 rows on the deployed stack; how they were created is not re-verified here.
+**Real-browser proof (2026-10-12, after the second residual below).** Own stack `elitea-code1084`
+(`http://code1084.localhost:18300/app/`), restored from the real-model dump. Production configuration: Worker
+`agent_node_recovery` and `agent_model_checkpoint_recovery` true, Main Code owner recovery and code consumers on,
+Code sandbox supervisor with Python preparation. Images: Main and Web `code1084-3c5c88096` (Main `sha256:17cc5231c3f7…`,
+binary contains `resource_project_id=$1::integer`, the previous image does not; Web `sha256:6d3e05a73f51…`), Worker
+and Supervisor `code1084-e9cdbaa1f` (Worker `sha256:326b7589795c…`). Agentstate migration 0014 applied to this stack
+only, after a local snapshot of both databases.
+
+Before the fixes the same flow failed on this stack with every image combination tried (merged-main Worker, pre-merge
+Worker, #1084 Main/Web, pristine `main-c0f2e5f9b-verify` Main/Web): 422 on answering card 1, shown as "no chat
+connection".
+
+Chat 933, pipeline 138 "Gate5 agent variable parent 20260930" as the active participant:
+
+| Step | Execution | Settlement |
+|---|---|---|
+| Message → card 1 (`override_call` asks) | `95069a39ff955e391027b9152d202ed5` | SUCCEEDED, attempt 1 |
+| `docker restart` of the Worker while card 1 is pending, then a full reload: card 1 still shown | — | — |
+| Answer card 1 ("Databases") → `override_call` completes, card 2 (`defaults_call`, different options) | `e7a0af51812504cb1bcd7b39b22e1a91` | SUCCEEDED, attempt 1 |
+| Answer card 2 ("Hardware") → final answer | `e42593fb89b95a6b63e2f8ae11d2cf73` | SUCCEEDED, attempt 1 |
+
+The final answer has an OVERRIDE CALL section (audience operators, tone brief) and a DEFAULT CALL section (audience
+users, tone formal), each with its own variable bindings. After a full reload the same single answer shows and no card
+remains. Main logged no `current agent continuation failed` and the Worker logged no ERROR in the window. Fixture: the
+existing pipeline 138 and agent 137 rows from the real-model dump (created through the UI on 2026-09-30, per the
+#1199 source mapping); nothing was created or edited through the database.
 
 #### Part J, second residual: the original-input lookup never ran on PostgreSQL
 
