@@ -11,6 +11,7 @@ import (
 
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/jackc/pgx/v5"
@@ -614,6 +615,50 @@ LIMIT 10001`, projectID, toolkitID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list index registry: %w", err)
+	}
+	return result, nil
+}
+
+// CatalogEntries implements indexregistry.CatalogSource: the live, stamped
+// rows of the project's toolkits named, as the frozen index catalog needs
+// them — name, id, embedding space — and nothing else (no history JSON, no
+// run job). One query for every toolkit of a freeze, ordered by toolkit then
+// oldest first, at most indexcatalog.MaxEntries+1 rows per toolkit so the
+// resolver can tell a truncated toolkit from a full one.
+func (r *IndexRegistryRepository) CatalogEntries(
+	ctx context.Context,
+	projectID int32,
+	toolkitIDs []int32,
+) ([]indexregistryapp.CatalogRow, error) {
+	if len(toolkitIDs) == 0 {
+		return []indexregistryapp.CatalogRow{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+SELECT toolkit_id, name, index_id::text, embedding_model, embedding_dimension
+FROM (
+    SELECT toolkit_id, name, index_id, embedding_model, embedding_dimension,
+           row_number() OVER (PARTITION BY toolkit_id ORDER BY created_at, index_id) AS position
+    FROM elitea_runtime.index_registry
+    WHERE project_id = $1 AND toolkit_id = ANY($2::integer[]) AND deleted_at IS NULL
+      AND embedding_model IS NOT NULL AND embedding_model <> ''
+      AND embedding_dimension IS NOT NULL AND embedding_dimension > 0
+) AS stamped
+WHERE position <= $3
+ORDER BY toolkit_id, position`, projectID, toolkitIDs, indexcatalog.MaxEntries+1)
+	if err != nil {
+		return nil, fmt.Errorf("list index registry catalog entries: %w", err)
+	}
+	defer rows.Close()
+	result := make([]indexregistryapp.CatalogRow, 0)
+	for rows.Next() {
+		var row indexregistryapp.CatalogRow
+		if err := rows.Scan(&row.ToolkitID, &row.Name, &row.IndexID, &row.Model, &row.Dimension); err != nil {
+			return nil, fmt.Errorf("scan index registry catalog entry: %w", err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list index registry catalog entries: %w", err)
 	}
 	return result, nil
 }

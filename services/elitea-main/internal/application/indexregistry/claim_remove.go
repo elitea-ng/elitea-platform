@@ -101,8 +101,10 @@ const (
 type ClaimRemovalRequest struct {
 	ToolkitID int64
 	IndexName string
-	// IndexID, when set, must be the live row's id: a name that now resolves
-	// to a recreated index is NotFound rather than a delete of the wrong row.
+	// IndexID is required: the worker always has it, since remove_index
+	// names an index from the frozen catalog. It must be the live row's id,
+	// so a name that now resolves to a recreated index is NotFound rather
+	// than a delete of the wrong row.
 	IndexID string
 }
 
@@ -135,7 +137,7 @@ func NewClaimRemover(
 // names no live run), the principal must be a user with the delete permission
 // in the claimed project (Forbidden otherwise), the index is looked up by name
 // in the claimed project's toolkit — the project is the CLAIM's, never the
-// request's — and checked against the id the worker froze (NotFound on a
+// request's — and must carry the id the worker froze (NotFound on a
 // mismatch), then Service.Delete runs: tombstone first, vectors through the
 // hook or the sweeper, schedule entry last. A schedule cleanup that fails
 // after the tombstone is reported, not surfaced: the index is gone.
@@ -149,7 +151,7 @@ func (r *ClaimRemover) RemoveIndex(
 	}
 	if request.ToolkitID <= 0 || request.ToolkitID > math.MaxInt32 ||
 		!validText(request.IndexName, indexmetaapp.MaxCurrentIndexMetaCollectionBytes) ||
-		(request.IndexID != "" && !indexIDPattern.MatchString(request.IndexID)) {
+		!indexIDPattern.MatchString(request.IndexID) {
 		return "", ErrInvalidClaimRemovalRequest
 	}
 	if claim.ExecutionID == "" || claim.Generation == 0 || claim.ClaimID == "" ||
@@ -194,7 +196,7 @@ func (r *ClaimRemover) RemoveIndex(
 		return RemovalNotFound, nil
 	case err != nil:
 		return "", dependencyError(ctx, ErrClaimRemovalUnavailable, err)
-	case !found, request.IndexID != "" && item.ID != request.IndexID:
+	case !found, item.ID != request.IndexID:
 		return RemovalNotFound, nil
 	}
 	err = r.registry.Delete(ctx, indexmetaapp.DeleteRequest{

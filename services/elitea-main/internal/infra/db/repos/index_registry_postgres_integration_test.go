@@ -17,6 +17,7 @@ import (
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -210,6 +211,88 @@ func TestIndexRegistryListIsScopedAndOldestFirst(t *testing.T) {
 	empty, err := repo.List(ctx, 2, 19)
 	if err != nil || empty == nil || len(empty) != 0 {
 		t.Fatalf("another project's list = %#v err=%v", empty, err)
+	}
+}
+
+// Review round 2, finding 4: the frozen catalog's one narrow query. Only
+// stamped live rows, only the toolkits asked, oldest first per toolkit, and
+// one row past the cap so the resolver can report a truncation.
+func TestIndexRegistryCatalogEntriesAreStampedScopedAndCapped(t *testing.T) {
+	repo, pool := newRegistryTestRepo(t)
+	ctx := context.Background()
+	for _, name := range []string{"b", "a", "never-ran"} {
+		if err := repo.InitializeRegistryRun(ctx, registryRun(1, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"b", "a"} {
+		if _, err := repo.ApplyResult(ctx, 1, registryResult(1, name, registrySummary(8, "text-embedding-3-small"))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := registryRun(1, "elsewhere")
+	other.ToolkitID = 20
+	if err := repo.InitializeRegistryRun(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ApplyResult(ctx, 1, registryResult(1, "elsewhere", registrySummary(8, "text-embedding-3-small"))); err != nil {
+		t.Fatal(err)
+	}
+	// A deleted row is not an index.
+	if err := repo.InitializeRegistryRun(ctx, registryRun(1, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ApplyResult(ctx, 1, registryResult(1, "gone", registrySummary(8, "text-embedding-3-small"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.MarkDeleted(ctx, 1, 19, mustFind(t, repo, "gone").IndexID); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := repo.CatalogEntries(ctx, 1, []int32{19, 21})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Name != "b" || rows[1].Name != "a" || rows[0].ToolkitID != 19 ||
+		rows[0].Model != "text-embedding-3-small" || rows[0].Dimension != 8 || rows[0].IndexID == "" {
+		t.Fatalf("catalog rows = %+v", rows)
+	}
+	both, err := repo.CatalogEntries(ctx, 1, []int32{20, 19})
+	if err != nil || len(both) != 3 || both[0].ToolkitID != 19 || both[2].ToolkitID != 20 || both[2].Name != "elsewhere" {
+		t.Fatalf("two toolkits = %+v err=%v", both, err)
+	}
+	if none, err := repo.CatalogEntries(ctx, 2, []int32{19}); err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("another project's catalog = %#v err=%v", none, err)
+	}
+	if none, err := repo.CatalogEntries(ctx, 1, nil); err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("no toolkits = %#v err=%v", none, err)
+	}
+
+	// The cap: one toolkit with MaxEntries+5 stamped rows answers
+	// MaxEntries+1 of them, the oldest, and leaves the other toolkit whole.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.index_registry
+    (project_id, toolkit_id, name, state, embedding_model, embedding_dimension, collection, created_at)
+SELECT 1, 22, 'bulk-' || lpad(n::text, 5, '0'), 'completed', 'm', 8, 'emb_m_8',
+       timestamp '2026-01-01 00:00:00+00' + make_interval(secs => n)
+FROM generate_series(1, $1) AS n`, indexcatalog.MaxEntries+5); err != nil {
+		t.Fatal(err)
+	}
+	capped, err := repo.CatalogEntries(ctx, 1, []int32{22, 19})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bulk, others int
+	for _, row := range capped {
+		if row.ToolkitID == 22 {
+			bulk++
+		} else {
+			others++
+		}
+	}
+	if bulk != indexcatalog.MaxEntries+1 || others != 2 || capped[0].Name != "b" ||
+		capped[2].Name != "bulk-00001" || capped[len(capped)-1].Name != fmt.Sprintf("bulk-%05d", indexcatalog.MaxEntries+1) {
+		t.Fatalf("capped: bulk=%d others=%d first=%s last=%s", bulk, others, capped[0].Name, capped[len(capped)-1].Name)
 	}
 }
 

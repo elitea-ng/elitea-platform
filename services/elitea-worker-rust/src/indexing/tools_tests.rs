@@ -7,7 +7,7 @@
 //! frozen WITH Main's `indexes` catalog (Rust indexing) serves the index
 //! tools, one frozen without it (Python indexing) does not.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use adk_rust::{Content, Llm, LlmRequest, LlmResponse, LlmResponseStream};
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall, IndexToolHost,
-    IndexToolName, IndexToolSupport, IndexToolsWithheld,
+    IndexToolName, IndexToolSupport, IndexToolsWithheld, SharedIndexCatalog,
 };
 use elitea_vector_index::client::toolkit_namespace;
 use elitea_vector_index::testing::FakeVector;
@@ -26,7 +26,7 @@ use http_body_util::{BodyExt as _, Full};
 use serde_json::{Value, json};
 use tonic::body::Body;
 
-use super::tools::{ClaimIndexToolHost, StepbackBinding};
+use super::tools::{ClaimIndexToolHost, LazyStepbackModel, StepbackBinding};
 use super::{IndexIngestRuntime, IndexRunLimits};
 use crate::protocol::control::{
     AgentControlError, ControlSemanticError, IndexRemovalBinding, IndexRemovalControl,
@@ -42,6 +42,8 @@ use crate::transport::openai_compatible_facade::{
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 const NS: &str = "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b";
+/// A second index's namespace.
+const OTHER_NS: &str = "1c1f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5c";
 const TOKEN: &str = "elvc_0123456789abcdef0123456789abcdef0123456789a";
 const MODEL: &str = "text-embedding-3-small";
 const DIMENSION: u32 = 4;
@@ -76,6 +78,43 @@ impl ModelGatewayTransport for AxisEmbeddings {
             .map(|(index, _)| json!({"object": "embedding", "index": index, "embedding": [1.0, 0.0, 0.0, 0.0]}))
             .collect();
         let reply = json!({"object": "list", "model": MODEL, "data": data});
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .version(Version::HTTP_2)
+            .header("content-type", "application/json")
+            .body(Body::new(Full::new(bytes::Bytes::from(reply.to_string()))))
+            .expect("response"))
+    }
+}
+
+/// Answers like [`AxisEmbeddings`] for any model, recording the model each
+/// request names.
+struct RecordingEmbeddings {
+    models: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl ModelGatewayTransport for RecordingEmbeddings {
+    async fn post(
+        &self,
+        request: Request<Body>,
+    ) -> Result<Response<Body>, ModelGatewayTransportError> {
+        let body = request
+            .into_body()
+            .collect()
+            .await
+            .map_err(|_| ModelGatewayTransportError::Unavailable)?
+            .to_bytes();
+        let parsed: Value = serde_json::from_slice(&body).expect("json body");
+        let model = parsed["model"].as_str().expect("model").to_owned();
+        self.models.lock().expect("models").push(model.clone());
+        let inputs = parsed["input"].as_array().expect("inputs");
+        let data: Vec<Value> = inputs
+            .iter()
+            .enumerate()
+            .map(|(index, _)| json!({"object": "embedding", "index": index, "embedding": [1.0, 0.0, 0.0, 0.0]}))
+            .collect();
+        let reply = json!({"object": "list", "model": model, "data": data});
         Ok(Response::builder()
             .status(StatusCode::OK)
             .version(Version::HTTP_2)
@@ -138,6 +177,13 @@ async fn harness() -> Harness {
 }
 
 async fn harness_with_removal(removal: Option<Arc<RecordingRemoval>>) -> Harness {
+    harness_with(removal, Arc::new(AxisEmbeddings)).await
+}
+
+async fn harness_with(
+    removal: Option<Arc<RecordingRemoval>>,
+    embeddings: Arc<dyn ModelGatewayTransport>,
+) -> Harness {
     let fake = FakeVector::new(&[(TOKEN, 1)]);
     let (address, server) = fake.clone().serve().await.expect("serve");
     let mut config = ClientConfig::new(format!("http://{address}"));
@@ -145,10 +191,7 @@ async fn harness_with_removal(removal: Option<Arc<RecordingRemoval>>) -> Harness
     let vector = VectorClient::connect_lazy(&config).expect("client");
     let runtime = IndexIngestRuntime {
         vector,
-        embeddings: EmbeddingsClient::with_transport(
-            Arc::new(AxisEmbeddings) as Arc<dyn ModelGatewayTransport>,
-            Duration::from_secs(5),
-        ),
+        embeddings: EmbeddingsClient::with_transport(embeddings, Duration::from_secs(5)),
         removal: removal
             .clone()
             .map(|removal| removal as Arc<dyn IndexRemovalControl>),
@@ -237,6 +280,14 @@ fn host_with_model(
     token: &VectorClaimToken,
     model: Option<StepbackBinding>,
 ) -> ClaimIndexToolHost {
+    host_with_lazy_model(harness, token, model.map(LazyStepbackModel::bound))
+}
+
+fn host_with_lazy_model(
+    harness: &Harness,
+    token: &VectorClaimToken,
+    model: Option<LazyStepbackModel>,
+) -> ClaimIndexToolHost {
     ClaimIndexToolHost::new(
         Arc::clone(&harness.runtime),
         token,
@@ -248,13 +299,23 @@ fn host_with_model(
 
 const TOOLKIT_ID: u64 = 41;
 
+/// One call over a fresh copy of [`catalog`].
 async fn call(host: &ClaimIndexToolHost, tool: IndexToolName, arguments: Value) -> Value {
-    let catalog = catalog();
+    call_on(host, &SharedIndexCatalog::new(catalog()), tool, arguments).await
+}
+
+/// One call over the run's `shared` catalog.
+async fn call_on(
+    host: &ClaimIndexToolHost,
+    shared: &SharedIndexCatalog,
+    tool: IndexToolName,
+    arguments: Value,
+) -> Value {
     match host
         .call(IndexToolCall {
             tool,
             toolkit_id: TOOLKIT_ID,
-            catalog: &catalog,
+            catalog: shared,
             doctype: "document",
             arguments: &arguments,
         })
@@ -263,6 +324,130 @@ async fn call(host: &ClaimIndexToolHost, tool: IndexToolName, arguments: Value) 
         Ok(value) => value,
         Err(failure) => Value::String(format!("FAILED: {}", failure.message())),
     }
+}
+
+/// Review round 2, finding 5: once Main reports an index removed — or
+/// already gone — it leaves the run's shared catalog, so the turn's later
+/// `list_indexes` and searches no longer see it.
+#[tokio::test]
+async fn remove_index_takes_the_index_out_of_the_shared_catalog_for_the_rest_of_the_turn() {
+    let harness = harness().await;
+    seed(&harness).await;
+    let host = host(&harness, &harness.token);
+    let shared = SharedIndexCatalog::new(catalog());
+    assert_eq!(
+        call_on(&host, &shared, IndexToolName::ListIndexes, json!({})).await,
+        json!("docs")
+    );
+    let removed = call_on(
+        &host,
+        &shared,
+        IndexToolName::RemoveIndex,
+        json!({"index_name": "docs"}),
+    )
+    .await;
+    assert!(
+        removed
+            .as_str()
+            .expect("text")
+            .starts_with("Index 'docs' has been removed"),
+        "{removed}"
+    );
+    assert_eq!(
+        call_on(&host, &shared, IndexToolName::ListIndexes, json!({})).await,
+        json!("No indexed collections")
+    );
+    let searched = call_on(
+        &host,
+        &shared,
+        IndexToolName::SearchIndex,
+        json!({"query": "alpha", "index_name": "docs"}),
+    )
+    .await;
+    assert!(
+        searched.as_str().expect("text").contains("not found"),
+        "a removed index is not searched: {searched}"
+    );
+    assert!(shared.snapshot().entries().is_empty());
+
+    // Main's NotFound (removed or recreated since the freeze) drops the
+    // stale entry too.
+    let removal = harness.removal.as_ref().expect("removal control");
+    removal.answer(Ok(IndexRemovalOutcome::NotFound));
+    let shared = SharedIndexCatalog::new(catalog());
+    let text = call_on(
+        &host,
+        &shared,
+        IndexToolName::RemoveIndex,
+        json!({"index_name": "docs"}),
+    )
+    .await;
+    assert!(
+        text.as_str().expect("text").contains("no longer exists"),
+        "{text}"
+    );
+    assert!(shared.snapshot().entries().is_empty());
+
+    // A refusal keeps the catalog as it was.
+    removal.answer(Ok(IndexRemovalOutcome::Forbidden));
+    let shared = SharedIndexCatalog::new(catalog());
+    call_on(
+        &host,
+        &shared,
+        IndexToolName::RemoveIndex,
+        json!({"index_name": "docs"}),
+    )
+    .await;
+    assert_eq!(shared.snapshot().entries().len(), 1);
+}
+
+/// Review round 2, finding 6: a query is embedded with the EXACT model name
+/// the index was stamped with. Two models that differ only in case and
+/// punctuation have different slugs (the slug carries a hash of the exact
+/// name), and each search names its own index's model to the gateway.
+#[tokio::test]
+async fn the_query_is_embedded_with_each_indexes_exact_model_name() {
+    let embeddings = Arc::new(RecordingEmbeddings {
+        models: Mutex::new(Vec::new()),
+    });
+    let harness = harness_with(
+        None,
+        Arc::clone(&embeddings) as Arc<dyn ModelGatewayTransport>,
+    )
+    .await;
+    let host = host(&harness, &harness.token);
+    let shared = SharedIndexCatalog::new(IndexCatalog::new(vec![
+        IndexCatalogEntry {
+            name: "docs".to_owned(),
+            index_id: NS.to_owned(),
+            embedding_model: "Text-Embedding-3-Small".to_owned(),
+            embedding_dimension: DIMENSION,
+        },
+        IndexCatalogEntry {
+            name: "notes".to_owned(),
+            index_id: OTHER_NS.to_owned(),
+            embedding_model: "text_embedding_3_small".to_owned(),
+            embedding_dimension: DIMENSION,
+        },
+    ]));
+    assert_ne!(
+        super::slug::vector_space_slug("Text-Embedding-3-Small"),
+        super::slug::vector_space_slug("text_embedding_3_small"),
+        "the slug is lossless: distinct model names never share a space"
+    );
+    for index_name in ["docs", "notes"] {
+        call_on(
+            &host,
+            &shared,
+            IndexToolName::SearchIndex,
+            json!({"query": "alpha", "index_name": index_name}),
+        )
+        .await;
+    }
+    assert_eq!(
+        *embeddings.models.lock().expect("models"),
+        ["Text-Embedding-3-Small", "text_embedding_3_small"]
+    );
 }
 
 #[tokio::test]
@@ -804,4 +989,91 @@ async fn the_step_back_model_is_called_without_streaming_so_its_text_is_not_doub
     let text = found.as_str().expect("rendered hits");
     assert!(text.contains("alpha text"), "{text}");
     assert!(!text.starts_with("FAILED"), "{text}");
+}
+
+/// Review round 2, finding 7: the step-back model is bound on the first
+/// step-back call and once; a turn that only lists or searches binds none.
+#[tokio::test]
+async fn the_step_back_model_is_bound_lazily_and_once() {
+    let harness = harness().await;
+    seed(&harness).await;
+    let binds = Arc::new(AtomicUsize::new(0));
+    let model = Arc::new(FramedModel {
+        streamed: AtomicBool::new(false),
+    });
+    let binder = {
+        let binds = Arc::clone(&binds);
+        let model = Arc::clone(&model);
+        Box::new(move || {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(StepbackBinding {
+                model: Arc::clone(&model) as Arc<dyn Llm>,
+                model_name: "chat-model".to_owned(),
+            })
+        })
+    };
+    let host = host_with_lazy_model(
+        &harness,
+        &harness.token,
+        Some(LazyStepbackModel::new(binder)),
+    );
+    call(&host, IndexToolName::ListIndexes, json!({})).await;
+    let found = call(
+        &host,
+        IndexToolName::SearchIndex,
+        json!({"query": "alpha", "index_name": "docs"}),
+    )
+    .await;
+    assert!(found.is_array(), "{found}");
+    assert_eq!(
+        binds.load(Ordering::SeqCst),
+        0,
+        "no step-back call, no binding"
+    );
+    let summary = call(
+        &host,
+        IndexToolName::StepbackSummaryIndex,
+        json!({"query": "alpha", "index_name": "docs"}),
+    )
+    .await;
+    assert_eq!(summary, json!("alpha text"));
+    assert_eq!(binds.load(Ordering::SeqCst), 1);
+    call(
+        &host,
+        IndexToolName::StepbackSearchIndex,
+        json!({"query": "alpha", "index_name": "docs"}),
+    )
+    .await;
+    assert_eq!(binds.load(Ordering::SeqCst), 1, "bound once for the run");
+
+    // A binder that fails leaves the two step-back tools refusing with a
+    // sentence, tried once.
+    let failures = Arc::new(AtomicUsize::new(0));
+    let failing = {
+        let failures = Arc::clone(&failures);
+        Box::new(move || {
+            failures.fetch_add(1, Ordering::SeqCst);
+            Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+        })
+    };
+    let host = host_with_lazy_model(
+        &harness,
+        &harness.token,
+        Some(LazyStepbackModel::new(failing)),
+    );
+    for _ in 0..2 {
+        let text = call(
+            &host,
+            IndexToolName::StepbackSummaryIndex,
+            json!({"query": "alpha", "index_name": "docs"}),
+        )
+        .await;
+        assert!(
+            text.as_str()
+                .expect("text")
+                .contains("needs the agent's chat model"),
+            "{text}"
+        );
+    }
+    assert_eq!(failures.load(Ordering::SeqCst), 1);
 }

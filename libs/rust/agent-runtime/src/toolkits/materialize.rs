@@ -353,6 +353,12 @@ async fn materialize_all(
         // the selection), and an `artifact` toolkit on a path that lends no
         // artifact authority (the family is skipped there; its index tools
         // are not). Without the index toolset both keep their old answer.
+        //
+        // A family half that is REFUSED (an unsupported setting, reported to
+        // the run) or SKIPPED (a selection or family this runtime does not
+        // serve) is left out alone: the toolkit's index tools, which depend
+        // on none of the family's settings, are still served (review round
+        // 2). Without an index toolset such a toolkit is omitted as before.
         let family = if index_toolset.is_some() && index_tools_stand_alone(reference, artifacts)? {
             None
         } else {
@@ -373,10 +379,11 @@ async fn materialize_all(
                         toolkit_type = reference.tool_type(),
                         toolkit_id = reference.tool_id(),
                         reason = setting.reason(),
-                        "agent toolkit configuration asks for a setting this runtime refuses; the toolkit was left out"
+                        index_tools_kept = index_toolset.is_some(),
+                        "agent toolkit configuration asks for a setting this runtime refuses; the toolkit's own tools were left out"
                     );
                     on_refused(reference, setting);
-                    continue;
+                    None
                 }
                 Err(error)
                     if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit =>
@@ -386,9 +393,10 @@ async fn materialize_all(
                         reason_code = "unsupported_toolkit_family",
                         toolkit_type = reference.tool_type(),
                         toolkit_id = reference.tool_id(),
-                        "agent toolkit is unavailable in this runtime and was omitted from the native toolsets"
+                        index_tools_kept = index_toolset.is_some(),
+                        "agent toolkit is unavailable in this runtime and its own tools were omitted from the native toolsets"
                     );
-                    continue;
+                    None
                 }
                 Err(error) => return Err(error),
             }
@@ -479,7 +487,25 @@ fn index_toolset_for(
             return Ok(None);
         }
     };
-    let catalog = IndexCatalog::parse(catalog).map_err(|_| invalid_configuration())?;
+    // A catalog Main froze that this runtime cannot read is a disagreement
+    // between the two freeze rules (both sides apply `indexcatalog`'s entry
+    // rule and its 1024-entry cap), not a configuration the user can fix:
+    // the toolkit's index tools are left out with a warning and the family's
+    // own tools are served (review round 2).
+    let catalog = match IndexCatalog::parse(catalog) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            tracing::warn!(
+                event = "agent_index_tools_unavailable",
+                reason_code = "invalid_catalog",
+                toolkit_type = reference.tool_type(),
+                toolkit_id = reference.tool_id(),
+                error = %error,
+                "the toolkit's frozen index catalog is not readable; its index tools were left out"
+            );
+            return Ok(None);
+        }
+    };
     let settings = reference.settings().ok_or_else(invalid_configuration)?;
     // A toolkit without an id cannot be addressed by Main's index delete
     // flow, which `remove_index` runs through; Main freezes every configured

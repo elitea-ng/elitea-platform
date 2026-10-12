@@ -273,19 +273,11 @@ func newCurrentIndexRuntime(
 		inputs:       inputs,
 	}
 	if rustIndexing {
-		schedules, err := repos.NewCurrentIndexMetaScheduleRepository(pool)
-		if err != nil {
-			return nil, fmt.Errorf("construct current index metadata schedule repository: %w", err)
-		}
-		service, err := indexregistryapp.NewService(
-			toolkits,
-			registry.repo,
-			schedules,
-			registry.vectors,
-			registry.report,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("construct index registry service: %w", err)
+		// The one registry Service of the deployment, which the worker's
+		// remove_index runs through as well (review round 2).
+		service := registry.service
+		if service == nil {
+			return nil, errors.New("current index runtime needs the composed index registry service")
 		}
 		runtime.indexMeta, runtime.indexDelete, runtime.indexConfig, runtime.exact =
 			service, service, service, service
@@ -343,6 +335,11 @@ type indexRegistryComposition struct {
 	// report receives failures that must not fail the user's request, such as a
 	// tombstone that could not be purged.
 	report func(error)
+	// service is THE registry Service of the deployment (review round 2):
+	// the index REST routes, the runtime's index_data path and the worker's
+	// remove_index (the claim remover) all run the same one. Built once by
+	// newIndexRegistryService in the composition root.
+	service *indexregistryapp.Service
 }
 
 func newConfiguredCurrentIndexMetaDeleteService(

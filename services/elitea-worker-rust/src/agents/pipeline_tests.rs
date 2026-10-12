@@ -5127,6 +5127,9 @@ fn a_toolkit_node_calling_an_index_tool_on_a_catalog_toolkit_asks_for_the_claim_
     assert!(!asks("list_indexes", gitlab_toolkit(None)));
     // A family tool on a catalog toolkit needs no claim context.
     assert!(!asks("read_file", gitlab_toolkit(Some(&catalog))));
+    // index_data is an SDK index tool name this worker never serves inline
+    // (review round 2): a node naming it redeems nothing either.
+    assert!(!asks("index_data", gitlab_toolkit(Some(&catalog))));
     // A family outside the I1 set never composes index tools, catalog or not.
     let mut other = gitlab_toolkit(Some(&catalog));
     other["type"] = json!("gitlab_org");

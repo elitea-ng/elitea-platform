@@ -1407,9 +1407,10 @@ type RemoveIndexRequestV1 struct {
 	ToolkitId int64 `protobuf:"varint,4,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
 	// The index name the model asked for, from the frozen catalog.
 	IndexName string `protobuf:"bytes,5,opt,name=index_name,json=indexName,proto3" json:"index_name,omitempty"`
-	// The frozen catalog's registry id of that index: Main refuses a name that
-	// no longer resolves to it (NOT_FOUND), so a recreated index is not
-	// deleted under a stale name.
+	// Required. The frozen catalog's registry id of that index (the worker
+	// names an index from the catalog, so it always has one): Main refuses a
+	// name that no longer resolves to it (NOT_FOUND), so a recreated index is
+	// not deleted under a stale name. A request without it is malformed.
 	IndexId       string `protobuf:"bytes,6,opt,name=index_id,json=indexId,proto3" json:"index_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

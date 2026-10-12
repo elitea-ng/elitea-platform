@@ -38,7 +38,9 @@ use super::session::{
 };
 use super::tool_namespacing::RenamedTool;
 use crate::indexing::IndexIngestRuntime;
-use crate::indexing::tools::{ClaimIndexToolHost, StepbackBinding};
+use crate::indexing::tools::{
+    ClaimIndexToolHost, LazyStepbackModel, StepbackBinder, StepbackBinding,
+};
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
@@ -476,8 +478,10 @@ impl OrdinaryNativeAgentAssembler {
     /// The index tools' authority for this claim, or the reason there is
     /// none: this worker has no vector store, or the claim carries no vector
     /// token (the families then serve no index tools). The step-back model
-    /// is bound on the agent's model; a binding failure leaves the two
-    /// step-back tools refusing with a sentence and the other three working.
+    /// is bound on the agent's model lazily, on the first step-back call
+    /// (review round 2): a turn that selects or calls no step-back tool
+    /// binds no second model. A binding failure leaves the two step-back
+    /// tools refusing with a sentence and the other three working.
     fn index_tool_authority(
         &self,
         runtime_context: &ClaimBoundRuntimeContextAuthority,
@@ -491,55 +495,56 @@ impl OrdinaryNativeAgentAssembler {
         let token = runtime_context
             .vector_token()
             .ok_or(IndexToolsWithheld::NoVectorToken)?;
-        let model = match self.bind_stepback_model(profile, context) {
-            Ok(binding) => Some(binding),
-            Err(error) => {
-                tracing::warn!(
-                    event = "index_tools_stepback_model_unbound",
-                    error = %error,
-                    "the step-back model could not be bound; stepback_search_index and stepback_summary_index will refuse"
-                );
-                None
-            }
-        };
+        let model = LazyStepbackModel::new(self.stepback_model_binder(profile, context));
         Ok(IndexToolAuthority::new(Arc::new(ClaimIndexToolHost::new(
             Arc::clone(runtime),
             token,
             Arc::clone(context),
-            model,
+            Some(model),
             runtime_context.index_removal_binding(),
         ))))
     }
 
     /// A second binding of the agent's model, with no instruction and no
     /// tools, for the step-back prompts: the agent's own binding captures
-    /// its final answer, which a tool's model call must not touch.
-    fn bind_stepback_model(
+    /// its final answer, which a tool's model call must not touch. The
+    /// binder holds only what the binding needs, so it can run after
+    /// assembly, inside the tool call.
+    fn stepback_model_binder(
         &self,
         profile: &super::assembly::OrdinaryNoToolProfile,
-        context: &ClaimScopedEliteaContext,
-    ) -> Result<StepbackBinding, ModelFacadeError> {
-        let invocation = ModelInvocation {
-            response_schema: None,
-            allow_text_continuation: false,
-            context_budget: profile.context_budget(),
-            model_name: profile.model_name().to_owned(),
-            system_instruction: String::new(),
-            max_tokens: profile.max_tokens(),
-            reasoning_effort: None,
-            temperature: profile.temperature(),
-            max_model_turns: profile.step_limit(),
-        };
+        context: &Arc<ClaimScopedEliteaContext>,
+    ) -> StepbackBinder {
+        let facade = Arc::clone(&self.model_facade);
+        let context = Arc::clone(context);
         let adapter = match profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
             OrdinaryModelProvider::NativeAnthropic => ModelAdapterKind::Anthropic,
         };
-        let bound =
-            self.model_facade
-                .bind(adapter, context, profile.model_project_id(), invocation)?;
-        Ok(StepbackBinding {
-            model: bound.adk_model(),
-            model_name: profile.model_name().to_owned(),
+        let model_project_id = profile.model_project_id();
+        let model_name = profile.model_name().to_owned();
+        let context_budget = profile.context_budget();
+        let max_tokens = profile.max_tokens();
+        let temperature = profile.temperature();
+        let max_model_turns = profile.step_limit();
+        Box::new(move || {
+            let invocation = ModelInvocation {
+                response_schema: None,
+                allow_text_continuation: false,
+                context_budget,
+                model_name: model_name.clone(),
+                system_instruction: String::new(),
+                max_tokens,
+                reasoning_effort: None,
+                temperature,
+                max_model_turns,
+            };
+            let bound: Result<BoundModelFacade, ModelFacadeError> =
+                facade.bind(adapter, context.as_ref(), model_project_id, invocation);
+            Ok(StepbackBinding {
+                model: bound?.adk_model(),
+                model_name: model_name.clone(),
+            })
         })
     }
 

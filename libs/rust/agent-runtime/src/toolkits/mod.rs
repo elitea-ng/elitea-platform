@@ -174,7 +174,7 @@ pub use families::artifact::ArtifactToolAuthority;
 pub use families::index_tools::{
     INDEXES_KEY, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,
-    is_index_family, is_sdk_index_tool_name,
+    SharedIndexCatalog, is_index_family, is_sdk_index_tool_name,
 };
 pub use materialize::{
     ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,

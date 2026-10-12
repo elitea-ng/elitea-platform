@@ -2115,17 +2115,19 @@ fn legacy_toolkit_key(value: &str) -> String {
         .collect()
 }
 
-/// Whether a toolkit node of the pipeline calls one of the index tools on a
-/// configured I1 indexing toolkit whose frozen reference carries Main's
-/// catalog (ADR-0030 I1). An LLM node's tools need the claim context anyway,
-/// so only the direct toolkit nodes decide here.
+/// Whether a toolkit node of the pipeline calls one of the five index tools
+/// this worker serves on a configured I1 indexing toolkit whose frozen
+/// reference carries Main's catalog (ADR-0030 I1). An LLM node's tools need
+/// the claim context anyway, so only the direct toolkit nodes decide here.
+/// `index_data` is not served inline (review round 2): a node naming it
+/// redeems nothing.
 pub(super) fn pipeline_calls_index_tool(
     definition: &PipelineDefinition,
     toolsets: &AdmittedToolSnapshot<'_>,
 ) -> bool {
     definition.direct_tool_selections().any(|selection| {
         selection.kind() == DirectToolNodeKind::Toolkit
-            && crate::toolkits::is_sdk_index_tool_name(selection.tool())
+            && elitea_agent_runtime::toolkits::IndexToolName::parse(selection.tool()).is_some()
             && toolsets.iter().any(|reference| {
                 reference.kind() == FrozenToolKind::Configured
                     && reference.toolkit_name() == selection.alias()

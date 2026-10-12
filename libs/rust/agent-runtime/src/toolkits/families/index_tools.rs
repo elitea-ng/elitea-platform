@@ -21,13 +21,20 @@
 //! Python indexing path, and that absence is what tells this runtime the
 //! tools are not its to serve. A present key with no authority (a worker
 //! without a `vector_target`) leaves the tools out with a warning; a present
-//! key that does not parse fails the toolkit as misconfigured.
+//! key that does not parse leaves that toolkit's index tools out with a
+//! warning too (review round 2) — the family's own tools are unaffected,
+//! and Main's freeze applies the same entry rule, so a rejected catalog is
+//! a bug on one side rather than a configuration the user can fix.
+//!
+//! The catalog a run's tools read is one [`SharedIndexCatalog`] per
+//! toolkit: `remove_index` takes the removed index out of it, so a later
+//! `list_indexes` or `search_index` in the same turn does not see it.
 //!
 //! `index_data` is not served here: an index run is admitted through
 //! elitea-main (`index.ingest.v1`), never inline in a turn.
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use adk_core::{Tool, ToolContext};
 use adk_tool::BasicToolset;
@@ -41,9 +48,11 @@ use crate::toolkits::policy::ToolAdmissionPolicy;
 pub const INDEXES_KEY: &str = "indexes";
 /// The SDK's `INDEX_NAME_MAX_LENGTH`.
 const INDEX_NAME_MAX_LENGTH: usize = 32;
-/// The most catalog entries a toolkit may carry (Main's listing is bounded
-/// far below this; a global search covers at most 64 of them).
-const MAX_CATALOG_ENTRIES: usize = 1_024;
+/// The most catalog entries a toolkit may carry: Main caps the catalog it
+/// freezes at the same number (`indexcatalog.MaxEntries`), oldest first,
+/// so a catalog that reaches this runtime always parses. A global search
+/// covers at most 64 of them.
+pub(crate) const MAX_CATALOG_ENTRIES: usize = 1_024;
 const MAX_MODEL_NAME_BYTES: usize = 256;
 const MAX_INDEX_ID_BYTES: usize = 64;
 const MAX_DIMENSION: u64 = 65_536;
@@ -428,6 +437,50 @@ impl IndexCatalog {
     pub fn entries(&self) -> &[IndexCatalogEntry] {
         &self.entries
     }
+
+    /// Takes the index `name` out; whether it was there.
+    fn remove(&mut self, name: &str) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|entry| entry.name != name);
+        self.entries.len() != before
+    }
+}
+
+/// One toolkit's catalog as the run's index tools share it: every tool of
+/// the toolkit reads the same one, and `remove_index` takes a removed index
+/// out of it (review round 2), so the rest of the turn no longer lists or
+/// searches an index Main has tombstoned. A poisoned lock yields its last
+/// state: the catalog holds plain data no panic can leave half-written.
+#[derive(Debug, Default)]
+pub struct SharedIndexCatalog {
+    catalog: RwLock<IndexCatalog>,
+}
+
+impl SharedIndexCatalog {
+    /// Shares `catalog`.
+    #[must_use]
+    pub fn new(catalog: IndexCatalog) -> Self {
+        Self {
+            catalog: RwLock::new(catalog),
+        }
+    }
+
+    /// The catalog as it stands now.
+    #[must_use]
+    pub fn snapshot(&self) -> IndexCatalog {
+        self.catalog
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Takes the index `name` out; whether it was there.
+    pub fn remove(&self, name: &str) -> bool {
+        self.catalog
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name)
+    }
 }
 
 fn bounded_text(
@@ -458,8 +511,8 @@ pub struct IndexToolCall<'a> {
     /// The frozen toolkit's `id`, which Main's index delete flow is
     /// addressed by for `remove_index`.
     pub toolkit_id: u64,
-    /// The toolkit's indexes.
-    pub catalog: &'a IndexCatalog,
+    /// The toolkit's indexes, shared by the toolkit's tools for the run.
+    pub catalog: &'a SharedIndexCatalog,
     /// `code` or `document` (the family's SDK `doctype`).
     pub doctype: &'a str,
     /// The call's arguments, as the model sent them (an object).
@@ -704,7 +757,7 @@ pub fn build_index_toolset(
 ) -> Result<BasicToolset, IndexToolsetError> {
     let selected = selected_tools(settings)?;
     let include = |name: &str| selected.is_empty() || selected.iter().any(|value| value == name);
-    let catalog = Arc::new(catalog);
+    let catalog = Arc::new(SharedIndexCatalog::new(catalog));
     let doctype: Arc<str> = Arc::from(doctype_for(toolkit_type));
     let tools: Vec<Arc<dyn Tool>> = IndexToolName::ALL
         .into_iter()
@@ -732,7 +785,7 @@ pub fn all_index_tools(
     toolkit_type: &str,
     authority: &IndexToolAuthority,
 ) -> Vec<Arc<dyn Tool>> {
-    let catalog = Arc::new(IndexCatalog::default());
+    let catalog = Arc::new(SharedIndexCatalog::default());
     let doctype: Arc<str> = Arc::from(doctype_for(toolkit_type));
     IndexToolName::ALL
         .into_iter()
@@ -803,7 +856,7 @@ struct IndexTool {
     tool: IndexToolName,
     toolkit_id: u64,
     authority: IndexToolAuthority,
-    catalog: Arc<IndexCatalog>,
+    catalog: Arc<SharedIndexCatalog>,
     doctype: Arc<str>,
     description: Box<str>,
 }

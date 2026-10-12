@@ -8,9 +8,15 @@
 //! embeddings route the ingest run also embeds through (the query is
 //! embedded with the model the index was stamped with, by its registry
 //! name), and — for the step-back tools — a chat model bound on the worker's
-//! model path. A host without a model (a direct `toolkit.call_tool.v1` run,
-//! which binds no agent model) refuses the two step-back tools with a
-//! sentence; the other three work there as in a turn.
+//! model path. That model is bound lazily, on the first step-back call
+//! ([`LazyStepbackModel`], review round 2): a turn that only lists or
+//! searches never binds a second model. A host without a model (a direct
+//! `toolkit.call_tool.v1` run, which binds no agent model) refuses the two
+//! step-back tools with a sentence; the other three work there as in a turn.
+//!
+//! The catalog a call reads is the toolkit's [`SharedIndexCatalog`] for the
+//! run: once Main reports an index removed, `remove_index` takes it out, so
+//! the turn's later `list_indexes` and searches no longer see it.
 //!
 //! `remove_index` never touches the vector store from here: elitea-main is
 //! the only writer of the index registry (ADR-0031), so the tool asks Main
@@ -23,13 +29,14 @@
 //! Every failure is a sentence the model reads, never a turn-aborting error.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use adk_rust::futures::StreamExt as _;
 use adk_rust::{Content, FinishReason, Llm, LlmRequest, Part};
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     IndexCatalog as FrozenCatalog, IndexToolCall, IndexToolFailure, IndexToolHost, IndexToolName,
+    SharedIndexCatalog,
 };
 use elitea_vector_index::format::{Doctype, index_not_found_message};
 use elitea_vector_index::{
@@ -43,6 +50,7 @@ use super::slug::vector_space_slug;
 use crate::protocol::control::{IndexRemovalBinding, IndexRemovalOutcome};
 use crate::protocol::vector_token::{VectorClaimToken, VectorSource};
 use crate::transport::embeddings_facade::{EmbeddingsClient, EmbeddingsError};
+use crate::transport::model_facade::ModelFacadeError;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 /// The most bytes a step-back model reply may hold.
@@ -56,12 +64,65 @@ pub(crate) struct StepbackBinding {
     pub(crate) model_name: String,
 }
 
+/// Binds the step-back model when first asked to.
+pub(crate) type StepbackBinder =
+    Box<dyn Fn() -> Result<StepbackBinding, ModelFacadeError> + Send + Sync>;
+
+/// The step-back tools' chat model, bound on the first step-back call of the
+/// run and never for a run that makes none (review round 2). A binding that
+/// fails is logged once; the two step-back tools then refuse with a sentence
+/// for the rest of the run while the other three tools work.
+pub(crate) struct LazyStepbackModel {
+    binder: Option<StepbackBinder>,
+    bound: OnceLock<Option<StepbackBinding>>,
+}
+
+impl LazyStepbackModel {
+    /// A model `binder` binds on first use.
+    #[must_use]
+    pub(crate) fn new(binder: StepbackBinder) -> Self {
+        Self {
+            binder: Some(binder),
+            bound: OnceLock::new(),
+        }
+    }
+
+    /// An already bound model.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn bound(binding: StepbackBinding) -> Self {
+        Self {
+            binder: None,
+            bound: OnceLock::from(Some(binding)),
+        }
+    }
+
+    fn get(&self) -> Option<&StepbackBinding> {
+        self.bound
+            .get_or_init(|| {
+                let binder = self.binder.as_ref()?;
+                match binder() {
+                    Ok(binding) => Some(binding),
+                    Err(error) => {
+                        tracing::warn!(
+                            event = "index_tools_stepback_model_unbound",
+                            error = %error,
+                            "the step-back model could not be bound; stepback_search_index and stepback_summary_index will refuse"
+                        );
+                        None
+                    }
+                }
+            })
+            .as_ref()
+    }
+}
+
 /// An [`IndexToolHost`] for one claim.
 pub(crate) struct ClaimIndexToolHost {
     runtime: Arc<IndexIngestRuntime>,
     token: VectorClaimToken,
     context: Arc<ClaimScopedEliteaContext>,
-    model: Option<StepbackBinding>,
+    model: Option<LazyStepbackModel>,
     /// The claim material `remove_index` addresses Main with.
     removal: IndexRemovalBinding,
 }
@@ -76,7 +137,7 @@ impl ClaimIndexToolHost {
         runtime: Arc<IndexIngestRuntime>,
         token: &VectorClaimToken,
         context: Arc<ClaimScopedEliteaContext>,
-        model: Option<StepbackBinding>,
+        model: Option<LazyStepbackModel>,
         removal: IndexRemovalBinding,
     ) -> Self {
         Self {
@@ -92,10 +153,12 @@ impl ClaimIndexToolHost {
     /// checked against the frozen catalog here, so the model's typo is
     /// answered with the available indexes without a round trip, then Main
     /// runs its delete flow as the run's principal. The vector store is not
-    /// touched from the worker.
+    /// touched from the worker. An index Main reports removed (or already
+    /// gone) is taken out of the run's `shared` catalog.
     async fn remove_index(
         &self,
         toolkit_id: u64,
+        shared: &SharedIndexCatalog,
         catalog: &IndexCatalog,
         index_name: &str,
     ) -> Result<Value, IndexToolFailure> {
@@ -119,14 +182,22 @@ impl ClaimIndexToolHost {
             .removal
             .request(toolkit_id, index_name, &entry.namespace_id);
         match control.remove_index(request).await {
-            Ok(IndexRemovalOutcome::Removed) => Ok(Value::String(format!(
-                "Index '{index_name}' has been removed from the vector store.\nAvailable indexes: {}",
-                catalog.without(index_name).list_indexes()
-            ))),
-            Ok(IndexRemovalOutcome::NotFound) => Err(IndexToolFailure::new(format!(
-                "Index '{index_name}' no longer exists: it was removed or recreated since this conversation started.\nAvailable indexes: {}",
-                catalog.without(index_name).list_indexes()
-            ))),
+            Ok(IndexRemovalOutcome::Removed) => {
+                shared.remove(index_name);
+                Ok(Value::String(format!(
+                    "Index '{index_name}' has been removed from the vector store.\nAvailable indexes: {}",
+                    catalog.without(index_name).list_indexes()
+                )))
+            }
+            Ok(IndexRemovalOutcome::NotFound) => {
+                // Gone or recreated under this name: either way the frozen
+                // entry no longer names a live index.
+                shared.remove(index_name);
+                Err(IndexToolFailure::new(format!(
+                    "Index '{index_name}' no longer exists: it was removed or recreated since this conversation started.\nAvailable indexes: {}",
+                    catalog.without(index_name).list_indexes()
+                )))
+            }
             Ok(IndexRemovalOutcome::Forbidden) => Err(IndexToolFailure::new(format!(
                 "you are not allowed to remove index '{index_name}': the run's user lacks the index delete permission in this project"
             ))),
@@ -182,7 +253,7 @@ impl IndexToolHost for ClaimIndexToolHost {
                 "the vector store is not available to this run: the claim carries no project token for toolkit indexes",
             ));
         }
-        let (catalog, models) = Self::catalog(call.catalog);
+        let (catalog, models) = Self::catalog(&call.catalog.snapshot());
         let session = VectorSession::new(&self.runtime.vector, &self.token);
         let embedder = GatewayQueryEmbedder {
             embeddings: &self.runtime.embeddings,
@@ -201,7 +272,7 @@ impl IndexToolHost for ClaimIndexToolHost {
                     .map_err(|error| failure(&error))
             }
             IndexToolName::StepbackSearchIndex | IndexToolName::StepbackSummaryIndex => {
-                let Some(binding) = self.model.as_ref() else {
+                let Some(binding) = self.model.as_ref().and_then(LazyStepbackModel::get) else {
                     return Err(IndexToolFailure::new(format!(
                         "{} needs the agent's chat model, which this run does not bind; call it from an agent conversation, or use search_index",
                         call.tool.as_str()
@@ -224,7 +295,7 @@ impl IndexToolHost for ClaimIndexToolHost {
                         return Err(IndexToolFailure::new("index_name must be a string"));
                     }
                 };
-                self.remove_index(call.toolkit_id, &catalog, index_name)
+                self.remove_index(call.toolkit_id, call.catalog, &catalog, index_name)
                     .await
             }
         }

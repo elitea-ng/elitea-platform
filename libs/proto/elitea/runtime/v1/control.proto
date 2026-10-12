@@ -224,9 +224,10 @@ message RemoveIndexRequestV1 {
   int64 toolkit_id = 4;
   // The index name the model asked for, from the frozen catalog.
   string index_name = 5;
-  // The frozen catalog's registry id of that index: Main refuses a name that
-  // no longer resolves to it (NOT_FOUND), so a recreated index is not
-  // deleted under a stale name.
+  // Required. The frozen catalog's registry id of that index (the worker
+  // names an index from the catalog, so it always has one): Main refuses a
+  // name that no longer resolves to it (NOT_FOUND), so a recreated index is
+  // not deleted under a stale name. A request without it is malformed.
   string index_id = 6;
   reserved 7 to 15;
 }

@@ -13,7 +13,8 @@ use serde_json::{Map, Value, json};
 use super::families::index_tools::{
     I1_INDEX_FAMILIES, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,
-    all_index_tools, build_index_toolset, doctype_for, is_index_family,
+    MAX_CATALOG_ENTRIES, SharedIndexCatalog, all_index_tools, build_index_toolset, doctype_for,
+    is_index_family,
 };
 use super::materialize::{
     materialize_configured_toolsets_reporting_refusals,
@@ -38,6 +39,7 @@ impl IndexToolHost for RecordingHost {
     async fn call(&self, call: IndexToolCall<'_>) -> Result<Value, IndexToolFailure> {
         let names = call
             .catalog
+            .snapshot()
             .entries()
             .iter()
             .map(|entry| entry.name.clone())
@@ -51,6 +53,11 @@ impl IndexToolHost for RecordingHost {
         ));
         if self.fail {
             return Err(IndexToolFailure::new("the vector store refused the call"));
+        }
+        if call.tool == IndexToolName::RemoveIndex {
+            // What the worker host does once Main reports the index removed.
+            let removed = call.arguments["index_name"].as_str().unwrap_or("docs");
+            call.catalog.remove(removed);
         }
         Ok(match call.tool {
             IndexToolName::ListIndexes => json!("docs,code"),
@@ -245,10 +252,6 @@ fn the_catalog_is_read_strictly() {
     for invalid in [
         json!({}),
         json!([1]),
-        json!([{"name": "", "index_id": "a", "embedding_model": "m", "embedding_dimension": 1}]),
-        json!([{"name": "n", "index_id": "A-UPPER", "embedding_model": "m", "embedding_dimension": 1}]),
-        json!([{"name": "n", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 0}]),
-        json!([{"name": "n", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 70000}]),
         json!([{"name": "n", "index_id": "ab", "embedding_dimension": 3}]),
         json!([
             {"name": "n", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 3},
@@ -257,6 +260,41 @@ fn the_catalog_is_read_strictly() {
     ] {
         assert!(IndexCatalog::parse(&invalid).is_err(), "{invalid}");
     }
+}
+
+/// Review round 2, finding 2: the entry rule is ONE rule, shared with
+/// elitea-main's `indexcatalog.ValidEntry` through the fixture both test
+/// suites read, and the entry cap is Main's cap.
+#[test]
+fn the_catalog_entry_rule_is_the_one_main_freezes_by() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("families/index_catalog_rule_cases.json"))
+            .expect("fixture");
+    assert_eq!(fixture["max_entries"], json!(MAX_CATALOG_ENTRIES));
+    let cases = fixture["cases"].as_array().expect("cases");
+    assert!(cases.len() >= 20, "the fixture lost its cases");
+    for case in cases {
+        let entry = json!([{
+            "name": case["name"],
+            "index_id": case["index_id"],
+            "embedding_model": case["embedding_model"],
+            "embedding_dimension": case["embedding_dimension"],
+        }]);
+        let valid = case["valid"].as_bool().expect("valid");
+        assert_eq!(
+            IndexCatalog::parse(&entry).is_ok(),
+            valid,
+            "{}: {entry}",
+            case["note"]
+        );
+    }
+    // Exactly the cap parses; one more does not.
+    let entry = |n: usize| json!({"name": format!("i{n}"), "index_id": "ab", "embedding_model": "m", "embedding_dimension": 3});
+    let full: Vec<Value> = (0..MAX_CATALOG_ENTRIES).map(entry).collect();
+    assert!(IndexCatalog::parse(&Value::Array(full.clone())).is_ok());
+    let mut over = full;
+    over.push(entry(MAX_CATALOG_ENTRIES));
+    assert!(IndexCatalog::parse(&Value::Array(over)).is_err());
 }
 
 #[tokio::test]
@@ -510,15 +548,150 @@ async fn a_catalog_without_an_authority_leaves_the_index_tools_out() {
     }
 }
 
+/// Review round 2, finding 2: a catalog Main froze that this runtime cannot
+/// read leaves that toolkit's index tools out with a warning; the family's
+/// own tools are served. A non-array `indexes` is still refused at the
+/// snapshot, before any toolkit is built.
 #[tokio::test]
-async fn a_malformed_catalog_fails_the_toolkit_and_a_non_array_is_refused_at_parse() {
+async fn a_malformed_catalog_drops_the_index_tools_and_keeps_the_family() {
     let version = json!({"tools": [github_tool(Some(json!([{"name": "x"}])), &["get_me"])]});
     let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
         .expect("snapshot")
         .apply_policy(policy().as_ref());
-    let (authority, _) = lend(false);
+    let (authority, host) = lend(false);
+    let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    assert_eq!(toolsets.len(), 1);
+    assert_eq!(tool_names(&toolsets).await, ["get_me"]);
+    assert!(host.calls.lock().expect("calls").is_empty());
+    let version = json!({"tools": [github_tool(Some(json!({"docs": 1})), &["get_me"])]});
     assert!(
-        materialize_configured_toolsets_with_authorities(
+        FrozenToolSnapshot::from_version_details(version.as_object().expect("version")).is_err()
+    );
+}
+
+fn gitlab_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
+    let mut tool = json!({
+        "id": 42,
+        "type": "gitlab",
+        "toolkit_name": "release_repository",
+        "settings": {
+            "gitlab_configuration": {
+                "url": "https://gitlab.example.test/",
+                "private_token": "fixture-token"
+            },
+            "repository": "team/project",
+            "branch": "main",
+            "selected_tools": selected,
+            "pgvector_configuration": null
+        }
+    });
+    if let Some(indexes) = indexes {
+        tool["indexes"] = indexes;
+    }
+    tool
+}
+
+fn bitbucket_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
+    let mut tool = json!({
+        "id": 43,
+        "type": "bitbucket",
+        "toolkit_name": "app_repository",
+        "settings": {
+            "bitbucket_configuration": {
+                "url": "https://bitbucket.example.test/ctx/",
+                "username": "bot",
+                "password": "fixture-password"
+            },
+            "project": "PROJ",
+            "repository": "app",
+            "branch": "main",
+            "cloud": null,
+            "selected_tools": selected,
+            "pgvector_configuration": null
+        }
+    });
+    if let Some(indexes) = indexes {
+        tool["indexes"] = indexes;
+    }
+    tool
+}
+
+/// Review round 2, finding 1: a family half that is skipped (a selection
+/// this runtime does not serve) no longer takes the toolkit's index tools
+/// down with it. GitHub's read-only port refuses the SDK's "all tools"
+/// default (an empty `selected_tools`): the five index tools are still
+/// served under the toolkit's name. A GitLab or Bitbucket selection naming
+/// a tool the port does not serve (Bitbucket has no `delete_file`; the
+/// GitLab name is outside its port) is skipped as a family, and
+/// `search_index` beside it is still served. Without an index toolset the
+/// same toolkits are omitted, as before.
+#[tokio::test]
+async fn a_skipped_family_half_keeps_the_toolkits_index_tools() {
+    let (authority, _) = lend(false);
+    // github, SDK default selection: the family is skipped, the index tools stay.
+    let version = json!({"tools": [github_tool(Some(catalog_value()), &[])]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    assert_eq!(toolsets.len(), 1);
+    assert_eq!(toolsets[0].name(), "repo");
+    let mut names = tool_names(&toolsets).await;
+    names.sort_unstable();
+    let mut expected: Vec<&str> = INDEX_TOOL_NAMES.to_vec();
+    expected.sort_unstable();
+    assert_eq!(names, expected);
+    // The same toolkit without a catalog is omitted, as before this stage.
+    let version = json!({"tools": [github_tool(None, &[])]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    assert!(toolsets.is_empty());
+    // gitlab and bitbucket with a tool this runtime does not serve.
+    for (tool, toolkit_name) in [
+        (
+            gitlab_tool(
+                Some(catalog_value()),
+                &["approve_merge_request", "search_index"],
+            ),
+            "release_repository",
+        ),
+        (
+            bitbucket_tool(Some(catalog_value()), &["delete_file", "search_index"]),
+            "app_repository",
+        ),
+    ] {
+        let version = json!({"tools": [tool]});
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                .expect("snapshot")
+                .apply_policy(policy().as_ref());
+        let (toolsets, _) = materialize_configured_toolsets_with_authorities(
             &snapshot,
             &policy(),
             &Map::new(),
@@ -526,11 +699,96 @@ async fn a_malformed_catalog_fails_the_toolkit_and_a_non_array_is_refused_at_par
             IndexToolSupport::Lent(&authority),
         )
         .await
-        .is_err()
+        .expect("materialized");
+        assert_eq!(toolsets.len(), 1, "{toolkit_name}");
+        assert_eq!(toolsets[0].name(), toolkit_name);
+        assert_eq!(
+            tool_names(&toolsets).await,
+            ["search_index"],
+            "{toolkit_name}"
+        );
+    }
+    // Both are omitted entirely without an index toolset.
+    for tool in [
+        gitlab_tool(None, &["approve_merge_request", "search_index"]),
+        bitbucket_tool(None, &["delete_file", "search_index"]),
+    ] {
+        let version = json!({"tools": [tool]});
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                .expect("snapshot")
+                .apply_policy(policy().as_ref());
+        let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+            &snapshot,
+            &policy(),
+            &Map::new(),
+            None,
+            IndexToolSupport::Lent(&authority),
+        )
+        .await
+        .expect("materialized");
+        assert!(toolsets.is_empty());
+    }
+}
+
+/// Review round 2, finding 5: the toolkit's tools share one catalog for the
+/// run, and `remove_index` takes the removed index out of it, so a later
+/// `list_indexes` in the same turn no longer sees it.
+#[tokio::test]
+async fn remove_index_takes_the_index_out_of_the_turns_shared_catalog() {
+    let shared = SharedIndexCatalog::new(IndexCatalog::parse(&catalog_value()).expect("catalog"));
+    assert!(shared.remove("docs"));
+    assert!(!shared.remove("docs"), "already gone");
+    assert_eq!(shared.snapshot().entries().len(), 1);
+    assert_eq!(shared.snapshot().entries()[0].name, "code");
+
+    let (authority, host) = lend(false);
+    let version =
+        json!({"tools": [github_tool(Some(catalog_value()), &["list_indexes", "remove_index"])]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    let context = Arc::new(SimpleToolContext::new("index-tools-test"));
+    let tools = toolsets[0]
+        .tools(Arc::clone(&context) as Arc<dyn ReadonlyContext>)
+        .await
+        .expect("tools");
+    let tool =
+        |name: &str| Arc::clone(tools.iter().find(|tool| tool.name() == name).expect("tool"));
+    for (name, arguments) in [
+        ("list_indexes", json!({})),
+        ("remove_index", json!({"index_name": "docs"})),
+        ("list_indexes", json!({})),
+    ] {
+        tool(name)
+            .execute(
+                Arc::clone(&context) as Arc<dyn adk_core::ToolContext>,
+                arguments,
+            )
+            .await
+            .expect("result");
+    }
+    let recorded = host.calls.lock().expect("calls").clone();
+    assert_eq!(recorded.len(), 3);
+    assert_eq!(recorded[0].3, ["docs", "code"]);
+    assert_eq!(
+        recorded[1].3,
+        ["docs", "code"],
+        "remove_index sees the index it removes"
     );
-    let version = json!({"tools": [github_tool(Some(json!({"docs": 1})), &["get_me"])]});
-    assert!(
-        FrozenToolSnapshot::from_version_details(version.as_object().expect("version")).is_err()
+    assert_eq!(
+        recorded[2].3,
+        ["code"],
+        "the removed index is gone for the rest of the turn"
     );
 }
 

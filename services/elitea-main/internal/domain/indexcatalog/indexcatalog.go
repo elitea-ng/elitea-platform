@@ -18,8 +18,63 @@
 // and the registry can all name the same key and shape.
 package indexcatalog
 
+import (
+	"strings"
+	"unicode"
+)
+
 // Key is the frozen toolkit key that carries the catalog, beside `settings`.
 const Key = "indexes"
+
+// The entry rule the Rust worker's `IndexCatalog::parse` applies, repeated
+// here so that a catalog elitea-main freezes always parses there (review
+// round 2). Both sides are tested against the one fixture
+// libs/rust/agent-runtime/src/toolkits/families/index_catalog_rule_cases.json.
+const (
+	// MaxEntries is the most indexes one toolkit's catalog carries. The
+	// resolver keeps the oldest MaxEntries and logs the truncation.
+	MaxEntries = 1024
+	// MaxNameBytes bounds the index name (the SDK's 32-character limit, times
+	// eight for a multi-byte spelling).
+	MaxNameBytes = 256
+	// MaxIndexIDBytes bounds the registry id (a UUID is 36).
+	MaxIndexIDBytes = 64
+	// MaxModelBytes bounds the embedding model name.
+	MaxModelBytes = 256
+	// MaxDimension bounds the embedding dimension.
+	MaxDimension = 65536
+)
+
+// ValidEntry reports whether an entry of (name, indexID, model, dimension)
+// is one the worker's catalog parser accepts: name and model non-empty after
+// trimming white space, within their byte bounds and free of control
+// characters (Unicode Cc); indexID non-empty, within its bound, lower-case
+// hex digits and '-' only; dimension in 1..=MaxDimension.
+func ValidEntry(name, indexID, model string, dimension int64) bool {
+	return boundedText(name, MaxNameBytes) && boundedText(model, MaxModelBytes) &&
+		validIndexID(indexID) && dimension >= 1 && dimension <= MaxDimension
+}
+
+func boundedText(value string, maxBytes int) bool {
+	if strings.TrimSpace(value) == "" || len(value) > maxBytes {
+		return false
+	}
+	return !strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func validIndexID(value string) bool {
+	if value == "" || len(value) > MaxIndexIDBytes {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		b := value[i]
+		hexDigit := (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f')
+		if b != '-' && !hexDigit {
+			return false
+		}
+	}
+	return true
+}
 
 // Families are the toolkit types whose Rust families carry the index tools in
 // stage I1 (ADR-0030: artifact, github, gitlab, bitbucket, ado_repos). A

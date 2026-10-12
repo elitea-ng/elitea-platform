@@ -24,7 +24,8 @@ type IndexRemover interface {
 
 const (
 	// maxRemoveIndexNameBytes bounds the index name and id the worker names;
-	// the registry's own bound is the same.
+	// the registry's own bound is the same. Both are required: the worker
+	// names an index from the frozen catalog, which carries its id.
 	maxRemoveIndexNameBytes = 4 << 10
 )
 

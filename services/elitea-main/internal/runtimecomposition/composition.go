@@ -400,6 +400,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct index registry: %w", err)
 		}
 		indexRegistry.repo.WithLogger(dependencies.Logger)
+		// THE registry Service: the index routes, the index runtime and the
+		// worker's remove_index all run this one (review round 2).
+		indexRegistry.service, err = newIndexRegistryService(dependencies.AdmissionPool, indexRegistry)
+		if err != nil {
+			return nil, fmt.Errorf("construct index registry service: %w", err)
+		}
 		indexCatalog, err = indexregistryapp.NewCatalogResolver(indexRegistry.repo)
 		if err != nil {
 			return nil, fmt.Errorf("construct index catalog resolver: %w", err)
@@ -1220,7 +1226,6 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var indexRemovals control.IndexRemover
 	if rustIndexing && indexRegistry != nil {
 		remover, removerErr := newClaimIndexRemover(
-			dependencies.AdmissionPool,
 			dependencies.ContentPool,
 			indexRegistry,
 			dependencies.PermissionResolver,

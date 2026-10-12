@@ -292,15 +292,6 @@ func TestClaimRemoverNamesTheFrozenIndexAndReportsTheRegistrysAnswer(t *testing.
 			},
 			disposition: RemovalNotFound,
 		},
-		"no frozen id still deletes by name": {
-			arrange: func(*removeFixture) ClaimRemovalRequest {
-				r := validRemoval()
-				r.IndexID = ""
-				return r
-			},
-			disposition: RemovalRemoved,
-			deleted:     true,
-		},
 		"toolkit the principal cannot see": {
 			arrange: func(f *removeFixture) ClaimRemovalRequest {
 				f.toolkits.found = false
@@ -362,6 +353,7 @@ func TestClaimRemoverRefusesMalformedRequestsAndIncompleteClaims(t *testing.T) {
 	for name, request := range map[string]ClaimRemovalRequest{
 		"no toolkit":   {IndexName: "docs"},
 		"no name":      {ToolkitID: 19},
+		"no id":        {ToolkitID: 19, IndexName: "docs"},
 		"bad id shape": {ToolkitID: 19, IndexName: "docs", IndexID: "not-a-uuid"},
 	} {
 		if _, err := f.remover.RemoveIndex(context.Background(), validClaim(), request); !errors.Is(err, ErrInvalidClaimRemovalRequest) {

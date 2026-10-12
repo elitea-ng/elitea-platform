@@ -21,24 +21,21 @@ import (
 // It exists only under the Rust indexing runtime; the control server's
 // IndexRemovals stays nil otherwise and the RPC answers UNSUPPORTED_CAPABILITY.
 
-// newClaimIndexRemover builds the remover over the same registry, toolkit
-// reader and schedule repository the index routes use, the content
-// repository's claim authorizer (the one the worker's PAT redemption goes
-// through) and the deployment's permission resolver.
+// newClaimIndexRemover builds the remover over THE registry Service the index
+// routes and the runtime's index path run (indexRegistryComposition.service,
+// review round 2), the content repository's claim authorizer (the one the
+// worker's PAT redemption goes through) and the deployment's permission
+// resolver.
 func newClaimIndexRemover(
-	pool *pgxpool.Pool,
 	contentPool *pgxpool.Pool,
 	registry *indexRegistryComposition,
 	permissions auth.PermissionResolver,
 	logger *slog.Logger,
 ) (*indexregistryapp.ClaimRemover, error) {
-	if pool == nil || contentPool == nil || registry == nil || permissions == nil || logger == nil {
+	if contentPool == nil || registry == nil || registry.service == nil || permissions == nil || logger == nil {
 		return nil, errors.New("index removal dependencies are required")
 	}
-	service, err := newIndexRegistryService(pool, registry)
-	if err != nil {
-		return nil, err
-	}
+	service := registry.service
 	content, err := storage.NewPostgresContentRepository(contentPool)
 	if err != nil {
 		return nil, fmt.Errorf("construct index removal claim authorizer: %w", err)
@@ -51,10 +48,14 @@ func newClaimIndexRemover(
 	)
 }
 
-// newIndexRegistryService is the registry Service the index routes are served
-// by in rust mode (newCurrentIndexRuntime builds the same), for a caller that
-// needs it before the index runtime exists.
+// newIndexRegistryService builds the one registry Service of a rust-mode
+// deployment, which the composition root stores in
+// indexRegistryComposition.service for the index routes, the index runtime
+// and the claim remover alike.
 func newIndexRegistryService(pool *pgxpool.Pool, registry *indexRegistryComposition) (*indexregistryapp.Service, error) {
+	if pool == nil || registry == nil || registry.repo == nil {
+		return nil, errors.New("index registry service dependencies are required")
+	}
 	builtInSchemas, err := LoadPinnedCurrentToolkitSchemaSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("load current SDK toolkit schema snapshot: %w", err)
