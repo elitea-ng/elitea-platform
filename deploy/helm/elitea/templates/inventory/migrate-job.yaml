@@ -1,0 +1,77 @@
+{{- if .Values.inventory.enabled }}
+{{- if and (include "elitea-inventory.sidecar" .) .Values.inventory.migrate.enabled }}
+{{- /*
+  The SAME resolution the Deployment's engine does, from the same define. A
+  migration Job that reads a different database URL from the engine migrates a
+  database the engine does not use, successfully, with nothing to report.
+  With the fixture engine and no database secret there is nothing to migrate,
+  and no Job is rendered.
+*/ -}}
+{{- $dbSecrets := fromJson (include "elitea-inventory.databaseSecrets" .) }}
+{{- if hasKey $dbSecrets "ELITEA_INVENTORY_DATABASE_URL" }}
+# The engine's own migrations (ADR-0027): the inventory_graph schema and the
+# pgvector extension, from the engine image whose `migrate` subcommand runs the
+# SQL files the binary embeds, so they are exactly the ones the running engine
+# expects. A JOB, not a startup step: two replicas starting together must not
+# race (it also takes an advisory lock), and elitea-migrate owns the product
+# schema only. Same hook ordering as DeepWiki's.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "elitea-inventory.fullname" . }}-migrate
+  labels:
+    {{- include "elitea-inventory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inventory-migrate
+  annotations:
+    {{- include "elitea.provider.migrateJobAnnotations" . | trim | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.inventory.migrate.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "elitea-inventory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: inventory-migrate
+    spec:
+      restartPolicy: Never
+      {{- with .Values.inventory.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # DELIBERATELY the namespace default ServiceAccount: this Job is a
+      # pre-install hook and the component's ServiceAccount is an ordinary
+      # release object that does not exist yet on a first install (see
+      # templates/deepwiki/migrate-job.yaml). It needs no Kubernetes API access.
+      {{- include "elitea.imagePullSecrets" (dict "local" .Values.inventory.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.inventory.engine.image.repository }}:{{ include "elitea-inventory.engineTag" . }}"
+          imagePullPolicy: {{ .Values.inventory.engine.image.pullPolicy }}
+          {{- with .Values.inventory.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # The image's ENTRYPOINT is the binary; its default CMD (`serve`)
+          # starts the sidecar, so the argument replaces it. It reads only
+          # ELITEA_INVENTORY_DATABASE_URL and exits 0 at the newest migration.
+          args: ["migrate"]
+          env:
+            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $dbSecrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+          resources:
+            {{- toYaml .Values.inventory.migrate.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.inventory.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.inventory.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

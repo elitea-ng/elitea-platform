@@ -109,7 +109,10 @@ func TestOutputRecordCouplesPayloadTypeToTerminalOutcome(t *testing.T) {
 		{name: "validation success", record: validation},
 		{name: "index success", record: indexResult},
 		{name: "index failure", record: withSettlementOutcome(indexResult, executionapp.SettlementFailed)},
-		{name: "cancelled index", record: withSettlementOutcome(indexResult, executionapp.SettlementCancelled), wantErr: true},
+		// A Rust run stopped after it touched the store reports the store and
+		// settles cancelled (ADR-0030 I1); an unknown outcome stays refused.
+		{name: "cancelled index", record: withSettlementOutcome(indexResult, executionapp.SettlementCancelled)},
+		{name: "outcome unknown index", record: withSettlementOutcome(indexResult, executionapp.SettlementOutcomeUnknown), wantErr: true},
 		{name: "runtime failure", record: runtimeFailure},
 		{name: "cancelled runtime failure", record: withSettlementOutcome(runtimeFailure, executionapp.SettlementCancelled)},
 		{name: "cancelled validation", record: withSettlementOutcome(validation, executionapp.SettlementCancelled), wantErr: true},
@@ -242,12 +245,16 @@ func TestInsertOutputInboxReturnsTypedCancellationLinearizationOnlyForExactAutho
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name      string
-		lock      scriptedRow
-		row       []any
-		cancelled bool
+		name                 string
+		lock                 scriptedRow
+		row                  []any
+		cancelled            bool
+		cancelledIndexResult bool
 	}{
 		{name: "exact cancelled authority", lock: scriptedRow{values: []any{"claim-1"}}, row: []any{"", "claim-1", "CANCELLED", false, false, false}, cancelled: true},
+		// An index result a stopped run reported with the store's record IS the
+		// cancellation (ADR-0030 I1): it is not replaced by the canonical one.
+		{name: "cancelled index result under cancelled authority", lock: scriptedRow{values: []any{"claim-1"}}, row: []any{"", "claim-1", "CANCELLED", false, false, false}, cancelledIndexResult: true},
 		{name: "stale authority", lock: scriptedRow{err: pgx.ErrNoRows}},
 		{name: "draining authority", lock: scriptedRow{values: []any{"claim-1"}}, row: []any{"", "claim-1", "DRAINING", false, false, false}},
 		{name: "existing conflict", lock: scriptedRow{values: []any{"claim-1"}}, row: []any{"", "claim-1", "CANCELLED", true, false, false}},
@@ -259,6 +266,11 @@ func TestInsertOutputInboxReturnsTypedCancellationLinearizationOnlyForExactAutho
 				rows = append(rows, scriptedRow{values: test.row})
 			}
 			executor := &scriptedExecutor{rowResults: rows}
+			record := record
+			if test.cancelledIndexResult {
+				record.PayloadType = payloadTypeIndexIngestResult
+				record.SettlementOutcome = executionapp.SettlementCancelled
+			}
 			result, err := insertOutputInbox(context.Background(), executor, record)
 			if err != nil {
 				t.Fatal(err)

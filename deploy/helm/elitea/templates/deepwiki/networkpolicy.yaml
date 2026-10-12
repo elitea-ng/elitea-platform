@@ -1,0 +1,12 @@
+{{- if and .Values.deepwiki.enabled .Values.networkPolicies.enabled }}
+{{- /* The provider ingress policy is shared with the other provider: elitea.netpol.providerIngress (_networkpolicies.tpl). */}}
+{{- include "elitea.netpol.providerIngress" (dict
+      "ctx" .
+      "name" (printf "%s-netpol" (include "elitea-deepwiki.fullname" .))
+      "labels" (include "elitea-deepwiki.labels" .)
+      "selectorLabels" (include "elitea-deepwiki.selectorLabels" .)
+      "title" "DeepWiki"
+      "key" "deepwiki"
+      "grpcPort" (.Values.deepwiki.platformGrpc | default dict).port
+      "platformGrpc" (include "elitea-deepwiki.platformGrpc" .)) }}
+{{- end }}

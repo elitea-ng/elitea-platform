@@ -316,6 +316,44 @@ mod tests {
         Arc::new(ToolAdmissionPolicy::from_runtime_config(&runtime).expect("valid toolkit policy"))
     }
 
+    /// The shipped default (`deploy/runtime/worker-toolkit-security.json`,
+    /// the chart's `worker.runtime.sensitiveTools`): `delete_file` AND the
+    /// indexing families' `remove_index` need a human's approval, under the
+    /// wildcard toolkit so no family's index tools escape it (ADR-0030 I1,
+    /// review round 1).
+    #[test]
+    fn the_shipped_default_marks_remove_index_sensitive_for_every_index_family() {
+        let shipped: Value = serde_json::from_str(include_str!(
+            "../../../../deploy/runtime/worker-toolkit-security.json"
+        ))
+        .expect("the shipped toolkit-security document is JSON");
+        let policy = Arc::new(
+            ToolAdmissionPolicy::from_runtime_config(
+                shipped.as_object().expect("a document object"),
+            )
+            .expect("the shipped document is a valid policy"),
+        );
+        for family in ["artifact", "github", "gitlab", "bitbucket", "ado_repos"] {
+            assert!(
+                policy
+                    .sensitive_tool(family, "kit", "remove_index")
+                    .is_some(),
+                "{family}/remove_index must need approval by default"
+            );
+            assert!(
+                policy
+                    .sensitive_tool(family, "kit", "search_index")
+                    .is_none(),
+                "{family}/search_index is a read and needs none"
+            );
+        }
+        assert!(
+            policy
+                .sensitive_tool("artifact", "files", "delete_file")
+                .is_some()
+        );
+    }
+
     #[test]
     fn absent_guardrails_reuse_fallback_but_explicit_empty_clears_it() {
         let fallback = policy(json!({"sensitive_tools": {"*": ["delete_file"]}}));

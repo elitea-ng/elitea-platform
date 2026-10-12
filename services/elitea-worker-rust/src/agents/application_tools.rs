@@ -52,6 +52,8 @@ use super::pipeline::materialize_saved_pipeline_tool;
 mod materialization;
 #[cfg(test)]
 mod materialization_tests;
+#[cfg(test)]
+mod session_lock_tests;
 mod static_resume;
 use super::application_pipeline::{PipelineStaticToolResume, static_pipeline_tool_pause};
 use super::graph::static_tool_pause::StaticToolDecision;
@@ -4364,15 +4366,19 @@ impl Agent for ApplicationEventStreamingAgent {
             inner: ctx,
             branch: APPLICATION_BRANCH_ROOT.to_owned(),
         });
-        let mut root_events = self.inner.run(root_ctx).await?;
+        // Driven on its own task: yielding a child event must never leave the
+        // root agent parked mid-append holding the root session writer.
+        let mut root_events =
+            crate::agents::driven::DrivenEventStream::new(self.inner.run(root_ctx).await?);
         let applications = self.applications.clone();
         let lineage = self.lineage.clone();
         let stream = async_stream::stream! {
             let mut application_batch = ApplicationCallBatch::default();
+            let mut child_events_open = true;
             loop {
                 tokio::select! {
                     biased;
-                    signal = child_events.recv() => {
+                    signal = child_events.recv(), if child_events_open => {
                         if let Some(signal) = signal {
                             match application_signal_event(signal) {
                                 Ok(event) => yield Ok(event),
@@ -4381,6 +4387,8 @@ impl Agent for ApplicationEventStreamingAgent {
                                     return;
                                 }
                             }
+                        } else {
+                            child_events_open = false;
                         }
                     }
                     event = root_events.next() => {

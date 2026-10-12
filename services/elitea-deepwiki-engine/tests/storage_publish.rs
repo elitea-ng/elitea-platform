@@ -84,8 +84,7 @@ async fn observe(pool: &PgPool, wiki: &str) -> (i64, i64, i64, i64, i64, i64) {
            (SELECT count(*) FROM wiki_nodes WHERE wiki_id = $1) AS nodes, \
            (SELECT count(*) FROM wiki_edges WHERE wiki_id = $1) AS edges, \
            (SELECT count(*) FROM wiki_node_embeddings WHERE wiki_id = $1) AS vectors, \
-           (SELECT coalesce(max(doc_count), -1)::bigint FROM wiki_bm25_meta \
-              WHERE wiki_id = $1 AND branch = 'bm25') AS bm25, \
+           (SELECT count(*) FROM wiki_bm25_docs WHERE wiki_id = $1 AND branch = 'fts') AS fts_docs, \
            (SELECT coalesce(max(doc_count), -1)::bigint FROM wiki_bm25_meta \
               WHERE wiki_id = $1 AND branch = 'fts') AS fts, \
            (SELECT count(*) FROM wiki_nodes WHERE wiki_id = $1 AND symbol_name LIKE 'alpha%') AS alpha",
@@ -98,7 +97,7 @@ async fn observe(pool: &PgPool, wiki: &str) -> (i64, i64, i64, i64, i64, i64) {
         row.get("nodes"),
         row.get("edges"),
         row.get("vectors"),
-        row.get("bm25"),
+        row.get("fts_docs"),
         row.get("fts"),
         row.get("alpha"),
     )
@@ -566,10 +565,11 @@ async fn vectors_round_trip_as_float4() {
 }
 
 /// A whitespace-free run longer than a B-tree key allows (a minified line)
-/// still publishes: it counts in its document's length but gets no
-/// posting. The elitea-platform corpus has a 108 kB one.
+/// still publishes: PostgreSQL's parser drops a word over 2046 bytes from
+/// the `fts` tsvector, so it gets no posting, and the node keeps the
+/// lexemes it does have. The elitea-platform corpus has a 108 kB one.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_huge_token_counts_in_the_length_but_gets_no_posting() {
+async fn a_huge_token_gets_no_posting_and_does_not_fail_the_publish() {
     let Some(pool) = common::fresh_database("publish_huge_token").await else {
         return;
     };
@@ -599,16 +599,18 @@ async fn a_huge_token_counts_in_the_length_but_gets_no_posting() {
             .await
             .expect("node");
     assert_eq!(stored, "%PDF\u{fffd}x");
-    let (length, terms): (i32, i64) = sqlx::query_as(
-        "SELECT (SELECT length FROM wiki_bm25_docs WHERE wiki_id = $1 AND branch = 'bm25' \
+    let (length, longest): (i32, i32) = sqlx::query_as(
+        "SELECT (SELECT length FROM wiki_bm25_docs WHERE wiki_id = $1 AND branch = 'fts' \
                     AND node_id = 'min.js::module'), \
-                (SELECT count(*) FROM wiki_bm25_terms WHERE wiki_id = $1 AND branch = 'bm25')",
+                (SELECT coalesce(max(octet_length(term)), 0)::integer FROM wiki_bm25_terms \
+                  WHERE wiki_id = $1 AND branch = 'fts')",
     )
     .bind(wiki)
     .fetch_one(&pool)
     .await
     .expect("stats");
-    // "min", "var", "a", "=", and the 100 kB token: 5 tokens, 4 postings;
-    // plus the PDF node's one term.
-    assert_eq!((length, terms), (5, 5));
+    // "min", "var" and the other short words still index; the 100 kB token
+    // contributes no lexeme.
+    assert!(length >= 2, "{length}");
+    assert!(longest < 1024, "{longest}");
 }

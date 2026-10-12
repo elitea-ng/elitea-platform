@@ -24,6 +24,19 @@
  */
 import { createFileRoute } from '@tanstack/react-router';
 
+import { TroubleshootEntry } from '@/pages/workspace/desktopEntry';
+
+/**
+ * One exception, desktop build only: `troubleshoot` is the Doctor (README of
+ * apps/elitea-desktop, "Diagnostics"). It rides on this catch-all instead of
+ * a route file of its own so the web build's route tree does not grow;
+ * `TroubleshootEntry` renders nothing outside `desktop`.
+ */
+function SettingsTab(): React.JSX.Element | null {
+  const { tab } = Route.useParams();
+  return tab === 'troubleshoot' ? <TroubleshootEntry /> : null;
+}
+
 export const Route = createFileRoute('/_shell/settings/$tab')({
-  component: () => null,
+  component: SettingsTab,
 });

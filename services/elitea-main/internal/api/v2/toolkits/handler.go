@@ -49,6 +49,11 @@ type Repository interface {
 	GetToolkit(ctx context.Context, projectID, toolkitID string) (map[string]any, error)
 	UpdateToolkit(ctx context.Context, projectID, toolkitID string, body map[string]any) (map[string]any, error)
 	DeleteToolkit(ctx context.Context, projectID, toolkitID string) error
+	// DeleteToolkitRowFirst deletes the toolkit row and, in the same
+	// transaction, lets journal record the engine-side cleanup the row's type
+	// owes (#1244). A row that does not exist is not an error. See
+	// toolkit_data.go.
+	DeleteToolkitRowFirst(ctx context.Context, projectID, toolkitID string, journal ToolkitCleanupJournal) error
 }
 
 // NOTE(#126): a ToolTester interface and a `tester` field stood here, plus
@@ -135,6 +140,10 @@ type Handler struct {
 	// composed.
 	toolRuns  toolkitrun.UseCase
 	discovery discovery.UseCase
+	// toolkitCleanup is the journal in which Delete records, in the row's own
+	// transaction, the engine-side deletion an application's toolkit owes (an
+	// Inventory graph). Nil deletes the row alone. See toolkit_data.go.
+	toolkitCleanup ToolkitCleanupJournal
 }
 
 // WithToolRuns supplies the synchronous tool-run use case. Without it the two
@@ -1498,11 +1507,21 @@ func selectedToolsRelationInsertSQL(schema string, withSelectedTools bool) strin
 	return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools) VALUES ($1, $2, $3, $4, $5::jsonb) ON CONFLICT (entity_version_id, tool_id, entity_type) DO UPDATE SET selected_tools = EXCLUDED.selected_tools, updated_at = now()`, schema)
 }
 
-// Delete removes a toolkit instance.
+// Delete removes a toolkit instance. With a cleanup journal wired the delete is
+// ROW-FIRST: one transaction removes the row and records the engine-side
+// deletion an application's toolkit owes (an Inventory graph), which a
+// reconciler then performs — see toolkit_data.go. The request never waits for
+// or depends on the engine.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	toolkitID := chi.URLParam(r, "toolkitID")
-	if err := h.repo.DeleteToolkit(r.Context(), projectID, toolkitID); err != nil {
+	var err error
+	if h.toolkitCleanup != nil {
+		err = h.repo.DeleteToolkitRowFirst(r.Context(), projectID, toolkitID, h.toolkitCleanup)
+	} else {
+		err = h.repo.DeleteToolkit(r.Context(), projectID, toolkitID)
+	}
+	if err != nil {
 		writeToolkitInternalError(w, r, "delete_toolkit", "failed to delete the toolkit", err)
 		return
 	}

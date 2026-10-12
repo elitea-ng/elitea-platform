@@ -37,6 +37,7 @@ mod tests;
 use super::LanguageParser;
 use super::limits;
 use super::model::{ParseResult, Relationship, RelationshipType, SymbolType};
+use crate::input::Sources;
 use indexmap::IndexMap;
 use rayon::prelude::*;
 use serde_json::{Map, Value};
@@ -55,9 +56,13 @@ impl LanguageParser for RustParser {
         "rust"
     }
 
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: Sources<'_>,
+    ) -> BTreeMap<String, ParseResult> {
         let parse_all =
-            || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f)).collect() };
+            || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f, sources)).collect() };
         let results = match limits::on_worker_pool("Rust", WORKER_STACK, parse_all) {
             Ok(results) => results,
             Err(error) => {
@@ -75,8 +80,8 @@ impl LanguageParser for RustParser {
 /// it. The Rust parser decodes exactly as the Go parser does: invalid bytes
 /// become U+FFFD and newlines are normalised; node text is then the true
 /// UTF-8 slice (`node.text.decode('utf8')`), so non-ASCII text is not shifted.
-fn parse_path(path: &str) -> ParseResult {
-    match super::go::read_python_text(path) {
+fn parse_path(path: &str, sources: Sources<'_>) -> ParseResult {
+    match super::go::read_python_text(path, sources) {
         Ok(source) => limits::with_output_budget(|| visitor::parse_source(path, &source))
             .unwrap_or_else(|error| visitor::failed(path, error)),
         Err(error) => visitor::failed(path, error),

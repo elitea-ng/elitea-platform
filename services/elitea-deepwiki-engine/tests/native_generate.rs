@@ -586,7 +586,13 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     let health = health.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
         serde_json::from_slice::<Value>(&health).unwrap(),
-        json!({"status": "UP", "runner": "native", "active": 0})
+        json!({
+            "status": "UP",
+            "runner": "native",
+            "active": 0,
+            // The tools the engine serves, so the host can tell what it can do.
+            "tools": elitea_deepwiki_engine::runner::ENGINE_TOOLS,
+        })
     );
 
     let mut lines = engine
@@ -786,13 +792,14 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     )
     .await;
     assert!(edges > 0);
+    // One statistics branch ('fts'); the dead 'bm25' branch is not written.
     assert_eq!(
         count(
             &pool,
             "SELECT count(*) FROM wiki_bm25_meta WHERE wiki_id = 'acme--notes-service--main'"
         )
         .await,
-        2
+        1
     );
     assert_eq!(
         count(&pool, "SELECT count(*) FROM deepwiki_build.builds").await,

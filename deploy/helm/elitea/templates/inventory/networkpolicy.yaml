@@ -1,0 +1,12 @@
+{{- if and .Values.inventory.enabled .Values.networkPolicies.enabled }}
+{{- /* The provider ingress policy is shared with the other provider: elitea.netpol.providerIngress (_networkpolicies.tpl). */}}
+{{- include "elitea.netpol.providerIngress" (dict
+      "ctx" .
+      "name" (printf "%s-netpol" (include "elitea-inventory.fullname" .))
+      "labels" (include "elitea-inventory.labels" .)
+      "selectorLabels" (include "elitea-inventory.selectorLabels" .)
+      "title" "Inventory"
+      "key" "inventory"
+      "grpcPort" (.Values.inventory.platformGrpc | default dict).port
+      "platformGrpc" (include "elitea-inventory.platformGrpc" .)) }}
+{{- end }}

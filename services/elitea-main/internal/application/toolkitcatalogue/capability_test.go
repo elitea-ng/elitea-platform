@@ -64,9 +64,9 @@ func TestPythonVerifiedImportKeysMatchTheWorkerLock(t *testing.T) {
 // The Rust list must equal the tool types `materialize.rs` actually dispatches.
 //
 // It reads the DISPATCH, not the directory listing. A family that is complete
-// on disk but reached by no arm (`aha`, today) is skipped at run time like any
-// unsupported type, and a list built from the directory would claim support the
-// runtime does not give.
+// on disk but reached by no arm (as `aha` was before its arm landed) is skipped
+// at run time like any unsupported type, and a list built from the directory
+// would claim support the runtime does not give.
 func TestRustNativeToolTypesMatchTheMaterialiser(t *testing.T) {
 	t.Parallel()
 
@@ -127,10 +127,28 @@ func TestCapabilityVerdicts(t *testing.T) {
 	require.True(t, both.Rust)
 	require.Equal(t, VerdictSupported, both.Verdict)
 
-	pythonOnly := source.ToolkitCapability("jira")
+	// jira was the Python-only example until its partial Rust family landed;
+	// it is carried by both workers now.
+	jira := source.ToolkitCapability("jira")
+	require.True(t, jira.Python)
+	require.True(t, jira.Rust)
+	require.Equal(t, VerdictSupported, jira.Verdict)
+
+	// No pinned catalogue type is Python-only today, so the Python-only row
+	// is exercised on the verdict table with a type the Rust worker genuinely
+	// does not dispatch (pptx): it must still read as supported, by Python.
+	require.False(t, rustNativeTypes()["pptx"], "pptx must stay unsupported on Rust for this case")
+	pythonOnly := capabilityVerdict("pptx", true, rustNativeTypes()["pptx"])
 	require.True(t, pythonOnly.Python)
 	require.False(t, pythonOnly.Rust)
 	require.Equal(t, VerdictSupported, pythonOnly.Verdict)
+	require.NotContains(t, pythonOnly.Reason, "Rust")
+	for _, toolkitType := range CapabilityTypes() {
+		capability := source.ToolkitCapability(toolkitType)
+		if capability.Python && !capability.Rust {
+			require.Equal(t, pythonOnly.Reason, capability.Reason, "%s is Python-only", toolkitType)
+		}
+	}
 
 	rustOnly := source.ToolkitCapability("slack")
 	require.False(t, rustOnly.Python)
@@ -144,14 +162,15 @@ func TestCapabilityVerdicts(t *testing.T) {
 
 	// Every verdict carries a sentence naming the runtime fact behind it. A
 	// bare boolean would send the operator to read Go source.
-	for _, capability := range []Capability{both, pythonOnly, rustOnly, neither} {
+	for _, capability := range []Capability{both, jira, pythonOnly, rustOnly, neither} {
 		require.NotEmpty(t, capability.Reason)
 	}
 	require.Contains(t, neither.Reason, "not verified",
 		"an unverified type must not read as a refusal: it may still work")
 
-	// `aha` is built in the Rust tree and reached by no dispatch arm.
-	require.False(t, source.ToolkitCapability("aha").Rust)
+	// `aha` was built in the Rust tree and reached by no dispatch arm; it is
+	// dispatched now (a partial family without attach_file).
+	require.True(t, source.ToolkitCapability("aha").Rust)
 }
 
 func TestCapabilityTypesIsSortedAndDeduplicated(t *testing.T) {

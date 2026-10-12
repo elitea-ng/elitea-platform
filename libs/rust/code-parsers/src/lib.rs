@@ -21,6 +21,7 @@
 pub mod cpp;
 pub mod csharp;
 pub mod go;
+pub mod input;
 pub mod java;
 pub mod javascript;
 pub mod kotlin;
@@ -32,7 +33,8 @@ pub mod swift;
 pub mod typescript;
 mod visit_support;
 
-pub use limits::{LARGEST_PARSER_STACK, with_pool_failures};
+pub use input::{STOPPED, Sources, Stop};
+pub use limits::{LARGEST_PARSER_STACK, parser_threads, set_parser_threads, with_pool_failures};
 
 use model::ParseResult;
 use std::collections::BTreeMap;
@@ -42,12 +44,24 @@ pub trait LanguageParser: Send + Sync {
     /// The language name the graph uses (`"python"`, `"typescript"`, …).
     fn language(&self) -> &'static str;
 
-    /// Parse every file of this language in the repository.
+    /// Parse every file of this language in the repository, reading each
+    /// from disk.
     ///
     /// `files` are absolute paths in sorted order. A file that cannot be read
     /// or parsed yields a result with `errors` set rather than being dropped,
     /// as the Python parsers do.
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult>;
+    fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
+        self.parse_sources(files, Sources::Disk)
+    }
+
+    /// [`Self::parse_files`] with each file's bytes from `sources`: the
+    /// same decoding and the same result for the same bytes, whoever read
+    /// them ([`input`]).
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: Sources<'_>,
+    ) -> BTreeMap<String, ParseResult>;
 }
 
 /// The parser for `language`, if this engine has one.

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-turn-changes"
+description = "Enables the turn_changes command without any pre-configured scope."
+commands.allow = ["turn_changes"]
+
+[[permission]]
+identifier = "deny-turn-changes"
+description = "Denies the turn_changes command without any pre-configured scope."
+commands.deny = ["turn_changes"]

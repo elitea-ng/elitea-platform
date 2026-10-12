@@ -297,8 +297,11 @@ func (r outputRecord) validate() error {
 			return outputapp.ErrInvalidValidationOutput
 		}
 	case payloadTypeIndexIngestResult:
+		// CANCELLED too: a Rust run stopped after it touched the vector store
+		// reports the store in its summary and settles cancelled (ADR-0030 I1).
 		if r.SettlementOutcome != executionapp.SettlementSucceeded &&
-			r.SettlementOutcome != executionapp.SettlementFailed {
+			r.SettlementOutcome != executionapp.SettlementFailed &&
+			r.SettlementOutcome != executionapp.SettlementCancelled {
 			return outputapp.ErrInvalidValidationOutput
 		}
 	case payloadTypeAgentExecutionResult:
@@ -480,7 +483,13 @@ SELECT COALESCE((SELECT claim_id FROM inserted LIMIT 1), ''),
 	if sequenceRejected {
 		return outputInsertResult{}, outputapp.ErrValidationOutputConflict
 	}
-	cancellationRejected := authorityClaimID != "" && desiredState == string(runtimedomain.DesiredCancelled) && !conflictExists && (record.PayloadType != payloadTypeRuntimeFailure || record.SettlementOutcome != executionapp.SettlementCancelled)
+	// A terminal that is itself a cancellation (a CANCELLED runtime error, or
+	// an index result a stopped run reported with the store's record) is what
+	// a cancel asked for; any other terminal under a cancel is replaced by the
+	// canonical cancellation.
+	isCancellation := record.SettlementOutcome == executionapp.SettlementCancelled &&
+		(record.PayloadType == payloadTypeRuntimeFailure || record.PayloadType == payloadTypeIndexIngestResult)
+	cancellationRejected := authorityClaimID != "" && desiredState == string(runtimedomain.DesiredCancelled) && !conflictExists && !isCancellation
 	deadlineRejected := authorityClaimID != "" && desiredState == string(runtimedomain.DesiredRunning) && deadlineExpired && !conflictExists && !canonicalDeadline
 	return outputInsertResult{CancellationRejected: cancellationRejected, DeadlineRejected: deadlineRejected}, nil
 }

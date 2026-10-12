@@ -33,6 +33,7 @@ mod unparse;
 mod tests;
 
 use super::LanguageParser;
+use super::input::Sources;
 use super::limits;
 use super::model::{ParseResult, Relationship, RelationshipType, SymbolType};
 use rayon::prelude::*;
@@ -48,9 +49,16 @@ impl LanguageParser for PythonParser {
         "python"
     }
 
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: Sources<'_>,
+    ) -> BTreeMap<String, ParseResult> {
         let run = || {
-            let parsed: Vec<Parsed> = files.par_iter().map(|path| parse_path(path)).collect();
+            let parsed: Vec<Parsed> = files
+                .par_iter()
+                .map(|path| parse_path(path, sources))
+                .collect();
             link(files, parsed)
         };
         // Lowering and the visitors recurse once per tree level; files may
@@ -76,8 +84,8 @@ pub(crate) struct Parsed {
 }
 
 /// Read and parse one file as `PythonParser.parse_file`.
-fn parse_path(path: &str) -> Parsed {
-    match read_python_text(path) {
+fn parse_path(path: &str, sources: Sources<'_>) -> Parsed {
+    match read_python_text(path, sources) {
         Ok(source) => {
             limits::with_output_budget(|| parse_source(path, &source)).unwrap_or_else(|error| {
                 Parsed {
@@ -143,14 +151,14 @@ fn failed(path: &str, error: impl Into<String>) -> ParseResult {
 /// (Python quirk: unlike the tree-sitter parsers there is no
 /// `errors='replace'`, so a bad byte fails the file) and universal newlines
 /// (`\r\n` and a lone `\r` become `\n`, which moves byte columns).
-fn read_python_text(path: &str) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| match error.kind() {
+fn read_python_text(path: &str, sources: Sources<'_>) -> Result<String, String> {
+    let bytes = sources.read(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => {
             format!("[Errno 2] No such file or directory: '{path}'")
         }
         _ => error.to_string(),
     })?;
-    let text = match String::from_utf8(bytes) {
+    let text = match String::from_utf8(bytes.into_owned()) {
         Ok(text) => text,
         Err(error) => {
             let utf8 = error.utf8_error();

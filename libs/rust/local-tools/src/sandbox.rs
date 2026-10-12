@@ -3,8 +3,8 @@
 //! | OS | Mechanism | Reported enforcement |
 //! |---|---|---|
 //! | macOS | Seatbelt: `/usr/bin/sandbox-exec -p <profile>` with a profile generated per command ([`seatbelt`]) | `full`: writes confined, `.git` read-only, credentials and `path_deny` unreadable, network denied (loopback included) |
-//! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked; the walk is cached per session until a write | `full`; `partial` past 20 000 directories, where commands that may write are **refused** unless the host sets [`SandboxConfig::allow_partial`] |
-//! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/`, has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`] |
+//! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked; the walk is cached per session until a write | `full`; `partial` past 20 000 directories (`path_deny` matches and `.git` entries past the cap are not masked: the result carries [`BWRAP_TRUNCATED_GAPS`] and the session asks for the command), where commands that may write are **refused** unless the host sets [`SandboxConfig::allow_partial`]. A host-given `bwrap` path is probed like the well-known ones |
+//! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/` (so **credentials, the desktop app's data and `path_deny` files are not hidden**), has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`]; when it does, every such command is asked ([`Prepared::hides_denied`] is false) and each result carries [`LANDLOCK_GAPS`] |
 //! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
 //!
 //! What every confined command gets, whatever the mode:
@@ -13,11 +13,17 @@
 //!   [`SandboxRequest::git_roots`]: hooks, config, `commondir`, the object
 //!   store and the refs are where code and checkpoints live, and the host
 //!   runs git there.
-//! * **Credentials are unreadable**: [`credential_paths`] (SSH, cloud, git
-//!   and browser credentials, the keychains), the host's own data
-//!   directory, and the workspace's `path_deny` files. Metadata stays
-//!   visible (`ls`, `git status` work); contents do not. The keychain's mach
-//!   services are not reachable unless the host allows it.
+//! * **The session's deny list is unreadable** ([`crate::deny::DenyList`]):
+//!   [`credential_paths`] (SSH, cloud, git and browser credentials, the
+//!   keychains), the host app's own data (the directories it resolved, and
+//!   those under its identifier: the stored sign-in, other workspaces'
+//!   history, checkpoints and indexes), the session's data directory, and
+//!   the workspace's `path_deny` files. Metadata stays visible (`ls` of the
+//!   parent, `git status`); contents do not. A writable root inside a denied
+//!   directory (the session's temporary directory) is opened again. The
+//!   keychain's mach services are not reachable unless the host allows it.
+//!   Where the sandbox chosen for a command cannot hide them
+//!   ([`Prepared::hides_denied`]), the session asks for that command.
 //! * **No listening sockets** when the network is allowed, unless the host
 //!   allows it.
 //!
@@ -55,6 +61,19 @@ impl Enforcement {
         }
     }
 }
+
+/// What a Landlock-only result says it does not enforce: the reason such a
+/// command is asked ([`Prepared::hides_denied`] is false).
+pub const LANDLOCK_GAPS: &str = "Landlock only (no bubblewrap): credentials, the desktop app's \
+     data (stored sign-in, history, other workspaces) and path_deny files are NOT hidden from \
+     this command; .git is not read-only under the workspace; UDP and pathname sockets are not \
+     blocked";
+
+/// What a bubblewrap result says when its walk stopped at
+/// [`bubblewrap::MAX_WALK_DIRS`]: the reason such a command is asked.
+pub const BWRAP_TRUNCATED_GAPS: &str = "the workspace has more directories than the sandbox \
+     walks: path_deny files and .git entries past the walk's cap are NOT hidden or protected \
+     from this command";
 
 /// What one command may do.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -103,10 +122,14 @@ impl SandboxRequest {
     }
 }
 
-/// Credentials a command never needs to read: SSH and GPG keys, cloud and
-/// container credentials, git credentials, the keychains, browser profiles
-/// (cookies and saved passwords), and Elitea's own configuration. Caches
-/// and toolchains (`~/.cargo`, `~/.npm`, `~/.rustup`) stay readable.
+/// Credentials a command never needs to read, under `home` (as given; the
+/// [`crate::deny::DenyList`] adds the resolved spellings): SSH and GPG
+/// keys, cloud and container credentials, git credentials, the keychains,
+/// browser profiles (cookies and saved passwords) and Elitea's own CLI
+/// configuration. Caches and toolchains (`~/.cargo`, `~/.npm`,
+/// `~/.rustup`) stay readable. A host app's own directories are not here:
+/// the host names them ([`crate::deny::app_paths`] from its identifier,
+/// and the directories it resolved).
 #[must_use]
 pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
     const RELATIVE: &[&str] = &[
@@ -147,7 +170,6 @@ pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
         "Library/Application Support/com.operasoftware.Opera",
         "Library/Application Support/elitea*",
     ];
-    let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
     RELATIVE
         .iter()
         .map(|relative| home.join(relative))
@@ -186,6 +208,15 @@ pub struct Prepared {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub enforcement: Enforcement,
+    /// What the enforcement leaves out, when it is not obvious from the
+    /// level ([`LANDLOCK_GAPS`], [`BWRAP_TRUNCATED_GAPS`]).
+    pub note: Option<&'static str>,
+    /// Whether the sandbox chosen for this command hides everything the
+    /// request denies ([`SandboxRequest::deny_paths`] and `path_deny`). When
+    /// it does not (no sandbox, Landlock alone, a bubblewrap walk cut at its
+    /// cap), the command is not fully confined: the session asks for it
+    /// every time.
+    pub hides_denied: bool,
 }
 
 fn unwrapped(argv: &[String], enforcement: Enforcement) -> ToolResult<Prepared> {
@@ -196,6 +227,8 @@ fn unwrapped(argv: &[String], enforcement: Enforcement) -> ToolResult<Prepared> 
         program: PathBuf::from(program),
         args: rest.to_vec(),
         enforcement,
+        note: None,
+        hides_denied: false,
     })
 }
 
@@ -255,6 +288,8 @@ fn platform_prepare(
         program: PathBuf::from(SANDBOX_EXEC),
         args: wrapped,
         enforcement: Enforcement::Full,
+        note: None,
+        hides_denied: true,
     }))
 }
 
@@ -266,12 +301,7 @@ fn platform_prepare(
 ) -> ToolResult<Option<Prepared>> {
     if let Some(bwrap) = bubblewrap::usable(config) {
         let masks = config.masks.discover(request);
-        let enforcement = bubblewrap::enforcement(request, &masks, config)?;
-        return Ok(Some(Prepared {
-            program: bwrap,
-            args: bubblewrap::args(request, &masks, argv),
-            enforcement,
-        }));
+        return bubblewrap::prepared(bwrap, request, &masks, config, argv).map(Some);
     }
     let Some(helper) = &config.linux_helper else {
         return Ok(None);
@@ -280,13 +310,16 @@ fn platform_prepare(
         return Err(ToolError::new(
             ErrorCode::SandboxUnavailable,
             "only Landlock is available here, which cannot keep .git read-only, hide \
-             credentials or block UDP; install bubblewrap (bwrap) or allow partial enforcement",
+             credentials and the desktop app's data, or block UDP; install bubblewrap (bwrap) \
+             or allow partial enforcement",
         ));
     }
     Ok(Some(Prepared {
         program: helper.clone(),
         args: landlock::helper_args(request, argv)?,
         enforcement: Enforcement::Partial,
+        note: Some(LANDLOCK_GAPS),
+        hides_denied: false,
     }))
 }
 
@@ -773,6 +806,30 @@ pub mod bubblewrap {
         Ok(Enforcement::Partial)
     }
 
+    /// The command `argv` under bubblewrap `program` for `request`: full
+    /// when the walk was complete; partial, not hiding everything denied
+    /// and saying why, when it stopped at its cap.
+    ///
+    /// # Errors
+    ///
+    /// As [`enforcement`].
+    pub fn prepared(
+        program: PathBuf,
+        request: &SandboxRequest,
+        masks: &Masks,
+        config: &SandboxConfig,
+        argv: &[String],
+    ) -> ToolResult<super::Prepared> {
+        let enforcement = enforcement(request, masks, config)?;
+        Ok(super::Prepared {
+            program,
+            args: args(request, masks, argv),
+            enforcement,
+            note: masks.truncated.then_some(super::BWRAP_TRUNCATED_GAPS),
+            hides_denied: !masks.truncated,
+        })
+    }
+
     /// One session's last walk, reused until a write (the session calls
     /// [`MaskCache::invalidate`] after every change and command that may
     /// write), [`MASK_CACHE_TTL`], or a different request.
@@ -1053,44 +1110,62 @@ pub mod bubblewrap {
         out
     }
 
-    /// The `bwrap` to use, if it works here (probed once: unprivileged user
-    /// namespaces can be off).
-    #[cfg(target_os = "linux")]
+    /// Whether `bwrap` at `path` runs a confined `/bin/true` on this
+    /// kernel (unprivileged user namespaces can be off).
+    fn probe(path: &Path) -> bool {
+        path.is_file()
+            && std::process::Command::new(path)
+                .args([
+                    "--die-with-parent",
+                    "--unshare-pid",
+                    "--unshare-net",
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--",
+                    "/bin/true",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+    }
+
+    /// The `bwrap` to use, if it works here: the host's
+    /// [`SandboxConfig::bubblewrap`] or the first well-known one, probed the
+    /// same way either way (once per path).
     #[must_use]
     pub fn usable(config: &super::SandboxConfig) -> Option<PathBuf> {
+        use std::collections::HashMap;
         use std::sync::OnceLock;
         static FOUND: OnceLock<Option<PathBuf>> = OnceLock::new();
+        static EXPLICIT: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
         if let Some(explicit) = &config.bubblewrap {
-            return Some(explicit.clone());
+            let probed = EXPLICIT.get_or_init(Mutex::default);
+            let works = probed
+                .lock()
+                .ok()
+                .and_then(|known| known.get(explicit).copied());
+            let works = works.unwrap_or_else(|| {
+                let works = probe(explicit);
+                if let Ok(mut known) = probed.lock() {
+                    known.insert(explicit.clone(), works);
+                }
+                works
+            });
+            return works.then(|| explicit.clone());
         }
         FOUND
             .get_or_init(|| {
                 ["/usr/bin/bwrap", "/usr/local/bin/bwrap", "/bin/bwrap"]
                     .iter()
                     .map(PathBuf::from)
-                    .filter(|path| path.is_file())
-                    .find(|path| {
-                        std::process::Command::new(path)
-                            .args([
-                                "--die-with-parent",
-                                "--unshare-pid",
-                                "--unshare-net",
-                                "--ro-bind",
-                                "/",
-                                "/",
-                                "--dev",
-                                "/dev",
-                                "--proc",
-                                "/proc",
-                                "--",
-                                "/bin/true",
-                            ])
-                            .stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .is_ok_and(|status| status.success())
-                    })
+                    .find(|path| probe(path))
             })
             .clone()
     }
@@ -1311,6 +1386,71 @@ mod tests {
             ..req.clone()
         };
         assert!(seatbelt::profile(&full).0.contains("GIT_ROOT_0"));
+    }
+
+    /// The library names no app: a host's own directories come from the
+    /// host ([`crate::deny::app_paths`] and the directories it resolved).
+    #[test]
+    fn credential_paths_name_no_host_app() {
+        let home = Path::new("/nonexistent-home/me");
+        assert!(
+            credential_paths(home)
+                .iter()
+                .all(|path| !path.to_string_lossy().contains("ai.elitea")),
+            "no bundle identifier in the shared list"
+        );
+    }
+
+    /// A bubblewrap walk cut at its cap is partial: `path_deny` matches
+    /// past it are not masked, so the command does not count as hiding what
+    /// it denies (the session asks for it), and the result says why.
+    #[test]
+    fn a_truncated_bubblewrap_walk_does_not_hide_denied_paths() {
+        let dir = tempfile::tempdir().expect("dir");
+        let ws = std::fs::canonicalize(dir.path()).expect("canonical");
+        for index in 0..8 {
+            std::fs::create_dir_all(ws.join(format!("d{index}/e"))).expect("dirs");
+        }
+        let request = SandboxRequest {
+            writable_roots: vec![ws.clone()],
+            git_roots: vec![ws.clone()],
+            deny_root: Some(ws.clone()),
+            ..SandboxRequest::new(SandboxMode::ReadOnly, false)
+        };
+        let config = SandboxConfig::default();
+        let argv = ["true".to_owned()];
+        let complete = super::bubblewrap::Masks::discover(&request);
+        let full = super::bubblewrap::prepared("/b".into(), &request, &complete, &config, &argv)
+            .expect("full");
+        assert_eq!(full.enforcement, Enforcement::Full);
+        assert!(full.hides_denied);
+        assert_eq!(full.note, None);
+        let capped = super::bubblewrap::Masks::discover_with_limit(&request, 3);
+        let partial = super::bubblewrap::prepared("/b".into(), &request, &capped, &config, &argv)
+            .expect("partial");
+        assert_eq!(partial.enforcement, Enforcement::Partial);
+        assert!(!partial.hides_denied, "asked, not run as confined");
+        assert_eq!(partial.note, Some(super::BWRAP_TRUNCATED_GAPS));
+    }
+
+    /// A host-given `bwrap` is probed like the well-known ones: one that
+    /// cannot run a confined command is not used.
+    #[test]
+    fn an_explicit_bubblewrap_path_is_probed() {
+        let config = |path: &str| SandboxConfig {
+            bubblewrap: Some(PathBuf::from(path)),
+            ..SandboxConfig::default()
+        };
+        assert_eq!(
+            super::bubblewrap::usable(&config("/nonexistent/bwrap")),
+            None
+        );
+        assert_eq!(super::bubblewrap::usable(&config("/usr/bin/false")), None);
+        assert_eq!(
+            super::bubblewrap::usable(&config("/usr/bin/true")),
+            Some(PathBuf::from("/usr/bin/true")),
+            "a stand-in that succeeds passes the probe"
+        );
     }
 
     #[test]
@@ -1585,12 +1725,14 @@ mod tests {
             allow_partial: true,
             ..config
         };
+        let prepared = prepare(&req, &argv, &allowed).expect("partial allowed");
+        assert_eq!(prepared.enforcement, Enforcement::Partial);
         assert_eq!(
-            prepare(&req, &argv, &allowed)
-                .expect("partial allowed")
-                .enforcement,
-            Enforcement::Partial
+            prepared.note,
+            Some(super::LANDLOCK_GAPS),
+            "the result says what is not hidden"
         );
+        assert!(!prepared.hides_denied, "asked, not run as confined");
     }
 
     #[test]

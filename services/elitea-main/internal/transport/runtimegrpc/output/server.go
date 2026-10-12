@@ -410,10 +410,7 @@ func (s *Server) indexIngestFrame(message *runtimev1.ExecutionOutputFrameV1, wor
 	if err != nil {
 		return outputapp.IndexIngestFrame{}, err
 	}
-	expectedOutcome := executionapp.SettlementSucceeded
-	if result.ResultSummary.Status == outputapp.IndexIngestStatusError {
-		expectedOutcome = executionapp.SettlementFailed
-	}
+	expectedOutcome := result.ResultSummary.SettlementOutcome()
 	settlement, encodedSettlement, err := s.settlementProposalDomain(message, fence, encodedResult, expectedOutcome)
 	if err != nil {
 		return outputapp.IndexIngestFrame{}, err
@@ -761,11 +758,15 @@ func indexIngestResultDomain(result *runtimev1.IndexIngestResultV1) (outputapp.I
 		}
 	}
 	resultSummary := outputapp.IndexIngestSummary{}
+	var documents []outputapp.IndexIngestDocument
+	var removedDocumentKeys []string
+	documentsTruncated := false
 	if result.GetResultSummary() != nil {
 		resultSummary, err = indexIngestSummaryDomain(result.GetResultSummary())
 		if err != nil {
 			return outputapp.IndexIngestResult{}, err
 		}
+		documents, removedDocumentKeys, documentsTruncated = indexIngestDocumentsDomain(result.GetResultSummary())
 	}
 
 	mapped := outputapp.IndexIngestResult{
@@ -779,13 +780,38 @@ func indexIngestResultDomain(result *runtimev1.IndexIngestResultV1) (outputapp.I
 			MCPTokens:            mcpTokens,
 			EmbeddingBinding:     embeddingBinding,
 		},
-		ResultArtifact: artifact,
-		ResultSummary:  resultSummary,
+		ResultArtifact:      artifact,
+		ResultSummary:       resultSummary,
+		Documents:           documents,
+		RemovedDocumentKeys: removedDocumentKeys,
+		DocumentsTruncated:  documentsTruncated,
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.IndexIngestResult{}, err
 	}
 	return mapped, nil
+}
+
+// indexIngestDocumentsDomain copies the per-document lists of a typed (Rust)
+// summary onto the result; IndexIngestResult.Validate bounds them. A nil
+// document entry is kept as a zero value, which validation refuses (empty key).
+func indexIngestDocumentsDomain(summary *runtimev1.IndexIngestSummaryV1) ([]outputapp.IndexIngestDocument, []string, bool) {
+	var documents []outputapp.IndexIngestDocument
+	if wire := summary.GetDocuments(); len(wire) != 0 {
+		documents = make([]outputapp.IndexIngestDocument, 0, len(wire))
+		for _, document := range wire {
+			documents = append(documents, outputapp.IndexIngestDocument{
+				Key:        document.GetDocumentKey(),
+				Version:    document.GetVersion(),
+				ChunkCount: document.GetChunkCount(),
+			})
+		}
+	}
+	var removed []string
+	if wire := summary.GetRemovedDocumentKeys(); len(wire) != 0 {
+		removed = append([]string(nil), wire...)
+	}
+	return documents, removed, summary.GetDocumentsTruncated()
 }
 
 func agentExecutionResultDomain(result *runtimev1.AgentExecutionResultV1) (outputapp.AgentExecutionResult, error) {
@@ -932,17 +958,42 @@ func indexIngestSummaryDomain(summary *runtimev1.IndexIngestSummaryV1) (outputap
 		terminalState = outputapp.IndexIngestTerminalFailed
 	case runtimev1.IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED:
 		terminalState = outputapp.IndexIngestTerminalPartlyIndexed
+	case runtimev1.IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED:
+		terminalState = outputapp.IndexIngestTerminalCancelled
 	default:
 		return outputapp.IndexIngestSummary{}, outputapp.ErrInvalidIndexIngestOutput
 	}
+	skipped := make(map[string]uint64, len(summary.GetSkipped()))
+	for reason, count := range summary.GetSkipped() {
+		skipped[reason] = count
+	}
+	skippedJSON, err := outputapp.NewIndexSkipped(skipped)
+	if err != nil {
+		return outputapp.IndexIngestSummary{}, err
+	}
+	// The totals are optional fields set together or not at all; their
+	// presence is what the registry acts on, so half a pair is malformed.
+	if (summary.TotalDocuments == nil) != (summary.TotalChunks == nil) {
+		return outputapp.IndexIngestSummary{}, outputapp.ErrInvalidIndexIngestOutput
+	}
 	mapped := outputapp.IndexIngestSummary{
-		Status:         status,
-		Message:        summary.GetMessage(),
-		TerminalState:  terminalState,
-		Indexed:        summary.GetIndexed(),
-		Updated:        summary.GetUpdated(),
-		ReindexPresent: summary.Reindex != nil,
-		Reindex:        summary.GetReindex(),
+		Status:             status,
+		Message:            summary.GetMessage(),
+		TerminalState:      terminalState,
+		Indexed:            summary.GetIndexed(),
+		Updated:            summary.GetUpdated(),
+		ReindexPresent:     summary.Reindex != nil,
+		Reindex:            summary.GetReindex(),
+		IndexedDocuments:   summary.GetIndexedDocuments(),
+		IndexedChunks:      summary.GetIndexedChunks(),
+		FailedChunks:       summary.GetFailedChunks(),
+		SkippedJSON:        skippedJSON,
+		EmbeddingModel:     summary.GetEmbeddingModel(),
+		EmbeddingDimension: summary.GetEmbeddingDimension(),
+		TotalsPresent:      summary.TotalDocuments != nil,
+		TotalDocuments:     summary.GetTotalDocuments(),
+		TotalChunks:        summary.GetTotalChunks(),
+		WholeIndexRecord:   summary.GetWholeIndexRecord(),
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.IndexIngestSummary{}, err
@@ -1174,6 +1225,10 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "MODEL_UNAVAILABLE", SafeMessage: "The model service could not be reached or is temporarily unavailable. Try again; ask an administrator to check the connection if it persists.", Retryable: true}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE:
 		return runtimeFailurePolicy{Code: "MODEL_PROVIDER_FAILURE", SafeMessage: "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.", Retryable: true}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESULT_REFUSED:
+		// The platform refused the worker's typed result (index registry,
+		// ADR-0030 I1); the worker then settles the run failed with this code.
+		return runtimeFailurePolicy{Code: "RESULT_REFUSED", SafeMessage: "The index result was refused by the platform.", Retryable: false}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL:
 		return runtimeFailurePolicy{Code: "INTERNAL", SafeMessage: "The runtime operation failed."}, true
 	default:
@@ -1223,6 +1278,20 @@ func hasUnknown(message protoreflect.Message) bool {
 	}
 	found := false
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		if field.IsMap() {
+			// A map field reports MessageKind (its entry type) but its value
+			// is a Map, and value.Message() panics on it. No map field of
+			// this protocol holds a message value, so there is nothing
+			// further to inspect; one that does is walked here.
+			if field.MapValue().Kind() != protoreflect.MessageKind {
+				return true
+			}
+			value.Map().Range(func(_ protoreflect.MapKey, entry protoreflect.Value) bool {
+				found = hasUnknown(entry.Message())
+				return !found
+			})
+			return !found
+		}
 		if field.Kind() != protoreflect.MessageKind {
 			return true
 		}
@@ -1254,6 +1323,8 @@ func safeOutputError(err error) (runtimev1.RuntimeErrorCodeV1, string, bool) {
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The output does not match the admitted validation input.", false
 	case errors.Is(err, outputapp.ErrIndexIngestBindingMismatch):
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The output does not match the admitted index input.", false
+	case errors.Is(err, outputapp.ErrIndexResultRefused):
+		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESULT_REFUSED, "The index result was refused: it names another embedding space than the index is stamped with, or carries no typed summary.", false
 	case errors.Is(err, outputapp.ErrAgentExecutionBindingMismatch):
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The output does not match the admitted agent input.", false
 	case errors.Is(err, outputapp.ErrAgentExecutionResultMismatch):

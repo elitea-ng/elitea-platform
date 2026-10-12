@@ -1,5 +1,5 @@
 //! The socket's tool table against the descriptor the Go host serves
-//! (`descriptor/legacy-v1`, byte-pinned in the host): a tool cannot be served
+//! (`descriptor/legacy-v2`, byte-pinned in the host): a tool cannot be served
 //! and unadvertised, and an advertised tool is either served or one of the
 //! deliberate exceptions below.
 
@@ -31,7 +31,7 @@ fn every_advertised_tool_is_served_or_a_named_exception() {
         "fixtures",
         "inventory",
         "descriptor",
-        "legacy-v1",
+        "legacy-v2",
         "provider_descriptor.json",
     ]);
     let descriptor: Value = serde_json::from_str(

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-sign-in-cancel"
+description = "Enables the host_sign_in_cancel command without any pre-configured scope."
+commands.allow = ["host_sign_in_cancel"]
+
+[[permission]]
+identifier = "deny-host-sign-in-cancel"
+description = "Denies the host_sign_in_cancel command without any pre-configured scope."
+commands.deny = ["host_sign_in_cancel"]

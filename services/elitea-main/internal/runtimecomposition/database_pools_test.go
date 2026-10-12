@@ -15,7 +15,8 @@ func TestPhaseOneDatabasePoolLimitsArePositiveAndBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	if limits.AdmissionPublisher != 10 || limits.Control != 8 || limits.Output != 8 ||
-		limits.Replay != 4 || limits.TerminalEffects != 2 || limits.Content != 4 {
+		limits.Replay != 4 || limits.TerminalEffects != 2 || limits.Content != 4 ||
+		limits.VectorIntrospection != 8 {
 		t.Fatalf("unexpected phase-one database profile: %+v", limits)
 	}
 }
@@ -38,11 +39,13 @@ func TestDatabasePoolLimitsFromEnvAppliesMixedDeploymentBudget(t *testing.T) {
 		"ELITEA_RUNTIME_DB_REPLAY_MAX_CONNS":    "1",
 		"ELITEA_RUNTIME_DB_TERMINAL_MAX_CONNS":  "1",
 		"ELITEA_RUNTIME_DB_CONTENT_MAX_CONNS":   "1",
+
+		"ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS": "5",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := DatabasePoolLimits{3, 2, 2, 1, 1, 1}
+	want := DatabasePoolLimits{3, 2, 2, 1, 1, 1, 5}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("limits = %+v, want %+v", got, want)
 	}
@@ -99,4 +102,31 @@ func TestRuntimeDependenciesRejectSharedDatabaseCapacity(t *testing.T) {
 		}
 	}
 	dependencies.TerminalEffectsPool = isolatedTerminalEffects
+}
+
+// The introspection pool is optional, but when composed it is its own pool:
+// never the control pool (nor any other).
+func TestRuntimeDependenciesRejectAnIntrospectionPoolThatSharesCapacity(t *testing.T) {
+	control := new(pgxpool.Pool)
+	dependencies := Dependencies{
+		AdmissionPool:       new(pgxpool.Pool),
+		ControlPool:         control,
+		OutputPool:          new(pgxpool.Pool),
+		ReplayPool:          new(pgxpool.Pool),
+		TerminalEffectsPool: new(pgxpool.Pool),
+		ContentPool:         new(pgxpool.Pool),
+		PermissionResolver:  &authorizationPermissionResolver{},
+		Logger:              slog.Default(),
+	}
+	if err := validateDependencies(dependencies); err != nil {
+		t.Fatalf("no introspection pool is valid: %v", err)
+	}
+	dependencies.VectorIntrospectionPool = new(pgxpool.Pool)
+	if err := validateDependencies(dependencies); err != nil {
+		t.Fatalf("a dedicated introspection pool is valid: %v", err)
+	}
+	dependencies.VectorIntrospectionPool = control
+	if err := validateDependencies(dependencies); err == nil {
+		t.Fatal("an introspection pool shared with the control pool was accepted")
+	}
 }

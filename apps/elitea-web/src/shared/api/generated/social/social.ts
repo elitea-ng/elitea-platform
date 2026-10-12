@@ -72,6 +72,7 @@ import type {
   SocialAuthorProfile,
   SocialAuthorSummary,
   SocialTrendingAuthor,
+  ThemePreference,
   UploadCurrentSocialAvatarBody,
 } from "../model";
 
@@ -520,6 +521,498 @@ export function useUpdateCurrentAuthor<
 } {
   const queryOptions = getUpdateCurrentAuthorQueryOptions(
     authorUpdateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getCurrentAuthorThemeResponse200 = {
+  data: ThemePreference;
+  status: 200;
+};
+
+export type getCurrentAuthorThemeResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getCurrentAuthorThemeResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getCurrentAuthorThemeResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getCurrentAuthorThemeResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getCurrentAuthorThemeResponseSuccess =
+  getCurrentAuthorThemeResponse200 & {
+    headers: Headers;
+  };
+export type getCurrentAuthorThemeResponseError = (
+  | getCurrentAuthorThemeResponse400
+  | getCurrentAuthorThemeResponse401
+  | getCurrentAuthorThemeResponse426
+  | getCurrentAuthorThemeResponse500
+) & {
+  headers: Headers;
+};
+
+export type getCurrentAuthorThemeResponse =
+  getCurrentAuthorThemeResponseSuccess | getCurrentAuthorThemeResponseError;
+
+export const getGetCurrentAuthorThemeUrl = () => {
+  return `/social/author/theme`;
+};
+
+/**
+ * Client contract 1.7. internal/api/v2/social/theme.go (GetThemePreference). Reads
+ * `personalization.theme_mode` from the caller's own
+ * centry.social_users row, keyed on the authenticated principal's
+ * owning user id. `theme_mode` is null when the user has never chosen
+ * one, or when the stored value is not one of the three modes.
+ * @summary Get the authenticated user's own colour-theme preference
+ */
+export const getCurrentAuthorTheme = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getCurrentAuthorThemeResponse> => {
+  return eliteaFetch<getCurrentAuthorThemeResponse>(
+    getGetCurrentAuthorThemeUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetCurrentAuthorThemeQueryKey = () => {
+  return [`/social/author/theme`] as const;
+};
+
+export const getGetCurrentAuthorThemeQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetCurrentAuthorThemeQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCurrentAuthorTheme>>
+  > = ({ signal }) => getCurrentAuthorTheme({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetCurrentAuthorThemeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCurrentAuthorTheme>>
+>;
+export type GetCurrentAuthorThemeQueryError =
+  N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response;
+
+export function useGetCurrentAuthorTheme<
+  TData = Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+          TError,
+          Awaited<ReturnType<typeof getCurrentAuthorTheme>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCurrentAuthorTheme<
+  TData = Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+          TError,
+          Awaited<ReturnType<typeof getCurrentAuthorTheme>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCurrentAuthorTheme<
+  TData = Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get the authenticated user's own colour-theme preference
+ */
+
+export function useGetCurrentAuthorTheme<
+  TData = Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetCurrentAuthorThemeQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateCurrentAuthorThemeResponse200 = {
+  data: ThemePreference;
+  status: 200;
+};
+
+export type updateCurrentAuthorThemeResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateCurrentAuthorThemeResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateCurrentAuthorThemeResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateCurrentAuthorThemeResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type updateCurrentAuthorThemeResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateCurrentAuthorThemeResponseSuccess =
+  updateCurrentAuthorThemeResponse200 & {
+    headers: Headers;
+  };
+export type updateCurrentAuthorThemeResponseError = (
+  | updateCurrentAuthorThemeResponse400
+  | updateCurrentAuthorThemeResponse401
+  | updateCurrentAuthorThemeResponse404
+  | updateCurrentAuthorThemeResponse426
+  | updateCurrentAuthorThemeResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateCurrentAuthorThemeResponse =
+  | updateCurrentAuthorThemeResponseSuccess
+  | updateCurrentAuthorThemeResponseError;
+
+export const getUpdateCurrentAuthorThemeUrl = () => {
+  return `/social/author/theme`;
+};
+
+/**
+ * Client contract 1.7. internal/api/v2/social/theme.go (UpdateThemePreference). Merges
+ * `theme_mode` into the caller's personalization blob; every other key
+ * (persona, instructions) is kept. Creates the caller's social profile
+ * row when there is none. Answers the stored preference.
+ * @summary Set the authenticated user's own colour-theme preference
+ */
+export const updateCurrentAuthorTheme = async (
+  themePreference: ThemePreference,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateCurrentAuthorThemeResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateCurrentAuthorThemeResponse>(
+    getUpdateCurrentAuthorThemeUrl(),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(themePreference),
+    },
+  );
+};
+
+export const getUpdateCurrentAuthorThemeQueryKey = (
+  themePreference?: ThemePreference,
+) => {
+  return ["PUT", `/social/author/theme`, themePreference] as const;
+};
+
+export const getUpdateCurrentAuthorThemeQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  themePreference: ThemePreference,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateCurrentAuthorThemeQueryKey(themePreference);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateCurrentAuthorTheme>>
+  > = ({ signal }) =>
+    updateCurrentAuthorTheme(themePreference, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateCurrentAuthorThemeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateCurrentAuthorTheme>>
+>;
+export type UpdateCurrentAuthorThemeQueryError =
+  | N400Response
+  | N401Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useUpdateCurrentAuthorTheme<
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  themePreference: ThemePreference,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+          TError,
+          Awaited<ReturnType<typeof updateCurrentAuthorTheme>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateCurrentAuthorTheme<
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  themePreference: ThemePreference,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+          TError,
+          Awaited<ReturnType<typeof updateCurrentAuthorTheme>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateCurrentAuthorTheme<
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  themePreference: ThemePreference,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Set the authenticated user's own colour-theme preference
+ */
+
+export function useUpdateCurrentAuthorTheme<
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  themePreference: ThemePreference,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorTheme>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateCurrentAuthorThemeQueryOptions(
+    themePreference,
     options,
   );
 

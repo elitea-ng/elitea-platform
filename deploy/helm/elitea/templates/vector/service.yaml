@@ -1,0 +1,73 @@
+{{- if .Values.vector.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  # Named explicitly: the server certificate's DNS SANs name this Service.
+  name: {{ .Values.vector.service.name }}
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+spec:
+  # ClusterIP only: the facade trusts its client certificates, so it must not
+  # sit on a network where anyone can attempt the handshake. The health port
+  # is deliberately not here; only the kubelet probes it.
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: {{ .Values.vector.service.port }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc
+  selector:
+    {{- include "elitea-vector.selectorLabels" . | nindent 4 }}
+---
+{{- if .Values.vector.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "elitea-vector.serviceAccountName" . }}
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+  {{- with .Values.vector.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+{{- end }}
+{{- if .Values.vector.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "elitea-vector.fullname" . }}
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "elitea-vector.fullname" . }}
+  minReplicas: {{ .Values.vector.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.vector.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.vector.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if .Values.vector.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "elitea-vector.fullname" . }}
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.vector.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "elitea-vector.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- end }}

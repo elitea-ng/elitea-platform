@@ -369,6 +369,7 @@ func (r *CommandOutboxRepository) LoadPendingIndexIngest(ctx context.Context, ou
 	var priority int32
 	var bundleDigest, embeddingBindingDigest []byte
 	var embeddingBindingCount int64
+	var expectedDimension int32
 	err := r.store.QueryRow(ctx, `
 SELECT o.outbox_id,
        j.command_id,
@@ -403,7 +404,10 @@ SELECT o.outbox_id,
        COALESCE(i.client_stream_id, ''),
        COALESCE(i.client_message_id, ''),
        COALESCE(i.sio_event, ''),
-       i.initiator
+       i.initiator,
+       COALESCE(registry.embedding_model, ''),
+       COALESCE(registry.embedding_dimension, 0),
+       COALESCE(registry.index_id::text, '')
 FROM elitea_runtime.command_outbox AS o
 JOIN elitea_runtime.execution_jobs AS j
   ON j.execution_id = o.execution_id AND j.generation = o.generation
@@ -424,6 +428,17 @@ LEFT JOIN LATERAL (
     ORDER BY entry.entry_id
     LIMIT 1
 ) AS embedding_binding ON true
+-- The stamp of the index this run writes (rust indexing runtime only, $3):
+-- the registry row the admission initializer wrote for this exact run, before
+-- the outbox became dispatchable (index_meta_initialized_at).
+LEFT JOIN LATERAL (
+    SELECT r.embedding_model, r.embedding_dimension, r.index_id
+    FROM elitea_runtime.index_registry AS r
+    WHERE $3::boolean
+      AND r.execution_id = j.execution_id
+      AND r.execution_generation = j.generation
+      AND r.deleted_at IS NULL
+) AS registry ON true
 WHERE o.outbox_id = $1
   AND o.stream_name = $2
   AND o.published_at IS NULL
@@ -434,7 +449,7 @@ WHERE o.outbox_id = $1
   AND j.desired_state = 'RUNNING'
   AND j.capability_id = 'index.ingest.v1'
   AND j.generation = 1
-  AND i.index_meta_initialized_at IS NOT NULL`, outboxID, r.expectedStream).Scan(
+  AND i.index_meta_initialized_at IS NOT NULL`, outboxID, r.expectedStream, r.indexRegistry).Scan(
 		&dispatch.OutboxID,
 		&dispatch.CommandID,
 		&dispatch.ExecutionID,
@@ -469,6 +484,9 @@ WHERE o.outbox_id = $1
 		&dispatch.ClientMessageID,
 		&dispatch.SIOEvent,
 		&dispatch.Initiator,
+		&dispatch.ExpectedEmbeddingModel,
+		&expectedDimension,
+		&dispatch.IndexID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return indexingapp.IndexIngestDispatch{}, ErrPendingIndexIngestDispatchNotFound
@@ -483,6 +501,10 @@ WHERE o.outbox_id = $1
 	dispatch.DispatchOrdinal = uint64(ordinal)
 	dispatch.Priority = uint32(priority)
 	dispatch.InputBundleByteLength = uint64(manifestSize)
+	if expectedDimension < 0 {
+		return indexingapp.IndexIngestDispatch{}, errors.New("pending index ingest expected embedding dimension is invalid")
+	}
+	dispatch.ExpectedEmbeddingDimension = uint32(expectedDimension)
 	if dispatch.InputBundleDigest, err = storedDigest(bundleDigest); err != nil {
 		return indexingapp.IndexIngestDispatch{}, fmt.Errorf("pending index ingest input digest: %w", err)
 	}

@@ -119,12 +119,10 @@ async fn a_restricted_document_is_read_only_by_its_principals() {
     .await
     .expect("commit");
 
-    let views = ViewCache::default();
-    let stored = views
-        .view(&pool, key)
-        .await
-        .expect("view")
-        .expect("a graph");
+    let views = ViewCache::new(elitea_inventory_engine::store::PgGraphStore::new(
+        pool.clone(),
+    ));
+    let stored = views.view(key).await.expect("view").expect("a graph");
     assert_eq!(stored.restricted.len(), 1);
 
     // The listed user reads everything: no filtered copy is made.

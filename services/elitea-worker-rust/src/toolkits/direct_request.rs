@@ -242,6 +242,25 @@ impl DirectToolkitRequest {
         &self.arguments
     }
 
+    /// Whether Main froze an index catalog into the toolkit (`indexes`,
+    /// ADR-0030 I1): only then is a claim context worth redeeming for the
+    /// index tools.
+    pub(crate) fn carries_index_catalog(&self) -> bool {
+        self.toolkit
+            .get(elitea_agent_runtime::toolkits::INDEXES_KEY)
+            .is_some_and(Value::is_array)
+    }
+
+    /// Whether this call names one of the five index tools of a toolkit that
+    /// carries a catalog — the only case the index tools' authority (and the
+    /// claim-context redemption it needs) is worth building for a
+    /// `toolkit.call_tool.v1` run. A `github` `read_file` on a toolkit with
+    /// a catalog is not one.
+    pub(crate) fn calls_index_tool(&self) -> bool {
+        self.carries_index_catalog()
+            && elitea_agent_runtime::toolkits::IndexToolName::parse(self.tool_name()).is_some()
+    }
+
     pub(crate) fn tokens(&self) -> &Map<String, Value> {
         &self.tokens
     }

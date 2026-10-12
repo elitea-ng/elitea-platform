@@ -1,0 +1,1123 @@
+{
+  "name": "inventory",
+  "service_location_url": "http://127.0.0.1:8080",
+  "configuration": {
+    "provided_ui": [
+      {
+        "name": "ui",
+        "path": "/ui",
+        "headers": {
+          "X-User-Id": {
+            "type": "user_id"
+          },
+          "X-Project-Id": {
+            "type": "project_id"
+          }
+        }
+      }
+    ]
+  },
+  "provided_toolkits": [
+    {
+      "name": "inventory",
+      "description": "Knowledge Graph for codebase understanding. Build graphs from multiple data sources, search entities, analyze dependencies, and visualize code structure.",
+      "toolkit_config": {
+        "type": "Inventory Knowledge Graph Configuration",
+        "description": "Configure your knowledge graph storage and processing settings. Data sources (repositories, wikis, etc.) are added after creation through the UI or tools.",
+        "fields_order": [
+          "bucket",
+          "llm_model",
+          "embedding_model",
+          "reasoning_effort",
+          "sources"
+        ],
+        "parameters": {
+          "bucket": {
+            "type": "String",
+            "required": true,
+            "description": "Storage bucket for knowledge graph data and configurations"
+          },
+          "llm_model": {
+            "type": "String",
+            "required": true,
+            "description": "LLM model for entity and relation extraction",
+            "json_schema_extra": {
+              "configuration_model": "llm"
+            }
+          },
+          "embedding_model": {
+            "type": "String",
+            "required": false,
+            "description": "Embedding model for semantic search (optional)",
+            "json_schema_extra": {
+              "configuration_model": "embedding"
+            },
+            "default": ""
+          },
+          "sources": {
+            "type": "JSON",
+            "required": false,
+            "description": "List of source toolkit IDs for data ingestion",
+            "default": [],
+            "json_schema_extra": {
+              "toolkit_types": [
+                "github",
+                "ado_repos",
+                "gitlab",
+                "bitbucket"
+              ]
+            }
+          },
+          "source_configs": {
+            "type": "JSON",
+            "required": false,
+            "description": "Per-source configuration (keyed by toolkit ID). Each config can have: file_patterns (whitelist), exclude_patterns (blacklist), branch, preset",
+            "default": {},
+            "json_schema_extra": {
+              "hidden": true
+            }
+          },
+          "reasoning_effort": {
+            "type": "String",
+            "required": false,
+            "description": "Reasoning effort for model calls: none, low, medium or high (empty keeps the model's default). Use none for reasoning models such as Qwen3 to avoid long thinking. A caller-supplied llm_settings.reasoning_effort overrides it.",
+            "default": ""
+          }
+        }
+      },
+      "provided_tools": [
+        {
+          "name": "run_ingestion",
+          "description": "Run ingestion pipeline for a toolkit to build/update the knowledge graph. Uses EliteAClient to fetch from the source toolkit.",
+          "args_schema": {
+            "toolkit_id": {
+              "type": "Integer",
+              "required": true,
+              "description": "Toolkit ID of the data source (GitHub, ADO Repos, GitLab, etc.)"
+            },
+            "branch": {
+              "type": "String",
+              "required": false,
+              "description": "Branch to analyze (uses toolkit default if not specified)"
+            },
+            "file_patterns": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated file patterns to include (e.g., '**/*.py,**/*.js')"
+            },
+            "exclude_patterns": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated patterns to exclude (e.g., '**/test/**,**/vendor/**')"
+            },
+            "full_rebuild": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Force full rebuild instead of incremental update",
+              "default": false
+            }
+          },
+          "tool_metadata": {
+            "result_composition": "list_of_objects",
+            "result_objects": [
+              {
+                "object_type": "message",
+                "result_target": "response",
+                "result_encoding": "plain"
+              }
+            ]
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": false,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "delta_update",
+          "description": "Update specific files from a toolkit (faster than full ingestion)",
+          "args_schema": {
+            "toolkit_id": {
+              "type": "Integer",
+              "required": true,
+              "description": "Toolkit ID of the data source"
+            },
+            "file_paths": {
+              "type": "String",
+              "required": true,
+              "description": "Comma-separated file paths to update"
+            },
+            "branch": {
+              "type": "String",
+              "required": false,
+              "description": "Branch to fetch files from"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": false,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "remove_source_entities",
+          "description": "Remove all entities from a specific source toolkit from the graph",
+          "args_schema": {
+            "toolkit_id": {
+              "type": "Integer",
+              "required": true,
+              "description": "Toolkit ID whose entities should be removed"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "list_ingested_sources",
+          "description": "List all source toolkits that have been ingested into the current graph, with entity counts per source",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "list_graphs",
+          "description": "List all available knowledge graphs in this inventory",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "load_graph",
+          "description": "Load/switch to a specific knowledge graph",
+          "args_schema": {
+            "graph_name": {
+              "type": "String",
+              "required": true,
+              "description": "Name of the graph to load"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_graph_info",
+          "description": "Get metadata about the currently loaded graph including sources, entity counts, and last update",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "search_graph",
+          "description": "Search for entities with token matching. Supports 'chat message' finding 'ChatMessageHandler', file patterns, layer and source filtering",
+          "args_schema": {
+            "query": {
+              "type": "String",
+              "required": true,
+              "description": "Search query for finding entities"
+            },
+            "entity_type": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by entity type (class, function, service, etc.)"
+            },
+            "layer": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by layer (code, service, data, product, domain)"
+            },
+            "source_toolkit": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by source toolkit (e.g., 'github', 'ado_repos', or toolkit ID)"
+            },
+            "file_pattern": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by file path pattern (e.g., '**/chat*.py')"
+            },
+            "top_k": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum number of results",
+              "default": 10
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json' (includes edges for visualization)",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_entity",
+          "description": "Get detailed information about a specific entity including properties, relations, and all source citations",
+          "args_schema": {
+            "entity_name": {
+              "type": "String",
+              "required": true,
+              "description": "Entity reference - copy from search results. Supports 'Name', 'Name (type)', or 'Name (type) @ source - path'"
+            },
+            "include_relations": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Include related entities",
+              "default": true
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_entity_content",
+          "description": "Retrieve the source code for an entity using its citation",
+          "args_schema": {
+            "entity_name": {
+              "type": "String",
+              "required": true,
+              "description": "Entity reference - copy from search results. Supports 'Name', 'Name (type)', or 'Name (type) @ source - path'"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "impact_analysis",
+          "description": "Analyze what entities would be impacted by changes (downstream) or dependencies (upstream). Works across all sources.",
+          "args_schema": {
+            "entity_name": {
+              "type": "String",
+              "required": true,
+              "description": "Entity reference - copy from search results. Supports 'Name', 'Name (type)', or 'Name (type) @ source - path'"
+            },
+            "direction": {
+              "type": "String",
+              "required": false,
+              "description": "'downstream' (what depends on this) or 'upstream' (what this depends on)",
+              "default": "downstream"
+            },
+            "max_depth": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum traversal depth",
+              "default": 3
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_related_entities",
+          "description": "Get entities related to a specific entity, optionally filtered by relation type",
+          "args_schema": {
+            "entity_name": {
+              "type": "String",
+              "required": true,
+              "description": "Entity reference - copy from search results. Supports 'Name', 'Name (type)', or 'Name (type) @ source - path'"
+            },
+            "relation_type": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by relation type (CALLS, IMPORTS, EXTENDS, etc.)"
+            },
+            "direction": {
+              "type": "String",
+              "required": false,
+              "description": "'outgoing', 'incoming', or 'both'",
+              "default": "both"
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "query_graph",
+          "description": "Query knowledge graph with structured filters (no similarity search). Supports JQL-like syntax: 'type:class layer:code' or 'related:UserService type:function dir:out'. Use for precise code queries.",
+          "args_schema": {
+            "query": {
+              "type": "String",
+              "required": false,
+              "description": "JQL-like query string. Syntax: type:class,function layer:code file:*.py name:User related:Entity rel:calls dir:out limit:50. Example: 'type:class layer:code' or 'related:UserService type:function'"
+            },
+            "types": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated entity types to filter (e.g., 'class,function,method'). Use layer names like 'code', 'service', 'data' to get all types in that layer."
+            },
+            "layers": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated layers to filter: 'code', 'service', 'data', 'documentation', 'domain', 'product', 'configuration', 'testing', 'tooling', 'knowledge', 'structure'"
+            },
+            "files": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated file patterns (e.g., '*.py,src/**/*.ts')"
+            },
+            "name": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by entity name (substring match)"
+            },
+            "related_to": {
+              "type": "String",
+              "required": false,
+              "description": "Find entities related to this entity. Copy from search results - supports 'Name', 'Name (type)', or full 'Name (type) @ source - path' format."
+            },
+            "relation_types": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated relation types to filter when using related_to (e.g., 'calls,imports,contains')"
+            },
+            "direction": {
+              "type": "String",
+              "required": false,
+              "description": "Relation direction when using related_to: 'in', 'out', or 'both'",
+              "default": "both"
+            },
+            "has_relations": {
+              "type": "Boolean",
+              "required": false,
+              "description": "If true, only return entities with relations; if false, only isolated entities"
+            },
+            "limit": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum number of results",
+              "default": 30
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_cross_source_relations",
+          "description": "Get relations that connect entities from different data sources (e.g., Jira ticket -> GitHub PR)",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_stats",
+          "description": "Get statistics about the knowledge graph (entity counts by type, source, layer)",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "list_entities_by_type",
+          "description": "List all entities of a specific type across all sources",
+          "args_schema": {
+            "entity_type": {
+              "type": "String",
+              "required": true,
+              "description": "Type of entities to list (class, function, service, etc.)"
+            },
+            "source_toolkit": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by source toolkit (e.g., 'github', 'ado_repos', or toolkit ID)"
+            },
+            "limit": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum number of entities",
+              "default": 50
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "list_entities_by_layer",
+          "description": "List entities by semantic layer (code, service, data, product, domain, etc.)",
+          "args_schema": {
+            "layer": {
+              "type": "String",
+              "required": true,
+              "description": "Layer to filter by"
+            },
+            "source_toolkit": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by source toolkit (e.g., 'github', 'ado_repos', or toolkit ID)"
+            },
+            "limit": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum number of entities",
+              "default": 50
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "list_entities_by_source",
+          "description": "List all entities from a specific source toolkit",
+          "args_schema": {
+            "source_toolkit": {
+              "type": "String",
+              "required": true,
+              "description": "Source toolkit identifier (e.g., 'github', 'ado_repos', or toolkit ID)"
+            },
+            "entity_type": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by entity type"
+            },
+            "limit": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum number of entities",
+              "default": 50
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "list_presets",
+          "description": "List available language presets for ingestion (python, typescript, java, etc.)",
+          "args_schema": {},
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_preset_info",
+          "description": "Get details about a specific language preset including file patterns",
+          "args_schema": {
+            "preset_name": {
+              "type": "String",
+              "required": true,
+              "description": "Name of the preset (python, typescript, java, etc.)"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_cache_stats",
+          "description": "Get statistics about the local graph cache including size, count, and individual graph details",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "cleanup_cache",
+          "description": "Force cleanup of stale graphs from the cache (normally runs automatically in background)",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_ingestion_status",
+          "description": "Report the ingestion currently running for this toolkit, if any, with its progress. Used by the sources view to show a run in flight.",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "'json' or 'text'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_sources_status",
+          "description": "Get status of all sources added to the knowledge graph. Shows ingestion status (pending/in_progress/completed/error), last update time, and entity counts for each source.",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_entities_by_ids",
+          "description": "Fetch entities by their IDs together with the edges connecting them. Used by the chat view to display and highlight the entities a response drew on.",
+          "args_schema": {
+            "entity_ids": {
+              "type": "JSON",
+              "required": true,
+              "description": "List of entity IDs to fetch",
+              "default": []
+            },
+            "include_edges": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Include the edges between the returned entities",
+              "default": true
+            },
+            "include_bridging": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Include bridging nodes that connect otherwise disjoint clusters",
+              "default": true
+            },
+            "max_bridge_length": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum path length when bridging (4 means up to 3 intermediate nodes)",
+              "default": 4
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "'json' or 'text'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_entity_neighbors",
+          "description": "Get the neighbours of an entity up to a given depth, with the edges connecting them. Used by the graph view's context menu to expand connections 1-3 levels deep.",
+          "args_schema": {
+            "entity_id": {
+              "type": "String",
+              "required": true,
+              "description": "ID of the entity to expand from"
+            },
+            "depth": {
+              "type": "Integer",
+              "required": false,
+              "description": "Number of hops to expand (1, 2 or 3); values outside that range are clamped",
+              "default": 1
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "'json' or 'text'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "normalize_types",
+          "description": "Normalize all entity types in the graph to canonical lowercase forms. Consolidates variations like 'Feature', 'Features', 'feature' into 'feature'. Run this to reduce type fragmentation.",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "rebuild_indices",
+          "description": "Rebuild all graph indices (name, type, file, source). Use after manual modifications or to fix index inconsistencies. Also normalizes entity types.",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "smart_normalize_types",
+          "description": "Use the configured LLM to map uncommon entity types onto the canonical set, on the graph as it is stored now. No engine runs it after an ingestion; run it when the graph has stray types.",
+          "args_schema": {
+            "threshold": {
+              "type": "Integer",
+              "required": false,
+              "description": "Only normalize types whose entity count is below this",
+              "default": 1000
+            },
+            "dry_run": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Show the proposed mapping without applying it",
+              "default": false
+            },
+            "batch_size": {
+              "type": "Integer",
+              "required": false,
+              "description": "Number of types to send per LLM call",
+              "default": 100
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "'json' or 'text'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "import_graph",
+          "description": "Import a graph.json document (the node-link graph the Python engine kept in this toolkit's artifact bucket) into the graph store, replacing the stored graph. Re-running it replaces the graph again. Refused while an ingestion runs, and refused over native ingestion state unless replace_ingestion_state is set.",
+          "args_schema": {
+            "artifact_name": {
+              "type": "String",
+              "required": false,
+              "description": "Name of the graph document in this toolkit's artifact bucket",
+              "default": "graph.json"
+            },
+            "replace_ingestion_state": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Delete the toolkit's native ingestion state (source status, document versions) with the old graph",
+              "default": false
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "'json' or 'text'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "export_graph",
+          "description": "Write the stored graph to this toolkit's artifact bucket as graph.json (the Python engine's node-link layout), replacing the object there.",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "'json' or 'text'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_type_stats",
+          "description": "Get detailed statistics about entity types including counts and potential duplicates. Useful for identifying type fragmentation before normalization.",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "json"
+            },
+            "show_all": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Show all types instead of top 50",
+              "default": false
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "link_toolkits_to_tools",
+          "description": "Create PROVIDES_TOOL relationships between toolkit entities and their tools. Links based on file paths (same directory), naming patterns, and parent_toolkit properties. Run after ingestion to improve toolkit-tool connectivity.",
+          "args_schema": {
+            "dry_run": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Preview changes without modifying the graph",
+              "default": false
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "connect_orphan_nodes",
+          "description": "Find isolated entities (no relationships) and connect them to related entities using word overlap scoring. Creates RELATED_TO relationships based on name similarity. Helps reduce graph fragmentation.",
+          "args_schema": {
+            "min_score": {
+              "type": "Number",
+              "required": false,
+              "description": "Minimum similarity score (0-1) required to create a relationship",
+              "default": 0.3
+            },
+            "max_connections": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum connections to create per orphan node",
+              "default": 3
+            },
+            "dry_run": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Preview changes without modifying the graph",
+              "default": false
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "validate_relationships",
+          "description": "Validate existing relationships using heuristic rules. Checks for issues like self-loops, invalid relation types for entity combinations, and missing required relationships. Returns validation report.",
+          "args_schema": {
+            "fix_issues": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Automatically fix fixable issues (remove invalid relationships)",
+              "default": false
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Output format: 'text' or 'json'",
+              "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        }
+      ],
+      "toolkit_metadata": {
+        "type_override": "inventory",
+        "application": true,
+        "interface": {
+          "type": "iframe",
+          "create_url": null,
+          "app_url": "/app/ui_host/inventory/ui/{project_id}/{toolkit_id}?theme={theme}"
+        }
+      }
+    },
+    {
+      "name": "inventory_search",
+      "description": "Read-only access to an Inventory Knowledge Graph. Search entities, explore relationships, and understand code structure from an existing knowledge graph.",
+      "toolkit_config": {
+        "type": "Inventory Search Tools",
+        "description": "Connect to an existing Inventory Knowledge Graph to search and explore entities. Select an inventory toolkit that has already been configured and has data ingested.",
+        "fields_order": [
+          "inventory_toolkit"
+        ],
+        "parameters": {
+          "inventory_toolkit": {
+            "type": "Integer",
+            "required": true,
+            "description": "ID of an existing Inventory toolkit to connect to",
+            "json_schema_extra": {
+              "toolkit_types": [
+                "inventory"
+              ],
+              "application": true,
+              "label": "Inventory Toolkit"
+            }
+          }
+        }
+      },
+      "provided_tools": [
+        {
+          "name": "search_knowledge_graph",
+          "description": "Search the knowledge graph for entities (code, documentation, configs, etc.) matching a query. Returns entities with their types, sources, and relevance scores.",
+          "args_schema": {
+            "query": {
+              "type": "String",
+              "required": true,
+              "description": "Search query for finding entities (e.g., 'user authentication', 'database connection')"
+            },
+            "top_k": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum number of results to return",
+              "default": 20
+            },
+            "entity_type": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by entity type (class, function, method, service, etc.)"
+            },
+            "layer": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by layer (code, service, data, documentation, domain)"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_entity_details",
+          "description": "Get detailed information about a specific entity including its properties, description, content, and source citations.",
+          "args_schema": {
+            "entity_name": {
+              "type": "String",
+              "required": true,
+              "description": "Entity reference - copy from search results. Supports: 'Name', 'Name (type)', or 'Name (type) @ source - path'"
+            },
+            "include_relations": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Include related entities in the response",
+              "default": true
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "get_related_entities",
+          "description": "Get entities related to a specific entity. Shows dependencies, callers, imports, and other relationships.",
+          "args_schema": {
+            "entity_name": {
+              "type": "String",
+              "required": true,
+              "description": "Entity reference - copy from search results. Supports: 'Name', 'Name (type)', or 'Name (type) @ source - path'"
+            },
+            "relation_type": {
+              "type": "String",
+              "required": false,
+              "description": "Filter by relation type (CALLS, IMPORTS, EXTENDS, IMPLEMENTS, CONTAINS, etc.)"
+            },
+            "direction": {
+              "type": "String",
+              "required": false,
+              "description": "Relation direction: 'outgoing', 'incoming', or 'both'",
+              "default": "both"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "query_graph",
+          "description": "Query the knowledge graph with structured filters using JQL-like syntax. No similarity search - exact filtering by type, layer, file patterns, and relationships.",
+          "args_schema": {
+            "query": {
+              "type": "String",
+              "required": false,
+              "description": "JQL-like query. Syntax: type:class,function layer:code file:*.py name:User related:Entity rel:calls dir:out limit:50"
+            },
+            "types": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated entity types (class, function, method, service, etc.)"
+            },
+            "layers": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated layers: code, service, data, documentation, domain, product, configuration, testing"
+            },
+            "related_to": {
+              "type": "String",
+              "required": false,
+              "description": "Find entities related to this entity. Copy from search results."
+            },
+            "limit": {
+              "type": "Integer",
+              "required": false,
+              "description": "Maximum number of results",
+              "default": 30
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "list_entity_types",
+          "description": "List all entity types in the knowledge graph with their counts. Useful for understanding what's in the graph before searching.",
+          "args_schema": {},
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "investigate",
+          "description": "Ask a natural language question about the knowledge graph. An AI agent will search the graph, explore relationships, and provide a comprehensive answer with citations. Use this for complex questions that require reasoning across multiple entities.",
+          "args_schema": {
+            "question": {
+              "type": "String",
+              "required": true,
+              "description": "The question to investigate (e.g., 'How does the authentication system work?', 'What components depend on the UserService?')"
+            },
+            "entity_types": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated entity types to focus on (e.g., 'class,function,service')"
+            },
+            "sources": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated source toolkits to search (e.g., 'github_backend,confluence_docs')"
+            },
+            "layers": {
+              "type": "String",
+              "required": false,
+              "description": "Comma-separated layers to search: code, service, data, documentation, domain"
+            },
+            "depth": {
+              "type": "Integer",
+              "required": false,
+              "description": "Max relationship hops to traverse",
+              "default": 2
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "Response format: 'text' (default) or 'json'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        }
+      ],
+      "toolkit_metadata": {
+        "type_override": "inventory_search",
+        "application": false,
+        "required_context": [
+          "project_id"
+        ]
+      }
+    }
+  ]
+}

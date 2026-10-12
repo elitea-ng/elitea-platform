@@ -57,6 +57,7 @@ interface FolderConversationRefWire {
   readonly updated_at?: string;
   readonly created_at?: string;
   readonly isPlayback?: boolean;
+  readonly source?: string;
   readonly [key: string]: unknown;
 }
 
@@ -73,6 +74,7 @@ function normaliseFolderConversationRef(wire: FolderConversationRefWire): Folder
     ...(wire.updated_at !== undefined ? { updatedAt: wire.updated_at } : {}),
     ...(wire.created_at !== undefined ? { createdAt: wire.created_at } : {}),
     ...(wire.isPlayback !== undefined ? { isPlayback: wire.isPlayback } : {}),
+    ...(typeof wire.source === 'string' && wire.source !== '' ? { source: wire.source } : {}),
   };
 }
 
@@ -227,6 +229,8 @@ export interface FolderConversationsParams {
   readonly offset?: number;
   readonly sort_by?: string;
   readonly sort_order?: string;
+  /** `local_work` pages the rail's "Local work" filter; absent pages the ordinary rail. */
+  readonly source?: string;
 }
 
 function folderConversationsQueryString(params: FolderConversationsParams): string {
@@ -238,6 +242,7 @@ function folderConversationsQueryString(params: FolderConversationsParams): stri
   });
   if (params.sort_by !== undefined) query.set('sort_by', params.sort_by);
   if (params.sort_order !== undefined) query.set('sort_order', params.sort_order);
+  if (params.source !== undefined) query.set('source', params.source);
   return `?${query.toString()}`;
 }
 
@@ -258,6 +263,8 @@ export interface DateGroupConversationsParams {
   readonly offset?: number;
   readonly sort_by?: string;
   readonly sort_order?: string;
+  /** `local_work` pages the rail's "Local work" filter; absent pages the ordinary rail. */
+  readonly source?: string;
 }
 
 function dateGroupConversationsQueryString(params: DateGroupConversationsParams): string {
@@ -269,6 +276,7 @@ function dateGroupConversationsQueryString(params: DateGroupConversationsParams)
   });
   if (params.sort_by !== undefined) query.set('sort_by', params.sort_by);
   if (params.sort_order !== undefined) query.set('sort_order', params.sort_order);
+  if (params.source !== undefined) query.set('source', params.source);
   return `?${query.toString()}`;
 }
 

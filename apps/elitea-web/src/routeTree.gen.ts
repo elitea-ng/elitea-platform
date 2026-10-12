@@ -72,6 +72,8 @@ import { Route as ShellToolkitsIndexRouteImport } from './routes/_shell/toolkits
 import { Route as ShellToolkitsTabRouteImport } from './routes/_shell/toolkits/$tab'
 import { Route as ShellToolkitsCreateRouteImport } from './routes/_shell/toolkits/create'
 import { Route as ShellUserPublicTabRouteImport } from './routes/_shell/user-public/$tab'
+import { Route as ShellWorkspacesIndexRouteImport } from './routes/_shell/workspaces.index'
+import { Route as ShellWorkspacesWorkspaceIdRouteImport } from './routes/_shell/workspaces.$workspaceId'
 import { Route as SharedChatTokenRouteImport } from './routes/shared.chat.$token'
 import { Route as ShellAgentsTabAgentIdRouteImport } from './routes/_shell/agents/$tab.$agentId'
 import { Route as ShellAppsTabAppIdRouteImport } from './routes/_shell/apps/$tab.$appId'
@@ -423,6 +425,17 @@ const ShellUserPublicTabRoute = ShellUserPublicTabRouteImport.update({
   path: '/user-public/$tab',
   getParentRoute: () => ShellRouteRoute,
 } as any)
+const ShellWorkspacesIndexRoute = ShellWorkspacesIndexRouteImport.update({
+  id: '/workspaces/',
+  path: '/workspaces/',
+  getParentRoute: () => ShellRouteRoute,
+} as any)
+const ShellWorkspacesWorkspaceIdRoute =
+  ShellWorkspacesWorkspaceIdRouteImport.update({
+    id: '/workspaces/$workspaceId',
+    path: '/workspaces/$workspaceId',
+    getParentRoute: () => ShellRouteRoute,
+  } as any)
 const SharedChatTokenRoute = SharedChatTokenRouteImport.update({
   id: '/shared/chat/$token',
   path: '/shared/chat/$token',
@@ -613,6 +626,7 @@ export interface FileRoutesByFullPath {
   '/toolkits/$tab': typeof ShellToolkitsTabRouteWithChildren
   '/toolkits/create': typeof ShellToolkitsCreateRouteWithChildren
   '/user-public/$tab': typeof ShellUserPublicTabRoute
+  '/workspaces/$workspaceId': typeof ShellWorkspacesWorkspaceIdRoute
   '/shared/chat/$token': typeof SharedChatTokenRoute
   '/agents/': typeof ShellAgentsIndexRoute
   '/apps/': typeof ShellAppsIndexRoute
@@ -625,6 +639,7 @@ export interface FileRoutesByFullPath {
   '/settings/': typeof ShellSettingsIndexRoute
   '/skills/': typeof ShellSkillsIndexRoute
   '/toolkits/': typeof ShellToolkitsIndexRoute
+  '/workspaces/': typeof ShellWorkspacesIndexRoute
   '/agents/$tab/$agentId': typeof ShellAgentsTabAgentIdRouteWithChildren
   '/apps/$tab/$appId': typeof ShellAppsTabAppIdRoute
   '/apps/create/$appType': typeof ShellAppsCreateAppTypeRoute
@@ -700,6 +715,7 @@ export interface FileRoutesByTo {
   '/toolkits/$tab': typeof ShellToolkitsTabRouteWithChildren
   '/toolkits/create': typeof ShellToolkitsCreateRouteWithChildren
   '/user-public/$tab': typeof ShellUserPublicTabRoute
+  '/workspaces/$workspaceId': typeof ShellWorkspacesWorkspaceIdRoute
   '/shared/chat/$token': typeof SharedChatTokenRoute
   '/agents': typeof ShellAgentsIndexRoute
   '/apps': typeof ShellAppsIndexRoute
@@ -712,6 +728,7 @@ export interface FileRoutesByTo {
   '/settings': typeof ShellSettingsIndexRoute
   '/skills': typeof ShellSkillsIndexRoute
   '/toolkits': typeof ShellToolkitsIndexRoute
+  '/workspaces': typeof ShellWorkspacesIndexRoute
   '/agents/$tab/$agentId': typeof ShellAgentsTabAgentIdRouteWithChildren
   '/apps/$tab/$appId': typeof ShellAppsTabAppIdRoute
   '/apps/create/$appType': typeof ShellAppsCreateAppTypeRoute
@@ -790,6 +807,7 @@ export interface FileRoutesById {
   '/_shell/toolkits/$tab': typeof ShellToolkitsTabRouteWithChildren
   '/_shell/toolkits/create': typeof ShellToolkitsCreateRouteWithChildren
   '/_shell/user-public/$tab': typeof ShellUserPublicTabRoute
+  '/_shell/workspaces/$workspaceId': typeof ShellWorkspacesWorkspaceIdRoute
   '/shared/chat/$token': typeof SharedChatTokenRoute
   '/_shell/agents/': typeof ShellAgentsIndexRoute
   '/_shell/apps/': typeof ShellAppsIndexRoute
@@ -802,6 +820,7 @@ export interface FileRoutesById {
   '/_shell/settings/': typeof ShellSettingsIndexRoute
   '/_shell/skills/': typeof ShellSkillsIndexRoute
   '/_shell/toolkits/': typeof ShellToolkitsIndexRoute
+  '/_shell/workspaces/': typeof ShellWorkspacesIndexRoute
   '/_shell/agents/$tab/$agentId': typeof ShellAgentsTabAgentIdRouteWithChildren
   '/_shell/apps/$tab/$appId': typeof ShellAppsTabAppIdRoute
   '/_shell/apps/create/$appType': typeof ShellAppsCreateAppTypeRoute
@@ -880,6 +899,7 @@ export interface FileRouteTypes {
     | '/toolkits/$tab'
     | '/toolkits/create'
     | '/user-public/$tab'
+    | '/workspaces/$workspaceId'
     | '/shared/chat/$token'
     | '/agents/'
     | '/apps/'
@@ -892,6 +912,7 @@ export interface FileRouteTypes {
     | '/settings/'
     | '/skills/'
     | '/toolkits/'
+    | '/workspaces/'
     | '/agents/$tab/$agentId'
     | '/apps/$tab/$appId'
     | '/apps/create/$appType'
@@ -967,6 +988,7 @@ export interface FileRouteTypes {
     | '/toolkits/$tab'
     | '/toolkits/create'
     | '/user-public/$tab'
+    | '/workspaces/$workspaceId'
     | '/shared/chat/$token'
     | '/agents'
     | '/apps'
@@ -979,6 +1001,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/skills'
     | '/toolkits'
+    | '/workspaces'
     | '/agents/$tab/$agentId'
     | '/apps/$tab/$appId'
     | '/apps/create/$appType'
@@ -1056,6 +1079,7 @@ export interface FileRouteTypes {
     | '/_shell/toolkits/$tab'
     | '/_shell/toolkits/create'
     | '/_shell/user-public/$tab'
+    | '/_shell/workspaces/$workspaceId'
     | '/shared/chat/$token'
     | '/_shell/agents/'
     | '/_shell/apps/'
@@ -1068,6 +1092,7 @@ export interface FileRouteTypes {
     | '/_shell/settings/'
     | '/_shell/skills/'
     | '/_shell/toolkits/'
+    | '/_shell/workspaces/'
     | '/_shell/agents/$tab/$agentId'
     | '/_shell/apps/$tab/$appId'
     | '/_shell/apps/create/$appType'
@@ -1541,6 +1566,20 @@ declare module '@tanstack/react-router' {
       path: '/user-public/$tab'
       fullPath: '/user-public/$tab'
       preLoaderRoute: typeof ShellUserPublicTabRouteImport
+      parentRoute: typeof ShellRouteRoute
+    }
+    '/_shell/workspaces/': {
+      id: '/_shell/workspaces/'
+      path: '/workspaces'
+      fullPath: '/workspaces/'
+      preLoaderRoute: typeof ShellWorkspacesIndexRouteImport
+      parentRoute: typeof ShellRouteRoute
+    }
+    '/_shell/workspaces/$workspaceId': {
+      id: '/_shell/workspaces/$workspaceId'
+      path: '/workspaces/$workspaceId'
+      fullPath: '/workspaces/$workspaceId'
+      preLoaderRoute: typeof ShellWorkspacesWorkspaceIdRouteImport
       parentRoute: typeof ShellRouteRoute
     }
     '/shared/chat/$token': {
@@ -2028,6 +2067,7 @@ interface ShellRouteRouteChildren {
   ShellToolkitsTabRoute: typeof ShellToolkitsTabRouteWithChildren
   ShellToolkitsCreateRoute: typeof ShellToolkitsCreateRouteWithChildren
   ShellUserPublicTabRoute: typeof ShellUserPublicTabRoute
+  ShellWorkspacesWorkspaceIdRoute: typeof ShellWorkspacesWorkspaceIdRoute
   ShellAgentsIndexRoute: typeof ShellAgentsIndexRoute
   ShellAppsIndexRoute: typeof ShellAppsIndexRoute
   ShellArtifactsIndexRoute: typeof ShellArtifactsIndexRoute
@@ -2038,6 +2078,7 @@ interface ShellRouteRouteChildren {
   ShellPipelinesIndexRoute: typeof ShellPipelinesIndexRoute
   ShellSkillsIndexRoute: typeof ShellSkillsIndexRoute
   ShellToolkitsIndexRoute: typeof ShellToolkitsIndexRoute
+  ShellWorkspacesIndexRoute: typeof ShellWorkspacesIndexRoute
   ShellUserPublicAgentsAgentIdRoute: typeof ShellUserPublicAgentsAgentIdRouteWithChildren
   ShellUserPublicAppsAppIdRoute: typeof ShellUserPublicAppsAppIdRoute
   ShellUserPublicMcpsMcpIdRoute: typeof ShellUserPublicMcpsMcpIdRoute
@@ -2074,6 +2115,7 @@ const ShellRouteRouteChildren: ShellRouteRouteChildren = {
   ShellToolkitsTabRoute: ShellToolkitsTabRouteWithChildren,
   ShellToolkitsCreateRoute: ShellToolkitsCreateRouteWithChildren,
   ShellUserPublicTabRoute: ShellUserPublicTabRoute,
+  ShellWorkspacesWorkspaceIdRoute: ShellWorkspacesWorkspaceIdRoute,
   ShellAgentsIndexRoute: ShellAgentsIndexRoute,
   ShellAppsIndexRoute: ShellAppsIndexRoute,
   ShellArtifactsIndexRoute: ShellArtifactsIndexRoute,
@@ -2084,6 +2126,7 @@ const ShellRouteRouteChildren: ShellRouteRouteChildren = {
   ShellPipelinesIndexRoute: ShellPipelinesIndexRoute,
   ShellSkillsIndexRoute: ShellSkillsIndexRoute,
   ShellToolkitsIndexRoute: ShellToolkitsIndexRoute,
+  ShellWorkspacesIndexRoute: ShellWorkspacesIndexRoute,
   ShellUserPublicAgentsAgentIdRoute:
     ShellUserPublicAgentsAgentIdRouteWithChildren,
   ShellUserPublicAppsAppIdRoute: ShellUserPublicAppsAppIdRoute,

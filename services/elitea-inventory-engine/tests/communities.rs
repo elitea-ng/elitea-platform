@@ -1,6 +1,6 @@
 //! The communities stage against the Python engine: `two_clusters.json`
 //! and what `CommunityAnalyzer` (real igraph) produced for it
-//! (`two_clusters.expected.json`, written by `fixtures/communities/generate.py`).
+//! (`two_clusters.expected.json`, frozen; generator in `fixtures/PROVENANCE.md`).
 
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::StopSignal;

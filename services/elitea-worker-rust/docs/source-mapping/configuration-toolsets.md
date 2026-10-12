@@ -130,16 +130,16 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | --- | --- | --- | ---: | :---: | --- | --- |
 | `artifact` | None; the bucket is an inline toolkit setting and the AUTHORITY is the live execution claim, not a credential | `runtime/tools/artifact::ArtifactWrapper` | 4 of 8 | No | `toolkits/families/artifact/{config,tools}.rs` | The one family whose authority is not in the frozen snapshot (#906): there is no third-party endpoint, only this platform's own storage, reached over main's private claim-bound content listener (`ContentServer.PostArtifact*`). `list_files`, `read_file`, `create_file` and `delete_file` carry the SDK's own names and argument names; the read enforces the SDK's 200,000-character agent-path cap and refuses with the same structured `content_too_large` object. Built only where the claim is in scope: the ordinary agent path and a root pipeline's direct and LLM nodes ([pipeline artifact toolkit nodes](pipeline-artifact-toolkit-nodes-20261009.md)). Saved child pipelines and nested applications still skip it; a direct node there is refused as `unsupported_capability`. `read_multiple_files`, `get_file_metadata`, `append_data`, `create_new_bucket` and the indexing pair remain gates |
 | `github` | `configurations/github.py::GithubConfiguration` | `tools/github::EliteAGitHubToolkit` | 44 | Yes | `toolkits/families/github/{config,client,code_search,commits,projects,pull_requests,workflow_runs,tools}.rs`; common configured-tool materializer | Partial read profile: strict anonymous/PAT/basic/App probe parsing plus twenty identity, branch, file, repository-navigation, issue, pull-request, commit, server-side code-search, workflow-status and Project V2 reads; a mixed explicit SDK selection keeps these reads and omits unsupported operations with one bounded warning; the other 24 tools, workflow-log archives, App installation auth, sensitive effects and indexing remain gates |
-| `ado_repos` | `configurations/ado.py::AdoConfiguration` | `tools/ado/repos::AzureDevOpsReposToolkit` | 22 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_repos/` | Planned as its own complete SDK family; 16 repository operations plus 6 inherited indexing tools |
-| `ado_plans` | `configurations/ado.py::AdoConfiguration` | `tools/ado/test_plan::AzureDevOpsPlansToolkit` | 18 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_plans/` | Planned as its own complete SDK family; 12 test-plan operations plus 6 inherited indexing tools |
-| `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 20 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_boards/` | Planned as its own complete SDK family; 14 work-item operations plus 6 inherited indexing tools |
-| `ado_wiki` | `configurations/ado.py::AdoConfiguration` | `tools/ado/wiki::AzureDevOpsWikiToolkit` | 14 | Yes | `configurations/families/ado.rs`; future `toolkits/families/ado_wiki/` | Planned as its own complete SDK family; 8 wiki operations plus 6 inherited indexing tools |
-| `gitlab` | `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab::EliteAGitlabToolkit` | 44 | Yes | `configurations/families/gitlab.rs`; `toolkits/families/gitlab/` | Planned standard repository family; inherited indexing overlay stays last |
+| `ado_repos` | `configurations/ado.py::AdoConfiguration` | `tools/ado/repos::AzureDevOpsReposToolkit` | 21 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_repos}/` | Partial native family: all 15 repository operations; the 6 indexing tools stay on the Python worker |
+| `ado_plans` | `configurations/ado.py::AdoConfiguration` | `tools/ado/test_plan::AzureDevOpsPlansToolkit` | 18 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_plans}/` | Partial native family: all 12 test-plan operations; the 6 indexing tools stay on the Python worker |
+| `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 19 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_boards}/` | Partial native family: 11 of 13 work-item operations; `get_image_by_url` (vision LLM), `attach_file_to_work_item` (artifact storage) and the 6 indexing tools stay on the Python worker |
+| `ado_wiki` | `configurations/ado.py::AdoConfiguration` | `tools/ado/wiki::AzureDevOpsWikiToolkit` | 14 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_wiki}/` | Partial native family: all 8 wiki operations (image description in page content omitted); the 6 indexing tools stay on the Python worker |
+| `gitlab` | `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab::EliteAGitlabToolkit` | 27 | Yes | `toolkits/families/gitlab/{config,client,tools}.rs`, shared `families/vcs_text.rs`; reuses `gitlab_org` transport, status/effect mapping, OLD/NEW editor and MR diff positions | Partial capability-disabled family (per-tool capability): all 21 non-index tools (10 reads, 9 writes, 2 deletes) keep SDK names, argument schemas, messages, protected-base-branch rules, the invocation-local active branch (moved by reads, as in the SDK) and first-page vs all-pages pagination. A selected index tool is omitted with a warning; the 6 index tools, non-UTF-8 document/image parsing, live check, exact-interrupt HITL and effect reconciliation remain gates |
 | `gitlab_org` | shared `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab_org::EliteAGitlabSpaceToolkit` | 17 | Yes | `toolkits/families/gitlab_org/{config,client,edit,diff,tools}.rs` | Capability-disabled complete family: 8 reads, 8 writes and 1 delete; dynamic-project authority, live check, HITL and effect reconciliation remain gates |
-| `qtest` | `configurations/qtest.py::QtestConfiguration` | `tools/qtest::QtestToolkit` | 25 | Yes | `configurations/families/qtest.rs`; `toolkits/families/qtest/` | Planned |
-| `bitbucket` | `configurations/bitbucket.py::BitbucketConfiguration` | `tools/bitbucket::EliteABitbucketToolkit` | 22 | Yes | `configurations/families/bitbucket.rs`; `toolkits/families/bitbucket/` | Planned |
-| `confluence` | `configurations/confluence.py::ConfluenceConfiguration` | `tools/confluence::ConfluenceToolkit` | 25 | Yes | `configurations/families/confluence.rs`; `toolkits/families/confluence/` | Planned; shared Atlassian auth normalizer |
-| `jira` | `configurations/jira.py::JiraConfiguration` | `tools/jira::JiraToolkit` | 23 | Yes | `configurations/families/jira.rs`; `toolkits/families/jira/` | Planned; shared Atlassian auth normalizer |
+| `qtest` | `configurations/qtest.py::QtestConfiguration` | `tools/qtest::QtestToolkit` | 25 | Yes | `toolkits/families/qtest/{config,client,search,ops,effects,fields,html,schema,tools}.rs` | Partial family (17 of 25): every DQL/lookup/relationship/module/field/version read plus test-case create/update/delete, requirement links and test-run status; the two artifact-upload tools need raw artifact bytes the runtime cannot read, and the six index tools wait for Rust indexing. The capability snapshot lists the 17 served tools |
+| `bitbucket` | `configurations/bitbucket.py::BitbucketConfiguration` | `tools/bitbucket::EliteABitbucketToolkit` | 22 | Yes | `toolkits/families/bitbucket/{config,client,tools}.rs`, shared `families/vcs_text.rs` and the `gitlab_org` OLD/NEW editor | Partial capability-disabled family (per-tool capability): all 16 non-index tools (8 reads, 7 writes, 1 delete) over Bitbucket Cloud REST 2.0 or Server REST 1.0 with a sensitive Basic credential, SDK names/schemas/messages and the invocation-local active branch. Several SDK paths that could never succeed are repaired rather than copied (Server PR commits/changes returned a generator repr, Server decline and inline comments raised `TypeError`, Server file listing indexed strings, Cloud PR reads leaked the client's `__dict__`, and an unset `cloud` never detected bitbucket.org). The 6 index tools, SDK 429 retry/backoff, live check, exact-interrupt HITL and effect reconciliation remain gates |
+| `confluence` | `configurations/confluence.py::ConfluenceConfiguration` | `tools/confluence::ConfluenceToolkit` | 16 of 25 | Yes | `toolkits/families/confluence/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): the sixteen REST tools; image-description, attachment and file-upload tools and the six index tools are not served (`supported_tools.confluence`); see [Confluence REST family](#confluence-rest-family) |
+| `jira` | `configurations/jira.py::JiraConfiguration` | `tools/jira::JiraToolkit` | 12 of 23 | Yes | `toolkits/families/jira/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): the twelve REST tools; image-description, attachment-content and artifact-upload tools and the six index tools are not served (`supported_tools.jira`); see [Jira REST family](#jira-rest-family) |
 | `postman` | `configurations/postman.py::PostmanConfiguration` | `tools/postman::PostmanToolkit` | 31 | No | `toolkits/families/postman/` | Capability-disabled complete family: 8 reads, 19 writes, 3 deletes and 1 execute surface; management authority is fixed to the claimed Postman origin, while stored-request execution remains behind a separate sealed dynamic-egress authority |
 | `elastic` | None; cluster origin and optional encoded API key are inline toolkit settings | `tools/elastic::ElasticToolkit` | 1 | No | `toolkits/families/elastic/{config,client,tools}.rs` | Capability-disabled complete read family: one bounded Query DSL search against a fixed verified-TLS cluster; approved DNS/IP egress, authorized materialization and live read/load proof remain gates |
 | `keycloak` | None; authority and service-account credentials are inline toolkit settings | `tools/keycloak::KeycloakToolkit` | 1 | No | `toolkits/families/keycloak/{config,client,tools}.rs` | Capability-disabled complete family: one generic Admin REST execute surface retains reads, writes, deletes and actions inside one frozen HTTPS realm; exact-interrupt HITL, effect reconciliation, approved egress and live provider proof remain gates |
@@ -147,30 +147,31 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `gcp` | None; the service-account JSON is an inline sealed toolkit setting | `tools/cloud/gcp::GcpToolkit` | 1 | No | `toolkits/families/gcp/{config,client,tools}.rs` | Capability-disabled complete family: one generic scoped Google REST surface retains reads, writes, deletes and actions on approved `googleapis.com` origins; exact-interrupt HITL, effect reconciliation, DNS/IP egress and live service-account role proof remain gates |
 | `kubernetes` | None; cluster origin and Bearer token are inline toolkit settings | `tools/cloud/k8s::KubernetesToolkit` | 2 | No | `toolkits/families/kubernetes/{config,client,tools}.rs` | Capability-disabled complete family: one generic Kubernetes REST execute surface plus its `/version` health read on an exact verified-TLS origin; exact-interrupt HITL, effect reconciliation, approved DNS/IP egress, CA policy and live RBAC proof remain gates |
 | `service_now` | `configurations/service_now.py::ServiceNowConfiguration` | `tools/servicenow::ServiceNowToolkit` | 3 | No | `toolkits/families/service_now/{config,client,tools}.rs` | Capability-disabled complete family: one bounded incident read plus create and update effects over fixed-origin Table API; shared durable sensitive-tool approval, authorized materialization and cancellation-safe effect reconciliation remain gates |
-| `testrail` | `configurations/testrail.py::TestRailConfiguration` | `tools/testrail::TestrailToolkit` | 23 | Yes | `configurations/families/testrail.rs`; `toolkits/families/testrail/` | Planned |
+| `testrail` | `configurations/testrail.py::TestRailConfiguration` | `tools/testrail::TestrailToolkit` | 23 | Yes | `toolkits/families/testrail/{config,client,format,schema,tools}.rs` (+ shared `families/python_repr.rs`) | Partial family (16 of 23): every case/suite/section/run/result read and the six case/section effects over the `testrail_api==1.13.4` wire contract; `add_file_to_case` needs raw artifact bytes the runtime cannot read, and the six index tools wait for Rust indexing. The capability snapshot lists the 16 served tools |
 | `slack` | `configurations/slack.py::SlackConfiguration` | `tools/slack::SlackToolkit` | 7 | No | `toolkits/families/slack/{config,client,tools}.rs` | Capability-disabled complete family: seven bounded fixed-origin messaging, membership and workspace operations; authorized materialization, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `azure_search` | `configurations/azure_search.py::AzureSearchConfiguration` | `tools/azure_ai/search::AzureSearchToolkit` | 2 | No | `toolkits/families/azure_search/{config,client,tools}.rs` | Capability-disabled complete read family: fixed configured index, two bounded reads, SDK 11.5.2 wire/result projection and no unbounded continuation; authorized materialization and live provider proof remain gates |
-| `delta_lake` | `configurations/delta_lake.py::DeltaLakeConfiguration` | `tools/aws/delta_lake::DeltaLakeToolkit` | 3 | No | `configurations/families/delta_lake.rs`; `toolkits/families/delta_lake/` | Planned; source has no focused family tests |
-| `bigquery` | `configurations/bigquery.py::BigQueryConfiguration` | `tools/google/bigquery::BigQueryToolkit` | 11 | No | `configurations/families/bigquery.rs`; `toolkits/families/bigquery/` | Planned; source has no focused family tests |
-| `xray` | `configurations/xray.py::XrayConfiguration` | `tools/xray::XrayToolkit` as `xray_cloud` | 12 | Yes | `configurations/families/xray.rs`; `toolkits/families/xray/` | Planned; preserve runtime alias |
+| `delta_lake` | `configurations/delta_lake.py::DeltaLakeConfiguration` | `tools/aws/delta_lake::DeltaLakeToolkit` | 3 | No | None | Blocked (`toolkit-port-b7-20261010.md`): needs Delta log replay, Parquet/Arrow over S3 and pandas `DataFrame.query` semantics; the Python image does not ship its dependencies either |
+| `aws` | None; region and access-key credentials are inline toolkit settings | `tools/cloud/aws::AWSToolkit` | 1 | No | None | Blocked (`toolkit-port-b7-20261010.md`): the pinned SDK never binds it and cannot construct it; `execute_aws` needs botocore service models and SigV4, which the runtime does not have |
+| `bigquery` | `configurations/bigquery.py::BigQueryConfiguration` | `tools/google/bigquery::BigQueryToolkit` | 11 | No | `toolkits/families/bigquery/{config,client,format,tools}.rs` | Partial capability-disabled family: 8 of 11 tools (reads, nearest-neighbour searches, job statistics, vector-index DDL and Delta Lake external-table creation); `similarity_search`, `similarity_search_with_score` and `execute` are not served |
+| `xray` | `configurations/xray.py::XrayConfiguration` | `tools/xray::XrayToolkit` as `xray_cloud` | 12 | Yes | `toolkits/families/xray_cloud/{config,client,tools}.rs` | Partial family under the preserved `xray_cloud` runtime alias (6 of 12): all six GraphQL business tools over one client-credential token per invocation; `add_attachment_to_test_step` serves `filedata` and explains why `filepath` (raw artifact bytes) is unavailable; the six index tools wait for Rust indexing |
 | `zephyr` | None; base URL and Basic-auth credentials are inline toolkit settings | `tools/zephyr::ZephyrToolkit` | 4 | No | `toolkits/families/zephyr/{config,client,tools}.rs` | Capability-disabled complete legacy family: one bounded step read plus all three sequential create effects; exact-interrupt HITL, durable partial-effect reconciliation, approved egress and live legacy-ZAPI proof remain gates |
-| `zephyr_scale` | `configurations/zephyr.py::ZephyrConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_scale::ZephyrScaleToolkit` | 26 | Yes | future `toolkits/families/zephyr_scale/` | Planned after the shared indexing overlay; 20 business operations plus 6 inherited indexing tools |
+| `zephyr_scale` | `configurations/zephyr.py::ZephyrConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_scale::ZephyrScaleToolkit` | 26 | Yes | `toolkits/families/zephyr_scale/{config,client,folders,render,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all 20 business operations against the fixed Cloud API with the token; the 6 inherited indexing tools are not served |
 | `zephyr_squad` | None; credentials are inline toolkit settings | `tools/zephyr_squad::ZephyrSquadToolkit` | 15 | No | `toolkits/families/zephyr_squad/{config,client,tools}.rs` | Capability-disabled complete family: five bounded reads plus all eight writes and two deletes over fixed Squad Cloud JWT routes; authorized materialization, live credential proof, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
-| `zephyr_enterprise` | `ZephyrEnterpriseConfiguration` | `ZephyrEnterpriseToolkit` | 11 | Yes | corresponding family paths | Planned; source has no focused family tests |
-| `zephyr_essential` | `ZephyrEssentialConfiguration` | `ZephyrEssentialToolkit` | 51 | Yes | corresponding family paths | Planned; largest fixed catalog, no focused tests |
-| `figma` | `configurations/figma.py::FigmaConfiguration` | `tools/figma::FigmaToolkit` | 17 | Yes | corresponding family paths | Planned; content/artifact limits required |
+| `zephyr_enterprise` | `configurations/zephyr_enterprise.py::ZephyrEnterpriseConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_enterprise::ZephyrEnterpriseToolkit` | 11 | Yes | `toolkits/families/zephyr_enterprise/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all five business operations (three reads, two effects) over one bearer flex-REST client; the six inherited indexing tools are not served and the capability snapshot lists the family per tool |
+| `zephyr_essential` | `configurations/zephyr_essential.py::ZephyrEssentialConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_essential::ZephyrEssentialToolkit` | 51 | Yes | `toolkits/families/zephyr_essential/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: 41 of the 45 business operations (24 reads, 17 effects); not served are the six indexing tools, the three automation-result uploads and the BDD ZIP download (see the family section) |
+| `figma` | `configurations/figma.py::FigmaConfiguration` | `tools/figma::FigmaToolkit` | 17 | Yes | `toolkits/families/figma/{config,client,output,tokens,tools}.rs` | Partial capability-disabled family: eight REST reads/comment with the SDK's `extra_params` output reduction plus both design-token extractors; `analyze_file` (LLM/TOON) and the six indexing tools stay SDK-only; exact-interrupt HITL for the comment effect, approved egress and live proof remain gates |
 | `rally` | `configurations/rally.py::RallyConfiguration` | `tools/rally::RallyToolkit` | 8 | No | `toolkits/families/rally/{config,client,tools}.rs` | Capability-disabled complete family: six bounded WSAPI reads plus create/update, with lazy per-invocation API-key/Basic authority; authorized materialization, exact-interrupt HITL, live WSAPI proof and cancellation-safe effect reconciliation remain gates |
 | `sonar` | `configurations/sonar.py::SonarConfiguration` | `tools/code/sonar::SonarToolkit` | 1 | No | `toolkits/families/sonar/{config,client,tools}.rs` | Capability-disabled complete read family: one project-bound `/api/issues/search` request with bounded filters and raw JSON projection; authorized materialization and live Sonar TLS proof remain gates |
 | `sql` | `configurations/sql.py::SqlConfiguration` | `tools/sql::SQLToolkit` | 2 | No | `toolkits/families/sql/` | Capability-disabled complete family: backend-specific PostgreSQL/MySQL execution plus bounded default-schema discovery; exact-interrupt HITL, effect reconciliation, TLS authority and driver preallocation controls remain gates |
 | `google_places` | `configurations/google_places.py::GooglePlacesConfiguration` | `tools/google_places::GooglePlacesToolkit` | 2 | No | `toolkits/families/google_places/{config,client,tools}.rs` | Capability-disabled complete read family: supported Places API (New) projection for `places` and `find_near`; attribution/persisted-result policy, authorized materialization and live provider proof remain gates |
 | `salesforce` | `configurations/salesforce.py::SalesforceConfiguration` | `tools/salesforce::SalesforceToolkit` | 6 | No | `toolkits/families/salesforce/{config,client,tools}.rs` | Capability-disabled complete family: six bounded CRM tools, including create/update and generic GET/POST/PATCH/DELETE; authorized materialization, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `sharepoint` | `configurations/sharepoint.py::SharepointConfiguration` | `tools/sharepoint::SharepointToolkit` | 28 | Yes | `toolkits/families/sharepoint/{config,client,tools}.rs` | Partial capability-disabled delegated read family: 8 explicitly selected Graph operations cover lists, columns, metadata-only recursive file discovery and bounded raw OneNote XHTML with proactive missing-token guards and direct-node reactive 401 interrupts. Empty/all selection, ACS/app-only auth, remaining content/artifact/index/effect tools, rich OAuth discovery/DCR/refresh metadata, model-loop reactive 401 confirmation, approved egress and live-provider proof remain gates |
-| `carrier` | `CarrierConfiguration` | `EliteACarrierToolkit` | 18 | No | corresponding family paths | Planned; source has no focused family tests |
+| `carrier` | `configurations/carrier.py::CarrierConfiguration` | `tools/carrier::EliteACarrierToolkit` | 18 | No | `toolkits/families/carrier/{config,client,tools}.rs` | Partial capability-disabled family: 15 ticket, backend and UI test/report operations with the SDK's confirmation steps; the archive tools `get_report_by_id`, `create_excel_report` and `create_ui_excel_report` stay SDK-only (archive/xlsx writers), and exact-interrupt HITL, effect reconciliation, approved egress and live proof remain gates |
 | `report_portal` | `configurations/report_portal.py::ReportPortalConfiguration` | `tools/report_portal::ReportPortalToolkit` | 9 | Yes | `toolkits/families/report_portal/{config,client,tools}.rs` | Capability-disabled complete read family: nine bounded project/report reads, including explicit UTF-8 HTML and base64 PDF export projections; authorized materialization, egress policy and live provider proof remain gates |
-| `testio` | `TestIOConfiguration` | `TestIOToolkit` | 15 | Yes | corresponding family paths | Deferred as an incoherent source contract: the check and official API require `Authorization: Token`, while runtime tools send `Bearer`; exploratory-test retrieval cannot receive its implementation-required product ID; and the two SDK write payloads do not map to the current provider create/confirmation operations without inventing product behavior |
+| `testio` | `configurations/testio.py::TestIOConfiguration` | `tools/testio::TestIOToolkit` | 15 | Yes | `toolkits/families/testio/{config,client,tools}.rs` | Partial read family (13 of 15): every read over `Authorization: Token`; the two SDK writes stay unserved because their payloads do not map to the current provider create/confirmation operations (below), and the capability snapshot lists the 13 served tools so the catalogue marks the writes unavailable |
 | `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Direct-node delegated 401 recovery has component proof in `delegated-auth-expiry.md`. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
 | `langfuse` | `LangfuseConfiguration` | No standard toolkit | 0 | Yes | `configurations/families/langfuse.rs` | Planned; observability support configuration |
-| `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 33 | Yes | `toolkits/families/aha/` | Capability-disabled complete family; all 25 reads, 6 writes, 1 delete and the effectful combined execute surface are retained, with artifact-backed attachment upload behind a claim-scoped verified temp-spool resolver |
+| `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 32 of 33 | Yes | `toolkits/families/aha/`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): all 25 reads, 5 writes, 1 delete and the effectful combined execute surface pass the SDK conformance gate and are served; `attach_file` is implemented behind a claim-scoped verified temp-spool resolver but omitted from the served set (`supported_tools.aha`) until an artifact-read grant plane exists |
 | `pgvector` | `PgVectorConfiguration` | No standalone toolkit | 0 | No | `configurations/families/pgvector.rs` | Planned; shared indexing/runtime dependency |
 
 The OpenAPI slice follows the current SDK business boundary without copying its
@@ -269,28 +270,74 @@ metadata-only traversal, reactive-401 and materializer-catalog proof. This
 mapping was rechecked against SDK commit
 `c181fc0fb56e9db017cb301841644680684b4b54` on 2026-08-24.
 
-`testio` is deliberately deferred rather than copied as a nominally complete
-family. Its connection check and Test IO's current customer API authenticate
-with `Authorization: Token`, while all fifteen runtime methods send `Bearer`.
-The public `get_exploratory_test` schema also omits the product ID required by
-its implementation, and product-scoped list calls can construct a literal
-`/products/None/` path. More importantly, the SDK's two writes are not safely
-repairable by changing a URL: current exploratory-test creation requires a
-product-scoped nested request with a test environment and a feature-or-template
-choice, while the SDK exposes unrelated legacy device/date/goal fields; its
+`testio` is ported as a partial read family rather than as a nominally
+complete one. Its connection check and Test IO's current customer API
+authenticate with `Authorization: Token`, while all fifteen runtime methods
+send `Bearer`; Rust sends `Token`. The public `get_exploratory_test` schema
+omits the product ID its implementation requires, and product-scoped list
+calls can construct a literal `/products/None/` path: Rust adds an optional
+`product_id` to `get_exploratory_test` (an extra optional property keeps every
+SDK-shaped call valid) and refuses either exploratory-test read without one
+instead of requesting a `None` path. `list_products` applies the documented
+product-ID filter itself because the SDK's nested `filter` dict is encoded by
+`requests` as `filter=product_ids` and never filters. The SDK's two writes are
+not served: current exploratory-test creation requires a product-scoped
+nested request with a test environment and a feature-or-template choice,
+while the SDK exposes unrelated legacy device/date/goal fields, and its
 `confirm_bug_fix` payload maps neither to the current confirmation-information
-request nor to the separate bug-state transitions. A Rust port therefore needs
-a coordinated platform/SDK contract revision or provider-backed migration
-fixtures, not guessed provider effects.
+request nor to the separate bug-state transitions. Serving them needs a
+coordinated platform/SDK contract revision or provider-backed migration
+fixtures, not guessed provider effects. `testio_tests.rs` owns the wire,
+result-member, selection and SDK-conformance proof.
 
 Additional standard toolkits without a registered same-named configuration are
 tracked separately: AWS (1), Azure Resource Manager (2), GCP (1), Kubernetes
 (2), Keycloak (1), Elastic (1), PPTX (2), and Yagmail (1). Yagmail, Elastic,
 Keycloak, Azure Resource Manager, GCP and Kubernetes are now implemented
 completely behind capability gates from inline claim-materialized settings. LocalGit
-(13) is intentionally deferred: its local-filesystem/process isolation boundary
-is outside the remote toolkit migration priority. The remaining families still
-require an explicit authority source and admission policy before live porting.
+(13) is blocked in the cloud worker, not merely deferred; see
+[LocalGit is not a worker family](#localgit-is-not-a-worker-family). The
+remaining families still require an explicit authority source and admission
+policy before live porting.
+
+### LocalGit is not a worker family
+
+SDK `tools/localgit/{__init__,local_git,tool}.py` at the pinned revision
+`b5113a1` exposes 13 tools (`create_file`, `read_file`, `update_file`,
+`delete_file`, `checkout_branch`, `checkout_commit`, `get_diff`,
+`update_file_content_by_lines`, `list_files`, `get_files_in_folder`,
+`commit_changes`, `read_multiple_files`, `grep_file`) over a checkout at
+`os.path.join(base_path, repo_path)`, optionally cloned from `repo_url` and
+hard-reset to `commit_sha`. The toolkit is `hidden` in the catalogue and its
+snapshot schema declares no configuration properties. Rust deliberately
+registers no family for it:
+
+- **No path authority exists in the worker.** `base_path`, `repo_path` and
+  `repo_url` are user-authored toolkit settings, so the root itself is chosen
+  by the caller. Every SDK operation joins the model's `file_path` with
+  `os.path.normpath` and no containment check, so `../` and absolute paths
+  escape even that root. Confining to a user-chosen directory on a shared,
+  multi-tenant worker host is no confinement; the worker has no per-claim
+  workspace, and inventing one (a deployment root plus per-execution
+  directories, cleanup and quotas) is a platform decision, not a port.
+- **Clone is unmanaged egress.** `repo_url` makes the worker clone an arbitrary
+  remote over git transports, outside the per-family HTTPS allowlists and
+  bounds every configured family uses. `gix` exists only in `libs/rust/repo-ingest`
+  for the indexing pipeline's own fetches.
+- **The pinned SDK cannot serve a call either.** `LocalGit.validate_toolkit`
+  is a `mode='before'` classmethod that opens the repository into a local
+  variable and never stores it; every tool then dereferences the undeclared
+  `self.repo` and `LocalGitAction._run` returns `Error: Traceback …
+  AttributeError`. The SDK's own unit test injects `repo` by hand ("set
+  externally in production", which nothing does). Tool names are additionally
+  prefixed with `repo_path + "_"`, which no saved agent selection matches.
+
+The meaningful equivalent already exists where a confined workspace exists:
+the desktop host's `libs/rust/local-tools` (ADR-0029) provides
+openat/`O_NOFOLLOW`-confined file, grep, shell and git tools rooted at the
+folder the person opened. A frozen `localgit` reference reaching the cloud
+worker keeps today's behavior: it is skipped as an unsupported family with
+`agent_toolkit_skipped`, and the capability snapshot does not list it.
 
 The SDK also defines `EmbeddingConfiguration`, but it is not one of the 32
 registered configuration families. Rust will model it as a referenced model
@@ -1146,6 +1193,197 @@ exact-`interrupt_id` HITL wrapper, and cancellation-safe effect
 identity/reconciliation. Any read may independently be configured sensitive;
 catalog effect groups never authorize execution.
 
+### Zephyr Enterprise business family
+
+Zephyr Enterprise serves the five business operations of the worker-pinned
+SDK revision `b5113a129329b85d23c2d5c2bf55f18e307414ec` (none of the five
+worker patches touch Zephyr). The six inherited indexing tools
+(`index_data`, `list_indexes`, `remove_index`, `search_index`,
+`stepback_search_index`, `stepback_summary_index`) are not served, because
+indexing does not exist in this runtime; `supported_tools.zephyr_enterprise`
+in the Rust capability snapshot lists the five served names, so the
+catalogue marks the others unavailable and a direct call to one is refused.
+A persisted selection keeps the served names it contains and logs the omitted
+ones; a selection of only indexing tools skips the toolkit.
+
+Main freezes `zephyr_configuration` (`base_url`, redeemed `token`).
+`config.rs` requires an HTTPS base (a path prefix such as `/zephyr` is kept)
+and the token: the SDK schema marks it optional, but its client refuses to
+start without it. The shared `zephyr_rest` client sends a sensitive
+`Authorization: Bearer` header, disables redirects and automatic retries,
+bounds request, response and output sizes, and appends every identifier as
+one percent-encoded path segment, refusing dot segments and control
+characters, so no argument can leave the `flex/services/rest/latest` prefix
+of the configured instance.
+
+| SDK operation | Route | Rust behavior |
+| --- | --- | --- |
+| `get_test_case` (read) | `GET testcase/{testcase_id}` | Provider object (an empty body is `""`) |
+| `search_zql` (read) | `POST advancesearch/zql` with the decoded `zql_json` | Provider result; a failure is a read failure, never an unknown effect |
+| `create_testcase` (effect) | `POST testcase/` (trailing slash kept) with the decoded `create_testcase_json` | Provider object; post-dispatch ambiguity is `UnknownOutcome` |
+| `add_steps` (effect) | `GET testcase/{tree}`, then `GET testcase/versions?testcaseid=` (last entry), then `GET testcase/{version}/teststep`, then one `POST testcase/{version}/teststep/detail/{tree}` per step | Same body (`tcId`, `maxId`, `step{step,data,result,orderId}`, `tctId`, chained `id`), order continuing from the highest existing `orderId`; the SDK's `Step added: ...` lines joined by `;`; empty or null `steps` returns the SDK's `Steps cannot be empty.`; a failure after the first confirmed append is `UnknownOutcome` |
+| `get_testcases_by_zql` (read) | `GET testcase?zqlquery=` | The SDK's `Test case ID: {id}, Test case: {testcase}` lines, or its `No test cases found for the provided ZQL query.` sentence |
+
+Every description keeps the SDK's `Toolkit: {name}` prefix line and its
+`Zephyr Enterprise instance: {base_url}` suffix line, cut at 1000
+characters. Provider objects inside text are canonical JSON rather than
+Python's `str(dict)`. Where the SDK returns `ToolException("Unable to ...:
+{e}")` as the tool text for an HTTP failure, Rust returns the shared stable,
+redacted error taxonomy instead (no provider bodies, routes or tokens). The
+configuration model's `check_connection` probe is not part of the toolkit and
+is not ported here. Proof: `toolkits/zephyr_enterprise_tests.rs`
+(configuration, catalogue/selection/policy, exact routes and bodies, SDK
+output text, add-steps version resolution and partial-effect handling,
+redaction, SDK schema gate) and `toolkits/zephyr_rest_tests.rs` (shared
+transport). Live provider proof, exact-interrupt HITL and durable effect
+reconciliation remain activation gates, as for the other families.
+
+### Zephyr Essential business family
+
+Zephyr Essential is the Zephyr Scale Cloud v2 REST API behind its own
+configuration type. The family serves 41 of the 45 business operations of the
+worker-pinned SDK revision `b5113a129329b85d23c2d5c2bf55f18e307414ec`, over
+the shared `zephyr_rest` bearer client described for Zephyr Enterprise. Main
+freezes `zephyr_essential_configuration` (`base_url`, redeemed `token`); a
+missing or empty `base_url` selects the SDK wrapper's default
+`https://prod-api.zephyr4jiracloud.com/v2`, and any base must be HTTPS.
+
+The operations are one table in `tools.rs` (name, SDK model title, verb, path
+segments, arguments, query mapping), so the SDK's `ZephyrEssentialAPI` routes
+are reviewable in one place: test cases (list, create, get, update, links,
+issue/web links, versions, test script, test steps), test cycles (list,
+create, get, update, links, issue/web links), test executions (list, create,
+get, update, test steps, update test steps, sync script, links, issue link),
+projects, folders (list, create, get, find by name), link deletion, the four
+issue-link reverse lookups and `healthcheck`. Optional filters become query
+parameters only when given (as `requests` drops `None`), in the SDK's order.
+GET tools are read-only; POST/PUT/DELETE are effects whose post-dispatch
+ambiguity is `UnknownOutcome`. Results are the provider JSON, its text, or
+`""` for an empty body, as the SDK's `_do_request` returns them;
+`list_test_cases` and `get_test_case_test_steps` return the page's `values`
+array as the SDK does.
+
+SDK special cases kept:
+
+- the three issue-link tools refuse a body without `issueId` before any
+  request, returning the SDK's exact guidance text (including the `issueKey`
+  lookup advice) as the tool result;
+- `create_folder` resolves `parentName` to `parentId` when no `parentId` is
+  given and returns the SDK's `Parent folder with name '...' not found.`
+  when the lookup fails; `parentName` stays in the body, as in the SDK;
+- `find_folder_by_name` matches names ignoring case and returns the folder
+  object or `null`.
+
+Deliberate differences: `find_folder_by_name` (and the parent lookup) walks
+the `/folders` pages (`maxResults=100`, `isLast`, at most 50 pages) where the
+SDK reads only the first page at the server's default size and so misses
+later folders; the parent lookup is scoped to the payload's `projectKey` and
+`folderType` when present, where the SDK searched every project. HTTP
+failures use the stable redacted taxonomy instead of the SDK's
+`Unexpected status code ...` text with the provider body.
+
+Not served, and absent from `supported_tools.zephyr_essential`:
+
+- the six indexing tools (no indexing in this runtime);
+- `create_custom_executions`, `create_cucumber_executions` and
+  `create_junit_executions`: the SDK passes its `files` argument, a path
+  string, to `requests` as `files=`, which raises before any request (a string
+  is not a 2-tuple list), so these tools cannot succeed in the SDK; serving
+  them needs a defined file source (for example an artifact) and multipart
+  upload, which is a new contract rather than a port;
+- `retrieve_bdd_test_cases`: the endpoint answers `application/zip`; the SDK
+  returns the archive decoded as text, which is not usable, and this runtime
+  has no ZIP reader to return the feature files instead.
+
+Proof: `toolkits/zephyr_essential_tests.rs` (configuration and default base,
+catalogue groups and unserved selection, the exact method/route/query/body of
+every table operation, `values` projection, issue-link guidance, folder
+lookup paging, parent resolution and not-found text, text/empty replies and
+argument refusal, SDK schema gate). Live provider proof, exact-interrupt HITL
+and durable effect reconciliation remain activation gates.
+
+### Zephyr Scale business family
+
+Zephyr Scale serves all twenty business operations of the worker-pinned SDK
+revision `b5113a129329b85d23c2d5c2bf55f18e307414ec`, which drive
+`zephyr-python-api==0.1.0` (its Cloud wrapper, `CloudApiWrapper`, and
+`ZephyrSession`). The six inherited indexing tools are not served (no
+indexing in this runtime); `supported_tools.zephyr_scale` lists the twenty.
+
+Configuration. Main freezes the shared `zephyr` configuration under
+`zephyr_configuration`. The SDK validator accepts a token, username/password
+or cookies, but then always builds `ZephyrScale(token=values['token'])`: the
+library's Cloud wrapper with its fixed `https://api.zephyrscale.smartbear.com/v2/`
+origin and bearer authentication, ignoring `base_url`. Rust does the same,
+explicitly: the origin is the fixed Cloud API, the token is required, and the
+other fields are accepted and ignored. Requests go through the shared
+`zephyr_rest` client (sensitive bearer header, no redirects or automatic
+retries, bounded bodies, percent-encoded path segments).
+
+Pagination. The library's `get_paginated` reads every page from the given
+`startAt`, following each `next` link's query until `isLast`; `maxResults`
+is only the page size. `client.rs::paginated` keeps that, takes only the
+query of `next` (so a provider link can never move the token to another
+origin), stops when a page has no `values`, no usable `next` or an unchanged
+query (the library would loop), and is bounded (200 pages, 10,000 items).
+
+Outputs follow the SDK's strings: `Extracted tests: ...`, `Extracted test
+steps: ...`, `Test case with name ... was created: ...`, `Steps for test
+case ... were added/updated: ...`, `Extracted folders: ...`, `Versions for
+test case ...`, `Found N test cases matching ...: [json]` and the rest.
+`render.rs` reproduces Python's `str()`/`repr()` of the decoded objects
+(`'single quotes'`, `True`, `None`, Python's quote choice and escapes) and
+`json.dumps(indent=2)` with `ensure_ascii` for the search result; object
+members are written in sorted key order (the canonical-ordering rule of
+`crate::canonical`), the only difference from the SDK's text. `folders.rs`
+reproduces the folder-tree helpers (`_build_folder_hierarchy`, name and
+path lookup, `_collect_subfolders`) and `_parse_tests`.
+
+Behavior preserved: the search's client-side filters (search term over
+`str(tc.values())`, any-of labels, custom-field rules for scalar and list
+values, step search over `inline` description/test data/expected result with
+optional inclusion), sort, `limit_results`, field projection including
+`customFields.<name>`, the criteria message; folder reads that fail are
+skipped with a warning as in the SDK; `update_test_steps` reads all steps,
+validates every update (its exact `index`/`inline` messages) before the
+single `OVERWRITE` write.
+
+Deliberate differences, each a defect in the pinned SDK:
+
+- `get_test_steps` and `get_links` read `kwargs['return_list']` /
+  `kwargs['return_only_links']`, which a tool call never passes, so both
+  always returned a `KeyError` text after fetching; Rust returns the
+  intended `Extracted test steps: ...` / `Links for test case ...` text.
+- `create_test_case` with `steps` reads `response['test_case_key']`, which
+  the Cloud API never returns, so the case was created but the steps were not
+  and the tool reported failure; Rust appends the steps to the response's
+  `key`.
+- `update_test_case` forwarded the raw `additional_fields` JSON string as a
+  body member named `additional_fields`; Rust merges the decoded fields, as
+  the argument documents.
+- `create_test_cases` validates every case before the first create (the SDK
+  raised mid-batch on a malformed case after creating the earlier ones), and
+  treats a missing `additional_fields`/`steps` as empty instead of raising;
+  the result is the SDK's list of per-case lines, an API failure for one case
+  reported as its `Unable to create test case ...` line.
+- `_collect_subfolders` returned `list(set(...))`; Rust keeps first-seen
+  order so the folder chosen as `folder ID` and the request order are
+  deterministic. A cyclic folder tree terminates instead of recursing.
+- Sorting mixed value types (a `TypeError` in the SDK) uses a total order.
+- `archived` is accepted and, as in the SDK, never sent.
+- HTTP failures use the stable redacted taxonomy instead of the library's
+  `Error {status}. Response: {body}` text.
+
+Proof: `toolkits/zephyr_scale_tests.rs` (token-only configuration, Python
+renderings, catalogue and effect groups, `next`-link pagination and parsed
+rows, the read sentences and routes, create-with-steps on the created key,
+batch validation and per-case lines, step updates and their refusals, effect
+bodies, folder path/name/recursive walks with a skipped folder, search
+filters/sort/limit/projection/message, folder-scoped step search and the
+custom-field refusal text, SDK schema gate). Live provider proof,
+exact-interrupt HITL and durable effect reconciliation remain activation
+gates.
+
 ### ReportPortal complete read family
 
 ReportPortal is a complete nine-tool read family over one configured project.
@@ -1504,6 +1742,22 @@ owner.
 | Main toolkit freezer/materializer and Python `EliteaSdkAgentAdapter` | Same frozen tool contract for application and ad-hoc execution | Rust fixtures consume the materialized nested shape; no environment/global credential fallback exists |
 | SDK Aha unit and credential-gated end-to-end suites | Route, schema, formatter and provider evidence | `aha_tests.rs` adds fourteen focused route/schema/model-metadata, adversarial bound, unknown-outcome, secret-isolation and artifact-authority tests |
 
+**Materialization (2026-10-09).** `materialize.rs` now dispatches `aha`
+(`materialize_a_to_k`) and the Rust capability snapshot lists it with
+`supported_tools.aha` naming 32 tools. `attach_file` is the one tool left out:
+the sealed resolver needs an artifact-read GRANT (immutable version, byte length
+and SHA-256 bound before dispatch), and no host provides one — the claim-bound
+platform reader (`PlatformWriter::read_artifact`) returns capped decoded text,
+not verified bytes. `build_aha_toolset` therefore takes an optional resolver;
+production passes none, the tool is not built, an explicit selection of it is
+dropped with one `agent_toolkit_tools_skipped` warning, and a selection of only
+`attach_file` skips the toolkit as unsupported. A defensive
+`AhaArtifactResolver::unavailable()` refuses every path as unauthorized if a call
+ever reached it. Empty selection serves the 32 tools. The SDK conformance gate
+(`every_tool_keeps_the_sdk_contract`) now checks the production profile, so the
+served set and `supported_tools.aha` are asserted equal; no schema drift and no
+exemption was needed.
+
 Production registration remains disabled pending authorized application/ad-hoc
 materialization, fixed-origin egress and live `/api/v1/me` proof, shared
 per-tool sensitive policy, durable exact-interrupt continuation, effect receipt
@@ -1511,6 +1765,107 @@ and reconciliation, and the real claim-scoped artifact resolver. Large tool
 results must retain one event owner and remain below the output-frame boundary;
 the Python worker's known duplicated 51,979-byte Aha result is a regression
 fixture rather than behavior to reproduce.
+
+### Jira REST family
+
+`jira` serves twelve of the SDK type's twenty-three tools. The baseline is the
+worker-pinned SDK revision `b5113a129329b85d23c2d5c2bf55f18e307414ec`
+(`elitea-sdk` 0.9.8; none of the five pinned patch commits touch Jira) and the
+`atlassian-python-api==4.0.7` client it drives. Tool names and argument schemas
+are the SDK's and pass the conformance gate with no exemption.
+
+Configuration. Main freezes the nested `jira_configuration` (`base_url`,
+`hosting`, `username`, `api_key`, `token`) and the toolkit settings (`cloud`,
+`api_version`, `limit`, `labels`, `additional_fields`, `custom_headers`,
+`verify_ssl`, `selected_tools`). Rust resolves cloud and the REST version
+exactly as `_hosting_to_cloud`/`_resolve_api_version` do: toolkit `cloud`
+wins, else hosting, else an `*.atlassian.net` host (host match, not
+substring); an explicit `2`/`3` wins, else cloud or an Atlassian host means v3.
+A `token` containing `JSESSIONID` is sent as cookies, any other token as
+Bearer, otherwise `username`+`api_key` as Basic. Deliberate differences: the
+origin must be HTTPS (plain HTTP and `verify_ssl: false` skip the toolkit as
+unsupported rather than disabling TLS checks); a custom header may not replace
+`Authorization`/`Cookie`, platform identity or framing headers; `limit` is
+clamped to 1000; blank list items are dropped.
+
+The SDK's `JiraClient` validates the credential with `GET /rest/api/{v}/myself`
+when it is built, because Jira answers an unauthenticated search with 200 and
+no issues. Rust probes once per toolset before the first operation and returns
+the SDK's own sentences (`Authentication failed: Invalid username or API
+key.`, `... Access forbidden.`, the v2/v3 Hosting hint on 404).
+
+| SDK tool | Route and behaviour kept | Rust differences |
+| --- | --- | --- |
+| `search_using_jql` | v3 `GET search/jql` with `nextPageToken`/`isLast`, v2 `GET search` with `startAt`; `maxResults=min(100, limit)`, `fields=*all`; `_parse_issues` projection plus additional fields; `No Jira issues found` / `Found N Jira issues:` | Total capped at 1000 and 50 pages (`limit: 0` means 1000); issue URLs are `{base}/browse/{key}` (the SDK concatenated without a slash) |
+| `create_issue` | `POST issue?updateHistory=false` with `fields`/`update`, the SDK's validation sentences, default labels after | A label failure after creation is appended as a warning instead of reporting the created issue as an error |
+| `update_issue`, `modify_labels` | `PUT /rest/api/2/issue/{key}` (the SDK client hardcodes v2), label add/remove operations, default labels after update | Default labels are applied only after a successful update |
+| `list_comments`, `add_comments` | `GET`/`POST issue/{key}/comment`; v3 comments are one ADF paragraph | — |
+| `list_projects` | Cloud pages `project/search`; Server reads `project` | `nextPage` is followed only on this toolkit's own REST root, at most 20 pages |
+| `set_issue_status` | `GET` transitions, case-insensitive target-status match, `POST` transition, default labels after | The SDK sent the `update` block as `fields` too; Rust sends `fields` and `update` as given, and names the available statuses when none matches |
+| `get_specific_field_info`, `get_remote_links` | `GET issue/{key}?fields=`, falling back to the non-null field list; `GET issue/{key}/remotelink` | — |
+| `link_issues` | `POST issueLink` with the link comment (ADF on v3) | — |
+| `execute_generic_rq` | Any path on the instance; `params` (outermost `{...}`) as query for GET, JSON body otherwise; search responses projected as `process_search_response`; `HTTP: {method} {url} -> {status} {reason} {body}` | The path must stay a plain path under the configured base (no scheme, `//`, query, fragment or dot segments); methods GET/HEAD/OPTIONS/POST/PUT/PATCH/DELETE |
+
+Results are text, as the SDK's are; where the SDK printed a Python `repr`, Rust
+prints compact JSON. A Jira 4xx is returned as the SDK-prefixed text with
+Jira's `errorMessages`/`errors` (bounded to 2 KiB); 401, 429, 5xx and transport
+failures are typed `AdkError`s, and any failure after an effect was sent is a
+nonretryable unknown outcome. Reads above 512 KiB are refused; effect
+confirmations are truncated instead.
+
+Not served, each listed in `supported_tools.jira` by omission and dropped with
+one `agent_toolkit_tools_skipped` warning when selected:
+`get_field_with_image_descriptions` and `get_comments_with_image_descriptions`
+(their default path is a vision-model call per image; toolkit families are
+given no model handle), `get_attachments_content` (the SDK's
+`process_content_by_type` document/OCR/LLM parser; `libs/rust/doc-extract`
+exists but is not linked into the runtime and has no image path),
+`add_file_to_issue_description` and `update_comment_with_file` (they upload
+artifact bytes; the host's artifact reader returns capped text, not verified
+bytes), and the six index tools. A selection with nothing served left skips
+the toolkit as unsupported; empty selection serves the twelve.
+
+### Confluence REST family
+
+`confluence` serves sixteen of the SDK type's twenty-five tools against the
+same worker-pinned SDK revision and `atlassian-python-api==4.0.7` as Jira. Tool
+names and argument schemas pass the conformance gate with no exemption.
+
+Configuration and URLs. The nested `confluence_configuration` carries
+`base_url`, `hosting`, `username`, `api_key` and `token`; toolkit settings add
+`space`, `api_version` (`Auto`/`1`/`2`), `limit` (per-request page size,
+default 5, at most 100), `max_pages` (default 10, at most 50), `labels`,
+`custom_headers`, `verify_ssl` and `cloud`. Cloud and the version resolve as
+`_hosting_to_cloud`/`_resolve_confluence_api_version` do. As the SDK does, a
+Cloud base URL loses a trailing `/wiki` and page links get `/wiki` exactly once
+(`_build_page_url`), while the REST root is the `atlassian` client's: the base
+plus `/wiki` when the URL names `atlassian.net`/`jira.com` without it.
+Credentials, HTTPS-only, `verify_ssl` and custom-header rules are Jira's.
+`number_of_retries`/`min_retry_seconds`/`max_retry_seconds` are accepted and
+ignored: Rust families make one attempt and report a typed retryable failure.
+
+| SDK tool | Route and behaviour kept | Rust differences |
+| --- | --- | --- |
+| `create_page`, `create_pages` | Duplicate-title check, parent defaulting to the space home page, v1 `POST rest/api/content` (fixed-width metadata, ancestors) or, on v2, space-id lookup and `POST api/v2/pages` reshaped like v1; page label and default labels; the SDK's result sentence | The duplicate check uses the target space (the SDK always checked the toolkit space); a missing space is a sentence, not a provider 400; a label failure is a warning on the created page; batches stop at 50 pages |
+| `delete_page` | By id, or by title in the toolkit space; `DELETE rest/api/content/{id}` | — |
+| `update_page_by_id`, `update_page_by_title`, `update_pages`, `update_labels` | Title-collision check, `history` version + 1, `PUT rest/api/content/{id}?status=current`, the unchanged-content short-circuit, label replacement, default labels, the SDK's result sentence with version and diff link | Without `new_body` the page keeps its STORAGE body; the SDK resent the rendered `view` HTML as storage, which flattens macros, so `update_labels` and title-only updates no longer rewrite content |
+| `get_page_tree` | `child/page` 100 at a time, pre-order, `{id: [title, parent_id]}` | At most 1000 pages and depth 32 |
+| `get_pages_with_label`, `list_pages_with_label` | CQL `type=page AND label="..."` paging with de-duplication up to `max_pages` | The label is CQL-escaped; the list variant uses the search result titles instead of reading every page body |
+| `read_page_by_id` | `expand=body.{format},version`; Markdown via `markdownify` semantics, ADF returned verbatim; `skip_images` strips base64 images; the SDK's not-found sentence | Markdown is produced by `html-to-markdown-rs` (ATX headings, no preprocessing), not byte-identical to `markdownify` |
+| `search_pages`, `search_by_title`, `site_search` | The SDK's CQL with the space unquoted and re-quoted, `ceil(max_pages/limit)` result pages, each match read and rendered; site search's ten previews joined by `---` | `search_pages` escapes the query like the other two; an unreadable page is skipped instead of ending the batch |
+| `get_page_id_by_title` | `rest/api/content?type=...&spaceKey=...&title=...` | — |
+| `execute_generic_confluence` | Path under the client root, params as query for GET and JSON body otherwise, every status returned as `HTTP: {method}{url} -> {status}{reason}{body}`, Markdown for `/rest/api/content/{id}` GETs | The path must stay a plain path under the root; an effect's 5xx is an unknown outcome instead of text |
+
+Results are text; structured values are compact JSON where the SDK printed a
+Python `repr`. Confluence 4xx answers are `Confluence API error: HTTP ...`
+text with the provider's `message`/`errors`; 401, 429, 5xx and transport
+failures are typed, and any failure after an effect was sent is a nonretryable
+unknown outcome.
+
+Not served: `get_page_with_image_descriptions` (a vision-model call per
+image), `get_page_attachments` (the SDK's attachment parser and LLM analysis),
+`add_file_to_page` (artifact bytes), and the six index tools — the same gaps,
+for the same reasons, as Jira's.
 
 ### Postman complete collection-management family
 
@@ -2006,18 +2361,477 @@ both application and ad-hoc materialization. Reads may independently be marked
 sensitive because API responses can expose secrets, workload configuration and
 cluster topology.
 
+### BigQuery partial warehouse family
+
+BigQuery is a configuration-backed family: Main seals
+`bigquery_configuration.api_key`, which holds the complete service-account
+JSON, and freezes the optional `project`, `location`, `dataset` and `table`
+defaults beside it. Worker-pinned SDK `b5113a1` exposes eleven tools. The SDK
+toolkit binds only explicitly selected tools (an empty selection binds none),
+prefixes `Toolkit:` and then `Project:` to each description and cuts it to 1000
+characters. Rust keeps all three rules.
+
+The pinned SDK cannot run any of its tools. `BigQueryAction` is built without
+`mode`, so every call dispatches the empty tool name and returns an
+`Error: ... Unknown tool name` traceback; the vector tools call a
+`_row_to_document` helper that does not exist; the vector SQL calls
+`VECTOR_DISTANCE`, which BigQuery does not have; and `execute` requires a client
+that only a previous call would have created. Rust therefore ports what each
+wrapper method was written to do rather than the failure, and records each
+repair here.
+
+| Python source | Observable responsibility | Rust target |
+| --- | --- | --- |
+| `configurations/bigquery.py` and `tools/google/bigquery/__init__.py::{BigQueryToolkit,get_tools}` | Nested sealed service account, table defaults, explicit-only selection and description prefix | `config.rs` parses `bigquery_configuration` through the `gcp` family's non-debuggable signing configuration; `tools.rs` selects in SDK order and omits unserved names with a warning |
+| `BigQueryApiWrapper.bigquery_client` (`google.cloud.bigquery.Client`) | Service-account OAuth, job project (configured, else the key's `project_id`) and location | `client.rs` signs with `gcp::client::service_account_token_request` and the `bigquery` scope, then runs jobs.query, jobs.getQueryResults polling and paging over verified HTTPS with no redirect or retry |
+| `get_documents`, `_create_filters`, `_get_table_id` | `SELECT *` over the configured table with `doc_id IN UNNEST(@ids)` and a dict or WHERE-text filter | `tools.rs::where_clause` reproduces the bare-number/quoted-text rule; values become escaped GoogleSQL literals, keys must be field paths and `;` is refused |
+| `similarity_search_by_vector[_with_score]`, `similarity_search_by_vectors`, `batch_search` | Nearest rows by a `FLOAT64` array parameter, `ORDER BY score ASC LIMIT k`; `batch_search` quotes every dict value and refuses text queries without an embedding model | `EUCLIDEAN_DISTANCE(embedding, @query_embedding)`, the distance the SDK's own vector index declares; the `{**d, ...}` branches of `similarity_search_by_vectors` are kept as written |
+| `create_vector_index`, `create_delta_lake_table` | `CREATE VECTOR INDEX IF NOT EXISTS ... IVF/EUCLIDEAN`; tables.insert of a `DELTA_LAKE` external table with `exists_ok=True` | DDL and tables.insert are effects: a post-dispatch timeout, 408, 429, 5xx or unreadable answer is a non-retryable unknown outcome; a 409 reads the existing table back |
+| `job_stats` | `get_job(job_id)._properties["statistics"]` | jobs.get in the configured location, projected to `statistics` |
+| `process_output` (`json.dumps(rows, default=str)`) | Result text | `format.rs` emits CPython's default `json.dumps`: schema column order, `", "`/`": "` separators, `ensure_ascii`, `repr` floats and the `str()` forms of TIMESTAMP, DATETIME and TIME values the Python client builds |
+
+Not served: `similarity_search` and `similarity_search_with_score` embed text
+through `self.embedding`, which no toolkit path sets, and `execute` reflects
+over arbitrary Python client methods, which has no REST equivalent. They are
+absent from `supported_tools.bigquery`, so the catalogue marks them
+unavailable. A result over 1000 rows is refused with a narrow-the-filter error
+rather than returned unbounded. Production registration remains gated on the
+same live service-account, exact-interrupt HITL, effect-reconciliation and
+egress proofs as the `gcp` family.
+
+### Figma partial design-file family
+
+Ported from the worker-pinned SDK revision
+`b5113a129329b85d23c2d5c2bf55f18e307414ec` (no pinned patch touches Figma)
+and the `FigmaPy==2018.1.0` client it wraps. Configuration is
+`figma_configuration.token` (sent as a sensitive `X-Figma-Token`) plus the
+toolkit-level `global_limit` and `global_regexp` defaults; a missing token or
+a `global_regexp` that does not compile refuses the toolkit, as the SDK's
+validator does. All calls go to the fixed `https://api.figma.com/v1/` origin
+through the family's bounded transport (no redirects or automatic retries,
+16 MiB response cap); keys and ids are single percent-encoded path segments.
+
+| SDK tool | Route | Result |
+| --- | --- | --- |
+| `get_file_nodes` | `GET files/{key}/nodes?ids=` | Raw JSON through `process_output` |
+| `get_file` | `GET files/{key}` | FigmaPy `File` attributes: `name`, `last_modified`, `thumbnail_url`, `document`, `components`, `schema_version`, `styles` |
+| `get_file_versions` | `GET files/{key}/versions` | `versions`, `pagination` |
+| `get_file_comments` | `GET files/{key}/comments` | `comments` rebuilt from FigmaPy `Comment`'s nine attributes |
+| `post_file_comment` | `POST files/{key}/comments` | `{"message", "client_meta"?}` body (the SDK's override of FigmaPy's broken payload); one effect |
+| `get_file_images` | `GET images/{key}?ids=` | `err`, `images` |
+| `get_team_projects` | `GET teams/{id}/projects` | `projects` |
+| `get_project_files` | `GET projects/{id}/files` | `files` |
+| `extract_design_tokens` | `GET files/{key}/nodes?ids=&depth=` | Colours, strokes, typography, effects, summary and raw entries |
+| `extract_design_tokens_batch` | the same, up to five entries at once | `full`, `compact`, `summary` or `style_guide` |
+
+`output.rs` reproduces `process_output`: the result is serialized as Python's
+`json.dumps` writes it (`", "`/`": "` separators, `ensure_ascii`), because
+`limit` counts characters of that text and `regexp` is matched against it.
+`regexp` uses `fancy-regex`, so lookaround (which the SDK's own documented
+example uses) behaves as in Python `re`, under a bounded backtracking budget.
+Over the limit, the RAW result is reduced by `fields_retain`/`fields_remove`
+between `depth_start` and `depth_end`, prefixed with the SDK's note and cut at
+`limit` characters. An empty result answers the SDK's "Response result is
+empty" text, and an unusable control answers `Error in '<tool>': ...`, as the
+SDK's catch-all does.
+
+`tokens.rs` reproduces the extraction and the four dedup passes, including
+Python's `round` (ties to even; an integer stays an integer) and value-equal
+dedup keys (`1` and `1.0` collide, as in a Python dict).
+
+Deliberate differences:
+
+- `simplified_dict` turns everything below depth 3 into Python `str()`
+  reprs (so a file's pages and a version's user become repr strings). Rust
+  returns those values as JSON; key order follows the worker's `serde_json`.
+- FigmaPy appends `geometry`, `version`, `scale` and `format` to the query
+  as bare values (`?paths`), so Figma never received them. Rust sends them
+  as named parameters; a `key=value` argument (the SDK's own internal
+  `depth=1`) is kept as that pair.
+- A non-2xx Figma answer is a redacted error instead of the SDK's
+  `Error in '...': Figma API error <status>: <body>` text, and an ambiguous
+  `post_file_comment` is an unknown-outcome error.
+- Token results are JSON values (the SDK returns `json.dumps` text); a batch
+  holds at most 100 entries.
+
+Not ported: `analyze_file` renders frames to images and asks the toolkit's
+LLM to explain screens and flows, over the 2,900-line TOON serializer; a
+Rust toolkit is materialized from settings alone and holds no model
+authority, and a model-free variant would answer something the SDK never
+does. The six indexing tools wait for the shared indexing overlay. The
+capability snapshot lists the ten served tools.
+
+### Carrier partial performance-testing family
+
+Ported from the worker-pinned SDK revision
+`b5113a129329b85d23c2d5c2bf55f18e307414ec` (the five pinned patches do not
+touch Carrier). The SDK has no focused Carrier tests, so the fixtures in
+`libs/rust/agent-runtime/src/toolkits/carrier_tests.rs` are the primary
+compatibility proof.
+
+Configuration is the SDK's: `carrier_configuration.{url,organization,private_token}`
+plus the toolkit-level `project_id`, which the SDK refuses when empty. The URL
+must be HTTPS without credentials, query or fragment; a path prefix is kept.
+`project_id` becomes a path segment, so only a bounded URL-safe token (or a
+non-negative integer frozen by an older form) is admitted. The token is a
+sensitive header and never reaches an error.
+
+Every request goes through the family's bounded transport (redirects and
+automatic retries disabled, fixed timeouts, 4 MiB response cap). Each model id
+is ONE percent-encoded path segment, so `report_id="55/../x"` cannot reach a
+second route. The SDK's two header sets are kept: the session calls carry
+`Authorization: Bearer` and `X-Organization`; `add_tag_to_report` and
+`create_backend_test` use the bare lower-case `bearer` and no organization.
+`create_backend_test` and `create_ui_test` post the definition as the
+form field `data`, as `requests.post(data=...)` does.
+
+| SDK tool | Route(s) | Rust behaviour |
+| --- | --- | --- |
+| `get_ticket_list` | `GET issues/issues/{pid}?board_id=&limit=100` | Tag (lower-cased) and status filters, newline-joined titles |
+| `create_ticket` | `GET engagements/engagements/{pid}`, `POST issues/issues/{pid}` | Date validation before any request, engagement name to hash id, `None` fields omitted, `item` required |
+| `get_reports` | `GET backend_performance/reports/{pid}` | Name/tag filters and the SDK's trimmed fields |
+| `add_tag_to_report` | `POST backend_performance/tags/{pid}/{id}` | Success is the answer text containing `Tags was updated`, whatever the status |
+| `get_tests`, `get_test_by_id` | `GET backend_performance/tests/{pid}` | Trimmed list; `{}` when the id is absent |
+| `run_test_by_id` | tests list, `GET shared/locations/default/{pid}`, `POST backend_performance/test/{pid}/{id}` | The SDK's four confirmation answers (missing test, parameters, location, cloud settings) and one run |
+| `create_backend_test` | `GET integrations/integrations/{pid}?name=reporter_email`, `POST backend_performance/tests/{pid}` | The SDK's prompts for each missing field and runner/email shaping |
+| `get_ui_reports` | `GET ui_performance/reports/{pid}` | Name and naive/aware ISO date filtering; a naive-versus-aware comparison answers Python's own error text |
+| `get_ui_report_by_id` | reports list, `GET ui_performance/results/{pid}/{uid}?sort=loop&order=asc` | Unique sorted `.html` links under the SDK's fixed `platform.getcarrier.io` prefix; a link failure is an empty list, as in the SDK |
+| `get_ui_tests` | `GET ui_performance/tests/{pid}` | Trimmed source (repository credentials are never projected), optional config and schedules |
+| `run_ui_test` | tests list, `GET ui_performance/test/{pid}/{id}`, `GET shared/locations/{pid}`, `POST ui_performance/test/{pid}/{id}` | Default-configuration prompt, location validation and public/project/cloud region resolution |
+| `update_ui_test_schedule` | tests list, `GET`/`PUT ui_performance/test/{pid}/{id}` | Cron shape check and the SDK's PUT body with existing schedules kept |
+| `create_ui_test` | `POST ui_performance/tests/{pid}` | The SDK's success and 400/other-status markdown |
+| `cancel_ui_test` | `GET ui_performance/reports/{pid}`, `PUT ui_performance/report_status/{pid}/{id}` | Command parsing, cancelable listing and final-state refusal |
+
+Deliberate differences, each a repair of a source defect:
+
+- The SDK's `get_tools` reads `selected_tools` from the tool dictionary rather
+  than its settings, so the Python toolkit always serves all eighteen tools.
+  Rust honours `settings.selected_tools`; an empty list serves all fifteen,
+  an explicit list keeps the served names and omits the three SDK-only names
+  with one `agent_toolkit_tools_skipped` warning, and an unknown name refuses
+  the toolkit.
+- `run_test_by_id` compares `str(test["id"])` with the INTEGER `test_id`, so
+  an id lookup never matches in the SDK. Rust compares the id as text.
+- Results that the SDK `json.dumps` are returned as JSON values; dictionaries
+  the SDK returns as prompts stay JSON objects.
+- A post-dispatch transport failure, 408, 429 or 5xx on an effect is an
+  unknown-outcome error (never retried), where the SDK printed a failure
+  report for a test or cancellation that may have applied.
+- The SDK raises `KeyError` when a test parameter lacks `default`/`type`;
+  Rust projects `null`.
+
+Not ported: `get_report_by_id` downloads every `reports_test_results_<build>`
+zip from the report bucket, unzips and merges JMeter/Gatling logs, re-zips the
+merged errors and uploads that archive back to Carrier; `create_excel_report`
+and `create_ui_excel_report` additionally parse the logs and write `.xlsx`
+workbooks. Those need zip read/write and an xlsx writer that neither the
+worker's nor the desktop host's Cargo lock carries (the libs workspace has
+`zip` only transitively through `calamine`). The capability snapshot lists
+the fifteen served tools, so elitea-main marks the three unavailable.
+
+### Toolkit types that cannot be ported as configured families yet
+
+Each type below was surveyed at the worker-pinned SDK revision
+`b5113a129329b85d23c2d5c2bf55f18e307414ec` (plus its pinned patches) and is
+NOT dispatched by `materialize.rs`, so the Rust worker keeps skipping it with
+`agent_toolkit_skipped` and the capability snapshot does not list it. None is
+a missing HTTP client: every one needs an authority a configured family is
+never given. `materialize.rs` builds a family from frozen settings alone (plus
+the claim-lent `ArtifactToolAuthority` for `artifact`); no family receives a
+model (`host::ModelTransport` is bound once, for the agent itself) or the
+code sandbox (`host::CodeSandbox` reaches only pipeline code nodes). Porting a
+schema without that authority would ship tools that cannot do what their SDK
+twins do, so nothing is faked.
+
+#### `pptx` (blocked)
+
+`pptx` is a configured toolkit (`bucket_name` plus the agent's `llm`, which
+the SDK injects into the settings) with two tools, both LLM-driven:
+
+- `fill_template(file_name, output_file_name, content_description,
+  pdf_file_name?, batch_size?)` downloads the template, collects every
+  placeholder text frame, asks the model for structured content in batches
+  of `batch_size` (with each slide's PDF page rendered by PyMuPDF as an image
+  when `pdf_file_name` is given), rewrites the runs keeping their formatting,
+  and uploads the result.
+- `translate_presentation(file_name, output_file_name, target_language)`
+  unzips the deck, asks the model to translate every text run and SmartArt
+  diagram node in batches, re-zips and uploads it.
+
+Blocked on: (1) a model authority lent to a configured family, which no
+family has; (2) OOXML read/write: the worker lock carries no `zip` or
+`quick-xml` (the libs workspace has `zip` only through `calamine`), so
+adding them grows the worker and desktop dependency graphs; (3) PDF page
+rendering for `pdf_file_name`, for which nothing in the Rust tree is a
+PyMuPDF equivalent. The artifact half (`ArtifactToolAuthority` read/write)
+already exists. A port is a host change first: lend a bound model (for
+example a `ToolModelAuthority` beside `ArtifactToolAuthority` through
+`materialize_configured_toolsets_with_artifact_authority`), then the family.
+
+#### `imagegen` (blocked)
+
+`imagegen` (#864, pinned SDK patch `afff2349`) has `generate_image(prompt,
+size?, n?)` and `edit_image(image, prompt, mask?)`. Both POST to the
+gateway's OpenAI-compatible images API (`/llm/v1/images/generations` as
+JSON, `/llm/v1/images/edits` as multipart) with the TOOLKIT's own
+`image_generation_model`, decode `b64_json` (or fetch `url`) results, and
+save each image as `{name_prefix}{generate|edit}-{i}.png` in the toolkit's
+`bucket`, answering `{"artifacts": [{"filepath", "filename"}]}`.
+
+Blocked on the model half only:
+
+1. `libs/rust/llm-wire/src/route.rs` declares the chat, embeddings and
+   messages routes; there is no images route or response type.
+2. The worker reaches the gateway only through `transport::model_facade`,
+   which consumes one claim-scoped credential into ONE bound chat model
+   (`ModelGatewayClient`, mTLS, origin-bound). Nothing exposes a second,
+   non-chat call on that channel, and `host::ModelTransport::bind` returns
+   an ADK `Llm`, not an images client.
+3. `materialize.rs` lends families only the artifact authority; an image
+   family needs an image-generation authority lent the same way (and Main
+   must freeze `image_generation_model` into the snapshot the claim serves).
+
+The artifact half is already there: `ArtifactToolAuthority` reads the
+`edit_image` source and mask and writes the results under the live claim.
+elitea-main already models the gap: `nativeWorkerGatedToolkitTypes` hides
+`imagegen` on a Rust-worker deployment, and the `image_generation` internal
+tool reports `rustAvailable: false`.
+
+#### `data_analysis` (blocked)
+
+`data_analysis` is an internal tool (the chat "Data Analysis" toggle), not a
+configured family: its `bucket_name` is the conversation attachment bucket
+injected at run time, and the Rust worker already recognizes and skips it
+with `agent_internal_tool_skipped` (`agents/internal_tools.rs`). Its one
+tool, `pandas_analyze_data(query, filename)`, loads the file into a pandas
+DataFrame (CSV, Excel via calamine, Parquet, JSON, XML, HDF5, Feather,
+pickle), asks the agent's LLM to write pandas code for the query (retrying up
+to five times with the traceback), runs that code in the SDK's restricted
+in-process executor, and saves any matplotlib chart as `chart_<uuid>.png` in
+the bucket, answering the text result or the chart links.
+
+Blocked on three authorities at once: (1) a model for code generation, which
+no tool is lent; (2) an isolated Python runtime with pandas and matplotlib:
+the Rust worker's only one is the Pyodide code-runner behind
+`host::CodeSandbox`, reached today only by pipeline code nodes, so lending it
+to a tool (with the file bytes as job input and the chart as job output) is
+new host plumbing; (3) the attachment bucket as an artifact authority, which
+exists (`ArtifactToolAuthority`) but is lent only to configured families.
+The row in "Special runtime toolsets" above keeps the long-term direction.
+
+### Azure DevOps Boards work item family
+
+`ado_boards` is the first of the four Azure DevOps families. The behaviour
+source is the worker-pinned SDK revision
+`b5113a129329b85d23c2d5c2bf55f18e307414ec`
+(`tools/ado/work_item/{__init__,ado_wrapper}.py`, `configurations/ado.py`);
+none of the worker's five SDK patches touches `tools/ado`. The SDK talks to
+Azure DevOps through `azure-devops` `WorkItemTrackingClient` v7.1, and Rust
+calls the same REST routes and route versions directly.
+
+The four ADO types share one authority, kept in `toolkits/families/ado/`:
+`config.rs` reads `ado_configuration.{organization_url,token}`, `project`,
+`limit` (default 5), `selected_tools` and the per-type optional settings;
+`client.rs` owns one HTTPS-only, redirect-free, retry-free, size-bounded
+transport and sends the PAT exactly as the SDK's
+`BasicAuthentication('', token)` does (`Authorization: Basic base64(":" +
+PAT)`, marked sensitive); `work_items.rs` holds the work item calls that
+`ado_plans` reuses; `format.rs` reproduces msrest `Model.as_dict()` key
+naming and Python `repr()` text; `toolset.rs` builds the ADK tools. An
+Azure DevOps Server collection URL is accepted as the SDK accepts it; plain
+HTTP is refused because the PAT travels as Basic credentials.
+
+Served tools, in SDK order, with their routes:
+
+| Tool | Route (api-version) | Result |
+| --- | --- | --- |
+| `search_work_items` | `POST {project}/_apis/wit/wiql?$top=` (7.1-preview.2), then `GET wit/workitems/{id}?fields=` per hit (7.1-preview.3) | `[{id, url, <field>: value or "N/A"}]`, `"No work items found."`; `limit` 0/absent uses the toolkit limit, `-1` omits `$top`; `System.Id`/`System.WorkItemType` are dropped from `fields` as in `_parse_work_items` |
+| `create_work_item` | `POST {project}/_apis/wit/workitems/${type}` JSON Patch | `{id, message}`; parse failures and HTTP 400 rule errors return the SDK texts (`Issues during attempt to parse work_item_json: ...`, `Error creating work item: <provider message>`) |
+| `update_work_item` | `PATCH {project}/_apis/wit/workitems/{id}` JSON Patch | `Work item (<id>) was updated.` |
+| `delete_work_item` | `DELETE {project}/_apis/wit/workitems/{id}` | `Work item <id> was successfully deleted.` |
+| `get_work_item` | `GET {project}/_apis/wit/workitems/{id}?fields=&asOf=&$expand=` | `{id, url, fields...}` plus msrest `relations` for `$expand` Relations/All |
+| `link_work_items` | `GET _apis/wit/workitemrelationtypes` once per toolset, `PATCH _apis/wit/workitems/{source}` (no project, as the SDK) | SDK link sentence, or the SDK's "Link type is incorrect ..." text with the `{name: referenceName}` map |
+| `get_relation_types` | `GET _apis/wit/workitemrelationtypes` (7.1-preview.2), cached | `{name: referenceName}` |
+| `get_comments` | `GET {project}/_apis/wit/workItems/{id}/comments` (7.1-preview.4): first page `$top=<limit>`, then continuation pages of 3 | msrest-shaped comment list truncated to `limit_total` |
+| `link_work_items_to_wiki_page` / `unlink_work_items_from_wiki_page` | `GET _apis/projects/{project}`, `GET wiki/wikis/{id}`, `GET wiki/wikis/{id}/pages?path=`, then one `PATCH` per work item | `vstfs:///Wiki/WikiPage/<quote(project/wiki/path)>` artifact links; the SDK's success/no-link/failure sentences with `json.dumps` failure maps |
+| `get_work_item_type_fields` | `GET {project}/_apis/wit/workitemtypes/{type}` (7.1-preview.2), cached per type | The SDK report byte for byte, including `Type: Unknown` (the v7.1 field model has no `type`) |
+
+Gaps and deliberate differences:
+
+- `get_image_by_url` describes an attachment with the toolkit's vision LLM,
+  and `attach_file_to_work_item` reads artifact storage. A configured toolkit
+  holds neither authority in this runtime, so both are unserved and listed
+  out of `supported_tools.ado_boards`; a selection naming only unserved tools
+  skips the toolkit.
+- `get_work_item(parse_attachments=true)` and `get_comments(process_images=true)`
+  return the work item or comments without image descriptions or parsed
+  attachment content, which is what the SDK returns when no LLM is
+  configured.
+- The SDK caches a failed field-definition read as empty until
+  `force_refresh`; Rust does not cache a failure.
+- A WIQL result above 200 work items returns a model-visible "narrow the
+  query" text instead of 200+ sequential reads.
+- Provider error bodies stay out of results except HTTP 400/422 messages on
+  work item create/update, which the SDK shows the model and which a caller
+  needs to supply missing required fields. Effects that fail after dispatch
+  (transport, 408, 429, 5xx) are `UnknownOutcome` and never retried.
+
+Proof: `toolkits/ado_boards_tests.rs` (configuration, WIQL/field reads,
+JSON Patch create, rule-error text, unknown outcome, relations, comment
+pagination, wiki artifact links, field report golden, selection/policy,
+argument validation, SDK conformance).
+
+### Azure DevOps Test Plans family
+
+`ado_plans` serves all twelve non-index tools of
+`tools/ado/test_plan/test_plan_wrapper.py` at the same pinned SDK revision,
+over the shared `families/ado` connection. The SDK's `TestPlanClient` comes
+from `connection.clients` (v7.0); test case work items go through the work
+item wrapper it builds internally, which Rust reuses as
+`families/ado/work_items.rs`.
+
+| Tool | Route (api-version 7.0 unless noted) | Result |
+| --- | --- | --- |
+| `create_test_plan` | `POST {project}/_apis/testplan/plans` | `Test plan <id> created successfully.` |
+| `delete_test_plan` | `DELETE .../testplan/plans/{planId}` | `Test plan <id> deleted successfully.` |
+| `get_test_plan` | `GET .../testplan/plans/{planId}` or `.../plans` (first page) | msrest `as_dict()` object or list; `plan_id` 0/absent lists |
+| `create_test_suite` | `POST .../testplan/Plans/{planId}/suites` | `Test suite <id> created successfully.` |
+| `delete_test_suite` | `DELETE .../testplan/Plans/{planId}/Suites/{suiteId}` | `Test suite <id> deleted successfully.` |
+| `get_test_suite` | `GET .../Plans/{planId}/Suites/{suiteId}` or `.../suites` | `as_dict()` object or list |
+| `add_test_case` | `POST .../Plans/{planId}/Suites/{suiteId}/TestCase` | `as_dict()` test case list |
+| `create_test_case` | `POST {project}/_apis/wit/workitems/$Test Case` (7.1-preview.3), then `add_test_case` | the added test cases |
+| `create_test_cases` | `create_test_case` per entry | list of per-entry results |
+| `get_test_case` / `get_test_cases` | `GET .../TestCase/{id}` or `.../TestCase`, then `GET wit/workitems/{id}` (`$expand=Relations` without `fields`) | `as_dict()` test case plus `work_item_full_details`; the SDK's "No test cases found ..." text |
+| `get_all_test_case_fields_for_project` | `GET wit/workitemtypes/Test Case` | the work item field report for `Test Case` |
+
+The `*_create_params` and `suite_test_case_create_update_parameters`
+arguments stay JSON strings with the SDK's Python attribute names
+(`area_path`, `parent_suite`, `work_item`). `model_body` admits exactly the
+msrest model's attributes (an unknown name returns the constructor's
+`TypeError` text, as the SDK does), renames them to REST camelCase and
+coerces the `int` attributes (`work_item.id` "23" becomes 23) as msrest's
+serializer does. Test steps are rebuilt into `Microsoft.VSTS.TCM.Steps`
+byte for byte as `ElementTree.tostring` writes them (`steps.rs`), from the
+JSON array or the `<Steps><Step>` XML; the XML reader is bounded and refuses
+DTDs and undefined entities. A `TF401320` or validation failure on create
+returns the provider rule text with the SDK's pointer to
+`get_all_test_case_fields_for_project`.
+
+Differences: `create_test_cases` validates every entry before creating the
+first work item (the SDK raises `KeyError` midway, after creating earlier
+entries), defaults a missing `test_steps_format` to `json`, and takes at
+most 50 entries. `get_test_cases` reads at most 200 test cases with their
+work items and otherwise returns a model-visible "read them by id" text.
+A failed field-definition read is not cached. As in the SDK, a failed work
+item read leaves a test case without `work_item_full_details`.
+
+Proof: `toolkits/ado_plans_tests.rs` (ElementTree step golden output, XML
+reader defaults/entities/refusals, create params naming and errors, add/list
+`as_dict` shapes, create-test-case flow and rule-error hint, test case
+details, unknown outcome, argument shapes, SDK conformance).
+
+### Azure DevOps Wiki family
+
+`ado_wiki` serves all eight non-index tools of `tools/ado/wiki/ado_wrapper.py`
+at the pinned SDK revision, over the shared `families/ado` connection and the
+`WikiClient`/`CoreClient` v7.0 routes the wrapper uses (`connection.clients`).
+The live settings path is the common `tools/ado/__init__.py::get_tools`, which
+adds the optional `default_wiki_identifier`; every tool falls back to it, and
+the tool descriptions end with `Default wiki: <name>` as the SDK's do.
+
+| Tool | Route (api-version 7.0) | Result |
+| --- | --- | --- |
+| `get_wiki` | `GET {project}/_apis/wiki/wikis/{wiki}` | `_format_wiki_response`: id, name, type, url, project_id, repository_id, mapped_path, optional remote_url and versions |
+| `get_wiki_page` | `GET .../wikis/{wiki}/pages/{id}` or `.../pages?path=` with `recursionLevel` and `includeContent` | `{eTag (ETag header), page: {id, path, git_item_path, remote_url, url, order, is_parent_page, is_non_conformant, sub_pages, content?}}`; 404 returns the SDK's "Page ... not found in wiki ..." text |
+| `get_wiki_page_by_path` / `get_wiki_page_by_id` | `GET .../pages?path=` or `.../pages/{id}` with `includeContent=true` | the page content |
+| `delete_page_by_path` / `delete_page_by_id` | `DELETE .../pages?path=` or `.../pages/{id}` | the SDK's "has been deleted" sentences |
+| `modify_wiki_page` | `GET .../wikis` (create via `GET _apis/projects` + `POST .../wikis` when missing), `GET .../pages?path=` for the eTag, `PUT .../pages?path=&versionDescriptor.*` with `If-Match` | `{eTag, id, page: url}`, or the expanded page with `expanded` |
+| `rename_wiki_page` | `POST .../wikis/{wiki}/pagemoves?comment=&versionDescriptor.*` | `{eTag, page_move: as_dict(WikiPageMove)}` |
+
+Page writes and moves are retried once without the version descriptor when
+the provider answers "The version '{0}' either is invalid or does not exist."
+as the SDK does; a missing page (404) on the eTag read makes the write a
+create.
+
+Gaps and differences: the SDK describes images in page content with the
+toolkit LLM (`process_images`, `image_description_prompt`) and, for
+`/.attachments/` images, reads them through an internal repos wrapper. No
+LLM is lent to a toolkit here, so content is returned with its image
+references unchanged, which is the SDK's own result when no description is
+produced. `rename_wiki_page` returns the msrest-shaped move instead of the
+SDK's `str()` of a model object. `modify_wiki_page` treats a wiki addressed by
+id as existing; the SDK compares names only and would try to create a wiki
+named after the id.
+
+Proof: `toolkits/ado_wiki_tests.rs` (wiki format and default identifier,
+expanded page and 404 text, raw page content and description suffix, eTag
+`If-Match` write with the version retry, wiki and page creation, page move
+and delete sentences, argument validation, SDK conformance).
+
+### Azure DevOps Repos family
+
+`ado_repos` serves all fifteen non-index tools of
+`tools/ado/repos/repos_wrapper.py` at the pinned SDK revision over the
+`GitClient` v7.0 routes, all under
+`{project}/_apis/git/repositories/{repository_id}` except the project-level
+`git/pullrequests/{id}` read. Settings add the required `repository_id` and
+`base_branch`/`active_branch` (`main` when absent or empty). The toolset owns
+the wrapper's mutable active branch: `set_active_branch`, `list_files`,
+`read_file`, `create_branch`, `create_file` and `update_file` move it exactly
+where the SDK assigns `self.active_branch`.
+
+| Tool | Route | Result |
+| --- | --- | --- |
+| `list_branches_in_repo` / `set_active_branch` | `GET .../stats/branches` | the SDK's "Found N branches" and "Switched to branch" / "does not exist" texts |
+| `list_files` | `GET .../items?scopePath=&recursionLevel=Full&includeContentMetadata=true&versionDescriptor.*` | blob paths |
+| `read_file` | `GET .../items?path=&versionDescriptor.*` with `Accept: text/plain` | text, 1-indexed `offset`/`limit` slices (`apply_line_slice`), and the `guard_text_read` `content_too_large` object relabelled to `offset`/`limit` above 200000 characters |
+| `create_file` / `update_file` / `delete_file` | `GET .../stats/branches?name=` for the head, `POST .../pushes` with an `add`/`edit`/`delete` change | `Created/Updated/Deleted file <path>`; create and update refuse the base branch with the SDK's "protected" text; create probes `GET .../items` first |
+| `create_branch` | `GET .../stats/branches?name=` twice, `POST .../refs` from the active branch head | the SDK's created/exists/spaces texts |
+| `list_open_pull_requests` / `get_pull_request` | `GET .../pullrequests?searchCriteria.status=active` or `GET git/pullrequests/{id}`, then threads and commits per PR | the SDK's Python `str()` list text (open PRs) or the JSON list |
+| `list_pull_request_files` | iterations, last iteration's changes, `GET .../items` at the target and source commits | `json.dumps` text of `[{path, diff}]` with `difflib.unified_diff` output (`diff.rs`) |
+| `get_work_items` | `GET .../pullRequests/{id}/workitems` | the first ten ids |
+| `comment_on_pull_request` | `POST .../pullRequests/{id}/threads` | the SDK's thread texts; inline comments carry `CommentThreadContext` positions |
+| `create_pull_request` | `POST .../pullrequests` | `Successfully created PR with ID <id>`; a 400/409 provider refusal returns the SDK's "Unable to create pull request" text |
+| `get_commits` | `GET .../commits?searchCriteria.*` with `str(datetime.fromisoformat(...))` dates | `[{sha, author, createdAt, message, url}]` |
+
+`update_file` uses the GitLab Org family's OLD/NEW marker engine
+(`gitlab_org::edit::apply_update`, now visible to sibling families) and the
+SDK's texts for unsupported files, missing markers and no-op edits. The diff
+reproduces `SequenceMatcher` exactly, including the autojunk rule for lines
+that make up more than 1% of a 200+ line file, and is checked against
+CPython goldens.
+
+Differences: the SDK validates the repository and both branches over the
+network at construction; here materialization stays network-free. The SDK
+caches file content per toolkit; Rust always reads the provider. `get_commits`
+reports each commit's own date where the SDK repeats the first commit's.
+`create_branch` reports a ref update the provider answers with
+`success: false`; the SDK reports success. Inline comments are all validated
+before the first thread is created. Bounds: `list_files` returns a
+"list a subdirectory" text above 20000 files or one result,
+`list_open_pull_requests` reads at most 100 PRs, `list_pull_request_files`
+diffs at most 100 changes and files up to 1 MiB, and the SDK's
+`ToolException` texts that would carry provider error bodies are stable
+Azure DevOps error codes.
+
+Proof: `toolkits/ado_repos_tests.rs` (configuration, CPython difflib
+goldens, `fromisoformat`/line-slice parity, read slicing and guard, create
+and update pushes, branch flows, open-PR Python text, PR diff JSON text,
+inline and query comments, commit filters, unknown outcome, argument
+validation, SDK conformance).
+
 ## Special runtime toolsets
 
 | Python source | Behavior | Rust target | Status / deviation |
 | --- | --- | --- | --- |
 | SDK `runtime/tools/ask_user.py` plus `runtime/toolkits/tools.py` internal-tool selection | Runtime-built clarification tool with 1-4 normalized questions and a structured UI answer | `src/agents/internal_tools.rs`, direct/nested agent session replay and pipeline LLM graph replay | Implemented capability-disabled through native ADK confirmation. Object/string answers replace the original call result; they are not new user turns. Main application/ad-hoc projection and `answer` admission are included. Nested-parallel saved-child calls have distinct hierarchical cards, atomic complete-set admission, frozen child-scope validation, and exact-answer replay coverage |
 | SDK `runtime/toolkits/mcp.py` | Remote MCP discovery and invocation | `src/toolkits/mcp.rs`, `src/agents/{ordinary,pipeline}.rs` | Partial capability-disabled HTTP implementation with exact selected-tool discovery/invocation, bounded RMCP protected-resource and authorization-server discovery, exact delegated authorization resume, and native direct/pipeline composition. Fixed and declared-parameter catalogue-backed HTTP definitions are supported through Main claim-time resolution. External Elitea-as-MCP can execute opted-in selected read-only toolkit operations through the separately gated durable direct-tool path. Stdio, descriptor sync, remaining OAuth transport variants, effectful external calls and external agent/pipeline controls remain gated |
-| SDK `runtime/toolkits/mcp_config.py` | Saved HTTP/stdio MCP definitions | Main prebuilt catalogue, dynamic toolkit schema and claim materializer; Rust MCP module; external MCP runner client | Partial capability-disabled for fixed and declared-parameter HTTP definitions with project-vault secret sealing. Main also injects runtime-only project identity and a current-user PAT for trusted same-origin internal MCP endpoints. The Main-owned application, skill, toolkit, configuration, notification, project-context, and secret operations are mapped in `internal-elitea-mcp.md`. Discovery, chat, analytics, artifacts, and live per-instance toolkit discovery remain closed there. Stdio is intentionally externalized |
+| SDK `runtime/toolkits/mcp_config.py` | Saved HTTP/stdio MCP definitions | Main prebuilt catalogue, dynamic toolkit schema and claim materializer; Rust MCP module; external MCP runner client | Partial capability-disabled for fixed and declared-parameter HTTP definitions with project-vault secret sealing. Main also injects runtime-only project identity and a current-user PAT for trusted same-origin internal MCP endpoints. The Main-owned application, skill, toolkit, configuration, notification, project-context, and secret operations are mapped in `internal-elitea-mcp.md`. Discovery, chat, analytics, artifacts, and live per-instance toolkit discovery remain closed there. Stdio is intentionally externalized. The SDK snapshot declares no static tools for `mcp_config` (the server's tools are discovered), so there is no schema gate; the Rust worker capability lists `mcp_config` because `snapshot.rs` classifies it as MCP and the direct MCP branch serves it, which `TestRustCapabilitySnapshotMatchesTheRustSource` derives from the source |
 | SDK `runtime/toolkits/application.py` | Nested applications | `src/agents/application_tools.rs`, `src/agents/graph/application.rs` | Partial capability-disabled direct-agent and saved-pipeline nesting with exact version, hierarchy, cycle/tier bounds and durable nested HITL; private immutable Main child resolution, child variables and further recursive pipeline nodes remain gated |
 | SDK `runtime/toolkits/artifact.py` | 16 artifact tools and indexing coupling | `src/toolkits/artifact.rs` | Planned; artifact service boundary required |
-| SDK `tools/memory` and `runtime/toolkits/vectorstore.py` | Four memory and four vectorstore tools | `src/toolkits/{memory,vectorstore}.rs` | Planned |
-| SDK `runtime/tools/sandbox.py` | Two Pyodide variants | External sandbox client | Intentional deviation: library abstraction is not a sandbox |
-| SDK `runtime/tools/data_analysis.py` | Generated data analysis over artifacts and pandas-shaped tabular operations | External sandbox/artifact boundary with Polars as the likely native data-frame engine | Planned after attachment/artifact grants and isolation design; neither pandas byte-for-byte behavior nor in-process arbitrary Python execution is implied |
+| SDK `tools/memory` and `runtime/toolkits/vectorstore.py` | Four memory and four vectorstore tools | `src/toolkits/{memory,vectorstore}.rs` | Memory blocked pending the gate 7b ownership decision; vectorstore blocked on the native indexing gate (both in `toolkit-port-b7-20261010.md`) |
+| SDK `runtime/tools/sandbox.py` | Two Pyodide variants | External sandbox client | Intentional deviation: library abstraction is not a sandbox. Blocked as a toolkit (`toolkit-port-b7-20261010.md`): the SDK binds no tool for a configured `sandbox` type, and the Rust code runner has no Main grant path or lent authority for model-initiated jobs |
+| SDK `runtime/tools/data_analysis.py` | Generated data analysis over artifacts and pandas-shaped tabular operations | External sandbox/artifact boundary with Polars as the likely native data-frame engine | Blocked (surveyed 2026-10-10, see "Toolkit types that cannot be ported as configured families yet"): needs a tool-lent model, the `CodeSandbox` lent to a tool and the attachment-bucket artifact authority together; neither pandas byte-for-byte behavior nor in-process arbitrary Python execution is implied |
 | SDK `community/inventory` | Dynamic retrieval/ingestion registry | `src/toolkits/inventory.rs` | Planned; current 14-schema versus 9-default drift must be resolved |
 
 ## Safe implementation ownership
@@ -2034,8 +2848,9 @@ Non-overlapping batches are:
 
 1. GitHub completion as the broad reference family, including its gated effects.
 2. Independent simple REST families using the Google Places/Sonar ownership pattern.
-3. Standard GitLab and Bitbucket with separate owners; LocalGit stays
-   intentionally deferred. GitLab Org is already complete behind its gate.
+3. Standard GitLab and Bitbucket with separate owners (both now partial: all
+   non-index tools); LocalGit is blocked in the cloud worker (see above).
+   GitLab Org is already complete behind its gate.
 4. All four ADO toolsets under one owner.
 5. Jira and Confluence after one shared Atlassian normalizer.
 6. qTest, TestRail, Xray and the indexing-backed Zephyr variants as coherent
