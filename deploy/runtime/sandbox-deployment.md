@@ -196,6 +196,8 @@ Each entry uses `language`, `target`, `audience`, `image_digest`, `policy_revisi
 Match image digests, policy revisions, and supported languages to the selected supervisor profile.
 Use a target hostname present in the supervisor certificate. A Service name alone does not establish TLS identity.
 Set `worker.runtime.agentModelCheckpointRecovery=true` for the verified checkpoint recovery deployment.
+With `worker.runtime.agentNodeRecovery=true`, also configure `main.runtime.codeOwnerRecovery` for the same supervisor audiences ([Code consumers](code-consumers-deployment.md)).
+Main admits a journaled Code node only through original-Code owner recovery, so the chart refuses the journal with sandbox runtimes without it.
 The chart rejects these Rust-only options when the Python worker is selected.
 
 The runtime command bus is NATS JetStream (docs/runtime-command-bus.md), so
