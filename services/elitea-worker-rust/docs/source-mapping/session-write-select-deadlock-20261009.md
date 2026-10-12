@@ -45,18 +45,19 @@ application 138). Its two nested application nodes each call agent 137, which pa
 
 | Mechanism | Owner | `path:line` |
 | --- | --- | --- |
-| `DrivenEventStream`: one inline poll, then a pending pull is finished on an owned, abort-on-drop task. Lockstep with the caller; cancellation-safe. | Worker | `services/elitea-worker-rust/src/agents/driven.rs:84`, `:103`, `:110` |
-| `DrivenTask`: owned task, abort on drop, `cancel()` waits until the task has released what it owns, panic is a typed failure | Worker | `src/agents/driven.rs:31`, `:46`, `:65`, `:74` |
+| `DrivenTask`: polls inline first and moves only pending work to an owned task (`tokio::spawn`). It aborts on drop, `cancel()` waits until the task has released what it owns, and a panic (inline or on the task) is a typed failure. | Worker | `services/elitea-worker-rust/src/agents/driven.rs:45`, `:58`, `:72`, `:79`, `:104` |
+| `DrivenEventStream`: each pull goes through one `DrivenTask`, in lockstep with the caller; cancellation-safe | Worker | `src/agents/driven.rs:114`, `:133` |
 | Pipeline node-event wrapper drives the graph | Worker | `src/agents/graph/node_events.rs:428` |
 | Application-event wrapper drives the root agent; it also stops polling a closed child channel (that was a latent busy loop) | Worker | `src/agents/application_tools.rs:4372`, `:4391` |
 | Pipeline-tool `drain_child` drives the child | Worker | `src/agents/application_pipeline.rs:1561` |
-| Scoped application node drives the tool future on a task, and cancels it before the queue drain on a drain failure | Worker | `src/agents/pipeline/scoped_runtime.rs:247`, `:259` |
-| Session transactions begin with `SET LOCAL lock_timeout` and `SET LOCAL idle_in_transaction_session_timeout`, in one round trip | Worker | `src/state/postgres_session.rs:107`, `:117` |
+| Scoped application node drives the tool future, and cancels it before the queue drain on a drain failure | Worker | `src/agents/pipeline/scoped_runtime.rs:247`, `:259` |
+| Session transactions begin with `SET LOCAL lock_timeout` and `SET LOCAL idle_in_transaction_session_timeout`, in one round trip (one shared builder) | Worker | `src/state/postgres_session.rs:105`, `:112`, `:121` |
 | Named bounds (`WRITER_LOCK_TIMEOUT` 10 s, max 60 s; `IDLE_TRANSACTION_TIMEOUT` 30 s, max 300 s; min 1 ms), validated in `SessionLimits` | Worker | `src/state/postgres_session.rs:44`, `:48`, `:96` |
-| `25P03` (idle timeout) joins `55P03` (lock timeout) as `session.storage_unavailable` (retryable) | Worker | `src/state/postgres_session.rs:1672` |
+| Graph checkpoint transactions, which lock `agent_graph_checkpoint_writers` the same way (a child share-locks its root), carry the same bounds through the same builder and constants | Worker | `src/state/postgres_checkpointer.rs:1497` (all six `begin` sites) |
+| `25P03` (idle timeout) joins `55P03` (lock timeout) as retryable: `session.storage_unavailable` / `checkpoint.storage_unavailable` | Worker | `src/state/postgres_session.rs:1676`, `src/state/postgres_checkpointer.rs:1528` |
 
 There are no changes in `libs/rust`, no new dependencies, and no migrations. The bounds are transaction-local, so
-they do not affect the checkpointer or other users of the agentstate pool.
+they apply only to the session and graph-checkpoint transactions, not to other users of the agentstate pool.
 
 ## Tests
 
@@ -64,12 +65,12 @@ The suite ran with `cargo test --offline --locked` (Worker) against a disposable
 It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` and
 `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`.
 
-- **Results.**
-  - Full Worker suite: **1655 passed, 0 failed, 10 ignored**.
+- **Results (final commit).**
+  - Full Worker suite: **1656 passed, 0 failed, 10 ignored**.
   - The 9 ignored PostgreSQL checkpointer tests were run explicitly with `--ignored`: **9 passed**.
   - The one remaining ignored test is a manual release-profile timing probe.
 - **Checks.** `cargo fmt --check` clean; `cargo clippy --locked --all-targets --all-features -D warnings` clean.
-- **New tests: 14, all passing.**
+- **New tests: 15, all passing.**
   - **Real PostgreSQL, the incident reproduction.**
     `agents::graph::node_events::session_lock_tests::node_event_yield_never_strands_a_child_append_holding_the_root_writer`.
     - Setup: a real root writer and a child `model_scope` writer.
@@ -90,12 +91,16 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
       then gets the writer row, and the holder's connection is gone.
     - `session_timeouts_are_bounded_at_activation`: limit + 1 and zero are refused before any database work; 1 ms and
       the maximum are accepted.
+    - `state::postgres_checkpointer::lock_bound_tests::checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bound`:
+      a graph checkpoint save behind a stalled writer-row holder fails with `StorageUnavailable` after
+      `WRITER_LOCK_TIMEOUT`, and succeeds once the holder releases.
   - **Unit tests, `agents::driven::tests` (7).**
     - A lost select arm keeps driving the item and never loses it.
     - Pulls stay in lockstep with the caller.
     - Ready items are returned inline without yielding to siblings.
     - Dropping the stream aborts an in-flight pull.
-    - A panicking task pull fails closed with `elitea_agent.driven_task_failed`, without the panic text.
+    - A panic, either inline or on the task, fails closed with `elitea_agent.driven_task_failed`, without the panic
+      text.
     - `cancel()` returns only after the task has released what it owns.
     - Awaiting a `DrivenTask` is cancellation-safe.
 - **Regression found and fixed during the change.**
@@ -103,8 +108,8 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
     version, which always spawned a task per item.
   - Cause: parallel in-process siblings interleaved, and the test's scripted model gateway hands out responses in
     arrival order.
-  - Fix: the inline first poll. A ready item takes no task, so work that never waits keeps its exact old scheduling.
-    No test was weakened.
+  - Fix: the inline first poll, now in `DrivenTask` for both the stream and the scoped tool future. Ready work takes no
+    task, so work that never waits keeps its exact old scheduling. No test was weakened.
 - **Skipped.** None besides the ignored timing probe. Not run: the drain paths of `drain_child` and `scoped_runtime`
   under a full 64-slot channel. They use the same helper, which the unit tests cover, but they have no dedicated
   end-to-end test.
@@ -113,7 +118,8 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
 
 - **Budgets.**
   - Zero extra database round trips per session transaction: the bounds ride in the `BEGIN` simple-query message.
-  - Zero tasks for a ready item; one Tokio task per inner item that is still pending after one poll.
+  - Zero tasks for ready work; one Tokio task (and one small boxed future) per inner item that is still pending after
+    one poll.
   - No added locks or buffering.
 - **Measured.**
   - A per-transaction `format!` of a ~100-byte `BEGIN` statement.
@@ -137,8 +143,7 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
   retryable).
 - **Task ownership.** Inner pulls run on owned tasks that are aborted on drop. `scoped_runtime` cancels and awaits its
   tool task before draining, so no child sender outlives tool polling.
-- **Panics.** A panic in a task pull becomes `elitea_agent.driven_task_failed`, logged once with no payload. A panic
-  during the inline poll propagates exactly as direct polling did.
+- **Panics.** A panic, inline or on the task, becomes `elitea_agent.driven_task_failed`, logged once with no payload.
 - **Latent busy loop removed.** `ApplicationEventStreamingAgent` no longer spins on a closed child channel.
 
 ## Security
@@ -149,6 +154,16 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
 - **No sensitive data in errors or logs.** The new error carries no data, and the panic log has no payload.
 - **No new egress, authorization surface or dependency.** Writer fencing (`ensure_current` plus `FOR UPDATE`/`FOR SHARE`
   on the writer row) is unchanged.
+- **Reviews.**
+  - `code-review` (high) reported 9 findings. Fixed: the graph checkpointer was unbounded; the scoped tool future had
+    no inline fast path; panic handling differed between inline and task polling; a stale doc comment.
+  - No change needed: re-formatting the `BEGIN` string per transaction (`begin_with` needs an owned `'static` statement
+    either way).
+  - Recorded as follow-ups below: asynchronous teardown on early return, a task per nesting level, full-channel
+    end-to-end tests, and a structural guard against new raw-stream `select!` sites.
+  - `security-review`: no findings. Injection: only validated integers are formatted. Writer fencing: the lease check,
+    writer-row lock and commit check are unchanged, and none depend on task-locals. Secrets/PII: the panic payload is
+    discarded. Crypto and deserialization: not applicable.
 - **Audit.** `cargo deny --all-features check advisories` (Worker) reports one pre-existing finding,
   RUSTSEC-2023-0071 (`rsa`, Marvin attack, via `sqlx-mysql`). It is unchanged by this PR: `Cargo.toml` and
   `Cargo.lock` are untouched.
@@ -157,12 +172,13 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
 
 | Component × phase | Class | Enforcing code | Proof |
 | --- | --- | --- | --- |
-| Worker × tool call (child model-scope append while a forwarded event persists) | R | `driven.rs:103`, `node_events.rs:428`, `application_tools.rs:4372` | both `session_lock_tests`; browser runs |
+| Worker × tool call (child model-scope append while a forwarded event persists) | R | `driven.rs:133`, `node_events.rs:428`, `application_tools.rs:4372` | both `session_lock_tests`; browser runs |
 | Worker × HITL pause and decision (nested `ask_user` answer turn) | R | as above | browser: three two-card journeys, each turn SUCCEEDED |
 | Worker × fan-out child forwarding (pipeline tool, scoped application node) | R | `application_pipeline.rs:1561`, `scoped_runtime.rs:247` | `driven::tests`; full suite |
 | PostgreSQL × session write under a stalled lock holder | I | `postgres_session.rs:107`, `:1672` | `session_writer_lock_wait_fails_typed_instead_of_waiting_forever` (retry lands once) |
-| PostgreSQL × takeover behind an idle holder | I | `postgres_session.rs:107` | `an_idle_session_transaction_releases_its_writer_locks` |
-| Worker × panic inside an inner agent stream | F | `driven.rs:65` | `a_panicking_pull_fails_closed_with_a_typed_error` |
+| PostgreSQL × takeover behind an idle holder | I | `postgres_session.rs:112` | `an_idle_session_transaction_releases_its_writer_locks` |
+| PostgreSQL × graph checkpoint write under a stalled writer holder | I | `postgres_checkpointer.rs:1497` | `checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bound` |
+| Worker × panic inside an inner agent stream | F | `driven.rs:72` | `a_panicking_pull_fails_closed_with_a_typed_error` |
 
 Pre-existing L closed: the hung execution, which was resolved only by a Worker restart and then marked FAILED.
 
@@ -205,7 +221,34 @@ Pre-existing L closed: the hung execution, which was resolved only by a Worker r
 - **Server side.**
   - No `agentstate` backend was ever `idle in transaction`.
   - The Worker logged 0 `lock_not_available`, `storage_unavailable`, `driven_task_failed` or panic lines.
-- **Teardown.** The stack was torn down with `down -v` after the evidence was recorded.
+- **Final image, second pass.** The evidence above is from image `a97c56daf`. After the review fixes, the stack was
+  rebuilt on the final commit: Worker `session-deadlock-cd18caa56`, image
+  `sha256:906f2eff85db90875dab08d6c8211cf0a305dd8319b96b81ae11645daeb7a67d`. Its binary contains the two strings above
+  plus `an agent task panicked; the execution fails closed`.
+  - **An interrupted run, recorded honestly.** The first journey on this image (chat 880) was cut short by the host,
+    not by the fix.
+    - What happened: the Mac went to sleep on battery from 22:16 to 22:37 UTC (`pmset` log: "Maintenance Sleep" with
+      second-long dark wakes). Main's claim lease expired while the Worker was frozen.
+    - What the Worker logged: the stream ended with `stream_disposition="lease_failed"` / `claim_lease_control_failure`
+      at 22:37:58. The lifecycle span shows only about 20 s awake (`time.busy=242ms time.idle=19.7s`). The command was
+      retained for recovery, and Main retired it (`agent_delivery.authorization_terminal_retired`), so execution
+      `0a2f0c0ec5b83bf197e8caa066d070f9` settled as FAILED.
+    - What it was not: no agentstate backend was ever `idle in transaction`. This is the expected lease-loss path, not
+      the session-lock hang.
+  - **Clean pass.** With the host kept awake, a fresh journey in chat 881 ran first message → card 1 → answer card 1
+    → card 2 → answer card 2 → both node results. All three executions `SUCCEEDED`:
+
+    | Execution | Seconds |
+    | --- | --- |
+    | `039624375e13953a332ea986eef5dff4` | 2.9 |
+    | `15cbc1e8aa8ca4216f5df6fd3aee6a23` | 3.8 (the incident step) |
+    | `9e1bd650e821b39fddf8d9f561dff3a8` | 1.9 |
+
+    - After reload, the final message showed both the OVERRIDE CALL and DEFAULT CALL blocks.
+    - 12 Haiku 4.5 model log lines and 0 LLM-mock requests.
+    - 0 `idle in transaction` agentstate backends.
+    - 0 lock-timeout, driven-task or panic log lines.
+- **Teardown.** The stack was torn down with `down -v` after each pass's evidence was recorded.
 
 ## Fixtures
 
@@ -220,3 +263,10 @@ Pre-existing L closed: the hung execution, which was resolved only by a Worker r
   needs no session lock, and the new bounds release any held writer row within 30 s. Dropping or draining `native`
   before the close would remove the window entirely.
 - **End-to-end drain tests.** Add tests for `drain_child` / `scoped_runtime` under a full 64-slot event channel.
+- **Asynchronous teardown on early return.** On an early `?` return in `drain_child` or the wrappers, a pending pull is
+  aborted rather than dropped in place. It can finish its current poll, and a late node event is then discarded by the
+  existing stale-event guard. An explicit `cancel().await` on those paths would make the teardown synchronous.
+- **One task per nesting level.** Nested wrappers can spawn one task per level for an item that stays pending. This is
+  bounded by nesting depth; it was measured as negligible in the browser runs.
+- **Structural guard.** Add a lint or a single forwarding combinator, so no new `select!` can race a raw `EventStream`
+  against a side channel.
