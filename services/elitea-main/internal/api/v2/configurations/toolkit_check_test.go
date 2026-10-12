@@ -27,15 +27,14 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
-// allowAnyHost is the explicit "no host restriction" form the policy documents.
-// Tests dial an httptest server on 127.0.0.1, which no realistic allowlist
-// names, so the egress control is exercised by its own case below instead of
-// standing between every other case and the provider.
-func allowAnyHost() material.GitEgressPolicy {
-	return material.ParseGitEgress("*", handler.ToolkitCheckAllowlistEnv)
+// allowAnyHost names the loopback address the httptest providers listen on,
+// as an operator names a self-hosted provider: the IP entry is both the host
+// bound and the private permit the egress guard needs for it. The egress
+// control is exercised by its own cases (toolkit_check_egress_test.go).
+func allowAnyHost() string {
+	return "127.0.0.1"
 }
 
 // providerStub is an httptest provider that records what it was asked, so a
@@ -67,7 +66,7 @@ func newProviderStub(t *testing.T, status int) *providerStub {
 
 func TestToolkitCheckReportsOkOnlyForAProviderThatAcceptedTheCredential(t *testing.T) {
 	stub := newProviderStub(t, http.StatusOK)
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	outcome := checker.CheckToolkit(context.Background(), "github", map[string]any{
 		"base_url":     stub.server.URL,
@@ -88,7 +87,7 @@ func TestToolkitCheckReportsOkOnlyForAProviderThatAcceptedTheCredential(t *testi
 func TestToolkitCheckReportsAuthFailedForARefusedCredential(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		stub := newProviderStub(t, status)
-		checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 		outcome := checker.CheckToolkit(context.Background(), "github", map[string]any{
 			"base_url":     stub.server.URL,
@@ -114,7 +113,7 @@ func TestToolkitCheckReportsUnreachableWhenNothingAnswers(t *testing.T) {
 	address := stub.server.URL
 	stub.server.Close()
 
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 	outcome := checker.CheckToolkit(context.Background(), "gitlab", map[string]any{
 		"url":           address,
 		"private_token": "a-token",
@@ -129,7 +128,7 @@ func TestToolkitCheckReportsUnreachableWhenNothingAnswers(t *testing.T) {
 }
 
 func TestToolkitCheckReportsUnsupportedTypeForAFamilyWithNoProbe(t *testing.T) {
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	outcome := checker.CheckToolkit(context.Background(), "sharepoint", map[string]any{"base_url": "https://example.invalid"})
 
@@ -143,7 +142,7 @@ func TestToolkitCheckReportsUnsupportedTypeForAFamilyWithNoProbe(t *testing.T) {
 
 func TestToolkitCheckReportsUnsupportedTypeForAnAuthMethodItCannotProbe(t *testing.T) {
 	stub := newProviderStub(t, http.StatusOK)
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	cases := []struct {
 		name       string
@@ -233,7 +232,7 @@ func TestToolkitCheckProbesAGitHubAppWithAJWTSignedByTheStoredKey(t *testing.T) 
 	} {
 		t.Run(encoding.name, func(t *testing.T) {
 			stub := newProviderStub(t, http.StatusOK)
-			checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+			checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 			before := time.Now()
 
 			outcome := checker.CheckToolkit(context.Background(), "github", map[string]any{
@@ -291,7 +290,7 @@ func TestToolkitCheckProbesAGitHubAppWithAJWTSignedByTheStoredKey(t *testing.T) 
 func TestToolkitCheckReportsAuthFailedForAGitHubAppTheProviderRefuses(t *testing.T) {
 	_, keyPEM := testAppKey(t)
 	stub := newProviderStub(t, http.StatusUnauthorized)
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	outcome := checker.CheckToolkit(context.Background(), "github", map[string]any{
 		"base_url":        stub.server.URL,
@@ -312,7 +311,7 @@ func TestToolkitCheckReportsUnreachableWhenTheGitHubAppEndpointDoesNotAnswer(t *
 	stub := newProviderStub(t, http.StatusOK)
 	address := stub.server.URL
 	stub.server.Close() // nothing listens now: the dial itself fails.
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	outcome := checker.CheckToolkit(context.Background(), "github", map[string]any{
 		"base_url":        address,
@@ -348,7 +347,7 @@ func TestToolkitCheckReportsAuthFailedForAGitHubAppKeyItCannotRead(t *testing.T)
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			stub := newProviderStub(t, http.StatusOK)
-			checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+			checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 			data := map[string]any{"base_url": stub.server.URL}
 			for key, value := range testCase.data {
 				data[key] = value
@@ -389,7 +388,7 @@ func TestToolkitCheckReportsAuthFailedForAGitHubAppKeyItCannotRead(t *testing.T)
 func TestToolkitCheckStillReadsTheUserEndpointForANonAppGitHubCredential(t *testing.T) {
 	_, keyPEM := testAppKey(t)
 	stub := newProviderStub(t, http.StatusOK)
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	// A row that carries BOTH a token and App fields: the token wins, and the
 	// endpoint has to follow the credential that was actually presented.
@@ -413,8 +412,7 @@ func TestToolkitCheckStillReadsTheUserEndpointForANonAppGitHubCredential(t *test
 
 func TestToolkitCheckRefusesAHostTheAllowlistDoesNotName(t *testing.T) {
 	stub := newProviderStub(t, http.StatusOK)
-	policy := material.ParseGitEgress("api.github.com", handler.ToolkitCheckAllowlistEnv)
-	checker := handler.NewToolkitConnectionChecker(policy, nil)
+	checker := handler.NewToolkitConnectionChecker("api.github.com")
 
 	outcome := checker.CheckToolkit(context.Background(), "jira", map[string]any{
 		"base_url": stub.server.URL,
@@ -435,7 +433,7 @@ func TestToolkitCheckRefusesAHostTheAllowlistDoesNotName(t *testing.T) {
 
 func TestToolkitCheckNeverPutsTheSecretOrTheProviderBodyInTheMessage(t *testing.T) {
 	stub := newProviderStub(t, http.StatusUnauthorized)
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	const secret = "super-secret-token-value"
 	outcome := checker.CheckToolkit(context.Background(), "bitbucket", map[string]any{
@@ -519,7 +517,7 @@ func TestToolkitProbesUseEachFamilysOwnIdentityEndpoint(t *testing.T) {
 			data[key] = value
 		}
 
-		checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 		outcome := checker.CheckToolkit(context.Background(), testCase.configType, data)
 
 		if outcome.Reason != handler.ToolkitCheckReasonOK {
@@ -539,7 +537,7 @@ func TestToolkitCheckKeepsABaseUrlsOwnPathPrefix(t *testing.T) {
 	// answer 404, which this build would report as unreachable — a working
 	// credential shown as broken.
 	stub := newProviderStub(t, http.StatusOK)
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	outcome := checker.CheckToolkit(context.Background(), "confluence", map[string]any{
 		"base_url": stub.server.URL + "/wiki",
@@ -556,7 +554,7 @@ func TestToolkitCheckKeepsABaseUrlsOwnPathPrefix(t *testing.T) {
 }
 
 func TestToolkitCheckRefusesANonHttpBaseUrl(t *testing.T) {
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	outcome := checker.CheckToolkit(context.Background(), "github", map[string]any{
 		"base_url":     "file:///etc/passwd",
@@ -604,7 +602,7 @@ func postCheckConnection(t *testing.T, router *chi.Mux, configType string, body 
 
 func TestCheckConnectionRouteReportsTheToolkitProbesOutcome(t *testing.T) {
 	stub := newProviderStub(t, http.StatusOK)
-	router := setupConfigRouterWithToolkitChecker(handler.NewToolkitConnectionChecker(allowAnyHost(), nil))
+	router := setupConfigRouterWithToolkitChecker(handler.NewToolkitConnectionChecker(allowAnyHost()))
 
 	status, body := postCheckConnection(t, router, "github",
 		`{"base_url":"`+stub.server.URL+`","access_token":"t"}`)
@@ -622,7 +620,7 @@ func TestCheckConnectionRouteReportsTheToolkitProbesOutcome(t *testing.T) {
 
 func TestCheckConnectionRouteReportsAuthFailedForAToolkitCredentialTheProviderRefuses(t *testing.T) {
 	stub := newProviderStub(t, http.StatusUnauthorized)
-	router := setupConfigRouterWithToolkitChecker(handler.NewToolkitConnectionChecker(allowAnyHost(), nil))
+	router := setupConfigRouterWithToolkitChecker(handler.NewToolkitConnectionChecker(allowAnyHost()))
 
 	status, body := postCheckConnection(t, router, "jira",
 		`{"base_url":"`+stub.server.URL+`","username":"u","api_key":"wrong"}`)
@@ -646,7 +644,7 @@ func TestCheckConnectionRouteReportsAuthFailedForAToolkitCredentialTheProviderRe
 }
 
 func TestCheckConnectionRouteStillRefusesAToolkitTypeWithNoProbe(t *testing.T) {
-	router := setupConfigRouterWithToolkitChecker(handler.NewToolkitConnectionChecker(allowAnyHost(), nil))
+	router := setupConfigRouterWithToolkitChecker(handler.NewToolkitConnectionChecker(allowAnyHost()))
 
 	// `sharepoint` is a real catalogue type with no probe: it must keep the
 	// honest "not supported yet" answer rather than becoming an error.
@@ -675,7 +673,7 @@ func TestCheckConnectionRouteStillRefusesAToolkitTypeWithNoProbe(t *testing.T) {
 func TestAhaCheckAnswersTheFourOutcomesItAdvertises(t *testing.T) {
 	accepted := newProviderStub(t, http.StatusOK)
 	refused := newProviderStub(t, http.StatusUnauthorized)
-	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	for name, test := range map[string]struct {
 		data       map[string]any

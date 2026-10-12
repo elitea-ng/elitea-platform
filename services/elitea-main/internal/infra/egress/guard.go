@@ -9,8 +9,10 @@
 //     dials the checked IP literal, so DNS rebinding cannot swap the address
 //     between the check and the connect (dialContext).
 //   - Loopback and private-network addresses (RFC 1918, ULA, CGNAT,
-//     benchmarking, site-local) are refused unless the operator's allowlist
-//     declares private egress. Unspecified, link-local, multicast, reserved,
+//     benchmarking, site-local) are refused unless an operator allowlist entry
+//     names that address: a CIDR entry permits its own block, an IP literal
+//     that address, `localhost` loopback, each only on the entry's port when it
+//     pins one (classify.go privatePermits). Unspecified, link-local, multicast, reserved,
 //     IETF-protocol, discard, Teredo and cloud-metadata addresses are refused
 //     whatever the allowlist says (classify.go).
 //   - IPv4 reached through an IPv6 form (IPv4-mapped, NAT64 64:ff9b::/96, 6to4)
@@ -27,8 +29,9 @@
 // The operator allowlists (ELITEA_WEBHOOK_EGRESS_ALLOWLIST,
 // ELITEA_MCP_EGRESS_ALLOWLIST, ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST, and the
 // Code workspace host allowlist) use libs/go/egresslib's grammar. This guard
-// asks one question of them: does an entry declare private egress? It never
-// widens past the forbidden classes.
+// asks one question of them: which private addresses does an entry name? An
+// entry permits only its own range, never the other private classes, and
+// never widens past the forbidden classes.
 //
 // The guard used to live in internal/api/webhook. It moved here so
 // infrastructure adapters can use it without importing the api layer.
@@ -76,9 +79,9 @@ type Resolver interface {
 // Guard is the SSRF gate for a tenant-chosen destination. It is safe for
 // concurrent use and immutable after New.
 type Guard struct {
-	allowPrivate bool
-	resolver     Resolver
-	httpsOnly    bool
+	private   []privatePermit
+	resolver  Resolver
+	httpsOnly bool
 }
 
 // Option configures a Guard built by New.
@@ -106,7 +109,7 @@ func New(allowlist *egresslib.Allowlist, opts ...Option) *Guard {
 	for _, opt := range opts {
 		opt(g)
 	}
-	g.allowPrivate = declaresPrivateEgress(allowlist)
+	g.private = privatePermits(allowlist)
 	return g
 }
 
@@ -120,10 +123,6 @@ func NewWithResolver(allowlist *egresslib.Allowlist, resolver Resolver) *Guard {
 // blocks. An empty list refuses every private destination.
 func ParseAllowlist(raw []string) (*egresslib.Allowlist, error) {
 	return egresslib.Parse(raw)
-}
-
-func (g *Guard) allowsPrivate() bool {
-	return g != nil && g.allowPrivate
 }
 
 // Validate checks a destination URL before it is stored or used. It applies
@@ -143,10 +142,22 @@ func (g *Guard) Validate(ctx context.Context, rawURL string) error {
 	if err != nil {
 		return fmt.Errorf("%w: could not resolve %q: %v", ErrDestinationRefused, host, err)
 	}
-	if len(g.permittedIPs(ips)) == 0 {
+	if len(g.permittedIPs(ips, destinationPort(u))) == 0 {
 		return notPermitted(host)
 	}
 	return nil
+}
+
+// destinationPort is the port a request to u dials: the explicit port, or the
+// scheme's default. A port-pinned allowlist entry is compared against it.
+func destinationPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "http") {
+		return "80"
+	}
+	return "443"
 }
 
 // Transport returns an *http.Transport that dials only through dialContext,
@@ -217,7 +228,7 @@ func (g *Guard) dialContext(ctx context.Context, network, addr string) (net.Conn
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not resolve %q: %v", ErrDestinationRefused, host, err)
 	}
-	allowed := g.permittedIPs(ips)
+	allowed := g.permittedIPs(ips, port)
 	if len(allowed) == 0 {
 		return nil, notPermitted(host)
 	}
@@ -242,22 +253,36 @@ func notPermitted(host string) error {
 }
 
 // permittedIPs is the ONE filter Validate and dialContext both apply. It keeps
-// public addresses, and private ones only when the allowlist declares private
-// egress. Forbidden addresses are never kept.
-func (g *Guard) permittedIPs(ips []net.IP) []net.IP {
-	allowPrivate := g.allowsPrivate()
+// public addresses, and a private one only when an allowlist entry names it
+// (on this port, when the entry pins one). Forbidden addresses are never kept.
+func (g *Guard) permittedIPs(ips []net.IP, port string) []net.IP {
 	allowed := make([]net.IP, 0, len(ips))
 	for _, ip := range ips {
 		switch classify(ip) {
 		case classPublic:
 			allowed = append(allowed, ip)
 		case classPrivate:
-			if allowPrivate {
+			if g.permitsPrivate(ip, port) {
 				allowed = append(allowed, ip)
 			}
 		}
 	}
 	return allowed
+}
+
+// permitsPrivate reports whether an allowlist entry names this private
+// address on this port.
+func (g *Guard) permitsPrivate(ip net.IP, port string) bool {
+	if g == nil || len(g.private) == 0 {
+		return false
+	}
+	ip = canonicalIP(ip)
+	for _, permit := range g.private {
+		if permit.permits(ip, port) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveHost resolves host to at most MaxResolvedAddresses addresses. An IP

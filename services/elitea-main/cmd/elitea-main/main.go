@@ -65,6 +65,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
@@ -1002,6 +1003,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if currentConfigurationsConfig.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
 		return errors.New("ELITEA_CONFIGURATIONS_ENABLED requires an authenticated deployment")
 	}
+	// The optional runtime configuration is read here, ahead of the runtime
+	// itself, because one Configurations-side decision depends on it: under
+	// the Rust indexing runtime no project vector store is composed (below).
+	// Its validation against the Configurations flags stays where the runtime
+	// is composed.
+	runtimeConfig, err := runtimecomposition.ConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load optional runtime configuration: %w", err)
+	}
 	var currentConfigurationsRoot *runtimecomposition.CurrentConfigurationsRuntime
 	// The toolkit settings resolver the Inventory facade expands a source with.
 	// Nil where the Configurations runtime is not composed — a deployment with
@@ -1083,18 +1093,30 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// deliberately NOT used here: it keys off ELITEA_VAULT_MASTER_KEY_FILE,
 		// which no file under deploy/ sets, so it could not open the vault the
 		// handler had just created.
-		vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
-			pool,
-			v2secrets.NewHandler(pool),
-			logger,
-		)
-		if err != nil {
-			return fmt.Errorf("compose project vector-store provisioning: %w", err)
-		}
-		// Through the concrete value, and only when there IS one. See the
-		// declaration above for what a typed nil costs here.
-		if vectorStore != nil {
-			projectVectorStore = vectorStore
+		//
+		// NOT UNDER THE RUST INDEXING RUNTIME (ADR-0031 decision 5). A
+		// deployment that indexes natively keeps index metadata in the
+		// registry and vectors in elitea-vector; a created project needs no
+		// pgvector role, database or `pgvector_configuration`, and requiring
+		// a pgvector bootstrap would keep alive the per-project database the
+		// runtime retires. The provisioner then takes no vector store and
+		// skips its project_pgvector step.
+		if runtimeConfig.ProjectVectorStoreProvisioned() {
+			vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
+				pool,
+				v2secrets.NewHandler(pool),
+				logger,
+			)
+			if err != nil {
+				return fmt.Errorf("compose project vector-store provisioning: %w", err)
+			}
+			// Through the concrete value, and only when there IS one. See the
+			// declaration above for what a typed nil costs here.
+			if vectorStore != nil {
+				projectVectorStore = vectorStore
+			}
+		} else {
+			logger.Info("project vector store not provisioned: the Rust indexing runtime needs no per-project pgvector database (ADR-0031 decision 5)")
 		}
 		toolkitSettingsResolver, err := currentConfigurationsRoot.NewToolkitSettingsValidator(pool)
 		if err != nil {
@@ -1370,10 +1392,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		logger.Info("chat-config route enabled (ungated)")
 	}
 
-	runtimeConfig, err := runtimecomposition.ConfigFromEnv(os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("load optional runtime configuration: %w", err)
-	}
+	// runtimeConfig was read above, before the Configurations runtime, so the
+	// project vector-store decision could use it.
 	if runtimeConfig.Enabled && (principalValidator == nil || forwardedIdentityVerifier == nil) {
 		return errors.New("ELITEA_RUNTIME_ENABLED requires production authentication")
 	}
@@ -1451,7 +1471,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 			inventorySources, err = v2inventory.NewSources(
 				inventoryToolkits, inventorySourceSettings,
-				material.NewCallbackMinter(inventoryTokens), inventorySourcesConfig)
+				material.NewCallbackMinter(inventoryTokens),
+				// What investigate's bearer was minted for: the record the
+				// test_tool source-tool gate reads (shared/0159).
+				dbrepos.NewCallbackTokenGrants(pool), inventorySourcesConfig)
 			if err != nil {
 				return fmt.Errorf("compose Inventory source expander: %w", err)
 			}
@@ -1599,6 +1622,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
 		}
 	}
+	// The application engines' platform services (#1243, #1244): the gRPC
+	// clients that delete a project's (and a toolkit's) data in DeepWiki and
+	// Inventory, read beside the two facades whose mTLS material they present.
+	// They are shared by the project provisioner's cleanup journal (one step
+	// each) and the toolkit cleanup journal (one row per Inventory toolkit),
+	// through RouterConfig.ApplicationData.
+	applicationData, closePlatformOperations, err := composePlatformOperations(
+		logger, deepwikiConfig, inventoryConfig, os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("compose application platform operations: %w", err)
+	}
+	defer closePlatformOperations()
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -1622,6 +1657,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load pinned worker toolkit capability: %w", err)
 	}
+	// Under the Rust indexing runtime the Rust worker serves the index tools
+	// inside the I1 indexing families (ADR-0030 I1), which the pinned
+	// snapshot cannot express: the same image serves them under one setting
+	// and not the other. The decision is the runtime configuration's
+	// RustIndexing() — the same one the composition root keys the registry,
+	// the catalog freeze and the vector store on — so the catalogue can never
+	// offer a tool the runtime does not serve.
+	workerToolkitCapability = workerToolkitCapability.ForIndexingRuntime(runtimeConfig)
 	logger.Info(
 		"toolkit type catalogue composed",
 		"worker_implementation", workerImplementation,
@@ -1688,6 +1731,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return openErr
 		}
 		defer runtimePools.Close()
+		if len(runtimeConfig.VectorIntrospectionClients) > 0 {
+			if err := runtimePools.openVectorIntrospection(ctx, dbDSN, databasePoolLimits, openRuntimePostgresPool); err != nil {
+				return err
+			}
+		}
 		compiledState, compiledStateErr := openCompiledSnapshotStatePool(ctx, runtimeConfig)
 		if compiledStateErr != nil {
 			return compiledStateErr
@@ -1723,6 +1771,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ReplayPool:                       runtimePools.Replay,
 			TerminalEffectsPool:              runtimePools.TerminalEffects,
 			ContentPool:                      runtimePools.Content,
+			VectorIntrospectionPool:          runtimePools.VectorIntrospection,
 			CompiledSnapshotStatePool:        compiledState.pool,
 			CodeWorkspaceCapabilities:        codeConsumers.workspaceCapabilities,
 			CodeWorkspacePolicy:              codeConsumers.workspacePolicy,
@@ -1734,11 +1783,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ActorTokenIssuer:                 formGraph,
 			ProjectTokenValidator:            formGraph,
 			ProjectSystemTokenSource:         formGraph,
-			PermissionResolver:               legacyrbac.NewPostgresResolver(pool),
-			Logger:                           logger,
-			ObjectStore:                      objectStore,
-			ToolkitCatalogue:                 toolkitCatalogue,
-			WorkerToolkitCapability:          workerToolkitCapability,
+			// elitea-vector's token introspection (ADR-0031) reads callback
+			// grants over the main pool, where the minting facades write them.
+			CallbackTokenFacts:      dbrepos.NewCallbackTokenGrants(pool),
+			PermissionResolver:      legacyrbac.NewPostgresResolver(pool),
+			Logger:                  logger,
+			ObjectStore:             objectStore,
+			ToolkitCatalogue:        toolkitCatalogue,
+			WorkerToolkitCapability: workerToolkitCapability,
 			// pipeline.run.succeeded/failed — see
 			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
 			PipelineRuns: pipelineRunsRepo,
@@ -2345,7 +2397,41 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
 
+	// The project-deletion reconciler (#1211) drains the cleanup journal over
+	// the one provisioner the router builds, so it is started from the router's
+	// hook. A failure to construct it
+	// is carried out of the hook and stops startup like the other composition
+	// errors.
+	deletionReconciler, err := projectDeletionReconcilerFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load project deletion reconciler settings: %w", err)
+	}
+	projectDeleteBudget, err := projectDeleteBudgetFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load project delete budget: %w", err)
+	}
+	var deletionReconcilerErr error
+	startDeletionReconciler := func(provisioner *projectprovisioning.Provisioner) {
+		deletionReconcilerErr = startProjectDeletionReconciler(ctx, deletionReconciler, provisioner, logger)
+	}
+	// The toolkit-deletion reconciler (#1244) drains the toolkit cleanup
+	// journal the toolkit handler enqueues into, over the same journal, from
+	// the router's hook; it has a flag of its own.
+	toolkitReconciler, err := toolkitDeletionReconcilerFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load toolkit deletion reconciler settings: %w", err)
+	}
+	var toolkitReconcilerErr error
+	startToolkitReconciler := func(journal *toolkitcleanup.Journal) {
+		toolkitReconcilerErr = startToolkitDeletionReconciler(ctx, toolkitReconciler, journal, logger)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
+		OnProjectProvisioner:         startDeletionReconciler,
+		OnToolkitCleanupJournal:      startToolkitReconciler,
+		ProjectCleanupContext:        ctx,
+		ProjectDeleteBudget:          projectDeleteBudget,
+		ApplicationData:              applicationData,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,
@@ -2507,6 +2593,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		WebhookDestinationGuard:     webhookDestinationGuard,
 		MCPAuthorizationEgressGuard: mcpAuthorizationEgressGuard,
 	})
+	if deletionReconcilerErr != nil {
+		return fmt.Errorf("start project deletion reconciler: %w", deletionReconcilerErr)
+	}
+	if toolkitReconcilerErr != nil {
+		return fmt.Errorf("start toolkit deletion reconciler: %w", toolkitReconcilerErr)
+	}
 
 	// NOTE(#126): the Socket.IO prototype server (internal/api/socketio) is
 	// gone. It was never mounted — the comment that stood here said it stayed

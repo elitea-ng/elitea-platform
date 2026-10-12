@@ -1325,8 +1325,11 @@ in a release note.**
 - ~~Set `secrets.*.optional: false` ... for `GATEWAY_IDENTITY_SECRET`~~ — DONE
   2026-08-09 (issue #11, see the Trust-boundary entry above): it is `false` in
   the base chart for both the gateway and elitea-main. `SECRETS_MASTER_KEY`
-  remains `optional: true` (unset ⇒ Fernet vault degraded single-level mode);
-  making that one mandatory is still open and needs a human.
+  is mandatory too since 2026-10-09: the binary refuses to start without it
+  (`cmd/elitea-llm-gateway/master_key_gate.go`, elitea-main's rule and opt-out
+  `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`), and the chart renders the reference
+  `optional: false` and refuses a values set with none
+  (`deploy/helm/tests/render-gateway-master-key.sh`).
 - elitea-main env-drift is still WARN-heavy for vars read via a default
   (`ELITEA_RUNTIME_ENABLED`, `REDIS_URL`, and ~19 others) with no chart
   override knob at all — real, now-visible (the two bugs above previously

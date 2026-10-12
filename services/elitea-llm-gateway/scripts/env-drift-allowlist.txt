@@ -46,3 +46,10 @@ SERVICE_VERSION
 # value on every replica, is what arms a default install. Delete this entry
 # when that lands.
 GATEWAY_HOP_SECRET
+
+# The development-only opt-out from the mandatory vault master key
+# (cmd/elitea-llm-gateway/master_key_gate.go). It is absent from values.yaml on
+# purpose: a default there would ship the unwrapped posture. A throwaway install
+# sets it as llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS, and the chart
+# then makes the key reference optional (elitea-llm-gateway.masterKeyRef).
+ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS

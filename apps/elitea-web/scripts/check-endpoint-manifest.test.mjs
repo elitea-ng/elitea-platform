@@ -728,7 +728,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // listExecutionInterrupts and decideExecutionInterrupt. Main registers them
 // only behind ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED and no web code
 // calls them in Wave 1, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 315;
+// 315 -> 317 (shared theme preference): getCurrentAuthorTheme and
+// updateCurrentAuthorTheme, the per-user theme mode the web and desktop apps
+// both read and write. Their manifest entries are `handwritten` (see
+// MANIFEST_ENTRY_COUNT's 273 -> 275 note).
+const GENERATED_OPERATION_COUNT = 317;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -915,8 +919,14 @@ const GENERATED_OPERATION_COUNT = 315;
  * operationId: /llm is elitea-main's proxy to the gateway, not part of the
  * /api/v2 spec, so orval never generates them and GENERATED_OPERATION_COUNT
  * does not move.
+ *
+ * 273 -> 275 (shared theme preference): social.getThemePreference and
+ * social.updateThemePreference. Both `handwritten` with a real operationId:
+ * shared/api/themePreference.ts calls `eliteaFetch` directly so both requests
+ * can be `background` (a 401 on a theme sync must not open the re-auth
+ * window), which the generated functions cannot ask for.
  */
-const MANIFEST_ENTRY_COUNT = 273;
+const MANIFEST_ENTRY_COUNT = 275;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -223,12 +223,10 @@ function resolveApiBaseUrl(): string | undefined {
 type SessionStore = UseBoundStore<StoreApi<SessionState>>;
 
 /**
- * The session probe deliberately omits `reauthenticate`: a 401 here means
- * "not logged in", which is the answer we are asking for, not a condition to
- * recover from. Escalating it into the re-auth popup would loop.
- *
- * `baseUrl: '/'` — `/auth/info` is served by the same origin as the
- * app, not by the API base.
+ * The probe omits `reauthenticate`: its 401 means "not logged in", the answer
+ * asked for; escalating it into the re-auth popup would loop. `baseUrl: '/'`:
+ * `/auth/info` is served by the app's origin, not the API base. The desktop
+ * build never asks it (see `fetchSession`).
  */
 export interface CreateSessionStoreOptions {
   /**
@@ -248,11 +246,9 @@ export interface CreateSessionStoreOptions {
 }
 
 /**
- * The Form-plane user, with its permission list, or `undefined` when
- * `/social/author` cannot name one.
- *
- * Split out of `fetchSession` to keep that function under the §3.5
- * complexity budget.
+ * The Form-plane (and desktop) user, with its permission list, or `undefined`
+ * when `/social/author` cannot name one. Split out of `fetchSession` to keep
+ * that function under the §3.5 complexity budget.
  */
 async function formPlaneUser(apiBaseUrl: string | undefined): Promise<AuthUser | undefined> {
   const author = await fetchAuthorSession(apiBaseUrl);
@@ -263,7 +259,6 @@ async function formPlaneUser(apiBaseUrl: string | undefined): Promise<AuthUser |
   };
   return withPermissions(user, apiBaseUrl);
 }
-
 
 export function createSessionStore(options: CreateSessionStoreOptions = {}): SessionStore {
   const http = createProbeClient(
@@ -278,6 +273,15 @@ export function createSessionStore(options: CreateSessionStoreOptions = {}): Ses
     loaded: false,
     probeStatus: undefined,
     fetchSession: async () => {
+      const apiBaseUrl = options.apiBaseUrl ?? resolveApiBaseUrl();
+      // Desktop (ADR-0029): `/auth/info` reads only the browser-session cookie, and a native client
+      // has a bearer token instead — it would answer "not signed in" (the endless Loading). `/social/author`
+      // answers a bearer caller on either plane. A literal MODE test: every other build drops the branch.
+      if (import.meta.env.MODE === 'desktop') {
+        const user = await formPlaneUser(apiBaseUrl);
+        set({ user, loaded: true, probeStatus: user === undefined ? undefined : 200 });
+        return;
+      }
       const result = await http.get<SessionInfoResponse>(SESSION_INFO_PATH);
       // The status lives in a different place on each arm of HttpResult, and
       // the arm that matters here is the FAILURE one: a 404 is what identifies
@@ -293,7 +297,6 @@ export function createSessionStore(options: CreateSessionStoreOptions = {}): Ses
         // cookie. Ask the endpoint that answers on both planes before
         // concluding "not logged in" — otherwise a logged-in user is sent back
         // to the login form on every load.
-        const apiBaseUrl = options.apiBaseUrl ?? resolveApiBaseUrl();
         const fallbackUser = probeStatus === 404 ? await formPlaneUser(apiBaseUrl) : undefined;
         set({ user: fallbackUser, loaded: true, probeStatus });
         return;
@@ -305,13 +308,13 @@ export function createSessionStore(options: CreateSessionStoreOptions = {}): Ses
       // names a project the user is not a member of: `NotificationButton`
       // then opened its SSE subscription against it and was refused with a
       // 403, terminal for EventSource. The real source is `/social/author`.
-      const personalProjectId = await fetchPersonalProjectId(options.apiBaseUrl ?? resolveApiBaseUrl());
+      const personalProjectId = await fetchPersonalProjectId(apiBaseUrl);
       const user: AuthUser = {
         id: result.data.user_id,
         ...(personalProjectId !== undefined ? { personal_project_id: personalProjectId } : {}),
       };
       set({
-        user: await withPermissions(user, options.apiBaseUrl ?? resolveApiBaseUrl()),
+        user: await withPermissions(user, apiBaseUrl),
         loaded: true,
         probeStatus,
       });

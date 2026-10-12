@@ -32,9 +32,19 @@ export interface UseFlowEditorNodeOperationsArgs {
 }
 
 export interface UseFlowEditorNodeOperationsResult {
-  readonly onNodeCreateAtPosition: (type: string, position: { readonly x: number; readonly y: number }) => FlowNode;
-  readonly onAddNode: (type: string) => FlowNode;
+  /** The created canvas node, or `undefined` when the document write was refused and nothing was added. */
+  readonly onNodeCreateAtPosition: (type: string, position: { readonly x: number; readonly y: number }) => FlowNode | undefined;
+  readonly onAddNode: (type: string) => FlowNode | undefined;
   readonly calculateLayoutNodes: (parsedYamlJson: YamlPipelineDocument, shouldDoLayout: boolean, layoutAll: boolean, expanded: boolean) => void;
+}
+
+/** The document with `newNode` appended, and made the entry point when none is set yet. */
+function withAppendedNode(currentDoc: YamlPipelineDocument, newNode: { readonly id: string }, setEntryPoint: boolean): YamlPipelineDocument {
+  return {
+    ...currentDoc,
+    nodes: [...(currentDoc?.nodes ?? []), newNode],
+    ...(setEntryPoint ? { entry_point: newNode.id } : {}),
+  };
 }
 
 /** `FlowEditor.jsx:205-261` — creates a new YAML node + matching flow node at a given canvas position, wiring `entry_point` on the first non-Condition node the way the baseline does. */
@@ -66,11 +76,9 @@ function useOnNodeCreateAtPosition(args: Pick<UseFlowEditorNodeOperationsArgs, '
       const shouldSetEntryPoint = type !== FlowEditorConstants.PipelineNodeTypes.Condition && type !== FlowEditorConstants.PipelineNodeTypes.End && !currentDoc?.entry_point;
 
       if (type !== FlowEditorConstants.PipelineNodeTypes.Condition) {
-        setYamlJsonObject({
-          ...currentDoc,
-          nodes: [...(currentDoc?.nodes ?? []), newNode],
-          ...(shouldSetEntryPoint ? { entry_point: newNode.id } : {}),
-        });
+        const stored = setYamlJsonObject(withAppendedNode(currentDoc, newNode, shouldSetEntryPoint));
+        // A refused write keeps the document, so the canvas must not show a node it does not hold.
+        if (stored === false) return undefined;
       }
 
       const label = type === FlowEditorConstants.PipelineNodeTypes.Condition ? 'Condition' : newNode.id;
@@ -137,6 +145,7 @@ function useOnAddNode(
         type,
       );
       const created = onNodeCreateAtPosition(type, { x: xPos, y: yPos });
+      if (!created) return undefined;
       // Deferred and re-measured rather than reusing `editorWidth`/
       // `editorHeight` above: those are the pane's size DURING the add, and a
       // node that opens the admission panel shrinks the pane immediately

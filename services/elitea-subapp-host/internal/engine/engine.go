@@ -34,6 +34,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -42,6 +43,34 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
+
+const (
+	// MaxStreamLineBytes is the longest NDJSON line the host reads from a
+	// sidecar stream. A result line carries every artifact inline, so it
+	// bounds what one tool can return: the Inventory engine's export_graph
+	// returns the whole graph.json, JSON-escaped, in artifacts[].data.
+	MaxStreamLineBytes = 64 << 20
+	// MaxExportDocumentBytes mirrors the Inventory engine's
+	// MAX_EXPORT_DOCUMENT_BYTES (services/elitea-inventory-engine/src/lib.rs):
+	// the largest escaped graph.json its export_graph returns. Above it the
+	// engine refuses with a ValueError that names its export-graph command.
+	// TestExportBoundMirrorsTheEngine reads the Rust constant and pins this
+	// value to it, and pins MaxStreamLineBytes above it with headroom
+	// (streamLineOverhead) for the line's envelope and the export summary.
+	MaxExportDocumentBytes = 60 << 20
+	// streamLineOverhead is the headroom MaxStreamLineBytes keeps above
+	// MaxExportDocumentBytes.
+	streamLineOverhead = 1 << 20
+)
+
+// ErrUnknownTool is what errors.Is finds in an error when the engine answered
+// that it does not serve the tool asked for.
+var ErrUnknownTool = errors.New("the engine does not serve this tool")
+
+type unknownToolError struct{ error }
+
+func (e unknownToolError) Unwrap() error      { return e.error }
+func (unknownToolError) Is(target error) bool { return target == ErrUnknownTool }
 
 // line is one NDJSON line of the sidecar's stream.
 type line struct {
@@ -55,6 +84,9 @@ type lineError struct {
 	Message       string `json:"message"`
 	ErrorType     string `json:"error_type"`
 	ErrorCategory string `json:"error_category"`
+	// Code is the engine's machine-readable code (spi.CodeBusy, say);
+	// absent on most lines.
+	Code string `json:"code"`
 }
 
 // Client speaks the sidecar protocol over a Unix socket.
@@ -65,6 +97,8 @@ type Client struct {
 	Label      string
 	HTTP       *http.Client
 	StopPeriod time.Duration
+
+	caps capabilities
 }
 
 // NewClient dials the socket for every request; the URL host is a
@@ -112,7 +146,13 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		text, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return nil, spi.Failf(spi.KindRuntime, "%s refused the invocation: HTTP %d %s", c.subject(), response.StatusCode, strings.TrimSpace(string(text)))
+		refusal := fmt.Errorf("%s refused the invocation: HTTP %d %s", c.subject(), response.StatusCode, strings.TrimSpace(string(text)))
+		if response.StatusCode == http.StatusBadRequest && strings.Contains(string(text), "Unknown tool") {
+			// An engine of an older release does not serve this tool (a
+			// rolling deploy: the host is newer than the engine).
+			refusal = unknownToolError{refusal}
+		}
+		return nil, spi.NewFailure(spi.KindRuntime, refusal)
 	}
 
 	// The stop watcher: the host's checkpoint is the only place a stop is
@@ -140,7 +180,7 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 	defer func() { cancel(); <-watcherDone }()
 
 	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxStreamLineBytes)
 	for scanner.Scan() {
 		raw := bytes.TrimSpace(scanner.Bytes())
 		if len(raw) == 0 {
@@ -163,7 +203,14 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 				return nil, err
 			}
 		case next.Error != nil:
-			return nil, spi.Failf(KindOf(next.Error.ErrorType), "%s", next.Error.Message)
+			failure := fmt.Errorf("%s", next.Error.Message)
+			if next.Error.ErrorType == "KeyError" && strings.HasPrefix(next.Error.Message, "Unknown tool:") {
+				failure = unknownToolError{failure}
+			}
+			if next.Error.Code != "" {
+				return nil, spi.NewCodedFailure(KindOf(next.Error.ErrorType), next.Error.Code, failure)
+			}
+			return nil, spi.NewFailure(KindOf(next.Error.ErrorType), failure)
 		case next.Result != nil:
 			return next.Result, nil
 		}
@@ -172,6 +219,9 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 	case <-stopped:
 		return nil, spi.ErrCancelled
 	default:
+	}
+	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
+		return nil, spi.Failf(spi.KindRuntime, "%s sent a result line over this host's %d MiB limit", c.subject(), MaxStreamLineBytes>>20)
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
 		return nil, spi.Failf(spi.KindRuntime, "%s's stream ended in error: %v", c.subject(), err)

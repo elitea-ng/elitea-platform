@@ -195,3 +195,33 @@ fn a_genuinely_malformed_document_stays_malformed() {
         Err(BoundedYamlError::Malformed(_))
     ));
 }
+
+/// The boundary cases Main's save-time check is held to
+/// (services/elitea-main/internal/domain/pipelinelimits/expansion.go) get the
+/// same verdict here, under the budget a stored pipeline is parsed with, so a
+/// definition Main stores is one the Worker parses and the other way round.
+#[test]
+fn shared_pipeline_budget_cases_match_mains_save_check() {
+    let raw = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../testdata/pipeline-yaml-budget/cases.json"
+    ));
+    let fixture: serde_json::Value = serde_json::from_str(raw).expect("cases.json parses");
+    let budget = crate::graph::PIPELINE_YAML_BUDGET;
+    assert_eq!(fixture["budget"]["nodes"], budget.nodes);
+    assert_eq!(fixture["budget"]["scalar_bytes"], budget.scalar_bytes);
+    assert_eq!(fixture["budget"]["depth"], budget.depth);
+    let cases = fixture["cases"].as_array().expect("cases array");
+    assert!(!cases.is_empty());
+    for case in cases {
+        let name = case["name"].as_str().expect("name");
+        let yaml = case["yaml"].as_str().expect("yaml");
+        let want = case["limit"].as_str();
+        let got = limit(yaml, budget).map(YamlBudgetLimit::as_str);
+        match case["verdict"].as_str() {
+            Some("accept") => assert_eq!(got, None, "{name}"),
+            Some("refuse") => assert_eq!(got, want, "{name}"),
+            other => panic!("{name}: bad verdict {other:?}"),
+        }
+    }
+}

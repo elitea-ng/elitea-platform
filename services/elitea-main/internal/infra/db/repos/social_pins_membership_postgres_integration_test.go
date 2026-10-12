@@ -20,12 +20,16 @@ import (
 )
 
 // seedPinAccessTables creates the pylon-owned auth tables the membership
-// predicate reads. The migrated template does not carry them (pylon owns them
+// predicate reads (auth_core__user only for its suspension flag). The migrated template does not carry them (pylon owns them
 // in a deployment), so a pin test that needs a member creates the minimum here.
 // They are created once per database; a second call is a no-op.
 func seedPinAccessTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `
+CREATE TABLE IF NOT EXISTS public.auth_core__user (
+    id integer PRIMARY KEY,
+    suspended boolean NOT NULL DEFAULT false
+);
 CREATE TABLE IF NOT EXISTS public.auth_core__role (
     id integer PRIMARY KEY,
     name varchar(64) NOT NULL,
@@ -352,5 +356,199 @@ func TestSocialPinWriteStatementEnforcesMembershipOnItsOwn(t *testing.T) {
 	requirePinStatus(t, err, http.StatusForbidden, "unpin statement by a non-member")
 	if got := pinCount(t, pool, 1); got != 1 {
 		t.Fatalf("a non-member's unpin statement removed the pin: %d left", got)
+	}
+}
+
+// setPinUserSuspended records the account's suspension flag; the row is created
+// on first use because only the flag matters to the membership predicate.
+func setPinUserSuspended(t *testing.T, pool *pgxpool.Pool, user int, suspended bool) {
+	t.Helper()
+	seedPinAccessTables(t, pool)
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO public.auth_core__user (id, suspended) VALUES ($1, $2)
+ON CONFLICT (id) DO UPDATE SET suspended = EXCLUDED.suspended`, user, suspended); err != nil {
+		t.Fatalf("set user %d suspended=%v: %v", user, suspended, err)
+	}
+}
+
+func setPinProjectSuspended(t *testing.T, pool *pgxpool.Pool, project int, suspended bool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE centry.project SET suspended = $2 WHERE id = $1`, project, suspended); err != nil {
+		t.Fatalf("set project %d suspended=%v: %v", project, suspended, err)
+	}
+}
+
+// SEC-14: a suspension that lands after the route gate refuses the write
+// because suspension is part of the shared membership predicate.
+func TestSocialPinRefusesASuspendedMemberAndRestoresOnLift(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ids := seedPinFixtures(t, pool)
+	grantPinMembership(t, pool, 1, 7)
+	pins := NewCurrentSocialPinsRepository(pool)
+	appID := fmt.Sprint(ids["application"])
+	toolkitID := fmt.Sprint(ids["toolkit"])
+
+	if err := pins.Pin(asUser("7"), "1", "application", appID); err != nil {
+		t.Fatal(err)
+	}
+	setPinUserSuspended(t, pool, 7, true)
+	requirePinStatus(t, pins.Pin(asUser("7"), "1", "toolkit", toolkitID), http.StatusForbidden, "Pin by a suspended member")
+	requirePinStatus(t, pins.Unpin(asUser("7"), "1", "application", appID), http.StatusForbidden, "Unpin by a suspended member")
+	if got := pinCount(t, pool, 1); got != 1 {
+		t.Fatalf("pins = %d after refused writes by a suspended member, want the unchanged 1", got)
+	}
+
+	setPinUserSuspended(t, pool, 7, false)
+	if err := pins.Pin(asUser("7"), "1", "toolkit", toolkitID); err != nil {
+		t.Fatalf("Pin after the suspension was lifted: %v", err)
+	}
+	if err := pins.Unpin(asUser("7"), "1", "application", appID); err != nil {
+		t.Fatalf("Unpin after the suspension was lifted: %v", err)
+	}
+	if got := pinCount(t, pool, 1); got != 1 {
+		t.Fatalf("pins = %d, want only the toolkit pin", got)
+	}
+}
+
+// A suspended project grants nothing to anyone: not its members and not the
+// administration-mode super_admin.
+func TestSocialPinRefusesEveryoneOnASuspendedProject(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ids := seedPinFixtures(t, pool)
+	grantPinMembership(t, pool, 1, 7)
+	seedPinAccessTables(t, pool)
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO public.auth_core__user_role (user_id, role_id) VALUES (11, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	pins := NewCurrentSocialPinsRepository(pool)
+	appID := fmt.Sprint(ids["application"])
+
+	if err := pins.Pin(asUser("7"), "1", "application", appID); err != nil {
+		t.Fatal(err)
+	}
+	setPinProjectSuspended(t, pool, 1, true)
+	for _, actor := range []string{"7", "11"} {
+		requirePinStatus(t, pins.Pin(asUser(actor), "1", "toolkit", fmt.Sprint(ids["toolkit"])), http.StatusForbidden, "Pin by "+actor+" on a suspended project")
+		requirePinStatus(t, pins.Unpin(asUser(actor), "1", "application", appID), http.StatusForbidden, "Unpin by "+actor+" on a suspended project")
+	}
+	if got := pinCount(t, pool, 1); got != 1 {
+		t.Fatalf("pins = %d after refused writes on a suspended project, want the unchanged 1", got)
+	}
+
+	setPinProjectSuspended(t, pool, 1, false)
+	if err := pins.Pin(asUser("11"), "1", "toolkit", fmt.Sprint(ids["toolkit"])); err != nil {
+		t.Fatalf("administrator Pin after the project was reactivated: %v", err)
+	}
+}
+
+// The write STATEMENTS carry the suspension terms on their own: the gate
+// statement can pass and the suspension land before the write runs, so the
+// writes are exercised here without the gate.
+func TestSocialPinWriteStatementRefusesSuspensionOnItsOwn(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ids := seedPinFixtures(t, pool)
+	grantPinMembership(t, pool, 1, 7)
+	seedPinAccessTables(t, pool)
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO public.auth_core__user_role (user_id, role_id) VALUES (11, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	appID := int32(ids["application"])
+
+	write := func(actor int32) error {
+		return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			if err := pinEntity(ctx, tx, "p_1", "applications", "application", 1, appID, actor); err != nil {
+				return err
+			}
+			return unpinEntity(ctx, tx, "application", 1, appID, actor)
+		})
+	}
+
+	// A pin written earlier must survive every refused statement below.
+	if err := NewCurrentSocialPinsRepository(pool).Pin(asUser("7"), "1", "application", fmt.Sprint(appID)); err != nil {
+		t.Fatal(err)
+	}
+
+	setPinUserSuspended(t, pool, 7, true)
+	requirePinStatus(t, write(7), http.StatusForbidden, "statements for a suspended member")
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return unpinEntity(ctx, tx, "application", 1, appID, 7) })
+	requirePinStatus(t, err, http.StatusForbidden, "unpin statement for a suspended member")
+	setPinUserSuspended(t, pool, 7, false)
+
+	setPinProjectSuspended(t, pool, 1, true)
+	requirePinStatus(t, write(7), http.StatusForbidden, "statements for a member of a suspended project")
+	requirePinStatus(t, write(11), http.StatusForbidden, "statements for the administrator on a suspended project")
+	if got := pinCount(t, pool, 1); got != 1 {
+		t.Fatalf("pins = %d after refused statements, want the unchanged 1", got)
+	}
+
+	setPinProjectSuspended(t, pool, 1, false)
+	if err := write(7); err != nil {
+		t.Fatalf("statements after the suspension was lifted: %v", err)
+	}
+	if got := pinCount(t, pool, 1); got != 0 {
+		t.Fatalf("pins = %d, want the pin removed by the member's own unpin", got)
+	}
+}
+
+// The feedback insert carries the same predicate in its own statement.
+func TestSocialFeedbackCreateStatementRefusesSuspensionOnItsOwn(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedPinFixtures(t, pool)
+	grantPinMembership(t, pool, 1, 7)
+	seedPinAccessTables(t, pool)
+	if _, err := pool.Exec(context.Background(), `
+CREATE TABLE IF NOT EXISTS centry.social_feedbacks (
+    id serial PRIMARY KEY,
+    user_id integer NOT NULL,
+    referrer varchar,
+    description text NOT NULL,
+    rating integer NOT NULL,
+    user_agent varchar,
+    created_at timestamp NOT NULL DEFAULT now(),
+    project_id integer NULL
+);`); err != nil {
+		t.Fatal(err)
+	}
+	feedback, err := NewCurrentSocialFeedbacksRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		var n int
+		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM centry.social_feedbacks`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	create := func() error {
+		_, err := feedback.CreateCurrentFeedback(context.Background(), 7, 1, "text", 4, nil, "agent")
+		return err
+	}
+
+	if err := create(); err != nil {
+		t.Fatalf("member feedback: %v", err)
+	}
+	setPinUserSuspended(t, pool, 7, true)
+	if err := create(); !errors.Is(err, ErrSocialFeedbackForbidden) {
+		t.Fatalf("feedback by a suspended member = %v, want ErrSocialFeedbackForbidden", err)
+	}
+	setPinUserSuspended(t, pool, 7, false)
+	setPinProjectSuspended(t, pool, 1, true)
+	if err := create(); !errors.Is(err, ErrSocialFeedbackForbidden) {
+		t.Fatalf("feedback in a suspended project = %v, want ErrSocialFeedbackForbidden", err)
+	}
+	if got := count(); got != 1 {
+		t.Fatalf("%d feedback rows after refused inserts, want the one written before", got)
+	}
+	setPinProjectSuspended(t, pool, 1, false)
+	if err := create(); err != nil {
+		t.Fatalf("feedback after the suspension was lifted: %v", err)
+	}
+	if got := count(); got != 2 {
+		t.Fatalf("%d feedback rows, want 2", got)
 	}
 }

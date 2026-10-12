@@ -14,7 +14,7 @@ import type { FlowEdge, FlowNode, YamlPipelineDocumentRef } from '../reactFlowTy
 
 export interface UseIncompleteEdgeArgs {
   readonly onConnect: (connection: Connection) => void;
-  readonly onNodeCreateAtPosition: (nodeType: string, position: { x: number; y: number }) => { id: string };
+  readonly onNodeCreateAtPosition: (nodeType: string, position: { x: number; y: number }) => { id: string } | undefined;
   readonly yamlJsonObjectRef: YamlPipelineDocumentRef;
   readonly disabled?: boolean;
 }
@@ -162,6 +162,10 @@ export function useIncompleteEdge({
       const newNode = onNodeCreateAtPosition(nodeType, currentGhostNode.position);
 
       cleanupGhostNode(currentGhostNode);
+      if (!newNode) {
+        resetDropdownState();
+        return;
+      }
 
       const connection: Connection = { source: sourceNodeId, target: newNode.id, sourceHandle, targetHandle: null };
 

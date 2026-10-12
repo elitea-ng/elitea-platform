@@ -21,6 +21,7 @@
 //!   instead of indexing a repository whose files all failed to parse.
 
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tree_sitter::Node;
 
 /// The deepest tree a parser walks. Python's own parser refuses a file at
@@ -135,6 +136,25 @@ pub(crate) fn kept(text: String) -> Option<String> {
     charge(text.len()).then_some(text)
 }
 
+/// The worker threads of each parse's pool; 0 is rayon's default (one per
+/// core).
+static PARSER_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+/// Cap the worker threads of every parse's pool at `threads` from now on,
+/// process-wide; 0 goes back to one per core. The engines keep the
+/// default; the desktop's local index sets about half the cores, so a
+/// refresh does not take the whole machine (each language's parse builds
+/// its own pool, with [`LARGEST_PARSER_STACK`]-sized stacks).
+pub fn set_parser_threads(threads: usize) {
+    PARSER_THREADS.store(threads, Ordering::Relaxed);
+}
+
+/// The cap [`set_parser_threads`] set (0: one per core).
+#[must_use]
+pub fn parser_threads() -> usize {
+    PARSER_THREADS.load(Ordering::Relaxed)
+}
+
 /// Run `job` on a rayon pool whose threads have `stack` bytes of stack.
 /// `Err` (the text for every file's `errors`) when the pool cannot start.
 pub(crate) fn on_worker_pool<T: Send>(
@@ -143,6 +163,7 @@ pub(crate) fn on_worker_pool<T: Send>(
     job: impl FnOnce() -> T + Send,
 ) -> Result<T, String> {
     rayon::ThreadPoolBuilder::new()
+        .num_threads(parser_threads())
         .stack_size(stack)
         .thread_name(move |i| format!("parser-{i}"))
         .build()
@@ -172,6 +193,25 @@ pub fn with_pool_failures<T>(work: impl FnOnce() -> T) -> (T, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_parser_thread_cap_sizes_every_pool() {
+        // Other tests may parse meanwhile: a smaller pool changes nothing
+        // they assert.
+        set_parser_threads(2);
+        let capped = on_worker_pool("python", 1 << 20, rayon::current_num_threads);
+        set_parser_threads(0);
+        assert_eq!(capped, Ok(2));
+        assert_eq!(parser_threads(), 0);
+        let default = on_worker_pool("python", 1 << 20, rayon::current_num_threads);
+        assert_eq!(
+            default,
+            Ok(rayon::ThreadPoolBuilder::new()
+                .build()
+                .unwrap()
+                .current_num_threads())
+        );
+    }
 
     #[test]
     fn depth_is_measured_without_recursion() {

@@ -150,22 +150,26 @@ func TestAHalfWiredExpanderIsRefused(t *testing.T) {
 	toolkits := toolkits()
 	settings := &countingSettings{}
 	minter := &recordingMinter{}
+	grants := &recordingGrants{}
 	whole := config()
 
 	cases := map[string]func() (*inventory.Sources, error){
 		"no toolkit reader": func() (*inventory.Sources, error) {
-			return inventory.NewSources(nil, settings, minter, whole)
+			return inventory.NewSources(nil, settings, minter, grants, whole)
 		},
 		"no settings resolver": func() (*inventory.Sources, error) {
-			return inventory.NewSources(toolkits, nil, minter, whole)
+			return inventory.NewSources(toolkits, nil, minter, grants, whole)
 		},
 		"no callback minter": func() (*inventory.Sources, error) {
-			return inventory.NewSources(toolkits, settings, nil, whole)
+			return inventory.NewSources(toolkits, settings, nil, grants, whole)
+		},
+		"no grant recorder": func() (*inventory.Sources, error) {
+			return inventory.NewSources(toolkits, settings, minter, nil, whole)
 		},
 		"no callback origin": func() (*inventory.Sources, error) {
 			without := whole
 			without.CallbackBaseURL = "   "
-			return inventory.NewSources(toolkits, settings, minter, without)
+			return inventory.NewSources(toolkits, settings, minter, grants, without)
 		},
 	}
 	for name, compose := range cases {
@@ -188,7 +192,7 @@ func TestAHalfWiredExpanderIsRefused(t *testing.T) {
 	// artifact routes do not answer.
 	trailing := whole
 	trailing.CallbackBaseURL = "http://elitea-main:8080/"
-	built, err := inventory.NewSources(toolkits, settings, minter, trailing)
+	built, err := inventory.NewSources(toolkits, settings, minter, grants, trailing)
 	if err != nil || built == nil {
 		t.Fatalf("%v %v", built, err)
 	}

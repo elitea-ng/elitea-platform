@@ -49,6 +49,7 @@ import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
 import { ContextBudget, ContextBudgetIndicator } from '@/widgets/context-budget';
 
+import { LocalWorkNotice } from './LocalWorkNotice';
 import { useChatPageData } from './useChatPageData';
 import { useChatModelSettings } from './useChatModelSettings';
 import { useAddParticipants } from './useAddParticipants';
@@ -127,6 +128,12 @@ function conversationIdOf(activeConversation: unknown): string | undefined {
   return (activeConversation as { readonly id?: string } | undefined)?.id;
 }
 
+/** A desktop Local work thread is read-only here: the notice replaces the composer (see `LocalWorkNotice`). */
+function readOnlyFor(localWork: { readonly folderName: string | undefined } | undefined, conversationId: string | undefined): { readonly readOnlyNotice?: React.ReactNode } {
+  if (localWork === undefined || conversationId === undefined) return {};
+  return { readOnlyNotice: <LocalWorkNotice conversationId={conversationId} folderName={localWork.folderName} /> };
+}
+
 export function findActiveParticipantById(participants: readonly unknown[] | undefined, id: string | undefined): unknown {
   if (!id) return undefined;
   return participants?.find((raw) => {
@@ -172,7 +179,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const queryClient = useQueryClient();
   const { conversationId: routeConversationId } = useParams({ strict: false }) as { conversationId?: string };
   const { conversationId, messageId } = useDeepLinkedConversationId(routeConversationId);
-  const { projectId, user, activeConversation, isLoadingConversation } = useChatPageData({ conversationId });
+  const { projectId, user, activeConversation, isLoadingConversation, localWork } = useChatPageData({ conversationId });
   const llm = useChatModelSettings({ activeConversation, projectId, userId: user?.id });
   const { getLocalActiveParticipant, setLocalActiveParticipant, clearLocalActiveParticipant } = useLocalActiveParticipant();
   const { mutate: deleteParticipant } = useDeleteParticipantMutation();
@@ -292,6 +299,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
             ...(editorCallbacks ? { editorCallbacks } : {}),
             ...(entitySubmenus ? { entitySubmenus } : {}),
             contextIndicator: <ContextBudgetIndicator conversationId={conversationIdOf(activeConversation)} projectId={projectId} />,
+            ...readOnlyFor(localWork, conversationId),
           }}
         />
       </Box>

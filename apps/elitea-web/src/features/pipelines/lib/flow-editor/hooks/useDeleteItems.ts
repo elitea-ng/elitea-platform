@@ -108,9 +108,11 @@ export function useDeleteItems({
         newFlowNodes = result.flowNodes;
       }
 
-      setFlowNodes(newFlowNodes);
-      setYamlJsonObject(newYamlJsonObject);
-      setFlowEdges(prev => prev.filter(edge => !edges.find(edgeDel => edgeDel.id === edge.id)));
+      // A refused write keeps the document, so the canvas keeps what it still holds.
+      if (setYamlJsonObject(newYamlJsonObject) !== false) {
+        setFlowNodes(newFlowNodes);
+        setFlowEdges(prev => prev.filter(edge => !edges.find(edgeDel => edgeDel.id === edge.id)));
+      }
       setNodesToDelete([]);
       setEdgesToDelete([]);
     },

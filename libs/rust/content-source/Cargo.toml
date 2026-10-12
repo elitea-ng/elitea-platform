@@ -8,7 +8,13 @@ publish.workspace = true
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+# Default features only. Nothing here depends on map order or number
+# representation, and the desktop host links this crate (through
+# elitea-local-tools) next to the agent runtime, which must not build with
+# `preserve_order` (ADR-0029 decision 2). The engines that link it turn
+# both features on themselves (engine-core and the others), so their
+# builds are unchanged.
+serde_json = "1.0.151"
 sha2 = "0.10.9"
 thiserror = "2.0.20"
 

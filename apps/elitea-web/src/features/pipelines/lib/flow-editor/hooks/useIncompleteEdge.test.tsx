@@ -263,6 +263,38 @@ describe('useIncompleteEdge: dropdown selection / creation', () => {
     vi.useRealTimers();
   });
 
+  it('handleNodeCreate connects nothing and resets the dropdown when the node was not created (refused document write)', () => {
+    vi.useFakeTimers();
+    try {
+      const sourceNode: FlowNode = { id: 'A', type: 'agent', position: { x: 0, y: 0 }, data: {} };
+      const onConnect = vi.fn();
+      const onNodeCreateAtPosition = vi.fn(() => undefined);
+      const { result, getFlow } = renderIncompleteEdge(
+        { yamlJsonObjectRef: makeRef({ nodes: [{ id: 'A' }] }), onConnect, onNodeCreateAtPosition },
+        [sourceNode],
+      );
+
+      act(() => {
+        result.current.onConnectEnd(makeConnectEndEvent(10, 10), { isValid: false, fromHandle: { type: 'source', id: 'out-1' }, fromNode: { id: 'A' } });
+      });
+      act(() => {
+        result.current.handleNodeCreate('agent');
+      });
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(onNodeCreateAtPosition).toHaveBeenCalledTimes(1);
+      expect(onConnect).not.toHaveBeenCalled();
+      expect(result.current.showConnectionDropdown).toBe(false);
+      expect(result.current.currentGhostNode).toBeNull();
+      expect(getFlow().getNodes()).toEqual([sourceNode]);
+      expect(getFlow().getEdges()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('handleNodeCreate is a no-op when there is no pending ghost node', () => {
     const onNodeCreateAtPosition = vi.fn();
     const { result } = renderIncompleteEdge({ yamlJsonObjectRef: makeRef({ nodes: [] }), onNodeCreateAtPosition });

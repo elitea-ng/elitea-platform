@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 
-use adk_rust::futures::StreamExt as _;
 use adk_rust::{
     AdkError, Agent, Content, ErrorCategory, ErrorComponent, Event, EventStream,
     FunctionResponseData, InvocationContext, Part,
@@ -193,6 +192,12 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
+    /// Free slots left in the bounded channel (tests prove it filled).
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
     pub(crate) async fn send_routed_application_event(&self, event: Event) -> adk_rust::Result<()> {
         self.inner
             .send(PipelineNodeEventSignal::RoutedEvent(Box::new(event)))
@@ -336,10 +341,13 @@ impl PipelineNodeEventSender {
             .await
     }
 
+    /// Close a saved child's card with the child's own result: the text it
+    /// returned to the parent, already bounded by the child's result node.
     pub(crate) async fn send_application_end_scoped(
         &self,
         tool_name: &str,
         call_id: &str,
+        response: &str,
         scope: Option<&PipelineNodeEventScope>,
     ) -> adk_rust::Result<()> {
         let mut event = Event::new("pipeline_application_completed");
@@ -348,7 +356,7 @@ impl PipelineNodeEventSender {
             parts: vec![Part::FunctionResponse {
                 function_response: FunctionResponseData::new(
                     tool_name,
-                    json!({"response":"Pipeline completed."}),
+                    json!({"response": response}),
                 ),
                 id: Some(call_id.to_owned()),
                 annotations: None,
@@ -420,7 +428,10 @@ impl Agent for PipelineNodeEventStreamingAgent {
         let root_invocation_id = ctx.invocation_id().to_owned();
         let root_author = ctx.agent_name().to_owned();
         let root_branch = ctx.branch().to_owned();
-        let mut root_events = self.inner.run(ctx).await?;
+        // Driven on its own task: yielding a node event must never leave the
+        // graph parked mid-append holding the root session writer.
+        let mut root_events =
+            crate::agents::driven::DrivenEventStream::new(self.inner.run(ctx).await?);
         let stream = async_stream::stream! {
             let mut node_events_open = true;
             loop {
@@ -648,6 +659,10 @@ fn pipeline_node_event_channel_error() -> AdkError {
         "the pipeline node event channel is unavailable",
     )
 }
+
+#[cfg(test)]
+#[path = "node_events_session_lock_tests.rs"]
+pub(crate) mod session_lock_tests;
 
 #[cfg(test)]
 mod failure_tests {

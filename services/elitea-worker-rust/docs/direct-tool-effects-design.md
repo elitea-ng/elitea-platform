@@ -69,8 +69,10 @@ What we deliberately do not port:
    - `agent_node_recovery: true` is set in `deploy/runtime/worker-runtime.rust.json`, which the Rust compose
      overlay mounts. The shared `worker-runtime.json` stays without it because the Python worker rejects unknown
      keys. The NATS-secure compose profile does not enable it.
-   - Helm has a `worker.runtime.agentNodeRecovery` toggle for Rust installs. It defaults to false
-     because the chart's default worker is Python and the runtime file is shared between them.
+   - Helm has a `worker.runtime.agentNodeRecovery` toggle for Rust installs. It defaults to false: under a
+     node-recovery claim Main also grants model checkpoint inspection, so the toggle opens recovery on Kubernetes,
+     which stays closed until the pod-replacement proofs pass (`recovery-guarantees.md`, D1). A non-boolean value
+     and `true` with the Python worker fail the render (`deploy/helm/tests/render-worker-node-recovery.sh`).
 
 ## Recovery guarantees
 

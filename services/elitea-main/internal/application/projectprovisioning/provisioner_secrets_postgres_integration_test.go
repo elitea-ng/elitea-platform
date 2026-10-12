@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
@@ -186,6 +187,10 @@ func (v failingVaultBootstrapper) EnsureProjectSecretsHeaderValue(
 }
 
 func (v failingVaultBootstrapper) RemoveProjectVault(context.Context, string) error { return nil }
+
+func (v failingVaultBootstrapper) RemoveProjectVaultTx(context.Context, pgx.Tx, string) error {
+	return nil
+}
 
 // TestProvisionRollsBackWhenTheVaultStepFails is the other direction: a failure
 // IN the new step must undo every step before it.

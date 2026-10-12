@@ -128,6 +128,8 @@
 #   8097  ado-mock journal          STANDALONE_ADO_PORT — see the ado-mock comment
 #   (llm-real, the `real-llm` profile, publishes nothing — see its comment)
 #   9400  oidc-provider-mock        E2E_OIDC_PORT — see the oidc-mock comment
+#   (qdrant :6333/:6334 and elitea-vector :9470/:9471 publish nothing; they
+#    are reached only on the compose network)
 #
 #   The runtime plane is NOT published to the host. elitea-main:9443/9444/9445
 #   are reachable only on the compose network, which is where the worker (#282)
@@ -492,8 +494,9 @@ services:
   #            opt-out explicitly with LLM_BUDGET_REQUIRE_ENFORCEMENT below
   #            (issue #304): without it, the gateway refuses to start as soon as
   #            somebody authors a budget row in this database.
-  #   Vault  — SECRETS_MASTER_KEY is optional as long as seeded credentials carry
-  #            a literal api_key rather than a {{secret.NAME}} reference.
+  #   Vault  — SECRETS_MASTER_KEY is required, as for elitea-main, unless
+  #            ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true; this local stack sets
+  #            that opt-out below because its seed stores project keys unwrapped.
   #   PG     — pgxpool.New only parses the DSN, never dials, so an unreachable
   #            database degrades (empty /v1/models) rather than failing boot.
   # GATEWAY_IDENTITY_SECRET is the one hard requirement: startupIdentityCheck
@@ -514,6 +517,10 @@ services:
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
+      # The gateway refuses to start without the key unless a local stack opts
+      # out explicitly, the same rule as elitea-main. A supplied key is used
+      # either way.
+      ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "${ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS-true}"
       # MUST match elitea-main's value below: it keys the HMAC over the
       # X-Elitea-Project-Id / X-Elitea-User-Id / X-Elitea-Tenant-Id headers that
       # elitea-main signs and the gateway verifies.
@@ -998,6 +1005,13 @@ services:
       # service on the compose network, plain HTTP — the minted bearer is the
       # credential; mTLS is on the hop the other way.
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # The engine's platform gRPC listener (#1243): where this service
+      # deletes a project's wiki search indexes when the project is
+      # deprovisioned, presenting the same client certificate as the facade
+      # hop above. The host below allows CN=elitea-main
+      # (ELITEA_DEEPWIKI_PLATFORM_CLIENTS) and its server certificate's SANs
+      # name elitea-deepwiki, which is what this verifies.
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "elitea-deepwiki:9443"
 
       # ── The Inventory facade (ADR-0023 H4c) ────────────────────────────
       # The SECOND provider, composed the same way and from its own
@@ -1030,6 +1044,17 @@ services:
       # read-only tools would still work and the three that name a source
       # would get the provider's own refusal.
       ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # The engine's platform gRPC listener (#1244): where this service
+      # deletes an Inventory toolkit's graph when the toolkit is deleted and
+      # every graph of a project when the project is deprovisioned, presenting
+      # the same client certificate as the facade hop above. The host below
+      # allows CN=elitea-main (ELITEA_INVENTORY_PLATFORM_CLIENTS) and its
+      # server certificate's SANs name elitea-inventory.
+      ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: "elitea-inventory:9443"
+      # The toolkit-deletion reconciler (#1244) drains the journal those
+      # deletes write (centry.toolkit_deletions). On by default; its own flag,
+      # apart from the project reconciler's.
+      ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "${ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED:-true}"
       # The project whose configurations are treated as PUBLIC and merged into
       # every other project's option lookups.
       #
@@ -1219,6 +1244,13 @@ services:
       ELITEA_RUNTIME_CONTENT_TLS_CERT_FILE: /run/elitea-runtime/content-server.crt
       ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: /run/elitea-runtime/content-server.key
       ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: /run/elitea-runtime/runtime-ca.crt
+
+      # ── elitea-vector token introspection (ADR-0031 V0) ─────────────────
+      # The client identities admitted to TokenIntrospectionService on the
+      # control listener above. elitea-vector's certificate carries exactly
+      # DNS:elitea-vector, signed by the runtime CA that listener trusts
+      # (deploy/scripts/gen-vector-certs.sh).
+      ELITEA_VECTOR_INTROSPECTION_CLIENTS: "dns:elitea-vector"
     volumes:
       # Only the gateway-client keypair and its CA — three files, not the
       # ./certs directory. Bind-mounting the parent handed elitea-main the whole
@@ -1364,6 +1396,16 @@ services:
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
       ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "https://elitea-deepwiki:8080"
+      # The platform gRPC service (elitea.subapp.v1.PlatformOperations):
+      # project deprovisioning, authorised by the verified client certificate
+      # alone. The certificate elitea-main presents is CN=elitea-main
+      # (gen-deepwiki-certs.sh). A second listener behind the same TLS
+      # configuration, reachable on the compose network only (no published
+      # port). Remove PLATFORM_CLIENTS to turn the service off.
+      ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+    expose:
+      - "9443"
     volumes:
       - deepwiki-engine-sock:/run/deepwiki
       - ./certs/deepwiki-server.crt:/certs/deepwiki-server.crt:ro
@@ -1463,10 +1505,11 @@ services:
   #
   # RUNNER=legacy, reaching the engine sidecar below over a shared Unix socket
   # — the same socket shape DeepWiki runs here (with its native engine), and
-  # the reason this stack proves the socket hop rather than only the Go half. The sidecar runs the PYTHON
-  # fixture engine, so no engine closure is needed. (The E2E stack takes the
-  # other arm: the Go host's own fixture runner and no sidecar at all. Two
-  # fixture runners, kept in step by hand — the trap DeepWiki records.)
+  # the reason this stack proves the socket hop rather than only the Go half.
+  # The sidecar is the Rust-native engine (ADR-0027) on its fixture runner.
+  # (The E2E stack takes the other arm: the Go host's own fixture runner and
+  # no sidecar at all. Two fixture runners, kept in step by hand — the trap
+  # DeepWiki records.)
   elitea-inventory:
     image: ghcr.io/elitea-ng/elitea-subapp-host:standalone
     build:
@@ -1474,10 +1517,11 @@ services:
       dockerfile: services/elitea-subapp-host/Containerfile
     environment:
       ELITEA_SUBAPP: inventory
-      # `legacy` reaches the engine sidecar over the socket, which is what this
-      # stack exists to exercise. The sidecar below serves the PYTHON fixture
-      # engine (elitea_inventory.fixture_graph), which since the standalone
-      # fixture package landed replays the SAME six-entity graph the Go
+      # `sidecar` reaches the engine sidecar over the socket, which is what this
+      # stack exists to exercise (`legacy`, its old name, is still an alias).
+      # This is the HOST's runner; the engine container below has its own
+      # (INVENTORY_ENGINE_RUNNER) and never reads this one. The sidecar below serves the native engine's
+      # fixture runner, which replays the SAME six-entity graph the Go
       # host's OWN fixture runner uses on the E2E stack
       # (conformance/provider/fixtures/inventory/spi/graph.json) — so the
       # default already shows a populated Inventory workspace; no flag
@@ -1485,7 +1529,7 @@ services:
       # switches the GO HOST to its own canned graph and bypasses the sidecar
       # entirely, which is useful if you want to exercise the Go fixture
       # runner specifically, or the sidecar's socket hop is not needed.
-      ELITEA_INVENTORY_RUNNER: "${INVENTORY_RUNNER:-legacy}"
+      ELITEA_INVENTORY_RUNNER: "${INVENTORY_RUNNER:-sidecar}"
       ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
       ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "${INVENTORY_FIXTURE_STEP_SECONDS:-1}"
       ELITEA_INVENTORY_TLS_CERTFILE: /certs/inventory-server.crt
@@ -1496,6 +1540,17 @@ services:
       ELITEA_INVENTORY_IDENTITY_SECRET: "standalone-inventory-identity"
       ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
       ELITEA_INVENTORY_SERVICE_LOCATION_URL: "https://elitea-inventory:8080"
+      # The platform gRPC service (elitea.subapp.v1.PlatformOperations):
+      # deleting an Inventory toolkit's graph and a project's graphs (issue
+      # #1244), authorised by the verified client certificate alone. The
+      # certificate elitea-main presents is CN=elitea-main
+      # (gen-inventory-certs.sh). A second listener behind the same TLS
+      # configuration, reachable on the compose network only (no published
+      # port). Remove PLATFORM_CLIENTS to turn the service off.
+      ELITEA_INVENTORY_PLATFORM_CLIENTS: "elitea-main"
+      ELITEA_INVENTORY_PLATFORM_GRPC_ADDR: ":9443"
+    expose:
+      - "9443"
     volumes:
       - inventory-engine-sock:/run/inventory
       - ./certs/inventory-server.crt:/certs/inventory-server.crt:ro
@@ -1514,40 +1569,150 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # ── The Inventory ENGINE sidecar ──────────────────────────────────────────
-  # The Python process the Go host calls over a Unix socket: the copied
-  # knowledge-graph tool layer and, in production, its dependency closure (the
-  # `-engine` image). Here it serves the FIXTURE engine, so the hop is
-  # exercised end to end without that closure. No SPI, no TLS, no identity:
-  # the socket is reachable only through the shared volume.
-  elitea-inventory-engine:
-    image: ghcr.io/elitea-ng/elitea-inventory:standalone
+  # The Inventory graph store's migrations, from the native engine image (the
+  # binary embeds the SQL files, creates the inventory_graph schema and the
+  # pgvector extension, and writes inventory_graph.schema_migrations). Exits 0
+  # at the newest migration; the engine waits for it. It runs for the fixture
+  # runner too, so switching to native needs no extra step.
+  elitea-inventory-migrate:
+    image: ghcr.io/elitea-ng/elitea-inventory-engine:local
+    # The same build as the engine below (a cache hit after the first), so
+    # compose never tries to PULL a tag that only exists locally.
     build:
       context: ..
-      dockerfile: services/elitea-inventory/Containerfile
-    # The image's ENTRYPOINT is `python -m elitea_inventory`, which IS the
-    # sidecar — unlike DeepWiki's, whose entrypoint is its SPI shell. Stated
-    # here anyway so a change to that entrypoint cannot silently start
-    # something else in this stack.
-    entrypoint: ["python", "-m", "elitea_inventory"]
+      dockerfile: services/elitea-inventory-engine/Containerfile
+    # The image's ENTRYPOINT is the binary; this replaces its CMD (`serve`).
+    command: ["migrate"]
     environment:
-      ELITEA_INVENTORY_RUNNER: "fixture"
+      ELITEA_INVENTORY_DATABASE_URL: "postgresql://elitea:elitea@postgres:5432/elitea"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # db-init creates the vector extension too; two concurrent
+      # CREATE EXTENSION IF NOT EXISTS can fail the loser on a fresh volume.
+      db-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # ── The Inventory ENGINE sidecar (ADR-0023 H2, ADR-0027) ──────────────────
+  # The Rust-native engine: one distroless binary on the socket the Go host
+  # dials. No SPI, no TLS, no identity: the socket is reachable only through
+  # the shared volume. It serves the FIXTURE runner by default, so the hop is
+  # exercised end to end with no repository and no model; set
+  # INVENTORY_ENGINE_RUNNER=native for the real engine (graph in PostgreSQL,
+  # the engine clones repositories itself, so the git allowlist below applies
+  # and ELITEA_INVENTORY_GIT_ALLOWLIST should equal elitea-main's).
+  elitea-inventory-engine:
+    image: ghcr.io/elitea-ng/elitea-inventory-engine:local
+    build:
+      context: ..
+      dockerfile: services/elitea-inventory-engine/Containerfile
+    # The image's own ENTRYPOINT/CMD: `elitea-inventory-engine serve`.
+    environment:
+      ELITEA_INVENTORY_RUNNER: "${INVENTORY_ENGINE_RUNNER:-fixture}"
       ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "${INVENTORY_FIXTURE_STEP_SECONDS:-1}"
       ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
       ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
-      # Unset (default): the fixture engine reads its packaged copy of the
-      # canned graph (elitea_inventory/fixtures/inventory/spi/graph.json,
-      # built into the image). Set INVENTORY_FIXTURES=/fixtures/inventory to
-      # read the bind-mounted copy below instead — the repository's own
-      # conformance/provider/fixtures/inventory, live-editable without a
-      # rebuild. Both copies are asserted identical by
-      # services/elitea-inventory/tests/unit/test_fixture_graph.py.
+      # Required by the native runner, ignored by fixture.
+      ELITEA_INVENTORY_DATABASE_URL: "postgresql://elitea:elitea@postgres:5432/elitea"
+      # Fail-closed in the engine itself: unset, every clone is refused. The
+      # same allowlist as elitea-main's ELITEA_INVENTORY_GIT_ALLOWLIST.
+      ELITEA_INVENTORY_GIT_ALLOWLIST: "${INVENTORY_GIT_ALLOWLIST:-github.com,*.github.com}"
+      # Unset (default): the fixture runner reads its packaged copy of the
+      # canned graph. Set INVENTORY_FIXTURES=/fixtures/inventory to read the
+      # bind-mounted copy below instead, the repository's own
+      # conformance/provider/fixtures/inventory, editable without a rebuild.
       ELITEA_INVENTORY_FIXTURES: "${INVENTORY_FIXTURES:-}"
     volumes:
       - inventory-engine-sock:/run/inventory
       - ../conformance/provider/fixtures/inventory:/fixtures/inventory:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elitea-inventory-migrate:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/inventory/engine.sock'); s.close()"]
+      # Distroless: no shell, no python. The binary probes its own socket.
+      test: ["CMD", "/usr/local/bin/elitea-inventory-engine", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── Qdrant, the vector store (ADR-0031) ───────────────────────────────────
+  # Single node. Nothing but elitea-vector reaches it: it is not published to
+  # the host, and elitea-vector is the only holder of its API key. The key is
+  # generated by deploy/scripts/gen-vector-certs.sh; the image's entrypoint is
+  # wrapped only to read it from the file, so the value never sits in this
+  # file or in `compose config` output.
+  qdrant:
+    image: docker.io/qdrant/qdrant:v1.19.2
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'QDRANT__SERVICE__API_KEY="$$(cat /run/qdrant/api-key)" exec ./entrypoint.sh'
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+      QDRANT__LOG_LEVEL: "INFO"
+    volumes:
+      - standalone_qdrant_data:/qdrant/storage
+      - ./certs/vector/qdrant-api-key:/run/qdrant/api-key:ro
+    healthcheck:
+      # /readyz needs no API key. The image has no curl; bash's /dev/tcp does.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && printf 'GET /readyz HTTP/1.0\r\n\r\n' >&3 && grep -q ' 200 ' <&3"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── elitea-vector, the only Qdrant client (ADR-0031 V0) ───────────────────
+  # A stateless gRPC facade over mTLS (:9470, compose network only). Callers
+  # present a project-bound token, which it verifies through elitea-main's
+  # TokenIntrospectionService on the control listener (:9443), and it injects
+  # the project into every Qdrant filter and write. One certificate
+  # (DNS:elitea-vector, runtime CA) serves both its listener and its client
+  # hop to elitea-main; elitea-main admits it by ELITEA_VECTOR_INTROSPECTION_CLIENTS.
+  elitea-vector:
+    image: ghcr.io/elitea-ng/elitea-vector:standalone
+    build:
+      context: ..
+      dockerfile: services/elitea-vector/Containerfile
+    environment:
+      ELITEA_VECTOR_GRPC_ADDR: "0.0.0.0:9470"
+      ELITEA_VECTOR_HEALTH_ADDR: "0.0.0.0:9471"
+      ELITEA_VECTOR_TLS_CERT_FILE: /run/elitea-vector/vector.crt
+      ELITEA_VECTOR_TLS_KEY_FILE: /run/elitea-vector/vector.key
+      # The callers' trust root: the workers' agent-worker-client and
+      # elitea-main's administrator identity are both runtime-CA identities.
+      ELITEA_VECTOR_TLS_CLIENT_CA_FILE: /run/elitea-vector/runtime-ca.crt
+      # Admitted without a token, for deletion and admin reads only.
+      ELITEA_VECTOR_ADMIN_IDENTITIES: "dns:elitea-main"
+      ELITEA_VECTOR_QDRANT_URL: "http://qdrant:6334"
+      ELITEA_VECTOR_QDRANT_API_KEY_FILE: /run/elitea-vector/qdrant-api-key
+      ELITEA_VECTOR_COLLECTION_REPLICATION_FACTOR: "1"
+      ELITEA_VECTOR_COLLECTION_SHARD_NUMBER: "1"
+      # elitea-main's control listener; its server certificate is
+      # control-server.crt (DNS:elitea-main), signed by the runtime CA.
+      ELITEA_VECTOR_INTROSPECTION_URL: "https://elitea-main:9443"
+      ELITEA_VECTOR_INTROSPECTION_CA_FILE: /run/elitea-vector/runtime-ca.crt
+      ELITEA_VECTOR_INTROSPECTION_SERVER_NAME: "elitea-main"
+      ELITEA_VECTOR_INTROSPECTION_TIMEOUT_MS: "2000"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      RUST_LOG: "${ELITEA_VECTOR_LOG:-info}"
+    volumes:
+      - ./certs/vector/vector.crt:/run/elitea-vector/vector.crt:ro
+      - ./certs/vector/vector.key:/run/elitea-vector/vector.key:ro
+      - ./certs/vector/runtime-ca.crt:/run/elitea-vector/runtime-ca.crt:ro
+      - ./certs/vector/qdrant-api-key:/run/elitea-vector/qdrant-api-key:ro
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      # Distroless: no shell. The binary probes its own health listener.
+      test: ["CMD", "/usr/local/bin/elitea-vector", "healthcheck"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -1724,8 +1889,9 @@ services:
       SSL_CERT_FILE: /run/elitea-worker-trust/worker-ca-bundle.pem
       # The one environment variable the worker itself reads. Mirrors the
       # hybrid's fail-safe snapshot: broader than the current
-      # `artifact.delete_file` rule so metadata drift cannot bypass approval.
-      ELITEA_SENSITIVE_TOOLS: '{"*":["delete_file"]}'
+      # `artifact.delete_file` rule so metadata drift cannot bypass approval;
+      # `remove_index` (the indexing families' index delete) is destructive too.
+      ELITEA_SENSITIVE_TOOLS: '{"*":["delete_file","remove_index"]}'
     volumes:
       - ./runtime/worker-runtime.json:/run/elitea/runtime.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro
@@ -1898,6 +2064,9 @@ volumes:
   inventory-engine-sock:
   standalone_pg_data:
   standalone_rustfs_data:
+  # Qdrant's collections (ADR-0031). The only copy of the vectors: sources
+  # are the source of truth, so `down -v` costs a re-index, not data.
+  standalone_qdrant_data:
   # Runtime material, split per consumer so no service holds a key it does not
   # use. Populated by runtime-material from deploy/certs/runtime.
   standalone_runtime_main:

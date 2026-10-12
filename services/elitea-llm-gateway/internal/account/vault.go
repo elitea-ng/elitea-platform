@@ -42,24 +42,51 @@ type vaultData struct {
 	HiddenSecrets map[string]json.RawMessage `json:"hidden_secrets"`
 }
 
-// NewFernetVault constructs a FernetVault. The master key is read from
-// SECRETS_MASTER_KEY (base64url 32-byte Fernet key); when unset the vault treats
-// project keys as stored unwrapped, matching centry and the elitea-main secrets
-// handler. When the env
-// var is set but malformed, NewFernetVault returns an error — a decode failure is
-// a startup misconfiguration that must be surfaced loudly rather than silently
-// degrading to single-level storage (which would fail to decrypt wrapped keys at
-// runtime with no actionable signal).
-func NewFernetVault(db rowQuerier) (*FernetVault, error) {
-	v := &FernetVault{db: db}
-	if mk := os.Getenv("SECRETS_MASTER_KEY"); mk != "" {
-		raw, err := fernetDecodeKey(mk)
-		if err != nil {
-			return nil, fmt.Errorf("SECRETS_MASTER_KEY decode failed: %w", err)
-		}
-		v.masterKey = raw
+// MasterKeyEnvVar names the vault master key. elitea-main reads the same
+// variable (internal/api/v2/secrets.MasterKeyEnvVar), and the two services must
+// carry the same value: they open the same centry.secrets_key rows.
+const MasterKeyEnvVar = "SECRETS_MASTER_KEY"
+
+// AllowUnwrappedEnvVar is the development-only opt-out that lets the gateway
+// start with no master key and read project keys stored unwrapped. It is the
+// variable elitea-main honours for the same purpose
+// (internal/api/v2/secrets.AllowUnwrappedEnvVar), so one setting covers a local
+// stack. Without it an absent master key stops the gateway at start-up
+// (cmd/elitea-llm-gateway/master_key_gate.go).
+const AllowUnwrappedEnvVar = "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS"
+
+// MasterKeyFromEnv reads the master key and validates it. It returns nil, nil
+// when the variable is unset and an error when it is set and malformed. The
+// error names the variable and the decode fault, never the value.
+//
+// getenv is injected so a test can supply a value without t.Setenv, which
+// forbids t.Parallel.
+func MasterKeyFromEnv(getenv func(string) string) ([]byte, error) {
+	value := getenv(MasterKeyEnvVar)
+	if value == "" {
+		return nil, nil
 	}
-	return v, nil
+	raw, err := fernetDecodeKey(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s is set and malformed: %w; supply a base64url-encoded 32-byte Fernet key "+
+			"with no stray spaces or tabs", MasterKeyEnvVar, err)
+	}
+	return raw, nil
+}
+
+// NewFernetVault constructs a FernetVault with the master key from
+// SECRETS_MASTER_KEY (see MasterKeyFromEnv). Without the key the vault treats
+// project keys as stored unwrapped, matching centry and the elitea-main secrets
+// handler; cmd/elitea-llm-gateway refuses that state at start-up unless the
+// development opt-out is set. A set but malformed key is an error — degrading
+// to single-level storage would fail every wrapped-key decrypt at runtime with
+// no actionable signal.
+func NewFernetVault(db rowQuerier) (*FernetVault, error) {
+	masterKey, err := MasterKeyFromEnv(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+	return &FernetVault{db: db, masterKey: masterKey}, nil
 }
 
 // Resolve returns the plaintext for secretRef within projectID. When secretRef is

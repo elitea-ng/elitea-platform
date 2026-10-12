@@ -42,6 +42,7 @@ export { useProjectOptions } from './api/useProjectOptions';
 export type { ProjectOptionsResult } from './api/useProjectOptions';
 export { orderedProjectOptions } from './lib/projectOptions';
 export {
+  computeIsSelectedProjectPublic,
   navSections,
   selectedNavItem,
   visibleNavSections,

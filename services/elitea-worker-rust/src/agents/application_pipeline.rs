@@ -55,7 +55,6 @@ pub(crate) use static_pause::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use adk_rust::futures::StreamExt as _;
 use adk_rust::graph::interrupt::{GraphInterruptPayload, INTERRUPT_METADATA_KEY};
 use adk_rust::graph::{Checkpoint, Checkpointer, MemoryCheckpointer, State};
 use adk_rust::{Agent, Content, Event, Part, ReadonlyContext as _, Tool, ToolContext};
@@ -1556,66 +1555,106 @@ impl ApplicationPipelineTool {
                 "discarded node events left over from an earlier call of this pipeline tool"
             );
         }
-        let mut stream = agent.run(child_context).await?;
-        let mut node_events_open = true;
-        let mut result_text = None;
-        loop {
-            let mut event = tokio::select! {
-                biased;
-                signal = node_events.recv(), if node_events_open => {
-                    if let Some(event) = signal {
-                        self.forward(ctx, thread_id, arguments, event?).await?;
-                    } else {
-                        node_events_open = false;
+        // Driven on its own task: forwarding a node event must never leave the
+        // child parked mid-append holding the root session writer.
+        let mut stream =
+            crate::agents::driven::DrivenEventStream::new(agent.run(child_context).await?);
+        // Every exit, `?` and pause included, stops the child before the
+        // node-event drain guard is released: nothing it owns may keep
+        // sending into a channel a later call of this tool will read.
+        let outcome = async {
+            let mut node_events_open = true;
+            let mut result_text = None;
+            loop {
+                let mut event = tokio::select! {
+                    biased;
+                    signal = node_events.recv(), if node_events_open => {
+                        if let Some(event) = signal {
+                            self.forward(ctx, thread_id, arguments, event?).await?;
+                        } else {
+                            node_events_open = false;
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                next = stream.next() => {
-                    // The graph may wrap an error after queuing its typed cause.
-                    // Drain that cause before returning the generic graph error.
+                    next = stream.next() => {
+                        // The graph may wrap an error after queuing its typed cause.
+                        // Drain that cause before returning the generic graph error.
+                        while let Some(queued) = node_events.try_recv() {
+                            self.forward(ctx, thread_id, arguments, queued?).await?;
+                        }
+                        let Some(next) = next else { break };
+                        next?
+                    }
+                };
+                // The child's own tier, NOT empty: an empty branch is visible to
+                // every branch, so the parent would re-read the child's events as
+                // its own on the next turn (#990 review 1).
+                branch.clone_into(&mut event.branch);
+                if event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY) {
+                    // #990 review 5: the node events this child already emitted
+                    // belong to THIS call and are its visible progress; draining
+                    // them before the pause returns is what keeps them from being
+                    // dropped or replayed under a later call's identity.
                     while let Some(queued) = node_events.try_recv() {
                         self.forward(ctx, thread_id, arguments, queued?).await?;
                     }
-                    let Some(next) = next else { break };
-                    next?
+                    return self
+                        .pause(ctx, thread_id, event, checkpointer, arguments)
+                        .await;
                 }
-            };
-            // The child's own tier, NOT empty: an empty branch is visible to
-            // every branch, so the parent would re-read the child's events as
-            // its own on the next turn (#990 review 1).
-            branch.clone_into(&mut event.branch);
-            if event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY) {
-                // #990 review 5: the node events this child already emitted
-                // belong to THIS call and are its visible progress; draining
-                // them before the pause returns is what keeps them from being
-                // dropped or replayed under a later call's identity.
-                while let Some(queued) = node_events.try_recv() {
-                    self.forward(ctx, thread_id, arguments, queued?).await?;
+                if event
+                    .provider_metadata
+                    .contains_key(PIPELINE_COMPLETED_METADATA_KEY)
+                {
+                    // Suppressed, not forwarded: the pipeline's terminal marker is
+                    // this TOOL's return value, and re-emitting it as a descendant
+                    // model answer would put the child's text in the transcript
+                    // twice — once as the tool's own result and once as a message
+                    // the parent never wrote.
+                    result_text = event_text(&event);
+                    continue;
                 }
-                return self
-                    .pause(ctx, thread_id, event, checkpointer, arguments)
-                    .await;
+                self.forward(ctx, thread_id, arguments, event).await?;
             }
-            if event
-                .provider_metadata
-                .contains_key(PIPELINE_COMPLETED_METADATA_KEY)
-            {
-                // Suppressed, not forwarded: the pipeline's terminal marker is
-                // this TOOL's return value, and re-emitting it as a descendant
-                // model answer would put the child's text in the transcript
-                // twice — once as the tool's own result and once as a message
-                // the parent never wrote.
-                result_text = event_text(&event);
-                continue;
+            while let Some(event) = node_events.try_recv() {
+                self.forward(ctx, thread_id, arguments, event?).await?;
             }
-            self.forward(ctx, thread_id, arguments, event).await?;
+            Ok(json!({
+                "response": result_text.unwrap_or_else(|| "No response from pipeline".to_owned())
+            }))
         }
-        while let Some(event) = node_events.try_recv() {
-            self.forward(ctx, thread_id, arguments, event?).await?;
-        }
-        Ok(json!({
-            "response": result_text.unwrap_or_else(|| "No response from pipeline".to_owned())
-        }))
+        .await;
+        stream.cancel().await;
+        outcome
+    }
+
+    /// Test entry to the child drain with an injected child agent.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)] // Mirrors drain_child's identity inputs.
+    pub(super) async fn drain_child_for_test(
+        &self,
+        ctx: &dyn ToolContext,
+        agent: Arc<dyn Agent>,
+        child_context: Arc<ApplicationToolInvocationContext>,
+        invocation_id: &str,
+        thread_id: &str,
+        checkpointer: &dyn Checkpointer,
+        arguments: &Value,
+    ) -> adk_rust::Result<Value> {
+        let branch = child_context.branch().to_owned();
+        self.drain_child(
+            ctx,
+            agent,
+            child_context,
+            ChildIdentity {
+                invocation_id,
+                branch: &branch,
+                thread_id,
+            },
+            checkpointer,
+            arguments,
+        )
+        .await
     }
 
     /// Surface one child HITL pause, or refuse it.

@@ -232,11 +232,12 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
 
   const setYamlJsonObject = useCallback(
     (next: YamlPipelineDocument) => {
-      if (areYamlObjectsEqual(next, yamlJsonObject)) return;
+      if (areYamlObjectsEqual(next, yamlJsonObject)) return true;
       const yamlString = serializeDocument(next);
-      if (yamlString === undefined) return;
+      if (yamlString === undefined) return false;
       storeSetYamlJsonObject(next);
       if (Object.keys(next).length && yamlString !== yamlCode) storeSetYamlCode(yamlString);
+      return true;
     },
     [serializeDocument, storeSetYamlCode, storeSetYamlJsonObject, yamlCode, yamlJsonObject],
   );
@@ -313,9 +314,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
     [mode, onParseCodeToJson, serializeDocument, storeSetYamlCode, yamlCode, yamlJsonObject],
   );
 
-  const onAddNode = useCallback((type: PipelineNodeType) => {
-    flowEditorRef.current?.onAddNode(type);
-  }, []);
+  const onAddNode = useCallback((type: PipelineNodeType) => void flowEditorRef.current?.onAddNode(type), []);
 
   const onCopy = useCallback(() => {
     void handleCopy(yamlCode);

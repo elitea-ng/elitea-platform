@@ -108,7 +108,12 @@ func invokeOn(t *testing.T, runner *run.Runner, toolkit, tool string, request ma
 	defer manager.Stop()
 	ctx := context.Background()
 	invocation, err := manager.Submit(ctx, toolkit, tool, func(ctx context.Context, tc *spi.Context) (map[string]any, error) {
-		return runner.Invoke(ctx, spi.Invoke{Family: resolved, Toolkit: toolkit, Tool: tool, Request: request}, tc)
+		// The engine runner refuses a call with no verified project
+		// (Runner.RequireVerifiedProject); the gate would have verified one.
+		return runner.Invoke(ctx, spi.Invoke{
+			Family: resolved, Toolkit: toolkit, Tool: tool, Request: request,
+			Identity: spi.Identity{ProjectID: "1"},
+		}, tc)
 	})
 	if err != nil {
 		t.Fatal(err)

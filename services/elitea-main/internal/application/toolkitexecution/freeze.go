@@ -239,6 +239,10 @@ func (f *CurrentReadToolFreezer) Freeze(
 	// entries authorize nothing and duplicates collapse deterministically.
 	resolved["selected_tools"] = canonicalSelected
 
+	// No `indexes` catalog on this path (ADR-0030 I1): a direct read serves
+	// no index tools — its claim carries no vector token — and the worker's
+	// read and discovery runtimes list none, so Main writes none here. The
+	// agent and toolkit.call_tool.v1 freezers are the two that do.
 	toolkitJSON, err := boundedJSON(map[string]any{
 		"id":           toolkit.ID,
 		"type":         toolkit.Type,

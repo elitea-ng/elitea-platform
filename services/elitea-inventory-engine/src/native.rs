@@ -3,8 +3,11 @@
 //!
 //! Every tool of both families: `run_ingestion` (clone, parsers, model,
 //! communities, embeddings — `crate::ingest`), the status tools,
-//! `remove_source_entities`, `investigate` (`crate::investigate`), and the
-//! read tools (`crate::retrieval`). A tool the dispatch does not know is
+//! `remove_source_entities`, `import_graph` / `export_graph`
+//! (`crate::transfer`), `smart_normalize_types` (a model maps the
+//! graph's stray types onto the canonical set, written back to the store),
+//! `investigate` (`crate::investigate`), and the read tools
+//! (`crate::retrieval`). A tool the dispatch does not know is
 //! refused by name, never answered empty (a test holds the tables to it).
 
 // The reports are built line by line, as the Python handlers built them.
@@ -12,12 +15,14 @@
 
 use crate::config::Settings;
 use crate::extract::{self, Model};
+use crate::graph::Graph;
 use crate::ingest::source::Source;
 use crate::ingest::{self, ModelOptions, Outcome, RunOptions};
 use crate::store::{self, GraphKey, sources};
 use crate::tools;
-use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::errors::{EngineError, ErrorType, codes};
 use elitea_engine_core::stream::{Context, StopSignal};
+use elitea_inventory_core::store::GraphStore as _;
 use elitea_model_client::chat::ChatClient;
 use elitea_model_client::embeddings::{EmbeddingClient, EmbeddingOptions};
 use elitea_model_client::settings::ModelSettings;
@@ -39,23 +44,85 @@ pub struct NativeRunner {
     pool: PgPool,
     settings: Arc<Settings>,
     transport: Transport,
-    views: Arc<crate::retrieval::ViewCache>,
+    views: Arc<crate::retrieval::ViewCache<store::PgGraphStore>>,
+    /// The ingestion model calls in flight across this process
+    /// (`ELITEA_INVENTORY_MODEL_CONCURRENCY`).
+    model_calls: Arc<tokio::sync::Semaphore>,
 }
 
 fn invalid(message: impl Into<String>) -> EngineError {
     EngineError::new(ErrorType::Value, message.into())
 }
 
-/// Python truthiness of a parameter.
-fn truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(flag)) => *flag,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|n| n != 0.0),
-        Some(Value::String(text)) => !text.is_empty(),
-        Some(Value::Array(items)) => !items.is_empty(),
-        Some(Value::Object(fields)) => !fields.is_empty(),
+/// A store failure as the host reads it. A deleted toolkit (the lease's
+/// fence, migration 0007) carries its code, so the refusal is recognised
+/// without reading the text.
+fn store_error(error: &crate::store::StoreError) -> EngineError {
+    let failure = EngineError::new(ErrorType::Runtime, error.to_string());
+    match error {
+        crate::store::StoreError::Deleted(_) => failure.with_code(codes::TOOLKIT_DELETED),
+        _ => failure,
     }
+}
+
+/// The refusal every lease-holding write answers while a run holds the
+/// graph: `code: busy`, so the host can tell it from a failure.
+fn busy(message: &str) -> EngineError {
+    EngineError::new(ErrorType::Runtime, message).with_code(codes::BUSY)
+}
+
+/// The stored graph, for a write that must not create one: a graph
+/// deleted since the caller planned its work is a refusal (nothing is
+/// saved), not an empty graph to write back.
+///
+/// # Errors
+///
+/// `FileNotFound` when no graph is stored; `Runtime` on a store failure.
+pub async fn load_existing(pool: &PgPool, key: GraphKey) -> Result<Graph, EngineError> {
+    match store::PgGraphStore::new(pool.clone()).load(key).await {
+        Ok(Some((graph, _))) => Ok(graph),
+        Ok(None) => Err(EngineError::new(
+            ErrorType::FileNotFound,
+            "no graph is stored for this Inventory toolkit (it was removed meanwhile); nothing was changed",
+        )),
+        Err(error) => Err(EngineError::new(ErrorType::Runtime, error.to_string())),
+    }
+}
+
+/// How an `import_graph` failure reaches the caller. A document the
+/// import cannot read and a refusal (an ingestion holds the lease, or the
+/// graph has native ingestion state and `replace_ingestion_state` is
+/// false) are the caller's to correct, so they are `ValueError`s; only a
+/// store failure is a `RuntimeError`.
+fn import_error(error: crate::transfer::TransferError) -> EngineError {
+    use crate::transfer::TransferError;
+    match error {
+        TransferError::Document(_) | TransferError::Refused(_) => invalid(error.to_string()),
+        TransferError::Store(error) => store_error(&error),
+        TransferError::NotFound { .. } => EngineError::new(ErrorType::Runtime, error.to_string()),
+    }
+}
+
+/// `run_ingestion`'s `full_rebuild`, read leniently: a full rebuild builds
+/// the new graph and swaps it in, so turning it on by a `1` or `"yes"` is
+/// safe, and reading those as off would silently run incrementally.
+fn full_rebuild(params: &Map<String, Value>) -> bool {
+    crate::retrieval::lenient_flag(params.get("full_rebuild"))
+}
+
+/// The call's `project_id` alone (a project-wide tool names no toolkit):
+/// an integer, or a string of one, above zero.
+fn project_id_of(arguments: &Map<String, Value>) -> Result<i64, crate::store::StoreError> {
+    let parsed = match arguments.get("project_id") {
+        Some(Value::Number(number)) => number.as_i64(),
+        Some(Value::String(text)) => text.trim().parse().ok(),
+        _ => None,
+    };
+    parsed.filter(|id| *id >= 1).ok_or_else(|| {
+        crate::store::StoreError::InvalidKey(
+            "the call carries no positive integer project_id, so it names no project".to_owned(),
+        )
+    })
 }
 
 fn text_param<'a>(params: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
@@ -101,11 +168,20 @@ impl NativeRunner {
             user_agent: concat!("elitea-inventory-engine/", env!("CARGO_PKG_VERSION")),
             ..TransportSettings::default()
         })?;
+        let model_calls = Arc::new(tokio::sync::Semaphore::new(
+            settings
+                .model_concurrency
+                .clamp(1, tokio::sync::Semaphore::MAX_PERMITS),
+        ));
+        let views = Arc::new(crate::retrieval::ViewCache::new(store::PgGraphStore::new(
+            pool.clone(),
+        )));
         Ok(Self {
             pool,
             settings: Arc::new(settings),
             transport,
-            views: Arc::new(crate::retrieval::ViewCache::default()),
+            views,
+            model_calls,
         })
     }
 
@@ -144,6 +220,10 @@ impl NativeRunner {
             .get("params")
             .and_then(Value::as_object)
             .unwrap_or(&empty);
+        if family == tools::PLATFORM_FAMILY {
+            context.thinking(format!("Running {tool}"));
+            return self.platform_tools(tool, arguments, params, context).await;
+        }
         let key = GraphKey::from_arguments(arguments).map_err(|e| invalid(e.to_string()))?;
         context.thinking(format!("Running {tool}"));
         match tool {
@@ -155,6 +235,9 @@ impl NativeRunner {
                     .await
             }
             "remove_source_entities" => self.remove_source(key, params).await,
+            "smart_normalize_types" => self.smart_normalize(key, params, context).await,
+            "import_graph" => self.import_graph(key, params, context).await,
+            "export_graph" => self.export_graph(key, params, context).await,
             other => {
                 self.read(other, family, key, params, &caller_of(arguments))
                     .await
@@ -162,8 +245,147 @@ impl NativeRunner {
         }
     }
 
-    /// `remove_source_entities`: the source's citations, its edges and the
-    /// entities only it cited go; its status and file hashes too. Under the
+    /// `delete_project_graphs`: every toolkit's graph of the project
+    /// ([`delete::delete_project`]), answered as a structured result.
+    async fn delete_project_graphs(
+        &self,
+        project_id: i64,
+        json: bool,
+    ) -> Result<Value, EngineError> {
+        use crate::store::delete;
+        let done = delete::delete_project(&self.pool, project_id)
+            .await
+            .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?;
+        for &(application_id, _) in &done.by_toolkit {
+            self.views.forget(GraphKey {
+                project_id,
+                application_id,
+            });
+        }
+        // A toolkit a write holds is NOT a failure of the call: what was
+        // deleted stays deleted, and the answer says which toolkits are
+        // left and that the deletion is not complete, so the host can
+        // report that as such and the platform can call again.
+        let busy = done
+            .busy
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut text = format!(
+            "Deleted the Inventory graphs of {} toolkit(s) of project {project_id}: {} entities, {} relations, {} sources, {} documents.",
+            done.deleted.len(),
+            done.removed.entities,
+            done.removed.relations,
+            done.removed.sources,
+            done.removed.documents
+        );
+        if !done.complete() {
+            text.push_str(&format!(
+                " An ingestion is running on toolkit(s) {busy}; their graphs were not deleted. Stop it and delete the project's graphs again."
+            ));
+        }
+        Ok(crate::retrieval::answer(if json {
+            elitea_engine_core::pyjson::dumps(&json!({
+                "project_id": project_id,
+                "complete": done.complete(),
+                "toolkits": done.deleted,
+                "busy_toolkits": done.busy,
+                "by_toolkit": done
+                    .by_toolkit
+                    .iter()
+                    .map(|(toolkit_id, removed)| json!({
+                        "toolkit_id": toolkit_id,
+                        "entities": removed.entities,
+                        "relations": removed.relations,
+                        "sources": removed.sources,
+                        "documents": removed.documents,
+                    }))
+                    .collect::<Vec<_>>(),
+                "entities": done.removed.entities,
+                "relations": done.removed.relations,
+                "sources": done.removed.sources,
+                "documents": done.removed.documents,
+            }))
+        } else {
+            text
+        }))
+    }
+
+    /// The `platform` tools (issue #1244, the host's gRPC platform service): the platform deleting what
+    /// a deleted toolkit or project left behind.
+    async fn platform_tools(
+        &self,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::store::delete::{self, GraphDeletion};
+        let json = json_format(params);
+        if tool == tools::DELETE_PROJECT_GRAPHS {
+            let project_id = project_id_of(arguments).map_err(|e| invalid(e.to_string()))?;
+            context.checkpoint()?;
+            return self.delete_project_graphs(project_id, json).await;
+        }
+        let key = GraphKey::from_arguments(arguments).map_err(|e| invalid(e.to_string()))?;
+        context.checkpoint()?;
+        match delete::delete_graph(&self.pool, key)
+            .await
+            .map_err(|e| store_error(&e))?
+        {
+            // The code is what the host acts on (retry); the text is for
+            // a reader.
+            GraphDeletion::Busy => Err(EngineError::new(
+                ErrorType::Runtime,
+                "an ingestion of this Inventory toolkit is running; stop it and delete the graph again",
+            )
+            .with_code(codes::BUSY)),
+            GraphDeletion::Deleted { removed } => {
+                // This replica's cached view of the graph goes with it (the
+                // stamp's incarnation covers every other replica's).
+                self.views.forget(key);
+                // "deleted" when ANY row went — a source status or a
+                // document version without a graph row is still something
+                // the toolkit left — and "nothing to delete" only when none
+                // did.
+                let deleted = !removed.is_empty();
+                let text = if deleted {
+                    format!(
+                        "Deleted the Inventory graph of toolkit {} in project {}: {} entities, {} relations, {} sources, {} documents.",
+                        key.application_id,
+                        key.project_id,
+                        removed.entities,
+                        removed.relations,
+                        removed.sources,
+                        removed.documents
+                    )
+                } else {
+                    format!(
+                        "Toolkit {} in project {} has no Inventory graph; nothing to delete.",
+                        key.application_id, key.project_id
+                    )
+                };
+                Ok(crate::retrieval::answer(if json {
+                    elitea_engine_core::pyjson::dumps(&json!({
+                        "deleted": deleted,
+                        "project_id": key.project_id,
+                        "application_id": key.application_id,
+                        "entities": removed.entities,
+                        "relations": removed.relations,
+                        "sources": removed.sources,
+                        "documents": removed.documents,
+                    }))
+                } else {
+                    text
+                }))
+            }
+        }
+    }
+
+    /// `remove_source_entities`: the source's citations, its contribution
+    /// to every edge (an edge only it found goes) and the entities only it
+    /// cited go; its status and file hashes too. Under the
     /// ingestion lease, so it cannot interleave with a run.
     ///
     /// The Python handler matched the toolkit id against citations that
@@ -174,27 +396,223 @@ impl NativeRunner {
         key: GraphKey,
         params: &Map<String, Value>,
     ) -> Result<Value, EngineError> {
-        let store_error =
-            |e: crate::store::StoreError| EngineError::new(ErrorType::Runtime, e.to_string());
         let (toolkit_id, name) = Self::source_identity(params)?;
-        let Some(_lease) = sources::lease(&self.pool, key).await.map_err(store_error)? else {
-            return Err(EngineError::new(
-                ErrorType::Runtime,
+        let graphs = self.views.store();
+        let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
+            return Err(busy(
                 "an ingestion of this Inventory toolkit is running; remove the source when it finishes",
             ));
         };
-        let mut graph = store::load(&self.pool, key)
+        let mut graph = graphs
+            .load(key)
             .await
-            .map_err(store_error)?
+            .map_err(|e| store_error(&e))?
             .map(|(graph, _)| graph)
             .unwrap_or_default();
         let removed = graph.remove_source(&name);
-        sources::remove(&self.pool, key, &graph, &toolkit_id, &name)
+        graphs
+            .remove_source(key, &graph, &toolkit_id, &name)
             .await
-            .map_err(store_error)?;
+            .map_err(|e| store_error(&e))?;
         Ok(crate::retrieval::answer(format!(
             "Removed {removed} entities from toolkit {toolkit_id}"
         )))
+    }
+
+    /// `import_graph`: the operator's `import-graph` as a tool. The Go
+    /// host read the document from the toolkit's bucket into
+    /// `graph_document` (it overwrites any caller value); the import is
+    /// [`crate::transfer::import_graph`], under the ingestion lease.
+    async fn import_graph(
+        &self,
+        key: GraphKey,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::transfer;
+        let Some(text) = params.get("graph_document").and_then(Value::as_str) else {
+            return Err(invalid(
+                "import_graph needs the graph document the host reads from the toolkit's bucket; run the tool through the platform",
+            ));
+        };
+        let name = text_param(params, &["artifact_name"]).unwrap_or("graph.json");
+        context.thinking(format!("Importing {name}"));
+        context.checkpoint()?;
+        let replace = crate::retrieval::flag(params.get("replace_ingestion_state"));
+        let report = transfer::import_graph(&self.pool, key, text, replace)
+            .await
+            .map_err(import_error)?;
+        if json_format(params) {
+            return Ok(crate::retrieval::answer(elitea_engine_core::pyjson::dumps(
+                &json!({
+                    "stored": true,
+                    "entities": report.entities,
+                    "relations": report.relations,
+                    "revision": report.revision,
+                    "embeddings_model": report.embeddings_model,
+                }),
+            )));
+        }
+        Ok(crate::retrieval::answer(format!(
+            "Imported {} entities and {} relations from {name} (revision {}).{}",
+            report.entities,
+            report.relations,
+            report.revision,
+            report.embeddings_model.map_or_else(String::new, |model| format!(
+                " The graph was embedded with {model}: semantic search needs that embedding model configured."
+            ))
+        )))
+    }
+
+    /// `export_graph`: the stored graph as `graph.json`, returned as an
+    /// artifact the host uploads to the toolkit's bucket; the answer is a
+    /// summary (counts, revision, size, bucket), never the document.
+    async fn export_graph(
+        &self,
+        key: GraphKey,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::transfer::{self, TransferError};
+        context.thinking("Exporting the stored graph");
+        let report = transfer::export_report(&self.pool, key, &crate::clock::now_iso())
+            .await
+            .map_err(|error| match error {
+                TransferError::NotFound { .. } => {
+                    EngineError::new(ErrorType::FileNotFound, error.to_string())
+                }
+                other => EngineError::new(ErrorType::Runtime, other.to_string()),
+            })?;
+        if let Some(refusal) =
+            transfer::export_size_refusal(&report.document, crate::MAX_EXPORT_DOCUMENT_BYTES)
+        {
+            return Err(invalid(refusal));
+        }
+        let (summary, text) = transfer::export_summary(
+            &transfer::export_bucket(params),
+            report.entities,
+            report.relations,
+            Some(report.revision),
+            report.document.len(),
+        );
+        let result = if json_format(params) {
+            elitea_engine_core::pyjson::dumps(&summary)
+        } else {
+            text
+        };
+        // The document goes to the bucket only: the host uploads the
+        // artifact and leaves it out of the terminal body (run.ExportTool).
+        Ok(json!({
+            "success": true,
+            "result": result,
+            "artifacts": [{"name": transfer::EXPORT_ARTIFACT, "type": "application/json", "data": report.document}],
+        }))
+    }
+
+    /// `smart_normalize_types` (`crate::retrieval::admin_tools`): the
+    /// toolkit's model maps the types that qualify onto the canonical set,
+    /// one batch at a time, through a forced call of Python's structured-
+    /// output tool; unless `dry_run`, the mapping is applied to the stored
+    /// graph under the ingestion lease and saved in one transaction.
+    ///
+    /// A batch the model cannot answer refuses the run, nothing written.
+    async fn smart_normalize(
+        &self,
+        key: GraphKey,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::retrieval::admin_tools::{self as admin, Applied, SmartStep};
+        context.thinking("Loading graph and analyzing types...");
+        let stored = self
+            .views
+            .view(key)
+            .await
+            .map_err(|e| store_error(&e))?
+            .unwrap_or_default();
+        let plan = match admin::smart_plan(&stored.graph, params)? {
+            SmartStep::Answer(text) => return Ok(crate::retrieval::answer(text)),
+            SmartStep::Map(plan) => plan,
+        };
+        context.thinking(format!(
+            "Found {} types to normalize...",
+            plan.candidates.len()
+        ));
+        let model_name = Self::model_name(params).ok_or_else(|| {
+            invalid("no LLM model is configured for this Inventory toolkit; set llm_model in the toolkit configuration")
+        })?;
+        let settings = Self::model_settings(params, &model_name)?;
+        let client = ChatClient::new(self.transport.clone(), settings);
+        let stop = context.stop_signal();
+        let batches: Vec<Vec<String>> = plan.batches().collect();
+        let mut mappings = indexmap::IndexMap::new();
+        for (index, batch) in batches.iter().enumerate() {
+            context.checkpoint()?;
+            context.thinking(format!(
+                "Processing batch {}/{} ({} types)...",
+                index + 1,
+                batches.len(),
+                batch.len()
+            ));
+            let pairs = ask_batch(
+                &client,
+                &stop,
+                &model_name,
+                batch,
+                (index + 1, batches.len()),
+            )
+            .await?;
+            admin::merge_batch(&mut mappings, batch, pairs);
+        }
+        context.thinking(format!("Generated {} type mappings...", mappings.len()));
+        if plan.dry_run {
+            return Ok(crate::retrieval::answer(admin::smart_report(
+                &plan,
+                &mappings,
+                None,
+                &model_name,
+            )));
+        }
+        context.checkpoint()?;
+        context.thinking("Applying type mappings to graph...");
+        let graphs = self.views.store();
+        let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
+            return Err(busy(
+                "an ingestion of this Inventory toolkit is running; normalise the types when it finishes",
+            ));
+        };
+        // The graph as stored now, not as planned: a run may have saved since.
+        let mut graph = load_existing(&self.pool, key).await?;
+        let entities_normalized = admin::apply_mappings(&mut graph, &mappings);
+        graphs
+            .save(key, &graph)
+            .await
+            .map_err(|e| store_error(&e))?;
+        let applied = Applied {
+            types_after: admin::graph_entity_types(&graph).len(),
+            entities_normalized,
+        };
+        Ok(crate::retrieval::answer(admin::smart_report(
+            &plan,
+            &mappings,
+            Some(applied),
+            &model_name,
+        )))
+    }
+
+    /// The toolkit's chat model: `llm_model` (either spelling), else
+    /// `llm_settings.model_name`.
+    fn model_name(params: &Map<String, Value>) -> Option<String> {
+        text_param(params, &["llm_model", "toolkit_configuration_llm_model"])
+            .map(str::to_owned)
+            .or_else(|| {
+                params
+                    .get("llm_settings")
+                    .and_then(|s| s.get("model_name"))
+                    .and_then(Value::as_str)
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_owned)
+            })
     }
 
     /// The source a `remove_source_entities` call names: the expanded
@@ -223,7 +641,10 @@ impl NativeRunner {
 
     /// `semantic_search` for an investigation, when the graph has vectors:
     /// the query is embedded with the model the graph was built with, so
-    /// the two compare, and PostgreSQL ranks the entities (pgvector).
+    /// the two compare (in that model's query format,
+    /// [`crate::embed::query_text`]), and PostgreSQL ranks the entities
+    /// (pgvector's cosine distance, which is scale-free: unnormalised
+    /// vectors rank as normalised ones).
     fn ranker(
         &self,
         view: &crate::retrieval::view::GraphView,
@@ -243,31 +664,26 @@ impl NativeRunner {
                         ..EmbeddingOptions::default()
                     },
                 );
-                let (stop, pool) = (stop.clone(), self.pool.clone());
+                let (stop, graphs) = (stop.clone(), self.views.store().clone());
                 let embed: crate::investigate::Embed = Arc::new(move |query: String| {
-                    let (client, stop, pool) = (client.clone(), stop.clone(), pool.clone());
+                    let (client, stop, graphs) = (client.clone(), stop.clone(), graphs.clone());
                     Box::pin(async move {
-                        let vectors = client.embed_documents(&[query], &stop).await?;
-                        let vector: Vec<f64> = vectors
-                            .into_iter()
-                            .next()
-                            .unwrap_or_default()
+                        let text = crate::embed::query_text(client.model(), &query);
+                        let vector: Vec<f64> = client
+                            .embed_query(&text, &stop)
+                            .await?
                             .into_iter()
                             .map(f64::from)
                             .collect();
-                        store::vectors::rank(
-                            &pool,
-                            key,
-                            &vector,
-                            crate::retrieval::semantic::DEFAULT_MIN_SCORE,
-                        )
-                        .await
-                        .map_err(|e| {
-                            EngineError::new(
-                                ErrorType::Runtime,
-                                format!("the graph store failed: {e}"),
-                            )
-                        })
+                        graphs
+                            .rank(key, &vector, crate::retrieval::semantic::DEFAULT_MIN_SCORE)
+                            .await
+                            .map_err(|e| {
+                                EngineError::new(
+                                    ErrorType::Runtime,
+                                    format!("the graph store failed: {e}"),
+                                )
+                            })
                     })
                 });
                 embed
@@ -311,23 +727,13 @@ impl NativeRunner {
         let Some(question) = Question::from_params(params) else {
             return Ok(crate::retrieval::answer(agent::missing_question()));
         };
-        let model_name = text_param(params, &["llm_model", "toolkit_configuration_llm_model"])
-            .map(str::to_owned)
-            .or_else(|| {
-                params
-                    .get("llm_settings")
-                    .and_then(|s| s.get("model_name"))
-                    .and_then(Value::as_str)
-                    .filter(|m| !m.is_empty())
-                    .map(str::to_owned)
-            })
-            .ok_or_else(|| {
+        let model_name = Self::model_name(params).ok_or_else(|| {
                 invalid("no LLM model is configured for this Inventory toolkit; set llm_model in the toolkit configuration")
             })?;
         let settings = Self::model_settings(params, &model_name)?;
         let stored = self
             .views
-            .view(&self.pool, key)
+            .view(key)
             .await
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
             .unwrap_or_default();
@@ -351,7 +757,6 @@ impl NativeRunner {
             self.transport.http_client().clone(),
             &settings,
             key.project_id,
-            model_name,
         );
         let embed = self.ranker(&view, &settings, key, &stop);
         let model = self.chat_model(&settings, &stop);
@@ -383,7 +788,7 @@ impl NativeRunner {
     ) -> Result<Value, EngineError> {
         let stored = self
             .views
-            .view(&self.pool, key)
+            .view(key)
             .await
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
             .unwrap_or_default();
@@ -398,7 +803,7 @@ impl NativeRunner {
             Err(EngineError::new(
                 ErrorType::FileNotFound,
                 format!(
-                    "'{tool}' is not served by the native Inventory engine yet (ADR-0027 P4); run the deployment with ELITEA_INVENTORY_RUNNER=legacy for it"
+                    "'{tool}' has no handler in the native Inventory engine; this is a defect of the engine's tool table, not of the request"
                 ),
             ))
         })
@@ -443,7 +848,8 @@ impl NativeRunner {
         let model: Model = extract::gateway_model(
             ChatClient::new(self.transport.clone(), chat_settings.clone()),
             context.stop_signal(),
-        );
+        )
+        .limited(Arc::clone(&self.model_calls), context.stop_signal());
         let embeddings = text_param(
             params,
             &["embedding_model", "toolkit_configuration_embedding_model"],
@@ -463,7 +869,7 @@ impl NativeRunner {
         let options = RunOptions {
             model: Some(ModelOptions::new(model)),
             embeddings,
-            full_rebuild: truthy(params.get("full_rebuild")),
+            full_rebuild: full_rebuild(params),
         };
         let outcome = ingest::run(
             &self.pool,
@@ -575,12 +981,14 @@ impl NativeRunner {
 /// {platform}/api/v2/elitea_core/test_tool/prompt_lib/{project}/{toolkit}`
 /// with the invocation's bearer. The platform reloads the toolkit's own
 /// settings and credentials and applies the user's permissions; the engine
-/// sends only the tool and its arguments.
+/// sends only the tool and its arguments. Exactly `request_id`,
+/// `tool_name`, `tool_params` and `toolkit_config.toolkit_id`: the
+/// platform's investigate grant (`material.SourceToolGate`) admits that
+/// shape and nothing more, so no model choice (`llm_model`) rides on it.
 fn source_caller(
     client: reqwest::Client,
     settings: &ModelSettings,
     project_id: i64,
-    model: String,
 ) -> crate::investigate::SourceCall {
     let platform = settings
         .api_base
@@ -594,14 +1002,13 @@ fn source_caller(
             let url = format!(
                 "{platform}/api/v2/elitea_core/test_tool/prompt_lib/{project_id}/{toolkit_id}"
             );
-            let (client, bearer, model) = (client.clone(), bearer.clone(), model.clone());
+            let (client, bearer) = (client.clone(), bearer.clone());
             Box::pin(async move {
                 let body = json!({
                     "request_id": format!("investigate-{toolkit_id}-{tool}"),
                     "tool_name": tool,
                     "tool_params": arguments,
                     "toolkit_config": {"toolkit_id": toolkit_id},
-                    "llm_model": model,
                 });
                 let response = client
                     .post(&url)
@@ -637,6 +1044,79 @@ fn source_caller(
     )
 }
 
+/// One smart-normalisation batch through the model: Python's prompt, its
+/// structured-output tool forced, the reply as `(original, canonical)`
+/// pairs. `position` is `(batch, of)`, for the refusal.
+async fn ask_batch(
+    client: &ChatClient,
+    stop: &StopSignal,
+    model_name: &str,
+    batch: &[String],
+    position: (usize, usize),
+) -> Result<Vec<(String, String)>, EngineError> {
+    use crate::retrieval::admin_tools as admin;
+    use elitea_model_client::chat::{
+        ChatMessage, ChatRequest, Sampling, ToolChoice, ToolDefinition,
+    };
+    let (tool_name, description, schema) = admin::mapping_tool();
+    let mut request = ChatRequest::new(vec![ChatMessage::User(admin::smart_prompt(batch))]);
+    request.tools = vec![ToolDefinition {
+        name: tool_name.to_owned(),
+        description: description.to_owned(),
+        parameters: schema,
+    }];
+    request.tool_choice = Some(ToolChoice::Function(tool_name.to_owned()));
+    request.sampling = Sampling::Deterministic;
+    request.max_tokens = Some(4096);
+    let refuse = |reason: String| {
+        EngineError::new(
+            ErrorType::Runtime,
+            format!(
+                "smart_normalize_types: batch {} of {} got no usable type mapping from {model_name} ({reason}); nothing was changed",
+                position.0, position.1
+            ),
+        )
+    };
+    let response = client.complete(&request, stop).await.map_err(|e| {
+        if e == EngineError::cancelled() {
+            e
+        } else {
+            refuse(e.message)
+        }
+    })?;
+    let reply = mapping_reply(&response).map_err(&refuse)?;
+    admin::mappings_from_reply(&reply).map_err(&refuse)
+}
+
+/// A smart-normalisation batch's reply: the forced tool call's arguments,
+/// or, from a model that answered in text instead, that text as JSON (a
+/// fenced block is unwrapped).
+fn mapping_reply(response: &elitea_model_client::chat::ChatResponse) -> Result<Value, String> {
+    use crate::retrieval::admin_tools::MAPPING_TOOL;
+    if let Some(call) = response
+        .tool_calls
+        .iter()
+        .find(|call| call.name == MAPPING_TOOL)
+    {
+        return call
+            .parsed_arguments()
+            .map(Value::Object)
+            .map_err(|e| e.message);
+    }
+    let text = response.content.trim();
+    let text = text
+        .strip_prefix("```json")
+        .or_else(|| text.strip_prefix("```"))
+        .and_then(|rest| rest.trim_end().strip_suffix("```"))
+        .unwrap_or(text);
+    serde_json::from_str::<Value>(text.trim())
+        .ok()
+        .filter(Value::is_object)
+        .ok_or_else(|| {
+            "the answer is neither a TypeMappingResponse call nor a JSON object".to_owned()
+        })
+}
+
 /// `_ingestion_report`, from the run's outcome (or its failure).
 fn report(
     name: &str,
@@ -653,15 +1133,18 @@ fn report(
     let _ = kind;
     let source = name.to_owned();
     if as_json {
-        let (documents, entities, relations) = outcome.map_or((0, 0, 0), |o| {
-            (o.documents_processed, o.entities_added, o.relations_added)
-        });
+        let empty = Outcome::default();
+        let counts = outcome.unwrap_or(&empty);
         return elitea_engine_core::pyjson::dumps(&json!({
             "success": outcome.is_ok(),
             "source": source,
-            "documents_processed": documents,
-            "entities_added": entities,
-            "relations_added": relations,
+            "documents_processed": counts.documents_processed,
+            // Python's keys: this run's extraction, merges included.
+            "entities_added": counts.entities_added,
+            "relations_added": counts.relations_added,
+            // What the graph holds of the source (get_sources_status).
+            "entities_in_graph": counts.entities_stored,
+            "relations_in_graph": counts.relations_stored,
             "errors": errors.iter().take(10).collect::<Vec<_>>(),
             "duration_seconds": seconds,
         }));
@@ -672,9 +1155,16 @@ fn report(
         lines.extend(errors.iter().take(10).map(|e| format!("- {e}")));
         return lines.join("\n");
     };
+    // Entities and Relations are the stored graph's (what get_stats and
+    // get_sources_status count); the extraction line is this run's add
+    // calls, before duplicates merged and the quality pass pruned.
     let mut output = format!(
-        "# Ingestion Complete: {name}\n\n**Source:** {source}\n**Documents:** {}\n**Entities:** {}\n**Relations:** {}\n**Duration:** {seconds:.1}s\n",
-        outcome.documents_processed, outcome.entities_added, outcome.relations_added
+        "# Ingestion Complete: {name}\n\n**Source:** {source}\n**Documents:** {}\n**Entities:** {}\n**Relations:** {}\n**Extracted this run:** {} entities, {} relations (before duplicates merged)\n**Duration:** {seconds:.1}s\n",
+        outcome.documents_processed,
+        outcome.entities_stored,
+        outcome.relations_stored,
+        outcome.entities_added,
+        outcome.relations_added
     );
     if !errors.is_empty() {
         output.push_str(&format!("\n**Warnings/Errors ({}):**\n", errors.len()));
@@ -775,13 +1265,82 @@ fn status_text(summary: &Value) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn full_rebuild_is_lenient_and_replace_ingestion_state_is_strict() {
+        for on in [
+            json!(true),
+            json!(1),
+            json!(2.5),
+            json!("true"),
+            json!(" TRUE "),
+            json!("1"),
+            json!("yes"),
+            json!("On"),
+        ] {
+            let params = json!({ "full_rebuild": on });
+            let params = params.as_object().cloned().unwrap_or_default();
+            assert!(full_rebuild(&params), "{params:?}");
+        }
+        for off in [
+            json!(false),
+            json!(0),
+            json!(0.0),
+            json!("false"),
+            json!("0"),
+            json!("no"),
+            json!("off"),
+            json!(""),
+            json!(null),
+            json!([]),
+            json!({}),
+        ] {
+            let params = json!({"full_rebuild": off});
+            let params = params.as_object().cloned().unwrap_or_default();
+            assert!(!full_rebuild(&params), "{params:?}");
+        }
+        assert!(!full_rebuild(&Map::new()));
+        // The destructive flag stays strict: 1 and "yes" do not delete state.
+        for value in [json!(1), json!("1"), json!("yes"), json!("on")] {
+            assert!(!crate::retrieval::flag(Some(&value)), "{value}");
+        }
+    }
+
+    #[test]
+    fn import_refusals_are_the_callers_to_correct() {
+        use crate::transfer::TransferError;
+        for (error, wanted) in [
+            (TransferError::Document("bad".into()), ErrorType::Value),
+            (
+                TransferError::Refused("an ingestion of this Inventory toolkit is running".into()),
+                ErrorType::Value,
+            ),
+            (
+                TransferError::Refused("already has native ingestion state".into()),
+                ErrorType::Value,
+            ),
+            (
+                TransferError::NotFound {
+                    project_id: 1,
+                    application_id: 2,
+                },
+                ErrorType::Runtime,
+            ),
+        ] {
+            let mapped = import_error(error);
+            assert_eq!(mapped.error_type, wanted, "{}", mapped.message);
+        }
+    }
+
     /// The tools `run` answers itself, before the read dispatch.
-    const RUN_TOOLS: [&str; 5] = [
+    const RUN_TOOLS: [&str; 8] = [
+        "import_graph",
+        "export_graph",
         "run_ingestion",
         "get_sources_status",
         "get_ingestion_status",
         "investigate",
         "remove_source_entities",
+        "smart_normalize_types",
     ];
 
     #[test]
@@ -808,16 +1367,45 @@ mod tests {
     }
 
     #[test]
+    fn a_mapping_reply_is_the_tool_call_or_json_text() {
+        use elitea_model_client::chat::{ChatResponse, ToolCall};
+        let call = ChatResponse {
+            content: "ignored".to_owned(),
+            tool_calls: vec![ToolCall {
+                id: "c1".to_owned(),
+                name: "TypeMappingResponse".to_owned(),
+                arguments: r#"{"mappings": []}"#.to_owned(),
+            }],
+            ..ChatResponse::default()
+        };
+        assert_eq!(mapping_reply(&call), Ok(json!({"mappings": []})));
+        let fenced = ChatResponse {
+            content: "```json\n{\"mappings\": [1]}\n```".to_owned(),
+            ..ChatResponse::default()
+        };
+        assert_eq!(mapping_reply(&fenced), Ok(json!({"mappings": [1]})));
+        let prose = ChatResponse {
+            content: "I think widget is a fact".to_owned(),
+            ..ChatResponse::default()
+        };
+        assert!(mapping_reply(&prose).is_err());
+    }
+
+    #[test]
     fn reports_follow_the_python_text() {
         let outcome = Outcome {
             documents_processed: 3,
             entities_added: 9,
             relations_added: 4,
+            entities_stored: 7,
+            relations_stored: 3,
             ..Outcome::default()
         };
         let text = report("repo", "github", Ok(&outcome), 1.25, false);
+        // The counts are the stored graph's; the extraction is labelled.
         assert!(
-            text.starts_with("# Ingestion Complete: repo\n\n**Source:** repo\n**Documents:** 3\n")
+            text.starts_with("# Ingestion Complete: repo\n\n**Source:** repo\n**Documents:** 3\n**Entities:** 7\n**Relations:** 3\n**Extracted this run:** 9 entities, 4 relations (before duplicates merged)\n"),
+            "{text}"
         );
         assert!(text.contains("**Duration:** 1.2s"));
         let failed = report("repo", "github", Err(&invalid("clone refused")), 0.0, false);
@@ -829,6 +1417,8 @@ mod tests {
             serde_json::from_str(&report("repo", "github", Ok(&outcome), 2.0, true))
                 .unwrap_or_default();
         assert_eq!(as_json["entities_added"], json!(9));
+        assert_eq!(as_json["entities_in_graph"], json!(7));
+        assert_eq!(as_json["relations_in_graph"], json!(3));
         assert_eq!(as_json["success"], json!(true));
     }
 

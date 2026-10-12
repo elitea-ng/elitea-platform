@@ -39,9 +39,16 @@ func WithEdgeAuthCredentialHeaders(headers ...EdgeAuthCredentialHeader) EdgeAuth
 	}
 }
 
-// EdgeAuthHandler implements Traefik's edge-auth protocol.
-// Traefik sends the original request headers; this handler validates
+// EdgeAuthHandler implements Traefik's edge-auth protocol as a credential
+// check: Traefik sends the original request headers; this handler validates
 // credentials and responds 200 on success or 403 on credential failure.
+//
+// It never projects an identity. The X-Auth-* projection elitea-main trusts
+// is produced only by the signing EdgeAuth plane (internal/api/browserauth,
+// mounted at /internal/auth/main), which binds it to the request with a
+// signature the auth middleware verifies. An unsigned projection from this
+// route would be a set of headers no hop can tell from a caller's own, so a
+// request for one (the `target` mapper parameter) is refused.
 type EdgeAuthHandler struct {
 	credentials       *forwardapp.TokenCredentialAuthenticator
 	credentialHeaders []EdgeAuthCredentialHeader
@@ -136,30 +143,16 @@ func (h *EdgeAuthHandler) authenticate(
 }
 
 func writeSuccess(w http.ResponseWriter, r *http.Request, user identity.User) error {
-	// The current baseline identifies a token by auth_core__token.id. The
-	// additive owner header lets downstream code cross-check it without changing
-	// the existing X-Auth-ID contract.
+	// The current baseline identifies a token by auth_core__token.id and its
+	// owner; a validator that names only one of them is refused.
 	if user.TokenID == "" || user.UserID == "" {
 		return errors.New("validated token identity is incomplete")
 	}
-
-	targetValues, targetProvided := r.URL.Query()["target"]
-	if !targetProvided {
-		writeOK(w)
-		return nil
+	// No mapper target is registered: this route answers the credential check
+	// only and never sets X-Auth-* (see EdgeAuthHandler).
+	if _, targetProvided := r.URL.Query()["target"]; targetProvided {
+		return errors.New("edge-auth identity projection is not offered on this route")
 	}
-	target := ""
-	if len(targetValues) > 0 {
-		target = targetValues[0]
-	}
-	if target != "rpc" {
-		return errors.New("edge-auth success target is not registered")
-	}
-
-	w.Header().Set("X-Auth-Type", "token")
-	w.Header().Set("X-Auth-ID", user.TokenID)
-	w.Header().Set("X-Auth-User-ID", user.UserID)
-	w.Header().Set("X-Auth-Reference", "-")
 	writeOK(w)
 	return nil
 }

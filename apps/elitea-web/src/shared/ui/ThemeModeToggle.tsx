@@ -70,7 +70,16 @@ const ThemeModeToggle = memo(({ fullWidth = false }: ThemeModeToggleProps) => {
 
   const onChange = useCallback(
     (value: string) => {
-      setMode(value as ThemeModeValue);
+      const mode = value as ThemeModeValue;
+      // Applied at once (MUI also writes it to the `el-mode` first-paint
+      // cache), then stored for the user's other clients: web and desktop
+      // share no browser storage. Optimistic, so a failed save keeps the
+      // local choice and says nothing. Imported on demand to keep the
+      // request code out of the initial chunk.
+      setMode(mode);
+      void import('@/shared/api/themePreference')
+        .then(({ saveThemePreference }) => saveThemePreference(mode))
+        .catch(() => undefined);
     },
     [setMode],
   );

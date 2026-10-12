@@ -90,6 +90,13 @@ const (
 	IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX IndexIngestTerminalStateV1 = 3
 	IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_FAILED            IndexIngestTerminalStateV1 = 4
 	IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED    IndexIngestTerminalStateV1 = 5
+	// CANCELLED is a Rust run (ADR-0030 I1) that was stopped at a document
+	// boundary after it had written to or deleted from the vector store. Its
+	// status is ERROR and its summary carries the store's totals and record, so
+	// elitea-main records what the store holds and the registry row ends
+	// `cancelled`; the settlement proposes CANCELLED. A run stopped before it
+	// touched the store ends as a plain CANCELLED runtime error instead.
+	IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED IndexIngestTerminalStateV1 = 6
 )
 
 // Enum value maps for IndexIngestTerminalStateV1.
@@ -101,6 +108,7 @@ var (
 		3: "INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX",
 		4: "INDEX_INGEST_TERMINAL_STATE_V1_FAILED",
 		5: "INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED",
+		6: "INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED",
 	}
 	IndexIngestTerminalStateV1_value = map[string]int32{
 		"INDEX_INGEST_TERMINAL_STATE_V1_UNSPECIFIED":       0,
@@ -109,6 +117,7 @@ var (
 		"INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX": 3,
 		"INDEX_INGEST_TERMINAL_STATE_V1_FAILED":            4,
 		"INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED":    5,
+		"INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED":         6,
 	}
 )
 
@@ -156,7 +165,28 @@ type IndexIngestCommandV1 struct {
 	// The command bus carries only this immutable entry reference and digest.
 	EmbeddingBinding *IndexIngestInputBindingV1 `protobuf:"bytes,9,opt,name=embedding_binding,json=embeddingBinding,proto3" json:"embedding_binding,omitempty"`
 	// Durable admission origin. Consumers accept only user, llm, or schedule.
-	Initiator     string `protobuf:"bytes,16,opt,name=initiator,proto3" json:"initiator,omitempty"`
+	Initiator string `protobuf:"bytes,16,opt,name=initiator,proto3" json:"initiator,omitempty"`
+	// The embedding space the index is already stamped with (ADR-0030 decision
+	// 2), set by elitea-main from the index registry under
+	// ELITEA_INDEXING_RUNTIME=rust. Both are empty (""/0) when the index is not
+	// stamped yet (its first run stamps it) and always on the Python path; they
+	// are set together or not at all. They are a non-secret fence on the run,
+	// not an input: the embedding inputs stay in the input bundle.
+	//
+	// A worker that receives them MUST compare them with the model and
+	// dimension its embedding client actually produces BEFORE it writes any
+	// vector, and on any difference write nothing and propose FAILED with a
+	// terminal summary that says so. elitea-main records a terminal result that
+	// names another space as failed regardless, but only in the registry and the
+	// notification: the settlement and the stored projection keep the worker's
+	// outcome, and vectors already written would sit in the wrong collection.
+	ExpectedEmbeddingModel     string `protobuf:"bytes,17,opt,name=expected_embedding_model,json=expectedEmbeddingModel,proto3" json:"expected_embedding_model,omitempty"`
+	ExpectedEmbeddingDimension uint32 `protobuf:"varint,18,opt,name=expected_embedding_dimension,json=expectedEmbeddingDimension,proto3" json:"expected_embedding_dimension,omitempty"`
+	// The index registry row this run writes (ADR-0031 decision 2: the row's
+	// UUID is the vector namespace), set by elitea-main from the registry under
+	// ELITEA_INDEXING_RUNTIME=rust and empty on the Python path. Canonical
+	// lower-case UUID text; a non-secret identity like the fields above.
+	IndexId       string `protobuf:"bytes,19,opt,name=index_id,json=indexId,proto3" json:"index_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -257,6 +287,27 @@ func (x *IndexIngestCommandV1) GetEmbeddingBinding() *IndexIngestInputBindingV1 
 func (x *IndexIngestCommandV1) GetInitiator() string {
 	if x != nil {
 		return x.Initiator
+	}
+	return ""
+}
+
+func (x *IndexIngestCommandV1) GetExpectedEmbeddingModel() string {
+	if x != nil {
+		return x.ExpectedEmbeddingModel
+	}
+	return ""
+}
+
+func (x *IndexIngestCommandV1) GetExpectedEmbeddingDimension() uint32 {
+	if x != nil {
+		return x.ExpectedEmbeddingDimension
+	}
+	return 0
+}
+
+func (x *IndexIngestCommandV1) GetIndexId() string {
+	if x != nil {
+		return x.IndexId
 	}
 	return ""
 }
@@ -421,8 +472,60 @@ type IndexIngestSummaryV1 struct {
 	Indexed       uint64                     `protobuf:"varint,4,opt,name=indexed,proto3" json:"indexed,omitempty"`
 	Updated       uint64                     `protobuf:"varint,5,opt,name=updated,proto3" json:"updated,omitempty"`
 	Reindex       *bool                      `protobuf:"varint,6,opt,name=reindex,proto3,oneof" json:"reindex,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Typed counts and the embedding stamp of the Rust indexing runtime
+	// (ADR-0030 decision 2). elitea-main is the only writer of index metadata:
+	// it applies these fields to the index_registry row in its terminal
+	// transition, so no English result sentence is parsed. All of them are
+	// absent (zero, empty) on the Python SDK path, which keeps writing its own
+	// index_meta row; a summary that carries any of them describes a Rust run.
+	//
+	// Documents written by this run, chunks written, and chunks whose embedding
+	// or write failed.
+	IndexedDocuments uint64 `protobuf:"varint,7,opt,name=indexed_documents,json=indexedDocuments,proto3" json:"indexed_documents,omitempty"`
+	IndexedChunks    uint64 `protobuf:"varint,8,opt,name=indexed_chunks,json=indexedChunks,proto3" json:"indexed_chunks,omitempty"`
+	FailedChunks     uint64 `protobuf:"varint,9,opt,name=failed_chunks,json=failedChunks,proto3" json:"failed_chunks,omitempty"`
+	// Documents the run did not index, by closed reason (for example
+	// "unsupported_type", "too_large", "needs_model"). Keys are bounded lower
+	// snake_case tokens; a reason is never free text.
+	Skipped map[string]uint64 `protobuf:"bytes,10,rep,name=skipped,proto3" json:"skipped,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	// The model that produced the vectors and the dimension it returned. The
+	// first terminal result stamps them on the index; a later result with a
+	// different dimension fails the run (ADR-0030 decision 2).
+	EmbeddingModel     string `protobuf:"bytes,11,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
+	EmbeddingDimension uint32 `protobuf:"varint,12,opt,name=embedding_dimension,json=embeddingDimension,proto3" json:"embedding_dimension,omitempty"`
+	// The per-document record of the Rust indexing runtime (ADR-0030 decision
+	// 3): the documents this run wrote (with the version and chunk count the
+	// vector store now holds) and the keys of documents whose points this run
+	// deleted (they disappeared from the source, or their old points were
+	// deleted and the new ones could not be written). elitea-main applies them
+	// to index_registry_documents in the same terminal transition. The output
+	// frame is bounded (64 KiB), so a run that touched more documents than fit
+	// lists the first ones and sets documents_truncated. A record may carry
+	// only removed keys (a run that deleted and wrote nothing), only totals,
+	// or both.
+	Documents           []*IndexIngestDocumentV1 `protobuf:"bytes,16,rep,name=documents,proto3" json:"documents,omitempty"`
+	RemovedDocumentKeys []string                 `protobuf:"bytes,17,rep,name=removed_document_keys,json=removedDocumentKeys,proto3" json:"removed_document_keys,omitempty"`
+	DocumentsTruncated  bool                     `protobuf:"varint,18,opt,name=documents_truncated,json=documentsTruncated,proto3" json:"documents_truncated,omitempty"`
+	// The whole index as the vector store holds it after this run: documents
+	// present and their chunks. Unchanged documents, documents this run wrote,
+	// and documents whose old points still stand (changed in the source but
+	// not re-indexed; vanished but not deleted when the run failed) all count.
+	// Presence is explicit: a summary that carries them describes the store,
+	// zero included, and elitea-main records them as given; one without them
+	// (the Python SDK path, a run that failed before touching the store) says
+	// nothing about the store. Set together or not at all. A run that failed
+	// after writing or deleting anything carries them, so the registry
+	// follows the store.
+	TotalDocuments *uint64 `protobuf:"varint,19,opt,name=total_documents,json=totalDocuments,proto3,oneof" json:"total_documents,omitempty"`
+	TotalChunks    *uint64 `protobuf:"varint,20,opt,name=total_chunks,json=totalChunks,proto3,oneof" json:"total_chunks,omitempty"`
+	// True when `documents` names every document the store holds after the
+	// run (nothing truncated, no unchanged or retained document outside the
+	// list): elitea-main then makes index_registry_documents exactly that
+	// list. It is a statement by the worker, never inferred from counts; when
+	// it is set, total_documents equals the length of `documents`.
+	WholeIndexRecord bool `protobuf:"varint,21,opt,name=whole_index_record,json=wholeIndexRecord,proto3" json:"whole_index_record,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *IndexIngestSummaryV1) Reset() {
@@ -497,6 +600,152 @@ func (x *IndexIngestSummaryV1) GetReindex() bool {
 	return false
 }
 
+func (x *IndexIngestSummaryV1) GetIndexedDocuments() uint64 {
+	if x != nil {
+		return x.IndexedDocuments
+	}
+	return 0
+}
+
+func (x *IndexIngestSummaryV1) GetIndexedChunks() uint64 {
+	if x != nil {
+		return x.IndexedChunks
+	}
+	return 0
+}
+
+func (x *IndexIngestSummaryV1) GetFailedChunks() uint64 {
+	if x != nil {
+		return x.FailedChunks
+	}
+	return 0
+}
+
+func (x *IndexIngestSummaryV1) GetSkipped() map[string]uint64 {
+	if x != nil {
+		return x.Skipped
+	}
+	return nil
+}
+
+func (x *IndexIngestSummaryV1) GetEmbeddingModel() string {
+	if x != nil {
+		return x.EmbeddingModel
+	}
+	return ""
+}
+
+func (x *IndexIngestSummaryV1) GetEmbeddingDimension() uint32 {
+	if x != nil {
+		return x.EmbeddingDimension
+	}
+	return 0
+}
+
+func (x *IndexIngestSummaryV1) GetDocuments() []*IndexIngestDocumentV1 {
+	if x != nil {
+		return x.Documents
+	}
+	return nil
+}
+
+func (x *IndexIngestSummaryV1) GetRemovedDocumentKeys() []string {
+	if x != nil {
+		return x.RemovedDocumentKeys
+	}
+	return nil
+}
+
+func (x *IndexIngestSummaryV1) GetDocumentsTruncated() bool {
+	if x != nil {
+		return x.DocumentsTruncated
+	}
+	return false
+}
+
+func (x *IndexIngestSummaryV1) GetTotalDocuments() uint64 {
+	if x != nil && x.TotalDocuments != nil {
+		return *x.TotalDocuments
+	}
+	return 0
+}
+
+func (x *IndexIngestSummaryV1) GetTotalChunks() uint64 {
+	if x != nil && x.TotalChunks != nil {
+		return *x.TotalChunks
+	}
+	return 0
+}
+
+func (x *IndexIngestSummaryV1) GetWholeIndexRecord() bool {
+	if x != nil {
+		return x.WholeIndexRecord
+	}
+	return false
+}
+
+// IndexIngestDocumentV1 is one indexed document as the vector store holds it
+// after a run.
+type IndexIngestDocumentV1 struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DocumentKey   string                 `protobuf:"bytes,1,opt,name=document_key,json=documentKey,proto3" json:"document_key,omitempty"`
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	ChunkCount    uint32                 `protobuf:"varint,3,opt,name=chunk_count,json=chunkCount,proto3" json:"chunk_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IndexIngestDocumentV1) Reset() {
+	*x = IndexIngestDocumentV1{}
+	mi := &file_elitea_runtime_v1_indexing_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IndexIngestDocumentV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IndexIngestDocumentV1) ProtoMessage() {}
+
+func (x *IndexIngestDocumentV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_indexing_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IndexIngestDocumentV1.ProtoReflect.Descriptor instead.
+func (*IndexIngestDocumentV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_indexing_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *IndexIngestDocumentV1) GetDocumentKey() string {
+	if x != nil {
+		return x.DocumentKey
+	}
+	return ""
+}
+
+func (x *IndexIngestDocumentV1) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *IndexIngestDocumentV1) GetChunkCount() uint32 {
+	if x != nil {
+		return x.ChunkCount
+	}
+	return 0
+}
+
 // IndexIngestResultV1 binds one terminal result to the exact immutable inputs
 // consumed by EliteAClient.test_toolkit_tool. Exactly one of result_artifact or
 // result_summary is required. Progress, index-status and callback events use
@@ -520,7 +769,7 @@ type IndexIngestResultV1 struct {
 
 func (x *IndexIngestResultV1) Reset() {
 	*x = IndexIngestResultV1{}
-	mi := &file_elitea_runtime_v1_indexing_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_indexing_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -532,7 +781,7 @@ func (x *IndexIngestResultV1) String() string {
 func (*IndexIngestResultV1) ProtoMessage() {}
 
 func (x *IndexIngestResultV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_indexing_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_indexing_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -545,7 +794,7 @@ func (x *IndexIngestResultV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexIngestResultV1.ProtoReflect.Descriptor instead.
 func (*IndexIngestResultV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_indexing_proto_rawDescGZIP(), []int{4}
+	return file_elitea_runtime_v1_indexing_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *IndexIngestResultV1) GetInputBundleId() string {
@@ -622,7 +871,7 @@ var File_elitea_runtime_v1_indexing_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\n" +
-	" elitea/runtime/v1/indexing.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\"\x9f\x04\n" +
+	" elitea/runtime/v1/indexing.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\"\xb6\x05\n" +
 	"\x14IndexIngestCommandV1\x12C\n" +
 	"\x1etoolkit_configuration_entry_id\x18\x01 \x01(\tR\x1btoolkitConfigurationEntryId\x127\n" +
 	"\x18tool_parameters_entry_id\x18\x02 \x01(\tR\x15toolParametersEntryId\x12+\n" +
@@ -633,7 +882,10 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\x11client_message_id\x18\a \x01(\tR\x0fclientMessageId\x12\x1b\n" +
 	"\tsio_event\x18\b \x01(\tR\bsioEvent\x12Y\n" +
 	"\x11embedding_binding\x18\t \x01(\v2,.elitea.runtime.v1.IndexIngestInputBindingV1R\x10embeddingBinding\x12\x1c\n" +
-	"\tinitiator\x18\x10 \x01(\tR\tinitiatorJ\x04\b\n" +
+	"\tinitiator\x18\x10 \x01(\tR\tinitiator\x128\n" +
+	"\x18expected_embedding_model\x18\x11 \x01(\tR\x16expectedEmbeddingModel\x12@\n" +
+	"\x1cexpected_embedding_dimension\x18\x12 \x01(\rR\x1aexpectedEmbeddingDimension\x12\x19\n" +
+	"\bindex_id\x18\x13 \x01(\tR\aindexIdJ\x04\b\n" +
 	"\x10\x10\"\xad\x01\n" +
 	"\x19IndexIngestInputBindingV1\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12+\n" +
@@ -648,16 +900,39 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\vbyte_length\x18\x04 \x01(\x04R\n" +
 	"byteLength\x123\n" +
 	"\x06digest\x18\x05 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x06digest\x12&\n" +
-	"\x0eclassification\x18\x06 \x01(\tR\x0eclassificationJ\x04\b\a\x10\x10\"\xab\x02\n" +
+	"\x0eclassification\x18\x06 \x01(\tR\x0eclassificationJ\x04\b\a\x10\x10\"\xe0\a\n" +
 	"\x14IndexIngestSummaryV1\x12>\n" +
 	"\x06status\x18\x01 \x01(\x0e2&.elitea.runtime.v1.IndexIngestStatusV1R\x06status\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12T\n" +
 	"\x0eterminal_state\x18\x03 \x01(\x0e2-.elitea.runtime.v1.IndexIngestTerminalStateV1R\rterminalState\x12\x18\n" +
 	"\aindexed\x18\x04 \x01(\x04R\aindexed\x12\x18\n" +
 	"\aupdated\x18\x05 \x01(\x04R\aupdated\x12\x1d\n" +
-	"\areindex\x18\x06 \x01(\bH\x00R\areindex\x88\x01\x01B\n" +
+	"\areindex\x18\x06 \x01(\bH\x00R\areindex\x88\x01\x01\x12+\n" +
+	"\x11indexed_documents\x18\a \x01(\x04R\x10indexedDocuments\x12%\n" +
+	"\x0eindexed_chunks\x18\b \x01(\x04R\rindexedChunks\x12#\n" +
+	"\rfailed_chunks\x18\t \x01(\x04R\ffailedChunks\x12N\n" +
+	"\askipped\x18\n" +
+	" \x03(\v24.elitea.runtime.v1.IndexIngestSummaryV1.SkippedEntryR\askipped\x12'\n" +
+	"\x0fembedding_model\x18\v \x01(\tR\x0eembeddingModel\x12/\n" +
+	"\x13embedding_dimension\x18\f \x01(\rR\x12embeddingDimension\x12F\n" +
+	"\tdocuments\x18\x10 \x03(\v2(.elitea.runtime.v1.IndexIngestDocumentV1R\tdocuments\x122\n" +
+	"\x15removed_document_keys\x18\x11 \x03(\tR\x13removedDocumentKeys\x12/\n" +
+	"\x13documents_truncated\x18\x12 \x01(\bR\x12documentsTruncated\x12,\n" +
+	"\x0ftotal_documents\x18\x13 \x01(\x04H\x01R\x0etotalDocuments\x88\x01\x01\x12&\n" +
+	"\ftotal_chunks\x18\x14 \x01(\x04H\x02R\vtotalChunks\x88\x01\x01\x12,\n" +
+	"\x12whole_index_record\x18\x15 \x01(\bR\x10wholeIndexRecord\x1a:\n" +
+	"\fSkippedEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01B\n" +
 	"\n" +
-	"\b_reindexJ\x04\b\a\x10\x10\"\xc4\x06\n" +
+	"\b_reindexB\x12\n" +
+	"\x10_total_documentsB\x0f\n" +
+	"\r_total_chunksJ\x04\b\r\x10\x10\"u\n" +
+	"\x15IndexIngestDocumentV1\x12!\n" +
+	"\fdocument_key\x18\x01 \x01(\tR\vdocumentKey\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1f\n" +
+	"\vchunk_count\x18\x03 \x01(\rR\n" +
+	"chunkCount\"\xc4\x06\n" +
 	"\x13IndexIngestResultV1\x12&\n" +
 	"\x0finput_bundle_id\x18\x01 \x01(\tR\rinputBundleId\x12K\n" +
 	"\x13input_bundle_digest\x18\x02 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x11inputBundleDigest\x12a\n" +
@@ -675,14 +950,15 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\"INDEX_INGEST_STATUS_V1_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INDEX_INGEST_STATUS_V1_OK\x10\x01\x12)\n" +
 	"%INDEX_INGEST_STATUS_V1_PARTLY_INDEXED\x10\x02\x12 \n" +
-	"\x1cINDEX_INGEST_STATUS_V1_ERROR\x10\x03*\xba\x02\n" +
+	"\x1cINDEX_INGEST_STATUS_V1_ERROR\x10\x03*\xe8\x02\n" +
 	"\x1aIndexIngestTerminalStateV1\x12.\n" +
 	"*INDEX_INGEST_TERMINAL_STATE_V1_UNSPECIFIED\x10\x00\x12*\n" +
 	"&INDEX_INGEST_TERMINAL_STATE_V1_CREATED\x10\x01\x12,\n" +
 	"(INDEX_INGEST_TERMINAL_STATE_V1_COMPLETED\x10\x02\x124\n" +
 	"0INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX\x10\x03\x12)\n" +
 	"%INDEX_INGEST_TERMINAL_STATE_V1_FAILED\x10\x04\x121\n" +
-	"-INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED\x10\x05BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"-INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED\x10\x05\x12,\n" +
+	"(INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED\x10\x06BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_indexing_proto_rawDescOnce sync.Once
@@ -697,7 +973,7 @@ func file_elitea_runtime_v1_indexing_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_indexing_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_elitea_runtime_v1_indexing_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_elitea_runtime_v1_indexing_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_elitea_runtime_v1_indexing_proto_goTypes = []any{
 	(IndexIngestStatusV1)(0),               // 0: elitea.runtime.v1.IndexIngestStatusV1
 	(IndexIngestTerminalStateV1)(0),        // 1: elitea.runtime.v1.IndexIngestTerminalStateV1
@@ -705,29 +981,33 @@ var file_elitea_runtime_v1_indexing_proto_goTypes = []any{
 	(*IndexIngestInputBindingV1)(nil),      // 3: elitea.runtime.v1.IndexIngestInputBindingV1
 	(*IndexIngestArtifactReferenceV1)(nil), // 4: elitea.runtime.v1.IndexIngestArtifactReferenceV1
 	(*IndexIngestSummaryV1)(nil),           // 5: elitea.runtime.v1.IndexIngestSummaryV1
-	(*IndexIngestResultV1)(nil),            // 6: elitea.runtime.v1.IndexIngestResultV1
-	(*DigestV1)(nil),                       // 7: elitea.runtime.v1.DigestV1
+	(*IndexIngestDocumentV1)(nil),          // 6: elitea.runtime.v1.IndexIngestDocumentV1
+	(*IndexIngestResultV1)(nil),            // 7: elitea.runtime.v1.IndexIngestResultV1
+	nil,                                    // 8: elitea.runtime.v1.IndexIngestSummaryV1.SkippedEntry
+	(*DigestV1)(nil),                       // 9: elitea.runtime.v1.DigestV1
 }
 var file_elitea_runtime_v1_indexing_proto_depIdxs = []int32{
 	3,  // 0: elitea.runtime.v1.IndexIngestCommandV1.embedding_binding:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
-	7,  // 1: elitea.runtime.v1.IndexIngestInputBindingV1.content_digest:type_name -> elitea.runtime.v1.DigestV1
-	7,  // 2: elitea.runtime.v1.IndexIngestArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
+	9,  // 1: elitea.runtime.v1.IndexIngestInputBindingV1.content_digest:type_name -> elitea.runtime.v1.DigestV1
+	9,  // 2: elitea.runtime.v1.IndexIngestArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
 	0,  // 3: elitea.runtime.v1.IndexIngestSummaryV1.status:type_name -> elitea.runtime.v1.IndexIngestStatusV1
 	1,  // 4: elitea.runtime.v1.IndexIngestSummaryV1.terminal_state:type_name -> elitea.runtime.v1.IndexIngestTerminalStateV1
-	7,  // 5: elitea.runtime.v1.IndexIngestResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
-	3,  // 6: elitea.runtime.v1.IndexIngestResultV1.toolkit_configuration:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
-	3,  // 7: elitea.runtime.v1.IndexIngestResultV1.tool_parameters:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
-	3,  // 8: elitea.runtime.v1.IndexIngestResultV1.llm_model:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
-	3,  // 9: elitea.runtime.v1.IndexIngestResultV1.llm_configuration:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
-	3,  // 10: elitea.runtime.v1.IndexIngestResultV1.mcp_tokens:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
-	4,  // 11: elitea.runtime.v1.IndexIngestResultV1.result_artifact:type_name -> elitea.runtime.v1.IndexIngestArtifactReferenceV1
-	5,  // 12: elitea.runtime.v1.IndexIngestResultV1.result_summary:type_name -> elitea.runtime.v1.IndexIngestSummaryV1
-	3,  // 13: elitea.runtime.v1.IndexIngestResultV1.embedding_binding:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	8,  // 5: elitea.runtime.v1.IndexIngestSummaryV1.skipped:type_name -> elitea.runtime.v1.IndexIngestSummaryV1.SkippedEntry
+	6,  // 6: elitea.runtime.v1.IndexIngestSummaryV1.documents:type_name -> elitea.runtime.v1.IndexIngestDocumentV1
+	9,  // 7: elitea.runtime.v1.IndexIngestResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
+	3,  // 8: elitea.runtime.v1.IndexIngestResultV1.toolkit_configuration:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
+	3,  // 9: elitea.runtime.v1.IndexIngestResultV1.tool_parameters:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
+	3,  // 10: elitea.runtime.v1.IndexIngestResultV1.llm_model:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
+	3,  // 11: elitea.runtime.v1.IndexIngestResultV1.llm_configuration:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
+	3,  // 12: elitea.runtime.v1.IndexIngestResultV1.mcp_tokens:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
+	4,  // 13: elitea.runtime.v1.IndexIngestResultV1.result_artifact:type_name -> elitea.runtime.v1.IndexIngestArtifactReferenceV1
+	5,  // 14: elitea.runtime.v1.IndexIngestResultV1.result_summary:type_name -> elitea.runtime.v1.IndexIngestSummaryV1
+	3,  // 15: elitea.runtime.v1.IndexIngestResultV1.embedding_binding:type_name -> elitea.runtime.v1.IndexIngestInputBindingV1
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_indexing_proto_init() }
@@ -743,7 +1023,7 @@ func file_elitea_runtime_v1_indexing_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_indexing_proto_rawDesc), len(file_elitea_runtime_v1_indexing_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

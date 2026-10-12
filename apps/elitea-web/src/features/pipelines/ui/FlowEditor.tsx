@@ -147,7 +147,7 @@ export interface FlowEditorProps {
 /** @public Imperative surface `FlowWrapper`'s baseline exposes via `ref` (`FlowEditor.jsx:327-363`). */
 export interface FlowEditorHandle {
   readonly fitView: () => void;
-  readonly onAddNode: (type: string) => FlowNode;
+  readonly onAddNode: (type: string) => FlowNode | undefined;
   readonly onRcvAgentEvent: (event: RunSocketEvent) => void;
   readonly setFlowEdges: SetFlowEdges;
   readonly setFlowNodes: SetFlowNodes;

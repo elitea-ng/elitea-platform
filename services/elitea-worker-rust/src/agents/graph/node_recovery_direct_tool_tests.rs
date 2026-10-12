@@ -15,6 +15,9 @@ use serde_json::{Value, json};
 use std::sync::atomic::AtomicUsize;
 use tokio::sync::Notify;
 
+#[path = "node_recovery_artifact_tests.rs"]
+mod artifact_tests;
+
 const NODE: &str = r"
 id: lookup
 type: toolkit

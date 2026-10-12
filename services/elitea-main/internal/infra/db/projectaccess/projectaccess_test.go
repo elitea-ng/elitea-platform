@@ -13,6 +13,9 @@ func TestMembershipBindsOnlyItsPlaceholdersAndNamesNoTenantSchema(t *testing.T) 
 	for _, want := range []string{
 		"project_id = $3", "user_id = $5", "ur.user_id = $5",
 		"role.name = 'super_admin'", "role.mode = 'administration'",
+		// SEC-14: suspension of the user and of the project refuses.
+		"FROM auth_core__user\n\t\t\t\t\tWHERE id = $5 AND suspended IS NOT FALSE",
+		"FROM centry.project\n\t\t\t\t\tWHERE id = $3 AND suspended IS NOT FALSE",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("predicate lacks %q:\n%s", want, sql)

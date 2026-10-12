@@ -656,7 +656,43 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 158: shared/0158_social_feedbacks_project.sql, the legacy shared
 	// centry.social_feedbacks table (created if absent) with a nullable
 	// project_id and two indexes. No tenant table, no permission.
-	require.EqualValues(t, 158, Head(shared))
+	//
+	// 159: shared/0159_callback_token_grants.sql, what a provider callback
+	// token was minted for (elitea_identity.callback_token_grant: provider,
+	// tool, project, invoking toolkit, source toolkits), read by the
+	// Inventory investigate source-tool gate on test_tool. No permission.
+	//
+	// 160: shared/0160_vector_claim_tokens.sql, the per-claim worker token
+	// for elitea-vector (ADR-0031 decision 1): the SHA-256 of the bearer, its
+	// claim, execution, resource project, actor, sources and expiry. Liveness
+	// is read from the claim and the execution, never written. No permission.
+	//
+	// 161: shared/0161_project_deletions_journal.sql, the cleanup journal
+	// (centry.project_deletions) a project delete writes in the transaction
+	// that removes the project row, and that a reconciler drains (#1211). No
+	// tenant table, no permission.
+	//
+	// 162: shared/0162_index_registry.sql, the index registry of the Rust
+	// indexing runtime (ADR-0031 V1, ADR-0030 decision 2):
+	// elitea_runtime.index_registry (state, history, counts, skips, embedding
+	// stamp, run fence, tombstone) and index_registry_documents (one
+	// document_key/version per indexed document). New tables only, nothing
+	// migrated from index_meta, no permission.
+	//
+	// 163: shared/0163_toolkit_deletions_journal.sql, the cleanup journal
+	// (centry.toolkit_deletions) a toolkit delete writes in the transaction
+	// that removes the toolkit row when its type belongs to an application
+	// engine that keeps data per toolkit (Inventory's graph), and that a
+	// reconciler drains over the engine's platform gRPC service (#1244). No
+	// tenant table, no permission, no data migrated.
+	//
+	// 164: shared/0164_index_registry_totals.sql, the index's totals on the
+	// registry row (index_registry.total_documents, total_chunks; ADR-0030
+	// I1). The worker's result frame is bounded, so index_registry_documents
+	// is a bounded subset and cannot be summed for the list; the worker
+	// reports the whole index's totals and Main stores them. Two columns with
+	// DEFAULT 0, nothing migrated, no permission.
+	require.EqualValues(t, 164, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

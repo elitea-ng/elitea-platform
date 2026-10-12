@@ -69,7 +69,13 @@ const CallbackExecutionPrefix = "callback-"
 // ToolSettingsCarried are the keys of a TOOL-level llm_settings block a facade
 // carries into its own: tuning, never transport. Everything else in that block
 // is dropped with it.
-var ToolSettingsCarried = []string{"max_tokens", "temperature"}
+//
+// reasoning_effort is tuning too, and the engines' model client already
+// reads it (libs/rust/model-client settings.rs): without it a reasoning model
+// (Qwen3 on vLLM, measured) thinks for thousands of tokens per extraction
+// call and an ingestion of a 50-file repository outlives the gateway's
+// timeout. `none` turns thinking off where the gateway passes it through.
+var ToolSettingsCarried = []string{"max_tokens", "temperature", "reasoning_effort"}
 
 // LiftToolLLMSettings removes a client's llm_settings from the TOOL-level
 // `parameters` and lifts its tuning keys into the facade's block.
@@ -83,6 +89,11 @@ var ToolSettingsCarried = []string{"max_tokens", "temperature"}
 // api_base/api_key past the rewrite that exists to stop that: the
 // configuration-level block was replaced, the tool-level one merged.
 func (e *Envelope) LiftToolLLMSettings(block map[string]any) error {
+	// The toolkit's own saved default goes in first, so a caller's value,
+	// lifted below, wins over it.
+	if effort := e.toolkitReasoningEffort(); effort != "" {
+		block["reasoning_effort"] = effort
+	}
 	encoded, ok := e.root["parameters"]
 	if !ok || IsNull(encoded) {
 		return nil
@@ -113,6 +124,41 @@ func (e *Envelope) LiftToolLLMSettings(block map[string]any) error {
 	}
 	e.root["parameters"] = rewritten
 	return nil
+}
+
+// toolkitReasoningEffort reads the toolkit-level default from the saved
+// configuration: the flat `configuration.parameters.reasoning_effort` the
+// Inventory toolkit form writes, then the nested
+// `configuration.parameters.llm_settings.reasoning_effort` an agent version
+// stores. Only values the model client accepts count; anything else is
+// ignored. No other toolkit-level setting is carried.
+func (e *Envelope) toolkitReasoningEffort() string {
+	if effort := validReasoningEffort(e.parameters["reasoning_effort"]); effort != "" {
+		return effort
+	}
+	raw, ok := e.parameters["llm_settings"]
+	if !ok || IsNull(raw) {
+		return ""
+	}
+	var saved map[string]json.RawMessage
+	if json.Unmarshal(raw, &saved) != nil {
+		return ""
+	}
+	return validReasoningEffort(saved["reasoning_effort"])
+}
+
+// validReasoningEffort returns the value when it is one the Rust model client
+// and the gateway accept (libs/rust/model-client ReasoningEffort), else "".
+func validReasoningEffort(raw json.RawMessage) string {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	switch value {
+	case "none", "low", "medium", "high":
+		return value
+	}
+	return ""
 }
 
 // Revoke gives a grant back, and never fails a request for it.

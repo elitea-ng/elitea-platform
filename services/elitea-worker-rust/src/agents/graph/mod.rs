@@ -133,6 +133,8 @@ pub(crate) use llm::{
     PipelineLlmAgentBinding, PipelineLlmAgentFactory, PipelineLlmReplayEnvelope,
     PipelineModelScope, PipelineToolGuard, prepare_pipeline_llm_replay,
 };
+#[cfg(test)]
+pub(crate) use node_events::session_lock_tests;
 pub(crate) use node_events::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PIPELINE_NODE_METADATA_KEY, PipelineNodeEventReceiver,
     PipelineNodeEventScope, PipelineNodeEventSender, PipelineNodeEventStreamingAgent,

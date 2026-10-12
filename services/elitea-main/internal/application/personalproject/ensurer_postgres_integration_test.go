@@ -18,9 +18,13 @@ package personalproject_test
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,6 +251,141 @@ func TestEnsureRepairsAnUnfinishedPersonalProject(t *testing.T) {
 	if resolved := resolveAuthorPersonalProjectID(ctx, t, pool, userID); resolved != repaired {
 		t.Fatalf("the author resolver answered %d, want the repaired project %d", resolved, repaired)
 	}
+}
+
+func seedUnfinishedProject(ctx context.Context, t *testing.T, pool *pgxpool.Pool, userID int64) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO centry.project (name, owner_id, plugins, create_success)
+		 VALUES ($1, $2, '{}', false) RETURNING id`,
+		personalproject.Name(userID), userID,
+	).Scan(&id); err != nil {
+		t.Fatalf("seed the unfinished project: %v", err)
+	}
+	return id
+}
+
+// gatedDropStore is a vector store whose drop waits for the gate: the login
+// path must not wait for it. The drop signals entered when it starts.
+type gatedDropStore struct {
+	projectprovisioning.ProjectVectorStore
+	gate    chan struct{}
+	entered chan struct{}
+}
+
+func (s gatedDropStore) ProvisionProjectVectorStore(context.Context, int64) error { return nil }
+
+func (s gatedDropStore) RemoveProjectVectorStore(context.Context, int64) error { return nil }
+
+func (s gatedDropStore) ProjectHasVectorStore(context.Context, projectprovisioning.Querier, int64) (bool, error) {
+	return true, nil
+}
+
+func (s gatedDropStore) DropProjectVectorStore(ctx context.Context, projectID int64, _ bool) (string, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.gate:
+		return fmt.Sprintf("project_%d", projectID), nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// The repair does not wait for the cleanup: the decision (the row and every
+// credential) has committed when Deprovision returns, and the slow steps run in
+// the background (a detached run holding the journal lease), whatever they
+// would have done.
+func TestEnsureRepairHandsTheCleanupToTheJournal(t *testing.T) {
+	ctx := context.Background()
+	pool := newPersonalProjectPool(t)
+	store := gatedDropStore{gate: make(chan struct{}), entered: make(chan struct{}, 1)}
+	provisioner := projectprovisioning.New(
+		pool,
+		migrate.New(pool, platformmigrations.Files),
+		nil,
+		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
+		projectprovisioning.WithVectorStore(store),
+	)
+	var logs bytes.Buffer
+	ensurer, err := personalproject.NewEnsurer(pool, provisioner,
+		personalproject.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+	if err != nil {
+		t.Fatalf("build ensurer: %v", err)
+	}
+	userID := seedUser(t, pool, "handoff@autotest.local", "Handoff")
+	strandedID := seedUnfinishedProject(ctx, t, pool, userID)
+
+	// Ensure returns while the drop is still blocked.
+	repaired, err := ensurer.Ensure(ctx, userID)
+	if err != nil {
+		t.Fatalf("Ensure over an unfinished project: %v", err)
+	}
+	if repaired == 0 || repaired == strandedID {
+		t.Fatalf("Ensure returned %d for stranded project %d", repaired, strandedID)
+	}
+	select {
+	case <-store.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the background cleanup never reached the drop")
+	}
+	read := func() (completed, leased, recorded bool) {
+		if err := pool.QueryRow(ctx, `
+SELECT completed_at IS NOT NULL, claimed_until IS NOT NULL AND claimed_until > clock_timestamp(),
+       (cleanup->>'had_vector_store')::boolean
+FROM centry.project_deletions WHERE project_id = $1`, strandedID,
+		).Scan(&completed, &leased, &recorded); err != nil {
+			t.Fatalf("read the journal row of the removed project: %v", err)
+		}
+		return
+	}
+	if completed, leased, recorded := read(); completed || !leased || !recorded {
+		t.Fatalf("journal: completed=%v leased=%v had_vector_store=%v; want an open row leased to the background run",
+			completed, leased, recorded)
+	}
+
+	// Released, the run finishes by itself.
+	close(store.gate)
+	if err := provisioner.WaitForCleanups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if completed, leased, _ := read(); !completed || leased {
+		t.Fatalf("journal after the run: completed=%v leased=%v, want complete", completed, leased)
+	}
+}
+
+// A decision that fails is a repair that fails: the error says which project.
+func TestEnsureRepairFailsWhenTheDeleteDoesNotHappen(t *testing.T) {
+	ctx := context.Background()
+	pool := newPersonalProjectPool(t)
+	var logs bytes.Buffer
+	refusing, err := personalproject.NewEnsurer(pool, failingDeleteProvisioner{}, personalproject.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID := seedUser(t, pool, "failrepair@autotest.local", "Fail Repair")
+	strandedID := seedUnfinishedProject(ctx, t, pool, userID)
+
+	_, err = refusing.Ensure(ctx, userID)
+	if !errors.Is(err, projectprovisioning.ErrProjectNotRemoved) {
+		t.Fatalf("Ensure err = %v, want ErrProjectNotRemoved", err)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprint(strandedID)) {
+		t.Fatalf("the error does not name the project: %v", err)
+	}
+}
+
+type failingDeleteProvisioner struct{}
+
+func (failingDeleteProvisioner) Provision(context.Context, projectprovisioning.Request) (projectprovisioning.Result, error) {
+	panic("provision must not run while the repair is blocked")
+}
+
+func (failingDeleteProvisioner) Deprovision(context.Context, int64, ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error) {
+	return projectprovisioning.Result{}, projectprovisioning.ErrProjectNotRemoved
 }
 
 // The three identities that must NOT be given a personal project, and the

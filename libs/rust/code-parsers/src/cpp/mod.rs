@@ -45,6 +45,7 @@ mod tests;
 use super::LanguageParser;
 use super::limits;
 use super::model::{ParseResult, RelationshipType, SymbolType};
+use crate::input::Sources;
 use elitea_engine_core::pystr::stem;
 use rayon::prelude::*;
 use source::Source;
@@ -63,9 +64,13 @@ impl LanguageParser for CppParser {
         "cpp"
     }
 
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: Sources<'_>,
+    ) -> BTreeMap<String, ParseResult> {
         let parse_all =
-            || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f)).collect() };
+            || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f, sources)).collect() };
         let mut results = match limits::on_worker_pool("C++", WORKER_STACK, parse_all) {
             Ok(results) => results,
             Err(error) => {
@@ -82,8 +87,8 @@ impl LanguageParser for CppParser {
 
 /// `parse_file(path)`: a read failure is `Parse error: <OSError>`; bytes
 /// never fail (`errors='ignore'`).
-fn parse_path(path: &str) -> ParseResult {
-    match std::fs::read(path) {
+fn parse_path(path: &str, sources: Sources<'_>) -> ParseResult {
+    match sources.read(path) {
         Ok(bytes) => {
             let source = Source::decode(&bytes);
             limits::with_output_budget(|| parse_source(path, &source))

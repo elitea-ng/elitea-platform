@@ -19,7 +19,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -921,20 +920,6 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// A pipeline definition over the save-time bounds is refused before
-		// any write, so a refused request changes nothing. The repository
-		// applies the same check to the version write itself.
-		if instructions, ok := versionData["instructions"].(string); ok {
-			for _, ver := range versions {
-				if ver.ID == versionID && ver.AgentType == "pipeline" {
-					if err := pipelinelimits.Check(instructions); err != nil {
-						apierr.Write(w, err)
-						return
-					}
-				}
-			}
-		}
-
 		// Reject renaming protected versions (base, latest)
 		if vName := anyStr(versionData, "name"); vName != "" {
 			for _, ver := range versions {
@@ -962,7 +947,31 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		req.Icon = &ic
 	}
 
-	app, err := h.repo.Update(r.Context(), req)
+	// The version write shares the application write's transaction, so a
+	// refused or failed version answers its own status and leaves the
+	// application unchanged.
+	var app applications.Application
+	var ver applications.Version
+	var err error
+	versionID := ""
+	if versionData != nil {
+		versionID = anyStr(versionData, "id")
+	}
+	if versionID != "" {
+		v := applications.Version{
+			Name: anyStr(versionData, "name"),
+		}
+		v.Present.Name = v.Name != ""
+		// Same presence rule as UpdateVersion's own decode (#824): the
+		// nested `version` stub can clear the instructions too.
+		if instr, ok := versionData["instructions"].(string); ok {
+			v.Instructions = instr
+			v.Present.Instructions = true
+		}
+		app, ver, err = h.repo.UpdateWithVersion(r.Context(), req, versionID, v)
+	} else {
+		app, err = h.repo.Update(r.Context(), req)
+	}
 	if err != nil {
 		apierr.Write(w, err)
 		return
@@ -978,30 +987,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		"owner_id":   app.OwnerID,
 		"created_at": app.CreatedAt,
 	}
-
-	// Update version if provided
-	if versionData != nil {
-		versionID := anyStr(versionData, "id")
-		if versionID != "" {
-			v := applications.Version{
-				Name: anyStr(versionData, "name"),
-			}
-			v.Present.Name = v.Name != ""
-			// Same presence rule as UpdateVersion's own decode (#824): the
-			// nested `version` stub can clear the instructions too.
-			if instr, ok := versionData["instructions"].(string); ok {
-				v.Instructions = instr
-				v.Present.Instructions = true
-			}
-			ver, vErr := h.repo.UpdateVersion(r.Context(), projectID, applicationID, versionID, v)
-			if vErr == nil {
-				// This branch writes name/instructions only, but the echo
-				// still reports the version's real tags: they are stored
-				// state, not something this request cleared (#345).
-				s, _ := tenantSchema(projectID)
-				resp["version_details"] = versionDetailsResponse(ver, user, userID, h.versionTagsOrEmpty(r.Context(), s, versionID))
-			}
-		}
+	if versionID != "" {
+		// This branch writes name/instructions only, but the echo still
+		// reports the version's real tags: they are stored state, not
+		// something this request cleared (#345).
+		s, _ := tenantSchema(projectID)
+		resp["version_details"] = versionDetailsResponse(ver, user, userID, h.versionTagsOrEmpty(r.Context(), s, versionID))
 	}
 
 	writeJSON(w, http.StatusCreated, resp)

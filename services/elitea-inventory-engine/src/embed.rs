@@ -6,11 +6,17 @@
 //! the dimension, which retrieval later checks before comparing a query's
 //! vector with the graph's.
 //!
-//! One difference, deliberately: when the graph is stamped with another
-//! model than this run's, every entity is embedded again. The Python step
-//! skipped every entity that already had a vector, so a changed model left
-//! old vectors in one space and new ones in another, and the stamp named
-//! only the new one.
+//! Two differences, deliberately:
+//!
+//! * when the graph is stamped with another model than this run's, every
+//!   entity is embedded again. The Python step skipped every entity that
+//!   already had a vector, so a changed model left old vectors in one space
+//!   and new ones in another, and the stamp named only the new one.
+//! * an entity whose composed text changed since its vector was made is
+//!   embedded again. The graph records a hash of that text beside the
+//!   vector ([`text_hash`]); Python kept the old vector for good. An entity
+//!   with a vector and no recorded hash (embedded before the hash existed)
+//!   is embedded once more, which records it.
 
 use crate::graph::Graph;
 use elitea_engine_core::errors::EngineError;
@@ -18,43 +24,12 @@ use elitea_engine_core::stream::StopSignal;
 use elitea_model_client::embeddings::EmbeddingClient;
 use serde_json::{Value, json};
 
-/// `_metadata` keys of the embedding space.
-pub const MODEL_KEY: &str = "embeddings_model";
-pub const DIMENSION_KEY: &str = "embeddings_dimension";
-
-/// `_compose_embedding_text`: name, type (underscores as spaces),
-/// description (the node's, else its `properties`' one), then the
-/// `properties`' purpose, summary, signature and docstring.
-#[must_use]
-pub fn compose_text(node: &serde_json::Map<String, Value>) -> String {
-    let text = |value: Option<&Value>| value.and_then(Value::as_str).unwrap_or_default().to_owned();
-    let mut parts: Vec<String> = Vec::new();
-    let name = text(node.get("name"));
-    if !name.is_empty() {
-        parts.push(name);
-    }
-    let kind = text(node.get("type"));
-    if !kind.is_empty() {
-        parts.push(kind.replace('_', " "));
-    }
-    let properties = node.get("properties").and_then(Value::as_object);
-    let mut description = text(node.get("description"));
-    if description.is_empty() {
-        description = text(properties.and_then(|p| p.get("description")));
-    }
-    if !description.is_empty() {
-        parts.push(description);
-    }
-    if let Some(properties) = properties {
-        for key in ["purpose", "summary", "signature", "docstring"] {
-            let value = text(properties.get(key));
-            if !value.is_empty() {
-                parts.push(value);
-            }
-        }
-    }
-    elitea_engine_core::pystr::strip(&parts.join(" ")).to_owned()
-}
+// The model-free half (the composed texts and the space's keys) lives in
+// the shared core (ADR-0029 decision 7); re-exported so every path in this
+// crate stays the same.
+pub use elitea_inventory_core::embed::{
+    DIMENSION_KEY, MODEL_KEY, QUERY_TASK, compose_text, instruction_tuned, query_text, text_hash,
+};
 
 /// An `f32` from the gateway as the decimal it was sent as (`0.1`, not
 /// `0.10000000149011612`), which is what Python's JSON parse kept.
@@ -88,26 +63,30 @@ pub async fn embed_graph(
     let rebuild = stamped.is_some_and(|stamped| stamped != model);
     let mut ids = Vec::new();
     let mut texts = Vec::new();
+    let mut hashes = Vec::new();
     for (id, node) in graph.nodes() {
-        if !rebuild && has_vector(node) {
-            continue;
-        }
         let text = compose_text(node);
         if text.is_empty() {
             continue;
         }
+        let hash = text_hash(&text);
+        if !rebuild && has_vector(node) && graph.embedding_hash(id) == Some(hash.as_str()) {
+            continue;
+        }
         ids.push(id.to_owned());
         texts.push(text);
+        hashes.push(hash);
     }
     if ids.is_empty() {
         return Ok(0);
     }
     let vectors = client.embed_documents(&texts, stop).await?;
     let mut dimension = None;
-    for (id, vector) in ids.iter().zip(vectors) {
+    for ((id, hash), vector) in ids.iter().zip(hashes).zip(vectors) {
         dimension = Some(vector.len());
         let widened: Vec<f64> = vector.into_iter().map(widen).collect();
         graph.set_embedding(id, &widened);
+        graph.set_embedding_hash(id, hash);
     }
     graph.metadata.insert(MODEL_KEY.to_owned(), json!(model));
     if let Some(dimension) = dimension.or_else(|| client.dimension()) {
@@ -127,25 +106,6 @@ pub async fn embed_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_text_is_composed_as_python_composed_it() {
-        let node = json!({
-            "name": "UserService", "type": "api_endpoint",
-            "properties": {"description": "nested", "purpose": "users", "summary": 7, "docstring": "Doc."}
-        });
-        assert_eq!(
-            compose_text(node.as_object().unwrap_or(&serde_json::Map::new())),
-            "UserService api endpoint nested users Doc."
-        );
-        let flat =
-            json!({"name": "f", "description": "flat wins", "properties": {"description": "no"}});
-        assert_eq!(
-            compose_text(flat.as_object().unwrap_or(&serde_json::Map::new())),
-            "f flat wins"
-        );
-        assert_eq!(compose_text(&serde_json::Map::new()), "");
-    }
 
     #[test]
     #[allow(clippy::float_cmp)]

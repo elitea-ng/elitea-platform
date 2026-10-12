@@ -357,6 +357,9 @@ func TestGatewayRefusesToStartWithoutEnforcement(t *testing.T) {
 			// Required whenever NATS is configured (issue #11), and this test
 			// must fail on the budget gate, not on that one.
 			"GATEWAY_IDENTITY_SECRET=startup-gate-test",
+			// Required at start-up (master_key_gate.go); this test must fail
+			// on the budget gate, not on that one.
+			"SECRETS_MASTER_KEY="+testMasterKey,
 			// Port 0 so a run that WRONGLY starts cannot collide with a real
 			// listener; it is still a defect, and the assertions below catch it.
 			"GATEWAY_HTTP_ADDR=127.0.0.1:0",

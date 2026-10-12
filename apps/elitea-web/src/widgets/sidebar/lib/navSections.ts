@@ -40,7 +40,8 @@ export type NavItemValue =
   | 'mcps'
   | 'credentials'
   | 'applications'
-  | 'artifacts';
+  | 'artifacts'
+  | 'workspaces';
 
 export interface NavItem {
   readonly value: NavItemValue;
@@ -60,6 +61,9 @@ export function navSections(): readonly NavSection[] {
         { value: 'chat', label: 'Chats', url: '/chat' },
         { value: 'agents', label: 'Agents', url: '/agents' },
         { value: 'pipelines', label: 'Pipelines', url: '/pipelines' },
+        // Desktop build only (ADR-0029 D0). A literal MODE test, not a helper
+        // call: the bundler folds it, so the web bundle carries no trace.
+        ...(import.meta.env.MODE === 'desktop' ? [{ value: 'workspaces' as const, label: 'Workspaces', url: '/workspaces' }] : []),
       ],
     },
     {

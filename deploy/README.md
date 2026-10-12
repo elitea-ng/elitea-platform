@@ -110,24 +110,43 @@ through `RUNTIME_WORKER_SESSION_ID`, `RUNTIME_WORKER_PRODUCER_ID`,
 database restored from a backup that predates this row, or a worker brought
 up with `--no-deps` — but a normal `up` no longer needs it.
 
-### DeepWiki and Inventory — canned data with no engine closure
+### elitea-vector and Qdrant (ADR-0031)
+
+The stack runs a single-node Qdrant (`qdrant`, volume `standalone_qdrant_data`)
+and one `elitea-vector`, the only Qdrant client. Neither is published to the
+host. `elitea-vector` serves gRPC over mTLS on `elitea-vector:9470` and plain
+HTTP health on `:9471`. It verifies each caller's project-bound token through
+elitea-main's control listener (`elitea-main:9443`), which admits it as
+`dns:elitea-vector` (`ELITEA_VECTOR_INTROSPECTION_CLIENTS`).
+
+`standalone-stack.sh certs` runs `deploy/scripts/gen-vector-certs.sh` after the
+runtime script. It writes `deploy/certs/vector/`: `vector.{crt,key}` (one DNS
+SAN, `elitea-vector`, server and client use, signed by the runtime CA), a copy
+of `runtime-ca.crt`, and `qdrant-api-key`. It re-issues the certificate when the
+runtime CA rotates, and never rotates the runtime tree itself.
+
+### DeepWiki and Inventory — canned data, or the real engines
 
 Both sub-applications run their Go host (`elitea-subapp-host`) reaching an
 engine SIDECAR over a shared Unix socket — the socket hop this stack exists
 to exercise, not just the Go half. DeepWiki's host runs `RUNNER=native`
 and its sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`,
-with its migration service); Inventory's host runs `RUNNER=legacy` and its
-sidecar is `elitea-inventory` without the engine closure. Both sidecars
-serve their `fixture` runner, so `up` shows a populated wiki and a
-populated Inventory graph with no repository and no model.
-`DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead.
+with its migration service); Inventory's host runs `RUNNER=sidecar` (the host's
+word for "dial the sidecar socket"; `legacy` is an accepted alias) and its sidecar is the Rust-native
+`elitea-inventory-engine` (with its own `elitea-inventory-migrate` service).
+Both sidecars serve their `fixture` runner, so `up` shows a populated wiki
+and a populated Inventory graph with no repository and no model.
+`DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead, and
+`INVENTORY_ENGINE_RUNNER=native` the real Inventory engine (graph in the
+stack's PostgreSQL; it clones repositories itself, admitting the hosts in
+`INVENTORY_GIT_ALLOWLIST`, default `github.com,*.github.com`).
 
 Inventory's fixture graph (six entities, two source toolkits, five
 relations) is the SAME one the Go sub-application host's own fixture runner
 serves on the E2E stack
 (`conformance/provider/fixtures/inventory/spi/graph.json` — see
-`services/elitea-inventory/README.md`'s "Fixture mode" section for how the
-two are kept from drifting). `INVENTORY_FIXTURES=/fixtures/inventory`
+`services/elitea-inventory-engine/README.md` for the three fixture runners and
+the goldens that keep them from drifting). `INVENTORY_FIXTURES=/fixtures/inventory`
 points the `elitea-inventory-engine` service at the bind-mounted copy of
 that directory instead of the image's packaged one, for iterating on the
 fixture data without a rebuild:
@@ -1014,7 +1033,8 @@ so the DSN switch is the operator's one-line change.
 Two numbers, one on each side of the pooler:
 
 - **Client side, per replica.** `main.env.ELITEA_DATABASE_MAX_CONNS` bounds the
-  connections ONE replica opens toward the pooler. The six runtime pools add
+  connections ONE replica opens toward the pooler. The six runtime pools (seven with `vector.enabled`: the
+  token-introspection pool, default 8, `ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS`) add
   their own `ELITEA_RUNTIME_DB_*_MAX_CONNS`. This is the per-replica number the
   operator tunes.
 - **Server side, whole cluster.** `pgbouncer.poolSize` +
@@ -1262,7 +1282,7 @@ export SECRETS_MASTER_KEY=$(python3 -c \
 
 The variable has three states. They are not equivalent:
 
-| State | What `elitea-main` does | What is stored |
+| State | What `elitea-main` and `elitea-llm-gateway` do | What is stored |
 |---|---|---|
 | Set, valid | Wraps each project vault key with the master key. | The key row is a Fernet token. |
 | **Not set** | **Refuses to start**, unless `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true` is set (throwaway local stacks only); then it starts and writes a **warning** to the log. | With the opt-out, the key row is the project key **in the clear**. Anyone who can read the database can open every project secret. |
@@ -1282,13 +1302,20 @@ stray space or tab **is** malformed.
   the table, and compose fails if you do not export it (#418).
 - `docker-compose.staging.yml` requires it from your shell, and compose fails
   if you do not export it.
+- The `elitea` chart gives the LLM gateway a required Secret reference
+  (`llmGateway.secrets.SECRETS_MASTER_KEY`, `optional: false`). The render
+  fails when there is no reference, and refuses the key as a plain
+  `llmGateway.env` value; `llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`
+  makes the reference optional for a throwaway install
+  (`deploy/helm/tests/render-gateway-master-key.sh`).
 - The `elitea` chart gives `elitea-main` the Secret reference the LLM gateway
   reads (`llmGateway.secrets.SECRETS_MASTER_KEY`, by default Secret
   `elitea-llm-gateway-secrets`, key `secrets-master-key`), or
   `main.secrets.SECRETS_MASTER_KEY.secretName` / `.key` when set. That Secret
   must exist even with the gateway disabled. The render fails when there is no
   source, and refuses the key as a plain `main.env` value.
-- The E2E stack, `docker-compose.standalone-full.yml` and the kind stack set
+- The E2E stack, `docker-compose.standalone-full.yml` (for `elitea-main` and
+  the gateway) and the kind stack set
   `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`. They seed unwrapped key rows, so
   they need no key.
 

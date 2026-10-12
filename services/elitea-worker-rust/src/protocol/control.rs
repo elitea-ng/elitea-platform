@@ -29,6 +29,7 @@ pub(crate) use sandbox_authority::{ClaimBoundSandboxAuthority, SandboxStopAuthor
 
 use std::fmt;
 
+use async_trait::async_trait;
 use prost::Message;
 use ring::digest;
 use subtle::ConstantTimeEq;
@@ -38,6 +39,7 @@ use zeroize::Zeroizing;
 use super::ProtocolError;
 use super::command::{
     VerifiedAgentCommand, VerifiedExecutionCommand, VerifiedToolkitExecuteReadCommand,
+    terminal_logical_output_id,
 };
 use super::elitea::runtime::v1::{
     AgentExecutionResultV1, AuthorizeInvocationDispositionV1, AuthorizeInvocationRequestV1,
@@ -47,7 +49,8 @@ use super::elitea::runtime::v1::{
     ExecutionIdentityV1, ExecutionInputBundleReferenceV1, ExecutionInputBundleV1,
     ExecutionInputEntryV1, ExecutionOutcomeV1, ExecutionOutputFrameV1, NodeEventV1,
     ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorCodeV1,
+    PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
+    RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorCodeV1,
     RuntimeErrorV1, ScopedContentReferenceV1, SettlementProposalV1, SettlementRecoveryV1,
     worker_command_v1,
 };
@@ -56,6 +59,7 @@ use super::output::{
     build_agent_terminal_output_frame, build_node_event_output_frame,
     build_toolkit_execute_read_terminal_output_frame,
 };
+use super::vector_token::VectorClaimToken;
 use crate::agents::result::BoundAgentExecutionResult;
 use crate::transport::output_grpc::{
     FrameBoundProgressRejection, ProgressRejectionWinner, progress_frame_sha256,
@@ -76,6 +80,14 @@ const TOOLKIT_EXECUTE_READ_REQUEST_ROLE: &str = "toolkit.execute_read_request";
 const TOOLKIT_EXECUTE_READ_INPUT_MEDIA_TYPE: &str =
     "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf";
 const INPUT_GRANT_AUDIENCE: &str = "elitea.runtime.input.read.v1";
+/// The index bundle's entry roles (Main's `executiondomain.Index*Role`, the
+/// Python worker's `_INDEX_*_ROLE`).
+const INDEX_TOOLKIT_CONFIGURATION_ROLE: &str = "index.toolkit_configuration";
+const INDEX_TOOL_PARAMETERS_ROLE: &str = "index.tool_parameters";
+const INDEX_LLM_MODEL_ROLE: &str = "index.llm_model";
+const INDEX_LLM_CONFIGURATION_ROLE: &str = "index.llm_configuration";
+const INDEX_MCP_TOKENS_ROLE: &str = "index.mcp_tokens";
+const INDEX_EMBEDDING_BINDING_ROLE: &str = "index.embedding_binding";
 const DEADLINE_RETIREMENT_SAFE_MESSAGE: &str =
     "The execution deadline was exceeded before worker authority was granted.";
 
@@ -250,9 +262,19 @@ pub struct AcceptedAgentClaim {
     input_bundle: ExecutionInputBundleV1,
     request_entry: ExecutionInputEntryV1,
     arguments_entry: Option<ExecutionInputEntryV1>,
+    /// The elitea-vector bearer Main minted for this claim, if any.
+    vector_token: Option<VectorClaimToken>,
 }
 
 impl AcceptedAgentClaim {
+    /// The elitea-vector token of this claim, for toolkit and agent code
+    /// running under it. `None` when Main minted none (a capability that
+    /// does not use vectors, or no vector deployment).
+    #[must_use]
+    pub(crate) const fn vector_token(&self) -> Option<&VectorClaimToken> {
+        self.vector_token.as_ref()
+    }
+
     #[must_use]
     fn input_entry(&self, entry_id: &str) -> Option<&ExecutionInputEntryV1> {
         if self.request_entry.entry_id == entry_id {
@@ -377,24 +399,40 @@ impl AcceptedAgentClaim {
             && result.request_content_digest.as_ref() == content.digest.as_ref()
     }
 
+    /// The settings entry a result names must be the one the claim admitted:
+    /// same entry id, immutable version and content digest. Shared by every
+    /// capability whose request entry is a settings document.
+    #[must_use]
+    fn matches_settings_entry_binding(
+        &self,
+        entry_id: &str,
+        entry_version: &str,
+        content_digest: Option<&DigestV1>,
+    ) -> bool {
+        let Some(settings) = self.request_entry.content.as_ref() else {
+            return false;
+        };
+        entry_id == self.request_entry.entry_id
+            && entry_version == self.request_entry.immutable_version
+            && content_digest == settings.digest.as_ref()
+    }
+
     #[must_use]
     pub(crate) fn matches_toolkit_call_tool_result_binding(
         &self,
         result: &super::elitea::runtime::v1::ToolkitCallToolResultV1,
     ) -> bool {
-        let Some(settings) = self.request_entry.content.as_ref() else {
-            return false;
-        };
         let Some(arguments) = self.arguments_entry.as_ref() else {
             return false;
         };
         let Some(content) = arguments.content.as_ref() else {
             return false;
         };
-        result.settings_entry_id == self.request_entry.entry_id
-            && result.settings_entry_version == self.request_entry.immutable_version
-            && result.settings_content_digest.as_ref() == settings.digest.as_ref()
-            && result.arguments_entry_id == arguments.entry_id
+        self.matches_settings_entry_binding(
+            &result.settings_entry_id,
+            &result.settings_entry_version,
+            result.settings_content_digest.as_ref(),
+        ) && result.arguments_entry_id == arguments.entry_id
             && result.arguments_content_digest.as_ref() == content.digest.as_ref()
     }
 
@@ -403,12 +441,80 @@ impl AcceptedAgentClaim {
         &self,
         result: &super::elitea::runtime::v1::ToolkitAvailableToolsResultV1,
     ) -> bool {
-        let Some(content) = self.request_entry.content.as_ref() else {
-            return false;
+        self.matches_settings_entry_binding(
+            &result.settings_entry_id,
+            &result.settings_entry_version,
+            result.settings_content_digest.as_ref(),
+        )
+    }
+
+    /// A validation result must name the very bundle, entry version and
+    /// content the claim admitted, not merely carry well-formed digests: the
+    /// settings-entry binding plus the input bundle id and digest.
+    #[must_use]
+    pub(crate) fn matches_configuration_validation_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::ConfigurationValidationResultV1,
+    ) -> bool {
+        result.input_bundle_id == self.input_bundle_ref.input_bundle_id
+            && result.input_bundle_digest.as_ref() == self.input_bundle_ref.digest.as_ref()
+            && self.matches_settings_entry_binding(
+                &result.settings_entry_id,
+                &result.settings_entry_version,
+                result.settings_content_digest.as_ref(),
+            )
+    }
+
+    /// An index result must restate the bundle and every entry the claim
+    /// admitted: the toolkit configuration (the request entry), the tool
+    /// parameters (the arguments entry), and each optional entry the
+    /// manifest holds, with no binding for an entry it does not.
+    #[must_use]
+    pub(crate) fn matches_index_ingest_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::IndexIngestResultV1,
+    ) -> bool {
+        use super::elitea::runtime::v1::IndexIngestInputBindingV1;
+        fn matches(
+            binding: Option<&IndexIngestInputBindingV1>,
+            entry: Option<&ExecutionInputEntryV1>,
+        ) -> bool {
+            match (binding, entry) {
+                (None, None) => true,
+                (Some(binding), Some(entry)) => entry.content.as_ref().is_some_and(|content| {
+                    binding.entry_id == entry.entry_id
+                        && binding.immutable_version == entry.immutable_version
+                        && binding.content_digest.as_ref() == content.digest.as_ref()
+                }),
+                _ => false,
+            }
+        }
+        let by_role = |role: &str| {
+            self.input_bundle
+                .entries
+                .iter()
+                .find(|entry| entry.semantic_role == role)
         };
-        result.settings_entry_id == self.request_entry.entry_id
-            && result.settings_entry_version == self.request_entry.immutable_version
-            && result.settings_content_digest.as_ref() == content.digest.as_ref()
+        result.input_bundle_id == self.input_bundle_ref.input_bundle_id
+            && result.input_bundle_digest.as_ref() == self.input_bundle_ref.digest.as_ref()
+            && matches(
+                result.toolkit_configuration.as_ref(),
+                Some(&self.request_entry),
+            )
+            && matches(
+                result.tool_parameters.as_ref(),
+                self.arguments_entry.as_ref(),
+            )
+            && matches(result.llm_model.as_ref(), by_role(INDEX_LLM_MODEL_ROLE))
+            && matches(
+                result.llm_configuration.as_ref(),
+                by_role(INDEX_LLM_CONFIGURATION_ROLE),
+            )
+            && matches(result.mcp_tokens.as_ref(), by_role(INDEX_MCP_TOKENS_ROLE))
+            && matches(
+                result.embedding_binding.as_ref(),
+                by_role(INDEX_EMBEDDING_BINDING_ROLE),
+            )
     }
 
     /// Bind a validated terminal to the replacement claim without invocation.
@@ -469,6 +575,8 @@ impl AcceptedAgentClaim {
             input_bundle: _,
             request_entry: _,
             arguments_entry: _,
+            // Output replay needs no vector access; the bearer is erased here.
+            vector_token: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -875,6 +983,81 @@ pub(crate) struct ClaimBoundRuntimeContextAuthority {
     claim_id: String,
     fence_token: Zeroizing<Vec<u8>>,
     resource_project_id: String,
+    vector_token: Option<VectorClaimToken>,
+    /// The identity and fence the `remove_index` tool addresses Main's
+    /// `RemoveIndex` RPC with (ADR-0030 I1), lent as [`IndexRemovalBinding`]
+    /// copies; the raw material stays here.
+    index_removal: Box<IndexRemovalBinding>,
+}
+
+/// The claim material one `RemoveIndex` call carries: the execution identity,
+/// the fence and the claim id, as Main's context authorizer requires them.
+/// Neither cloneable by graph code nor formattable; the fence bytes are
+/// zeroized on drop. Main verifies the live claim on every request, so this
+/// is not a signed grant.
+pub(crate) struct IndexRemovalBinding {
+    identity: ExecutionIdentityV1,
+    fence: ExecutionFenceV1,
+    claim_id: String,
+}
+
+impl Drop for IndexRemovalBinding {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.fence.fence_token.zeroize();
+    }
+}
+
+impl IndexRemovalBinding {
+    fn duplicate(&self) -> Self {
+        Self {
+            identity: self.identity.clone(),
+            fence: self.fence.clone(),
+            claim_id: self.claim_id.clone(),
+        }
+    }
+
+    /// The `RemoveIndex` request for one index of the frozen toolkit
+    /// `toolkit_id`: `index_name` as the model asked for it, `index_id` as the
+    /// frozen catalog names it.
+    #[must_use]
+    pub(crate) fn request(
+        &self,
+        toolkit_id: u64,
+        index_name: &str,
+        index_id: &str,
+    ) -> RemoveIndexRequestV1 {
+        RemoveIndexRequestV1 {
+            identity: Some(self.identity.clone()),
+            fence: Some(self.fence.clone()),
+            claim_id: self.claim_id.clone(),
+            toolkit_id: i64::try_from(toolkit_id).unwrap_or(i64::MAX),
+            index_name: index_name.to_owned(),
+            index_id: index_id.to_owned(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        Self {
+            identity: ExecutionIdentityV1 {
+                tenant_id: "tenant-1".to_owned(),
+                resource_project_id: "17".to_owned(),
+                projection_project_id: "17".to_owned(),
+                command_id: "command-1".to_owned(),
+                execution_id: "execution-one".to_owned(),
+                generation: 2,
+            },
+            fence: ExecutionFenceV1 {
+                workload_session_id: "workload-1".to_owned(),
+                claim_attempt: 1,
+                lease_epoch: 1,
+                producer_id: "worker-1".to_owned(),
+                fence_token: vec![b'f'; 32],
+            },
+            claim_id: "claim-1".to_owned(),
+        }
+    }
 }
 
 /// Opaque authority for one claim-fenced ADK session writer.
@@ -942,7 +1125,31 @@ impl ClaimBoundRuntimeContextAuthority {
             claim_id: claim.claim_id.clone(),
             fence_token: Zeroizing::new(claim.fence.fence_token.clone()),
             resource_project_id: claim.identity.resource_project_id.clone(),
+            vector_token: claim.vector_token.as_ref().map(VectorClaimToken::duplicate),
+            index_removal: Box::new(IndexRemovalBinding {
+                identity: claim.identity.clone(),
+                fence: claim.fence.clone(),
+                claim_id: claim.claim_id.clone(),
+            }),
         }
+    }
+
+    /// A copy of the claim material the `remove_index` tool addresses Main
+    /// with (ADR-0030 I1).
+    #[must_use]
+    pub(crate) fn index_removal_binding(&self) -> IndexRemovalBinding {
+        self.index_removal.duplicate()
+    }
+
+    /// The elitea-vector token of the claim this authority was derived
+    /// from, for the agent's toolkits.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "The vector-index client (ADR-0030) is its consumer."
+    )]
+    pub(crate) const fn vector_token(&self) -> Option<&VectorClaimToken> {
+        self.vector_token.as_ref()
     }
 
     #[must_use]
@@ -996,6 +1203,12 @@ impl ClaimBoundSessionAuthority {
 }
 
 impl LeaseMonitoredAgentExecution {
+    /// The elitea-vector token of the claim, for the toolkit run under it.
+    #[must_use]
+    pub(crate) const fn vector_token(&self) -> Option<&VectorClaimToken> {
+        self.claim.vector_token()
+    }
+
     #[must_use]
     pub const fn input_bundle_ref(&self) -> &ExecutionInputBundleReferenceV1 {
         self.claim.input_bundle_ref()
@@ -1129,6 +1342,12 @@ impl AgentExecutionOutputAuthority {
             ToolkitExecuteReadTerminalOutput::AvailableTools(result) => self
                 .claim
                 .matches_toolkit_available_tools_result_binding(result),
+            ToolkitExecuteReadTerminalOutput::ConfigurationValidation(result) => self
+                .claim
+                .matches_configuration_validation_result_binding(result),
+            ToolkitExecuteReadTerminalOutput::IndexIngest(result) => {
+                self.claim.matches_index_ingest_result_binding(result)
+            }
             ToolkitExecuteReadTerminalOutput::Failure(_) => true,
         };
         if !inputs_match {
@@ -1484,6 +1703,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             input_bundle_ref: ExecutionInputBundleReferenceV1::default(),
             input_bundle: ExecutionInputBundleV1::default(),
             arguments_entry: None,
+            vector_token: None,
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -1503,6 +1723,8 @@ pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthor
         claim_id: "claim-1".to_owned(),
         fence_token: Zeroizing::new(vec![b'f'; 32]),
         resource_project_id: "17".to_owned(),
+        vector_token: None,
+        index_removal: Box::new(IndexRemovalBinding::fixture()),
     }
 }
 
@@ -1529,6 +1751,23 @@ pub(crate) fn test_session_authority_for(
         workload_session_id: "workload-session-1".to_owned(),
         producer_id: "worker-1".to_owned(),
         fence_token: Zeroizing::new(vec![b'f'; 32]),
+    }
+}
+
+/// The session authority of a later execution's own claim on the same session, as a new Worker
+/// process presents it for the next turn: its own claim id and fence and a strictly later claim
+/// start.
+#[cfg(test)]
+pub(crate) fn test_session_authority_for_claim(
+    execution_id: &str,
+    generation: u64,
+    claim_ordinal: u8,
+) -> ClaimBoundSessionAuthority {
+    ClaimBoundSessionAuthority {
+        claim_id: format!("claim-{claim_ordinal}"),
+        claim_started_at_unix_micros: 1_700_000_000_123_456 + i64::from(claim_ordinal) * 1_000_000,
+        fence_token: Zeroizing::new(vec![claim_ordinal; 32]),
+        ..test_session_authority_for(execution_id, generation)
     }
 }
 
@@ -2802,6 +3041,7 @@ fn parse_input_claim_binding(
         input_bundle,
         request_entry,
         arguments_entry,
+        vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
     })
 }
 
@@ -2847,6 +3087,69 @@ enum AuthorizeInvocationDecision {
 ///
 /// Returns a typed runtime rejection or rejects ambiguous/malformed responses.
 #[allow(dead_code)] // Parsed by the next owned invocation coordinator.
+/// What Main decided about one `RemoveIndex` request (ADR-0030 I1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IndexRemovalOutcome {
+    /// The registry row is tombstoned; the vectors are deleted or left to
+    /// Main's sweeper.
+    Removed,
+    /// No live index of that name and id in the claimed project's toolkit.
+    NotFound,
+    /// The run's principal may not delete this toolkit's indexes.
+    Forbidden,
+    /// The index's run is still active.
+    ActiveRun,
+}
+
+/// The control-plane half of the `remove_index` tool: one `RemoveIndex`
+/// call under the live claim. The indexing runtime holds it as a trait
+/// object so the assemblers need not name the transport.
+#[async_trait]
+pub(crate) trait IndexRemovalControl: Send + Sync {
+    /// Ask Main to delete the index the request names.
+    ///
+    /// # Errors
+    ///
+    /// A transport failure, or Main's rejection of the claim or the request.
+    async fn remove_index(
+        &self,
+        request: RemoveIndexRequestV1,
+    ) -> Result<IndexRemovalOutcome, AgentControlError>;
+}
+
+#[async_trait]
+impl<R: ControlRpc> IndexRemovalControl for AgentControlClient<R> {
+    async fn remove_index(
+        &self,
+        request: RemoveIndexRequestV1,
+    ) -> Result<IndexRemovalOutcome, AgentControlError> {
+        let response = self.control.remove_index(request).await?;
+        parse_remove_index_response(&response).map_err(Into::into)
+    }
+}
+
+fn parse_remove_index_response(
+    response: &RemoveIndexResponseV1,
+) -> Result<IndexRemovalOutcome, ControlSemanticError> {
+    if let Some(rejection) = response.rejection.as_ref() {
+        if response.disposition != RemoveIndexDispositionV1::Unspecified as i32 {
+            return Err(ControlSemanticError::InvalidInput(
+                "the index removal response is ambiguous",
+            ));
+        }
+        return Err(runtime_rejection(rejection));
+    }
+    match RemoveIndexDispositionV1::try_from(response.disposition).ok() {
+        Some(RemoveIndexDispositionV1::Removed) => Ok(IndexRemovalOutcome::Removed),
+        Some(RemoveIndexDispositionV1::NotFound) => Ok(IndexRemovalOutcome::NotFound),
+        Some(RemoveIndexDispositionV1::Forbidden) => Ok(IndexRemovalOutcome::Forbidden),
+        Some(RemoveIndexDispositionV1::ActiveRun) => Ok(IndexRemovalOutcome::ActiveRun),
+        _ => Err(ControlSemanticError::InvalidInput(
+            "the index removal disposition is malformed",
+        )),
+    }
+}
+
 fn parse_authorize_invocation_response(
     response: &AuthorizeInvocationResponseV1,
 ) -> Result<AuthorizeInvocationDecision, ControlSemanticError> {
@@ -2948,8 +3251,13 @@ fn parse_prepare_settlement_response(
         }
         return Err(runtime_rejection(rejection));
     }
+    let settled =
+        ExecutionOutcomeV1::try_from(response.outcome).unwrap_or(ExecutionOutcomeV1::Unspecified);
+    // Main settles exactly the proposed outcome or rejects the frame (an index
+    // result the registry refuses is RESULT_REFUSED, never a FAILED receipt
+    // for a SUCCEEDED proposal); any other outcome is a malformed receipt.
     if !bounded_text(&response.settlement_receipt_id, MAX_CONTROL_IDENTITY_BYTES)
-        || response.outcome != expected_outcome as i32
+        || settled != expected_outcome
         || !terminal_outcome(expected_outcome)
     {
         return Err(ControlSemanticError::InvalidInput(
@@ -2958,7 +3266,7 @@ fn parse_prepare_settlement_response(
     }
     Ok(SettlementReceipt {
         receipt_id: response.settlement_receipt_id,
-        outcome: expected_outcome,
+        outcome: settled,
         retirement,
     })
 }
@@ -3041,7 +3349,7 @@ fn validate_manifest_binding(
         || !valid_identifier(&manifest.input_bundle_id)
         || !valid_version(&manifest.immutable_version)
         || manifest.entries.is_empty()
-        || manifest.entries.len() > 3
+        || manifest.entries.len() > MAX_MANIFEST_ENTRIES
     {
         return Err(ControlSemanticError::InvalidInput(
             "the accepted claim input manifest is malformed",
@@ -3050,10 +3358,21 @@ fn validate_manifest_binding(
     Ok(())
 }
 
+/// The most entries a claim manifest may hold: the index bundle's six (the
+/// toolkit configuration, the tool parameters, the model, the model
+/// configuration, the MCP tokens and the embedding binding). Each capability's
+/// entry rules then require their exact set.
+const MAX_MANIFEST_ENTRIES: usize = 6;
+
 fn validate_execution_request_entries(
     command: &super::elitea::runtime::v1::WorkerCommandV1,
     manifest: &ExecutionInputBundleV1,
 ) -> Result<(ExecutionInputEntryV1, Option<ExecutionInputEntryV1>), ControlSemanticError> {
+    if let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+        command.capability_command.as_ref()
+    {
+        return validate_index_ingest_entries(index, manifest);
+    }
     let (request_entry_id, semantic_role, media_type, max_bytes, arguments_id) =
         match command.capability_command.as_ref() {
             Some(worker_command_v1::CapabilityCommand::AgentExecution(agent)) => (
@@ -3080,6 +3399,13 @@ fn validate_execution_request_entries(
             Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(toolkit)) => (
                 toolkit.settings_entry_id.as_str(),
                 "toolkit.available_tools.settings",
+                "application/json",
+                MAX_TOOLKIT_JSON_INPUT_BYTES,
+                None,
+            ),
+            Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(validation)) => (
+                validation.settings_entry_id.as_str(),
+                "configuration.settings",
                 "application/json",
                 MAX_TOOLKIT_JSON_INPUT_BYTES,
                 None,
@@ -3139,6 +3465,70 @@ fn validate_execution_request_entries(
         )?;
     }
     Ok((request, arguments))
+}
+
+/// The index bundle (the Python worker's `_accepted_index_claim`): the
+/// toolkit configuration and tool parameters are required, the model, model
+/// configuration and MCP token entries are present exactly when the command
+/// names them, and the embedding binding entry must carry the version and
+/// digest the command pins. Nothing else may be in the manifest. The toolkit
+/// configuration becomes the claim's request entry and the tool parameters
+/// its arguments entry; the others are fetched by id.
+fn validate_index_ingest_entries(
+    index: &super::elitea::runtime::v1::IndexIngestCommandV1,
+    manifest: &ExecutionInputBundleV1,
+) -> Result<(ExecutionInputEntryV1, Option<ExecutionInputEntryV1>), ControlSemanticError> {
+    let mut expected = 2;
+    let select = |entry_id: &str, role: &str| {
+        validate_selected_input_entry(
+            manifest,
+            entry_id,
+            role,
+            "application/json",
+            MAX_TOOLKIT_JSON_INPUT_BYTES,
+        )
+    };
+    let configuration = select(
+        &index.toolkit_configuration_entry_id,
+        INDEX_TOOLKIT_CONFIGURATION_ROLE,
+    )?;
+    let parameters = select(&index.tool_parameters_entry_id, INDEX_TOOL_PARAMETERS_ROLE)?;
+    for (entry_id, role) in [
+        (&index.llm_model_entry_id, INDEX_LLM_MODEL_ROLE),
+        (
+            &index.llm_configuration_entry_id,
+            INDEX_LLM_CONFIGURATION_ROLE,
+        ),
+        (&index.mcp_tokens_entry_id, INDEX_MCP_TOKENS_ROLE),
+    ] {
+        if !entry_id.is_empty() {
+            select(entry_id, role)?;
+            expected += 1;
+        }
+    }
+    if let Some(binding) = index.embedding_binding.as_ref() {
+        let entry = select(&binding.entry_id, INDEX_EMBEDDING_BINDING_ROLE)?;
+        let content = entry
+            .content
+            .as_ref()
+            .ok_or(ControlSemanticError::InvalidInput(
+                "the embedding binding entry is malformed",
+            ))?;
+        if entry.immutable_version != binding.immutable_version
+            || content.digest.as_ref() != binding.content_digest.as_ref()
+        {
+            return Err(ControlSemanticError::InvalidInput(
+                "the embedding binding does not match its entry",
+            ));
+        }
+        expected += 1;
+    }
+    if manifest.entries.len() != expected {
+        return Err(ControlSemanticError::InvalidInput(
+            "the input manifest has unbound or duplicate entries",
+        ));
+    }
+    Ok((configuration, Some(parameters)))
 }
 
 fn validate_selected_input_entry(
@@ -3233,21 +3623,6 @@ fn terminal_command_ack(
     }
 }
 
-fn terminal_logical_output_id(command: &super::elitea::runtime::v1::WorkerCommandV1) -> String {
-    match command.capability_command.as_ref() {
-        Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)) => {
-            format!("toolkit-execute-read:{}", command.execution_id)
-        }
-        Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(_)) => {
-            format!("toolkit-call-tool:{}", command.execution_id)
-        }
-        Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
-            format!("toolkit-available-tools:{}", command.execution_id)
-        }
-        _ => format!("agent-execution:{}", command.execution_id),
-    }
-}
-
 fn require_sha256(digest: Option<&DigestV1>) -> Result<&[u8], ControlSemanticError> {
     let value = digest.ok_or(ControlSemanticError::InvalidInput(
         "the immutable content digest is malformed",
@@ -3325,7 +3700,9 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
             | RuntimeErrorCodeV1::ContextBudgetExceeded
             | RuntimeErrorCodeV1::ModelRequestTooLarge
             | RuntimeErrorCodeV1::ModelUnavailable
-            | RuntimeErrorCodeV1::ModelProviderFailure,
+            | RuntimeErrorCodeV1::ModelProviderFailure
+            // An output-plane refusal; the control plane never sends it.
+            | RuntimeErrorCodeV1::ResultRefused,
         )
         | None => {
             return ControlSemanticError::InvalidInput(

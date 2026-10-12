@@ -567,6 +567,12 @@ where
             return Box::pin(run.close_no_ack(code, retryable)).await;
         }
         NativeStreamOutcome::FatalLease(error) => {
+            // The lease arm may have won while the agent stream was suspended
+            // mid-write. Drop the run before joining the lease actor. A write
+            // held inline rolls back here. A write in a driven pull is aborted
+            // here and rolls back when the runtime next runs that task. Writer
+            // fencing refuses any commit after the loss either way.
+            drop(native);
             return Box::pin(run.close_no_ack(error.code().as_str(), error.retryable())).await;
         }
     };
@@ -1447,7 +1453,10 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
+                // A gated node type, or a toolkit a direct node's position
+                // cannot serve: both are fixed by editing the pipeline.
                 cause.code() == crate::agents::graph::compiler::NODE_TYPE_NOT_AVAILABLE_CODE
+                    || cause.code() == crate::agents::pipeline::UNSERVED_DIRECT_TOOLKIT_CODE
             }) =>
         {
             RuntimeFailureKind::PipelineNodeTypeNotAvailable
@@ -1645,6 +1654,31 @@ mod taxonomy_tests {
             assembly_failure(&error),
             RuntimeFailureKind::UnsupportedCapability
         );
+    }
+
+    /// A direct node on a toolkit its position cannot serve ends as the same
+    /// registered, data-free message as a gated node type (#1180), not as the
+    /// generic "Configuration type is not supported."
+    #[test]
+    fn an_unserved_direct_toolkit_ends_as_the_registered_deployment_message() {
+        use crate::protocol::output::{
+            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE, runtime_error_policy,
+        };
+
+        let error = crate::agents::pipeline::unserved_direct_toolkit();
+        assert_eq!(
+            error.code(),
+            NativeAgentAssemblyErrorCode::UnsupportedCapability
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::PipelineNodeTypeNotAvailable);
+        let (code, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(
+            code,
+            crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
+        );
+        assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
+        assert!(!retryable);
     }
 
     #[test]

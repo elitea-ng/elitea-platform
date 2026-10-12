@@ -71,17 +71,19 @@ func Refusal(err error) *apierr.APIError {
 	case CodeNodeTypeNotAvailable, CodeNodeTypeUnsupported, CodeToolkitNotAttached:
 		return api
 	}
-	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) {
+	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) || errors.Is(err, ErrExpansionTooLarge) {
 		return api
 	}
 	return nil
 }
 
 // Check refuses a pipeline definition that exceeds MaxInstructionsBytes, whose
-// top-level `nodes` list holds more than MaxNodes entries, or one of whose
-// nodes declares a `type` the deployment's runtime does not admit. The size is
-// tested first, on the byte length, so an over-size document is never parsed;
-// the node count and the node types are read in the same single parse.
+// anchor and alias expansion exceeds the Worker's YAML budget (expansion.go),
+// whose top-level `nodes` list holds more than MaxNodes entries, or one of
+// whose nodes declares a `type` the deployment's runtime does not admit. The
+// size is tested first, on the byte length, so an over-size document is never
+// parsed; the expansion, the node count and the node types are read in the
+// same single parse, and the expansion is metered without being built.
 //
 // Check is a save-time guard, not a full validator. A document that does not
 // parse, has no `nodes` sequence, or is not a mapping is not refused here: the
@@ -113,6 +115,9 @@ func check(instructions string, attached *[]string) error {
 	var document yaml.Node
 	if yaml.NewDecoder(strings.NewReader(instructions)).Decode(&document) != nil || len(document.Content) != 1 {
 		return nil
+	}
+	if err := checkExpansion(document.Content[0]); err != nil {
+		return err
 	}
 	root := aliased(document.Content[0])
 	if root.Kind != yaml.MappingNode {

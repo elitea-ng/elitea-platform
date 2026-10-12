@@ -55,7 +55,7 @@ func TestNoPylonBridgeWiringReturns(t *testing.T) {
 		},
 		{
 			pattern: "cutover.NewAdminHandler",
-			why: "the /internal/cutover routes drove that traffic split.",
+			why:     "the /internal/cutover routes drove that traffic split.",
 		},
 		{
 			pattern: "authsvc.New(",
@@ -66,7 +66,7 @@ func TestNoPylonBridgeWiringReturns(t *testing.T) {
 		},
 		{
 			pattern: "pylon_auth:rpc",
-			why: "the Redis channel that client published on.",
+			why:     "the Redis channel that client published on.",
 		},
 		{
 			pattern: "InternalAdminToken",

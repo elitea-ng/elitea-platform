@@ -157,6 +157,7 @@ impl Discovery {
 /// Fetch and validate the discovery document for an origin.
 pub async fn fetch_discovery(
     client: &reqwest::Client,
+    timeout: std::time::Duration,
     origin: &Url,
 ) -> Result<Discovery, HostError> {
     let url = origin
@@ -164,6 +165,7 @@ pub async fn fetch_discovery(
         .map_err(|_| HostError::InvalidAddress("that is not a valid address".into()))?;
     let response = client
         .get(url)
+        .timeout(timeout)
         .header("Accept", "application/json")
         .send()
         .await

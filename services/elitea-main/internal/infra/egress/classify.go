@@ -12,7 +12,7 @@ type addressClass int
 const (
 	// classPublic is dialled.
 	classPublic addressClass = iota
-	// classPrivate is dialled only when the allowlist declares private egress.
+	// classPrivate is dialled only when an allowlist entry names the address.
 	classPrivate
 	// classForbidden is never dialled, whatever the allowlist says.
 	classForbidden
@@ -109,15 +109,27 @@ func embeddedIPv4(ip net.IP) net.IP {
 	}
 }
 
-// declaresPrivateEgress reports whether the allowlist declares that private
-// egress is intended. egresslib answers for RFC 1918, loopback and ULA; this
-// adds an entry naming one of privateBlocks, so an operator who names a CGNAT
-// receiver keeps reaching it. An entry naming only forbidden space (the
-// metadata address) declares nothing.
-func declaresPrivateEgress(allowlist *egresslib.Allowlist) bool {
-	if allowlist.AllowsPrivateNetwork() {
-		return true
-	}
+// privatePermit is one allowlist entry that names private space: the block it
+// names and, when the entry pinned one, the only port it permits.
+type privatePermit struct {
+	block *net.IPNet
+	port  string
+}
+
+// loopbackBlocks are what a `localhost` entry names. The guard pins the name
+// to 127.0.0.1 (resolveHost), and egresslib reads the entry as private.
+var loopbackBlocks = mustParseCIDRs("127.0.0.0/8", "::1/128")
+
+// privatePermits reads the entries that permit private egress, each for its
+// own range only: a CIDR entry permits its block, an IP literal entry that one
+// address, and `localhost` the loopback blocks, each limited to the entry's
+// port when it pins one. A host name or `*.` wildcard permits no private
+// address, because nothing about it says where it resolves (egresslib's
+// package doc). Naming one private range never opens the others: an operator
+// who names a CGNAT receiver has not opened loopback or RFC 1918. Forbidden
+// addresses stay refused whatever an entry names (permittedIPs).
+func privatePermits(allowlist *egresslib.Allowlist) []privatePermit {
+	var permits []privatePermit
 	for _, text := range allowlist.Entries() {
 		entry, err := egresslib.ParseEntry(text)
 		if err != nil {
@@ -125,36 +137,57 @@ func declaresPrivateEgress(allowlist *egresslib.Allowlist) bool {
 		}
 		switch entry.Kind() {
 		case egresslib.KindCIDR:
-			if _, block, err := net.ParseCIDR(text); err == nil && namesPrivateBlock(block) {
-				return true
+			if _, block, err := net.ParseCIDR(text); err == nil {
+				permits = append(permits, privatePermit{block: canonicalBlock(block)})
 			}
 		case egresslib.KindExact:
-			host := text
-			if h, _, err := net.SplitHostPort(text); err == nil {
-				host = h
+			host, port := text, ""
+			if h, p, err := net.SplitHostPort(text); err == nil {
+				host, port = h, p
 			}
-			if ip := net.ParseIP(host); ip != nil && classify(ip) == classPrivate {
-				return true
+			if host == "localhost" {
+				for _, block := range loopbackBlocks {
+					permits = append(permits, privatePermit{block: block, port: port})
+				}
+				continue
+			}
+			if ip := net.ParseIP(host); ip != nil {
+				ip = canonicalIP(ip)
+				bits := 8 * len(ip)
+				permits = append(permits, privatePermit{
+					block: &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)},
+					port:  port,
+				})
 			}
 		}
 	}
-	return false
+	return permits
 }
 
-// namesPrivateBlock reports whether block overlaps a privateBlocks range and
-// is not wholly inside a forbidden one.
-func namesPrivateBlock(block *net.IPNet) bool {
-	ones, _ := block.Mask.Size()
-	for _, forbidden := range forbiddenBlocks {
-		fOnes, _ := forbidden.Mask.Size()
-		if forbidden.Contains(block.IP) && fOnes <= ones && len(forbidden.IP) == len(block.IP) {
-			return false
-		}
+// canonicalIP is the address classify judges: the IPv4 address an
+// IPv4-mapped, NAT64 or 6to4 form reaches, as 4 bytes; any other address as
+// itself.
+func canonicalIP(ip net.IP) net.IP {
+	if v4 := embeddedIPv4(ip); v4 != nil {
+		ip = v4
 	}
-	for _, private := range privateBlocks {
-		if private.Contains(block.IP) || block.Contains(private.IP) {
-			return true
-		}
+	if v4 := ip.To4(); v4 != nil {
+		return v4
 	}
-	return false
+	return ip
+}
+
+// canonicalBlock returns an IPv4-mapped CIDR (::ffff:10.0.0.0/104) as the IPv4
+// block it names, so it matches the canonical IPv4 address.
+func canonicalBlock(block *net.IPNet) *net.IPNet {
+	ones, bits := block.Mask.Size()
+	if v4 := block.IP.To4(); v4 != nil && bits == 8*net.IPv6len && ones >= 96 {
+		return &net.IPNet{IP: v4, Mask: net.CIDRMask(ones-96, 32)}
+	}
+	return block
+}
+
+// permits reports whether one permit admits ip (already canonical) on port.
+func (p privatePermit) permits(ip net.IP, port string) bool {
+	return (p.port == "" || p.port == port) && p.block.Contains(ip)
 }
