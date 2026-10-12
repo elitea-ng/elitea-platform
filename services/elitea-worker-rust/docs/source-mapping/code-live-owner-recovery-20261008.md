@@ -596,3 +596,244 @@ After reload each chat shows one final answer with both sections and no card. Se
 15:28:37Z: 0 agentstate backends `idle in transaction`; Worker 0 `lock_not_available`, `storage_unavailable`,
 `driven_task_failed` or panic lines, 0 ERROR lines, 0 `too_many_pings`/GOAWAY; Main 0 `current agent continuation
 failed`.
+
+## Deployed Kubernetes Code matrix on the merged branch (2026-10-09)
+
+The branch head is `e7a291985`. These runs used a two-node kind cluster, `k8s1084`, reached at
+`http://k8s1084.localhost:18400` through an in-cluster Traefik front door and a port-forward.
+
+**Cluster.**
+- kind v0.33.0; node image `kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5`;
+  one control-plane node (also hosts Main, Supervisor, PostgreSQL, NATS, Web, front door) and one worker node
+  (`elitea.ai/sandbox=true`; hosts the Worker and every Code Pod). Kubelet `podPidsLimit: 128` on both nodes.
+- Calico v3.30.3 (`disableDefaultCNI`), so NetworkPolicy is enforced. cert-manager v1.19.2.
+- NATS: `deploy/helm/nats` (scale-1 profile, secured, 2 Gi PVC) plus `deploy/helm/nats-bootstrap`.
+- PostgreSQL `pgvector/pgvector:0.8.1-pg18-trixie` with TLS (the Supervisor connects with `verify-full`).
+  The real-model product dump (`main-c0f2e5f9b`) was restored; shared migrations 158 and tenants 148 are already the
+  branch level (the migration hook found nothing to apply). AgentState database at migration 13.
+- Chart: `deploy/helm/elitea` with `values-standalone.yaml` plus the values listed below. Registry: a local
+  `registry:2` container joined to the kind network; the Supervisor and the runners are referenced by digest.
+- RuntimeClass `elitea-code` (handler `runc`); execution namespace `elitea-code-execution` (deny-all policy, quota 16
+  Pods); preparation namespace `elitea-python-preparation` (DNS plus TCP 443 to six registry addresses).
+
+**Images.** Main, Worker, Web and Supervisor were built from `e7a291985` (tag `code1084-e7a291985`) and pushed to the
+registry. The runner sources are unchanged between `22f33b8f8` and `e7a291985` (`git diff --stat` on
+`services/elitea-code-runner`: empty), so the existing `22f33b8f8` runner images were reused instead of rebuilt.
+
+| Role | Registry manifest digest |
+| --- | --- |
+| Main | `sha256:4f9eade9ed20570f7f9660f65c21ee10d6cbe56c8c0c8844832f527085483799` |
+| Worker | `sha256:4445580b01d696664ab91645c0260c08919b10983bd6e4ed327c07119b3fd940` |
+| Web | `sha256:f1fabe1db2b539de8d6175a39e77c3297a315fe13a1c0ef5fe54b6628d71daf4` |
+| Supervisor | `sha256:04992018ffca7e1dc6e8b57228ecb991f2a8a18bc670f99ece672cf66789974c` |
+| Runner (Deno, Python/JavaScript/TypeScript) | `sha256:8434c49a99e04de1a45d00364ae9b0810c1d73f3afa920589dd3ffd5769e2105` |
+| Runner (Rust) | `sha256:d8af139c5395c10a05552965646c39a5ecdf77f537874ed3f354bf32e9b0ce4f` |
+
+The running Pods' `imageID` values equal the pushed digests for Main, Worker, Web and Supervisor. Main, Worker and Web
+are selected by tag (the chart has one global tag); the Supervisor and the runners are selected by digest, as the
+chart and the Pod policy require. Runner images are pre-pulled on the sandbox node by digest (`imagePullPolicy: Never`).
+
+**Binary check against `main-c0f2e5f9b-verify`.** Worker contains `code_timing.rs` and `pipeline.code_cancelled`
+(count 1; the verify image: 0). Main contains `resumeCurrentAgentStaticTools` (1; verify image: 0). Supervisor
+contains `service_job_owners.rs` (4). #1160 is an ancestor of the head.
+
+**Values.** `worker.runtime.agentNodeRecovery: true` (chart default `false`, set explicitly).
+`main.runtime.codeOwnerRecovery.enabled: true`, `mainWorkloadIdentity: dns:elitea-code-owner-main`, supervisors
+`dns:elitea-sandbox-deno` / `dns:elitea-sandbox-rust` at `https://elitea-sandbox-{deno,rust}:944{6,7}`;
+`codePlatform` one broker policy; `codeDebugArtifacts` on. Four `sandboxRuntimes` entries (Python, JavaScript,
+TypeScript on the Deno profile; Rust). Supervisor profiles `deno.json` and `rust.json`, `backend.kind: kubernetes`,
+cluster `k8s1084`, 512 MiB, 1 CPU, 180 s. The Gateway, Scheduler, DeepWiki and Inventory are off: the fixtures are
+Code-only. The Supervisor Deployment was patched after install with `nodeSelector tier=infra` (not in the chart).
+
+**Fixtures.** Saved pipelines with one Code node that records its start time and sleeps 25 s: JavaScript, Python
+(no packages), Rust. Each run is a normal conversation send through the API with a signed-in cookie.
+
+**Invariants.** All are scoped to this cluster's own ledger rows. The Pod name is
+`elitea-code-<runtime-job hash[:48]>` (`ledger.rs:46-66`).
+- I1: one execution row, one committed settlement, at most one terminal replay event.
+- I2: the stored start time precedes the fault (no re-run); one Pod UID per runtime job.
+- I5: claim attempts contiguous, epochs increasing, the settlement bound to the last claim.
+- I6: Pod physically deleted; no Pod left in either Code namespace; no ledger job left `reserved`/`dispatched`.
+- I7: outbox drained; the NATS agent durable has pending 0 and ack_pending 0.
+
+| Case | Language | Fault | Execution | Fault to settle | Settlement | Answer | Class | Invariants |
+|---|---|---|---|---|---|---|---|---|
+| POS-js | JavaScript | none | `429ed94ba4214f5bf59bef8b31dc8f8c` | - | SUCCEEDED, attempt 1 | started=`1791574045461` | - | all hold |
+| POS-py | Python | none | `e4078f93fbbc6195239e817df6021f5f` | - | SUCCEEDED, attempt 1 | started=`1791574113054` | - | all hold |
+| POS-rs | Rust | none | `53b0cee5ddf68b7e82ab5d28961c9ee5` | - | SUCCEEDED, attempt 1 | started=`1791574171901` | - | all hold |
+| POS-rs-2 | Rust | none (second run) | `b2ac4a99e8a69e22c5249433b5d48ff5` | - | SUCCEEDED, attempt 1 | started=`1791574229235` | - | all hold |
+| STOP-js | JavaScript | Stop at 8 s | `2403dcd1b3a4892a99e6444f4410e453` | 6 s | CANCELLED, attempt 1 | "Execution was cancelled." | - | all hold; Pod removed |
+| STOP-py | Python | Stop at 8 s | `2711c1d9b50ee0863fa6d102a78820c4` | 6 s | CANCELLED, attempt 1 | "Execution was cancelled." | - | all hold; Pod removed |
+| WFORCE-js | JavaScript | Worker Pod `--grace-period=0 --force` | `f27f19806d1c3df65bd9355378c7e7b9` | 60 s | SUCCEEDED, attempt 2 / epoch 2 | started=`1791574340026` | R | all hold; claim 1 LEASE_EXPIRED |
+| WFORCE-py | Python | same | `024436c3d1841f0c674ab27bd72c4795` | 58 s | SUCCEEDED, attempt 2 / epoch 2 | started=`1791574490836` | R | all hold |
+| WFORCE-rs | Rust | same (re-run, see below) | `28abf31eca156cec39838f169c4838d1` | 38 s | SUCCEEDED, attempt 2 / epoch 2 | started=`1791805654972` | R | all hold |
+| WROLL-js | JavaScript | Worker `rollout restart` | `f5985835643f01ae832d0e2249ea075a` | 17 s | SUCCEEDED, attempt 1 | started=`1791574584931` | R (drain) | all hold |
+| SDEL-js | JavaScript | Supervisor Pod force-delete | `d8af6ffd176360d788df87df1455cd89` | 51 s | SUCCEEDED, attempt 1 | started=`1791574649297` | R | all hold; gap 2.3 s |
+| SROLL-js | JavaScript | Supervisor `rollout restart` (`Recreate`) | `2172971eadf8c148e4cf2b37e3c7573e` | 54 s | SUCCEEDED, attempt 1 | started=`1791574739034` | R | all hold; gap 1.9 s |
+| MGRACE-js | JavaScript | Main Pod graceful delete | `2e77c3644b49d535cafb175bdcd72670` | 61 s | SUCCEEDED, attempt 2 / epoch 2 | started=`1791575840900` | R | all hold |
+| MDEL-js | JavaScript | Main Pod force-delete | `eddcfc7f196ae73458d73b425526ee49` | 16 min 17 s | SUCCEEDED, attempt 2 / epoch 2, at 19:56:56 | original result | R, late | holds after settlement; see below |
+| NODE-js | JavaScript | `docker kill` worker node, restart after 20 s | `0e33cba58631b61112c6b4fce086641c` | not settled; claims 1-3 | RUNNING / SUSPENDED; operator Stop then CANCELLED (attempt 4) | none | C | no re-run; sandbox job `failed`; node-recovery visit SUSPENDED |
+| NODEDOWN-js | JavaScript | `docker kill` worker node, restart after 420 s | `17186c116343b9de04ec0f58506dfe39` | not settled; claims 1-3 | RUNNING / SUSPENDED; operator Stop then CANCELLED | none | C | no re-run; Worker replacement Pending until the node returned |
+
+**Late recovery after a force-deleted Main (MDEL-js).** The Worker's control connection to the ClusterIP stayed in
+conntrack toward the old Main Pod IP. Every control call timed out at the 5 s deadline, and the retried NATS delivery
+(60 s) failed the same way until the kernel gave up on the connection, 16 min 17 s after the delete. The original
+result was then recovered with claim 2 and no Code re-run. A graceful Main delete (MGRACE-js) recovered in 61 s. The
+Worker source has no gRPC or TCP keepalive on its clients (`grep keep_alive` over `services/elitea-worker-rust/src`
+finds none in the transports). This is a follow-up, not a fix made here.
+
+**Node loss.** With the node killed and restarted after 20 s, or after 420 s, the Code Pod reached a kubelet
+terminated state (exit 255, `Unknown`) only after the node returned. In the 420 s case the taint manager evicted the
+Pods at about five minutes; the Pod stayed `Terminating` (receipt finalizer) until the kubelet reported the terminated
+container, then the Supervisor removed it. The Worker then found the Code job `failed` and suspended the node for
+operator reconcile (`agent_node_recovery_required`, `allowed_actions: [reconcile]`, `failure_class: invalid_result`,
+`replay_safety: unknown_external_effect`). No Code ran again. Stop settled the execution as CANCELLED and drained the
+durable. This is class C, not the documented F-after-`timeout+90` for G-SUP-02 (the node came back before that bound
+mattered).
+
+**User-code failure.** A Code node whose user code throws (typed receipt `failed`) was also suspended for operator
+reconcile instead of settling `PIPELINE_CODE_FAILED` (`code_attempt_remote.rs:535-552` classifies it `InvalidResult`
+with `UnknownExternalEffect`; `node_recovery_runtime.rs:1062-1072` publishes a terminal failure only for a Stop
+decision other than operator approval). It was observed on Kubernetes only; the code path is not Kubernetes-specific
+and was not compared on Docker.
+
+
+### Python dependency preparation (added after the first run)
+
+Preparation was enabled afterwards: a fourth supervisor profile `preparation.json` (port 9448, audience
+`dns:elitea-sandbox-preparation`, the Deno runner image as preparer), content staging for the `deno` and `preparation`
+clients (256 MiB tmpfs each), separate content-client certificates (`gen-sandbox-certs.sh --preparation`), a
+`dependency_content` block in `deno.json`, a `preparation` block on the Worker's Python entry, the preparation
+audience in Main's `sandboxAudiences` and `codeOwnerRecovery.supervisors`, and `sandboxKubernetes.preparation` with ten
+registry addresses on TCP 443. Fixture: `python-prepared-sleep` from the crash suite (micropip pins `python-slugify`,
+`text-unidecode`, `python-dateutil`, `six`, `pytz`, `idna`; a 25 s sleep; then a JavaScript sentinel node). Each run has
+one preparation job and two execution jobs (Python, sentinel). The answer is the sentinel's
+`CRASHRESULT {... "slug":"crash-recovery" ...} SENTINEL9999`, which proves the packages imported.
+
+| Case | Fault | Execution | Fault to settle | Settlement | Class | Invariants |
+|---|---|---|---|---|---|---|
+| PREP-POS | none | `8c0b74f802e8e942988d33fd41660b00` | - | SUCCEEDED, attempt 1 | - | all hold; 1 resolver Pod, 3 Pods in total, each created once and deleted |
+| PREP-WFORCE | Worker force-delete 1 s after the resolver Pod was bound | `1a1971c36d372387df4f701bed3af14c` | 96 s | SUCCEEDED, attempt 2 / epoch 2 | R | all hold; still 1 resolver Pod (no second download) |
+| PREP-SDEL | Supervisor force-delete 1 s after the resolver Pod was bound | `3f303a19c0543f5cc5796617b4e55ccd` | 95 s | SUCCEEDED, attempt 1; sandbox epoch 12 | R | all hold; 1 resolver Pod |
+| HYD-SDEL | Supervisor force-delete while the execution job was `reserved` (hydration) | `73ae9218ce74f8ae3da0c65b103a13c1` | 42 s | SUCCEEDED, attempt 1 | R | all hold |
+| PREPX-WFORCE | Worker force-delete during the prepared Python execution | `d40b67424dbf4d82b8f3eaf3b4a9e2a3` | 59 s | SUCCEEDED, attempt 2 / epoch 2 | R | all hold |
+
+Every row: one settlement, claims contiguous, outbox drained, NATS durable pending 0 and ack_pending 0, both Code
+namespaces empty afterwards, one Pod UID per ledger job. 69 checks held across the four fault runs; none was violated.
+
+A first PREP-POS (`5bde36dc3a96...`) ended `PIPELINE_CODE_FAILED` "Code dependency preparation failed" after about 2
+minutes. Cause: `cdn.jsdelivr.net` resolves inside the cluster to Fastly `151.101.{1,65,129,193}.229`, not the
+Cloudflare addresses seen from the host, so the egress policy blocked it. Those four addresses were added to
+`resolverCidrs` and the case then passed. This is an operator-allowlist finding: the policy cannot name hostnames.
+
+Extra manifest outside the chart: `elitea-main-content-from-supervisor` admits the Supervisor Pods to Main's content
+listener (9445); the chart's Main policy admits only Worker Pods on the runtime listeners.
+
+### Refusals
+
+| Case | Execution | Result |
+|---|---|---|
+| language `go`, `ruby`, `bash` | `ae1ac6a2...`, `5f1f3f22d4c9...`, `c8875572d6f0...` | FAILED, `INVALID_INPUT` "The execution input is invalid.", one settlement, no ledger job, no Pod |
+| unknown node field `timeout_seconds` | `010770aad269...` | same |
+| unknown node field `memory_bytes` | `a4d7e42bd0b8...` | same |
+| 2 MiB source | - | refused at save: HTTP 400, "exceeds the 512 KiB size limit" |
+| comment-only source (REF-empty_source, `c70ef5da069b...`) | - | not a refusal: the Pod ran, the runner failed, the node suspended for operator reconcile (same as the user-code failure above); Stop settled CANCELLED |
+
+### NetworkPolicy proof (`evidence/netpol.txt`)
+
+Probe Pods used the pre-warmed runner image in the preparation namespace, the execution namespace, and `default`
+(control, no policy).
+
+| Probe | Preparation namespace | Execution namespace | Control |
+|---|---|---|---|
+| DNS `pypi.org` | resolves | fails | resolves |
+| TCP `151.101.0.223:443` (listed) | connects (37 ms) | blocked | connects |
+| same IP, port 80 | blocked | blocked | connects |
+| `151.101.1.223:443` (not listed) | blocked | blocked | connects |
+| `1.1.1.1:443` | blocked | blocked | connects |
+| PostgreSQL / Main Service | blocked | blocked | PostgreSQL connects; Main blocked by its own policy |
+
+### Runs invalidated and re-run
+
+- The first `NODEDOWN-js` and `WFORCE-rs` (`run-f7.log`) spanned hours of host sleep (SEND 03:48, CHECKS 05:26,
+  trigger MISSED) and are discarded. `WFORCE-rs` was re-run awake: it first stalled with the Pod in
+  `ContainerCreating` because Calico's CNI credential on the worker node had gone stale (`error getting
+  ClusterInformation: connection is unauthorized`), which is a cluster artefact of the sleep and not a product defect.
+  Restarting `calico-node` fixed it; the clean re-run is the `WFORCE-rs` row (`28abf31e...`). `NODEDOWN-js` was
+  re-run awake after that.
+- A grep of Main, Worker and Supervisor logs for `PROTOCOL_VIOLATION`, `invalid node event output`,
+  `invalid_durable_state`, `output_recovery_pending` and `control_rejected` found no match on this cluster. The
+  old stuck `9279e24b...` execution was an artefact of the same stale-CNI condition and was settled CANCELLED by Stop.
+
+### Limits and follow-ups
+
+- Compiled Rust snapshots (the descriptor cache) were not enabled. They need the release manifest, native Cargo
+  bundle and preparation profiles. Cache evidence here is limited to the pre-warmed immutable runner images
+  (no image pull for any Pod). No same-source repeat run was made, so reuse of a compile result is not shown.
+- Python preparation was run end to end (section above) but only with the six-package fixture and one resolver Pod at a
+  time; a PyPI outage or a changed CDN address set was not tested.
+- The node kill preserved the node's disk, so the Worker `emptyDir` spool survived `docker start`; it is lost only in
+  the force-delete cases (new Pod).
+- Main, Worker and Web are selected by tag plus verified `imageID`, not by digest in the manifest.
+- Follow-ups: Worker gRPC keepalive (MDEL-js); user-code failure suspending for operator reconcile; the nats-bootstrap
+  chart renders `deltas.maxBytes: 1073741824` as `1.073741824e+09` under Helm 4.1.0 (install needed `--set-string`).
+- Helm follow-ups: (1) `deploy/helm/nats-bootstrap` renders `deltas.maxBytes: 1073741824` as `1.073741824e+09` under
+  Helm 4.1.0, which `nats` rejects ("bytes must end in B, K, KB..."); the install used `--set-string`. (2) The
+  Supervisor Deployment has no `nodeSelector`/affinity value; it was patched after install and `helm upgrade` reverts the
+  patch. (3) The chart has no way to admit the Supervisor to Main's content listener (extra NetworkPolicy above).
+
+### Fix images `9bf82d60d` (the #1084 branch merged with main `719d12178`)
+
+Images from `9bf82d60d` replaced Main, Worker, Web and Supervisor on the same cluster, with the same values (tag
+`code1084-9bf82d60d`, Supervisor by digest; the runners are unchanged). Main applied the new AgentState migration 0014
+on start (agentstate now at 14). The Supervisor `nodeSelector` patch and the extra content NetworkPolicy were re-applied.
+
+| Role | Local image | Registry manifest digest |
+| --- | --- | --- |
+| Main | `811f516d53d9` | `sha256:242b88f9a7aa4f64296fd8efa458c897aee4f4b21343319fa8b344143c23940d` |
+| Worker | `4bfaea5b9720` | `sha256:1cd75013c17f836ddcb0543862506eec45c8ebeab6b434805e0cbe8847b3f9c7` |
+| Web | `f18101e4ef63` | `sha256:49c4f5afb6fd62bbc80e8e14cc15ee574ad5adff5558dc59126bb62537cda136` |
+| Supervisor | `efacee7226c2` | `sha256:e5d39a028b21f4bf2e50a6295a7ddba9515368d4ea0e894b4933af3a2a9384e5` |
+
+Running Pods' `imageID` equals these digests. Marker check on the extracted binaries: Worker contains
+`code_platform_effects` (1) and `release_undispatched` (2; the old Worker: 0); Main contains
+`resource_project_id=$1::integer` (1; plus 2 spaced variants).
+
+| Case | Fault | Execution | Fault to settle | Settlement | Result | Before (e7a291985) |
+|---|---|---|---|---|---|---|
+| MDEL-js | Main Pod force-delete | `aafa080717b152c0efa42feec4970bf7` | 66 s | SUCCEEDED, attempt 2 / epoch 2 | R, original result | 16 min 17 s |
+| THROW-js (user code throws) | none | `1a9c3bf9d36a12734dc9b5b2cce30afb` | - | FAILED `PIPELINE_CODE_FAILED`, readable message | typed failure, no `agent_node_recovery_required` event | suspended for operator reconcile |
+| THROW-py | none | `4a87c096e01a953fa9a6c781a17ac429` | - | FAILED `PIPELINE_CODE_FAILED` | same | not run |
+| COMMENT-js (comment-only source) | none | `56d31f7832cf00af14e5041b4df44c3a` | - | FAILED `PIPELINE_CODE_FAILED` | same | suspended |
+| NODE-js | worker node killed 20 s | `ddc2a1c5712e8304fd8b0e8fab201a73` | 65 s | FAILED `PIPELINE_CODE_FAILED`, attempt 2 / epoch 2 | typed failure | suspended (C) |
+| IDLE-js | none, 120 s with no frames | `295c44bd7bc34042ff5274d1dcdb6480` | - | SUCCEEDED, attempt 1 | no GOAWAY / `too_many_pings` in Main, Worker or Supervisor logs | not run |
+| POS-js, POS-py, POS-rs | none | `1b27bb2e…`, `609484d9…`, `12a07191…` | - | SUCCEEDED, attempt 1 | pass | pass |
+| WFORCE-js | Worker force-delete | `7749ed259f3d86aed8ec5c1fbd146b6f` | 55 s | SUCCEEDED, attempt 2 | R | R |
+| SDEL-js | Supervisor force-delete | `3cefeef25305cf8263e7e539a2181d2f` | 51 s | SUCCEEDED, attempt 1 | R | R |
+| MGRACE-js | Main graceful delete | `bdf9029592189de44b5823ff621de8d1` | 61 s | SUCCEEDED, attempt 2 | R | R |
+| PREP-POS | none | `9e8cf19dea6a020ce568217febdf6c0b` | - | SUCCEEDED, attempt 1 | pass | pass |
+| PREP-WFORCE | Worker force-delete in preparation | `f134eb435c7a0e77ae8461f8f137027b` | 99 s | SUCCEEDED, attempt 2 | R | R |
+| HYD-SDEL | Supervisor force-delete in hydration | `076fad3966e3bec08df326e9e29fb9a2` | 95 s | SUCCEEDED, attempt 1 | R | R |
+| PREPX-WFORCE | Worker force-delete in prepared execution | `14b776d12b84ad77f80d2d93b31b0887` | 62 s | SUCCEEDED, attempt 2 | R | R |
+
+All invariants held on every row (one settlement, one Pod UID per ledger job, Pods deleted, namespaces empty,
+NATS drained, one resolver Pod in the prepared cases). The only reported check failure is my own harness expectation
+for `POS-py`, `THROW-py` and the other Python runs: the harness expected zero preparation jobs, but with the
+preparation profile deployed a Python node always has one (completed).
+
+**Why NODE-js now fails typed.** After the node returned, the Code job's ledger phase was `failed`
+(`sandbox.code_failed`, the kubelet's terminated container). The Worker raised `pipeline.code_failed` upstream and
+settled the execution at claim 2; there was no node-recovery visit row (the Main platform-call journal held no
+unresolved effect), so the "unresolved effect" exception did not apply. The Pod, the Worker and the platform-edge Pod
+restarted once.
+
+**MDEL-js.** The fault-to-settle time is dominated by the 60 s claim lease and NATS retry delay, not by a stale
+connection: the Worker's retried claim succeeded on the first attempt after the lease expired. Before the keepalive
+change the same fault took 16 min 17 s.
+
+**Follow-up from the fix run (FU-214).** NODE-js now settles typed instead of suspending, but node loss is an
+infrastructure loss, not a user-code failure: the Kubernetes backend reports the terminated container (exit 255,
+reason `Unknown`) as phase `failed` (`sandbox.code_failed`), the same as a thrown error. For effect-free Code (no
+network; no unresolved platform call in the Main journal) a lost runtime can be re-executed safely (class I). Distinguish
+"runtime lost" (node loss, eviction, `Unknown`/OOM-kill by the platform) from "user code failed" in the supervisor
+receipt, and retry the former within the deadline; keep the typed failure for the latter.
