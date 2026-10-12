@@ -1,5 +1,5 @@
 //! Keep the Code frontier pending until frozen dependencies are published and terminal.
-use super::{CodeRuntimeProfile, RemoteCodeRuntime, failed, observation_deadline, uncertain};
+use super::{CodeRuntimeProfile, RemoteCodeRuntime, failed, observation_deadline};
 use crate::agents::graph::code_timing;
 use crate::{
     agents::graph::{
@@ -348,6 +348,13 @@ impl RemoteCodeRuntime {
         .await
     }
 
+    /// Import the recorded dependency files while the execution stays inert.
+    ///
+    /// Every failure keeps a neutral typed reason: it is logged here and reaches
+    /// the caller as a `CodePreparationFailure`, so the run settles
+    /// `pipeline.code_preparation_failed` instead of a generic internal failure.
+    /// A transient content or supervisor condition is retried at the reconcile
+    /// cadence until the same absolute deadline as every other hydration call.
     pub(super) async fn hydrate_python_dependencies(
         &self,
         profile: &CodeRuntimeProfile,
@@ -355,43 +362,57 @@ impl RemoteCodeRuntime {
         job: &crate::sandbox::request::PreparedJob,
         bundle: &DependencyBundle,
         original_visit: Option<&crate::sandbox::code_recovery::OriginalCodeVisitRef>,
-    ) -> Result<(), GraphError> {
-        let config = profile
-            .preparation
-            .as_ref()
-            .ok_or_else(|| failed("Dependency hydration is not configured."))?;
+    ) -> Result<(), CodePreparationFailure> {
+        let Some(config) = profile.preparation.as_ref() else {
+            return Err(hydration_failure("hydration_not_configured", 0));
+        };
         let deadline = observation_deadline(config.timeout_seconds);
         let mut index = 0;
+        let mut preconditions = 0_u8;
         loop {
             // Each index uses fresh current-claim authority over the same original job.
             let intent = if let Some(visit) = original_visit {
-                let content = self
-                    .intent_content
-                    .as_deref()
-                    .ok_or_else(|| failed("Original Code intent signing is not configured."))?;
-                let digest = job
-                    .fingerprint()
-                    .map_err(|_| failed("The indexed Code execution request is invalid."))?;
-                Some(
-                    tokio::time::timeout_at(
-                        deadline,
-                        content.finalize_original_code_intent(
-                            &self.authority,
-                            visit,
-                            *activation,
-                            digest,
-                            profile.client.audience(),
-                            job,
-                            None,
-                            None,
-                        ),
-                    )
-                    .await
-                    .map_err(|_| uncertain())?
-                    .map_err(|_| {
-                        failed("The original Code intent does not authorize hydration.")
-                    })?,
+                let Some(content) = self.intent_content.as_deref() else {
+                    return Err(hydration_failure("intent_signing_not_configured", index));
+                };
+                let Ok(digest) = job.fingerprint() else {
+                    return Err(hydration_failure("request_invalid", index));
+                };
+                let signed = tokio::time::timeout_at(
+                    deadline,
+                    content.finalize_original_code_intent(
+                        &self.authority,
+                        visit,
+                        *activation,
+                        digest,
+                        profile.client.audience(),
+                        job,
+                        None,
+                        None,
+                    ),
                 )
+                .await;
+                match signed {
+                    Err(_) => return Err(hydration_unconfirmed("intent_deadline", index)),
+                    Ok(Ok(signed)) => Some(signed),
+                    Ok(Err(error)) => match intent_disposition(&error) {
+                        IntentDisposition::Retry => {
+                            if tokio::time::Instant::now() >= deadline {
+                                return Err(hydration_unconfirmed(error.code(), index));
+                            }
+                            tokio::time::sleep_until(
+                                (tokio::time::Instant::now()
+                                    + code_timing::CODE_RECONCILE_INTERVAL)
+                                    .min(deadline),
+                            )
+                            .await;
+                            continue;
+                        }
+                        IntentDisposition::Fail(reason) => {
+                            return Err(hydration_failure(reason, index));
+                        }
+                    },
+                }
             } else {
                 None
             };
@@ -404,20 +425,26 @@ impl RemoteCodeRuntime {
                 index,
                 intent.as_deref(),
             );
-            match tokio::time::timeout_at(deadline, attempt)
-                .await
-                .map_err(|_| uncertain())?
-            {
-                Ok(true) => return Ok(()),
-                Ok(false) => {
+            match tokio::time::timeout_at(deadline, attempt).await {
+                Err(_) => return Err(hydration_unconfirmed("supervisor_deadline", index)),
+                Ok(Ok(true)) => return Ok(()),
+                Ok(Ok(false)) => {
                     index += 1;
+                    preconditions = 0;
                     continue;
                 }
-                Err(error) if retryable(&error) => {}
-                Err(error) => return Err(failed(&error.to_string())),
+                Ok(Err(error)) if retryable(&error) => {}
+                // A fresh grant is minted on every pass, so a precondition
+                // refusal can be an expired grant; a persistent one is real.
+                Ok(Err(SandboxCallError::Submission {
+                    code: tonic::Code::FailedPrecondition,
+                })) if preconditions < HYDRATION_PRECONDITION_RETRIES => preconditions += 1,
+                Ok(Err(error)) => {
+                    return Err(hydration_failure(hydration_reason(&error), index));
+                }
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(uncertain());
+                return Err(hydration_unconfirmed("supervisor_deadline", index));
             }
             tokio::time::sleep_until(
                 (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
@@ -425,6 +452,66 @@ impl RemoteCodeRuntime {
             .await;
         }
     }
+}
+
+/// Consecutive precondition refusals tolerated per hydration index.
+const HYDRATION_PRECONDITION_RETRIES: u8 = 3;
+
+#[derive(Debug, Eq, PartialEq)]
+enum IntentDisposition {
+    Retry,
+    Fail(&'static str),
+}
+
+/// A transient content or Main condition retries; the rest is a typed failure.
+fn intent_disposition(error: &crate::transport::InputContentError) -> IntentDisposition {
+    if error.retryable() {
+        IntentDisposition::Retry
+    } else {
+        IntentDisposition::Fail(error.code())
+    }
+}
+
+/// Neutral reason for a supervisor or authorization refusal. Owner text and
+/// payloads never enter the reason.
+fn hydration_reason(error: &SandboxCallError) -> &'static str {
+    match error {
+        SandboxCallError::Invalid => "request_invalid",
+        SandboxCallError::Authorization(_) | SandboxCallError::Rejected => "authorization_refused",
+        SandboxCallError::InvalidReceipt => "invalid_receipt",
+        SandboxCallError::Submission { code } => match code {
+            tonic::Code::FailedPrecondition => "supervisor_failed_precondition",
+            tonic::Code::InvalidArgument => "supervisor_invalid_argument",
+            tonic::Code::NotFound => "supervisor_not_found",
+            tonic::Code::AlreadyExists => "supervisor_already_exists",
+            tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
+                "supervisor_authority_refused"
+            }
+            tonic::Code::DataLoss => "supervisor_data_loss",
+            tonic::Code::Internal => "supervisor_internal",
+            _ => "supervisor_refused",
+        },
+    }
+}
+
+fn hydration_failure(reason: &'static str, index: usize) -> CodePreparationFailure {
+    tracing::warn!(
+        event = "code_hydration_failed",
+        reason,
+        index,
+        "Python dependency hydration failed"
+    );
+    CodePreparationFailure::Failed
+}
+
+fn hydration_unconfirmed(reason: &'static str, index: usize) -> CodePreparationFailure {
+    tracing::warn!(
+        event = "code_hydration_unconfirmed",
+        reason,
+        index,
+        "Python dependency hydration could not be confirmed"
+    );
+    CodePreparationFailure::Unconfirmed
 }
 
 /// Keep lookup, original reconciliation, and fresh acquisition in one tested flow.
@@ -918,5 +1005,77 @@ mod frozen_lookup_retry_tests {
             }
         }
         assert_eq!(PREPARATION_IDENTITY_PROBES_BUDGET, 1);
+    }
+}
+
+#[cfg(test)]
+mod hydration_reason_tests {
+    use super::*;
+    use crate::transport::InputContentError;
+
+    #[test]
+    fn transient_intent_errors_retry_and_the_rest_keep_a_typed_reason() {
+        for error in [
+            InputContentError::DependencyUnavailable("unavailable"),
+            InputContentError::Timeout("timeout"),
+        ] {
+            assert_eq!(intent_disposition(&error), IntentDisposition::Retry);
+        }
+        for (error, reason) in [
+            (
+                InputContentError::AuthorizationFailed("refused"),
+                "input_content.authorization_failed",
+            ),
+            (
+                InputContentError::ResourceExhausted("large"),
+                "input_content.resource_exhausted",
+            ),
+            (
+                InputContentError::InvalidInput("shape"),
+                "input_content.invalid_response",
+            ),
+        ] {
+            assert_eq!(intent_disposition(&error), IntentDisposition::Fail(reason));
+        }
+    }
+
+    #[test]
+    fn supervisor_reasons_are_static_and_carry_no_owner_text() {
+        use tonic::Code;
+        for (error, reason) in [
+            (SandboxCallError::Invalid, "request_invalid"),
+            (SandboxCallError::Rejected, "authorization_refused"),
+            (SandboxCallError::InvalidReceipt, "invalid_receipt"),
+            (
+                SandboxCallError::Submission {
+                    code: Code::FailedPrecondition,
+                },
+                "supervisor_failed_precondition",
+            ),
+            (
+                SandboxCallError::Submission {
+                    code: Code::DataLoss,
+                },
+                "supervisor_data_loss",
+            ),
+            (
+                SandboxCallError::Submission { code: Code::Unknown },
+                "supervisor_refused",
+            ),
+        ] {
+            assert_eq!(hydration_reason(&error), reason);
+        }
+    }
+
+    #[test]
+    fn hydration_failures_settle_as_the_typed_preparation_failure() {
+        assert_eq!(
+            hydration_failure("supervisor_data_loss", 3).code(),
+            "pipeline.code_preparation_failed"
+        );
+        assert_eq!(
+            hydration_unconfirmed("supervisor_deadline", 3).code(),
+            "pipeline.code_preparation_unconfirmed"
+        );
     }
 }

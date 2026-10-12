@@ -336,17 +336,17 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         if selected.is_none()
             && let Some(bundle) = &bundle
         {
-            observe(
-                trace.as_ref(),
-                CodePhase::Hydration,
+            observe(trace.as_ref(), CodePhase::Hydration, async {
                 self.hydrate_python_dependencies(
                     profile,
                     &invocation.activation,
                     &job,
                     bundle,
                     None,
-                ),
-            )
+                )
+                .await
+                .map_err(super::code_runtime::CodePreparationFailure::graph_error)
+            })
             .await?;
         }
         // Hydration remains inert and has its own fixed observation budget.

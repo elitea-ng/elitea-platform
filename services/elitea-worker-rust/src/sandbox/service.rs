@@ -371,7 +371,15 @@ impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for Supervi
             .supervisor
             .hydrate_authorized(&authorization, &prepared, delivery, &bundle, input.index)
             .await
-            .map_err(|error| service_error(&error))?;
+            .map_err(|error| {
+                tracing::warn!(
+                    event = "sandbox_hydration_refused",
+                    reason = supervisor_error_reason(&error),
+                    index = input.index,
+                    "dependency hydration was refused"
+                );
+                service_error(&error)
+            })?;
         Ok(Response::new(HydrateSandboxDependenciesResponseV1 {
             ready,
         }))
@@ -578,6 +586,24 @@ fn response(outcome: Reconciliation) -> Result<SubmitSandboxJobResponseV1, Statu
         failure_code: record.failure_code.unwrap_or_default(),
         cleanup_pending,
     })
+}
+
+/// Neutral, static reason for the operator log. No owner text or payload.
+fn supervisor_error_reason(error: &SupervisorError) -> &'static str {
+    match error {
+        SupervisorError::Invalid => "grant_or_policy_mismatch",
+        SupervisorError::Busy => "capacity",
+        SupervisorError::Ledger(LedgerError::Conflict) => "ledger_conflict",
+        SupervisorError::Ledger(LedgerError::Fenced) => "lease_fenced",
+        SupervisorError::Ledger(LedgerError::Missing) => "job_missing",
+        SupervisorError::Ledger(LedgerError::Invalid) | SupervisorError::Receipt => {
+            "receipt_invalid"
+        }
+        SupervisorError::Ledger(LedgerError::SchemaMigrationRequired(_)) => "schema_migration",
+        SupervisorError::Ledger(LedgerError::Database(_)) => "persistence_unavailable",
+        SupervisorError::Content(_) => "content_unavailable",
+        SupervisorError::Runtime(_) => "runtime_unobservable",
+    }
 }
 
 fn service_error(error: &SupervisorError) -> Status {

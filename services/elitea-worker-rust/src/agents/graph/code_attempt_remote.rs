@@ -302,7 +302,10 @@ impl RemoteCodeRuntime {
                         Some(&original_visit),
                     )
                     .await
-                    .map_err(|_| before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown))
+                    .map_err(|failure| {
+                        before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown)
+                            .with_preparation_failure(failure)
+                    })
                 },
                 |_| before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown),
             )
