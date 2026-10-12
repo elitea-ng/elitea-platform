@@ -431,6 +431,37 @@ Suites (2026-10-12): Main `go build ./...`, `go vet`, and `go test` for `interna
 
 **Real-browser proof: pending** on the rebuilt stack (pipeline 138, answer card 1, reload). Fixture: the existing pipeline 138 and agent 137 rows on the deployed stack; how they were created is not re-verified here.
 
+#### Part J, second residual: the original-input lookup never ran on PostgreSQL
+
+On the rebuilt stack the same flow (pipeline 138, chat 933, answer card 1) still answered 422, now with a named reason: `original source restore: saved child scope is not authorized`. It was not a child check. The name came from `scope.ErrDenied`, the one sentinel the root owner returned for every failure, and the deployed trigger was the first statement of the restore, not the comparison fixed above.
+
+| Step | Path |
+|---|---|
+| The lookup compared the INTEGER column `execution_jobs.resource_project_id` with `$1::bigint::text`. PostgreSQL refuses it (`operator does not exist: integer = text`) | `services/elitea-main/internal/infra/db/repos/execution_source_definitions.go` `RestoreOriginalRootContinuation` (SQL: `j.resource_project_id=$1::integer`, `j.actor_id` stays text) |
+| The query error was returned as `scope.ErrDenied`, so an outage or a broken statement read as an authorization refusal | same function: a failed query or cursor is now `scope.ErrUnavailable`; the cause goes to the log, never to the caller; a missing or second row stays `ErrDenied` |
+| Why no test saw it | the only tests of this function use a scripted store that never parses the SQL; the statement had never run on a database since `f8a1499d1` (2026-10-05) |
+
+Evidence on the deployed data (read-only): the response message `bf7bacc5-998e-5380-a039-9cbd9db195bf` has exactly one `chat_predict` row for its stream and generation; the root source receipt and captured definition join and `DecodeSourceWire` verifies for project 2, actor 3; `originalContinuationApplicationTools` yields the one admitted handle (agent 137 version 144); `restoreOriginalApplicationHandles` accepts that handle against the captured pipeline. The same statement with the integer cast returns that one row. Every later step of the restore therefore passes for this data; the cast was the only failure.
+
+Authorization is unchanged and strict: the lookup still binds the actor, the project, the stream, the response message and the generation, and requires exactly one original. A foreign actor, a foreign project, another stream, message or generation each stay `ErrDenied`.
+
+**Web (same flow, second layer).** The 422 still showed "no chat connection is available" because `continueStreamedExecution` in `useChatBoxSend.ts` returned the route's answer only for the static contract; every other contract went through the boolean `resume`, so a rejected outcome reached the handlers as `no-transport` and `useChatBoxHandlers.ts` `continueHitl` (fixed in `acd0cf4fd`) never saw `rejected`. The served bundle (`usePipelineEditorLifecycle-7eKhspa5.js`) contains the `acd0cf4fd` handler change and the boolean collapse together. The same collapse hid refusals of the authorization and output-limit resumes. `continueStreamedExecution` now returns `resumeDetailed` for every contract. A 404 or 405 is still `no-transport`, so the socket fallback is unchanged; any other HTTP status, an auth failure, a network failure or a cancel is now `rejected`, as on the start path.
+
+**Tests (second residual).**
+
+| Case | Test | Result |
+|---|---|---|
+| Real, migrated PostgreSQL: the admitted saved pipeline restores (source reference, project, actor, one application handle) | `execution_source_continuation_postgres_integration_test.go` `TestPostgresOriginalRootContinuationRestoresTheAdmittedSavedPipeline` | passes; fails on the old SQL with the observed error |
+| Another actor, project, stream, message or generation is refused as `ErrDenied` and returns nothing | `TestPostgresOriginalRootContinuationRefusesEveryOtherRelation` (5 cases) | pass |
+| A statement that cannot run is `ErrUnavailable`, not `ErrDenied`, and the error text carries no SQL | `TestPostgresOriginalRootContinuationReportsABrokenLookupAsUnavailable` | passes; fails on the old code |
+| Web: a 422 on the HITL, authorization and output-limit resumes reaches the caller as `rejected` with the server's message; 404 stays `no-transport`; 200 is `started` | `useChatBoxSend.runEvents.test.tsx` `a resume the continuation route answers` (4 tests, real transport and `msw`) | pass; the first three fail on the old code |
+
+Suites: Main build and vet clean; `internal/application/agentexecution` 221 passed, `internal/api/v2/agentexecution` 59, `internal/runtimecomposition` 279 (10 skipped, as before), `internal/infra/db/repos` 446 passed with 566 skipped without a database (the three new tests run only with `ELITEA_TEST_DATABASE_URL`, run here against `pgvector/pgvector:0.8.1-pg18-trixie`; the whole package passed there in 82 s). Web `tsc --noEmit` clean, `oxlint --deny-warnings` clean on the changed files, `src/widgets/chat-box` 31 files and 350 tests passed.
+
+**Recovery class.** unchanged from Part J (F before, R after) for this flow; the refusal now also names an outage as unavailable.
+
+**Not verified.** The continued run itself (Worker side) and a real-browser answer on the rebuilt stack; both need the fixed Main and Web images deployed, which this change does not do. `unsupportedCurrentAgentStart` still maps `ErrUnavailable` to the same 422 as a refusal; a 5xx for an unavailable owner would need a route change.
+
 ## Review fixes (code review of PR #1084)
 
 A read-only review of parts A to I found nine items. This section records the fix for each, with the evidence. Part J above is a separate change.
