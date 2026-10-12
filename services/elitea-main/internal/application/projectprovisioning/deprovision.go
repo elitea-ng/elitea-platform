@@ -1262,10 +1262,10 @@ WHERE project_id = $1 AND completed_at IS NULL`, projectID); err != nil {
 // backoff (deletionRetryBase doubling per failed run, capped at
 // deletionRetryMax) when a failed step takes it, a fixed pause when every step
 // asked for one (the longest, for an identity the store refused; the rest of
-// the settle, for the vector step's planned wait). A run with FAILED steps
-// counts one attempt and names them in last_error (names only: a raw error can
-// carry SQL or addresses); a run that left only planned waits counts nothing
-// and clears last_error. It reports whether the row is now complete.
+// the settle, for the vector step's planned wait). A run that completes the
+// row or leaves FAILED steps counts one attempt (failed steps are named in
+// last_error, names only: a raw error can carry SQL or addresses); a run that
+// left only planned waits counts nothing and clears last_error. It reports whether the row is now complete.
 func (p *Provisioner) finishCleanupRun(runCtx context.Context, projectID int64, closing runClose) bool {
 	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
@@ -1292,7 +1292,7 @@ func (p *Provisioner) finishCleanupRun(runCtx context.Context, projectID int64, 
 	// reads the row's value before this run's increment.
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
-SET attempts = attempts + CASE WHEN $2::text IS NULL THEN 0 ELSE 1 END,
+SET attempts = attempts + CASE WHEN $3::boolean OR $2::text IS NOT NULL THEN 1 ELSE 0 END,
     last_error = $2::text,
     completed_at = CASE WHEN $3::boolean THEN clock_timestamp() END,
     next_attempt_at = CASE WHEN $3::boolean THEN next_attempt_at
