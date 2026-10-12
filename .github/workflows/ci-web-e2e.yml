@@ -685,7 +685,7 @@ jobs:
     # keeps that distinction — every leg here is the native runtime, and the
     # job name says which slice of the suite it ran.
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       # THREE SHARDS, not four. The same `--workers=1` argument as
       # `chat-stream` applies (same script, same persona, same four-stream
@@ -872,7 +872,7 @@ jobs:
     # job in this workflow now carries one; this is the one whose upstream
     # can hang.
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
