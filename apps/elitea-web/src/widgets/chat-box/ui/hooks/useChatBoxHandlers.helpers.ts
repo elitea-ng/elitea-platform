@@ -154,8 +154,6 @@ export type StreamStartOutcome =
   | { readonly started: false; readonly reason: 'no-transport' }
   | { readonly started: false; readonly reason: 'retry-later' }
   | { readonly started: false; readonly reason: 'rejected'; readonly message: string };
-/** The run is live server-side; the SSE transport owns it. */
-export const STREAM_STARTED: StreamStartOutcome = { started: true };
 /** No REST start happened; the socket emit is the fallback. */
 export const NO_STREAM_TRANSPORT: StreamStartOutcome = { started: false, reason: 'no-transport' };
 /**

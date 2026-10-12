@@ -39,10 +39,11 @@ const OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Elitea-owned crates whose events are reviewed for field safety. The Worker
 /// and the libraries it hosts (ADR-0027) share one level; every other crate
 /// stays off.
-pub(crate) const OWNED_TARGETS: [&str; 3] = [
+pub(crate) const OWNED_TARGETS: [&str; 4] = [
     "elitea_worker_rust",
     "elitea_agent_runtime",
     "elitea_vector_index",
+    "elitea_connectors",
 ];
 
 /// Process-level tracing setup failures with no environment contents exposed.
@@ -391,15 +392,15 @@ mod tests {
     fn tracing_level_is_crate_scoped_and_rejects_directives() {
         assert_eq!(
             tracing_directive(None).expect("default tracing directive"),
-            "elitea_worker_rust=info,elitea_agent_runtime=info,elitea_vector_index=info"
+            "elitea_worker_rust=info,elitea_agent_runtime=info,elitea_vector_index=info,elitea_connectors=info"
         );
         assert_eq!(
             tracing_directive(Some(" DEBUG ")).expect("debug tracing directive"),
-            "elitea_worker_rust=debug,elitea_agent_runtime=debug,elitea_vector_index=debug"
+            "elitea_worker_rust=debug,elitea_agent_runtime=debug,elitea_vector_index=debug,elitea_connectors=debug"
         );
         assert_eq!(
             trace_directive(Some("warn")).expect("warn trace directive"),
-            "elitea_worker_rust=warn,elitea_agent_runtime=warn,elitea_vector_index=warn"
+            "elitea_worker_rust=warn,elitea_agent_runtime=warn,elitea_vector_index=warn,elitea_connectors=warn"
         );
         assert_eq!(
             tracing_directive(Some("trace,hyper=trace")),

@@ -77,11 +77,23 @@ func validIndexID(value string) bool {
 }
 
 // Families are the toolkit types whose Rust families carry the index tools:
-// the I1 five (ADR-0030: artifact, github, gitlab, bitbucket, ado_repos) and
-// the I2 families whose connectors have landed (confluence, jira). A catalog
-// is frozen only for these; the other indexing families wait for the rest of
-// I2 and for I3 and keep the SDK worker's index tools until then.
-var Families = []string{"ado_repos", "artifact", "bitbucket", "confluence", "github", "gitlab", "jira"}
+// stage I1 (ADR-0030: artifact, github, gitlab, bitbucket, ado_repos) and the
+// I2 families (confluence, jira, sharepoint, ado_wiki, ado_boards, ado_plans). A
+// catalog is frozen only for these; the other indexing families wait for
+// I2/I3 and keep the SDK worker's index tools until then.
+var Families = []string{
+	"ado_boards",
+	"ado_plans",
+	"ado_repos",
+	"ado_wiki",
+	"artifact",
+	"bitbucket",
+	"confluence",
+	"github",
+	"gitlab",
+	"jira",
+	"sharepoint",
+}
 
 // Family reports whether toolkitType is a Rust-indexed family.
 func Family(toolkitType string) bool {

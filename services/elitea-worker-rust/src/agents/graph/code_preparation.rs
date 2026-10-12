@@ -1059,7 +1059,9 @@ mod hydration_reason_tests {
                 "supervisor_data_loss",
             ),
             (
-                SandboxCallError::Submission { code: Code::Unknown },
+                SandboxCallError::Submission {
+                    code: Code::Unknown,
+                },
                 "supervisor_refused",
             ),
         ] {

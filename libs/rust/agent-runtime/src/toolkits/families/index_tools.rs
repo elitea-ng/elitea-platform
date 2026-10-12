@@ -59,17 +59,28 @@ const MAX_DIMENSION: u64 = 65_536;
 const MAX_SELECTED_TOOLS: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
-/// The toolkit types whose families carry the index tools in stage I1.
-pub const I1_INDEX_FAMILIES: [&str; 5] = ["ado_repos", "artifact", "bitbucket", "github", "gitlab"];
-/// The I2 Atlassian families: indexed by the Rust worker since the Confluence
-/// and Jira connectors landed (ADR-0030 decision 7).
-pub const I2_ATLASSIAN_INDEX_FAMILIES: [&str; 2] = ["confluence", "jira"];
+/// The toolkit types whose families carry the index tools: stage I1 and stage
+/// I2 (ADR-0030). Elitea-main's `indexcatalog.Families` and the worker's
+/// `SERVED_TOOLKIT_TYPES` list the same types; all three are tested against
+/// `index_served_families.json`.
+pub const INDEX_FAMILIES: [&str; 11] = [
+    "ado_boards",
+    "ado_plans",
+    "ado_repos",
+    "ado_wiki",
+    "artifact",
+    "bitbucket",
+    "confluence",
+    "github",
+    "gitlab",
+    "jira",
+    "sharepoint",
+];
 
-/// Whether `toolkit_type` is a family the Rust worker indexes (I1, and the
-/// I2 families whose connectors exist).
+/// Whether `toolkit_type` is a Rust-indexed family (I1 and I2).
 #[must_use]
 pub fn is_index_family(toolkit_type: &str) -> bool {
-    I1_INDEX_FAMILIES.contains(&toolkit_type) || I2_ATLASSIAN_INDEX_FAMILIES.contains(&toolkit_type)
+    INDEX_FAMILIES.contains(&toolkit_type)
 }
 
 /// Whether `name` is one of the SDK's six index tool names (`index_data`

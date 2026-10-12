@@ -365,7 +365,11 @@ mod tests {
         )
         .await;
         assert!(matches!(outcome, Ok(7)));
-        assert_eq!(finished.load(Ordering::SeqCst), 1, "the step reached its boundary");
+        assert_eq!(
+            finished.load(Ordering::SeqCst),
+            1,
+            "the step reached its boundary"
+        );
         assert!(!tracker.interrupted());
         assert!(!tracker.in_flight());
     }
@@ -392,7 +396,10 @@ mod tests {
         )
         .await;
         assert!(matches!(outcome, Ok(7)));
-        assert!(tracker.interrupted(), "a step dropped mid-flight is unknown");
+        assert!(
+            tracker.interrupted(),
+            "a step dropped mid-flight is unknown"
+        );
         assert!(!tracker.in_flight());
         assert_eq!(dropped.load(Ordering::SeqCst), 1);
     }
