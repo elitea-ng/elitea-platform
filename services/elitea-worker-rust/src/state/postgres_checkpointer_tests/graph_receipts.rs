@@ -367,3 +367,62 @@ async fn postgres_graph_receipts_append_compares_latest_parent_and_unchanged_fro
             .is_none()
     );
 }
+
+/// The turn checkpointer restamps every append with the executing turn. The first receipt revision
+/// of a resumed execution therefore differs from its stored parent in the stamp alone, and that is
+/// not a change to the graph frontier.
+#[tokio::test]
+async fn postgres_graph_receipt_append_ignores_the_turn_stamp_and_nothing_else() {
+    let Some(database) = required_database().await else {
+        return;
+    };
+    let owner = Arc::new(
+        PostgresCheckpointer::activate(
+            database.pool.clone(),
+            writer("execution-1", "claim-1", 1, 1, [0x42; 32], [0x62; 32]),
+            CheckpointLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap(),
+    );
+    let mut original = checkpoint("stamped-frontier", "2026-10-02T10:00:00Z", 2);
+    original.metadata.insert(
+        "elitea.pipeline.execution.v1".to_owned(),
+        json!(["execution-1", 1]),
+    );
+    owner.save(&original).await.unwrap();
+    let capture = CaptureAppend {
+        inner: owner.clone(),
+        candidate: Mutex::new(None),
+    };
+    prepare(&capture, "review").await;
+    let revision = capture.candidate.lock().await.take().unwrap();
+
+    // Another metadata key changing is a frontier change and still conflicts.
+    let mut forged = revision.clone();
+    forged.metadata.insert("route".to_owned(), json!("forged"));
+    forged.metadata.insert(
+        "elitea.pipeline.execution.v1".to_owned(),
+        json!(["execution-2", 1]),
+    );
+    assert!(matches!(
+        owner.save(&forged).await,
+        Err(GraphError::CheckpointError(message)) if message.starts_with("checkpoint.conflict:")
+    ));
+
+    // A later execution restamps the same revision and it appends.
+    let mut restamped = revision;
+    restamped.metadata.insert(
+        "elitea.pipeline.execution.v1".to_owned(),
+        json!(["execution-2", 1]),
+    );
+    owner.save(&restamped).await.unwrap();
+    let latest = owner.load("thread-1").await.unwrap().unwrap();
+    assert_eq!(latest.checkpoint_id, restamped.checkpoint_id);
+    assert_eq!(
+        latest.metadata.get("elitea.pipeline.execution.v1"),
+        Some(&json!(["execution-2", 1]))
+    );
+    unchanged_frontier(&original, &latest);
+}

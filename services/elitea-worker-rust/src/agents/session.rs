@@ -1197,7 +1197,8 @@ async fn activate_pipeline_postgres(
         Arc::clone(&state_writer_lease),
     )
     .await
-    .map_err(|error| session_activation_error(&error))?;
+    .map_err(|error| session_activation_error(&error))?
+    .with_replay_equivalence(super::pipeline::scoped_applications::canonical_replay_form);
     let checkpointer = PostgresCheckpointer::activate(
         pool.clone(),
         checkpoint_writer,
@@ -1817,6 +1818,23 @@ async fn resolve_pipeline_start(
                     plan.session_id.as_ref(),
                 )
                 .map_err(projection_configuration)?;
+                // Every paused sibling is decided in one resume, on either resolver: a partial
+                // set would run the approved siblings and then fail mid-stream on the rest.
+                let expected = binding
+                    .interrupt_ids()
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<std::collections::BTreeSet<_>>();
+                let submitted = decisions
+                    .iter()
+                    .map(ResolvedDirectHitlDecision::interrupt_id)
+                    .collect::<std::collections::BTreeSet<_>>();
+                if submitted != expected {
+                    return Err(NativeAgentAssemblyError::new(
+                        NativeAgentAssemblyErrorCode::InvalidInput,
+                        "the checkpointed pipeline decision was rejected",
+                    ));
+                }
                 if let Some(scopes) = application_scopes {
                     scopes
                         .install_root_continuation(
@@ -1828,22 +1846,7 @@ async fn resolve_pipeline_start(
                         )
                         .await?;
                 } else {
-                    // Preserve the legacy path's all-decisions rule and coordinator ownership.
-                    let expected = binding
-                        .interrupt_ids()
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<std::collections::BTreeSet<_>>();
-                    let submitted = decisions
-                        .iter()
-                        .map(ResolvedDirectHitlDecision::interrupt_id)
-                        .collect::<std::collections::BTreeSet<_>>();
-                    if submitted != expected {
-                        return Err(NativeAgentAssemblyError::new(
-                            NativeAgentAssemblyErrorCode::InvalidInput,
-                            "the checkpointed pipeline decision was rejected",
-                        ));
-                    }
+                    // The legacy resolver keeps its coordinator ownership.
                     let coordinator = application_resume.ok_or_else(invalid_configuration)?;
                     install_nested_application_resume(
                         &events,

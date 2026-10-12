@@ -524,6 +524,21 @@ pub(crate) fn stamp_root_scope_projection(
     }
     Ok(())
 }
+/// An application event with the routing context of the invocation that re-sent it removed.
+///
+/// A resumed graph re-emits the original events of the calls it owns (start, leaf start, result)
+/// under their original id, content and timestamp, routed to the CURRENT root invocation: the
+/// root projection stamp and the descendant container edge name that invocation. Both are
+/// presentation routing, never identity or authority, so a stored event and its re-send are the
+/// same event when they agree after removing them.
+pub(crate) fn canonical_replay_form(event: &mut Event) {
+    for key in [
+        PIPELINE_ROOT_PROJECTION_METADATA_KEY,
+        DESCENDANT_CONTAINER_INVOCATION_KEY,
+    ] {
+        event.provider_metadata.remove(key);
+    }
+}
 pub(crate) fn project_root_scope_event(
     event: &Event,
     expected: Option<&str>,
@@ -2115,6 +2130,44 @@ mod tests {
         let mut mismatched = originals.clone();
         mismatched[1].branch = format!("{APPLICATION_BRANCH_ROOT}.application_99");
         assert!(scope_local_events(&mismatched, &activation, &branch, "thread-1").is_err());
+    }
+    #[test]
+    fn replay_canonical_form_removes_the_current_routing_and_nothing_else() {
+        let (registry, _, _) = registry();
+        let activation = registry.activation("", "thread-1", "delegate", 7).unwrap();
+        let original = call(&activation);
+        let mut replay = original.clone();
+        stamp_root_scope_projection(&mut replay, &original.invocation_id, "resumed-root").unwrap();
+        replay.provider_metadata.insert(
+            DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+            "resumed-root".to_owned(),
+        );
+        assert_ne!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&original).unwrap()
+        );
+        let mut canonical_replay = replay.clone();
+        let mut canonical_original = original.clone();
+        canonical_replay_form(&mut canonical_replay);
+        canonical_replay_form(&mut canonical_original);
+        assert_eq!(
+            serde_json::to_value(&canonical_replay).unwrap(),
+            serde_json::to_value(&canonical_original).unwrap()
+        );
+        // The activation receipt, call identity and every other key survive.
+        assert!(
+            canonical_replay
+                .provider_metadata
+                .contains_key(PIPELINE_APPLICATION_SCOPE_METADATA_KEY)
+        );
+        replay
+            .provider_metadata
+            .insert("lineage".to_owned(), "forged".to_owned());
+        canonical_replay_form(&mut replay);
+        assert_ne!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&canonical_original).unwrap()
+        );
     }
     #[test]
     fn root_projection_preserves_original_activation_and_rebinds_only_transient_routes() {

@@ -78,12 +78,14 @@ use crate::transport::model_facade::{
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use crate::transport::runtime_context::SavedAgentFingerprint;
-pub(super) use materialization::ApplicationMaterializationPath;
+#[cfg(test)]
+pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
+pub(super) use materialization::{ApplicationContinuation, ApplicationMaterializationPath};
 pub(crate) use static_resume::{
     install_static_application_resume, prepare_static_application_resume,
 };
 
-const MAX_APPLICATION_HOPS: usize = 25;
+pub(in crate::agents) const MAX_APPLICATION_HOPS: usize = 25;
 /// The one child `agent_type` this worker compiles as a nested `LlmAgent`.
 const SUPPORTED_APPLICATION_AGENT_TYPE: &str = "agent";
 /// The child `agent_type` compiled as a checkpointed graph tool (#973).
@@ -3080,7 +3082,9 @@ impl ApplicationAssemblyState<'_> {
         frozen: &AdmittedToolSnapshot<'_>,
         profile: &OrdinaryNoToolProfile,
     ) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
-        if !self.materialization.scoped_ready() {
+        // A conversation an older worker left paused never offered nested pipeline attachments;
+        // its Agent keeps the tool set it paused with.
+        if !self.materialization.is_scoped() {
             return Ok(Vec::new());
         }
         if self.conversation_thread_id.is_none()

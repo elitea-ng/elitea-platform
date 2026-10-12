@@ -26,6 +26,8 @@ pub(crate) use map_authority::PipelineMapReceiptAuthority;
 
 pub(crate) const GRAPH_CALL_RECEIPTS_METADATA_KEY: &str = "elitea.pipeline.graph-calls.v1";
 pub(crate) const GRAPH_CALL_REVISION_METADATA_KEY: &str = "elitea.pipeline.graph-call-revision.v1";
+/// Written by `elitea_agent_runtime::graph::turn_checkpointer::TurnCheckpointer` on every append.
+const TURN_EXECUTION_METADATA_KEY: &str = "elitea.pipeline.execution.v1";
 const REVISION_SCHEMA: &str = "elitea.pipeline.graph-call-revision.v1";
 const RECEIPTS_SCHEMA: &str = "elitea.pipeline.graph-calls.v1";
 const MAX_RECEIPT_BYTES: usize = 256 * 1024;
@@ -144,10 +146,14 @@ pub(crate) fn receipt_revision_parent(
 fn graph_frontier(checkpoint: &Checkpoint) -> Result<Value, GraphError> {
     let mut core = checkpoint.clone();
     core.checkpoint_id.clear();
-    // Revision ID/time describe the append, not a change to graph execution state.
+    // Revision ID/time describe the append, not a change to graph execution state. So does the
+    // turn stamp: it names the execution that WROTE a checkpoint, and the turn checkpointer
+    // restamps every append with the executing turn. A resumed execution therefore appends the
+    // first receipt revision of a thread whose latest checkpoint an earlier execution wrote.
     core.created_at = chrono::DateTime::UNIX_EPOCH;
     core.metadata.remove(GRAPH_CALL_RECEIPTS_METADATA_KEY);
     core.metadata.remove(GRAPH_CALL_REVISION_METADATA_KEY);
+    core.metadata.remove(TURN_EXECUTION_METADATA_KEY);
     serde_json::to_value(core).map_err(|_| receipt_error())
 }
 

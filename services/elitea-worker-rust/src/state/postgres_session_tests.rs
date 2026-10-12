@@ -1135,3 +1135,112 @@ fn caused_by_lock_timeout(error: &adk_rust::AdkError) -> bool {
     }
     false
 }
+
+fn drop_routing(event: &mut Event) {
+    event.provider_metadata.remove("routing");
+}
+
+#[tokio::test]
+async fn a_routing_only_replay_of_a_stored_event_is_idempotent_and_any_other_change_conflicts() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL session replay test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_schema(&database.pool).await;
+    let service = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-replay", 1, 1, [0x31; 32]),
+        SessionLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate session writer")
+    .with_replay_equivalence(drop_routing);
+    let session = service
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: Some("session-1".to_owned()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("create durable session");
+    let identity = session.try_identity().expect("typed session identity");
+    let mut original = Event::with_id("original-call", "invocation-1");
+    original.timestamp = Utc.timestamp_nanos(1_700_000_000_123_456_789);
+    original.author = "elitea-agent".to_owned();
+    original.llm_response.content = Some(Content::new("model").with_text("start"));
+    original
+        .provider_metadata
+        .insert("routing".to_owned(), "invocation-1".to_owned());
+    let append = |event: Event| {
+        service.append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event,
+        })
+    };
+    append(original.clone()).await.expect("append original");
+
+    // The resumed graph re-sends the same event routed to its own invocation.
+    let mut replay = original.clone();
+    replay
+        .provider_metadata
+        .insert("routing".to_owned(), "invocation-2".to_owned());
+    append(replay.clone())
+        .await
+        .expect("routing-only replay is idempotent");
+
+    // Anything outside the routing context is still a conflict.
+    let mut other_content = replay.clone();
+    other_content.llm_response.content = Some(Content::new("model").with_text("changed"));
+    assert_eq!(
+        append(other_content)
+            .await
+            .expect_err("changed content")
+            .code,
+        "session.event_conflict"
+    );
+    let mut other_timestamp = replay.clone();
+    other_timestamp.timestamp = Utc.timestamp_nanos(1_700_000_001_000_000_000);
+    assert_eq!(
+        append(other_timestamp)
+            .await
+            .expect_err("changed timestamp")
+            .code,
+        "session.event_conflict"
+    );
+    let mut other_metadata = replay;
+    other_metadata
+        .provider_metadata
+        .insert("lineage".to_owned(), "forged".to_owned());
+    assert_eq!(
+        append(other_metadata)
+            .await
+            .expect_err("changed lineage")
+            .code,
+        "session.event_conflict"
+    );
+
+    // The stored event stays the original, and there is exactly one.
+    let restored = service
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("restore session");
+    assert_eq!(restored.events().len(), 1);
+    assert_eq!(
+        restored
+            .events()
+            .at(0)
+            .and_then(|event| event.provider_metadata.get("routing")),
+        Some(&"invocation-1".to_owned())
+    );
+
+    database.pool.close().await;
+}
