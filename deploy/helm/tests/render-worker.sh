@@ -105,7 +105,9 @@ policy = json.loads(cm["data"]["toolkit-security.json"])
 # production.rs refuses a document without this key, even an empty one.
 assert "toolkit_security" in policy, policy
 # The same rule the Python worker reads from ELITEA_SENSITIVE_TOOLS, decoded.
-assert policy["toolkit_security"]["sensitive_tools"] == {"*": ["delete_file"]}, policy
+# `remove_index` (the indexing families' index delete, ADR-0030 I1) needs a
+# human's approval like `delete_file` does.
+assert policy["toolkit_security"]["sensitive_tools"] == {"*": ["delete_file", "remove_index"]}, policy
 
 # The environment is the OTHER half of the branch, and asserting only the
 # argument list left it uncovered: a first draft of this file passed while the
@@ -136,7 +138,7 @@ assert c["args"] == ["serve", "--config", "/run/elitea/runtime.json"], c["args"]
 assert c["image"].startswith("ghcr.io/elitea-ng/elitea-worker-python:"), c["image"]
 
 env = {e["name"]: e.get("value") for e in c["env"]}
-assert env["ELITEA_SENSITIVE_TOOLS"] == '{"*":["delete_file"]}', env
+assert env["ELITEA_SENSITIVE_TOOLS"] == '{"*":["delete_file","remove_index"]}', env
 # SDK settings. The Rust worker reads neither name, so they must not follow it.
 assert env["ELITEA_DISABLE_SYSTEM_CA"] == "1", env
 assert "REQUESTS_CA_BUNDLE" in env, env

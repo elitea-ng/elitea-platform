@@ -29,7 +29,7 @@
 // `blocked_tools`: `find_sensitive_tool_match` falls back to `_sensitive_tools['*']`,
 // while `is_tool_blocked` only ever looks up the exact canonical toolkit key.
 // That asymmetry is preserved here deliberately. The shipped compose files set
-// `ELITEA_SENSITIVE_TOOLS='{"*":["delete_file"]}'`, so the sensitive wildcard is
+// `ELITEA_SENSITIVE_TOOLS='{"*":["delete_file","remove_index"]}'`, so the sensitive wildcard is
 // load-bearing; inventing a blocked-tools wildcard the worker does not honour
 // would block in the catalogue what still executes at runtime.
 package guardrails

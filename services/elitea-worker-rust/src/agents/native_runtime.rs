@@ -100,6 +100,17 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         self
     }
 
+    /// Lend the indexing runtime to both modes (ADR-0030 I1).
+    #[must_use]
+    pub(crate) fn with_index_runtime(
+        mut self,
+        index_runtime: Option<Arc<crate::indexing::IndexIngestRuntime>>,
+    ) -> Self {
+        self.direct = self.direct.with_index_runtime(index_runtime.clone());
+        self.pipeline = self.pipeline.with_index_runtime(index_runtime);
+        self
+    }
+
     /// Compose both native modes over the same authorized `agentstate` pool.
     ///
     /// Direct agents consume only the session writer. Pipelines consume a

@@ -291,7 +291,8 @@ impl ProductionAgentRuntime {
                 SessionLimits::default(),
                 CheckpointLimits::default(),
             )
-            .with_sandbox(sandbox),
+            .with_sandbox(sandbox)
+            .with_index_runtime(index_runtime.clone()),
         );
         let clock = Arc::new(SystemUnixMillisClock);
         let agent: ProductionAgentProcessor = native_agent_delivery_processor(

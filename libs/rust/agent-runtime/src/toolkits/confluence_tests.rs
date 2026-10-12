@@ -23,6 +23,7 @@ use super::families::confluence::config::{
 use super::families::confluence::tools::{
     ConfluenceToolsetErrorCode, build_confluence_toolset, test_build_with_api, test_catalog,
 };
+use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
 use super::materialize::{
     materialize_configured_toolsets_reporting_refusals, refused_toolkits_notice_text,
 };
@@ -1048,6 +1049,7 @@ async fn a_refused_setting_is_named_in_the_run_notice() {
         &policy(&[]),
         &Map::new(),
         None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
     )
     .await
     .expect("a refused toolkit does not fail the agent");

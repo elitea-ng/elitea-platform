@@ -24,6 +24,11 @@ pub(crate) mod gitlab;
 pub(crate) mod gitlab_org;
 pub(crate) mod google_places;
 pub(crate) mod https_base_url;
+// Public only to the worker's composition suites (`test-support`).
+#[cfg(any(test, feature = "test-support"))]
+pub mod index_tools;
+#[cfg(not(any(test, feature = "test-support")))]
+pub(crate) mod index_tools;
 pub(crate) mod jira;
 pub(crate) mod keycloak;
 pub(crate) mod kubernetes;

@@ -22,7 +22,7 @@ use crate::config::{
     RuntimeConfigError, RuntimeDeployConfig, read_regular_file, validate_private_directory,
 };
 use crate::protocol::command::SignedCommandAuthenticator;
-use crate::protocol::control::{AgentControlClient, AgentControlError};
+use crate::protocol::control::{AgentControlClient, AgentControlError, IndexRemovalControl};
 use crate::security::{RuntimeTrustError, RuntimeTrustMaterial};
 use crate::spool::SpoolMasterKey;
 use crate::transport::command_bus::CommandBusLimits;
@@ -316,7 +316,10 @@ impl ProductionTransportBundle {
                     ),
                     crate::indexing::IndexRunLimits::default(),
                 )
-                .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?,
+                .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
+                // The `remove_index` tool asks Main over the same control
+                // plane the claim came from (ADR-0030 I1).
+                .with_removal_control(Arc::clone(&control) as Arc<dyn IndexRemovalControl>),
             )),
             None => None,
         };

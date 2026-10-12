@@ -12,6 +12,7 @@ use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
 use super::families::UnsupportedSetting;
+use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
 use super::families::jira::client::{
     JiraApi, JiraClient, JiraClientError, JiraClientErrorCode, JiraHttpResponse, JiraOperation,
     JiraTransport,
@@ -1271,6 +1272,7 @@ async fn a_refused_setting_is_named_to_the_user_not_silently_skipped() {
         &policy(&[]),
         &Map::new(),
         None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
     )
     .await
     .expect("a refused toolkit does not fail the agent");

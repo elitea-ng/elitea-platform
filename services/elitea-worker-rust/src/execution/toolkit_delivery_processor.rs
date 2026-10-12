@@ -44,7 +44,7 @@ use crate::protocol::elitea::runtime::v1::{
 use crate::protocol::output::{RuntimeFailureKind, ToolkitExecuteReadTerminalOutput};
 use crate::toolkits::{
     DirectToolkitRequest, DirectToolkitRequestErrorCode, DirectToolkitRuntime,
-    DirectToolkitRuntimeErrorCode,
+    DirectToolkitRuntimeErrorCode, IndexToolSupport, IndexToolsWithheld,
 };
 use crate::transport::command_bus::{
     CommandBusError, CommandDelivery, CommandRetirementClient, CommandRetirer,
@@ -840,6 +840,43 @@ where
         request.map_err(|error| request_failure(error.code()))
     }
 
+    /// The index tools' authority for a `toolkit.call_tool.v1` run that
+    /// calls an index tool of a toolkit carrying an index catalog: this
+    /// worker's vector store, the claim's vector token and its redeemed
+    /// context, with no chat model (the step-back pair refuse here). Without
+    /// a vector store or token the authority is withheld with that reason,
+    /// and no context is redeemed.
+    async fn index_tool_authority(
+        &self,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+    ) -> Result<Result<crate::toolkits::IndexToolAuthority, IndexToolsWithheld>, RuntimeFailureKind>
+    {
+        let Some(runtime) = self.index_runtime.as_ref() else {
+            return Ok(Err(IndexToolsWithheld::NoVectorStore));
+        };
+        let Some(token) = authorized.execution().vector_token() else {
+            return Ok(Err(IndexToolsWithheld::NoVectorToken));
+        };
+        let context = lease
+            .run_pre_invocation(
+                self.platform
+                    .redeem_elitea_context(authorized.runtime_context()),
+            )
+            .await
+            .map_err(|error| lease_failure(&error))?
+            .map_err(|error| runtime_context_failure(&error))?;
+        Ok(Ok(crate::toolkits::IndexToolAuthority::new(Arc::new(
+            crate::indexing::tools::ClaimIndexToolHost::new(
+                Arc::clone(runtime),
+                token,
+                Arc::new(context),
+                None,
+                authorized.runtime_context().index_removal_binding(),
+            ),
+        ))))
+    }
+
     async fn execute_shared(
         &self,
         verified: &VerifiedToolkitExecuteReadCommand,
@@ -853,10 +890,30 @@ where
         if deadline_exceeded(verified, self.clock.as_ref()) {
             return Err(RuntimeFailureKind::DeadlineExceeded);
         }
+        // The index tools (ADR-0030 I1) act under this claim's vector token
+        // and its redeemed context (the query embedding), so the context is
+        // redeemed here — only when the call names an index tool of a
+        // toolkit that carries an index catalog (review round 1: a `github`
+        // `read_file` on such a toolkit does not), since the redemption is a
+        // platform round trip every other tool call does not need.
+        let index_tools = if is_call && request.calls_index_tool() {
+            self.index_tool_authority(authorized, lease).await?
+        } else {
+            Err(IndexToolsWithheld::NotRequested)
+        };
+        let index_tools = match index_tools.as_ref() {
+            Ok(authority) => IndexToolSupport::Lent(authority),
+            Err(reason) => IndexToolSupport::Withheld(*reason),
+        };
         let operation = async {
             if is_call {
                 self.runtime
-                    .execute_test(request, &command.execution_id, &command.command_id)
+                    .execute_test(
+                        request,
+                        &command.execution_id,
+                        &command.command_id,
+                        index_tools,
+                    )
                     .await
             } else {
                 self.runtime.discover(request).await

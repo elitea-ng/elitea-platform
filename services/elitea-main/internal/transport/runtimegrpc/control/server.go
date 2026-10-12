@@ -69,6 +69,10 @@ type ServerConfig struct {
 	// that fails does not fail the claim: the receipt carries no token, the
 	// failure is logged and counted, and only the worker's vector calls fail.
 	VectorTokens VectorTokenIssuer
+	// IndexRemovals, when set, serves RemoveIndex: the `remove_index` tool
+	// of the Rust worker's indexing families runs Main's index delete flow
+	// under the live claim (ADR-0030 I1). Nil answers UNSUPPORTED_CAPABILITY.
+	IndexRemovals IndexRemover
 	// Meter creates the control service's instruments; nil uses the global
 	// "elitea-main" meter.
 	Meter                  metric.Meter
