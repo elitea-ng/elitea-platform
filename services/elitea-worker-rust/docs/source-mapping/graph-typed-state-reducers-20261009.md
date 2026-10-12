@@ -127,7 +127,10 @@ reducer process-replacement proof therefore runs in every build. The shaping tes
 
 ## 3. Tests
 
-Final run on the branch merged with `origin/main` `84bdbb47e` (2026-10-12), with no feature flag:
+Full run on the branch merged with `origin/main` `84bdbb47e` (2026-10-12), with no feature flag. After a further merge
+of `0f8fea2fe` (#1197–#1199, #1258), the affected suites were re-run: Worker lib with all features and PG 1,890 passed,
+71 ignored; Worker reducer subset with default features 20 passed; `agent-runtime` 764 passed; fmt and clippy clean in
+both workspaces. That merge touches no Web file.
 
 | Suite | Result |
 |---|---|
@@ -355,10 +358,9 @@ parity test and the compile-time limit assertions. There is no runtime change.
 
 ## 10. Open limits and follow-ups
 
-1. **Worker log filter drops `elitea_agent_runtime` events** (`src/diagnostics.rs:211` builds `elitea_worker_rust=<level>`).
-   - The guard's refusal warning, and every other moved runtime module's logs, are invisible in deployed Workers.
-   - Found in browser case 3. It is pre-existing since the extraction and is not changed here.
-   - Proposed as a separate task.
+1. **Resolved by #1198 (merged into this branch on 2026-10-12): Worker log filter dropped `elitea_agent_runtime` events.**
+   The filter now includes the runtime crate, so the guard's refusal warning reaches the Worker logs. Browser case 3
+   (§8a) predates that fix.
 2. **The chat failure text is generic** ("The runtime operation failed.") until the Wave 2 failure catalogue, which
    lives in `protocol/output.rs` (touched by #1084). The typed code reaches the node failure only.
 3. **Web reducer editing** (`StateDrawer`, `dumpYaml`) waits for Wave 2. Until then the notice says the key is
