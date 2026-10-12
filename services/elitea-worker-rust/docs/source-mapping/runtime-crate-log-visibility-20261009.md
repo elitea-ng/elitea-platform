@@ -1,6 +1,6 @@
 # Runtime-crate log visibility (2026-10-09)
 
-Base: `main` at `f7c6a6028`. Closes follow-up 2 of
+Base: `main` at `f7c6a6028`; `main` merged again on 2026-10-12 (see "Update 2026-10-12"). Closes follow-up 2 of
 [`pipeline-artifact-toolkit-nodes-20261009.md`](pipeline-artifact-toolkit-nodes-20261009.md) ("the materializer's
 `agent_toolkit_skipped` warning comes from the `elitea_agent_runtime` crate, which the deployed `ELITEA_RUST_LOG`
 filter does not show").
@@ -30,7 +30,7 @@ lists only span names whose target starts with `elitea_worker_rust`, so runtime-
 
 | Path | Change |
 | --- | --- |
-| `services/elitea-worker-rust/src/diagnostics.rs:42` | `OWNED_TARGETS = ["elitea_worker_rust", "elitea_agent_runtime"]`. The single place that names the Elitea-owned crates whose events are reviewed for field safety. |
+| `services/elitea-worker-rust/src/diagnostics.rs:42-46` | `OWNED_TARGETS = ["elitea_worker_rust", "elitea_agent_runtime", "elitea_vector_index"]`. The single place that names the Elitea-owned crates whose events are reviewed for field safety. |
 | `services/elitea-worker-rust/src/diagnostics.rs:220-236` | `level_directive` emits `target={level}` for each owned target, comma-joined. The same level and validation as before; arbitrary directives are still refused. It feeds both the log filter (`:163`) and the trace filter (`:168`). |
 | `services/elitea-worker-rust/src/diagnostics.rs:192-210` | `log_layer`: the production fmt layer and filter, factored out so the tests use exactly what the deployed Worker uses. Output is unchanged: compact, no ANSI, target and thread id, span close events, stdout. |
 | `services/elitea-worker-rust/src/diagnostics/failure.rs:66` | The failure-diagnostics async scope names spans from every owned target. It still writes only name, target and `file:line`, never field values. |
@@ -144,6 +144,22 @@ Standalone stack `elitea-logfilter`, `deploy/scripts/standalone-stack.sh` with `
 
 The typed-reducer warning from the original report lives in PR #1195 (draft). Once both land it is shown by the
 same filter; the drift guard keeps it that way.
+
+## Update 2026-10-12: merge of `main`, rustdoc, `elitea-vector-index`
+
+- CI's doc step (`RUSTDOCFLAGS=-D warnings cargo doc --locked --no-deps --all-features`) refused the public doc of
+  `install_tracing_subscriber` linking the crate-private `OWNED_TARGETS`. The link is now plain code text; the item
+  stays `pub(crate)`.
+- After merging 19 commits of `main`, `every_hosted_library_crate_that_traces_is_an_owned_target` failed: `main`
+  made `libs/rust/vector-index` (`elitea_vector_index`) a Worker dependency, and it uses `tracing`. This is the
+  case the guard exists for. Its two sites were read: `hit.rs:42` logs `point = point.id` (the point's UUID per the
+  `ScoredPoint` proto) and a fixed message; `tools.rs:375` logs a fixed message. Neither carries query text,
+  metadata or chunk content. `elitea_vector_index` was added to `OWNED_TARGETS`. The other new hosted crates
+  (`connectors`, `content-source`, `doc-chunk`, `doc-extract`) do not depend on `tracing`.
+- The guard now lists every missing crate in one failure instead of stopping at the first.
+- Re-run after the merge: `cargo doc` (CI flags) clean; clippy `--all-targets --all-features -D warnings` clean;
+  `cargo fmt --check` clean; worker `cargo test --locked --all-targets --all-features`: 13 test binaries, 1942
+  passed, 0 failed, 71 ignored.
 
 ## Follow-ups
 

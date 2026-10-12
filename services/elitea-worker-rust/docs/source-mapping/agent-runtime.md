@@ -333,7 +333,7 @@ Fresh preparation emits `agent.prepare`; later phases include
 
 Valid W3C `traceparent` metadata continues the upstream trace.
 `ELITEA_RUST_LOG` and `ELITEA_RUST_TRACE` accept one level from `off` through
-`trace` and remain scoped to `elitea_worker_rust` and `elitea_agent_runtime`
+`trace` and remain scoped to the Worker and the Elitea libraries it hosts
 (`OWNED_TARGETS` in `src/diagnostics.rs`). They cannot enable dependency-owned HTTP,
 model, SQL or SMTP fields. Execution identifiers are correlation fields, not
 metric labels. Metrics may use only bounded kind, outcome and error-code values.

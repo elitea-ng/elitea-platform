@@ -37,9 +37,13 @@ const OTEL_TRACES_ENDPOINT_ENVIRONMENT: &str = "OTEL_EXPORTER_OTLP_TRACES_ENDPOI
 const OTEL_SERVICE_NAME: &str = "elitea-worker-rust";
 const OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Elitea-owned crates whose events are reviewed for field safety. The Worker
-/// and the reusable runtime it hosts (ADR-0027) share one level; every other
-/// crate stays off.
-pub(crate) const OWNED_TARGETS: [&str; 2] = ["elitea_worker_rust", "elitea_agent_runtime"];
+/// and the libraries it hosts (ADR-0027) share one level; every other crate
+/// stays off.
+pub(crate) const OWNED_TARGETS: [&str; 3] = [
+    "elitea_worker_rust",
+    "elitea_agent_runtime",
+    "elitea_vector_index",
+];
 
 /// Process-level tracing setup failures with no environment contents exposed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,7 +151,7 @@ impl std::error::Error for DiagnosticShutdownError {}
 /// Install the process subscriber for safe Elitea-owned spans.
 ///
 /// Only a single level is accepted and it is applied exclusively to the
-/// Elitea-owned crates in [`OWNED_TARGETS`]. Arbitrary `RUST_LOG` directives
+/// Elitea-owned crates in `OWNED_TARGETS`. Arbitrary `RUST_LOG` directives
 /// are deliberately ignored so enabling local diagnostics cannot expose
 /// dependency-owned HTTP, model, SMTP or SQL fields. Span close events supply phase duration without logging payloads.
 ///
@@ -387,15 +391,15 @@ mod tests {
     fn tracing_level_is_crate_scoped_and_rejects_directives() {
         assert_eq!(
             tracing_directive(None).expect("default tracing directive"),
-            "elitea_worker_rust=info,elitea_agent_runtime=info"
+            "elitea_worker_rust=info,elitea_agent_runtime=info,elitea_vector_index=info"
         );
         assert_eq!(
             tracing_directive(Some(" DEBUG ")).expect("debug tracing directive"),
-            "elitea_worker_rust=debug,elitea_agent_runtime=debug"
+            "elitea_worker_rust=debug,elitea_agent_runtime=debug,elitea_vector_index=debug"
         );
         assert_eq!(
             trace_directive(Some("warn")).expect("warn trace directive"),
-            "elitea_worker_rust=warn,elitea_agent_runtime=warn"
+            "elitea_worker_rust=warn,elitea_agent_runtime=warn,elitea_vector_index=warn"
         );
         assert_eq!(
             tracing_directive(Some("trace,hyper=trace")),
@@ -476,6 +480,7 @@ mod tests {
         let manifest = read(root.join("Cargo.toml"));
         let dependencies = manifest["dependencies"].as_table().expect("dependencies");
         let mut hosted = 0;
+        let mut missing = Vec::new();
         for (name, spec) in dependencies {
             let Some(path) = spec.get("path").and_then(toml::Value::as_str) else {
                 continue;
@@ -491,12 +496,15 @@ mod tests {
                 .and_then(toml::Value::as_table)
                 .is_some_and(|table| table.contains_key("tracing"));
             let target = name.replace('-', "_");
-            assert!(
-                !traces || OWNED_TARGETS.contains(&target.as_str()),
-                "{name} emits tracing events but {target} is not in OWNED_TARGETS"
-            );
+            if traces && !OWNED_TARGETS.contains(&target.as_str()) {
+                missing.push(target);
+            }
         }
         assert!(hosted >= 2, "the hosted libs/rust crates were not found");
+        assert!(
+            missing.is_empty(),
+            "these hosted crates emit tracing events but are not in OWNED_TARGETS: {missing:?}"
+        );
     }
 
     #[test]
