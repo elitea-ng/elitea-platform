@@ -59,6 +59,11 @@ target "elitea-inventory-engine" {
 target "elitea-vector" {
   cache-from = ["type=gha,scope=elitea-vector-linux-amd64"]
 }
+// elitea-doc-extractor (ADR-0030 I1): the Rust worker's PDF/Office sidecar
+// in the rust agent overlay.
+target "elitea-doc-extractor" {
+  cache-from = ["type=gha,scope=elitea-doc-extractor-linux-amd64"]
+}
 target "elitea-web" {
   cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
 }
@@ -99,7 +104,7 @@ group "standalone" {
     "elitea-llm-gateway", "llm-mock", "elitea-deepwiki", "elitea-deepwiki-engine",
     "elitea-deepwiki-migrate",
     "elitea-inventory", "elitea-inventory-engine",
-    "elitea-vector",
+    "elitea-vector", "elitea-doc-extractor",
     "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",
     "ado-mock",
   ]
