@@ -15,6 +15,12 @@ DEFAULT_RUNS = pathlib.Path(os.environ.get(
 DEFAULT_TIMEOUT_S = 120
 
 
+def is_preparation_audience(audience):
+    """Python preparation is dns:elitea-sandbox-preparation; the native JS/TS preparers are
+    dns:elitea-sandbox-<language>-preparation. Execution audiences never end in -preparation."""
+    return bool(audience) and str(audience).endswith('-preparation')
+
+
 class HarnessError(RuntimeError):
     """A harness step failed. The message never carries command output that could hold secrets."""
 

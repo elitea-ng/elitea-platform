@@ -31,6 +31,15 @@ BASE_FILES = ('deploy/docker-compose.standalone-full.yml', 'deploy/docker-compos
 PREPARATION_NETWORK = 'elitea-python-preparation-resolver'
 PREPARATION_AUDIENCE = 'dns:elitea-sandbox-preparation'
 CONTENT_ORIGIN = 'https://elitea-main:9445'
+# Feature `npm` (native Deno): JavaScript and TypeScript execute on their own listener and prepare packages on one
+# preparation listener per language (the worker rejects a mixed or Python native profile, process.rs:161-190).
+NATIVE_NAME = 'deno-native'
+NATIVE_PORT = 9449
+NPM_PREPARER_PORTS = {'javascript': 9450, 'typescript': 9451}
+NATIVE_WORKSPACE_BYTES = 512 * 1024 * 1024  # the smallest the supervisor accepts
+NATIVE_MEMORY_HEADROOM = 128 * 1024 * 1024  # memory_bytes must be at least workspace + this
+NPM_PREPARATION_TIMEOUT_CAP_S = 120  # worker/config.rs: native non-Rust preparation timeout
+DOCKER_ARCH = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'amd64', 'amd64': 'amd64'}
 # The services the fault catalog targets (DESIGN §1.1).
 TARGETS = {
     'main': 'elitea-main', 'worker': 'elitea-worker', 'supervisor': 'elitea-sandbox', 'nats': 'nats',
@@ -50,7 +59,7 @@ CONFIG_TEMPLATE = {
                 'deno_policy_revision': 'crash-deno-v1', 'rust_policy_revision': 'crash-rust-v1'},
     'docker_socket': '/var/run/docker.sock',
     'docker_gid': '0',
-    'features': {'preparation': False, 'compiled': False},
+    'features': {'preparation': False, 'compiled': False, 'npm': False},
     'oidc_subject': 'admin@centry.user',
 }
 
@@ -68,6 +77,8 @@ class Stack:
         if not HOST_RE.match(cfg['host']):
             raise HarnessError('the crash stack host must be <name>.localhost')
         self.cfg = cfg
+        if self.feature('npm') and not self.feature('preparation'):
+            raise HarnessError('the stack feature `npm` builds on `preparation` (its overlay, resolver network and Main grants)')
         self.project = cfg['project']
         self.material = self.dir / 'material'
 
@@ -143,6 +154,8 @@ class Stack:
         files.append('deploy/docker-compose.crash-rehearsal.yml')
         if self.feature('preparation'):
             files.append('deploy/docker-compose.crash-preparation.yml')
+        if self.feature('npm'):
+            files.append('deploy/docker-compose.crash-npm.yml')
         if self.feature('compiled'):
             files.append('deploy/docker-compose.crash-compiled.yml')
         return [REPO / f for f in files] + [self.dir / 'images.yml', self.dir / 'ports.yml']
@@ -172,8 +185,10 @@ class Stack:
         run(['bash', 'deploy/scripts/gen-sandbox-certs.sh', str(certs), str(issued), '--native'], cwd=REPO, timeout=180)
         sandbox = self.cfg['sandbox']
         digests = {k: image_id(sandbox[f'{k}_image']) for k in ('deno', 'rust')}
+        npm = self.feature('npm')
         profiles = {
-            'deno': {'port': 9446, 'languages': ['python', 'javascript', 'typescript']},
+            # With `npm` JavaScript and TypeScript move to the native listener; native profiles cannot serve Python.
+            'deno': {'port': 9446, 'languages': ['python'] if npm else ['python', 'javascript', 'typescript']},
             'rust': {'port': 9447, 'languages': ['rust']},
         }
         db_url = 'postgresql://elitea:elitea@postgres:5432/agentstate?sslmode=verify-full'
@@ -222,6 +237,9 @@ class Stack:
             _write_private(out / 'config.json', json.dumps(config, indent=2) + '\n')
         if self.feature('preparation'):
             self._preparation_profile(certs, issued, digests['deno'], db_url)
+        arch = docker_arch() if npm else None
+        if npm:
+            self._npm_profiles(certs, issued, digests['deno'], db_url, arch)
         self._issue_owner_certificate(certs)
         pg = self.material / 'postgres'
         pg.mkdir(exist_ok=True)
@@ -229,20 +247,7 @@ class Stack:
         _copy_private(issued / 'postgres.crt', pg / 'server.crt')
         _copy_private(issued / 'postgres.key', pg / 'server.key')
         worker = json.loads((REPO / 'deploy/runtime/worker-runtime.crash.json').read_text())
-        worker['sandbox_runtimes'] = [
-            {'language': lang, 'target': f"elitea-sandbox-{name}:{profiles[name]['port']}",
-             'audience': f'dns:elitea-sandbox-{name}', 'image_digest': digests[name],
-             'policy_revision': sandbox[f'{name}_policy_revision'], 'timeout_seconds': sandbox['timeout_seconds']}
-            for name in ('deno', 'rust') for lang in profiles[name]['languages']]
-        for entry in worker['sandbox_runtimes']:
-            if entry['language'] == 'python' and self.feature('preparation'):
-                entry['preparation'] = {'target': 'elitea-sandbox-preparation:9448', 'audience': PREPARATION_AUDIENCE,
-                                        'image_digest': digests['deno'],
-                                        'policy_revision': sandbox.get('preparation_policy_revision', 'crash-preparation-v1'),
-                                        'timeout_seconds': sandbox.get('preparation_timeout_seconds', 120)}
-            if entry['language'] == 'rust' and self.feature('compiled'):
-                entry['compiled_snapshot'] = {'profiles_file': '/run/elitea-runtime/rust-compiled-profiles.json',
-                                              'profiles_sha256': compiled_pin, 'dependency_bundle_sha256': ''}
+        worker['sandbox_runtimes'] = self.sandbox_runtimes(digests, profiles, compiled_pin, arch)
         path = self.material / 'worker-runtime.json'
         path.write_text(json.dumps(worker, indent=2) + '\n')
         os.chmod(path, 0o644)
@@ -255,6 +260,39 @@ class Stack:
         os.chmod(stock_path, 0o644)
         self._write_overrides()
         return {'deno_image_digest': digests['deno'], 'rust_image_digest': digests['rust']}
+
+    def sandbox_runtimes(self, digests, profiles, compiled_pin, arch):
+        """The Worker's per-language sandbox_runtimes (at most four, one per language)."""
+        sandbox = self.cfg['sandbox']
+        runtimes = [
+            {'language': lang, 'target': f"elitea-sandbox-{name}:{profiles[name]['port']}",
+             'audience': f'dns:elitea-sandbox-{name}', 'image_digest': digests[name],
+             'policy_revision': sandbox[f'{name}_policy_revision'], 'timeout_seconds': sandbox['timeout_seconds']}
+            for name in ('deno', 'rust') for lang in profiles[name]['languages']]
+        if self.feature('npm'):
+            runtimes += [
+                {'language': lang, 'target': f'elitea-sandbox-{NATIVE_NAME}:{NATIVE_PORT}',
+                 'audience': f'dns:elitea-sandbox-{NATIVE_NAME}', 'image_digest': digests['deno'],
+                 'policy_revision': sandbox.get('deno_native_policy_revision', 'crash-deno-native-v1'),
+                 'timeout_seconds': sandbox['timeout_seconds'],
+                 # The preparer is native too: its platform must equal the execution listener's (process.rs).
+                 'preparation': {'target': f'elitea-sandbox-{lang}-preparation:{port}',
+                                 'audience': f'dns:elitea-sandbox-{lang}-preparation', 'image_digest': digests['deno'],
+                                 'policy_revision': sandbox.get('npm_preparation_policy_revision', 'crash-npm-preparation-v1'),
+                                 'timeout_seconds': min(sandbox.get('preparation_timeout_seconds', 120),
+                                                        NPM_PREPARATION_TIMEOUT_CAP_S),
+                                 'native_platform': native_platform(arch)}}
+                for lang, port in NPM_PREPARER_PORTS.items()]
+        for entry in runtimes:
+            if entry['language'] == 'python' and self.feature('preparation'):
+                entry['preparation'] = {'target': 'elitea-sandbox-preparation:9448', 'audience': PREPARATION_AUDIENCE,
+                                        'image_digest': digests['deno'],
+                                        'policy_revision': sandbox.get('preparation_policy_revision', 'crash-preparation-v1'),
+                                        'timeout_seconds': sandbox.get('preparation_timeout_seconds', 120)}
+            if entry['language'] == 'rust' and self.feature('compiled'):
+                entry['compiled_snapshot'] = {'profiles_file': '/run/elitea-runtime/rust-compiled-profiles.json',
+                                              'profiles_sha256': compiled_pin, 'dependency_bundle_sha256': ''}
+        return runtimes
 
     def _content_client(self, certs, issued, out, base, name):
         """Dependency-content client (dns:elitea-sandbox-<name>, clientAuth) towards Main's content listener."""
@@ -294,6 +332,64 @@ class Stack:
         }
         _write_private(out / 'config.json', json.dumps(config, indent=2) + '\n')
 
+    def _npm_profiles(self, certs, issued, image_digest, db_url, arch):
+        """Native Deno profiles of the `npm` feature, one material directory each below sandbox-npm/: the offline
+        JS/TS execution listener (port 9449) and one preparation listener per language (9450, 9451)."""
+        configs = self.npm_configs(image_digest, arch)
+        root = self.material / 'sandbox-npm'
+        root.mkdir(exist_ok=True)
+        os.chmod(root, 0o700)
+        for name, config in configs.items():
+            out = root / name
+            out.mkdir(exist_ok=True)
+            os.chmod(out, 0o700)
+            base = f'/run/elitea-sandbox/npm/{name}'
+            _copy_private(certs / 'runtime-ca.crt', out / 'client-ca.pem')
+            _copy_private(certs / 'runtime-ca.crt', out / 'database-ca.pem')
+            _copy_private(certs / 'command-signing-keyring.json', out / 'command-signing-keyring.json')
+            _copy_private(issued / f'elitea-sandbox-{name}.crt', out / 'server.pem')
+            _copy_private(issued / f'elitea-sandbox-{name}.key', out / 'server.key')
+            _write_private(out / 'database-url', db_url)
+            config['dependency_content'] = self._content_client(certs, issued, out, base, name)
+            _write_private(out / 'config.json', json.dumps(config, indent=2) + '\n')
+
+    def npm_configs(self, image_digest, arch):
+        """Supervisor configs of the `npm` feature, keyed by profile name (also the certificate prefix)."""
+        sandbox = self.cfg['sandbox']
+        platform = native_platform(arch)
+
+        def paths(name):
+            base = f'/run/elitea-sandbox/npm/{name}'
+            return {'ca_path': f'{base}/client-ca.pem', 'certificate_path': f'{base}/server.pem',
+                    'private_key_path': f'{base}/server.key',
+                    'verification_keyring_path': f'{base}/command-signing-keyring.json',
+                    'database_url_path': f'{base}/database-url', 'database_ca_path': f'{base}/database-ca.pem'}
+        configs = {NATIVE_NAME: {
+            'revision': 1, 'purpose': 'execution', 'listen_address': f'0.0.0.0:{NATIVE_PORT}',
+            'owner': f'{self.project}-sandbox-{NATIVE_NAME}', 'audience': f'dns:elitea-sandbox-{NATIVE_NAME}',
+            **paths(NATIVE_NAME), 'database_connections': 4, 'image_digest': image_digest,
+            'policy_revision': sandbox.get('deno_native_policy_revision', 'crash-deno-native-v1'),
+            'languages': ['javascript', 'typescript'], 'concurrency': sandbox['concurrency'],
+            'memory_bytes': max(sandbox['memory_bytes'], NATIVE_WORKSPACE_BYTES + NATIVE_MEMORY_HEADROOM),
+            'cpu_limit': sandbox['cpu_limit'], 'timeout_seconds': sandbox['timeout_seconds'],
+            'code_owner_requester': MAIN_OWNER_IDENTITY, 'native_platform': platform,
+            'native_workspace_bytes': NATIVE_WORKSPACE_BYTES}}
+        for lang in NPM_PREPARER_PORTS:
+            name = f'{lang}-preparation'
+            configs[name] = {
+                'revision': 1, 'purpose': 'preparation', 'backend': {'kind': 'docker'},
+                'preparation_network': PREPARATION_NETWORK, 'listen_address': f'0.0.0.0:{NPM_PREPARER_PORTS[lang]}',
+                'owner': f'{self.project}-sandbox-{name}', 'audience': f'dns:elitea-sandbox-{name}', **paths(name),
+                'database_connections': 2, 'image_digest': image_digest,
+                'policy_revision': sandbox.get('npm_preparation_policy_revision', 'crash-npm-preparation-v1'),
+                'languages': [lang], 'concurrency': 1,
+                'memory_bytes': max(sandbox.get('preparation_memory_bytes', 1073741824),
+                                    NATIVE_WORKSPACE_BYTES + NATIVE_MEMORY_HEADROOM),
+                'cpu_limit': 1.0, 'timeout_seconds': min(sandbox.get('preparation_timeout_seconds', 120),
+                                                         NPM_PREPARATION_TIMEOUT_CAP_S),
+                'native_platform': platform, 'native_workspace_bytes': NATIVE_WORKSPACE_BYTES}
+        return configs
+
     def _issue_owner_certificate(self, certs):
         """Main's original-Code owner client identity (dns:elitea-main, clientAuth), issued by the runtime CA.
         No repository script issues it; the material installer only copies it (install-material.sh:49-55)."""
@@ -325,13 +421,18 @@ class Stack:
         shutil.copyfile(crt, certs / 'code-owner-client.crt')
 
     def owner_config(self):
+        supervisors = [{'audience': 'dns:elitea-sandbox-deno', 'https_origin': 'https://elitea-sandbox-deno:9446'},
+                       {'audience': 'dns:elitea-sandbox-rust', 'https_origin': 'https://elitea-sandbox-rust:9447'}]
+        if self.feature('npm'):
+            # Original-Code recovery reaches the listener that executes JavaScript and TypeScript.
+            supervisors.append({'audience': f'dns:elitea-sandbox-{NATIVE_NAME}',
+                                'https_origin': f'https://elitea-sandbox-{NATIVE_NAME}:{NATIVE_PORT}'})
         return json.dumps({
             'main_workload_identity': MAIN_OWNER_IDENTITY,
             'certificate_chain_path': '/run/elitea-runtime/code-owner-client.crt',
             'private_key_path': '/run/elitea-runtime/code-owner-client.key',
             'server_ca_path': '/run/elitea-runtime/runtime-ca.crt',
-            'supervisors': [{'audience': 'dns:elitea-sandbox-deno', 'https_origin': 'https://elitea-sandbox-deno:9446'},
-                            {'audience': 'dns:elitea-sandbox-rust', 'https_origin': 'https://elitea-sandbox-rust:9447'}],
+            'supervisors': supervisors,
         }, separators=(',', ':'))
 
     def _write_overrides(self):
@@ -546,6 +647,18 @@ class Stack:
                 raise HarnessError(f'pg_restore {dump} failed: ' + proc.stderr.decode('utf-8', 'replace')[-400:])
         self.up()
         return {'volumes': volumes, 'databases': list(self.SNAPSHOT_DUMPS), 'spool': spool}
+
+
+def docker_arch():
+    """The Docker daemon's architecture in the supervisor's vocabulary (the native bundle platform)."""
+    out = run(['docker', 'info', '--format', '{{.Architecture}}']).stdout.decode().strip()
+    if out not in DOCKER_ARCH:
+        raise HarnessError(f'unsupported Docker architecture {out!r} for native Deno')
+    return DOCKER_ARCH[out]
+
+
+def native_platform(arch):
+    return {'os': 'linux', 'arch': arch, 'abi': 'gnu'}
 
 
 def image_id(ref):

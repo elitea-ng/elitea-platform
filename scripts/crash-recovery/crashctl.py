@@ -7,9 +7,11 @@ Standard library only. Local and opt-in: CI never runs it. Subcommands:
   up                   restore the real-model dump and start the dedicated compose crash stack
   seed                 create fixtures through the public API (records fixtures.json)
   preflight            run the scenario preflight once and print it
-  run SCOPE...         run scenarios (ids, or a tier name such as T0); writes evidence and verdicts
+  run SCOPE...         run scenarios (ids, or a tier name such as T0, LM, LM-rust); writes evidence and verdicts;
+                       a row the stack cannot run (missing stack feature) gets verdict NOT-SUPPORTED with its reason
   verify RUN_ID        re-evaluate the verdicts of a run from its stored evidence
-  report RUN_ID...     summarize runs: per-scenario verdicts, measurements, matrix-cell proposals
+  report RUN_ID...     summarize runs: per-scenario verdicts, measurements, matrix-cell proposals, NOT-SUPPORTED reasons,
+                       and which scenario proved each language-matrix reference row
   binary-check         §3b image identity check: extract each evidence binary and look for a marker
   snapshot DEST        replayable local snapshot of a stuck run: both DB dumps, the Worker spool, the NATS store
   restore-snapshot SRC recreate the (down, volume-less) crash stack from a snapshot and start it on current images
@@ -26,7 +28,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from lib import api, catalog, report  # noqa: E402
-from lib.common import DEFAULT_RUNS, HarnessError, iso, read_json, write_json  # noqa: E402
+from lib.common import DEFAULT_RUNS, HarnessError, is_preparation_audience, iso, read_json, write_json  # noqa: E402
 from lib.redact import scan_tree  # noqa: E402
 from lib.runner import preflight, run_scenario  # noqa: E402
 from lib.collectors import Collector  # noqa: E402
@@ -75,7 +77,9 @@ def cmd_seed(args):
         if existing and not args.all:
             # Keep the seeded base fixtures (their ids are cited as evidence); add only missing feature fixtures.
             missing = [f for f in features if not any(p.get('feature') == f for p in existing['pipelines'].values())]
-            extra = seed_mod.seed_features(client, existing['project_id'], missing, time.strftime('%Y%m%d%H%M%S'))
+            suffix = time.strftime('%Y%m%d%H%M%S')
+            extra = seed_mod.seed_features(client, existing['project_id'], missing, suffix)
+            extra.update(seed_mod.seed_variants(client, existing['project_id'], suffix, have=existing['pipelines']))
             existing['pipelines'].update(extra)
             write_json(stack.dir / 'fixtures.json', existing)
             fixtures = existing
@@ -107,24 +111,26 @@ def cmd_run(args):
     summary = read_json(run_dir / 'summary.json', {'run_id': run_id, 'started': iso(), 'results': []})
     for scenario in scenarios:
         scenario['_oracle'] = oracle.get(scenario['fixture'], {})
-        repeat = args.repeat or scenario.get('repeat', 1)
+        # A row the stack cannot run is recorded once, not once per repeat.
+        repeat = 1 if catalog.not_supported_reason(scenario, stack) else args.repeat or scenario.get('repeat', 1)
         for index in range(args.first_repeat, args.first_repeat + repeat):
             browser = args.browser and scenario.get('browser', False) and index == args.first_repeat
             out = run_dir / scenario['id'] / f'r{index}'
             print(f"{iso()} {scenario['id']} r{index} start (browser={browser})", flush=True)
             rec, result = run_scenario(stack, client, scenario, fixtures, out, browser=browser)
-            line = {'scenario': scenario['id'], 'repeat': index, 'execution_id': rec.get('execution_id'),
+            line = {'scenario': scenario['id'], 'lm_ids': scenario.get('lm_ids', []), 'repeat': index,
+                    'execution_id': rec.get('execution_id'),
                     'verdict': result['verdict'], 'observed': result.get('observed'), 'target': scenario['target'],
                     'why': result.get('why') or result.get('reason'), 'dir': str(out.relative_to(run_dir))}
             summary['results'].append(line)
             write_json(run_dir / 'summary.json', summary)
             print(f"{iso()} {scenario['id']} r{index} {result['verdict']} observed={result.get('observed')} "
                   f"exec={rec.get('execution_id')} {line['why']}", flush=True)
-            if scenario['id'].startswith('BASE-') and result['verdict'] == 'PASS':
+            if (scenario['id'].startswith('BASE-') or scenario.get('baseline')) and result['verdict'] == 'PASS':
                 jobs = rec['final']['agentstate']['sandbox'] or []
                 oracle[scenario['fixture']] = {
                     'jobs': len(jobs), 'execution_id': rec['execution_id'],
-                    'preparations': len({j['job_key'] for j in jobs if j.get('audience') == 'dns:elitea-sandbox-preparation'})}
+                    'preparations': len({j['job_key'] for j in jobs if is_preparation_audience(j.get('audience'))})}
                 write_json(stack.dir / 'oracle.json', oracle)
             client = _client(stack)  # a Main restart ends nothing, but a fresh session keeps runs independent
     hits = scan_tree(run_dir)
