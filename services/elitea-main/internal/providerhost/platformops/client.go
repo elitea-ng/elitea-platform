@@ -23,9 +23,10 @@
 //     engine is unreachable or slow (UNAVAILABLE, DEADLINE_EXCEEDED), or a
 //     project deletion answered OK with `incomplete` (what it deleted stays
 //     deleted; the rest is held by a run that started meanwhile).
-//   - ErrNotSupported: the application has nothing per toolkit to delete
-//     (UNIMPLEMENTED; DeepWiki's index is per wiki). A toolkit delete treats
-//     it as "nothing to do".
+//   - ErrNotSupported: the application does not implement the operation
+//     (UNIMPLEMENTED; DeepWiki keeps nothing per toolkit, its index is per
+//     wiki). The cleanup journals close the step as "unsupported"; a toolkit
+//     delete never asks DeepWiki in the first place (AppKeepsToolkitData).
 //   - ErrNotAllowed: the engine refused this process's certificate
 //     (UNAUTHENTICATED, PERMISSION_DENIED). A retry cannot fix it; the
 //     allowlist or the material is wrong, and the message says so.
@@ -320,6 +321,14 @@ func (c *Client) classify(op string, err error) error {
 	}
 	return fmt.Errorf("%s %s failed: %s (%s)", c.app, op, message, code)
 }
+
+// AppKeepsToolkitData reports whether the application's engine holds data PER
+// TOOLKIT, so that deleting a toolkit owes the engine a DeleteToolkit call.
+// Inventory does: each toolkit is a graph. DeepWiki does not: its search index
+// is per wiki and goes with the project (DeleteProject), and its DeleteToolkit
+// answers UNIMPLEMENTED — so a DeepWiki toolkit delete makes no engine call at
+// all, rather than one that is known to be refused.
+func AppKeepsToolkitData(app string) bool { return app == AppInventory }
 
 // AppForToolkitType names the application whose engine holds data for a
 // toolkit of the given type, or "" for a type no platform service covers.

@@ -262,12 +262,21 @@ type deletionCleanup struct {
 	// QuietDropFailures counts the drops that failed for a store the project was
 	// not recorded as having; at the limit the journal gives up (Notes).
 	QuietDropFailures int `json:"quiet_drop_failures,omitempty"`
-	// Notes holds a message per step that was marked done without doing its
-	// work ("gave up: ...").
+	// Notes holds a message per step: what a step that was marked done without
+	// doing its work recorded ("gave up: ...", "skipped: ...", "engine does not
+	// support deletion", "failed permanently: ..."), the engine's summary of an
+	// application step that did its work ("deleted 2 graph(s)"), or what a
+	// failed application step did before it failed (a partial deletion).
 	Notes map[string]string `json:"notes,omitempty"`
 	// Superseded is set when the journal row was closed because a project with
 	// the id exists again; nothing was cleaned.
 	Superseded bool `json:"superseded,omitempty"`
+	// Apps names the applications whose engine holds data for the project and
+	// must be asked to delete it, one journal step each (`<app>_data`), as
+	// recorded by the replica that decided the delete. Every run takes its
+	// application steps from here, not from the running process
+	// (application_data.go).
+	Apps []string `json:"apps,omitempty"`
 }
 
 // cleanupStep is one idempotent journal step. note is an optional message for a
@@ -298,13 +307,16 @@ func cleanupSteps() []cleanupStep {
 	}
 }
 
-// cleanupSteps is the step list a run of THIS provisioner takes: the base steps,
-// then the data of every wired application (#1243, #1244). The application
-// steps come last so a failing engine never delays the schema or the database
-// drop, and so the base list's indices are stable for the code and tests that
-// address them.
-func (p *Provisioner) cleanupSteps() []cleanupStep {
-	return append(cleanupSteps(), p.applicationSteps()...)
+// cleanupSteps is the step list a run of a journal ROW takes: the base steps,
+// then the data of every application the row recorded (#1243, #1244;
+// application_data.go). The application steps come last so a failing engine
+// never delays the schema or the database drop, and so the base list's indices
+// are stable for the code and tests that address them.
+func (p *Provisioner) cleanupSteps(cleanup *deletionCleanup) []cleanupStep {
+	if cleanup == nil {
+		return cleanupSteps()
+	}
+	return append(cleanupSteps(), applicationSteps(cleanup.Apps)...)
 }
 
 // decisionSteps are the steps the deciding transaction performs, in the order
@@ -509,7 +521,7 @@ func (p *Provisioner) Deprovision(ctx context.Context, projectID int64, options 
 		cleanupErr error
 	)
 	if config.handOff {
-		result = p.pendingResult(projectID, nil)
+		result = p.pendingResult(projectID, cleanup, nil)
 	} else {
 		var expiry <-chan time.Time
 		if config.budget > 0 {
@@ -550,10 +562,10 @@ func (p *Provisioner) startCleanup(projectID int64, cleanup *deletionCleanup) <-
 }
 
 // pendingResult builds the answer for a delete whose cleanup is still running:
-// the steps in done are reported OK, every other step pending.
-func (p *Provisioner) pendingResult(projectID int64, done map[string]bool) Result {
+// the steps in done are reported OK, every other step of the row pending.
+func (p *Provisioner) pendingResult(projectID int64, cleanup *deletionCleanup, done map[string]bool) Result {
 	result := Result{ProjectID: projectID}
-	for _, step := range p.cleanupSteps() {
+	for _, step := range p.cleanupSteps(cleanup) {
 		if done[step.name] {
 			status := StepStatus{Step: step.name, Initialized: true}
 			status.setOK()
@@ -580,20 +592,22 @@ func (p *Provisioner) pendingFromJournal(runCtx context.Context, projectID int64
 	if err := p.pool.QueryRow(ctx,
 		`SELECT cleanup, completed_at FROM centry.project_deletions WHERE project_id = $1`, projectID,
 	).Scan(&encoded, &completed); err != nil {
-		return p.pendingResult(projectID, nil)
+		// The row cannot be read: report this replica's own step list, the
+		// best approximation of what the row recorded.
+		return p.pendingResult(projectID, &deletionCleanup{Apps: p.ApplicationsWired()}, nil)
 	}
 	var cleanup deletionCleanup
 	if err := json.Unmarshal(encoded, &cleanup); err != nil {
-		return p.pendingResult(projectID, nil)
+		return p.pendingResult(projectID, &deletionCleanup{Apps: p.ApplicationsWired()}, nil)
 	}
 	done := cleanup.Done
 	if completed != nil {
 		done = map[string]bool{}
-		for _, step := range p.cleanupSteps() {
+		for _, step := range p.cleanupSteps(&cleanup) {
 			done[step.name] = true
 		}
 	}
-	return p.pendingResult(projectID, done)
+	return p.pendingResult(projectID, &cleanup, done)
 }
 
 // decideDeletion is the one transaction that decides a delete (#1211).
@@ -798,7 +812,7 @@ func (p *Provisioner) adoptLeftovers(ctx context.Context, projectID int64) (*del
 		return nil, nil
 	}
 
-	cleanup := &deletionCleanup{Done: map[string]bool{}, HadVectorStore: database}
+	cleanup := &deletionCleanup{Done: map[string]bool{}, HadVectorStore: database, Apps: p.ApplicationsWired()}
 	if database {
 		cleanup.VectorDatabase = pgvector.ProjectDatabaseName(projectID)
 	}
@@ -872,9 +886,10 @@ func (p *Provisioner) revokeIdentity(ctx context.Context, transaction pgx.Tx, pr
 }
 
 // recordCleanup reads, through the deciding transaction, what the cleanup
-// journal has to remember: whether the project has a vector store.
+// journal has to remember: whether the project has a vector store, and which
+// application engines (this replica's) must be asked to delete its data.
 func (p *Provisioner) recordCleanup(ctx context.Context, transaction pgx.Tx, projectID int64) (*deletionCleanup, error) {
-	cleanup := &deletionCleanup{Done: map[string]bool{}}
+	cleanup := &deletionCleanup{Done: map[string]bool{}, Apps: p.ApplicationsWired()}
 	if p.vectorStore != nil {
 		had, err := p.vectorStore.ProjectHasVectorStore(ctx, transaction, projectID)
 		if err != nil {
@@ -928,7 +943,7 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 		failedSteps []string
 		interrupted bool
 	)
-	for _, step := range p.cleanupSteps() {
+	for _, step := range p.cleanupSteps(cleanup) {
 		status := StepStatus{Step: step.name, Initialized: true}
 		if cleanup.Done[step.name] {
 			status.setOK()
@@ -965,19 +980,46 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			note, err = step.run(ctx, p, projectID, cleanup)
 		}
 
-		var quiet quietRetry
+		var (
+			quiet    quietRetry
+			closed   closedWithNote
+			notWired notWiredError
+		)
 		switch {
 		case err == nil:
 			status.setOK()
 			status.Msg = note
 			cleanup.Done[step.name] = true
-			p.markCleanupStep(ctx, projectID, step.name, "")
+			if note != "" {
+				if cleanup.Notes == nil {
+					cleanup.Notes = map[string]string{}
+				}
+				cleanup.Notes[step.name] = note
+			}
+			p.markCleanupStep(ctx, projectID, step.name, note)
 		case parent.Err() != nil:
 			// The process is stopping: this is not the step's failure.
 			interrupted = true
 			result.RollbackSteps = append(result.RollbackSteps, StepStatus{Step: step.name})
 			result.Pending = append(result.Pending, step.name)
 			continue
+		case errors.As(err, &notWired):
+			// This replica cannot run the step the row recorded (application_
+			// data.go): pending, not failed on the engine's account. The run
+			// counts it as not finished, so the row stays open with a backoff
+			// for a replica that can, and the run's error names the step and
+			// the missing client for the reconciler's log.
+			status = StepStatus{Step: step.name}
+			result.Pending = append(result.Pending, step.name)
+			failedSteps = append(failedSteps, step.name)
+			failures = append(failures, step.failure(cleanup, err))
+		case errors.As(err, &closed):
+			// Done without the work, for a reason a retry cannot change; the
+			// note says which (application_data.go). Logged by the step.
+			status.setOK()
+			status.Msg = closed.note
+			cleanup.Done[step.name] = true
+			p.markCleanupStep(ctx, projectID, step.name, closed.note)
 		case errors.As(err, &quiet):
 			// Retried by the journal, not reported (see cleanupVectorStore), and
 			// not for ever: a store nothing says existed is not worth an endless
@@ -1007,6 +1049,15 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			result.Pending = append(result.Pending, step.name)
 			if step.name == StepProjectPgvectorDrop {
 				result.VectorDatabase = cleanup.VectorDatabase
+			}
+			if note != "" {
+				// A failed step that still reports what it did (an engine that
+				// deleted part of the project's data): kept on the row.
+				if cleanup.Notes == nil {
+					cleanup.Notes = map[string]string{}
+				}
+				cleanup.Notes[step.name] = note
+				p.recordCleanupNote(ctx, projectID, step.name, note)
 			}
 		}
 		result.RollbackSteps = append(result.RollbackSteps, status)
@@ -1073,6 +1124,21 @@ SET cleanup = CASE WHEN $3::text = '' THEN jsonb_set(cleanup, ARRAY['done', $2::
     END
 WHERE project_id = $1`, projectID, step, note); err != nil {
 		p.logger.WarnContext(ctx, "could not record a finished cleanup step; a later run repeats it",
+			"project_id", projectID, "step", step, "err", err)
+	}
+}
+
+// recordCleanupNote stores a step's note WITHOUT marking the step done: what a
+// failed step did before it failed (a partial engine deletion). A failure is
+// logged only.
+func (p *Provisioner) recordCleanupNote(runCtx context.Context, projectID int64, step, note string) {
+	ctx, cancel := bookkeepingContext(runCtx)
+	defer cancel()
+	if _, err := p.pool.Exec(ctx, `
+UPDATE centry.project_deletions
+SET cleanup = jsonb_set(cleanup, '{notes}', COALESCE(cleanup->'notes', '{}'::jsonb) || jsonb_build_object($2::text, $3::text), true)
+WHERE project_id = $1`, projectID, step, note); err != nil {
+		p.logger.WarnContext(ctx, "could not record a cleanup step's note",
 			"project_id", projectID, "step", step, "err", err)
 	}
 }

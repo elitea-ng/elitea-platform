@@ -71,6 +71,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -419,6 +420,12 @@ type RouterConfig struct {
 	// is not listed keeps its data, and the composition root logs which are
 	// wired. See application_data.go.
 	ApplicationData []ApplicationDataClient
+	// OnToolkitCleanupJournal, when set, is called once with the toolkit
+	// cleanup journal the toolkit handler enqueues into (#1244), after it is
+	// built. The process uses it to start the toolkit-deletion reconciler over
+	// the same journal, as OnProjectProvisioner does for projects. It is not
+	// called when the composition has no pool and so no journal.
+	OnToolkitCleanupJournal func(*toolkitcleanup.Journal)
 	// ProjectDeleteBudget is how long DELETE of a project waits for the slow
 	// cleanup before it answers 202 (zero: v2projects.DefaultDeleteBudget).
 	ProjectDeleteBudget time.Duration
@@ -1133,12 +1140,16 @@ func newToolkitHandler(
 	if guardrailPolicies, err := platformconfig.NewGuardrailPolicyAdapter(cfg.Pool); err == nil {
 		options = append(options, v2toolkits.WithGuardrails(guardrailPolicies))
 	}
-	// The application engines (#1244): a toolkit of an application whose engine
-	// keeps data per toolkit (Inventory's graph) has that data deleted in the
-	// engine before its row goes. See application_data.go.
-	if len(cfg.ApplicationData) > 0 {
-		options = append(options, v2toolkits.WithToolkitDataRemover(
-			newApplicationToolkitData(cfg.ApplicationData, nil)))
+	// The toolkit cleanup journal (#1244): a toolkit delete is row-first, and
+	// the engine-side deletion an Inventory toolkit owes is recorded in the
+	// row's own transaction and performed by the reconciler the process starts
+	// over the same journal (OnToolkitCleanupJournal). See application_data.go.
+	if cfg.Pool != nil {
+		journal := newToolkitCleanupJournal(cfg)
+		options = append(options, v2toolkits.WithToolkitCleanupJournal(journal))
+		if cfg.OnToolkitCleanupJournal != nil {
+			cfg.OnToolkitCleanupJournal(journal)
+		}
 	}
 	return v2toolkits.NewHandler(cfg.Pool, options...)
 }

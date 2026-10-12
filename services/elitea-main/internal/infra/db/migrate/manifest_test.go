@@ -678,7 +678,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// stamp, run fence, tombstone) and index_registry_documents (one
 	// document_key/version per indexed document). New tables only, nothing
 	// migrated from index_meta, no permission.
-	require.EqualValues(t, 162, Head(shared))
+	//
+	// 163: shared/0163_toolkit_deletions_journal.sql, the cleanup journal
+	// (centry.toolkit_deletions) a toolkit delete writes in the transaction
+	// that removes the toolkit row when its type belongs to an application
+	// engine that keeps data per toolkit (Inventory's graph), and that a
+	// reconciler drains over the engine's platform gRPC service (#1244). No
+	// tenant table, no permission, no data migrated.
+	require.EqualValues(t, 163, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

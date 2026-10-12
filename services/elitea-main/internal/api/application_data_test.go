@@ -1,15 +1,15 @@
 package api
 
-// The toolkit-side adapter over the application engines (#1244): which engine a
-// toolkit type is sent to, and how the engine's answers reach the handler.
+// The composition of the application engines into the two cleanup journals
+// (#1243, #1244): every wired client becomes one provisioner option and one
+// toolkit-journal remover, and the toolkit journal built here enqueues only
+// for the applications it was given.
 
 import (
 	"context"
-	"errors"
-	"log/slog"
+	"slices"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
@@ -32,59 +32,6 @@ func (f *fakeApplicationClient) DeleteToolkitData(_ context.Context, projectID, 
 	return platformops.ToolkitDeletion{Deleted: f.err == nil}, f.err
 }
 
-func TestToolkitDataGoesToTheEngineOfItsType(t *testing.T) {
-	t.Parallel()
-	inventory := &fakeApplicationClient{app: platformops.AppInventory}
-	deepwiki := &fakeApplicationClient{app: platformops.AppDeepWiki, err: platformops.ErrNotSupported}
-	remover := newApplicationToolkitData([]ApplicationDataClient{inventory, deepwiki}, slog.Default())
-
-	if err := remover.DeleteToolkitData(context.Background(), 7, 70, "inventory_inventory"); err != nil {
-		t.Fatalf("inventory: %v", err)
-	}
-	if len(inventory.toolkits) != 1 || inventory.toolkits[0] != [2]int64{7, 70} {
-		t.Fatalf("inventory saw %v", inventory.toolkits)
-	}
-	// DeepWiki keeps nothing per toolkit: UNIMPLEMENTED is a no-op, not a
-	// refusal of the row delete.
-	if err := remover.DeleteToolkitData(context.Background(), 7, 71, "deepwiki_Deepwiki"); err != nil {
-		t.Fatalf("deepwiki: %v", err)
-	}
-	if len(deepwiki.toolkits) != 1 {
-		t.Fatalf("deepwiki was not asked: %v", deepwiki.toolkits)
-	}
-	// A type no engine covers is nobody's.
-	if err := remover.DeleteToolkitData(context.Background(), 7, 72, "github"); err != nil {
-		t.Fatalf("github: %v", err)
-	}
-	if len(inventory.toolkits)+len(deepwiki.toolkits) != 2 {
-		t.Fatal("a github toolkit reached an engine")
-	}
-}
-
-func TestAnUnconfiguredApplicationIsANoOp(t *testing.T) {
-	t.Parallel()
-	remover := newApplicationToolkitData(nil, nil)
-	if err := remover.DeleteToolkitData(context.Background(), 7, 70, "inventory_inventory"); err != nil {
-		t.Fatalf("an unconfigured engine refused the delete: %v", err)
-	}
-}
-
-func TestEngineAnswersAreTranslatedForTheHandler(t *testing.T) {
-	t.Parallel()
-	busy := &fakeApplicationClient{app: platformops.AppInventory, err: platformops.ErrRetryLater}
-	if err := newApplicationToolkitData([]ApplicationDataClient{busy}, nil).
-		DeleteToolkitData(context.Background(), 7, 70, "inventory"); !errors.Is(err, toolkits.ErrToolkitDataBusy) {
-		t.Fatalf("retry-later = %v, want ErrToolkitDataBusy", err)
-	}
-	cause := errors.New("internal")
-	failing := &fakeApplicationClient{app: platformops.AppInventory, err: cause}
-	err := newApplicationToolkitData([]ApplicationDataClient{failing}, nil).
-		DeleteToolkitData(context.Background(), 7, 70, "inventory")
-	if !errors.Is(err, cause) || errors.Is(err, toolkits.ErrToolkitDataBusy) {
-		t.Fatalf("failure = %v, want the cause and not busy", err)
-	}
-}
-
 func TestEveryClientBecomesOneProvisionerOption(t *testing.T) {
 	t.Parallel()
 	clients := []ApplicationDataClient{
@@ -94,5 +41,37 @@ func TestEveryClientBecomesOneProvisionerOption(t *testing.T) {
 	}
 	if got := len(applicationDataOptions(clients)); got != 2 {
 		t.Fatalf("%d options for two clients and a nil", got)
+	}
+	if got := len(toolkitCleanupOptions(clients)); got != 2 {
+		t.Fatalf("%d journal options for two clients and a nil", got)
+	}
+}
+
+// The toolkit journal the router builds knows the wired applications, and
+// decides from them (and from which applications keep data per toolkit) which
+// toolkit types owe a row: Inventory yes, DeepWiki never, others never.
+func TestTheToolkitJournalEnqueuesForTheWiredEnginesOnly(t *testing.T) {
+	t.Parallel()
+	journal := newToolkitCleanupJournal(RouterConfig{ApplicationData: []ApplicationDataClient{
+		&fakeApplicationClient{app: platformops.AppInventory},
+		&fakeApplicationClient{app: platformops.AppDeepWiki},
+	}})
+	if got := journal.AppsWired(); !slices.Equal(got, []string{"deepwiki", "inventory"}) {
+		t.Fatalf("AppsWired = %v", got)
+	}
+	ctx := context.Background()
+	if app := journal.AppToEnqueue(ctx, 7, 70, "inventory_inventory"); app != platformops.AppInventory {
+		t.Fatalf("inventory toolkit → %q", app)
+	}
+	if app := journal.AppToEnqueue(ctx, 7, 71, "deepwiki_Deepwiki"); app != "" {
+		t.Fatalf("a DeepWiki toolkit owes an engine call: %q", app)
+	}
+	if app := journal.AppToEnqueue(ctx, 7, 72, "github"); app != "" {
+		t.Fatalf("a github toolkit owes an engine call: %q", app)
+	}
+
+	unwired := newToolkitCleanupJournal(RouterConfig{})
+	if app := unwired.AppToEnqueue(ctx, 7, 70, "inventory_inventory"); app != "" {
+		t.Fatalf("a replica without the Inventory client enqueued for it: %q", app)
 	}
 }

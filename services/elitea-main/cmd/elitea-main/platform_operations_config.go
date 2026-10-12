@@ -91,9 +91,10 @@ func platformCallTimeout(facadeTimeout time.Duration) time.Duration {
 	return max(facadeTimeout, platformops.DefaultCallTimeout)
 }
 
-// composePlatformOperations builds the clients the router and the provisioner
-// share, and logs, per facade, whether the engine's data is deleted with its
-// project and toolkits. The returned close releases the connections.
+// composePlatformOperations builds the clients the two cleanup journals (the
+// project provisioner's and the toolkit one) share, and logs, per facade,
+// whether the engine's data is deleted with its project and toolkits. The
+// returned close releases the connections.
 func composePlatformOperations(
 	logger *slog.Logger,
 	deepwiki v2deepwiki.Config,

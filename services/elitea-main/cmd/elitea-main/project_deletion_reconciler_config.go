@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
 
@@ -91,6 +92,35 @@ func startProjectDeletionReconciler(
 	go func() {
 		if err := reconciler.Run(ctx); err != nil && ctx.Err() == nil {
 			logger.Error("the project deletion reconciler stopped", "err", err)
+		}
+	}()
+	return nil
+}
+
+// startToolkitDeletionReconciler runs the toolkit-deletion reconciler (#1244)
+// over the toolkit cleanup journal the router builds, until ctx ends. It is on
+// and off with the project one (the same flag: both drain a cleanup journal
+// that nothing else drains), and runs with no grace: a toolkit delete never
+// works its own row, so there is no request to keep out of the way of.
+func startToolkitDeletionReconciler(
+	ctx context.Context,
+	settings projectDeletionReconcilerSettings,
+	journal *toolkitcleanup.Journal,
+	logger *slog.Logger,
+) error {
+	if !settings.Enabled {
+		logger.Info("toolkit deletion reconciler is disabled", "env", projectDeletionReconcilerEnv)
+		return nil
+	}
+	reconciler, err := runtimecomposition.NewToolkitDeletionReconciler(
+		journal, runtimecomposition.ToolkitDeletionReconcilerConfig{}, logger)
+	if err != nil {
+		return err
+	}
+	logger.Info("toolkit deletion reconciler started", "apps_wired", journal.AppsWired())
+	go func() {
+		if err := reconciler.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("the toolkit deletion reconciler stopped", "err", err)
 		}
 	}()
 	return nil

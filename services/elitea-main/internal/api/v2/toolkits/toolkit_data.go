@@ -1,102 +1,99 @@
 package toolkits
 
-// Deleting what an application engine holds for a toolkit (issue #1244, and
-// #1243's per-toolkit half).
+// Deleting what an application engine holds for a toolkit (issue #1244).
 //
 // An Inventory toolkit's graph lives in the Inventory engine, not in the
 // tenant's elitea_tools row, so `DELETE FROM elitea_tools` leaves it behind for
-// ever. When a toolkit of such an application is deleted, the handler asks the
-// engine to delete the toolkit's data FIRST, over the platform gRPC service
-// (internal/providerhost/platformops), and removes the row only once the
-// engine has answered.
+// ever. The delete is therefore ROW-FIRST WITH A JOURNAL, the shape of a
+// project delete (#1245): ONE TRANSACTION deletes the toolkit row (RETURNING
+// its type) and, when the type belongs to an application whose engine keeps
+// data per toolkit, records the engine-side deletion owed in the cleanup
+// journal (internal/application/toolkitcleanup, centry.toolkit_deletions). A
+// reconciler drains the journal afterwards, with backoff.
 //
-// WHY THE ENGINE GOES FIRST HERE, when the project delete goes row-first with a
-// journal (#1245). A project delete has a journal row keyed by the project id
-// to remember work still owed after the row is gone; a toolkit has no such
-// record, and inventing one for a single external call is a table and a
-// reconciler for a case the engine-first order handles without either. The
-// engine's deletion is idempotent, and a toolkit whose graph is gone but whose
-// row survived (the row delete failed after the engine answered) is a usable
-// toolkit that re-ingests on its next run: nothing is lost that a retry of the
-// delete does not finish. The opposite order (row first, engine after) would be
-// the leak the issue describes whenever the engine call failed.
+// WHAT THE REQUEST DEPENDS ON: the database and nothing else. The toolkit is
+// gone when the transaction commits; the engine is never called from the
+// request, so an unreachable engine, a running ingest that holds the graph, or
+// an engine that refuses this process does not keep a toolkit the user asked
+// to delete. A database error deletes nothing and answers 500 as before. A row
+// that does not exist answers as it always has (204: the route's contract
+// documents no 404), and journals nothing.
 //
-// WHAT A REFUSAL MEANS. ErrToolkitDataBusy: the engine is still stopping an
-// ingest of this toolkit (or one started meanwhile and holds the graph);
-// nothing was deleted, on either side, and the client is told to retry (409).
-// Any other error: the engine could not be reached or failed; nothing was
-// deleted on either side, and the client is told so (503). A toolkit whose type
-// no engine covers, or an application that keeps nothing per toolkit
-// (DeepWiki's index is per wiki), is a no-op and the row is deleted as before.
+// WHICH TYPES OWE A JOURNAL ROW is the journal's decision
+// (toolkitcleanup.Journal.AppToEnqueue): Inventory types on a replica with the
+// Inventory client; DeepWiki types never (DeepWiki keeps nothing per toolkit);
+// every other type never.
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net/http"
 	"strconv"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
-// ErrToolkitDataBusy is the remover's answer when the engine refused the
-// deletion because a run still holds the toolkit's data; nothing was deleted
-// and a retry later is the right thing.
-var ErrToolkitDataBusy = errors.New("toolkits: the toolkit's data is held by a running ingest; retry")
-
-// ToolkitDataRemover deletes what an application engine holds for one toolkit.
-// It is given the toolkit's type so it can decide which engine (if any) the
-// toolkit belongs to; a type no engine covers is a nil return.
-type ToolkitDataRemover interface {
-	DeleteToolkitData(ctx context.Context, projectID, toolkitID int64, toolkitType string) error
+// ToolkitCleanupJournal records, inside the delete's transaction, the
+// engine-side deletion a toolkit owes. *toolkitcleanup.Journal satisfies it.
+type ToolkitCleanupJournal interface {
+	// Enqueue writes the journal row for the toolkit when its type owes one on
+	// this replica, and returns the application queued ("" when none).
+	Enqueue(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64, toolkitType string) (app string, err error)
 }
 
-// WithToolkitDataRemover wires the engine-side deletion into Delete. Without it
-// Delete removes the row alone, which is what every deployment did before the
-// engines served a platform service.
-func WithToolkitDataRemover(remover ToolkitDataRemover) Option {
-	return func(h *Handler) { h.toolkitData = remover }
+// WithToolkitCleanupJournal makes Delete row-first with a journal
+// (Repository.DeleteToolkitRowFirst). Without it Delete removes the row alone,
+// which is what every deployment did before the engines served a platform
+// service.
+func WithToolkitCleanupJournal(journal ToolkitCleanupJournal) Option {
+	return func(h *Handler) {
+		if journal == nil {
+			return
+		}
+		h.toolkitCleanup = journal
+	}
 }
 
-// removeToolkitData runs the engine-side half of a delete, when wired. It
-// answers the request itself on a refusal and reports false; true means the
-// row delete may proceed. A toolkit the repository cannot describe (gone
-// already, or a non-numeric id) proceeds too: the row delete is the authority
-// on those, and answers as it always has.
-func (h *Handler) removeToolkitData(w http.ResponseWriter, r *http.Request, projectID, toolkitID string) bool {
-	if h.toolkitData == nil {
-		return true
+// DeleteToolkitRowFirst implements Repository: one transaction that deletes the
+// toolkit row and lets journal record the engine-side cleanup its type owes. A
+// row that does not exist is not an error and journals nothing; any database
+// error (the delete's or the journal's) rolls both back.
+func (r *pgRepo) DeleteToolkitRowFirst(ctx context.Context, projectID, toolkitID string, journal ToolkitCleanupJournal) error {
+	schema, err := tenantschema.Quote(projectID)
+	if err != nil {
+		return err
 	}
-	project, projectErr := strconv.ParseInt(projectID, 10, 64)
-	toolkit, toolkitErr := strconv.ParseInt(toolkitID, 10, 64)
-	if projectErr != nil || toolkitErr != nil || project <= 0 || toolkit <= 0 {
-		return true
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
 	}
-	record, err := h.repo.GetToolkit(r.Context(), projectID, toolkitID)
-	if err != nil || record == nil {
-		return true
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var toolkitType string
+	switch err := tx.QueryRow(ctx,
+		fmt.Sprintf(`DELETE FROM %s.elitea_tools WHERE id = $1 RETURNING type`, schema), toolkitID,
+	).Scan(&toolkitType); {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Nothing to delete and nothing to journal; the empty transaction ends
+		// with the rollback above.
+		return nil
+	case err != nil:
+		return err
 	}
-	toolkitType, _ := record["type"].(string)
-	if toolkitType == "" {
-		return true
+	if journal != nil {
+		project, projectErr := strconv.ParseInt(projectID, 10, 64)
+		toolkit, toolkitErr := strconv.ParseInt(toolkitID, 10, 64)
+		if projectErr != nil || toolkitErr != nil {
+			// The tenant schema name and the DELETE already accepted both as
+			// integers; this cannot happen, and a journal keyed by them must
+			// not be guessed.
+			return fmt.Errorf("toolkit %q of project %q: ids are not integers", toolkitID, projectID)
+		}
+		if _, err := journal.Enqueue(ctx, tx, project, toolkit, toolkitType); err != nil {
+			return err
+		}
 	}
-	err = h.toolkitData.DeleteToolkitData(r.Context(), project, toolkit, toolkitType)
-	switch {
-	case err == nil:
-		return true
-	case errors.Is(err, ErrToolkitDataBusy):
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "the toolkit's data is held by a running ingest; the toolkit was not deleted. Stop or wait for the run, then retry",
-		})
-	default:
-		// Logged with the cause, answered without it: the error can carry an
-		// address. 503, not 500: nothing on this side failed, and the engine
-		// being unreachable is a condition a retry resolves.
-		slog.ErrorContext(r.Context(), "delete_toolkit_data: the engine could not delete the toolkit's data; the toolkit was not deleted",
-			"project_id", project, "toolkit_id", toolkit, "toolkit_type", toolkitType, "error",
-			fmt.Errorf("delete %s toolkit %d of project %d in its engine: %w", toolkitType, toolkit, project, err))
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"error": "the toolkit's engine data could not be deleted; the toolkit was not deleted. Retry later",
-		})
-	}
-	return false
+	return tx.Commit(ctx)
 }

@@ -1,18 +1,17 @@
 package api
 
 // The application engines' platform services in the composition (#1243, #1244):
-// the one list of clients RouterConfig carries, and the two places it is wired
-// into — the project provisioner's cleanup journal (one step per application)
-// and the toolkit handler's delete (the engine before the row).
+// the one list of clients RouterConfig carries, and the two journals it is
+// wired into — the project provisioner's cleanup journal (one step per
+// application, recorded on the row when the project is deleted) and the
+// toolkit cleanup journal (one row per Inventory toolkit deleted).
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log/slog"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
@@ -41,55 +40,22 @@ func applicationDataOptions(clients []ApplicationDataClient) []projectprovisioni
 	return options
 }
 
-// applicationToolkitData is the toolkit handler's remover: it finds the engine
-// a toolkit's type belongs to and asks it to delete the toolkit's data.
-type applicationToolkitData struct {
-	clients map[string]ApplicationDataClient
-	logger  *slog.Logger
-}
-
-func newApplicationToolkitData(clients []ApplicationDataClient, logger *slog.Logger) toolkits.ToolkitDataRemover {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	byApp := make(map[string]ApplicationDataClient, len(clients))
+// toolkitCleanupOptions are the journal options that give the toolkit cleanup
+// journal one remover per wired application.
+func toolkitCleanupOptions(clients []ApplicationDataClient) []toolkitcleanup.Option {
+	options := make([]toolkitcleanup.Option, 0, len(clients))
 	for _, client := range clients {
-		if client != nil {
-			byApp[client.App()] = client
+		if client == nil {
+			continue
 		}
+		options = append(options, toolkitcleanup.WithRemover(client.App(), client))
 	}
-	return &applicationToolkitData{clients: byApp, logger: logger}
+	return options
 }
 
-// DeleteToolkitData implements toolkits.ToolkitDataRemover.
-//
-// A type no application covers is nil: the toolkit has no engine data. An
-// application that is NOT wired on this process is nil too, logged at Warn:
-// the row delete must not be refused for an engine the deployment did not
-// configure, and the log is where an operator learns the graph stayed. The
-// engine's "nothing per toolkit" (DeepWiki) is nil; its "held by a run" is
-// ErrToolkitDataBusy; anything else is the failure it was.
-func (a *applicationToolkitData) DeleteToolkitData(ctx context.Context, projectID, toolkitID int64, toolkitType string) error {
-	app := platformops.AppForToolkitType(toolkitType)
-	if app == "" {
-		return nil
-	}
-	client, ok := a.clients[app]
-	if !ok {
-		a.logger.WarnContext(ctx, "toolkit delete: the application's engine is not configured on this process, so its data for the toolkit is not deleted",
-			"app", app, "project_id", projectID, "toolkit_id", toolkitID, "toolkit_type", toolkitType)
-		return nil
-	}
-	deletion, err := client.DeleteToolkitData(ctx, projectID, toolkitID)
-	switch {
-	case err == nil:
-		a.logger.InfoContext(ctx, "toolkit delete: application data removed",
-			"app", app, "project_id", projectID, "toolkit_id", toolkitID, "deleted", deletion.Deleted)
-		return nil
-	case errors.Is(err, platformops.ErrNotSupported):
-		return nil
-	case errors.Is(err, platformops.ErrRetryLater):
-		return fmt.Errorf("%w: %w", toolkits.ErrToolkitDataBusy, err)
-	}
-	return err
+// newToolkitCleanupJournal builds the toolkit cleanup journal over the shared
+// pool and the wired engines. The toolkit handler enqueues into it; the
+// process's reconciler (RouterConfig.OnToolkitCleanupJournal) drains it.
+func newToolkitCleanupJournal(cfg RouterConfig) *toolkitcleanup.Journal {
+	return toolkitcleanup.New(cfg.Pool, slog.Default(), toolkitCleanupOptions(cfg.ApplicationData)...)
 }
