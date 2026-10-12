@@ -1,23 +1,26 @@
 //! Azure DevOps work items (the `ado_boards` family) as a `ContentSource`
 //! (ADR-0030 I2).
 //!
-//! * **List.** The `wiql` query runs in windows of 2 000 ids
-//!   (`AND [System.Id] > last ORDER BY [System.Id]`), so a query matching
-//!   more than the 20 000 ids one WIQL answer may hold is still listed
-//!   completely; a link query (`FROM WorkItemLinks`) cannot be windowed and
-//!   is read in one answer. The ids are then read in batches of 200
-//!   (`workitemsbatch`, `$expand=relations`) for their revision, comment
-//!   count and attachments.
-//! * **Version.** `{System.Rev}.{System.CommentCount}`: the revision moves
-//!   on every field, relation and attachment change, the comment count on a
-//!   discussion the revision may not record. The SDK compares
-//!   `System.ChangedDate`.
+//! * **List.** The `wiql` query runs in windows of 2 000 ids: the user's
+//!   `WHERE` is wrapped as `WHERE (…) AND [System.Id] > last`, its
+//!   `ORDER BY` replaced by `ORDER BY [System.Id]` and its `ASOF` kept, so a
+//!   query matching more than the 20 000 ids one WIQL answer may hold is
+//!   still listed completely; a link query (`FROM WorkItemLinks`) cannot be
+//!   windowed and is read in one answer, refused when that answer is at
+//!   the server's ceiling (it would be truncated). The ids are then read in
+//!   batches of 200 (`workitemsbatch`, `$expand=relations`) for their
+//!   revision and attachments.
+//! * **Version.** `System.Rev`: the revision moves on every field, relation
+//!   and attachment change. The SDK compares `System.ChangedDate`.
 //! * **Dependents.** Every `AttachedFile` relation is a document
-//!   (`work_items/{id}/attachments/{name}`) and, with `include_comments`
-//!   (on by default), the discussion is one document
-//!   (`work_items/{id}/comments.md`). Both carry the parent's version and a
-//!   `parent_key`, so a changed work item re-indexes its group (ADR-0030
-//!   "Dependent documents"). The SDK indexes attachments and no comments.
+//!   (`work_items/{id}/attachments/{name}`) versioned by its own identity
+//!   (the attachment GUID of its URL, its size and modified date), and,
+//!   with `include_comments` (on by default), the discussion is one document
+//!   (`work_items/{id}/comments.md`) versioned by a hash over the comments'
+//!   ids, versions and modified dates (read at listing time, so an edited
+//!   comment re-indexes the discussion and an unrelated field edit does
+//!   not). Both carry a `parent_key` (ADR-0030 "Dependent documents"). The
+//!   SDK indexes attachments and no comments.
 //! * **Fetch.** A work item is `workitems/{id}?$expand=all`, its fields
 //!   sanitised (HTML to text, identities to display names, as the SDK's
 //!   `sanitize`) and written as JSON, keeping `fields` when given; an
@@ -28,7 +31,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
-use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
+use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError, content_version};
 use serde_json::{Map, Value, json};
 
 use super::client::{AdoClient, AdoRequest, AdoScope};
@@ -108,6 +111,9 @@ enum Extra {
     Comments {
         id: u64,
         title: String,
+        /// The hash over the comments' ids, versions and modified dates
+        /// the listing saw.
+        version: String,
     },
     Attachment {
         id: u64,
@@ -188,14 +194,21 @@ impl AdoBoardsSource {
                     .json(json!({"query": query})),
             )?;
             let (_, body) = self.http.json(request).await?;
-            let mut ids = Vec::new();
-            for relation in body
+            let relations = body
                 .get("workItemRelations")
                 .and_then(Value::as_array)
                 .ok_or(Failure::InvalidResponse(
                     "a link query answer has no workItemRelations",
-                ))?
-            {
+                ))?;
+            // The server returns at most `$top` relations without saying
+            // it cut the answer: a full answer is a truncated one.
+            if relations.len() >= WIQL_CEILING {
+                return Err(Failure::InvalidResponse(
+                    "the link query matches more work items than one answer holds; narrow it",
+                ));
+            }
+            let mut ids = Vec::new();
+            for relation in relations {
                 for end in ["source", "target"] {
                     if let Some(id) = relation
                         .get(end)
@@ -208,11 +221,6 @@ impl AdoBoardsSource {
             }
             ids.sort_unstable();
             ids.dedup();
-            if ids.len() >= WIQL_CEILING {
-                return Err(Failure::InvalidResponse(
-                    "the link query matches more work items than one answer holds; narrow it",
-                ));
-            }
             return Ok(ids);
         }
         let mut ids: Vec<u64> = Vec::new();
@@ -296,7 +304,7 @@ impl AdoBoardsSource {
                     .and_then(|fields| fields.get("System.CommentCount"))
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
-                let version = format!("{rev}.{comments}");
+                let version = rev.to_string();
                 let title = field_text("System.Title");
                 let kind = field_text("System.WorkItemType");
                 let key = format!("{KEY_PREFIX}/{id}.json");
@@ -312,14 +320,16 @@ impl AdoBoardsSource {
                 listed.push(Listed::new(key, version.clone(), 0, id.to_string()));
                 if self.params.include_comments && comments > 0 {
                     let key = format!("{KEY_PREFIX}/{id}/comments.md");
+                    let (version, _) = self.comments(id).await?;
                     extras.insert(
                         key.clone(),
                         Extra::Comments {
                             id,
                             title: title.clone(),
+                            version: version.clone(),
                         },
                     );
-                    listed.push(Listed::new(key, version.clone(), 0, id.to_string()));
+                    listed.push(Listed::new(key, version, 0, id.to_string()));
                 }
                 if self.params.include_attachments
                     && let Some(relations) = item.get("relations").and_then(Value::as_array)
@@ -354,12 +364,25 @@ impl AdoBoardsSource {
                             .and_then(|a| a.get("resourceSize"))
                             .and_then(Value::as_u64)
                             .unwrap_or(0);
+                        let guid = url
+                            .path_segments()
+                            .and_then(|mut s| s.next_back())
+                            .filter(|guid| !guid.is_empty())
+                            .ok_or(Failure::InvalidResponse(
+                                "an attachment URL names no attachment",
+                            ))?
+                            .to_owned();
+                        let modified = attributes
+                            .and_then(|a| a.get("resourceModifiedDate"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        // The attachment's own identity: its bytes never
+                        // change under one GUID, so a re-upload (a new
+                        // GUID) or a changed size/date is a new version,
+                        // and the parent's revision does not re-index it.
+                        let version = format!("{guid}:{size}:{modified}");
                         let mut key = format!("{KEY_PREFIX}/{id}/attachments/{name}");
                         if extras.contains_key(&key) {
-                            let guid = url
-                                .path_segments()
-                                .and_then(|mut s| s.next_back())
-                                .unwrap_or("dup");
                             key = format!("{KEY_PREFIX}/{id}/attachments/{guid}-{name}");
                         }
                         if !valid_key(&key) {
@@ -375,7 +398,7 @@ impl AdoBoardsSource {
                                 url,
                             },
                         );
-                        listed.push(Listed::new(key, version.clone(), size, id.to_string()));
+                        listed.push(Listed::new(key, version, size, id.to_string()));
                     }
                 }
                 self.http.check_count(listed.len())?;
@@ -491,11 +514,13 @@ impl AdoBoardsSource {
         Ok((bytes, metadata))
     }
 
-    /// The discussion as markdown, every page followed.
-    async fn comments(&self, id: u64) -> Result<Vec<u8>, Failure> {
+    /// The discussion: its version (a hash over every comment's id, version
+    /// and modified date, in order) and the markdown, every page followed.
+    async fn comments(&self, id: u64) -> Result<(String, Vec<u8>), Failure> {
         let id_text = id.to_string();
         let segments = ["wit", "workItems", id_text.as_str(), "comments"];
         let mut out = String::new();
+        let mut manifest = String::new();
         let mut continuation: Option<String> = None;
         let mut pages = 0;
         loop {
@@ -527,6 +552,13 @@ impl AdoBoardsSource {
                     .map(html_to_text)
                     .unwrap_or_default();
                 let _ = write!(out, "## {author} ({date})\n\n{text}\n\n");
+                let comment_id = comment.get("id").and_then(Value::as_u64).unwrap_or(0);
+                let version = comment.get("version").and_then(Value::as_u64).unwrap_or(0);
+                let modified = comment
+                    .get("modifiedDate")
+                    .and_then(Value::as_str)
+                    .unwrap_or(date);
+                let _ = writeln!(manifest, "{comment_id}:{version}:{modified}");
             }
             continuation = body
                 .get("continuationToken")
@@ -534,7 +566,7 @@ impl AdoBoardsSource {
                 .filter(|token| !token.is_empty())
                 .map(ToOwned::to_owned);
             if continuation.is_none() {
-                return Ok(out.into_bytes());
+                return Ok((content_version(manifest.as_bytes()), out.into_bytes()));
             }
         }
     }
@@ -567,39 +599,113 @@ fn is_link_query(query: &str) -> bool {
 }
 
 /// The query for the ids after `after`, ordered by id: the user's query
-/// without its `ORDER BY`, the window condition added to (or as) its `WHERE`.
+/// with its `ORDER BY` replaced by `ORDER BY [System.Id]`, its `ASOF` kept
+/// last, and the window condition added to its `WHERE` as
+/// `WHERE (original) AND [System.Id] > after` — in parentheses, so a
+/// top-level `OR` in the original keeps its meaning.
 fn windowed(query: &str, after: Option<u64>) -> String {
     let trimmed = query.trim().trim_end_matches(';').trim();
-    let lower = trimmed.to_ascii_lowercase();
-    let base = match find_keyword(&lower, "order by") {
-        Some(index) => trimmed[..index].trim_end(),
-        None => trimmed,
-    };
-    let mut out = base.to_owned();
-    if let Some(after) = after {
-        if find_keyword(&lower[..base.len()], "where").is_some() {
-            let _ = write!(out, " AND [System.Id] > {after}");
-        } else {
+    let words = words_outside_quotes(trimmed);
+    let where_at = find_words(&words, &["where"]);
+    let order_at = find_words(&words, &["order", "by"]);
+    let asof_at = find_words(&words, &["asof"]);
+    let end = trimmed.len();
+    // The `WHERE` body ends where the next clause starts.
+    let tail_start = [order_at, asof_at]
+        .into_iter()
+        .flatten()
+        .map(|(start, _)| start)
+        .filter(|start| where_at.is_none_or(|(where_start, _)| *start > where_start))
+        .min()
+        .unwrap_or(end);
+    let head = trimmed[..where_at.map_or(tail_start, |(start, _)| start)].trim_end();
+    let where_body = where_at.map(|(_, after_keyword)| trimmed[after_keyword..tail_start].trim());
+    let asof = asof_at.map(|(start, _)| {
+        let asof_end = order_at
+            .map(|(order_start, _)| order_start)
+            .filter(|order_start| *order_start > start)
+            .unwrap_or(end);
+        trimmed[start..asof_end].trim()
+    });
+    let mut out = head.to_owned();
+    match (where_body.filter(|body| !body.is_empty()), after) {
+        (Some(body), Some(after)) => {
+            let _ = write!(out, " WHERE ({body}) AND [System.Id] > {after}");
+        }
+        (Some(body), None) => {
+            let _ = write!(out, " WHERE {body}");
+        }
+        (None, Some(after)) => {
             let _ = write!(out, " WHERE [System.Id] > {after}");
         }
+        (None, None) => {}
     }
     out.push_str(" ORDER BY [System.Id]");
+    if let Some(asof) = asof {
+        let _ = write!(out, " {asof}");
+    }
     out
 }
 
-/// The byte index of `keyword` in `lower` as a whole word (space-bounded).
-fn find_keyword(lower: &str, keyword: &str) -> Option<usize> {
-    let mut from = 0;
-    while let Some(found) = lower[from..].find(keyword) {
-        let index = from + found;
-        let before = lower[..index].chars().next_back();
-        let after = lower[index + keyword.len()..].chars().next();
-        if before.is_none_or(char::is_whitespace) && after.is_none_or(char::is_whitespace) {
-            return Some(index);
+/// The words of `query` outside single-quoted strings and `[bracketed]`
+/// names: (start byte, end byte, lower-cased text).
+fn words_outside_quotes(query: &str) -> Vec<(usize, usize, String)> {
+    let mut words = Vec::new();
+    let mut word_start: Option<usize> = None;
+    let mut quoted = false;
+    let mut bracketed = false;
+    let close = |words: &mut Vec<(usize, usize, String)>, start: &mut Option<usize>, at| {
+        if let Some(begin) = start.take() {
+            words.push((begin, at, query[begin..at].to_ascii_lowercase()));
         }
-        from = index + keyword.len();
+    };
+    for (index, character) in query.char_indices() {
+        if quoted {
+            if character == '\'' {
+                quoted = false;
+            }
+            continue;
+        }
+        if bracketed {
+            if character == ']' {
+                bracketed = false;
+            }
+            continue;
+        }
+        match character {
+            '\'' => {
+                close(&mut words, &mut word_start, index);
+                quoted = true;
+            }
+            '[' => {
+                close(&mut words, &mut word_start, index);
+                bracketed = true;
+            }
+            '(' | ')' | ',' => close(&mut words, &mut word_start, index),
+            c if c.is_whitespace() => close(&mut words, &mut word_start, index),
+            _ => {
+                if word_start.is_none() {
+                    word_start = Some(index);
+                }
+            }
+        }
     }
-    None
+    close(&mut words, &mut word_start, query.len());
+    words
+}
+
+/// Where `keyword` (one or more consecutive words) first appears: the byte
+/// index of its first word and the byte index after its last.
+fn find_words(words: &[(usize, usize, String)], keyword: &[&str]) -> Option<(usize, usize)> {
+    words
+        .windows(keyword.len())
+        .find(|window| {
+            window
+                .iter()
+                .zip(keyword)
+                .all(|((_, _, word), wanted)| word == wanted)
+        })
+        .map(|window| (window[0].0, window[window.len() - 1].1))
 }
 
 impl ContentSource for AdoBoardsSource {
@@ -626,8 +732,11 @@ impl ContentSource for AdoBoardsSource {
                 let (bytes, metadata) = self.work_item(*id, *rev).await.map_err(failed)?;
                 (bytes, title.clone(), metadata)
             }
-            Extra::Comments { id, title } => {
-                let bytes = self.comments(*id).await.map_err(failed)?;
+            Extra::Comments { id, title, version } => {
+                let (now, bytes) = self.comments(*id).await.map_err(failed)?;
+                if &now != version {
+                    return Err(failed(Failure::Changed));
+                }
                 let mut metadata = Map::new();
                 metadata.insert("id".to_owned(), Value::String(format!("{id}::comments")));
                 metadata.insert("type".to_owned(), Value::String("comments".to_owned()));
@@ -678,8 +787,10 @@ mod tests {
     use super::*;
     use crate::source::fixture::{Reply, Scripted, query};
     use crate::transport::StatusCode;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     const ORG: &str = "https://dev.azure.com/contoso";
+    const MODIFIED: &str = "2026-09-30T12:00:00Z";
 
     fn config() -> AdoToolkitConfig {
         let settings = json!({
@@ -707,7 +818,8 @@ mod tests {
             .iter()
             .map(|(name, guid, size)| {
                 json!({"rel": "AttachedFile", "url": format!("{ORG}/p-guid/_apis/wit/attachments/{guid}"),
-                       "attributes": {"name": name, "resourceSize": size}})
+                       "attributes": {"id": 7, "name": name, "resourceSize": size,
+                                      "resourceCreatedDate": MODIFIED, "resourceModifiedDate": MODIFIED}})
             })
             .chain(std::iter::once(json!({"rel": "System.LinkTypes.Hierarchy-Forward", "url": format!("{ORG}/_apis/wit/workItems/9")})))
             .collect();
@@ -725,20 +837,46 @@ mod tests {
         })
     }
 
+    /// A comment as the comments API returns one (`7.1-preview.4`).
+    fn comment(id: u64, version: u64, author: &str, text: &str) -> Value {
+        json!({"id": id, "version": version, "text": text, "workItemId": 1,
+               "createdBy": {"displayName": author}, "createdDate": format!("2026-10-01T0{id}:00:00Z"),
+               "modifiedBy": {"displayName": author}, "modifiedDate": format!("2026-10-01T0{version}:00:00Z")})
+    }
+
+    /// The window a query asks for: the id after which it selects, when the
+    /// window condition was added the way WIQL precedence needs it — in an
+    /// `AND` outside the user's parenthesised `WHERE`. A condition appended
+    /// to a `WHERE` with a top-level `OR` binds to its last operand only, so
+    /// the server would answer the `OR`'s other branch again from id 1: the
+    /// fixture does the same.
+    fn window_after(query_text: &str) -> u64 {
+        let has_where = query_text.to_ascii_lowercase().contains(" where ");
+        let after = query_text
+            .split("[System.Id] > ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+        if after == 0 || !has_where {
+            return after;
+        }
+        if query_text.contains(") AND [System.Id] > ") {
+            after
+        } else {
+            0
+        }
+    }
+
     fn reply(request: &Request, items: &[(u64, u64, u64)]) -> Reply {
         let path = request.url().path();
         match path {
             "/contoso/Fabrikam/_apis/wit/wiql" => {
                 let body = body_json(request);
                 let query_text = body["query"].as_str().expect("query");
-                assert!(query_text.ends_with("ORDER BY [System.Id]"), "{query_text}");
-                let after: u64 = query_text
-                    .split("[System.Id] > ")
-                    .nth(1)
-                    .and_then(|rest| rest.split_whitespace().next())
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
+                assert!(query_text.contains("ORDER BY [System.Id]"), "{query_text}");
                 assert_eq!(query(request, "$top").as_deref(), Some("2000"));
+                let after = window_after(query_text);
                 let page: Vec<Value> = items
                     .iter()
                     .filter(|(id, _, _)| *id > after)
@@ -777,12 +915,15 @@ mod tests {
             }
             "/contoso/Fabrikam/_apis/wit/workItems/1/comments" => {
                 match query(request, "continuationToken").as_deref() {
-                    None => Reply::json(&json!({"comments": [
-                        {"text": "<p>First</p>", "createdBy": {"displayName": "Ada"}, "createdDate": "2026-10-01T01:00:00Z"}
-                    ], "continuationToken": "c2"})),
-                    Some("c2") => Reply::json(&json!({"comments": [
-                        {"text": "Second", "createdBy": {"displayName": "Bob"}, "createdDate": "2026-10-01T02:00:00Z"}
-                    ]})),
+                    None => Reply::json(&json!({
+                        "totalCount": 2, "count": 1,
+                        "comments": [comment(1, 1, "Ada", "<p>First</p>")],
+                        "continuationToken": "c2",
+                    })),
+                    Some("c2") => Reply::json(&json!({
+                        "totalCount": 2, "count": 1,
+                        "comments": [comment(2, 1, "Bob", "Second")],
+                    })),
                     other => panic!("token {other:?}"),
                 }
             }
@@ -802,6 +943,15 @@ mod tests {
             }
             other => panic!("unexpected request {other}"),
         }
+    }
+
+    /// The listed (key, version, size) of work item 1 and its dependents.
+    fn group_of_one(listed: &[DocumentRef]) -> Vec<(String, String, u64)> {
+        listed
+            .iter()
+            .filter(|d| d.key.starts_with("work_items/1/") || d.key == "work_items/1.json")
+            .map(|d| (d.key.clone(), d.version.clone(), d.size))
+            .collect()
     }
 
     #[tokio::test]
@@ -828,18 +978,33 @@ mod tests {
                 .count(),
             11
         );
-        let first: Vec<_> = listed
-            .iter()
-            .filter(|d| d.key.starts_with("work_items/1/") || d.key == "work_items/1.json")
-            .map(|d| (d.key.as_str(), d.version.as_str(), d.size))
-            .collect();
+        assert_eq!(
+            seen.iter().filter(|s| s.contains("/comments")).count(),
+            2,
+            "the discussion was read (both pages) once at listing time for its version"
+        );
+        let first = group_of_one(&listed);
+        let comments_version = first[3].1.clone();
+        assert_eq!(comments_version.len(), 64, "a hash: {comments_version}");
         assert_eq!(
             first,
             [
-                ("work_items/1.json", "3.1", 0),
-                ("work_items/1/attachments/a2-spec.pdf", "3.1", 6),
-                ("work_items/1/attachments/spec.pdf", "3.1", 5),
-                ("work_items/1/comments.md", "3.1", 0),
+                ("work_items/1.json".to_owned(), "3".to_owned(), 0),
+                (
+                    "work_items/1/attachments/a2-spec.pdf".to_owned(),
+                    format!("a2:6:{MODIFIED}"),
+                    6
+                ),
+                (
+                    "work_items/1/attachments/spec.pdf".to_owned(),
+                    format!("a1:5:{MODIFIED}"),
+                    5
+                ),
+                (
+                    "work_items/1/comments.md".to_owned(),
+                    comments_version.clone(),
+                    0
+                ),
             ]
         );
         let item = source.fetch("work_items/1.json").await.expect("item");
@@ -862,6 +1027,7 @@ mod tests {
         );
         assert!(text.contains("## Bob"), "both pages were read: {text}");
         assert_eq!(comments.metadata["parent_key"], "work_items/1.json");
+        assert_eq!(comments.reference.version, comments_version);
         let attachment = source
             .fetch("work_items/1/attachments/a2-spec.pdf")
             .await
@@ -869,6 +1035,133 @@ mod tests {
         assert_eq!(attachment.bytes, b"%PDF-2");
         assert_eq!(attachment.metadata["parent_key"], "work_items/1.json");
         assert_eq!(attachment.title, "spec.pdf");
+    }
+
+    /// The recorded tenant in three states: as recorded, after a field edit
+    /// (rev 3 → 4), after a new comment (comment 3 added).
+    fn phased_reply(request: &Request, phase: u64) -> Reply {
+        let items = [(
+            1_u64,
+            if phase >= 1 { 4 } else { 3 },
+            if phase >= 2 { 3 } else { 2 },
+        )];
+        if request.url().path() == "/contoso/Fabrikam/_apis/wit/workItems/1/comments" {
+            let mut comments = vec![
+                comment(1, 1, "Ada", "<p>First</p>"),
+                comment(2, 1, "Bob", "Second"),
+            ];
+            if phase >= 2 {
+                comments.push(comment(3, 1, "Cy", "Third"));
+            }
+            return Reply::json(
+                &json!({"totalCount": comments.len(), "count": comments.len(), "comments": comments}),
+            );
+        }
+        reply(request, &items)
+    }
+
+    #[tokio::test]
+    async fn a_field_edit_moves_only_the_work_item_and_a_new_comment_only_the_discussion() {
+        let phase = Arc::new(AtomicU64::new(0));
+        let listing_at = |phase: &Arc<AtomicU64>| {
+            let phase = Arc::clone(phase);
+            Scripted::new(move |request, _| phased_reply(request, phase.load(Ordering::SeqCst)))
+        };
+        let list = |transport| async move {
+            let source = AdoBoardsSource::new(
+                config(),
+                params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems"})),
+                allow(),
+                transport,
+            )
+            .expect("source");
+            group_of_one(&source.list().await.expect("listing"))
+        };
+        let recorded = list(listing_at(&phase)).await;
+        assert_eq!(recorded.len(), 4);
+
+        phase.store(1, Ordering::SeqCst);
+        let after_field_edit = list(listing_at(&phase)).await;
+        let moved: Vec<&str> = after_field_edit
+            .iter()
+            .zip(&recorded)
+            .filter(|(now, before)| now.1 != before.1)
+            .map(|(now, _)| now.0.as_str())
+            .collect();
+        assert_eq!(
+            moved,
+            ["work_items/1.json"],
+            "a field edit (rev 3 → 4) moves the work item's version only"
+        );
+
+        phase.store(2, Ordering::SeqCst);
+        let after_comment = list(listing_at(&phase)).await;
+        let moved: Vec<&str> = after_comment
+            .iter()
+            .zip(&after_field_edit)
+            .filter(|(now, before)| now.1 != before.1)
+            .map(|(now, _)| now.0.as_str())
+            .collect();
+        assert_eq!(
+            moved,
+            ["work_items/1/comments.md"],
+            "a new comment moves the discussion's version only"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_discussion_that_moved_on_since_the_listing_is_reported_changed() {
+        let phase = Arc::new(AtomicU64::new(0));
+        let shared = Arc::clone(&phase);
+        let fixture =
+            Scripted::new(move |request, _| phased_reply(request, shared.load(Ordering::SeqCst)));
+        let source = AdoBoardsSource::new(
+            config(),
+            params(
+                &json!({"wiql": "SELECT [System.Id] FROM WorkItems", "include_attachments": false}),
+            ),
+            allow(),
+            fixture,
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        phase.store(2, Ordering::SeqCst);
+        let error = source
+            .fetch("work_items/1/comments.md")
+            .await
+            .expect_err("changed");
+        assert!(matches!(error, SourceError::Changed(_)), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_query_with_a_top_level_or_is_windowed_in_parentheses() {
+        // 2 001 work items match `A OR B`; without the parentheses the second
+        // window's `OR B AND [System.Id] > 2000` re-selects branch A from id
+        // 1, which the connector reports as an out-of-order answer.
+        let items: Vec<(u64, u64, u64)> = (1..=2_001).map(|id| (id, 1, 0)).collect();
+        let fixture = Scripted::new(move |request, _| reply(request, &items));
+        let source = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active' OR [System.State] = 'New' ORDER BY [System.Id] DESC", "include_attachments": false})),
+            allow(),
+            fixture.clone(),
+        )
+        .expect("source");
+        let listed = source.list().await.expect("listing");
+        assert_eq!(listed.len(), 2_001);
+        let queries: Vec<String> = fixture
+            .requests()
+            .iter()
+            .filter(|request| request.url().path().ends_with("/wiql"))
+            .map(|request| body_json(request)["query"].as_str().expect("q").to_owned())
+            .collect();
+        assert_eq!(
+            queries,
+            [
+                "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active' OR [System.State] = 'New' ORDER BY [System.Id]",
+                "SELECT [System.Id] FROM WorkItems WHERE ([System.State] = 'Active' OR [System.State] = 'New') AND [System.Id] > 2000 ORDER BY [System.Id]",
+            ]
+        );
     }
 
     #[tokio::test]
@@ -929,6 +1222,63 @@ mod tests {
         );
     }
 
+    /// A link query answer with `relations` relations, every one between
+    /// work items 1 and 2.
+    fn link_reply(request: &Request, relations: usize) -> Reply {
+        match request.url().path() {
+            "/contoso/Fabrikam/_apis/wit/wiql" => {
+                assert_eq!(query(request, "$top").as_deref(), Some("20000"));
+                let value: Vec<Value> = (0..relations)
+                    .map(|_| json!({"rel": "System.LinkTypes.Hierarchy-Forward", "source": {"id": 1}, "target": {"id": 2}}))
+                    .collect();
+                Reply::json(&json!({"queryType": "oneHop", "workItemRelations": value}))
+            }
+            "/contoso/Fabrikam/_apis/wit/workitemsbatch" => {
+                let ids: Vec<u64> = body_json(request)["ids"]
+                    .as_array()
+                    .expect("ids")
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .collect();
+                let value: Vec<Value> = ids.iter().map(|id| work_item(*id, 1, 0, &[])).collect();
+                Reply::json(&json!({"count": value.len(), "value": value}))
+            }
+            other => panic!("unexpected request {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_link_query_lists_both_ends_and_a_full_answer_is_refused_as_truncated() {
+        let wiql = "SELECT [System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = @project MODE (MustContain)";
+        let source = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": wiql, "include_attachments": false})),
+            allow(),
+            Scripted::new(|request, _| link_reply(request, 3)),
+        )
+        .expect("source");
+        let listed = source.list().await.expect("listing");
+        let keys: Vec<&str> = listed.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(keys, ["work_items/1.json", "work_items/2.json"]);
+
+        // Exactly the ceiling of relations, which name only two work items:
+        // the raw count says the answer was cut, the ids do not.
+        let source = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": wiql})),
+            allow(),
+            Scripted::new(|request, _| link_reply(request, WIQL_CEILING)),
+        )
+        .expect("source");
+        let error = source.list().await.expect_err("truncated");
+        assert!(
+            error
+                .to_string()
+                .contains("more work items than one answer holds"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn queries_are_windowed_without_breaking_their_where_clause() {
         assert_eq!(
@@ -936,7 +1286,7 @@ mod tests {
                 "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active' ORDER BY [System.ChangedDate] DESC",
                 Some(10)
             ),
-            "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active' AND [System.Id] > 10 ORDER BY [System.Id]"
+            "SELECT [System.Id] FROM WorkItems WHERE ([System.State] = 'Active') AND [System.Id] > 10 ORDER BY [System.Id]"
         );
         assert_eq!(
             windowed("select [System.Id] from WorkItems;", Some(5)),
@@ -944,10 +1294,49 @@ mod tests {
         );
         assert_eq!(
             windowed(
-                "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS 'order by'",
+                "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active' OR [System.State] = 'New'",
+                Some(7)
+            ),
+            "SELECT [System.Id] FROM WorkItems WHERE ([System.State] = 'Active' OR [System.State] = 'New') AND [System.Id] > 7 ORDER BY [System.Id]"
+        );
+        assert_eq!(
+            windowed(
+                "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active' OR [System.State] = 'New'",
                 None
             ),
-            "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS 'order by' ORDER BY [System.Id]"
+            "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active' OR [System.State] = 'New' ORDER BY [System.Id]"
+        );
+        // Keywords inside quotes and bracketed names are text, and
+        // `ORDER   BY` may be spaced freely.
+        assert_eq!(
+            windowed(
+                "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS 'the order by clause where' AND [Custom.Where] = 1 ORDER   BY [System.Id]",
+                Some(3)
+            ),
+            "SELECT [System.Id] FROM WorkItems WHERE ([System.Title] CONTAINS 'the order by clause where' AND [Custom.Where] = 1) AND [System.Id] > 3 ORDER BY [System.Id]"
+        );
+        // ASOF stays, after the new ORDER BY, whether it followed or
+        // preceded the original ORDER BY.
+        assert_eq!(
+            windowed(
+                "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Done' ORDER BY [System.Id] ASOF '2026-01-01'",
+                Some(1)
+            ),
+            "SELECT [System.Id] FROM WorkItems WHERE ([System.State] = 'Done') AND [System.Id] > 1 ORDER BY [System.Id] ASOF '2026-01-01'"
+        );
+        assert_eq!(
+            windowed(
+                "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Done' ASOF '2026-01-01' ORDER BY [System.Id]",
+                None
+            ),
+            "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Done' ORDER BY [System.Id] ASOF '2026-01-01'"
+        );
+        assert_eq!(
+            windowed(
+                "SELECT [System.Id] FROM WorkItems ASOF '2026-01-01'",
+                Some(2)
+            ),
+            "SELECT [System.Id] FROM WorkItems WHERE [System.Id] > 2 ORDER BY [System.Id] ASOF '2026-01-01'"
         );
         assert!(is_link_query(
             "SELECT [System.Id] FROM workitemLinks WHERE ..."

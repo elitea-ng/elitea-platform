@@ -451,15 +451,19 @@ fn sharepoint_fixture(state: Arc<Mutex<Library>>) -> Arc<Recorded> {
                 "value": [{"id": "d1", "name": "Documents", "webUrl": "https://contoso.sharepoint.com/sites/eng/Shared%20Documents"}]
             })),
             ("graph.microsoft.com", "/v1.0/drives/d1/root/delta") => {
-                let value: Vec<Value> = library
-                    .iter()
-                    .map(|(id, (name, ctag, body))| {
-                        json!({"id": id, "name": name, "size": body.len(), "cTag": ctag,
-                               "lastModifiedDateTime": "2026-10-01T00:00:00Z", "file": {},
-                               "webUrl": format!("https://contoso.sharepoint.com/sites/eng/{name}"),
-                               "parentReference": {"driveId": "d1", "path": "/drives/d1/root:"}})
-                    })
-                    .collect();
+                // As Graph serves it: the root item first, every item with
+                // its parent's id and no `parentReference.path`.
+                let value: Vec<Value> = std::iter::once(
+                    json!({"id": "root-d1", "name": "root", "root": {}, "folder": {"childCount": 3},
+                           "parentReference": {"driveId": "d1"}}),
+                )
+                .chain(library.iter().map(|(id, (name, ctag, body))| {
+                    json!({"id": id, "name": name, "size": body.len(), "cTag": ctag,
+                           "lastModifiedDateTime": "2026-10-01T00:00:00Z", "file": {},
+                           "webUrl": format!("https://contoso.sharepoint.com/sites/eng/{name}"),
+                           "parentReference": {"driveId": "d1", "id": "root-d1"}})
+                }))
+                .collect();
                 Reply::json(
                     &json!({"value": value, "@odata.deltaLink": "https://graph.microsoft.com/v1.0/drives/d1/root/delta?token=x"}),
                 )
@@ -491,11 +495,7 @@ async fn sharepoint_indexes_its_fixture_then_only_what_changed() {
         }}),
         json!({"skip_extensions": ["png"]}),
         &state,
-        &[
-            "Documents/README.md",
-            "Documents/notes.txt",
-            "Documents/old.md",
-        ],
+        &["Documents/i1", "Documents/i2", "Documents/i3"],
         |library| {
             library.insert(
                 "i2",
@@ -507,10 +507,14 @@ async fn sharepoint_indexes_its_fixture_then_only_what_changed() {
             );
             library.remove("i3");
         },
-        "Documents/notes.txt",
-        "Documents/old.md",
+        "Documents/i2",
+        "Documents/i3",
     )
     .await;
+    // The key is the item id; the human path lives in the metadata and the
+    // media type comes from the name.
+    let points = harness.stored().await;
+    assert_eq!(points["Documents/i2"].0, "c2-b");
 }
 
 // ---------------------------------------------------------------- ado_wiki
@@ -603,23 +607,33 @@ async fn ado_wiki_indexes_its_fixture_then_only_what_changed() {
 
 // -------------------------------------------------------------- ado_boards
 
-/// Work items: id → (rev, comment count, description).
-type Board = BTreeMap<u64, (u64, u64, String)>;
+/// A comment as the comments API returns one: (id, version, text).
+type Comments = Vec<(u64, u64, &'static str)>;
+/// Work items: id → (rev, comments, description).
+type Board = BTreeMap<u64, (u64, Comments, String)>;
 
 fn board() -> Board {
     BTreeMap::from([
-        (1, (3, 1, "<p>Crash on <b>start</b></p>".to_owned())),
-        (2, (1, 0, "Slow page".to_owned())),
-        (3, (2, 0, "Typo in footer".to_owned())),
+        (
+            1,
+            (
+                3,
+                vec![(11, 1, "<p>Reproduced on main.</p>")],
+                "<p>Crash on <b>start</b></p>".to_owned(),
+            ),
+        ),
+        (2, (1, vec![], "Slow page".to_owned())),
+        (3, (2, vec![], "Typo in footer".to_owned())),
     ])
 }
 
 fn board_fixture(state: Arc<Mutex<Board>>) -> Arc<Recorded> {
-    fn item(id: u64, rev: u64, comments: u64, description: &str, attachments: bool) -> Value {
+    fn item(id: u64, rev: u64, comments: usize, description: &str, attachments: bool) -> Value {
         let mut relations = Vec::new();
         if attachments {
             relations.push(json!({"rel": "AttachedFile", "url": "https://dev.azure.com/contoso/p/_apis/wit/attachments/att-1",
-                                  "attributes": {"name": "log.txt", "resourceSize": 9}}));
+                                  "attributes": {"id": 5, "name": "log.txt", "resourceSize": 9,
+                                                 "resourceModifiedDate": "2026-09-30T00:00:00Z"}}));
         }
         json!({"id": id, "rev": rev, "fields": {
             "System.Title": format!("Item {id}"), "System.WorkItemType": "Bug", "System.State": "Active",
@@ -646,7 +660,7 @@ fn board_fixture(state: Arc<Mutex<Board>>) -> Arc<Recorded> {
                     .iter()
                     .filter(|(id, _)| asked.contains(id))
                     .map(|(id, (rev, comments, description))| {
-                        item(*id, *rev, *comments, description, *id == 1)
+                        item(*id, *rev, comments.len(), description, *id == 1)
                     })
                     .collect();
                 Reply::json(&json!({"value": value}))
@@ -660,15 +674,33 @@ fn board_fixture(state: Arc<Mutex<Board>>) -> Arc<Recorded> {
                 assert_eq!(query(request, "$expand").as_deref(), Some("all"));
                 match items.get(&id) {
                     Some((rev, comments, description)) => {
-                        Reply::json(&item(id, *rev, *comments, description, id == 1))
+                        Reply::json(&item(id, *rev, comments.len(), description, id == 1))
                     }
                     None => Reply::status(StatusCode::NOT_FOUND),
                 }
             }
-            "/contoso/Fabrikam/_apis/wit/workItems/1/comments" => {
-                Reply::json(&json!({"comments": [
-                    {"text": "<p>Reproduced on main.</p>", "createdBy": {"displayName": "Ada"}, "createdDate": "2026-10-01T01:00:00Z"}
-                ]}))
+            p if p.starts_with("/contoso/Fabrikam/_apis/wit/workItems/")
+                && p.ends_with("/comments") =>
+            {
+                let id: u64 = p
+                    .trim_start_matches("/contoso/Fabrikam/_apis/wit/workItems/")
+                    .trim_end_matches("/comments")
+                    .parse()
+                    .expect("id");
+                let comments: Vec<Value> = items
+                    .get(&id)
+                    .map(|(_, comments, _)| comments.as_slice())
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(comment_id, version, text)| {
+                        json!({"id": comment_id, "version": version, "text": text, "workItemId": id,
+                               "createdBy": {"displayName": "Ada"}, "createdDate": "2026-10-01T01:00:00Z",
+                               "modifiedDate": format!("2026-10-01T01:0{version}:00Z")})
+                    })
+                    .collect();
+                Reply::json(
+                    &json!({"totalCount": comments.len(), "count": comments.len(), "comments": comments}),
+                )
             }
             "/contoso/p/_apis/wit/attachments/att-1" => Reply::bytes(b"log lines"),
             other => panic!("unexpected request {other}"),
@@ -694,22 +726,27 @@ async fn ado_boards_indexes_work_items_with_their_dependents_then_only_what_chan
             "work_items/3.json",
         ],
         |items| {
-            items.insert(2, (2, 0, "Slow page, now measured at 4 s".to_owned()));
+            items.insert(2, (2, vec![], "Slow page, now measured at 4 s".to_owned()));
             items.remove(&3);
         },
         "work_items/2.json",
         "work_items/3.json",
     )
     .await;
-    // The dependents name their parent, and the parent's version covers them.
+    // Each document is versioned by its own identity: the work item by its
+    // revision, the attachment by its GUID, size and date, the discussion
+    // by a hash over its comments.
     let points = harness.stored().await;
-    assert_eq!(points["work_items/1/comments.md"].0, "3.1");
-    assert_eq!(points["work_items/1/attachments/log.txt"].0, "3.1");
-    assert_eq!(points["work_items/1.json"].0, "3.1");
+    assert_eq!(points["work_items/1.json"].0, "3");
+    assert_eq!(
+        points["work_items/1/attachments/log.txt"].0,
+        "att-1:9:2026-09-30T00:00:00Z"
+    );
+    assert_eq!(points["work_items/1/comments.md"].0.len(), 64);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_changed_work_item_re_indexes_its_dependents_group() {
+/// The keys the second of two runs wrote, after `mutate` changed the board.
+async fn written_after(mutate: impl FnOnce(&mut Board)) -> (Vec<String>, Harness) {
     let state = Arc::new(Mutex::new(board()));
     let harness = harness(board_fixture(Arc::clone(&state))).await;
     let settings = json!({"ado_configuration": {"organization_url": "https://dev.azure.com/contoso", "token": "pat"}, "project": "Fabrikam"});
@@ -717,35 +754,72 @@ async fn a_changed_work_item_re_indexes_its_dependents_group() {
     harness
         .run("ado_boards", settings.clone(), arguments.clone(), false)
         .await;
-    // A new comment: the parent's version moves, and so do its dependents'.
-    state
-        .lock()
-        .expect("state")
-        .insert(1, (3, 2, "<p>Crash on <b>start</b></p>".to_owned()));
+    mutate(&mut state.lock().expect("state"));
     let summary = harness.run("ado_boards", settings, arguments, true).await;
-    let mut written: Vec<&str> = summary
+    let mut written: Vec<String> = summary
         .documents
         .iter()
-        .map(|d| d.document_key.as_str())
+        .map(|d| d.document_key.clone())
         .collect();
     written.sort_unstable();
+    (written, harness)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_field_edit_re_indexes_only_the_work_item_document() {
+    // rev 3 → 4, the discussion and the attachment untouched.
+    let (written, harness) = written_after(|items| {
+        items.insert(
+            1,
+            (
+                4,
+                vec![(11, 1, "<p>Reproduced on main.</p>")],
+                "<p>Crash on <b>start</b>, also on resume</p>".to_owned(),
+            ),
+        );
+    })
+    .await;
+    assert_eq!(written, ["work_items/1.json"]);
+    let points = harness.stored().await;
+    assert_eq!(points["work_items/1.json"].0, "4");
     assert_eq!(
-        written,
-        [
-            "work_items/1.json",
-            "work_items/1/attachments/log.txt",
-            "work_items/1/comments.md"
-        ]
+        points["work_items/1/attachments/log.txt"].0,
+        "att-1:9:2026-09-30T00:00:00Z"
     );
-    assert_eq!(
-        harness
-            .stored()
-            .await
-            .values()
-            .filter(|(version, _)| version == "3.2")
-            .count(),
-        3
-    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_comment_re_indexes_only_the_discussion_document() {
+    let (written, harness) = written_after(|items| {
+        items.insert(
+            1,
+            (
+                3,
+                vec![
+                    (11, 1, "<p>Reproduced on main.</p>"),
+                    (12, 1, "Fixed in #42."),
+                ],
+                "<p>Crash on <b>start</b></p>".to_owned(),
+            ),
+        );
+    })
+    .await;
+    assert_eq!(written, ["work_items/1/comments.md"]);
+    assert_eq!(harness.stored().await["work_items/1.json"].0, "3");
+
+    // An edited comment (version 1 → 2) too.
+    let (written, _) = written_after(|items| {
+        items.insert(
+            1,
+            (
+                3,
+                vec![(11, 2, "<p>Reproduced on main and release.</p>")],
+                "<p>Crash on <b>start</b></p>".to_owned(),
+            ),
+        );
+    })
+    .await;
+    assert_eq!(written, ["work_items/1/comments.md"]);
 }
 
 // --------------------------------------------------------------- ado_plans

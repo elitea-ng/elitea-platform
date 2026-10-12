@@ -3,18 +3,26 @@
 //! I2), over Microsoft Graph.
 //!
 //! * **List.** The site (`sites/{host}:/{path}`), its drives (the document
-//!   libraries; `form_name` picks one), then each drive's — or folder's,
-//!   with `path` — **delta** enumeration (`root/delta`,
-//!   `root:/{folder}:/delta`): one paged walk that names every file of the
-//!   subtree with its content tag and size, no per-folder requests and no
-//!   page cap. `include_extensions` and `skip_extensions` filter by file
-//!   name as in the SDK; `limit_files` caps the listing only when given.
+//!   libraries; `form_name` picks one by display name or URL segment), then
+//!   each drive's **root delta** enumeration (`drives/{id}/root/delta`): one
+//!   paged walk that names every item of the drive with its content tag and
+//!   size, no per-folder requests and no page cap. Graph documents the
+//!   delta feed's shape, and the connector follows it: delta is served on
+//!   the drive root only (a `path` scope is applied after the walk, to the
+//!   reconstructed paths); an item may appear more than once across the
+//!   pages and its **last occurrence wins** (a later `deleted` facet
+//!   removes it); items carry `parentReference.id` but **no**
+//!   `parentReference.path`, so folder paths are rebuilt from the feed's
+//!   own folder items (id → name, parent id). `include_extensions` and
+//!   `skip_extensions` filter by file name as in the SDK; `limit_files`
+//!   caps the listing (the first files by path) only when given.
 //! * **Version.** The item's `cTag`, which Graph changes when the content
 //!   changes (not on a metadata edit), falling back to `eTag` and then
 //!   `lastModifiedDateTime`. The SDK compares `lastModifiedDateTime`.
-//! * **Key.** `{library}/{folder path}/{name}`: readable, stable while a
-//!   file stays in place (a moved file is a new document). The SDK keys by
-//!   the item id, which differs between its REST and Graph backends.
+//! * **Key.** `{library}/{driveItem id}`: the SDK's item-id keying, stable
+//!   across renames and moves within the library. The human path lives in
+//!   the metadata (`Path`) and drives the `path` and extension filters; the
+//!   document's media type comes from its name.
 //! * **Fetch.** `drives/{drive}/items/{item}/content`, following Graph's
 //!   redirect to the site host, under the document cap.
 //! * Lists, list items and OneNote are not indexed (the SDK indexes no
@@ -24,7 +32,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
+use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError, mime_of};
 use serde_json::{Map, Value};
 
 use super::config::SharePointIndexConfig;
@@ -36,13 +44,15 @@ use crate::source::{
     Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references,
     valid_key,
 };
-use crate::transport::{StatusCode, Transport, Url};
+use crate::transport::{Transport, Url};
 
 const PROVIDER: &str = "SharePoint";
 const PAGE: &str = "999";
-const ITEM_SELECT: &str = "id,name,file,folder,size,cTag,eTag,lastModifiedDateTime,createdDateTime,webUrl,parentReference,deleted";
+const ITEM_SELECT: &str = "id,name,file,folder,root,size,cTag,eTag,lastModifiedDateTime,createdDateTime,webUrl,parentReference,deleted";
 const DRIVE_SELECT: &str = "id,name,webUrl,driveType";
 const MAX_DRIVES: usize = 10_000;
+/// Folder nesting deeper than this is a cycle in the feed, not a library.
+const MAX_DEPTH: usize = 512;
 
 /// The `index_data` arguments of the `sharepoint` family
 /// (`sharepoint/api_wrapper.py::_index_tool_params`).
@@ -54,7 +64,7 @@ pub struct SharePointIndexParams {
     /// A folder: server-relative (`/sites/eng/Shared Documents/Specs`) or
     /// relative to the library (`Specs`, with `form_name`) or to the site.
     pub path: Option<String>,
-    /// A document library's name.
+    /// A document library's name (display name or URL segment).
     pub form_name: Option<String>,
 }
 
@@ -102,15 +112,56 @@ pub struct SharePointSource {
     extras: Mutex<Arc<BTreeMap<String, Extra>>>,
 }
 
-/// One delta walk to make: a drive, and the folder within it when the
-/// listing is scoped.
+/// A document library as the drives answer names it.
+#[derive(Clone, Debug)]
+struct Drive {
+    id: String,
+    /// The display name (`Documents`), or the drive id when the name is
+    /// unusable as a key segment.
+    name: String,
+    /// The percent-decoded last segment of `webUrl` (`Shared Documents`),
+    /// which a server-relative `path` names instead of the display name.
+    url_segment: Option<String>,
+}
+
+impl Drive {
+    /// Whether `wanted` names this library by display name or URL segment.
+    fn is_called(&self, wanted: &str) -> bool {
+        eq_ignore_case(&self.name, wanted)
+            || self
+                .url_segment
+                .as_deref()
+                .is_some_and(|segment| eq_ignore_case(segment, wanted))
+    }
+}
+
+/// One delta walk to make: a drive, and the folder within it the listing
+/// is scoped to.
 struct Seed {
-    drive_id: String,
-    library: String,
+    drive: Drive,
     folder: Option<String>,
     /// The folder came from a guess (a bare path tried in every library), so
-    /// a 404 skips the library instead of failing the listing.
+    /// its absence skips the library instead of failing the listing.
     guessed: bool,
+}
+
+/// One delta item, compacted: what the listing needs of it.
+#[derive(Debug)]
+enum Entry {
+    Root,
+    Folder {
+        name: String,
+        parent: Option<String>,
+    },
+    File {
+        name: String,
+        parent: Option<String>,
+        version: String,
+        size: u64,
+        web_url: Option<String>,
+        created: Option<String>,
+        modified: Option<String>,
+    },
 }
 
 impl SharePointSource {
@@ -203,8 +254,8 @@ impl SharePointSource {
             .ok_or(Failure::InvalidResponse("the site answer has no id"))
     }
 
-    /// The site's drives: (id, name, webUrl).
-    async fn drives(&self, site: &str) -> Result<Vec<(String, String, Option<String>)>, Failure> {
+    /// The site's drives.
+    async fn drives(&self, site: &str) -> Result<Vec<Drive>, Failure> {
         let mut url = graph_url(&["sites", site, "drives"])?;
         url.query_pairs_mut()
             .append_pair("$select", DRIVE_SELECT)
@@ -229,12 +280,13 @@ impl SharePointSource {
                     .get("name")
                     .and_then(Value::as_str)
                     .and_then(safe_name)
-                    .unwrap_or_else(|| "Documents".to_owned());
-                let web_url = drive
-                    .get("webUrl")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                drives.push((id.to_owned(), name, web_url));
+                    .unwrap_or_else(|| id.to_owned());
+                let web_url = drive.get("webUrl").and_then(Value::as_str);
+                drives.push(Drive {
+                    id: id.to_owned(),
+                    name,
+                    url_segment: web_url.and_then(url_last_segment),
+                });
                 if drives.len() > MAX_DRIVES {
                     return Err(Failure::InvalidResponse(
                         "the site holds more drives than the listing cap",
@@ -248,46 +300,46 @@ impl SharePointSource {
         }
     }
 
-    /// `path` relative to the site: the site prefix and surrounding slashes
-    /// removed.
+    /// `path` relative to the site: the site prefix (compared without
+    /// case, character by character) and surrounding slashes removed.
     fn relative_path(&self) -> Option<String> {
         let path = self.params.path.as_deref()?.trim().replace('\\', "/");
-        let mut relative = path.trim_matches('/').to_owned();
-        let site_path = self.config.site_path();
+        let mut relative = path.trim_matches('/');
+        // The configured site path is percent-encoded (it comes from a URL);
+        // the argument is typed.
+        let site_path = percent_decoded(self.config.site_path());
         if !site_path.is_empty() {
-            let lower = relative.to_lowercase();
-            let prefix = site_path.to_lowercase();
-            if lower == prefix {
-                relative.clear();
-            } else if let Some(rest) = lower.strip_prefix(&format!("{prefix}/")) {
-                relative = relative[relative.len() - rest.len()..].to_owned();
+            if eq_ignore_case(relative, &site_path) {
+                relative = "";
+            } else if let Some(rest) =
+                strip_prefix_ignore_case(relative, &site_path).filter(|rest| rest.starts_with('/'))
+            {
+                relative = rest;
             }
         }
-        let relative = relative.trim_matches('/').to_owned();
-        (!relative.is_empty()).then_some(relative)
+        let relative = relative.trim_matches('/');
+        (!relative.is_empty()).then(|| relative.to_owned())
     }
 
-    /// Which drives to walk, and where in each.
-    fn seeds(&self, drives: Vec<(String, String, Option<String>)>) -> Result<Vec<Seed>, Failure> {
+    /// Which drives to walk, and the folder in each the listing keeps.
+    fn seeds(&self, drives: Vec<Drive>) -> Result<Vec<Seed>, Failure> {
         let folder = self.relative_path();
         if let Some(form) = self.params.form_name.as_deref() {
             let wanted = form.trim().trim_matches('/');
             let matched: Vec<Seed> = drives
                 .into_iter()
-                .filter(|(_, name, web_url)| {
-                    name.eq_ignore_ascii_case(wanted)
-                        || web_url.as_deref().is_some_and(|url| {
-                            url.trim_end_matches('/')
-                                .rsplit('/')
-                                .next()
-                                .is_some_and(|last| last.eq_ignore_ascii_case(wanted))
-                        })
-                })
-                .map(|(drive_id, library, _)| Seed {
-                    drive_id,
-                    library,
-                    folder: folder.clone(),
-                    guessed: false,
+                .filter(|drive| drive.is_called(wanted))
+                .map(|drive| {
+                    // A server-relative path repeats the library's segment.
+                    let folder = folder
+                        .as_deref()
+                        .map(|folder| strip_library(folder, &drive))
+                        .filter(|folder| !folder.is_empty());
+                    Seed {
+                        drive,
+                        folder,
+                        guessed: false,
+                    }
                 })
                 .collect();
             if matched.is_empty() {
@@ -300,22 +352,21 @@ impl SharePointSource {
         let Some(folder) = folder else {
             return Ok(drives
                 .into_iter()
-                .map(|(drive_id, library, _)| Seed {
-                    drive_id,
-                    library,
+                .map(|drive| Seed {
+                    drive,
                     folder: None,
                     guessed: false,
                 })
                 .collect());
         };
-        // A path whose first segment names a library addresses that library.
+        // A path whose first segment names a library (by display name or
+        // URL segment) addresses that library.
         let (first, rest) = folder.split_once('/').unwrap_or((folder.as_str(), ""));
         let named: Vec<Seed> = drives
             .iter()
-            .filter(|(_, name, _)| name.eq_ignore_ascii_case(first))
-            .map(|(drive_id, library, _)| Seed {
-                drive_id: drive_id.clone(),
-                library: library.clone(),
+            .filter(|drive| drive.is_called(first))
+            .map(|drive| Seed {
+                drive: drive.clone(),
                 folder: (!rest.is_empty()).then(|| rest.to_owned()),
                 guessed: false,
             })
@@ -323,126 +374,167 @@ impl SharePointSource {
         if !named.is_empty() {
             return Ok(named);
         }
-        // Else the folder may exist in any library: walk it wherever it does.
+        // Else the folder may exist in any library: keep it wherever it does.
         Ok(drives
             .into_iter()
-            .map(|(drive_id, library, _)| Seed {
-                drive_id,
-                library,
+            .map(|drive| Seed {
+                drive,
                 folder: Some(folder.clone()),
                 guessed: true,
             })
             .collect())
     }
 
-    /// Walk one seed's delta, adding its files.
-    #[allow(clippy::too_many_lines)] // One pass over a delta page: skip, key, version, size.
+    /// One drive's whole delta feed, compacted: item id → entry, the last
+    /// occurrence of an id winning and a `deleted` facet removing it.
     async fn walk(
         &self,
-        seed: &Seed,
-        listed: &mut Vec<Listed>,
-        extras: &mut BTreeMap<String, Extra>,
+        drive_id: &str,
         pages: &mut usize,
-    ) -> Result<bool, Failure> {
-        let mut url = match &seed.folder {
-            None => graph_url(&["drives", &seed.drive_id, "root", "delta"])?,
-            Some(folder) => {
-                for segment in folder.split('/') {
-                    if segment.is_empty() || segment == ".." || segment.contains(['?', '#', '%']) {
-                        return Err(Failure::Client("`path` is unusable".to_owned()));
-                    }
-                }
-                graph_path_url(&format!("drives/{}/root:/{folder}:/delta", seed.drive_id))?
-            }
-        };
+    ) -> Result<BTreeMap<String, Entry>, Failure> {
+        let mut url = graph_url(&["drives", drive_id, "root", "delta"])?;
         url.query_pairs_mut()
             .append_pair("$select", ITEM_SELECT)
             .append_pair("$top", PAGE);
+        let mut entries: BTreeMap<String, Entry> = BTreeMap::new();
         loop {
             *pages += 1;
             self.http().check_pages(*pages)?;
-            let body = match self.graph.get_json(url).await {
-                Ok((_, body)) => body,
-                Err(Failure::Status(StatusCode::NOT_FOUND)) if seed.guessed => return Ok(false),
-                Err(Failure::Status(StatusCode::NOT_FOUND)) => {
-                    return Err(Failure::Client(
-                        "the folder `path` names does not exist in the library".to_owned(),
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
+            let (_, body) = self.graph.get_json(url).await?;
             for item in body
                 .get("value")
                 .and_then(Value::as_array)
                 .ok_or(Failure::InvalidResponse("a delta page has no value"))?
             {
-                if item.get("deleted").is_some()
-                    || item.get("folder").is_some()
-                    || item.get("file").is_none()
-                {
-                    continue;
-                }
                 let item_id = item
                     .get("id")
                     .and_then(Value::as_str)
                     .filter(|id| !id.is_empty() && valid_key(id))
                     .ok_or(Failure::InvalidResponse("a drive item has no id"))?;
-                let Some(name) = item.get("name").and_then(Value::as_str).and_then(safe_name)
-                else {
-                    continue;
-                };
-                if !self.params.files.admits(&name) {
-                    continue;
-                }
-                let folder_path = item
-                    .get("parentReference")
-                    .and_then(|parent| parent.get("path"))
-                    .and_then(Value::as_str)
-                    .and_then(|path| path.split_once("root:").map(|(_, rest)| rest))
-                    .unwrap_or_default()
-                    .trim_matches('/')
-                    .to_owned();
-                let path = if folder_path.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{folder_path}/{name}")
-                };
-                let key = format!("{}/{path}", seed.library);
-                if !valid_key(&key) || extras.contains_key(&key) {
+                if item.get("deleted").is_some() {
+                    entries.remove(item_id);
                     continue;
                 }
                 let text = |field: &str| item.get(field).and_then(Value::as_str).map(str::to_owned);
-                let version = text("cTag")
-                    .or_else(|| text("eTag"))
-                    .or_else(|| text("lastModifiedDateTime"))
-                    .ok_or(Failure::InvalidResponse("a drive item carries no version"))?;
-                let size = item.get("size").and_then(Value::as_u64).unwrap_or(0);
-                extras.insert(
-                    key.clone(),
-                    Extra {
-                        drive_id: seed.drive_id.clone(),
-                        item_id: item_id.to_owned(),
-                        library: seed.library.clone(),
-                        path,
-                        name,
-                        web_url: text("webUrl"),
-                        created: text("createdDateTime"),
-                        modified: text("lastModifiedDateTime"),
-                    },
-                );
-                listed.push(Listed::new(key, version, size, item_id.to_owned()));
-                self.http().check_count(listed.len())?;
-                if let Some(limit) = self.params.limit_files
-                    && listed.len() as u64 >= limit
-                {
-                    return Ok(true);
-                }
+                let parent = item
+                    .get("parentReference")
+                    .and_then(|parent| parent.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned);
+                let entry = if item.get("root").is_some() {
+                    Entry::Root
+                } else {
+                    let Some(name) = item.get("name").and_then(Value::as_str).and_then(safe_name)
+                    else {
+                        continue;
+                    };
+                    if item.get("folder").is_some() {
+                        Entry::Folder { name, parent }
+                    } else if item.get("file").is_some() {
+                        let version = text("cTag")
+                            .or_else(|| text("eTag"))
+                            .or_else(|| text("lastModifiedDateTime"))
+                            .ok_or(Failure::InvalidResponse("a drive item carries no version"))?;
+                        Entry::File {
+                            name,
+                            parent,
+                            version,
+                            size: item.get("size").and_then(Value::as_u64).unwrap_or(0),
+                            web_url: text("webUrl"),
+                            created: text("createdDateTime"),
+                            modified: text("lastModifiedDateTime"),
+                        }
+                    } else {
+                        continue;
+                    }
+                };
+                entries.insert(item_id.to_owned(), entry);
+                self.http().check_count(entries.len())?;
             }
             match body.get("@odata.nextLink").and_then(Value::as_str) {
                 Some(next) => url = parse_graph_link(next)?,
-                None => return Ok(true),
+                None => return Ok(entries),
             }
         }
+    }
+
+    /// The seed's files from its walked feed, scoped to the seed's folder:
+    /// `false` when a guessed folder is not in this library.
+    fn materialize(
+        &self,
+        seed: &Seed,
+        entries: &BTreeMap<String, Entry>,
+        out: &mut Vec<(Listed, Extra)>,
+    ) -> Result<bool, Failure> {
+        let folder_path = |id: &str| folder_path_of(entries, id);
+        if let Some(wanted) = seed.folder.as_deref() {
+            let exists = entries.iter().any(|(id, entry)| {
+                matches!(entry, Entry::Folder { .. })
+                    && folder_path(id).is_ok_and(|path| {
+                        path.as_deref()
+                            .is_some_and(|path| eq_ignore_case(path, wanted))
+                    })
+            });
+            if !exists {
+                if seed.guessed {
+                    return Ok(false);
+                }
+                return Err(Failure::Client(
+                    "the folder `path` names does not exist in the library".to_owned(),
+                ));
+            }
+        }
+        for (item_id, entry) in entries {
+            let Entry::File {
+                name,
+                parent,
+                version,
+                size,
+                web_url,
+                created,
+                modified,
+            } = entry
+            else {
+                continue;
+            };
+            if !self.params.files.admits(name) {
+                continue;
+            }
+            let folder = match parent {
+                Some(parent) => folder_path(parent)?,
+                None => None,
+            };
+            let path = match folder {
+                Some(folder) => format!("{folder}/{name}"),
+                None => name.clone(),
+            };
+            if let Some(wanted) = seed.folder.as_deref()
+                && !under_folder(&path, wanted)
+            {
+                continue;
+            }
+            let key = format!("{}/{item_id}", seed.drive.name);
+            if !valid_key(&key) {
+                continue;
+            }
+            let mut listed = Listed::new(key, version.clone(), *size, item_id.clone());
+            mime_of(name).clone_into(&mut listed.reference.mime);
+            out.push((
+                listed,
+                Extra {
+                    drive_id: seed.drive.id.clone(),
+                    item_id: item_id.clone(),
+                    library: seed.drive.name.clone(),
+                    path,
+                    name: name.clone(),
+                    web_url: web_url.clone(),
+                    created: created.clone(),
+                    modified: modified.clone(),
+                },
+            ));
+        }
+        Ok(true)
     }
 
     async fn listing(&self) -> Result<Vec<Listed>, Failure> {
@@ -454,22 +546,26 @@ impl SharePointSource {
             let seeds = self.seeds(drives)?;
             let mut pages = 0;
             let mut any = false;
+            let mut found = Vec::new();
             for seed in &seeds {
-                any |= self
-                    .walk(seed, &mut listed, &mut extras, &mut pages)
-                    .await?;
-                if self
-                    .params
-                    .limit_files
-                    .is_some_and(|limit| listed.len() as u64 >= limit)
-                {
-                    break;
-                }
+                let entries = self.walk(&seed.drive.id, &mut pages).await?;
+                any |= self.materialize(seed, &entries, &mut found)?;
+                self.http().check_count(found.len())?;
             }
             if !any && self.params.path.is_some() {
                 return Err(Failure::Client(
                     "the folder `path` names was not found in any document library".to_owned(),
                 ));
+            }
+            // The first `limit_files` by library and path, as a reader
+            // would count them.
+            found.sort_by(|(_, a), (_, b)| (&a.library, &a.path).cmp(&(&b.library, &b.path)));
+            if let Some(limit) = self.params.limit_files {
+                found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            }
+            for (item, extra) in found {
+                extras.insert(item.reference.key.clone(), extra);
+                listed.push(item);
             }
         }
         *self
@@ -498,6 +594,106 @@ impl SharePointSource {
             })
             .await
     }
+}
+
+/// The path of folder `id` relative to the drive root (`None` for the root
+/// itself), rebuilt from the feed's folder entries. A parent the feed does
+/// not name ends the path there.
+///
+/// # Errors
+///
+/// The folder entries form a cycle.
+fn folder_path_of(entries: &BTreeMap<String, Entry>, id: &str) -> Result<Option<String>, Failure> {
+    let mut names: Vec<&str> = Vec::new();
+    let mut current = Some(id);
+    while let Some(id) = current {
+        match entries.get(id) {
+            Some(Entry::Folder { name, parent }) => {
+                names.push(name);
+                current = parent.as_deref();
+            }
+            Some(Entry::Root | Entry::File { .. }) | None => break,
+        }
+        if names.len() > MAX_DEPTH {
+            return Err(Failure::InvalidResponse(
+                "the delta feed's folders form a cycle",
+            ));
+        }
+    }
+    if names.is_empty() {
+        return Ok(None);
+    }
+    names.reverse();
+    Ok(Some(names.join("/")))
+}
+
+/// Whether `path` lies under `folder` (`folder/…`), compared without case.
+fn under_folder(path: &str, folder: &str) -> bool {
+    strip_prefix_ignore_case(path, folder).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// `folder` without the library's own leading segment, when it has one.
+fn strip_library(folder: &str, drive: &Drive) -> String {
+    let (first, rest) = folder.split_once('/').unwrap_or((folder, ""));
+    if drive.is_called(first) {
+        rest.to_owned()
+    } else {
+        folder.to_owned()
+    }
+}
+
+/// Whether two strings are equal without case, character by character
+/// (Unicode lower-casing; no byte offsets of a lower-cased copy are used).
+fn eq_ignore_case(a: &str, b: &str) -> bool {
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .eq(b.chars().flat_map(char::to_lowercase))
+}
+
+/// `text` after `prefix`, compared without case character by character, on
+/// a character boundary of `text`.
+fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let mut rest = text.char_indices();
+    for wanted in prefix.chars() {
+        let (_, found) = rest.next()?;
+        if !found.to_lowercase().eq(wanted.to_lowercase()) {
+            return None;
+        }
+    }
+    Some(rest.as_str())
+}
+
+/// The percent-decoded last path segment of a URL (`…/Shared%20Documents`
+/// → `Shared Documents`).
+fn url_last_segment(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let last = parsed
+        .path_segments()?
+        .rfind(|segment| !segment.is_empty())?;
+    Some(percent_decoded(last))
+}
+
+/// `%XX` sequences decoded; anything else, and invalid UTF-8, kept lossily.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (
+                (bytes[index + 1] as char).to_digit(16),
+                (bytes[index + 2] as char).to_digit(16),
+            )
+        {
+            out.push(u8::try_from(high * 16 + low).unwrap_or(b'?'));
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 impl ContentSource for SharePointSource {
@@ -571,7 +767,7 @@ impl ContentSource for SharePointSource {
 mod tests {
     use super::*;
     use crate::source::fixture::{Reply, Scripted, query};
-    use crate::transport::Request;
+    use crate::transport::{Request, StatusCode};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -600,23 +796,40 @@ mod tests {
         ))
     }
 
-    fn file(drive: &str, id: &str, folder: &str, name: &str, ctag: &str, size: u64) -> Value {
+    /// A file as a delta page carries it: `parentReference` has the drive
+    /// and the parent folder's id, never a `path` (Graph does not return
+    /// `parentReference.path` in delta responses).
+    fn file(drive: &str, id: &str, parent: &str, name: &str, ctag: &str, size: u64) -> Value {
         json!({
             "id": id, "name": name, "size": size, "cTag": ctag, "eTag": format!("e-{ctag}"),
             "lastModifiedDateTime": "2026-10-01T00:00:00Z", "createdDateTime": "2026-09-01T00:00:00Z",
             "webUrl": format!("https://contoso.sharepoint.com/sites/eng/{name}"),
             "file": {"mimeType": "application/octet-stream"},
-            "parentReference": {"driveId": drive, "path": format!("/drives/{drive}/root:{folder}")},
+            "parentReference": {"driveId": drive, "id": parent},
         })
     }
 
-    fn folder(id: &str, name: &str) -> Value {
-        json!({"id": id, "name": name, "folder": {"childCount": 1}, "parentReference": {"path": "/drives/x/root:"}})
+    fn folder(drive: &str, id: &str, parent: &str, name: &str) -> Value {
+        json!({"id": id, "name": name, "folder": {"childCount": 1},
+               "parentReference": {"driveId": drive, "id": parent}})
     }
 
-    /// The recorded tenant: a token endpoint, a site with two libraries,
-    /// "Documents" paged in two delta pages, "Specs" with one file, and
-    /// content downloads that redirect to the site host.
+    fn root(drive: &str, id: &str) -> Value {
+        json!({"id": id, "name": "root", "root": {}, "folder": {"childCount": 2},
+               "parentReference": {"driveId": drive}})
+    }
+
+    fn deleted(id: &str, name: &str) -> Value {
+        json!({"id": id, "name": name, "deleted": {"state": "deleted"}, "file": {},
+               "parentReference": {"driveId": DOCS}})
+    }
+
+    /// The recorded tenant: a token endpoint, a site with two libraries
+    /// ("Documents" at `Shared Documents`, "Specs"), "Documents" paged in
+    /// two delta pages — with `notes.txt` appearing on both (the second
+    /// occurrence, `c2b`, wins) and `old.md` listed then deleted — and
+    /// content downloads that redirect to the site host. Delta is served
+    /// on the drive root only, as Graph does for SharePoint.
     fn reply(request: &Request, tokens_issued: &AtomicUsize) -> Reply {
         let url = request.url();
         match (url.host_str().unwrap_or_default(), url.path()) {
@@ -660,18 +873,23 @@ mod tests {
                                 assert_eq!(query(request, "$select").as_deref(), Some(ITEM_SELECT));
                                 Reply::json(&json!({
                                 "value": [
-                                    file(DOCS, "i1", "", "README.md", "c1", 11),
-                                    folder("f1", "General"),
-                                    file(DOCS, "i2", "/General", "notes.txt", "c2", 5),
-                                    {"id": "gone", "name": "old.md", "deleted": {"state": "deleted"}, "file": {}},
+                                    root(DOCS, "root-docs"),
+                                    file(DOCS, "i1", "root-docs", "README.md", "c1", 11),
+                                    folder(DOCS, "f1", "root-docs", "Specs"),
+                                    file(DOCS, "i2", "f1", "notes.txt", "c2", 5),
+                                    file(DOCS, "i5", "root-docs", "old.md", "c5", 2),
+                                    deleted("gone", "older.md"),
                                 ],
                                 "@odata.nextLink": "https://graph.microsoft.com/v1.0/drives/b!docs/root/delta?token=p2"
                             }))
                             }
                             Some("p2") => Reply::json(&json!({
                                 "value": [
-                                    file(DOCS, "i3", "/General/Deep", "plan.pdf", "c3", 7),
-                                    file(DOCS, "i4", "/General", "image.png", "c4", 9),
+                                    folder(DOCS, "f2", "f1", "Deep"),
+                                    file(DOCS, "i3", "f2", "plan.pdf", "c3", 7),
+                                    file(DOCS, "i4", "f1", "image.png", "c4", 9),
+                                    file(DOCS, "i2", "f1", "notes.txt", "c2b", 6),
+                                    deleted("i5", "old.md"),
                                 ],
                                 "@odata.deltaLink": "https://graph.microsoft.com/v1.0/drives/b!docs/root/delta?token=final"
                             })),
@@ -679,19 +897,22 @@ mod tests {
                         }
                     }
                     "/v1.0/drives/b!specs/root/delta" => Reply::json(&json!({
-                        "value": [file(SPECS, "s1", "", "spec.md", "c9", 3)],
+                        "value": [
+                            root(SPECS, "root-specs"),
+                            file(SPECS, "s1", "root-specs", "spec.md", "c9", 3),
+                            folder(SPECS, "f9", "root-specs", "Archive"),
+                            file(SPECS, "s2", "f9", "legacy.md", "c8", 4),
+                        ],
                         "@odata.deltaLink": "https://graph.microsoft.com/v1.0/drives/b!specs/root/delta?token=final"
                     })),
-                    "/v1.0/drives/b!docs/root:/General:/delta" => Reply::json(&json!({
-                        "value": [file(DOCS, "i2", "/General", "notes.txt", "c2", 5)],
-                        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/drives/b!docs/root:/General:/delta?token=final"
-                    })),
-                    "/v1.0/drives/b!specs/root:/General:/delta" => Reply::status(StatusCode::NOT_FOUND),
                     "/v1.0/drives/b!docs/items/i2/content" => {
                         Reply::status(StatusCode::FOUND).header(
                             "location",
                             "https://contoso.sharepoint.com/sites/eng/_layouts/15/download.aspx?UniqueId=i2&tempauth=xyz",
                         )
+                    }
+                    other if other.contains(":/") => {
+                        panic!("delta is served on the drive root only, not {other}")
                     }
                     other => panic!("unexpected Graph request {other}"),
                 }
@@ -716,8 +937,21 @@ mod tests {
         )
     }
 
+    async fn list_with(arguments: Value) -> (Vec<DocumentRef>, Arc<Scripted>) {
+        let (transport, _) = fixture();
+        let source =
+            SharePointSource::new(config(), params(&arguments), allow(), transport.clone())
+                .expect("source");
+        (source.list().await.expect("listing"), transport)
+    }
+
+    fn keys(listed: &[DocumentRef]) -> Vec<&str> {
+        listed.iter().map(|d| d.key.as_str()).collect()
+    }
+
     #[tokio::test]
-    async fn libraries_are_walked_by_delta_filtered_by_name_and_downloaded_through_the_redirect() {
+    async fn libraries_are_walked_by_root_delta_keyed_by_item_id_and_downloaded_through_the_redirect()
+     {
         let (transport, tokens) = fixture();
         let source = SharePointSource::new(
             config(),
@@ -734,36 +968,35 @@ mod tests {
         assert_eq!(
             keys,
             [
-                (
-                    "Documents/General/Deep/plan.pdf",
-                    "c3",
-                    7,
-                    "application/pdf"
-                ),
-                ("Documents/General/notes.txt", "c2", 5, "text/plain"),
-                ("Documents/README.md", "c1", 11, "text/markdown"),
-                ("Specs/spec.md", "c9", 3, "text/markdown"),
-            ]
+                ("Documents/i1", "c1", 11, "text/markdown"),
+                // The second occurrence of notes.txt won: version c2b, 6 bytes.
+                ("Documents/i2", "c2b", 6, "text/plain"),
+                ("Documents/i3", "c3", 7, "application/pdf"),
+                ("Specs/s1", "c9", 3, "text/markdown"),
+                ("Specs/s2", "c8", 4, "text/markdown"),
+            ],
+            "old.md was listed then deleted; image.png is skipped"
         );
         assert_eq!(
             tokens.load(Ordering::SeqCst),
             1,
             "one token for the whole listing"
         );
-        let document = source
-            .fetch("Documents/General/notes.txt")
-            .await
-            .expect("fetch");
+        let document = source.fetch("Documents/i2").await.expect("fetch");
         assert_eq!(document.bytes, b"notes");
         assert_eq!(
             tokens.load(Ordering::SeqCst),
             2,
             "a 401 renewed the token once"
         );
-        assert_eq!(document.metadata["Path"], "/Documents/General/notes.txt");
+        assert_eq!(
+            document.metadata["Path"], "/Documents/Specs/notes.txt",
+            "the path is rebuilt from the feed's folder items"
+        );
         assert_eq!(document.metadata["id"], "i2");
         assert_eq!(document.metadata["updated_on"], "2026-10-01T00:00:00Z");
         assert_eq!(document.title, "notes.txt");
+        assert_eq!(document.reference.mime, "text/plain");
         assert_eq!(
             document.uri.as_deref(),
             Some("https://contoso.sharepoint.com/sites/eng/notes.txt")
@@ -773,52 +1006,182 @@ mod tests {
             seen.iter().filter(|s| s.contains("/content")).count() == 2,
             "{seen:?}"
         );
+        assert!(
+            seen.iter()
+                .filter(|s| s.contains("/delta"))
+                .all(|s| s.contains("/root/delta")),
+            "every delta was asked of a drive root: {seen:?}"
+        );
     }
 
     #[tokio::test]
-    async fn path_and_form_name_scope_the_walk_and_limit_files_caps_it() {
-        let (transport, _) = fixture();
-        let source = SharePointSource::new(
-            config(),
-            params(&json!({"path": "/sites/eng/General"})),
-            allow(),
-            transport.clone(),
-        )
-        .expect("source");
-        let listed = source.list().await.expect("listing");
-        let keys: Vec<_> = listed.iter().map(|d| d.key.as_str()).collect();
+    async fn a_path_scopes_the_root_walk_by_library_name_or_url_segment_then_folder() {
+        // The library's URL segment, then a folder that is also another
+        // library's name: the folder of "Documents" is meant.
+        let (listed, transport) =
+            list_with(json!({"path": "/sites/eng/Shared Documents/Specs"})).await;
         assert_eq!(
-            keys,
-            ["Documents/General/notes.txt"],
-            "Specs has no General folder"
+            keys(&listed),
+            ["Documents/i2", "Documents/i3", "Documents/i4"]
+        );
+        assert!(
+            !transport.seen().iter().any(|s| s.contains("b!specs")),
+            "only the named library was walked"
         );
 
+        // A first segment naming a library by display name addresses it.
+        let (listed, _) = list_with(json!({"path": "/sites/eng/Specs"})).await;
+        assert_eq!(keys(&listed), ["Specs/s1", "Specs/s2"]);
+
+        // A bare folder is looked for in every library: "Documents" has no
+        // Archive and is skipped, "Specs" has one.
+        let (listed, transport) = list_with(json!({"path": "Archive"})).await;
+        assert_eq!(keys(&listed), ["Specs/s2"]);
+        assert!(
+            transport.seen().iter().any(|s| s.contains("b!docs")),
+            "a guessed folder is looked for in every library"
+        );
+
+        // A site prefix in another case, and the library segment repeated
+        // under `form_name`.
+        let (listed, _) = list_with(json!({"form_name": "Shared Documents", "path": "/Sites/ENG/shared documents/specs/deep"})).await;
+        assert_eq!(keys(&listed), ["Documents/i3"]);
+        let (listed, _) = list_with(json!({"form_name": "Documents", "path": "Specs"})).await;
+        assert_eq!(
+            keys(&listed),
+            ["Documents/i2", "Documents/i3", "Documents/i4"]
+        );
+
+        // A folder no library has, and one the named library has not.
         let (transport, _) = fixture();
         let source = SharePointSource::new(
             config(),
-            params(&json!({"form_name": "Specs", "limit_files": 1})),
+            params(&json!({"path": "/sites/eng/Deep"})),
             allow(),
-            transport.clone(),
+            transport,
         )
         .expect("source");
-        let listed = source.list().await.expect("listing");
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].key, "Specs/spec.md");
+        let error = source.list().await.expect_err("no such folder");
+        assert!(
+            error
+                .to_string()
+                .contains("not found in any document library"),
+            "{error}"
+        );
+        let (transport, _) = fixture();
+        let source = SharePointSource::new(
+            config(),
+            params(&json!({"path": "/sites/eng/Specs/Deep"})),
+            allow(),
+            transport,
+        )
+        .expect("source");
+        let error = source.list().await.expect_err("no such folder");
+        assert!(
+            error.to_string().contains("does not exist in the library"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn form_name_matches_the_url_segment_too_and_limit_files_caps_the_listing() {
+        let (listed, transport) = list_with(json!({"form_name": "shared documents"})).await;
+        assert_eq!(
+            keys(&listed),
+            [
+                "Documents/i1",
+                "Documents/i2",
+                "Documents/i3",
+                "Documents/i4"
+            ]
+        );
+        assert!(!transport.seen().iter().any(|s| s.contains("b!specs")));
+
+        let (listed, transport) = list_with(json!({"form_name": "Specs", "limit_files": 1})).await;
+        assert_eq!(keys(&listed), ["Specs/s2"], "Archive/legacy.md sorts first");
         assert!(
             !transport.seen().iter().any(|s| s.contains("b!docs")),
             "the other library was not walked"
         );
 
+        // The first files by library and path (README.md, Specs/Deep/plan.pdf).
+        let (listed, _) = list_with(json!({"limit_files": 2})).await;
+        assert_eq!(keys(&listed), ["Documents/i1", "Documents/i3"]);
+
+        let (listed, transport) = list_with(json!({"limit_files": 0})).await;
+        assert!(listed.is_empty());
+        assert!(transport.seen().is_empty());
+
         let (transport, _) = fixture();
-        let source = SharePointSource::new(
+        let error = SharePointSource::new(
             config(),
-            params(&json!({"limit_files": 0})),
+            params(&json!({"form_name": "Archive"})),
             allow(),
-            transport.clone(),
+            transport,
+        )
+        .expect("source")
+        .list()
+        .await
+        .expect_err("no such library");
+        assert!(error.to_string().contains("form_name"), "{error}");
+    }
+
+    #[test]
+    fn prefixes_are_compared_without_case_on_character_boundaries() {
+        // `İ` (2 bytes) lower-cases to `i̇` (3 bytes): byte offsets of a
+        // lower-cased copy would cut the original mid-character.
+        assert_eq!(
+            strip_prefix_ignore_case("sites/İstanbul/Docs", "sites/İstanbul"),
+            Some("/Docs")
+        );
+        assert_eq!(
+            strip_prefix_ignore_case("SITES/İSTANBUL/Docs", "sites/İstanbul"),
+            Some("/Docs")
+        );
+        assert_eq!(
+            strip_prefix_ignore_case("sites/istanbul/Docs", "sites/İstanbul"),
+            None,
+            "`İ` lower-cases to `i̇`, not `i`"
+        );
+        assert_eq!(
+            strip_prefix_ignore_case("Sites/Eng/Ünïcode", "sites/ENG"),
+            Some("/Ünïcode")
+        );
+        assert_eq!(strip_prefix_ignore_case("sites/en", "sites/eng"), None);
+        assert_eq!(strip_prefix_ignore_case("sites/eng", "sites/eng"), Some(""));
+        assert!(eq_ignore_case("Shared Documents", "shared DOCUMENTS"));
+        assert!(eq_ignore_case("İstanbul", "İSTANBUL"));
+        assert!(!eq_ignore_case("Specs", "Spec"));
+        assert!(under_folder("Specs/Deep/plan.pdf", "specs/deep"));
+        assert!(!under_folder("Specs/Deeper/plan.pdf", "specs/deep"));
+        assert!(!under_folder("Specs", "specs"));
+
+        let settings = json!({
+            "sharepoint_configuration": {
+                "site_url": "https://contoso.sharepoint.com/sites/İstanbul",
+                "client_id": "app-id", "client_secret": "s3cret",
+            }
+        });
+        let config =
+            SharePointIndexConfig::parse(settings.as_object().expect("settings")).expect("config");
+        let source = SharePointSource::new(
+            config,
+            params(&json!({"path": "/sites/İstanbul/Docs/Ü"})),
+            allow(),
+            Scripted::new(|_, _| panic!("no request")),
         )
         .expect("source");
-        assert!(source.list().await.expect("listing").is_empty());
-        assert!(transport.seen().is_empty());
+        assert_eq!(source.relative_path().as_deref(), Some("Docs/Ü"));
+
+        assert_eq!(
+            url_last_segment("https://contoso.sharepoint.com/sites/eng/Shared%20Documents/"),
+            Some("Shared Documents".to_owned())
+        );
+        assert_eq!(
+            url_last_segment("https://contoso.sharepoint.com/sites/eng/%C3%9Cbersicht"),
+            Some("Übersicht".to_owned())
+        );
+        assert_eq!(percent_decoded("a%2"), "a%2");
     }
 
     #[tokio::test]
@@ -873,7 +1236,7 @@ mod tests {
         )
         .expect("source");
         let listed = source.list().await.expect("listing");
-        assert_eq!(listed.len(), 5);
+        assert_eq!(listed.len(), 6);
         let seen = throttled.seen();
         assert_eq!(
             seen[2], seen[3],

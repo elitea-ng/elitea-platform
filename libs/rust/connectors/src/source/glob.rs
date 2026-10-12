@@ -163,7 +163,13 @@ mod tests {
     #[test]
     fn fnmatch_follows_python() {
         assert!(fnmatch("*.py", "src/app.py"));
+        assert!(fnmatch("*test_*", "tests/test_app.py"));
         assert!(fnmatch("src/?.rs", "src/a.rs"));
+        assert!(fnmatch("[a-c].md", "c.md"));
+        assert!(fnmatch("docs/**", "docs/a/b.md"));
+        assert!(fnmatch("*", ""));
+        assert!(fnmatch("README", "README"));
+        assert!(!fnmatch("readme", "README"), "case-sensitive as given");
         assert!(!fnmatch("src/?.rs", "src/ab.rs"));
         assert!(fnmatch("[abc].md", "b.md"));
         assert!(!fnmatch("[!abc].md", "b.md"));

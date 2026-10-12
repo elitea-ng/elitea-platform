@@ -16,7 +16,14 @@ pub fn decode_entities(text: &str) -> String {
     while let Some(start) = rest.find('&') {
         out.push_str(&rest[..start]);
         rest = &rest[start..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
+        // The `;` within the first 12 bytes, scanned by character so a
+        // multi-byte character straddling the window cannot split a slice.
+        let Some(end) = rest
+            .char_indices()
+            .take_while(|(index, _)| *index < 12)
+            .find(|(_, character)| *character == ';')
+            .map(|(index, _)| index)
+        else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -301,6 +308,20 @@ mod tests {
             "Hello world\none\ntwo & three"
         );
         assert_eq!(decode_entities("&#65;&#x42;&unknown;&"), "AB&unknown;&");
+    }
+
+    #[test]
+    fn entities_are_decoded_without_splitting_multi_byte_characters() {
+        // A multi-byte run right after `&` used to be sliced at byte 12.
+        assert_eq!(decode_entities("&日本語テスト"), "&日本語テスト");
+        assert_eq!(decode_entities("&日本語テスト;"), "&日本語テスト;");
+        assert_eq!(decode_entities("&ü;&ñ&amp;é"), "&ü;&ñ&é");
+        assert_eq!(decode_entities("a &émoji😀 b &lt;"), "a &émoji😀 b <");
+        assert_eq!(decode_entities("&nbsp;日&#x1F600;"), " 日😀");
+        assert_eq!(
+            html_to_text("<p>&日本語テスト</p><p>&amp;Ünïcødé</p>"),
+            "&日本語テスト\n&Ünïcødé"
+        );
         let sanitized = sanitize_field(&json!({
             "System.Description": "<p>Fix <i>it</i></p>",
             "System.AssignedTo": {"displayName": "Ada", "uniqueName": "ada@example.com"},

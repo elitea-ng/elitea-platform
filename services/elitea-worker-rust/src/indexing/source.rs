@@ -14,7 +14,8 @@
 //! The whitelist and blacklist keep the SDK's rule (`CodeIndexerToolkit`):
 //! a path is kept when it matches any whitelist pattern (or the whitelist is
 //! empty) and matches no blacklist pattern, where a pattern matches by Unix
-//! shell wildcards (`fnmatch`) or as a bare extension (`py` matches `a.py`).
+//! shell wildcards (`fnmatch`, the connectors' `source::glob` clone of
+//! Python's) or as a bare extension (`py` matches `a.py`).
 
 use std::sync::Arc;
 
@@ -36,6 +37,7 @@ use elitea_connectors::gitlab::source::GitLabSource;
 use elitea_connectors::sharepoint::config::SharePointIndexConfig;
 use elitea_connectors::sharepoint::source::{SharePointIndexParams, SharePointSource};
 use elitea_connectors::source::SourceLimits;
+use elitea_connectors::source::glob::fnmatch;
 use elitea_connectors::transport::Transport;
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
 use serde_json::Value;
@@ -308,117 +310,9 @@ impl PathFilter {
     }
 }
 
-/// Python's `fnmatch.fnmatch`: `*` any run, `?` one character, `[seq]` one
-/// of, `[!seq]` none of; `/` is not special. Case-sensitive, as on Linux.
-#[must_use]
-pub(crate) fn fnmatch(pattern: &str, text: &str) -> bool {
-    let pattern: Vec<char> = pattern.chars().collect();
-    let text: Vec<char> = text.chars().collect();
-    matches_from(&pattern, &text)
-}
-
-fn matches_from(pattern: &[char], text: &[char]) -> bool {
-    // Iterative with one backtrack point, the classic `*` algorithm.
-    let (mut p, mut t) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-    while t < text.len() {
-        if p < pattern.len() {
-            match pattern[p] {
-                '*' => {
-                    star = Some((p, t));
-                    p += 1;
-                    continue;
-                }
-                '?' => {
-                    p += 1;
-                    t += 1;
-                    continue;
-                }
-                '[' => {
-                    if let Some((matched, next)) = class(pattern, p, text[t]) {
-                        if matched {
-                            p = next;
-                            t += 1;
-                            continue;
-                        }
-                    } else if text[t] == '[' {
-                        p += 1;
-                        t += 1;
-                        continue;
-                    }
-                }
-                literal if literal == text[t] => {
-                    p += 1;
-                    t += 1;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        match star {
-            Some((star_p, star_t)) => {
-                p = star_p + 1;
-                t = star_t + 1;
-                star = Some((star_p, star_t + 1));
-            }
-            None => return false,
-        }
-    }
-    pattern[p..].iter().all(|c| *c == '*')
-}
-
-/// A bracket class at `start`: whether `character` is in it, and the index
-/// after `]`. `None` when the bracket is not closed (then it is literal).
-fn class(pattern: &[char], start: usize, character: char) -> Option<(bool, usize)> {
-    let mut index = start + 1;
-    let negated = index < pattern.len() && matches!(pattern[index], '!' | '^');
-    if negated {
-        index += 1;
-    }
-    let mut matched = false;
-    let mut first = true;
-    while index < pattern.len() {
-        let current = pattern[index];
-        if current == ']' && !first {
-            return Some((matched != negated, index + 1));
-        }
-        first = false;
-        if index + 2 < pattern.len() && pattern[index + 1] == '-' && pattern[index + 2] != ']' {
-            let (low, high) = (current, pattern[index + 2]);
-            if low <= character && character <= high {
-                matched = true;
-            }
-            index += 3;
-        } else {
-            if current == character {
-                matched = true;
-            }
-            index += 1;
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fnmatch_follows_python() {
-        assert!(fnmatch("*.py", "src/app.py"));
-        assert!(fnmatch("*test_*", "tests/test_app.py"));
-        assert!(fnmatch("src/?.rs", "src/a.rs"));
-        assert!(!fnmatch("src/?.rs", "src/ab.rs"));
-        assert!(fnmatch("[abc].md", "b.md"));
-        assert!(!fnmatch("[!abc].md", "b.md"));
-        assert!(fnmatch("[a-c].md", "c.md"));
-        assert!(fnmatch("docs/**", "docs/a/b.md"));
-        assert!(fnmatch("*", ""));
-        assert!(!fnmatch("?", ""));
-        assert!(fnmatch("a[", "a["));
-        assert!(fnmatch("README", "README"));
-        assert!(!fnmatch("readme", "README"));
-    }
 
     #[test]
     fn the_filter_keeps_the_sdk_rule() {

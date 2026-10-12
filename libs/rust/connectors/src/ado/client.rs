@@ -420,12 +420,8 @@ impl AdoClient {
     pub fn build(&self, request: AdoRequest<'_>) -> Result<Request, AdoClientError> {
         let url = self.url(&request)?;
         let mut http = Request::new(request.method.clone(), url);
-        let credential =
-            Zeroizing::new(BASE64_STANDARD.encode(format!(":{}", self.connection.token())));
-        let mut authorization = HeaderValue::from_str(&format!("Basic {}", credential.as_str()))
-            .map_err(|_| invalid_configuration())?;
-        authorization.set_sensitive(true);
-        http.headers_mut().insert(AUTHORIZATION, authorization);
+        http.headers_mut()
+            .insert(AUTHORIZATION, self.credential_header()?);
         http.headers_mut().insert(
             ACCEPT,
             HeaderValue::from_static(if request.accept_text {
@@ -465,13 +461,21 @@ impl AdoClient {
     /// build (an attachment URL the provider handed out, on the
     /// organization's own host).
     pub fn authorize(&self, request: &mut Request) -> Result<(), AdoClientError> {
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, self.credential_header()?);
+        Ok(())
+    }
+
+    /// The PAT as a sensitive Basic credential, the one way every request
+    /// of this client carries it.
+    fn credential_header(&self) -> Result<HeaderValue, AdoClientError> {
         let credential =
             Zeroizing::new(BASE64_STANDARD.encode(format!(":{}", self.connection.token())));
         let mut authorization = HeaderValue::from_str(&format!("Basic {}", credential.as_str()))
             .map_err(|_| invalid_configuration())?;
         authorization.set_sensitive(true);
-        request.headers_mut().insert(AUTHORIZATION, authorization);
-        Ok(())
+        Ok(authorization)
     }
 
     /// Send one request and map its status. Only a 2xx response comes back.
