@@ -984,8 +984,21 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
     let database = IsolatedPostgres::create(&database_url).await;
     install_schema(&database.pool).await;
     let lock_timeout = Duration::from_millis(250);
+    // Its own pool with a generous acquire bound: under a loaded suite a pool
+    // timeout must not stand in for the lock timeout this test is about.
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_mins(1))
+        .connect_with(
+            PgConnectOptions::from_str(&database_url)
+                .expect("parse test URL")
+                .disable_statement_logging()
+                .database(&database.database_name),
+        )
+        .await
+        .expect("connect session pool");
     let service = PostgresSessionService::activate(
-        database.pool.clone(),
+        pool.clone(),
         authority_for("claim-1", 1, 1, [0x22; 32]),
         bounded_limits(lock_timeout, Duration::from_secs(30)),
         Arc::new(TestStateWriterLease::current()),
@@ -1027,6 +1040,10 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
     .expect_err("a stalled writer lock fails the write");
     let waited = started.elapsed();
     assert_eq!(error.code, "session.storage_unavailable");
+    assert!(
+        caused_by_lock_timeout(&error),
+        "the failure is PostgreSQL's lock timeout, not another storage error"
+    );
     assert!(waited >= lock_timeout, "{waited:?}");
     assert!(waited < Duration::from_secs(5), "{waited:?}");
     holder.rollback().await.expect("release holder");
@@ -1103,4 +1120,18 @@ async fn an_idle_session_transaction_releases_its_writer_locks() {
             .is_err(),
         "the idle holder's connection was terminated"
     );
+}
+
+/// Whether `PostgreSQL`'s lock timeout (`55P03`) is in the error's cause chain.
+fn caused_by_lock_timeout(error: &adk_rust::AdkError) -> bool {
+    let mut cause = std::error::Error::source(error);
+    while let Some(current) = cause {
+        if let Some(sqlx::Error::Database(database)) = current.downcast_ref::<sqlx::Error>()
+            && database.code().as_deref() == Some("55P03")
+        {
+            return true;
+        }
+        cause = current.source();
+    }
+    false
 }

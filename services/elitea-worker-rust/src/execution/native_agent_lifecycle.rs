@@ -567,6 +567,11 @@ where
             return Box::pin(run.close_no_ack(code, retryable)).await;
         }
         NativeStreamOutcome::FatalLease(error) => {
+            // The lease arm may have won while the agent stream was suspended
+            // mid-write. Drop it (rolling back any open session transaction and
+            // releasing its writer locks) before joining the lease actor, so a
+            // replacement claim never waits on this run's locks.
+            drop(native);
             return Box::pin(run.close_no_ack(error.code().as_str(), error.retryable())).await;
         }
     };

@@ -1531,3 +1531,140 @@ async fn static_saved_pipeline_produces_authorized_inventory_and_resumes_after_o
     assert_ne!(pause.thread_id, later_pause.thread_id);
     assert_ne!(pause.pause_id, later_pause.pause_id);
 }
+
+/// A child that takes the root session writer for one "append" and parks on
+/// its I/O (a gate), the shape of a model-scope append mid-transaction.
+struct WriterHoldingChild {
+    writer: Arc<tokio::sync::Mutex<()>>,
+    locked: Arc<tokio::sync::Notify>,
+    io: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+#[async_trait::async_trait]
+impl adk_rust::Agent for WriterHoldingChild {
+    fn name(&self) -> &'static str {
+        "review-pipeline"
+    }
+
+    fn description(&self) -> &'static str {
+        "writer-holding child fixture"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn adk_rust::Agent>] {
+        &[]
+    }
+
+    async fn run(
+        &self,
+        _ctx: Arc<dyn adk_rust::InvocationContext>,
+    ) -> adk_rust::Result<adk_rust::EventStream> {
+        let writer = Arc::clone(&self.writer);
+        let locked = Arc::clone(&self.locked);
+        let io = self
+            .io
+            .lock()
+            .expect("io gate")
+            .take()
+            .expect("one child run");
+        Ok(Box::pin(async_stream::stream! {
+            let held = writer.lock().await;
+            locked.notify_one();
+            let _ = io.await;
+            drop(held);
+            if false {
+                yield Ok(Event::new("never"));
+            }
+        }))
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_full_parent_channel_never_strands_a_child_holding_the_root_writer() {
+    const FLOOD: usize = 70;
+    let Harness {
+        tool,
+        mut events,
+        node_events,
+        ..
+    } = harness(PLAIN_PIPELINE);
+    let writer = Arc::new(tokio::sync::Mutex::new(()));
+    let locked = Arc::new(tokio::sync::Notify::new());
+    let (io_done, io) = tokio::sync::oneshot::channel();
+    let agent: Arc<dyn adk_rust::Agent> = Arc::new(WriterHoldingChild {
+        writer: Arc::clone(&writer),
+        locked: Arc::clone(&locked),
+        io: std::sync::Mutex::new(Some(io)),
+    });
+    let ctx = context();
+    let invocation_id = format!("pipeline-child:{}", ctx.function_call_id());
+    let thread_id = format!("{CONVERSATION_THREAD}/{}", ctx.function_call_id());
+    let child_context = Arc::new(
+        super::application_tools::ApplicationToolInvocationContext::for_pipeline(
+            Arc::clone(&ctx),
+            Arc::clone(&agent),
+            Content::new("user").with_text("review"),
+            invocation_id.clone(),
+            thread_id.clone(),
+        ),
+    );
+    let checkpointer = adk_rust::graph::MemoryCheckpointer::new();
+    let arguments = json!({"input": "ship it"});
+    let received = std::sync::atomic::AtomicUsize::new(0);
+
+    let drain = tool.drain_child_for_test(
+        ctx.as_ref(),
+        agent,
+        child_context,
+        &invocation_id,
+        &thread_id,
+        &checkpointer,
+        &arguments,
+    );
+    // The parent's Runner: persists every forwarded event under the root writer.
+    let consumer = async {
+        while received.load(std::sync::atomic::Ordering::SeqCst) < FLOOD {
+            let Some(_signal) = events.recv().await else {
+                break;
+            };
+            received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _persisted = writer.lock().await;
+        }
+    };
+    let flood = async {
+        locked.notified().await;
+        for index in 0..FLOOD {
+            let mut event = Event::with_id(format!("node-{index}"), INVOCATION_ID);
+            event.author = "review-pipeline".to_owned();
+            event.set_content(Content::new("model").with_text("progress"));
+            node_events
+                .send_routed_application_event(event)
+                .await
+                .expect("queue node event");
+        }
+        // Let the parent channel fill: the consumer waits on the writer the
+        // child holds, so every forward beyond its capacity now blocks.
+        while received.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..256 {
+            tokio::task::yield_now().await;
+        }
+        io_done.send(()).expect("complete the child's I/O");
+    };
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Box::pin(async { tokio::join!(drain, consumer, flood).0 }),
+    )
+    .await;
+    let Ok(result) = outcome else {
+        panic!(
+            "self-deadlock: the child was left suspended holding the root writer while \
+             the full parent channel blocked its forward"
+        );
+    };
+    assert_eq!(
+        result.expect("drain completes"),
+        json!({"response": "No response from pipeline"})
+    );
+    assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), FLOOD);
+}

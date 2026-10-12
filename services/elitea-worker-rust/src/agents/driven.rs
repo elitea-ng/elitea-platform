@@ -76,6 +76,8 @@ impl<T: Send + 'static> Future for DrivenTask<T> {
                 }
                 Ok(Poll::Pending) => {
                     if let Stage::Inline(work) = std::mem::replace(&mut self.stage, Stage::Done) {
+                        #[cfg(test)]
+                        tests::SPAWNED.with(|spawned| spawned.set(spawned.get() + 1));
                         self.stage = Stage::Owned(tokio::spawn(work));
                     }
                 }
@@ -149,6 +151,17 @@ impl DrivenEventStream {
             }
             Err(error) => Some(Err(error)),
         }
+    }
+
+    /// Stop the inner stream and wait until it is dropped, including a pull
+    /// still running on its task, so nothing it owns (channel senders,
+    /// transactions) outlives this call. Use it before handing back anything
+    /// the inner stream could still write to.
+    pub(crate) async fn cancel(mut self) {
+        if let Some(pull) = self.pull.take() {
+            pull.cancel().await;
+        }
+        self.idle = None;
     }
 }
 

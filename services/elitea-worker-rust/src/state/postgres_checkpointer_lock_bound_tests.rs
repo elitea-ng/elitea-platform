@@ -2,11 +2,14 @@
 //! within the shared lock bound instead of waiting forever.
 
 use std::collections::HashMap;
+use std::str::FromStr as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use adk_rust::graph::Checkpoint;
 use chrono::Utc;
+use sqlx::ConnectOptions as _;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use super::{
     APPLICATION_CAPABILITY_ID, CheckpointLimits, CheckpointWriterAuthority,
@@ -66,8 +69,21 @@ async fn checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bo
         .execute(&database.pool)
         .await
         .expect("apply checkpoint migration");
+    // Its own pool with a generous acquire bound: under a loaded suite a pool
+    // timeout must not stand in for the lock timeout this test is about.
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_mins(1))
+        .connect_with(
+            PgConnectOptions::from_str(&url)
+                .expect("parse test URL")
+                .disable_statement_logging()
+                .database(&database.database_name),
+        )
+        .await
+        .expect("connect checkpoint pool");
     let checkpointer = PostgresCheckpointer::activate(
-        database.pool.clone(),
+        pool.clone(),
         authority(),
         CheckpointLimits::default(),
         Arc::new(TestStateWriterLease::current()),
@@ -91,10 +107,15 @@ async fn checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bo
     .expect("the checkpoint write must not wait forever")
     .expect_err("a stalled writer lock fails the write");
     let waited = started.elapsed();
+    let PostgresCheckpointError::StorageUnavailable { source } = &error else {
+        panic!(
+            "a lock wait is retryable storage unavailability: {}",
+            error.code()
+        );
+    };
     assert!(
-        matches!(error, PostgresCheckpointError::StorageUnavailable { .. }),
-        "{}",
-        error.code()
+        matches!(source, sqlx::Error::Database(database) if database.code().as_deref() == Some("55P03")),
+        "the failure is PostgreSQL's lock timeout, not another storage error"
     );
     assert!(waited >= WRITER_LOCK_TIMEOUT, "{waited:?}");
     holder.rollback().await.expect("release holder");

@@ -18,8 +18,9 @@ use crate::agents::session::ApplicationRuntimeProjection;
 use adk_rust::graph::{Checkpointer, GraphError, NodeContext};
 use adk_rust::{Event, Part, Tool};
 use serde_json::Value;
+use std::future::Future;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 
 pub(crate) struct PipelineGraphCallOwner {
     pub(crate) scope: PipelineApplicationScope,
@@ -239,41 +240,18 @@ impl PipelineApplicationNodeRuntime {
         )?;
         let receiver_owner = self.applications.event_receiver().ok_or_else(failure)?;
         let mut receiver = receiver_owner.take().await.map_err(|_| failure())?;
-        // Driven: forwarding a child event (a bounded send the Runner drains by
-        // persisting it) must never leave the child parked mid-append holding
-        // the root session writer.
         let tool = Arc::clone(tool);
-        let mut future =
-            DrivenTask::new(async move { tool.execute(tool_context, arguments).await });
         let mut terminal = None;
-        let result = loop {
-            tokio::select! {
-                value = &mut future => break match value { Ok(Ok(value)) => Ok(value), _ => Err(failure()) },
-                signal = receiver.recv() => match signal {
-                    Some(signal) => if let Err(error) = self.drain(signal,&receipt,graph_scope.as_ref(),parent.invocation_id(),&mut terminal).await { break Err(error); },
-                    None => break Err(failure()),
-                }
-            }
-        };
-        // A drain failure stops the tool task before the queue drain below.
-        future.cancel().await;
-        // Once tool polling stops no child sender may remain active. Drain its bounded queue.
-        let mut result = result;
-        while let Ok(signal) = receiver.try_recv() {
-            if let Err(error) = self
-                .drain(
-                    signal,
-                    &receipt,
-                    graph_scope.as_ref(),
-                    parent.invocation_id(),
-                    &mut terminal,
-                )
-                .await
-            {
-                result = Err(error);
-                break;
-            }
-        }
+        let result = self
+            .run_child_draining(
+                async move { tool.execute(tool_context, arguments).await },
+                &mut receiver,
+                &receipt,
+                graph_scope.as_ref(),
+                parent.invocation_id(),
+                &mut terminal,
+            )
+            .await;
         receiver_owner
             .restore(receiver)
             .await
@@ -306,6 +284,45 @@ impl PipelineApplicationNodeRuntime {
             .await?;
         }
         Ok((result, receipt.activation().call_id().to_owned()))
+    }
+
+    /// Run the child tool while forwarding its events, then drain what it
+    /// queued. The tool is driven (`DrivenTask`): forwarding a child event is a
+    /// bounded send the Runner drains by persisting it, so it must never leave
+    /// the child parked mid-append holding the root session writer.
+    async fn run_child_draining(
+        &self,
+        work: impl Future<Output = adk_rust::Result<Value>> + Send + 'static,
+        receiver: &mut mpsc::Receiver<ApplicationEventSignal>,
+        receipt: &PipelineGraphCallReceipt,
+        graph_scope: Option<&PipelineNodeEventScope>,
+        root_container: &str,
+        terminal: &mut Option<Event>,
+    ) -> Result<Value, GraphError> {
+        let mut future = DrivenTask::new(work);
+        let result = loop {
+            tokio::select! {
+                value = &mut future => break match value { Ok(Ok(value)) => Ok(value), _ => Err(failure()) },
+                signal = receiver.recv() => match signal {
+                    Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(error); },
+                    None => break Err(failure()),
+                }
+            }
+        };
+        // A drain failure stops the tool task before the queue drain below.
+        future.cancel().await;
+        // Once tool polling stops no child sender may remain active. Drain its bounded queue.
+        let mut result = result;
+        while let Ok(signal) = receiver.try_recv() {
+            if let Err(error) = self
+                .drain(signal, receipt, graph_scope, root_container, terminal)
+                .await
+            {
+                result = Err(error);
+                break;
+            }
+        }
+        result
     }
 
     async fn drain(
@@ -609,6 +626,134 @@ mod tests {
         let terminal = terminal.unwrap();
         assert_eq!(terminal.id, "original-result");
         assert_eq!(terminal.branch, branch);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)] // One ordered proof: hold, flood, block, release.
+    async fn a_full_node_event_channel_never_strands_a_child_holding_the_root_writer() {
+        const FLOOD: usize = 70;
+        let definition=PipelineDefinition::from_yaml("state: {answer: str}\nentry_point: child\nnodes:\n  - id: child\n    type: agent\n    tool: assistant\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n").unwrap();
+        let revision = PipelineCheckpointRevision {
+            application_id: 1,
+            version_id: 7,
+            definition_digest: definition.definition_digest(),
+        };
+        let scope =
+            PipelineApplicationScope::new(String::new(), &definition, Some(revision)).unwrap();
+        let activation = scope.activate("saved-root", "child", 2).unwrap();
+        let checkpointer = MemoryCheckpointer::new();
+        checkpointer
+            .save(&Checkpoint::new(
+                "saved-root",
+                State::new(),
+                2,
+                vec!["child".to_owned()],
+            ))
+            .await
+            .unwrap();
+        let context = NodeContext::new(State::new(), ExecutionConfig::new("saved-root"), 2);
+        let branch = format!("{APPLICATION_BRANCH_ROOT}.application_2");
+        let (receipt, _) = prepare_graph_call(
+            &checkpointer,
+            &Mutex::new(()),
+            &context,
+            activation,
+            "assistant",
+            &json!({"task":"work"}),
+            "graph-runtime",
+            "graph",
+            &branch,
+        )
+        .await
+        .unwrap();
+        let (events, node_receiver) = pipeline_node_event_channel();
+        let runtime = PipelineApplicationNodeRuntime::new(
+            scope,
+            "child".to_owned(),
+            Arc::new(ApplicationRuntimeProjection::default()),
+            events,
+            Arc::new(Mutex::new(())),
+        );
+        let (child_events, mut child_receiver) = mpsc::channel(64);
+        let writer = Arc::new(Mutex::new(()));
+        let locked = Arc::new(tokio::sync::Notify::new());
+        let (io_done, io) = tokio::sync::oneshot::channel::<()>();
+        // The child tool: one "append" holding the root writer, parked on I/O.
+        let work = {
+            let writer = Arc::clone(&writer);
+            let locked = Arc::clone(&locked);
+            async move {
+                let held = writer.lock().await;
+                locked.notify_one();
+                let _ = io.await;
+                drop(held);
+                Ok(json!({"response": "done"}))
+            }
+        };
+        let received = std::sync::atomic::AtomicUsize::new(0);
+        let mut terminal = None;
+        let drive = runtime.run_child_draining(
+            work,
+            &mut child_receiver,
+            &receipt,
+            None,
+            "graph-runtime",
+            &mut terminal,
+        );
+        // The Runner: persists every forwarded node event under the root writer.
+        let consumer = async {
+            let mut drain = node_receiver
+                .drain("new-outer-runtime", "graph", APPLICATION_BRANCH_ROOT)
+                .await
+                .unwrap();
+            while received.load(std::sync::atomic::Ordering::SeqCst) < FLOOD {
+                if drain.recv().await.is_none() {
+                    break;
+                }
+                received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _persisted = writer.lock().await;
+            }
+        };
+        let flood = async {
+            locked.notified().await;
+            for index in 0..FLOOD {
+                let mut child = Event::with_id(format!("leaf-{index}"), "ordinary-runtime");
+                child.branch = format!("{branch}.application_4");
+                child.llm_response.content = Some(Content::new("model").with_text("working"));
+                child_events
+                    .send(ApplicationEventSignal::Event {
+                        container_invocation_id: "graph-runtime".to_owned(),
+                        parent_call_id: receipt.activation().call_id().to_owned(),
+                        checkpoint_thread_id: None,
+                        event: Box::new(child),
+                    })
+                    .await
+                    .map_err(|_| ())
+                    .unwrap();
+            }
+            // The consumer now waits on the writer the child holds, so the
+            // node-event channel fills and the next forward blocks.
+            while received.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+            for _ in 0..256 {
+                tokio::task::yield_now().await;
+            }
+            io_done.send(()).unwrap();
+        };
+        let Ok(result) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(drive, consumer, flood).0
+        })
+        .await
+        else {
+            panic!(
+                "self-deadlock: the child tool was left suspended holding the root writer \
+                 while the full node-event channel blocked its forward"
+            );
+        };
+        assert_eq!(result.unwrap(), json!({"response": "done"}));
+        assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), FLOOD);
+        assert!(terminal.is_none());
     }
 
     #[test]

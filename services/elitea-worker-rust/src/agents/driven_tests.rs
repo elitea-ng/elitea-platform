@@ -1,11 +1,18 @@
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use adk_rust::Event;
+use adk_rust::{Event, EventStream};
 use tokio::sync::{Notify, oneshot};
 
 use super::{DrivenEventStream, DrivenTask};
+
+thread_local! {
+    /// Tasks spawned by `DrivenTask` on this test thread (budget tests use a
+    /// current-thread runtime, so every spawn happens here).
+    pub(super) static SPAWNED: Cell<usize> = const { Cell::new(0) };
+}
 
 const BOUND: Duration = Duration::from_secs(5);
 
@@ -191,4 +198,194 @@ async fn driven_task_output_is_returned_and_its_await_is_cancellation_safe() {
             .expect("output"),
         7
     );
+}
+
+fn nest(stream: EventStream) -> EventStream {
+    Box::pin(adk_rust::futures::stream::unfold(
+        DrivenEventStream::new(stream),
+        |mut driven| async move { driven.next().await.map(|item| (item, driven)) },
+    ))
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn nested_wrappers_spawn_no_task_for_ready_items_and_one_per_level_when_pending() {
+    const DEPTH: usize = 3;
+    let mut stream: EventStream = Box::pin(async_stream::stream! {
+        yield Ok(Event::with_id("ready-1", "invocation"));
+        yield Ok(Event::with_id("ready-2", "invocation"));
+        tokio::task::yield_now().await;
+        yield Ok(Event::with_id("pending", "invocation"));
+    });
+    for _ in 0..DEPTH - 1 {
+        stream = nest(stream);
+    }
+    let mut outer = DrivenEventStream::new(stream);
+    let mut spawned_per_item = Vec::new();
+    while let Some(item) = outer.next().await {
+        item.expect("ok item");
+        spawned_per_item.push(SPAWNED.with(|spawned| spawned.replace(0)));
+    }
+    // Budget: ready work never costs a task; a pending item costs exactly one
+    // task per driven level, bounded by nesting depth.
+    assert_eq!(spawned_per_item, vec![0, 0, DEPTH]);
+}
+
+#[tokio::test]
+async fn cancel_returns_only_after_an_in_flight_pull_dropped_the_inner_stream() {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let guard = DropFlag(dropped.clone());
+    let mut stream = DrivenEventStream::new(Box::pin(async_stream::stream! {
+        let _guard = guard;
+        std::future::pending::<()>().await;
+        yield Ok(Event::with_id("never", "invocation"));
+    }));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), stream.next())
+            .await
+            .is_err(),
+        "the pull is pending on its task"
+    );
+    tokio::time::timeout(BOUND, stream.cancel())
+        .await
+        .expect("bounded cancel");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the inner stream is gone when cancel returns"
+    );
+}
+
+/// Structural guard: a `select!` arm that polls an agent stream directly
+/// leaves it suspended (possibly holding a session writer lock) whenever
+/// another arm wins. Every such arm must poll a `DrivenEventStream`, or be
+/// listed here with the reason it cannot strand a write.
+#[test]
+fn no_select_arm_polls_a_raw_agent_stream() {
+    const ALLOWED: &[(&str, &str, &str)] = &[
+        (
+            "src/agents/graph/parallel.rs",
+            "inflight",
+            "FuturesUnordered of child branches polled only by this loop; no arm yields to a consumer",
+        ),
+        (
+            "src/execution/native_agent_lifecycle.rs",
+            "native",
+            "the lease arm returns and the run is dropped before the lease close; other arms finish the event first",
+        ),
+    ];
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let roots = [
+        (manifest.join("src"), "src"),
+        (
+            manifest.join("../../libs/rust/agent-runtime/src"),
+            "libs/rust/agent-runtime/src",
+        ),
+    ];
+    let mut violations = Vec::new();
+    let mut seen_allowed = Vec::new();
+    for (root, label) in &roots {
+        let mut pending = vec![root.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read source dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if !path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
+                    || name.ends_with("_tests.rs")
+                {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("read source");
+                let relative = format!(
+                    "{label}{}",
+                    path.to_string_lossy()
+                        .split_once(label)
+                        .map_or(String::new(), |(_, rest)| rest.to_owned())
+                );
+                for ident in raw_select_polls(&source) {
+                    let driven = source.contains(&format!("let mut {ident} =")) && {
+                        let start = source
+                            .find(&format!("let mut {ident} ="))
+                            .unwrap_or_default();
+                        source[start..]
+                            .split(';')
+                            .next()
+                            .is_some_and(|binding| binding.contains("DrivenEventStream::new"))
+                    };
+                    if driven {
+                        continue;
+                    }
+                    if ALLOWED
+                        .iter()
+                        .any(|(file, allowed, _)| *file == relative && *allowed == ident)
+                    {
+                        seen_allowed.push((relative.clone(), ident));
+                        continue;
+                    }
+                    violations.push(format!("{relative}: `{ident}`"));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "select! arms poll a raw agent stream; wrap it in DrivenEventStream or justify it: {violations:?}"
+    );
+    assert_eq!(
+        seen_allowed.len(),
+        ALLOWED.len(),
+        "a stale allowlist entry hides nothing: {seen_allowed:?}"
+    );
+}
+
+/// Identifiers polled with `.next()` / `.next_event()` inside `select!` bodies.
+fn raw_select_polls(source: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = source;
+    while let Some(start) = rest.find("select!") {
+        let after = &rest[start..];
+        let Some(open) = after.find('{') else { break };
+        let mut depth = 0_usize;
+        let mut end = open;
+        for (offset, ch) in after[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + offset;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &after[open..end];
+        for marker in [".next()", ".next_event()"] {
+            let mut cursor = body;
+            while let Some(at) = cursor.find(marker) {
+                let ident = cursor[..at]
+                    .chars()
+                    .rev()
+                    .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>();
+                if !ident.is_empty() && !found.contains(&ident) {
+                    found.push(ident);
+                }
+                cursor = &cursor[at + marker.len()..];
+            }
+        }
+        rest = &after[end.max(open) + 1..];
+    }
+    found
 }
