@@ -14,6 +14,13 @@ pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/elitea.rs"));
 }
 
+/// The document extractor sidecar's contract (`elitea.extract.v1`), spoken
+/// over a Unix socket by `transport::extractor_client`.
+#[allow(clippy::all, clippy::pedantic)]
+pub mod extract {
+    include!(concat!(env!("OUT_DIR"), "/elitea.extract.v1.rs"));
+}
+
 pub use error::{InputLimitField, ProtocolError};
 pub use generated::elitea;
 

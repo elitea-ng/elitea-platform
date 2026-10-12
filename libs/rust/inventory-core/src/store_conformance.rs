@@ -343,10 +343,18 @@ async fn one_lease_holder_at_a_time<S: GraphStore>(store: &S, key: GraphKey) {
     );
     assert!(other.is_some(), "another graph's lease is independent");
     drop(first);
-    assert!(
-        ok("lease", store.lease(key).await).is_some(),
-        "a dropped lease frees the graph"
-    );
+    // A store may free a dropped lease asynchronously (PostgreSQL releases a
+    // session advisory lock once its backend sees the closed connection), so
+    // the graph must come free promptly, not necessarily on the next call.
+    let mut freed = None;
+    for _ in 0..100 {
+        freed = ok("lease", store.lease(key).await);
+        if freed.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(freed.is_some(), "a dropped lease frees the graph");
 }
 
 async fn ranking<S: GraphStore>(store: &S, key: GraphKey) {

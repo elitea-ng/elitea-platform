@@ -57,10 +57,10 @@ use prost::Message as _;
 use serde_json::{Map, Value};
 use tokio::task::JoinSet;
 
-use super::IndexIngestRuntime;
 use super::inputs::{self, IndexParameters};
 use super::slug::vector_space_slug;
 use super::source::{IndexSource, PathFilter, PlatformAccess};
+use super::{IndexIngestRuntime, IndexRunLimits};
 use crate::execution::agent_lease::ClaimLeaseStateProbe;
 use crate::execution::{ClaimLeaseError, ClaimLeaseErrorCode};
 use crate::protocol::elitea::runtime::v1::{
@@ -70,6 +70,7 @@ use crate::protocol::elitea::runtime::v1::{
 use crate::protocol::output::MAX_INDEX_RESULT_DOCUMENTS;
 use crate::protocol::vector_token::{VectorClaimToken, VectorSource};
 use crate::transport::embeddings_facade::{EmbeddingsClient, EmbeddingsError, MAX_BATCH_INPUTS};
+use crate::transport::extractor_client::{Extraction, ExtractorClient, SkipReason};
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 /// The byte budget of the per-document record in the summary. The frame is
@@ -91,6 +92,13 @@ const SKIP_EMPTY: &str = "empty";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
 const SKIP_EMBEDDING_FAILED: &str = "embedding_failed";
 const SKIP_TOO_LARGE: &str = "too_large";
+/// The extraction sidecar did not answer about the document (socket, stream
+/// or sidecar failure); the document is retried by the next run.
+const SKIP_EXTRACT_FAILED: &str = "extract_failed";
+/// The sidecar's typed reasons that have no older label.
+const SKIP_ENCRYPTED: &str = "encrypted";
+const SKIP_TOO_MANY_PAGES: &str = "too_many_pages";
+const SKIP_EXTRACT_TIMEOUT: &str = "extract_timeout";
 
 /// What one run is given.
 pub(crate) struct IndexRun<'a> {
@@ -511,8 +519,11 @@ impl Runner<'_> {
                     };
                     let source = Arc::clone(&self.source);
                     let chunking = Arc::clone(&self.chunking);
-                    let max_bytes = self.runtime.limits.max_document_bytes;
-                    tasks.spawn(prepare(source, chunking, reference, plan, max_bytes));
+                    let limits = self.runtime.limits;
+                    let extractor = self.runtime.extractor.clone();
+                    tasks.spawn(prepare(
+                        source, chunking, reference, plan, limits, extractor,
+                    ));
                 }
                 let Some(joined) = tasks.join_next().await else {
                     break Ok(());
@@ -991,14 +1002,18 @@ fn expected_dimension(command: &IndexIngestCommandV1) -> Option<usize> {
 }
 
 /// Fetch, extract and chunk one document. Runs as its own task; the CPU
-/// work (extraction, tokenising) is on a blocking thread.
+/// work (extraction, tokenising) is on a blocking thread. A PDF or Office
+/// document is read by the extraction sidecar when the run has one
+/// (`extractor`), and skipped `unsupported_type` otherwise.
 async fn prepare(
     source: Arc<IndexSource>,
     chunking: Arc<ChunkingConfig>,
     reference: DocumentRef,
     plan: Plan,
-    max_bytes: u64,
+    limits: IndexRunLimits,
+    extractor: Option<Arc<ExtractorClient>>,
 ) -> Preparation {
+    let max_bytes = limits.max_document_bytes;
     if reference.size > max_bytes {
         return Preparation::Skipped(SKIP_TOO_LARGE);
     }
@@ -1037,16 +1052,30 @@ async fn prepare(
         version: document.reference.version.clone(),
         ..reference
     };
-    let bytes = document.bytes;
+    let mut bytes = document.bytes;
+    // A document format (PDF, Office, e-mail) is the sidecar's to read; this
+    // process extracts text and HTML itself, on the blocking thread below.
+    let sidecar_text = if elitea_doc_extract::is_document_type(&mime) {
+        let sent = std::mem::take(&mut bytes);
+        match sidecar_text(extractor, &key, &mime, sent, limits).await {
+            Ok(text) => Some(text),
+            Err(label) => return Preparation::Skipped(label),
+        }
+    } else {
+        None
+    };
     let chunked = tokio::task::spawn_blocking(move || {
         let is_html = matches!(mime.as_str(), "text/html" | "application/xhtml+xml");
         let options = ExtractOptions {
             html_to_markdown: true,
         };
-        let text = match elitea_doc_extract::extract_with(&mime, &bytes, &options) {
-            Extracted::Text { text, .. } => text,
-            Extracted::Unsupported => return Preparation::Skipped(SKIP_UNSUPPORTED),
-            Extracted::Unreadable(_) => return Preparation::Skipped(SKIP_UNREADABLE),
+        let text = match sidecar_text {
+            Some(text) => text,
+            None => match elitea_doc_extract::extract_with(&mime, &bytes, &options) {
+                Extracted::Text { text, .. } => text,
+                Extracted::Unsupported => return Preparation::Skipped(SKIP_UNSUPPORTED),
+                Extracted::Unreadable(_) => return Preparation::Skipped(SKIP_UNREADABLE),
+            },
         };
         if text.trim().is_empty() {
             return Preparation::Skipped(SKIP_EMPTY);
@@ -1075,6 +1104,58 @@ async fn prepare(
     chunked.unwrap_or(Preparation::Configuration(
         "the document preparation task stopped unexpectedly".to_owned(),
     ))
+}
+
+/// One document's text from the extraction sidecar, or the summary label
+/// it is skipped under: `unsupported_type` without a sidecar, the sidecar's
+/// own reason, or `extract_failed` when it did not answer about the
+/// document. The bytes move into the client; nothing copies them here.
+async fn sidecar_text(
+    extractor: Option<Arc<ExtractorClient>>,
+    key: &str,
+    mime: &str,
+    bytes: Vec<u8>,
+    limits: IndexRunLimits,
+) -> Result<String, &'static str> {
+    let Some(extractor) = extractor else {
+        return Err(SKIP_UNSUPPORTED);
+    };
+    let extracted = extractor
+        .extract(
+            key,
+            mime,
+            bytes,
+            limits.max_document_bytes,
+            limits.extract_timeout,
+        )
+        .await;
+    match extracted {
+        Ok(Extraction::Text(text)) => Ok(text),
+        Ok(Extraction::Skipped(reason)) => Err(skip_label(reason)),
+        Err(error) => {
+            tracing::warn!(
+                event = "index_document_extract_failed",
+                socket = %extractor.socket().display(),
+                error = %error
+            );
+            Err(SKIP_EXTRACT_FAILED)
+        }
+    }
+}
+
+/// The summary's skip label of a sidecar skip reason. The older labels are
+/// kept where the meaning is the same; the sidecar's own reasons get their
+/// own.
+fn skip_label(reason: SkipReason) -> &'static str {
+    match reason {
+        SkipReason::TooLarge | SkipReason::OutputTooLarge => SKIP_TOO_LARGE,
+        SkipReason::TooManyPages => SKIP_TOO_MANY_PAGES,
+        SkipReason::Encrypted => SKIP_ENCRYPTED,
+        SkipReason::Unsupported => SKIP_UNSUPPORTED,
+        SkipReason::Corrupt => SKIP_UNREADABLE,
+        SkipReason::Timeout => SKIP_EXTRACT_TIMEOUT,
+        SkipReason::Empty => SKIP_EMPTY,
+    }
 }
 
 /// ADR-0028 ACL entries as the point payload carries them: nothing for a

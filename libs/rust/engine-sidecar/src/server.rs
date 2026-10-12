@@ -31,14 +31,16 @@ use elitea_engine_core::stream::{Context, Line, StopSignal};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::io;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+
+// The engines call `server::bind`; the binder lives in `socket` so a sidecar
+// built without this module (feature `server` off) still has it.
+pub use crate::socket::bind;
 
 /// One engine behind the socket: the tools it serves and how it runs one.
 ///
@@ -269,37 +271,6 @@ async fn invoke<E: Engine>(State(shared): State<Arc<Shared<E>>>, body: Bytes) ->
         .header(header::CONTENT_TYPE, "application/x-ndjson")
         .body(Body::from_stream(lines))
         .unwrap_or_else(|_| detail(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"))
-}
-
-/// Bind the socket the host dials.
-///
-/// The parent directory is created; a stale SOCKET at the path is removed,
-/// anything else at the path is refused rather than deleted. The socket is
-/// made world-writable: the host's container runs as another non-root user
-/// and connecting needs write permission. The shared directory (an emptyDir
-/// or compose volume) is the only thing that scopes who reaches it.
-///
-/// # Errors
-///
-/// Any filesystem or bind failure, or a non-socket file at the path.
-pub fn bind(path: &Path) -> io::Result<UnixListener> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
-    }
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(path)?,
-        Ok(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("{} exists and is not a socket", path.display()),
-            ));
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    let listener = UnixListener::bind(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777))?;
-    Ok(listener)
 }
 
 /// Serve `engine` on `listener` until `shutdown` resolves.

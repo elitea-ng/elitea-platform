@@ -4013,6 +4013,92 @@ worker:
     image: docker.io/library/python:3.12.14-slim-trixie
     sizeLimit: 8Mi
 
+  # The document extraction sidecar (ADR-0030 I1): elitea-doc-extractor, a
+  # second container in the worker pod that reads the PDF and Office documents
+  # an index run fetched and hands the text back over a Unix socket in a
+  # shared emptyDir. Rust worker and indexingRuntime=rust only; the chart
+  # refuses it otherwise.
+  #
+  # WHY A CONTAINER AND NOT A FEATURE OF THE WORKER. The worker's Cargo.lock
+  # cannot hold the PDF backend next to its Kubernetes client (one caps
+  # smallvec below the other's floor), so the extractor is its own crate, its
+  # own lock, its own image. The process boundary is also the right place for
+  # a parser of untrusted documents: a crash or an OOM kill here is one
+  # document skipped `extract_failed` in the run's summary, never a dead
+  # worker. It has no port and no TLS; the socket directory is the only way
+  # in, the process opens no connection of its own, and it serves only the
+  # peer uid(s) in `peerUids` (SO_PEERCRED) — the pod-local Unix-socket
+  # sidecar exception to the gRPC-over-mTLS rule (AGENTS.md).
+  #
+  # OFF by default: without it a PDF or Office document is reported skipped
+  # `unsupported_type`, as it was before the sidecar existed.
+  extractor:
+    enabled: false
+    image:
+      repository: ghcr.io/elitea-ng/elitea-doc-extractor
+      # Empty means the chart-wide image.tag.
+      tag: ""
+      pullPolicy: IfNotPresent
+    # The shared socket directory; the worker's runtime.json gets
+    # `<socketDir>/extractor.sock` as `extractor_socket`.
+    socketDir: /run/elitea-extract
+    # The caps the extractor lowers a request's limits to. maxInputBytes is
+    # the worker's own document cap (50 MiB); the extractor lowers it further
+    # by itself when `resources.limits.memory` cannot hold `concurrency`
+    # documents at the cap several times over (see the service README,
+    # "Memory"), and such a document is skipped `too_large` instead of
+    # OOM-killing the container.
+    maxInputBytes: 52428800
+    maxPages: 1000
+    timeoutMillis: 120000
+    # Documents extracted at once. Not below the worker's own document
+    # concurrency (4): the worker keeps at most this many calls in flight
+    # (it reads the figure from the sidecar's Capabilities) and queues the
+    # rest itself, so a busy run never meets the sidecar's slot wait. Each
+    # slot holds a document and its expansion in memory; `fit_memory`
+    # lowers the input cap to what `resources.limits.memory` can hold for
+    # this many at once.
+    concurrency: 4
+    # How long a request may still wait for a slot before RESOURCE_EXHAUSTED;
+    # apart from timeoutMillis on purpose, since queueing is not a timeout.
+    slotWaitMillis: 600000
+    # The uids the sidecar serves Extract to, read from each connection's
+    # SO_PEERCRED; any other peer is refused PERMISSION_DENIED. Empty means
+    # the worker container's uid (worker.runAsUser), which is the right
+    # answer for every deployment of this chart; list uids only for a worker
+    # image that runs as something else. The probes are unaffected either
+    # way: Capabilities (the health probe) is always served to the sidecar's
+    # own uid, because the probe is the binary asking itself.
+    peerUids: []
+    logLevel: info
+    probes:
+      periodSeconds: 10
+      # The probe (`healthcheck`) gives the socket 2 s to answer Capabilities
+      # and exits; 5 s is that budget plus the exec's own start-up and a
+      # margin, so a loaded node does not read a serving sidecar as dead. It
+      # fails when every slot is held by an extraction that outran its
+      # timeout (the answer's `overruns` against `concurrency`), so a wedged
+      # sidecar is restarted even if its own exit did not happen.
+      timeoutSeconds: 5
+      failureThreshold: 3
+    # A small memory-backed /tmp for the sidecar (its root filesystem is
+    # read-only): xberg may need temp files for some formats.
+    tmpSizeLimit: 64Mi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        # 2560Mi and not a round 2Gi: the defaults above need maxInputBytes ×
+        # concurrency × 6 (the parser's expansion) × 2 (the half the process
+        # keeps) = 50 MiB × 4 × 12 = 2400 MiB for the sidecar's memory fit to
+        # leave the 50 MiB cap as configured (Config::memory_limit_for_caps,
+        # service README "Memory"). Under 2Gi the fit would quietly lower the
+        # cap to ~44 MiB and every larger document would be skipped
+        # `too_large`. Raise this with concurrency or maxInputBytes; the
+        # render test asserts the relation.
+        memory: 2560Mi
+
   # uid/gid 10001 is the `elitea` user baked into the worker image.
   runAsUser: 10001
   runAsGroup: 10001

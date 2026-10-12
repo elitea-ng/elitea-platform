@@ -165,6 +165,24 @@ target "elitea-vector" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
+# elitea-doc-extractor (ADR-0030 I1): the Rust worker's document extraction
+# sidecar (PDF, Office) on a Unix socket, in its own process and its own
+# Cargo.lock because the worker's lock cannot hold the PDF backend. The same
+# distroless base and cargo-auditable build as elitea-vector. Repo-root
+# context: the Containerfile COPYs services/elitea-doc-extractor, libs/proto
+# (its build script compiles elitea.extract.v1) and libs/rust (path
+# dependencies).
+#
+# Not in `group "default"`, like the engines: it compiles from source.
+target "elitea-doc-extractor" {
+  context    = "."
+  dockerfile = "services/elitea-doc-extractor/Containerfile"
+  tags       = ["${REGISTRY}/elitea-doc-extractor:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-doc-extractor"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-doc-extractor"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 # Standalone module that needs Go 1.26.4 or above (bifrost/core); its go.mod
 # asks for the go1.26.9 security floor. The Containerfile pins
 # golang:1.26 internally, so the correct toolchain is used regardless of the

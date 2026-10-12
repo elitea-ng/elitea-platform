@@ -45,6 +45,7 @@ use elitea_vector_index::{ClientConfig, VectorClient};
 
 use crate::protocol::control::IndexRemovalControl;
 use crate::transport::embeddings_facade::EmbeddingsClient;
+use crate::transport::extractor_client::ExtractorClient;
 
 pub(crate) use pipeline::{IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index};
 
@@ -63,6 +64,10 @@ pub(crate) struct IndexIngestRuntime {
     pub(crate) allowlist: HostAllowlist,
     pub(crate) transport: Arc<dyn Transport>,
     pub(crate) limits: IndexRunLimits,
+    /// The document extraction sidecar (`elitea-doc-extractor`), when the
+    /// deployment names its socket; `None` reports a PDF or Office document
+    /// skipped `unsupported_type`.
+    pub(crate) extractor: Option<Arc<ExtractorClient>>,
 }
 
 /// Bounds of one run.
@@ -77,6 +82,11 @@ pub(crate) struct IndexRunLimits {
     pub(crate) max_documents: usize,
     /// One document's bytes.
     pub(crate) max_document_bytes: u64,
+    /// The extraction time asked of the document extraction sidecar for one
+    /// PDF or Office document (sent in the request header; the sidecar
+    /// lowers it to its own cap). The client's call deadline is derived
+    /// from this and what the sidecar advertises, never fixed.
+    pub(crate) extract_timeout: Duration,
     /// The wait before the second embeddings attempt of a batch after a
     /// retryable refusal; the third waits twice that.
     pub(crate) embedding_retry_backoff: Duration,
@@ -89,6 +99,7 @@ impl Default for IndexRunLimits {
             embedding_batch: 64,
             max_documents: 50_000,
             max_document_bytes: 50 * 1024 * 1024,
+            extract_timeout: Duration::from_mins(2),
             embedding_retry_backoff: Duration::from_millis(500),
         }
     }
@@ -131,6 +142,7 @@ impl IndexIngestRuntime {
             allowlist,
             transport: Arc::new(transport),
             limits,
+            extractor: None,
         })
     }
 
@@ -139,6 +151,13 @@ impl IndexIngestRuntime {
     #[must_use]
     pub(crate) fn with_removal_control(mut self, control: Arc<dyn IndexRemovalControl>) -> Self {
         self.removal = Some(control);
+        self
+    }
+
+    /// Send PDF and Office documents to the extraction sidecar.
+    #[must_use]
+    pub(crate) fn with_extractor(mut self, extractor: Arc<ExtractorClient>) -> Self {
+        self.extractor = Some(extractor);
         self
     }
 }

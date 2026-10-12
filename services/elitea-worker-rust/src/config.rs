@@ -100,6 +100,13 @@ pub struct RuntimeDeployConfig {
     /// source host (fail-closed), so a deployment names what it indexes.
     #[serde(default)]
     pub index_egress_allowlist: Option<String>,
+    /// The Unix socket of `elitea-doc-extractor`, the document extraction
+    /// sidecar (ADR-0030 I1): where an index run sends a PDF or Office
+    /// document to be read, over `elitea.extract.v1`. Absent, such documents
+    /// are reported skipped `unsupported_type`, as before the sidecar
+    /// existed. An absolute path in a directory the two containers share.
+    #[serde(default)]
+    pub extractor_socket: Option<PathBuf>,
     pub ca_path: PathBuf,
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,
@@ -324,6 +331,9 @@ impl RuntimeDeployConfig {
         }
         if let Some(allowlist) = &self.index_egress_allowlist {
             require_bounded_text(allowlist, MAX_ORIGIN_BYTES)?;
+        }
+        if let Some(socket) = &self.extractor_socket {
+            require_absolute_path(socket)?;
         }
         if self.sandbox_runtimes.len() > 4 {
             return Err(invalid_config());

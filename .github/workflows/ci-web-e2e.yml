@@ -685,7 +685,7 @@ jobs:
     # keeps that distinction — every leg here is the native runtime, and the
     # job name says which slice of the suite it ran.
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       # THREE SHARDS, not four. The same `--workers=1` argument as
       # `chat-stream` applies (same script, same persona, same four-stream
@@ -748,7 +748,7 @@ jobs:
           cache-hcl: |
             ci/bake-cache.hcl
             ci/bake-cache-rust.hcl
-          targets: standalone
+          targets: standalone-rust
           mount-cache-suffix: rust
       - name: Run the journeys against a fresh Rust-runtime stack
         # The Rust worker is compiled from source by the stack's own `build`
@@ -872,7 +872,7 @@ jobs:
     # job in this workflow now carries one; this is the one whose upstream
     # can hang.
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -910,7 +910,7 @@ jobs:
           cache-hcl: |
             ci/bake-cache.hcl
             ci/bake-cache-rust.hcl
-          targets: standalone
+          targets: standalone-rust
           mount-cache-suffix: rust
       - name: Run the journeys against a fresh real-model stack
         # The same script and lifecycle as `chat-stream`. What differs is the
@@ -1081,7 +1081,7 @@ jobs:
           cache-hcl: |
             ci/bake-cache.hcl
             ci/bake-cache-rust.hcl
-          targets: standalone
+          targets: standalone-rust
           mount-cache-suffix: rust
       - name: Run the live toolkit journeys against a real-model stack
         if: steps.lanes.outputs.toolkits != '0'

@@ -1,0 +1,100 @@
+# syntax=docker/dockerfile:1.7
+#
+# elitea-doc-extractor (ADR-0030 I1): the document extraction sidecar of the
+# Rust indexing worker. One binary on a distroless base; it serves
+# elitea.extract.v1 on a Unix socket in a directory shared with the worker
+# and opens no network connection of its own. No shell, no Python.
+#
+# Build from the repository root (the context must be the root: the build
+# script compiles libs/proto/elitea/extract/v1, and libs/rust holds the path
+# dependencies):
+#   docker buildx bake elitea-doc-extractor
+#   podman build -f services/elitea-doc-extractor/Containerfile -t elitea-doc-extractor .
+#
+# Released as ghcr.io/elitea-ng/elitea-doc-extractor: docker-bake.hcl,
+# publish.yml's build / publish-image matrices and IMAGES array, and
+# ci-image-scan.yml name it together, and scripts/ci/image-matrix.sh holds
+# them in step.
+
+# Debian 13 (trixie) throughout (#1094). The runtime keeps glibc and CA roots
+# and has NO system OpenSSL; this binary links no TLS at all. libgcc_s comes
+# from distroless cc-debian13 with its package record and licence, as the
+# engines' images do.
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
+FROM rust:1.97.1-trixie AS runtime-libraries
+COPY --from=runtime-cc /usr/lib/ /cc-lib/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /usr/share/doc/gcc-14-base/ /runtime-files/usr/share/doc/gcc-14-base/
+COPY --from=runtime-cc /usr/share/lintian/overrides/libgcc-s1 /runtime-files/usr/share/lintian/overrides/libgcc-s1
+RUN cd /cc-lib && \
+    set -- */libgcc_s.so.1 && test "$#" -eq 1 && test -f "$1" && \
+    mkdir -p /runtime-files/usr/lib && cp --parents "$1" /runtime-files/usr/lib && \
+    ln -s gcc-14-base /runtime-files/usr/share/doc/libgcc-s1
+
+FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
+COPY --from=runtime-libraries /runtime-files/ /
+
+FROM rust:1.97.1-trixie AS builder
+
+# `cargo auditable` embeds the dependency list trivy's `rustbinary` analyzer
+# reads; without it an image scan sees only the Debian base (see the
+# worker's Containerfile). Installed before any source is copied, so a
+# source change does not rebuild the tool.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-auditable --locked --version 0.7.5
+
+WORKDIR /src/services/elitea-doc-extractor
+# The repository layout is kept under /src: build.rs reads ../../libs/proto,
+# and the path dependencies are under ../../libs/rust.
+COPY libs/proto /src/libs/proto
+COPY libs/rust /src/libs/rust
+COPY services/elitea-doc-extractor ./
+
+# /cargo-target is shared with every other build on the host, and cargo judges
+# a path crate fresh by mtime, so a context older than another checkout's build
+# would ship that build's binary. Touching /src under the lock recompiles the
+# local crates from this context while registry crates stay cached (see the
+# worker's Containerfile).
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/cargo-target,sharing=locked \
+    find /src -type f -exec touch {} + && \
+    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
+    cp /cargo-target/release/elitea-doc-extractor /usr/local/bin/elitea-doc-extractor
+
+# Resolve every library the binary needs against the runtime image, without
+# starting it: no system OpenSSL linked or shipped, CA roots present, and the
+# whole closure found inside the runtime root.
+RUN --mount=type=bind,from=runtime-base,source=/,target=/runtime-root,readonly \
+    sh /src/libs/rust/scripts/verify-runtime.sh /usr/local/bin/elitea-doc-extractor
+
+# The socket directory, baked into the image so a compose NAMED VOLUME
+# mounted there inherits it: podman/docker seed a fresh named volume from the
+# image's content at the mount point, ownership included. Without this the
+# volume is created root-owned 0755 and uid 10001 cannot bind the socket
+# (the engines' Containerfiles do the same for /run/deepwiki, /run/inventory).
+#
+# 0770, not the engines' 0777: the worker runs as the SAME uid:gid as this
+# process in every shipped deployment (the worker image's `USER 10001:10001`;
+# the chart's worker.runAsUser/runAsGroup, applied to both containers of the
+# pod), so group access is all the sharing needs, and a third container that
+# lands on the volume with another gid cannot reach the socket at all. The
+# peer-uid check in the service (SO_PEERCRED) is the gate for anything that
+# can; the mode is only the outer fence. In the chart the directory is an
+# emptyDir and not this one; the peer check is what holds there.
+RUN mkdir -p /socket-dir/run/elitea-extract && chmod 0770 /socket-dir/run/elitea-extract
+
+FROM runtime-base AS runtime
+
+COPY --from=builder /usr/local/bin/elitea-doc-extractor /usr/local/bin/elitea-doc-extractor
+COPY --from=builder --chown=10001:10001 /socket-dir/run/ /run/
+
+# The probe is the binary itself (`elitea-doc-extractor healthcheck`: a
+# Capabilities call over its own socket), because distroless has no shell.
+# Compose declares it; Helm uses an exec probe. No port is exposed: the
+# process listens on a Unix socket only.
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/elitea-doc-extractor"]
+CMD ["serve"]

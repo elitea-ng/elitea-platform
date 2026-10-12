@@ -59,6 +59,11 @@ target "elitea-inventory-engine" {
 target "elitea-vector" {
   cache-from = ["type=gha,scope=elitea-vector-linux-amd64"]
 }
+// elitea-doc-extractor (ADR-0030 I1): the Rust worker's PDF/Office sidecar
+// in the rust agent overlay.
+target "elitea-doc-extractor" {
+  cache-from = ["type=gha,scope=elitea-doc-extractor-linux-amd64"]
+}
 target "elitea-web" {
   cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
 }
@@ -103,4 +108,11 @@ group "standalone" {
     "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",
     "ado-mock",
   ]
+}
+
+// The standalone stack plus deploy/docker-compose.standalone-rust-agent.yml,
+// whose elitea-doc-extractor sidecar only that overlay defines (a group that
+// named it without the overlay would have no build context).
+group "standalone-rust" {
+  targets = ["standalone", "elitea-doc-extractor"]
 }

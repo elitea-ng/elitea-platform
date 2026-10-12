@@ -44,7 +44,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     tonic_prost_build::configure()
         .build_server(env::var_os("CARGO_FEATURE_SANDBOX_SUPERVISOR").is_some())
         .include_file("elitea.rs")
-        .compile_with_config(prost_config, &protos, &[proto_root])?;
+        .compile_with_config(prost_config, &protos, std::slice::from_ref(&proto_root))?;
+
+    // The document extractor sidecar's contract (elitea.extract.v1), compiled
+    // on its own so the include file above stays the runtime protocol's. The
+    // worker is its client; the server side exists for the indexing tests'
+    // fake extractor over a real Unix socket.
+    let extract = proto_root.join("elitea/extract/v1/extract.proto");
+    println!("cargo:rerun-if-changed={}", extract.display());
+    let mut extract_config = tonic_prost_build::Config::new();
+    extract_config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
+    // The document chunks as `bytes::Bytes`: the client streams slices of
+    // one buffer instead of a copy per chunk (transport/extractor_client.rs).
+    extract_config.bytes(["."]);
+    tonic_prost_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile_with_config(extract_config, &[extract], &[proto_root])?;
 
     Ok(())
 }

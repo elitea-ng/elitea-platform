@@ -107,6 +107,7 @@ on:
       # by the daily run.
       - "services/elitea-deepwiki-engine/**"
       - "services/elitea-vector/**"
+      - "services/elitea-doc-extractor/**"
       - "libs/rust/**"
       - "apps/elitea-web/**"
       # The elitea-ui image builds the apps/elitea-ui submodule, so a submodule
@@ -142,6 +143,7 @@ on:
       - "services/elitea-llm-gateway/**"
       - "services/elitea-deepwiki-engine/**"
       - "services/elitea-vector/**"
+      - "services/elitea-doc-extractor/**"
       - "libs/rust/**"
       - "apps/elitea-web/**"
       - "apps/elitea-ui"
@@ -452,6 +454,17 @@ jobs:
           - name: elitea-vector
             context: .
             dockerfile: ./services/elitea-vector/Containerfile
+            target: ""
+            build_args: ""
+            expect_type: rustbinary
+            blocking: true
+          # elitea-doc-extractor (ADR-0030 I1): the Rust worker's document
+          # extraction sidecar. Repo ROOT context: the Containerfile COPYs
+          # services/elitea-doc-extractor, libs/proto and libs/rust from
+          # there. `rustbinary` and blocking for the engines' reasons.
+          - name: elitea-doc-extractor
+            context: .
+            dockerfile: ./services/elitea-doc-extractor/Containerfile
             target: ""
             build_args: ""
             expect_type: rustbinary

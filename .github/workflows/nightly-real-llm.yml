@@ -90,7 +90,7 @@ jobs:
           cache-hcl: |
             ci/bake-cache.hcl
             ${{ matrix.worker == 'rust' && 'ci/bake-cache-rust.hcl' || '' }}
-          targets: standalone
+          targets: ${{ matrix.worker == 'rust' && 'standalone-rust' || 'standalone' }}
           mount-cache-suffix: ${{ matrix.worker }}
           # A scheduled run carries the main ref but is not a push to main:
           # it reads main's caches and writes nothing into the 10 GB cap.

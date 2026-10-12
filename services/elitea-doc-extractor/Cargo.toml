@@ -1,0 +1,62 @@
+[package]
+name = "elitea-doc-extractor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+description = "The document extraction sidecar of the Rust indexing worker: PDF and Office bytes to text over elitea.extract.v1 on a Unix socket (ADR-0030 I1)."
+
+# Its OWN workspace, deliberately. The worker's Cargo.lock cannot hold xberg's
+# PDF backend (`smallvec >= 1.16`) next to `kube-client` 4.2.0 (`smallvec <
+# 1.16`), which is why this binary exists at all (see README.md). Nothing here
+# links kube, so this lock resolves smallvec 1.16+; ci-doc-extractor.yml
+# asserts it.
+
+[dependencies]
+# The extractor, WITH the formats behind `documents` (xberg: PDF, Office,
+# spreadsheets, e-mail, e-books). No `html`: HTML is text to the worker.
+elitea-doc-extract = { path = "../../libs/rust/doc-extract", features = ["documents"] }
+# The socket binder and the cgroup reader only. NO default features: the
+# sidecar's NDJSON server (axum) and the OTLP exporter (reqwest) stay out of
+# this binary, so nothing in it can open a network connection — it reads
+# untrusted documents and should have nowhere to send anything.
+elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar", default-features = false }
+# The client connector over the socket (`healthcheck`, the tests).
+hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
+prost = "=0.14.4"
+# `getuid`, the default peer uid (the worker runs as this process's user in
+# every shipped deployment). Already in the lock through tempfile.
+rustix = { version = "=1.1.5", default-features = false, features = ["process", "std"] }
+tokio = { version = "=1.53.2", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "=0.1.19", features = ["net"] }
+# No TLS feature: the socket is reachable only through its directory.
+tonic = { version = "=0.14.6", default-features = false, features = ["channel", "codegen", "router", "server"] }
+tonic-prost = "=0.14.6"
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
+
+[build-dependencies]
+protoc-bin-vendored = "=3.2.0"
+tonic-prost-build = "=0.14.6"
+
+[dev-dependencies]
+# Writes the tests' tiny DOCX/XLSX/PPTX fixtures (stored entries, no
+# compression feature). The version xberg locks.
+zip = { version = "=8.6.0", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+
+[profile.release]
+opt-level = 3
+debug = "line-tables-only"
+strip = "none"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+incremental = false
