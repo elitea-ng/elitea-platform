@@ -135,6 +135,13 @@ fn page_json(id: u64, title: &str, version: u64, body: &str) -> Value {
     json!({
         "id": id.to_string(), "type": "page", "status": "current", "title": title,
         "version": {"number": version, "when": format!("2026-10-0{version}T00:00:00.000Z")},
+        "ancestors": [],
+        // As Confluence answers `expand=restrictions.read.restrictions.user,…group`:
+        // the read level is present, empty when the page is open.
+        "restrictions": {"read": {"operation": "read", "restrictions": {
+            "user": {"results": [], "start": 0, "limit": 100, "size": 0},
+            "group": {"results": [], "start": 0, "limit": 100, "size": 0},
+        }}},
         "_links": {"webui": format!("/spaces/DOCS/pages/{id}/{title}")},
         "space": {"key": "DOCS"},
         "body": {"view": {"value": body}},
@@ -425,6 +432,8 @@ fn issue_json(id: u64, key: &str, updated: &str, body: &str) -> Value {
             "status": {"name": "Open"}, "reporter": {"emailAddress": "ann@example.com"},
             "created": "2026-09-01T00:00:00.000+0000", "updated": updated,
             "project": {"key": "PROJ"}, "issuetype": {"name": "Task"},
+            // Jira answers a requested, empty `security` as null.
+            "security": null,
         }
     })
 }

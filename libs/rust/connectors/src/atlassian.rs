@@ -23,7 +23,8 @@ use crate::transport::header::{ACCEPT, AUTHORIZATION, COOKIE, HeaderName, Header
 
 #[cfg(feature = "content-source")]
 pub use self::listing::{
-    COMMENT_LISTING_CONCURRENCY, DetailedListing, Details, authorized_json, same_origin,
+    AttachmentDownloader, COMMENT_LISTING_CONCURRENCY, DetailedListing, Details,
+    MAX_DOWNLOAD_REDIRECTS, Snapshot, authorized_json, same_origin,
 };
 
 /// The longest secret a configuration carries.
@@ -742,17 +743,28 @@ pub fn key_segment(name: &str) -> String {
 mod listing {
     use std::collections::BTreeMap;
     use std::future::Future;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, PoisonError};
 
     use elitea_content_source::SourceError;
     use serde_json::{Map, Value};
 
-    use crate::source::{Failure, Listed, Listing, ListingCache, SourceHttp};
-    use crate::transport::{Request, StatusCode, Url};
+    use crate::egress::HostAllowlist;
+    use crate::source::{Failure, Listed, Listing, SourceHttp};
+    use crate::transport::header::{CONTENT_TYPE, LOCATION};
+    use crate::transport::{Method, Request, StatusCode, Url};
 
-    /// How many per-issue (or per-page) dependent listings run at once when
-    /// the embedded page did not hold everything (review round 1, finding 9).
+    /// How many per-issue or per-page dependent reads run at once: a Jira
+    /// issue's comment overflow, a Confluence page's attachments, comments
+    /// and ancestor restrictions (review rounds 1 and 2).
     pub const COMMENT_LISTING_CONCURRENCY: usize = 8;
+
+    /// The redirects one attachment download follows (Cloud answers with
+    /// one, to its media host; a Server may add a hop or two).
+    pub const MAX_DOWNLOAD_REDIRECTS: usize = 5;
+
+    /// The host Atlassian Cloud redirects attachment downloads to.
+    const ATLASSIAN_MEDIA_HOST: &str = "api.media.atlassian.com";
 
     /// What a listing learnt about each document beyond its reference: the
     /// metadata its fetch reports and whatever the fetch needs (a download
@@ -791,16 +803,44 @@ mod listing {
             && left.port_or_known_default() == right.port_or_known_default()
     }
 
-    /// The remembered listing and the details it learnt, so a fetch reads
-    /// the version it was listed with (and a fetch before any listing lists
-    /// once). See [`ListingCache`] for the sharing rules.
+    /// One listing generation: the listed documents and what the same
+    /// listing learnt about them. Swapped in as a whole, so a fetch never
+    /// pairs one listing's documents with another's details.
+    pub struct Snapshot {
+        pub listing: Listing,
+        pub details: Details,
+    }
+
+    impl Snapshot {
+        /// The details this listing recorded for `key` (empty when none).
+        #[must_use]
+        pub fn details_of(&self, key: &str) -> Map<String, Value> {
+            self.details.get(key).cloned().unwrap_or_default()
+        }
+    }
+
+    /// The remembered listing with its per-document details, in one cell
+    /// (review round 2, finding 7), so a fetch reads the version it was
+    /// listed with and a fetch before any listing lists once. The sharing
+    /// rules are [`crate::source::ListingCache`]'s: callers that arrive while
+    /// a listing runs wait for it, and a failed listing is not remembered.
     #[derive(Default)]
     pub struct DetailedListing {
-        cache: ListingCache,
-        details: Mutex<Arc<Details>>,
+        current: Mutex<Option<Arc<Snapshot>>>,
+        /// Held while a listing runs, so concurrent callers share it.
+        flight: tokio::sync::Mutex<()>,
+        /// Bumped each time a listing is remembered.
+        generation: AtomicU64,
     }
 
     impl DetailedListing {
+        fn current(&self) -> Option<Arc<Snapshot>> {
+            self.current
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+
         /// The remembered listing, or `list` run once.
         ///
         /// # Errors
@@ -810,14 +850,19 @@ mod listing {
             &self,
             provider: &str,
             list: F,
-        ) -> Result<Arc<Listing>, SourceError>
+        ) -> Result<Arc<Snapshot>, SourceError>
         where
             F: FnOnce() -> Fut,
             Fut: Future<Output = Result<(Vec<Listed>, Details), Failure>>,
         {
-            self.cache
-                .get_or_list(|| self.remember(provider, list))
-                .await
+            if let Some(snapshot) = self.current() {
+                return Ok(snapshot);
+            }
+            let _flight = self.flight.lock().await;
+            if let Some(snapshot) = self.current() {
+                return Ok(snapshot);
+            }
+            self.remember(provider, list).await
         }
 
         /// A fresh listing (an explicit `list()`), shared with callers that
@@ -830,21 +875,26 @@ mod listing {
             &self,
             provider: &str,
             list: F,
-        ) -> Result<Arc<Listing>, SourceError>
+        ) -> Result<Arc<Snapshot>, SourceError>
         where
             F: FnOnce() -> Fut,
             Fut: Future<Output = Result<(Vec<Listed>, Details), Failure>>,
         {
-            self.cache
-                .list_shared(|| self.remember(provider, list))
-                .await
+            let seen = self.generation.load(Ordering::SeqCst);
+            let _flight = self.flight.lock().await;
+            if self.generation.load(Ordering::SeqCst) != seen
+                && let Some(snapshot) = self.current()
+            {
+                return Ok(snapshot);
+            }
+            self.remember(provider, list).await
         }
 
         async fn remember<F, Fut>(
             &self,
             provider: &str,
             list: F,
-        ) -> Result<Vec<Listed>, SourceError>
+        ) -> Result<Arc<Snapshot>, SourceError>
         where
             F: FnOnce() -> Fut,
             Fut: Future<Output = Result<(Vec<Listed>, Details), Failure>>,
@@ -852,20 +902,220 @@ mod listing {
             let (listed, details) = list()
                 .await
                 .map_err(|failure| failure.into_source_error(provider, None))?;
-            *self.details.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(details);
-            Ok(listed)
+            let snapshot = Arc::new(Snapshot {
+                listing: listed
+                    .into_iter()
+                    .map(|listed| (listed.reference.key.clone(), listed))
+                    .collect(),
+                details,
+            });
+            *self.current.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some(Arc::clone(&snapshot));
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            Ok(snapshot)
+        }
+    }
+
+    /// The one attachment download both connectors use (review round 2,
+    /// findings 1 and 4).
+    ///
+    /// The credential goes to the configured origin only. A redirect is
+    /// followed (up to [`MAX_DOWNLOAD_REDIRECTS`]) when its target is
+    /// `https` and is either
+    ///
+    /// * on the configured origin, at a download path (`/download/…`,
+    ///   `/attachment/…`, `/attachments/…`; never a login or SSO page), still
+    ///   with the credential; or
+    /// * on an Atlassian media host: `api.media.atlassian.com`, or a host the
+    ///   egress allowlist names (the `*` opt-out does not widen this), requested
+    ///   WITHOUT the credential or any custom header. Once a download has
+    ///   left the origin it never returns to it.
+    ///
+    /// A 200 that is an HTML page for an attachment that is not HTML (an
+    /// SSO or error page served with a success status) is refused.
+    pub struct AttachmentDownloader {
+        origin: Url,
+        media_hosts: HostAllowlist,
+    }
+
+    impl AttachmentDownloader {
+        /// A downloader for the credential origin `origin`; `allowlist` is
+        /// the deployment's egress allowlist.
+        #[must_use]
+        pub fn new(origin: &Url, allowlist: &HostAllowlist) -> Self {
+            let named: Vec<&str> = allowlist
+                .entries()
+                .iter()
+                .map(String::as_str)
+                .filter(|entry| *entry != "*")
+                .collect();
+            Self {
+                origin: origin.clone(),
+                media_hosts: HostAllowlist::parse(Some(&named.join(" "))),
+            }
         }
 
-        /// The details the last listing recorded for `key` (empty when none).
-        #[must_use]
-        pub fn details_of(&self, key: &str) -> Map<String, Value> {
-            self.details
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(key)
-                .cloned()
-                .unwrap_or_default()
+        fn is_media_host(&self, target: &Url) -> bool {
+            target
+                .host_str()
+                .is_some_and(|host| host.eq_ignore_ascii_case(ATLASSIAN_MEDIA_HOST))
+                || self.media_hosts.permits_url(target)
         }
+
+        /// Whether `target` may be requested after a redirect.
+        fn check_redirect(&self, target: &Url, left_origin: bool) -> Result<(), Failure> {
+            let refuse = |message: &str| Err(Failure::Client(message.to_owned()));
+            if target.scheme() != "https" {
+                return refuse(
+                    "the attachment redirect points at a plain-HTTP location, which this runtime does not follow",
+                );
+            }
+            if same_origin(&self.origin, target) {
+                if left_origin {
+                    return refuse(
+                        "the attachment download came back to the configured origin after leaving it, which this runtime does not follow",
+                    );
+                }
+                let path = target.path().to_ascii_lowercase();
+                if path.contains("/download/")
+                    || path.contains("/attachment/")
+                    || path.contains("/attachments/")
+                {
+                    return Ok(());
+                }
+                if [
+                    "login",
+                    "logout",
+                    "signin",
+                    "sign-in",
+                    "sso",
+                    "saml",
+                    "authenticate",
+                ]
+                .iter()
+                .any(|word| path.contains(word))
+                {
+                    return refuse(
+                        "the attachment download was redirected to a login page, so it was refused (check the credential)",
+                    );
+                }
+                return refuse(
+                    "the attachment redirect leaves the download path on the configured origin, so it was refused",
+                );
+            }
+            if self.is_media_host(target) {
+                return Ok(());
+            }
+            refuse(
+                "the attachment redirect points at a host that is not an allowed Atlassian media host, so it was refused",
+            )
+        }
+
+        /// The bytes of the attachment at `url` (on the configured origin).
+        /// `authorize` builds a request to a URL on that origin with the
+        /// credential; `name` and `media_type` say whether an HTML answer
+        /// is the file itself.
+        ///
+        /// # Errors
+        ///
+        /// A link off the origin, a refused or looping redirect, a non-2xx
+        /// status, an HTML page where a file was listed, a body over the
+        /// document cap; see [`SourceHttp::send`].
+        pub async fn download<F>(
+            &self,
+            http: &SourceHttp,
+            url: Url,
+            authorize: F,
+            name: &str,
+            media_type: Option<&str>,
+        ) -> Result<Vec<u8>, Failure>
+        where
+            F: Fn(Url) -> Result<Request, Failure>,
+        {
+            if !same_origin(&self.origin, &url) {
+                return Err(Failure::Client(
+                    "the attachment's link is not on the configured origin, so the download was refused (the credential is sent only there)"
+                        .to_owned(),
+                ));
+            }
+            let mut url = url;
+            let mut credentialed = true;
+            let mut left_origin = false;
+            let mut hops = 0_usize;
+            loop {
+                let request = if credentialed {
+                    authorize(url.clone())?
+                } else {
+                    Request::new(Method::GET, url.clone())
+                };
+                let mut response = http.send(request).await?;
+                let status = response.status();
+                if matches!(
+                    status,
+                    StatusCode::MOVED_PERMANENTLY
+                        | StatusCode::FOUND
+                        | StatusCode::SEE_OTHER
+                        | StatusCode::TEMPORARY_REDIRECT
+                        | StatusCode::PERMANENT_REDIRECT
+                ) {
+                    hops += 1;
+                    if hops > MAX_DOWNLOAD_REDIRECTS {
+                        return Err(Failure::Client(
+                            "the attachment download redirected too many times".to_owned(),
+                        ));
+                    }
+                    let location = response
+                        .headers()
+                        .get(LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or(Failure::InvalidResponse("a redirect carries no Location"))?;
+                    let target = url.join(location).map_err(|_| {
+                        Failure::InvalidResponse("a redirect Location is not a URL")
+                    })?;
+                    self.check_redirect(&target, left_origin)?;
+                    credentialed = same_origin(&self.origin, &target);
+                    left_origin |= !credentialed;
+                    url = target;
+                    continue;
+                }
+                if !status.is_success() {
+                    return Err(Failure::Status(status));
+                }
+                if answers_with_html(&response) && !html_expected(name, media_type) {
+                    return Err(Failure::InvalidResponse(
+                        "the attachment download answered an HTML page, not the file (a login or error page)",
+                    ));
+                }
+                return SourceHttp::body(&mut response, http.limits().max_document_bytes).await;
+            }
+        }
+    }
+
+    fn answers_with_html(response: &crate::transport::Response) -> bool {
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                let kind = value.split(';').next().unwrap_or("").trim();
+                kind.eq_ignore_ascii_case("text/html")
+                    || kind.eq_ignore_ascii_case("application/xhtml+xml")
+            })
+    }
+
+    /// Whether an attachment listed as `name` / `media_type` is itself an
+    /// HTML document.
+    fn html_expected(name: &str, media_type: Option<&str>) -> bool {
+        let extension = name.rsplit_once('.').map(|(_, extension)| extension);
+        extension.is_some_and(|extension| {
+            ["html", "htm", "xhtml"]
+                .iter()
+                .any(|html| extension.eq_ignore_ascii_case(html))
+        }) || media_type.is_some_and(|media| {
+            let kind = media.split(';').next().unwrap_or("").trim();
+            kind.eq_ignore_ascii_case("text/html")
+                || kind.eq_ignore_ascii_case("application/xhtml+xml")
+        })
     }
 }
 
@@ -1084,6 +1334,65 @@ mod tests {
             &base,
             &url::Url::parse("https://acme.atlassian.net:8443/").unwrap()
         ));
+    }
+
+    /// Review round 2, finding 7: the details live in the same generation as
+    /// the listing, so a fetch that holds listing A never reads listing B's
+    /// details, however a relist interleaves.
+    #[cfg(feature = "content-source")]
+    #[tokio::test]
+    async fn a_relist_never_pairs_one_listing_with_anothers_details() {
+        use crate::source::{Failure, Listed};
+        use std::sync::Arc;
+
+        fn generation(version: &str, note: &str) -> (Vec<Listed>, Details) {
+            let mut details = Details::new();
+            details.insert(
+                "doc".into(),
+                json!({"note": note}).as_object().cloned().unwrap(),
+            );
+            (
+                vec![Listed::new("doc".into(), version.into(), 0, "h".into())],
+                details,
+            )
+        }
+        let listing = Arc::new(DetailedListing::default());
+        let first = listing
+            .get_or_list("Test", || async { Ok::<_, Failure>(generation("1", "A")) })
+            .await
+            .expect("first listing");
+
+        // A fetch holds the first snapshot across an await while a relist
+        // replaces the remembered one.
+        let held = Arc::clone(&first);
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let reader = tokio::spawn({
+            let gate = Arc::clone(&gate);
+            async move {
+                gate.notified().await;
+                (
+                    held.listing["doc"].reference.version.clone(),
+                    held.details_of("doc")["note"].clone(),
+                )
+            }
+        });
+        let second = listing
+            .list_shared("Test", || async { Ok::<_, Failure>(generation("2", "B")) })
+            .await
+            .expect("relist");
+        gate.notify_one();
+        let (version, note) = reader.await.expect("reader");
+        assert_eq!(version, "1");
+        assert_eq!(note, "A");
+        assert_eq!(second.listing["doc"].reference.version, "2");
+        assert_eq!(second.details_of("doc")["note"], "B");
+        // The remembered pair is the new one, whole.
+        let now = listing
+            .get_or_list("Test", || async { Ok::<_, Failure>(generation("3", "C")) })
+            .await
+            .expect("remembered");
+        assert_eq!(now.listing["doc"].reference.version, "2");
+        assert_eq!(now.details_of("doc")["note"], "B");
     }
 
     #[test]

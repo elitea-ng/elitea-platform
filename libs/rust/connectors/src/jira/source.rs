@@ -22,7 +22,11 @@
 //!   instead.
 //! * **Restrictions.** An issue with a security level (`fields.security`)
 //!   is left out with its dependents: the level's members are not
-//!   principals this runtime can record. A comment with `visibility` is left
+//!   principals this runtime can record. Fail-closed: an issue whose
+//!   response lacks the `security` key is left out too when its project has
+//!   an issue security scheme (asked once per project per run, and assumed
+//!   when the question fails); only a project without one reads absence as
+//!   unrestricted. A comment with `visibility` is left
 //!   out unless `include_restricted_content`, and then a group-restricted
 //!   comment is recorded as [`Acl::Restricted`] with that group; a
 //!   role-restricted comment and a Service Management internal note
@@ -43,14 +47,18 @@
 //!   configured base URL's origin (scheme included), otherwise the download
 //!   is refused; without one, `attachment/content/{id}` on Cloud and
 //!   `secure/attachment/{id}/{file name}` on Server. Cloud answers with a
-//!   redirect to its media host, followed once through the egress guard
-//!   without the credential and only to an `https` location, so a
-//!   deployment allowlists that host too.
+//!   redirect to its media host (`api.media.atlassian.com`), which the shared
+//!   [`crate::atlassian::AttachmentDownloader`] follows without the
+//!   credential, through the egress guard and only to `https` (so a
+//!   deployment allowlists that host too); a redirect to a login page, back
+//!   to the Jira origin after leaving it, or to any other host is refused,
+//!   and so is an HTML page served as a non-HTML attachment.
 //! * **Auth and limits.** The credential and custom headers come from the
 //!   toolkit configuration ([`super::config`]); a 401 or 403 on a listing is
 //!   an error naming the credential, never an empty listing; a 429 (or a
 //!   `Retry-After`) backs off within the shared bound.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -62,14 +70,13 @@ use serde_json::{Map, Value};
 
 use super::config::{JiraConnectorConfig, JiraIndexArguments, PROVIDER};
 use crate::atlassian::{
-    COMMENT_LISTING_CONCURRENCY, DetailedListing, Details, adf_text, authorized_json, id_of,
-    key_segment, safe_identifier, same_origin, size_of, text_of,
+    AttachmentDownloader, COMMENT_LISTING_CONCURRENCY, DetailedListing, Details, adf_text,
+    authorized_json, id_of, key_segment, safe_identifier, same_origin, size_of, text_of,
 };
 use crate::egress::HostAllowlist;
 use crate::source::{
     Backoff, Failure, Listed, SourceHttp, SourceLimits, Timeouts, references, web_url,
 };
-use crate::transport::header::LOCATION;
 use crate::transport::{Method, Request, Transport, Url};
 
 /// Issues (and comments) asked per page; Jira caps `maxResults` itself.
@@ -105,6 +112,7 @@ pub struct JiraSource {
     /// The `fields` query every search and issue read sends.
     fields: String,
     http: SourceHttp,
+    downloads: AttachmentDownloader,
     listing: DetailedListing,
 }
 
@@ -121,6 +129,7 @@ impl JiraSource {
         allowlist: HostAllowlist,
         transport: Arc<dyn Transport>,
     ) -> Result<Self, SourceError> {
+        let downloads = AttachmentDownloader::new(config.base_url(), &allowlist);
         let http = SourceHttp::new(allowlist, transport);
         if !http.permits(config.base_url()) {
             return Err(Failure::Refused.into_source_error(PROVIDER, None));
@@ -150,6 +159,7 @@ impl JiraSource {
             arguments,
             fields: fields.join(","),
             http,
+            downloads,
             listing: DetailedListing::default(),
         })
     }
@@ -236,12 +246,13 @@ impl JiraSource {
         loop {
             pages_seen += 1;
             self.http.check_pages(pages_seen)?;
-            let page = self
+            let mut page = self
                 .json(self.search_url(start, next_token.as_deref())?)
                 .await?;
-            let batch = match page.get("issues") {
+            // Taken, not cloned: a page holds up to 100 issues.
+            let batch = match page.get_mut("issues").map(Value::take) {
                 None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(items)) => items.clone(),
+                Some(Value::Array(items)) => items,
                 Some(_) => return Err(Failure::InvalidResponse("issues is not a list")),
             };
             if batch.is_empty() {
@@ -277,7 +288,8 @@ impl JiraSource {
         let mut listed = Vec::new();
         let mut details = Details::new();
         let mut tails: Vec<CommentTail> = Vec::new();
-        for issue in self.issues().await? {
+        let mut schemes: BTreeMap<String, bool> = BTreeMap::new();
+        for mut issue in self.issues().await? {
             let id = id_of(&issue, "/id").ok_or(Failure::InvalidResponse("an issue has no id"))?;
             if !safe_identifier(&id) {
                 return Err(Failure::InvalidResponse("an issue id is not an identifier"));
@@ -286,10 +298,7 @@ impl JiraSource {
             // (groups, roles, the reporter, …), which this runtime cannot
             // record as principals: the issue and its dependents are left
             // out whatever `include_restricted_content` says.
-            if issue
-                .pointer("/fields/security")
-                .is_some_and(|level| !level.is_null())
-            {
+            if self.is_secured(&issue, &mut schemes).await {
                 continue;
             }
             let issue_key = text_of(&issue, "/key").unwrap_or(&id).to_owned();
@@ -303,12 +312,15 @@ impl JiraSource {
                 self.list_attachments(&issue, &id, &issue_key, &key, &mut listed, &mut details)?;
             }
             if self.arguments.include_comments {
-                let page = issue.pointer("/fields/comment");
-                let embedded = match page.and_then(|page| page.get("comments")) {
+                let embedded = match issue
+                    .pointer_mut("/fields/comment/comments")
+                    .map(Value::take)
+                {
                     None | Some(Value::Null) => Vec::new(),
-                    Some(Value::Array(items)) => items.clone(),
+                    Some(Value::Array(items)) => items,
                     Some(_) => return Err(Failure::InvalidResponse("comments is not a list")),
                 };
+                let page = issue.pointer("/fields/comment");
                 self.keep_comments(&embedded, &id, &issue_key, &key, &mut listed, &mut details)?;
                 let start_at = page
                     .and_then(|page| page.get("startAt"))
@@ -360,6 +372,61 @@ impl JiraSource {
             )?;
         }
         Ok((listed, details))
+    }
+
+    /// Whether `issue` is under a security level, fail-closed (review
+    /// round 2, finding 6). A level present is a level. An issue whose
+    /// response lacks the `security` key (the field was not honoured) is
+    /// restricted when its project has an issue security scheme, or when
+    /// that cannot be established; only in a project known to have no scheme
+    /// does absence mean unrestricted. `schemes` remembers the answer per
+    /// project for the run.
+    async fn is_secured(&self, issue: &Value, schemes: &mut BTreeMap<String, bool>) -> bool {
+        match issue.pointer("/fields/security") {
+            Some(Value::Null) => return false,
+            Some(_) => return true,
+            None => {}
+        }
+        let Some(project) = text_of(issue, "/fields/project/key")
+            .or_else(|| text_of(issue, "/fields/project/id"))
+            .filter(|project| safe_identifier(project))
+        else {
+            return true;
+        };
+        if let Some(has_scheme) = schemes.get(project) {
+            return *has_scheme;
+        }
+        // Any failure to find out is a scheme: closed.
+        let has_scheme = self
+            .project_has_security_scheme(project)
+            .await
+            .unwrap_or(true);
+        schemes.insert(project.to_owned(), has_scheme);
+        has_scheme
+    }
+
+    /// Whether `project` has an issue security scheme. The scheme itself
+    /// (`project/{key}/issuesecuritylevelscheme`, Cloud and Data Center)
+    /// answers 200 when there is one; its administrator permission makes a
+    /// 404 ambiguous (no scheme, or not allowed to see it), so a 404 is
+    /// settled by the project's security levels the caller may see
+    /// (`project/{key}/securitylevel`, Browse Projects): none, and no issue
+    /// the caller can list can be under a level.
+    async fn project_has_security_scheme(&self, project: &str) -> Result<bool, Failure> {
+        let scheme = self.api(&["project", project, "issuesecuritylevelscheme"])?;
+        match self.http.json(self.get(scheme)?).await {
+            Ok((_, scheme)) if scheme.get("id").is_some() || scheme.get("levels").is_some() => {
+                return Ok(true);
+            }
+            Ok(_) | Err(Failure::Status(_)) => {}
+            Err(failure) => return Err(failure),
+        }
+        let levels = self.api(&["project", project, "securitylevel"])?;
+        let (_, answer) = self.http.json(self.get(levels)?).await?;
+        match answer.get("levels") {
+            Some(Value::Array(levels)) => Ok(!levels.is_empty()),
+            _ => Err(Failure::InvalidResponse("security levels is not a list")),
+        }
     }
 
     /// The attachments the `attachment` field of `issue` lists, as documents
@@ -447,10 +514,10 @@ impl JiraSource {
             url.query_pairs_mut()
                 .append_pair("startAt", &start.to_string())
                 .append_pair("maxResults", &PAGE_SIZE.to_string());
-            let page = self.json(url).await?;
-            let batch = match page.get("comments") {
+            let mut page = self.json(url).await?;
+            let batch = match page.get_mut("comments").map(Value::take) {
                 None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(items)) => items.clone(),
+                Some(Value::Array(items)) => items,
                 Some(_) => return Err(Failure::InvalidResponse("comments is not a list")),
             };
             if batch.is_empty() {
@@ -583,9 +650,9 @@ impl JiraSource {
     /// `content` URL when it is on the base URL's origin (a link elsewhere
     /// is refused, so the credential never leaves the configured origin),
     /// otherwise the Cloud `attachment/content/{id}` or the Server
-    /// `secure/attachment` path. Cloud's one redirect to the media host is
-    /// followed without the credential, through the egress guard, and only
-    /// to an `https` location.
+    /// `secure/attachment` path. Redirects go through the shared
+    /// [`AttachmentDownloader`]: Cloud's to its media host without the
+    /// credential, a login page refused.
     async fn download(
         &self,
         listed: &Listed,
@@ -619,30 +686,19 @@ impl JiraSource {
                 ))?
             }
         };
-        let mut response = self.http.send(self.get(url.clone())?).await?;
-        if response.status().is_redirection() {
-            let location = response
-                .headers()
-                .get(LOCATION)
-                .and_then(|value| value.to_str().ok())
-                .ok_or(Failure::InvalidResponse("a redirect carries no Location"))?;
-            let target = url
-                .join(location)
-                .map_err(|_| Failure::InvalidResponse("a redirect Location is not a URL"))?;
-            if target.scheme() != "https" {
-                return Err(Failure::Client(
-                    "the attachment redirect points at a plain-HTTP location, which this runtime does not follow"
-                        .to_owned(),
-                ));
-            }
-            // The media host is another origin: the credential is not
-            // forwarded, the egress guard still applies.
-            return self.http.raw(Request::new(Method::GET, target)).await;
-        }
-        if !response.status().is_success() {
-            return Err(Failure::Status(response.status()));
-        }
-        SourceHttp::body(&mut response, self.http.limits().max_document_bytes).await
+        let filename = details
+            .get("filename")
+            .and_then(Value::as_str)
+            .unwrap_or("attachment");
+        self.downloads
+            .download(
+                &self.http,
+                url,
+                |url| self.get(url),
+                filename,
+                details.get("mimeType").and_then(Value::as_str),
+            )
+            .await
     }
 }
 
@@ -652,7 +708,7 @@ impl ContentSource for JiraSource {
             .listing
             .list_shared(PROVIDER, || self.listing())
             .await?;
-        Ok(references(&listing))
+        Ok(references(&listing.listing))
     }
 
     #[allow(
@@ -660,15 +716,16 @@ impl ContentSource for JiraSource {
         reason = "one arm per document kind: issue, attachment, comment"
     )]
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
-        let listing = self
+        let snapshot = self
             .listing
             .get_or_list(PROVIDER, || self.listing())
             .await?;
-        let listed = listing
+        let listed = snapshot
+            .listing
             .get(key)
             .ok_or_else(|| SourceError::NotFound(key.to_owned()))?;
         let failed = |failure: Failure| failure.into_source_error(PROVIDER, Some(key));
-        let mut metadata = self.listing.details_of(key);
+        let mut metadata = snapshot.details_of(key);
         let kind = metadata
             .get("type")
             .and_then(Value::as_str)
@@ -856,7 +913,9 @@ mod tests {
     }
 
     fn allow() -> HostAllowlist {
-        HostAllowlist::parse(Some("acme.atlassian.net,jira.corp.example,media.example"))
+        HostAllowlist::parse(Some(
+            "acme.atlassian.net,jira.corp.example,media.example,api.media.atlassian.com",
+        ))
     }
 
     /// A comment as Jira Cloud's `comment` field (and `issue/{id}/comment`)
@@ -1400,6 +1459,201 @@ mod tests {
             2,
             "{seen:?}"
         );
+    }
+
+    /// Review round 2, finding 4: a redirect to a login page, back to the
+    /// Jira origin after leaving it, or to a host that is not a media host
+    /// is refused, and so is an HTML page served as the file; Cloud's media
+    /// host is followed without the credential.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn attachment_redirects_to_login_pages_or_back_to_the_origin_are_refused() {
+        let transport = Scripted::new(|request, _| match request.url().path() {
+            "/rest/api/3/search/jql" => {
+                let mut issue = issue("1", "PROJ-1", "u1");
+                issue["fields"]["attachment"] = json!([
+                    {"id": "11", "filename": "ok.pdf", "size": 3, "mimeType": "application/pdf"},
+                    {"id": "12", "filename": "login.pdf", "size": 3, "mimeType": "application/pdf"},
+                    {"id": "13", "filename": "loop.pdf", "size": 3, "mimeType": "application/pdf"},
+                    {"id": "14", "filename": "sso.pdf", "size": 3, "mimeType": "application/pdf"},
+                    {"id": "15", "filename": "other.pdf", "size": 3, "mimeType": "application/pdf"},
+                    {"id": "16", "filename": "page.html", "size": 3, "mimeType": "text/html"},
+                    {"id": "17", "filename": "chain.pdf", "size": 3, "mimeType": "application/pdf"},
+                ]);
+                Reply::json(&json!({"issues": [issue], "isLast": true}))
+            }
+            "/rest/api/3/attachment/content/11" => Reply::status(StatusCode::SEE_OTHER).header(
+                "location",
+                "https://api.media.atlassian.com/file/aa/binary?token=t",
+            ),
+            "/file/aa/binary" => {
+                assert!(request.headers().get("authorization").is_none());
+                Reply::bytes(b"abc").header("content-type", "application/pdf")
+            }
+            "/rest/api/3/attachment/content/12" => Reply::status(StatusCode::FOUND).header(
+                "location",
+                "/login.jsp?permissionViolation=true&os_destination=%2Fx",
+            ),
+            "/rest/api/3/attachment/content/13" => {
+                Reply::status(StatusCode::FOUND).header("location", "https://media.example/hop")
+            }
+            "/hop" => Reply::status(StatusCode::FOUND).header(
+                "location",
+                "https://acme.atlassian.net/rest/api/3/attachment/content/13",
+            ),
+            "/rest/api/3/attachment/content/14" => Reply::bytes(b"<html>Log in</html>")
+                .header("content-type", "text/html;charset=UTF-8"),
+            "/rest/api/3/attachment/content/15" => {
+                Reply::status(StatusCode::FOUND).header("location", "https://evil.example/x")
+            }
+            "/rest/api/3/attachment/content/16" => {
+                Reply::bytes(b"<p>x</p>").header("content-type", "text/html")
+            }
+            "/rest/api/3/attachment/content/17" => Reply::status(StatusCode::FOUND)
+                .header("location", "/rest/api/3/attachment/content/17"),
+            other => panic!("unexpected request {other}"),
+        });
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"include_attachments": true})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        let fetch = |key: &'static str| {
+            let source = &source;
+            async move { source.fetch(key).await }
+        };
+        assert_eq!(
+            fetch("issue/1/attachment/11/ok.pdf")
+                .await
+                .expect("media host")
+                .bytes,
+            b"abc"
+        );
+        let login = fetch("issue/1/attachment/12/login.pdf")
+            .await
+            .expect_err("login");
+        assert!(login.to_string().contains("login page"), "{login}");
+        let back = fetch("issue/1/attachment/13/loop.pdf")
+            .await
+            .expect_err("back to the origin");
+        assert!(back.to_string().contains("after leaving it"), "{back}");
+        let sso = fetch("issue/1/attachment/14/sso.pdf")
+            .await
+            .expect_err("HTML for a pdf");
+        assert!(sso.to_string().contains("HTML page"), "{sso}");
+        let other = fetch("issue/1/attachment/15/other.pdf")
+            .await
+            .expect_err("other host");
+        assert!(other.to_string().contains("media host"), "{other}");
+        assert_eq!(
+            fetch("issue/1/attachment/16/page.html")
+                .await
+                .expect("html")
+                .bytes,
+            b"<p>x</p>"
+        );
+        let looped = fetch("issue/1/attachment/17/chain.pdf")
+            .await
+            .expect_err("a loop");
+        assert!(looped.to_string().contains("too many times"), "{looped}");
+        let seen = transport.seen();
+        assert!(
+            !seen
+                .iter()
+                .any(|request| request.contains("login.jsp") || request.contains("evil.example")),
+            "{seen:?}"
+        );
+        assert_eq!(
+            seen.iter()
+                .filter(|request| request.ends_with("/content/17"))
+                .count(),
+            crate::atlassian::MAX_DOWNLOAD_REDIRECTS + 1,
+            "{seen:?}"
+        );
+    }
+
+    /// Review round 2, finding 6: an issue whose response lacks `security`
+    /// is restricted in a project with an issue security scheme, or when the
+    /// scheme cannot be established; in a project without one, absence is
+    /// unrestricted. The scheme is asked once per project per run.
+    #[tokio::test]
+    async fn an_issue_without_the_security_key_is_restricted_in_a_project_with_a_scheme() {
+        fn bare(id: &str, key: &str, project: &str) -> Value {
+            let mut issue = issue(id, key, "u1");
+            issue["fields"].as_object_mut().unwrap().remove("security");
+            issue["fields"]["project"] = json!({"key": project});
+            issue
+        }
+        let transport = Scripted::new(|request, _| match request.url().path() {
+            "/rest/api/3/search/jql" => {
+                let mut with_null = bare("3", "SEC-3", "SEC");
+                with_null["fields"]["security"] = Value::Null;
+                let mut no_project = bare("7", "X-7", "X");
+                no_project["fields"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("project");
+                let issues = vec![
+                    bare("1", "SEC-1", "SEC"),
+                    bare("2", "SEC-2", "SEC"),
+                    with_null,
+                    bare("4", "OPEN-4", "OPEN"),
+                    bare("5", "OPEN-5", "OPEN"),
+                    bare("6", "ERR-6", "ERR"),
+                    no_project,
+                ];
+                Reply::json(&json!({"issues": issues, "isLast": true}))
+            }
+            // A scheme the caller may read.
+            "/rest/api/3/project/SEC/issuesecuritylevelscheme" => Reply::json(
+                &json!({"id": 10000, "name": "Staff", "defaultSecurityLevelId": 10001, "levels": []}),
+            ),
+            // No scheme (or not allowed to read it), and no level visible.
+            "/rest/api/3/project/OPEN/issuesecuritylevelscheme" => {
+                Reply::status(StatusCode::NOT_FOUND)
+            }
+            "/rest/api/3/project/OPEN/securitylevel" => Reply::json(&json!({"levels": []})),
+            // Cannot be established.
+            "/rest/api/3/project/ERR/issuesecuritylevelscheme"
+            | "/rest/api/3/project/ERR/securitylevel" => {
+                Reply::status(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            other => panic!("unexpected request {other}"),
+        });
+        let source = JiraSource::new(cloud(), arguments(&json!({})), allow(), transport.clone())
+            .expect("source");
+        let keys: Vec<String> = source
+            .list()
+            .await
+            .expect("listing")
+            .into_iter()
+            .map(|d| d.key)
+            .collect();
+        assert_eq!(
+            keys,
+            ["issue/3.md", "issue/4.md", "issue/5.md"],
+            "SEC-1, SEC-2 (scheme, no key), ERR-6 (unknown scheme) and X-7 (no project) are out; \
+             SEC-3 says `null`; OPEN has no scheme"
+        );
+        let seen = transport.seen();
+        let asked = |path: &str| seen.iter().filter(|request| request.contains(path)).count();
+        assert_eq!(
+            asked("/project/SEC/issuesecuritylevelscheme"),
+            1,
+            "{seen:?}"
+        );
+        assert_eq!(
+            asked("/project/OPEN/issuesecuritylevelscheme"),
+            1,
+            "{seen:?}"
+        );
+        assert_eq!(asked("/project/OPEN/securitylevel"), 1, "{seen:?}");
+        assert!(transport.requests().first().is_some_and(|search| {
+            query(search, "fields").is_some_and(|fields| fields.contains("security"))
+        }));
     }
 
     #[tokio::test]

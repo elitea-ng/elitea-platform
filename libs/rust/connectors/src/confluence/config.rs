@@ -51,11 +51,17 @@ impl ConfluenceConnectorConfig {
             base_url.set_path(&path);
         }
         // An Atlassian URL without `/wiki` gets it (the library tests the URL
-        // text, so `jira.com` counts too).
+        // text, so `jira.com` counts too). Decided from the host and the
+        // path, never the serialized URL: `https://wikiteam.atlassian.net`
+        // has `/wiki` in its text (`//wikiteam`) and no `/wiki` path.
         let mut api_root = base_url.clone();
-        let text = base_url.as_str();
-        if (text.contains("atlassian.net") || text.contains("jira.com")) && !text.contains("/wiki")
-        {
+        let hosted = base_url
+            .host_str()
+            .is_some_and(|host| host.contains("atlassian.net") || host.contains("jira.com"));
+        let has_wiki = base_url
+            .path_segments()
+            .is_some_and(|mut segments| segments.any(|segment| segment == "wiki"));
+        if hosted && !has_wiki {
             let path = format!("{}/wiki", api_root.path().trim_end_matches('/'));
             api_root.set_path(&path);
         }
@@ -272,6 +278,27 @@ mod tests {
         );
         assert!(config.cloud());
         assert_eq!(config.space(), Some("DOCS"));
+
+        // Review round 2, finding 5: `/wiki` is decided from the path. A
+        // site whose NAME starts with `wiki` still gets the `/wiki` root.
+        let named = ConfluenceConnectorConfig::parse(&settings(
+            Some("DOCS"),
+            "https://wikiteam.atlassian.net",
+        ))
+        .expect("config");
+        assert_eq!(
+            named.api_root().as_str(),
+            "https://wikiteam.atlassian.net/wiki"
+        );
+        let named = ConfluenceConnectorConfig::parse(&settings(
+            Some("DOCS"),
+            "https://wikiteam.atlassian.net/wiki",
+        ))
+        .expect("config");
+        assert_eq!(
+            named.api_root().as_str(),
+            "https://wikiteam.atlassian.net/wiki"
+        );
 
         let server = ConfluenceConnectorConfig::parse(&settings(
             None,
