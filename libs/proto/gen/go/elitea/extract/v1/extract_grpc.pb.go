@@ -62,10 +62,17 @@ type DocumentExtractServiceClient interface {
 	// the size limit is refused as soon as the limit is crossed).
 	Extract(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ExtractRequest, ExtractResponse], error)
 	// Capabilities names the media types this build extracts, the limits it
-	// caps a request's own limits at, and its capacity (how many documents it
-	// extracts at once, how long a request may wait for a slot). A client
-	// sizes its own queue and its call deadline from it. It is also the
-	// health probe: an extractor that answers it is serving.
+	// caps a request's own limits at, its capacity (how many documents it
+	// extracts at once, how long a request may wait for a slot) and its
+	// present load (slots held, slots held by an extraction that outran its
+	// timeout). A client sizes its own queue and its call deadline from it.
+	// It is also the health probe: an extractor that answers it is serving,
+	// and one whose every slot is held by an overrun is NOT healthy, whatever
+	// it answers — the probe (`elitea-doc-extractor healthcheck`) reads
+	// `overruns` against `concurrency` and fails, so the container is
+	// restarted. The extractor serves this RPC to its own uid as well as to
+	// the configured peer uids, because the probe is the binary asking itself;
+	// Extract is served to the configured peer uids only.
 	Capabilities(ctx context.Context, in *CapabilitiesRequest, opts ...grpc.CallOption) (*CapabilitiesResponse, error)
 }
 
@@ -112,10 +119,17 @@ type DocumentExtractServiceServer interface {
 	// the size limit is refused as soon as the limit is crossed).
 	Extract(grpc.ClientStreamingServer[ExtractRequest, ExtractResponse]) error
 	// Capabilities names the media types this build extracts, the limits it
-	// caps a request's own limits at, and its capacity (how many documents it
-	// extracts at once, how long a request may wait for a slot). A client
-	// sizes its own queue and its call deadline from it. It is also the
-	// health probe: an extractor that answers it is serving.
+	// caps a request's own limits at, its capacity (how many documents it
+	// extracts at once, how long a request may wait for a slot) and its
+	// present load (slots held, slots held by an extraction that outran its
+	// timeout). A client sizes its own queue and its call deadline from it.
+	// It is also the health probe: an extractor that answers it is serving,
+	// and one whose every slot is held by an overrun is NOT healthy, whatever
+	// it answers — the probe (`elitea-doc-extractor healthcheck`) reads
+	// `overruns` against `concurrency` and fails, so the container is
+	// restarted. The extractor serves this RPC to its own uid as well as to
+	// the configured peer uids, because the probe is the binary asking itself;
+	// Extract is served to the configured peer uids only.
 	Capabilities(context.Context, *CapabilitiesRequest) (*CapabilitiesResponse, error)
 	mustEmbedUnimplementedDocumentExtractServiceServer()
 }

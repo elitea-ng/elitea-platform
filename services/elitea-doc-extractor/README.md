@@ -31,10 +31,12 @@ then the bytes in chunks; the answer is the text or a typed skip
 `TIMEOUT`, `OUTPUT_TOO_LARGE`, `EMPTY`). A skip is a statement about the
 document and travels as a response; a malformed stream, no capacity or an
 internal failure is a gRPC status, which the worker records as
-`extract_failed`. `Capabilities` lists the media types, the caps and the
-capacity (`concurrency`, `slot_wait_millis`, `stream_idle_millis`), and is
-the health probe; the worker's client reads it once before its first
-document (again after any failure) and shapes itself to it, below.
+`extract_failed`. `Capabilities` lists the media types, the caps, the
+capacity (`concurrency`, `slot_wait_millis`, `stream_idle_millis`) and the
+present load (`busy`, `overruns`), and is the health probe: the binary's
+`healthcheck` fails when `overruns` is every slot (see "Timeouts"). The
+worker's client reads it once before its first document (again after any
+failure) and shapes itself to it, below.
 
 The worker side is `services/elitea-worker-rust/src/transport/extractor_client.rs`;
 it is used by `src/indexing/pipeline.rs` for every media type
@@ -56,8 +58,12 @@ still, with the contract in `libs/proto`, but no TLS on a same-pod socket.
 In its place the service checks the peer: every connection's credentials
 (`SO_PEERCRED`) are read and only the uids in `ELITEA_EXTRACTOR_PEER_UIDS`
 (the worker's; by default this process's own uid, which is the worker's in
-every shipped deployment) are served — any other peer gets
-`PERMISSION_DENIED` on both RPCs before a byte of a document is read. The
+every shipped deployment) are served `Extract` — any other peer gets
+`PERMISSION_DENIED` before a byte of a document is read. `Capabilities` is
+served to the configured uids AND to this process's own uid whatever is
+configured: it is the health probe, and the probe is this binary asking
+itself, so a deployment whose worker runs as another uid does not fail its
+liveness probe for it. The
 image ships the socket directory `/run/elitea-extract` owned `10001:10001`
 mode `0770`, so a compose named volume mounted there is seeded writable for
 the extractor and reachable by the worker's group and nobody else's; in the
@@ -77,11 +83,11 @@ them):
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `ELITEA_EXTRACTOR_SOCKET` | the socket to serve on | `/run/elitea-extract/extractor.sock` |
-| `ELITEA_EXTRACTOR_PEER_UIDS` | the peer uids served (comma-separated), read from `SO_PEERCRED`; others are `PERMISSION_DENIED` | this process's uid |
+| `ELITEA_EXTRACTOR_PEER_UIDS` | the peer uids served `Extract` (comma-separated), read from `SO_PEERCRED`; others are `PERMISSION_DENIED`; `Capabilities` is served to this process's own uid as well | this process's uid |
 | `ELITEA_EXTRACTOR_MAX_INPUT_BYTES` | bytes accepted for one document (enforced on the declared length and on the running count) | 50 MiB |
 | `ELITEA_EXTRACTOR_MAX_PAGES` | pages read from a paged format; more is `TOO_MANY_PAGES`, never truncated | 1000 |
 | `ELITEA_EXTRACTOR_MAX_OUTPUT_BYTES` | text returned for one document | 20 MiB |
-| `ELITEA_EXTRACTOR_TIMEOUT_MILLIS` | wall time for one extraction after its bytes arrived | 120000 |
+| `ELITEA_EXTRACTOR_TIMEOUT_MILLIS` | wall time for one extraction after its bytes arrived; rounded UP to whole seconds for the parser | 120000 |
 | `ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS` | the longest wait for a document's next chunk | 30000 |
 | `ELITEA_EXTRACTOR_CONCURRENCY` | extractions at once; not below the worker's document concurrency (4) | 4 |
 | `ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS` | the longest a further request waits for a slot before `RESOURCE_EXHAUSTED`; separate from the extraction timeout | 600000 |
@@ -98,27 +104,63 @@ in the header (its run's, lowered to this process's cap) and derives its
 call deadline from that plus the advertised slot wait and idle limit plus a
 margin — never a fixed figure.
 
-**Memory.** Under a cgroup v2 memory limit the input cap is lowered so that
-`concurrency` documents at the cap, expanded six times over, fit in half the
-limit (`Config::fit_memory`): a document over that is skipped `too_large`
-instead of ending the process with an OOM kill. The fit is
+**Memory.** A request takes its slot BEFORE its document is read, so the
+bodies the process holds are bounded by `concurrency` documents at the cap,
+however many requests a client has in flight: a queued request holds no
+bytes (the socket tests prove it through `held_body_bytes`). The body's
+buffer starts at the declared length bounded by the cap and by one 4 MiB
+message, growing with the chunks that really arrive. Under a cgroup v2
+memory limit the input cap is lowered so that `concurrency` documents at
+the cap, expanded six times over, fit in half the limit
+(`Config::fit_memory`): a document over that is skipped `too_large` instead
+of ending the process with an OOM kill. The fit is
 `min(configured, max(budget, 1 MiB))`: it only ever lowers the configured
 cap, never raises it. The six counts the one copy of the document the
 process holds (the bytes read off the stream move into the parser without a
-copy) plus the parser's expansion. Set the container's memory limit
-(`worker.extractor.resources.limits.memory`, compose `mem_limit`) and the
-cap follows.
+copy) plus the parser's expansion. The limit under which the DEFAULTS stand
+as configured is therefore 50 MiB × 4 × 6 × 2 = 2400 MiB
+(`Config::memory_limit_for_caps`), which is why the chart
+(`worker.extractor.resources.limits.memory`) and compose (`mem_limit`)
+default to 2560 MiB and not a round 2 GiB — under 2 GiB the fit would
+quietly lower the cap to ~44 MiB. Raise the limit with `concurrency` or the
+cap; the render test asserts the relation. The sidecar also gets a small
+memory-backed `/tmp` (chart `worker.extractor.tmpSizeLimit`, 64 MiB;
+compose tmpfs) on its read-only root, because xberg may need temp files.
 
-**Timeouts.** An extraction thread that outruns its timeout cannot be
-killed; the request is answered `TIMEOUT` and the thread keeps its slot
-until it ends. The count of such overruns is kept exact by a per-thread
-ledger (`OverrunLedger`): the timeout counts a thread only when it claimed
-it first, the thread takes the overrun back only when it found that claim,
-and a thread that ended just as its timeout fired is not an overrun at all
-— its real answer is returned. When every slot is held by an overrun the
+**Timeouts.** The parser (xberg) takes whole seconds, so a request's
+timeout is rounded UP to the next second for it
+(`elitea_doc_extract::cooperative_timeout`: 1500 ms is two seconds, never
+one), and the request waits for its thread for that rounded figure plus a
+500 ms grace (`service::outer_timeout`), so the parser's own cooperative
+timeout always fires first and an ordinary overrun ends by itself. A thread
+that outruns even that cannot be killed; the request is answered `TIMEOUT`
+and the thread keeps its slot until it ends. The extraction runs on ONE
+dedicated large-stack thread (no `spawn_blocking` wrapper around a second
+thread) that owns the slot, the body and its overrun ledger and answers
+over a oneshot channel. A request the client CANCELS (or whose deadline the
+transport enforces) while its thread runs is accounted exactly like a
+timeout, by a guard on the request's future: the thread is an overrun until
+it ends. The count of overruns is kept exact by the per-thread ledger
+(`OverrunLedger`): the request counts a thread only when it claimed it
+first, the thread takes the overrun back only when it found that claim, and
+a thread that ended just as its request gave up is not an overrun at all —
+its real answer is returned. When every slot is held by an overrun the
 process logs `extractor_slots_exhausted` and exits (code 75) after a short
 grace, so the container restarts it; the worker records `extract_failed`
-for what was in flight and reconnects.
+for what was in flight and reconnects. `Capabilities` reports `busy` and
+`overruns`, and `elitea-doc-extractor healthcheck` fails when
+`overruns == concurrency`, so a wedged process also fails its liveness
+probe and is restarted even if its own exit did not happen.
+
+**Extractor-side failures.** An xberg `Io`, `Serialization` or `Other`
+error is the extractor's own failure (a temp file it could not write, a
+serde round-trip), not a statement about the document: it is answered as a
+gRPC `INTERNAL` status, which the worker records `extract_failed`, so the
+document is retried by the next run instead of being filed `unreadable`.
+The page limit is read from xberg's typed `SecurityError::TooManyPages`
+source, never from its sentence; the over-limit PDF test runs a real
+document through xberg, so an xberg release that dropped the typed source
+would fail CI there.
 
 ## Deployment
 
@@ -126,8 +168,12 @@ for what was in flight and reconnects.
   `base-nossl-debian13` plus `libgcc_s`, built with `cargo auditable`;
   `docker-bake.hcl`, `publish.yml`, `ci-image-scan.yml`).
 * Compose: `deploy/docker-compose.standalone-rust-agent.yml` adds the
-  service, the shared `standalone_doc_extractor_sock` volume and
-  `extractor_socket` in `deploy/runtime/worker-runtime.rust.json`.
+  service (2560 MiB `mem_limit`, a 64 MiB tmpfs at `/tmp`), the shared
+  `standalone_doc_extractor_sock` volume and `extractor_socket` in
+  `deploy/runtime/worker-runtime.rust.json`. The validate worker's document
+  (`worker-runtime.rust-validate.json`, derived by
+  `deploy/scripts/render-validate-worker-runtime.py`) deliberately drops the
+  key: that stack runs no sidecar.
 * Helm: `worker.extractor.enabled` (off by default) renders the container in
   the worker pod with a memory-backed `emptyDir` at `worker.extractor.socketDir`
   and writes `extractor_socket` into the worker's `runtime.json`;

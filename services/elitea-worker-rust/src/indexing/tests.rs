@@ -1433,9 +1433,11 @@ fn a_failure_summary_names_the_index_and_is_bounded() {
 /// in for elitea-doc-extractor. The document's key decides the answer:
 /// `skip-<reason>.<ext>` is that skip, `crash.<ext>` stops the server with
 /// the call in flight, `hang.<ext>` never answers (the server stays up),
-/// `slow.<ext>` answers text after a short while, anything else is text at
-/// once. Every header it read is recorded with the bytes that followed;
-/// the most calls it ever had in flight at once is counted.
+/// `fail.<ext>` answers a gRPC INTERNAL status (the server stays up; the
+/// client records `extract_failed` and asks Capabilities again), `slow.<ext>`
+/// answers text after a short while, anything else is text at once. Every
+/// header it read is recorded with the bytes that followed; the most calls
+/// it ever had in flight at once is counted.
 mod fake_extractor {
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1473,6 +1475,8 @@ mod fake_extractor {
             concurrency,
             slot_wait_millis: 600_000,
             stream_idle_millis: 30_000,
+            busy: 0,
+            overruns: 0,
         }
     }
 
@@ -1538,6 +1542,9 @@ mod fake_extractor {
             }
             if stem == "hang" {
                 std::future::pending::<()>().await;
+            }
+            if stem == "fail" {
+                return Err(Status::internal("scripted extractor failure"));
             }
             if stem == "slow" {
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -1926,6 +1933,64 @@ async fn in_flight_extractor_calls_are_capped_at_the_advertised_concurrency() {
     assert_eq!(summary.indexed_documents, 4, "{summary:?}");
     assert!(fake.max_in_flight.load(Ordering::SeqCst) > 1);
     assert!(fake.max_in_flight.load(Ordering::SeqCst) <= 4);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failure_mid_run_does_not_widen_the_in_flight_cap() {
+    // The sidecar advertises TWO slots; the run prepares three documents at
+    // once. One document fails at the sidecar (INTERNAL; the server stays
+    // up), which makes the client forget what it learned and ask again on
+    // the next document while two slow calls still hold their permits.
+    // The permits are one pool for the client's life: the re-learned size
+    // adds nothing next to the live permits, and the fake never sees three
+    // calls in flight. (A pool replaced on re-learning would have handed
+    // out two fresh permits beside the two still held: up to four.)
+    let socket = socket_path("relearn");
+    let fake = fake_extractor::serve_with(&socket, fake_extractor::capabilities(2));
+    let mut harness = with_extractor(harness(4, None).await, &socket);
+    harness.runtime.limits.document_concurrency = 3;
+    let documents: Vec<Document> = vec![
+        binary_document("slow-0/slow.pdf", b"x"),
+        binary_document("fail-0/fail.pdf", b"x"),
+        binary_document("slow-1/slow.pdf", b"x"),
+        binary_document("slow-2/slow.pdf", b"x"),
+        binary_document("fail-1/fail.pdf", b"x"),
+        binary_document("slow-3/slow.pdf", b"x"),
+        binary_document("slow-4/slow.pdf", b"x"),
+        binary_document("slow-5/slow.pdf", b"x"),
+    ];
+    let summary = run(
+        &harness,
+        documents,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 6, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&2),
+        "{summary:?}"
+    );
+    assert!(
+        fake.capabilities_calls.load(Ordering::SeqCst) >= 2,
+        "the client asked again after a failure: {} call(s)",
+        fake.capabilities_calls.load(Ordering::SeqCst)
+    );
+    assert!(
+        fake.max_in_flight.load(Ordering::SeqCst) <= 2,
+        "never more in flight than advertised: {}",
+        fake.max_in_flight.load(Ordering::SeqCst)
+    );
+    let client = harness.runtime.extractor.as_ref().expect("client");
+    assert_eq!(
+        client.free_slots_for_tests(),
+        2,
+        "every permit came back to the one pool"
+    );
     let _ = std::fs::remove_file(&socket);
 }
 

@@ -300,7 +300,8 @@ spec:
             runAsGroup: {{ .Values.worker.runAsGroup }}
             runAsNonRoot: true
             allowPrivilegeEscalation: false
-            # It writes nothing but the socket, which lives in the emptyDir.
+            # It writes nothing but the socket (in the emptyDir) and the
+            # parser's temp files (in the small memory-backed /tmp below).
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
@@ -328,7 +329,10 @@ spec:
             - name: RUST_LOG
               value: {{ $x.logLevel | quote }}
           # timeoutSeconds covers the probe's own 2 s answer budget plus the
-          # exec start-up (values.yaml, worker.extractor.probes).
+          # exec start-up (values.yaml, worker.extractor.probes). The probe
+          # runs as this container's uid, which the service serves
+          # Capabilities to whatever peerUids lists; it fails when every slot
+          # is held by an extraction that outran its timeout.
           livenessProbe:
             exec:
               command: ["/usr/local/bin/elitea-doc-extractor", "healthcheck"]
@@ -346,6 +350,8 @@ spec:
           volumeMounts:
             - name: extractor-socket
               mountPath: {{ $x.socketDir }}
+            - name: extractor-tmp
+              mountPath: /tmp
         {{- end }}
       volumes:
         - name: runtime-config
@@ -385,6 +391,12 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        # The sidecar's /tmp: its own, memory-backed and small (the worker's
+        # `tmp` is disk-backed and the worker's). xberg may need temp files.
+        - name: extractor-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.worker.extractor.tmpSizeLimit | default "64Mi" }}
         {{- end }}
       {{- with .Values.worker.nodeSelector }}
       nodeSelector:

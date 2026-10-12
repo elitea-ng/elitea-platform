@@ -3988,26 +3988,42 @@ worker:
     # How long a request may still wait for a slot before RESOURCE_EXHAUSTED;
     # apart from timeoutMillis on purpose, since queueing is not a timeout.
     slotWaitMillis: 600000
-    # The uids the sidecar serves, read from each connection's SO_PEERCRED;
-    # any other peer is refused PERMISSION_DENIED. Empty means the worker
-    # container's uid (worker.runAsUser), which is the right answer for every
-    # deployment of this chart; list uids only for a worker image that runs
-    # as something else.
+    # The uids the sidecar serves Extract to, read from each connection's
+    # SO_PEERCRED; any other peer is refused PERMISSION_DENIED. Empty means
+    # the worker container's uid (worker.runAsUser), which is the right
+    # answer for every deployment of this chart; list uids only for a worker
+    # image that runs as something else. The probes are unaffected either
+    # way: Capabilities (the health probe) is always served to the sidecar's
+    # own uid, because the probe is the binary asking itself.
     peerUids: []
     logLevel: info
     probes:
       periodSeconds: 10
       # The probe (`healthcheck`) gives the socket 2 s to answer Capabilities
       # and exits; 5 s is that budget plus the exec's own start-up and a
-      # margin, so a loaded node does not read a serving sidecar as dead.
+      # margin, so a loaded node does not read a serving sidecar as dead. It
+      # fails when every slot is held by an extraction that outran its
+      # timeout (the answer's `overruns` against `concurrency`), so a wedged
+      # sidecar is restarted even if its own exit did not happen.
       timeoutSeconds: 5
       failureThreshold: 3
+    # A small memory-backed /tmp for the sidecar (its root filesystem is
+    # read-only): xberg may need temp files for some formats.
+    tmpSizeLimit: 64Mi
     resources:
       requests:
         cpu: 250m
         memory: 512Mi
       limits:
-        memory: 2Gi
+        # 2560Mi and not a round 2Gi: the defaults above need maxInputBytes ×
+        # concurrency × 6 (the parser's expansion) × 2 (the half the process
+        # keeps) = 50 MiB × 4 × 12 = 2400 MiB for the sidecar's memory fit to
+        # leave the 50 MiB cap as configured (Config::memory_limit_for_caps,
+        # service README "Memory"). Under 2Gi the fit would quietly lower the
+        # cap to ~44 MiB and every larger document would be skipped
+        # `too_large`. Raise this with concurrency or maxInputBytes; the
+        # render test asserts the relation.
+        memory: 2560Mi
 
   # uid/gid 10001 is the `elitea` user baked into the worker image.
   runAsUser: 10001

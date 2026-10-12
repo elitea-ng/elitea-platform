@@ -434,7 +434,10 @@ mod documents {
 }
 
 #[cfg(feature = "documents")]
-pub use documents::{DocumentError, DocumentLimits, DocumentText, extract_document};
+pub use documents::{
+    DocumentError, DocumentLimits, DocumentText, EXTRACTION_STACK_BYTES, cooperative_timeout,
+    extract_document, extract_document_on_this_thread,
+};
 
 /// Whether `mime` is one of the formats the document extractor reads (PDF,
 /// Office, spreadsheets, e-mail, e-books); text and HTML are not. True
@@ -466,6 +469,24 @@ mod documents {
     const MAX_PAGES: usize = 1000;
     /// Bytes of content one document may hold.
     const MAX_CONTENT_BYTES: usize = 50 * 1024 * 1024;
+
+    /// The stack a thread that runs [`extract_document_on_this_thread`]
+    /// needs: the extractor recurses deeper than a runtime worker's default
+    /// stack allows. [`extract_document`] spawns its own thread with it.
+    pub const EXTRACTION_STACK_BYTES: usize = STACK_BYTES;
+
+    /// The timeout the extractor really runs under for a caller's
+    /// `timeout`: xberg takes whole seconds, so the figure is rounded UP
+    /// (never down: a 1500 ms budget is two seconds, not one) and never
+    /// under one second. A caller that bounds the extraction from outside
+    /// (the sidecar) waits for at least this long, so the extractor's own
+    /// cooperative timeout fires first and an ordinary overrun ends by
+    /// itself.
+    #[must_use]
+    pub fn cooperative_timeout(timeout: Duration) -> Duration {
+        let seconds = u64::try_from(timeout.as_millis().div_ceil(1000)).unwrap_or(u64::MAX);
+        Duration::from_secs(seconds.max(1))
+    }
 
     /// The bounds one document extraction runs under.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -594,7 +615,7 @@ mod documents {
         let worker = std::thread::Builder::new()
             .name("doc-extract".to_owned())
             .stack_size(STACK_BYTES)
-            .spawn(move || run(&mime, bytes, &limits));
+            .spawn(move || extract_document_on_this_thread(&mime, bytes, &limits));
         match worker.map(std::thread::JoinHandle::join) {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(DocumentError::Extractor(
@@ -606,11 +627,24 @@ mod documents {
         }
     }
 
-    fn run(
+    /// [`extract_document`] on the CALLING thread: no thread is spawned
+    /// here. For a caller that already runs on a thread of its own with
+    /// [`EXTRACTION_STACK_BYTES`] of stack and bounds it from outside (the
+    /// extractor sidecar, which holds its slot and its overrun ledger on
+    /// that one thread). Never call this on a runtime worker thread: the
+    /// extractor blocks, recurses deeply, and builds a runtime of its own.
+    ///
+    /// # Errors
+    ///
+    /// [`DocumentError`], one variant per reason.
+    pub fn extract_document_on_this_thread(
         mime: &str,
         bytes: Vec<u8>,
         limits: &DocumentLimits,
     ) -> Result<DocumentText, DocumentError> {
+        if !is_document_type(mime) {
+            return Err(DocumentError::Unsupported(mime.to_owned()));
+        }
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -619,7 +653,7 @@ mod documents {
             })?;
         let config = xberg::ExtractionConfig {
             use_cache: false,
-            extraction_timeout_secs: Some(limits.timeout.as_secs().max(1)),
+            extraction_timeout_secs: Some(cooperative_timeout(limits.timeout).as_secs()),
             security_limits: Some(xberg::SecurityLimits {
                 max_pages: Some(limits.max_pages),
                 max_content_size: limits.max_content_bytes,
@@ -642,22 +676,36 @@ mod documents {
 
     /// The typed reason behind an xberg error. The PDF backend's own errors
     /// arrive wrapped as `Parsing` with the PDF error as the source; the
-    /// security limits as `Security` with a sentence naming the limit.
+    /// security limits as `Security` with the typed `SecurityError` as the
+    /// source (`From<SecurityError> for XbergError` keeps it), which is what
+    /// the page limit is read from — never the sentence, which an xberg
+    /// release may reword. An xberg release that drops the typed source
+    /// would turn every over-limit document into `TooLarge`, and the
+    /// sidecar's over-limit PDF test (`too_many_pages_is_refused_not_truncated`,
+    /// a real document through xberg) would fail with it.
+    ///
+    /// `Io`, `Serialization` and `Other` are the extractor's own failures (a
+    /// temp file it could not write, a serde round-trip, a catch-all), not
+    /// statements about the document: [`DocumentError::Extractor`], which
+    /// the sidecar answers as a gRPC `INTERNAL` status and the worker records
+    /// `extract_failed`, so the document is retried by the next run instead
+    /// of being filed as corrupt.
     fn classify(error: &xberg::XbergError) -> DocumentError {
         use xberg::XbergError;
+        use xberg::extractors::security::SecurityError;
         let detail = error.to_string();
         match error {
             XbergError::Timeout { .. } | XbergError::Cancelled => DocumentError::Timeout(detail),
             XbergError::UnsupportedFormat(_) | XbergError::MissingDependency(_) => {
                 DocumentError::Unsupported(detail)
             }
-            XbergError::Security { message, .. } => {
-                if message.contains("too many pages") {
-                    DocumentError::TooManyPages(detail)
-                } else {
-                    DocumentError::TooLarge(detail)
-                }
-            }
+            XbergError::Security { source, .. } => match source
+                .as_ref()
+                .and_then(|source| source.downcast_ref::<SecurityError>())
+            {
+                Some(SecurityError::TooManyPages { .. }) => DocumentError::TooManyPages(detail),
+                _ => DocumentError::TooLarge(detail),
+            },
             XbergError::Parsing { message, source } => {
                 use xberg::pdf::error::PdfError;
                 // The native PDF backend reports a document it cannot open
@@ -678,12 +726,79 @@ mod documents {
                     _ => DocumentError::Corrupt(detail),
                 }
             }
-            XbergError::Io(_)
-            | XbergError::Validation { .. }
-            | XbergError::ImageProcessing { .. }
-            | XbergError::Serialization { .. }
-            | XbergError::Other(_) => DocumentError::Corrupt(detail),
+            XbergError::Validation { .. } | XbergError::ImageProcessing { .. } => {
+                DocumentError::Corrupt(detail)
+            }
+            XbergError::Io(_) | XbergError::Serialization { .. } | XbergError::Other(_) => {
+                DocumentError::Extractor(detail)
+            }
             _ => DocumentError::Extractor(detail),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use xberg::XbergError;
+        use xberg::extractors::security::SecurityError;
+
+        #[test]
+        fn the_page_limit_is_read_from_the_typed_source_not_the_sentence() {
+            let over = XbergError::from(SecurityError::TooManyPages { count: 3, max: 2 });
+            assert!(matches!(classify(&over), DocumentError::TooManyPages(_)));
+            // Another security limit is "too large", whatever its sentence.
+            let cells = XbergError::from(SecurityError::TooManyCells { cells: 9, max: 8 });
+            assert!(matches!(classify(&cells), DocumentError::TooLarge(_)));
+            // The sentence alone, with no typed source, is NOT trusted as the
+            // page limit: it would be a reworded release's guess.
+            let untyped = XbergError::Security {
+                message: "Document has too many pages: 3 (max: 2)".to_owned(),
+                source: None,
+            };
+            assert!(matches!(classify(&untyped), DocumentError::TooLarge(_)));
+        }
+
+        #[test]
+        fn io_serialization_and_other_are_the_extractors_failure_not_the_documents() {
+            let io = XbergError::Io(std::io::Error::other("no temp dir"));
+            assert!(matches!(classify(&io), DocumentError::Extractor(_)), "{io}");
+            let other = XbergError::Other("something uncommon".to_owned());
+            assert!(matches!(classify(&other), DocumentError::Extractor(_)));
+            let serialization = XbergError::Serialization {
+                message: "msgpack".to_owned(),
+                source: None,
+            };
+            assert!(matches!(
+                classify(&serialization),
+                DocumentError::Extractor(_)
+            ));
+            // The document's own faults stay the document's.
+            let parsing = XbergError::Parsing {
+                message: "bad xref".to_owned(),
+                source: None,
+            };
+            assert!(matches!(classify(&parsing), DocumentError::Corrupt(_)));
+        }
+
+        #[test]
+        fn the_cooperative_timeout_rounds_up_to_whole_seconds_and_never_under_one() {
+            assert_eq!(
+                cooperative_timeout(Duration::from_millis(1)),
+                Duration::from_secs(1)
+            );
+            assert_eq!(cooperative_timeout(Duration::ZERO), Duration::from_secs(1));
+            assert_eq!(
+                cooperative_timeout(Duration::from_millis(1500)),
+                Duration::from_secs(2)
+            );
+            assert_eq!(
+                cooperative_timeout(Duration::from_secs(2)),
+                Duration::from_secs(2)
+            );
+            assert_eq!(
+                cooperative_timeout(Duration::from_millis(2001)),
+                Duration::from_secs(3)
+            );
         }
     }
 }

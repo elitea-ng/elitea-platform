@@ -14,7 +14,12 @@
 //!
 //! * it keeps no more calls in flight than the sidecar's advertised
 //!   `concurrency`, queueing further documents HERE, so the sidecar's slot
-//!   wait is never what turns ordinary queueing into `RESOURCE_EXHAUSTED`;
+//!   wait is never what turns ordinary queueing into `RESOURCE_EXHAUSTED`.
+//!   The permits are ONE pool for the life of the client, resized to each
+//!   `Capabilities` answer (permits added, or forgotten as the calls that
+//!   hold them end) and never replaced: a failure that makes the client ask
+//!   again while other calls are in flight must not hand out a second pool
+//!   next to the permits those calls still hold;
 //! * it asks for an extraction timeout (the run's, lowered to the sidecar's
 //!   cap) in the header, and sets its own call deadline from that timeout
 //!   plus the advertised slot wait and stream idle limit plus a margin,
@@ -37,7 +42,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use hyper_util::rt::TokioIo;
 use tokio::net::UnixStream;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 
@@ -97,8 +102,8 @@ impl std::fmt::Display for ExtractorError {
 
 impl std::error::Error for ExtractorError {}
 
-/// What the sidecar advertised, and the local queue sized to it.
-#[derive(Debug)]
+/// What the sidecar advertised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Sidecar {
     /// The sidecar's extraction timeout cap.
     pub(crate) timeout: Duration,
@@ -106,10 +111,9 @@ pub(crate) struct Sidecar {
     pub(crate) slot_wait: Duration,
     /// How long the sidecar waits for a document's next chunk.
     pub(crate) stream_idle: Duration,
-    /// Documents the sidecar extracts at once.
+    /// Documents the sidecar extracts at once; the client's in-flight calls
+    /// are capped at it ([`Slots`]).
     pub(crate) concurrency: usize,
-    /// This process's in-flight calls, at most `concurrency`.
-    slots: Arc<Semaphore>,
 }
 
 impl Sidecar {
@@ -131,7 +135,6 @@ impl Sidecar {
             slot_wait: or(answer.slot_wait_millis, FALLBACK_SLOT_WAIT),
             stream_idle: or(answer.stream_idle_millis, FALLBACK_STREAM_IDLE),
             concurrency,
-            slots: Arc::new(Semaphore::new(concurrency)),
         }
     }
 
@@ -153,13 +156,104 @@ impl Sidecar {
     }
 }
 
-/// The client. Clone-cheap: one channel, one learned sidecar, shared.
+/// The client's one permit pool, for the life of the client: in-flight
+/// calls hold its permits, and its size follows the sidecar's advertised
+/// concurrency without ever being replaced.
+///
+/// Growing is immediate (`add_permits`). Shrinking forgets what is free at
+/// once and remembers the rest as a DEBT, which each call that ends pays by
+/// forgetting its own permit instead of returning it ([`Slots::release`]);
+/// so the pool is exactly the advertised size as soon as the calls that
+/// outnumber it have ended, and never more than the live permits plus the
+/// free ones in between. A failure that makes the client ask the sidecar
+/// again while calls are in flight therefore changes NOTHING about how many
+/// may run: there is no second semaphore to acquire from next to the
+/// permits the running calls hold.
+#[derive(Debug)]
+struct Slots {
+    semaphore: Arc<Semaphore>,
+    sizing: std::sync::Mutex<Sizing>,
+}
+
+/// The pool's bookkeeping: what it is sized to, and how many permits are
+/// still to be forgotten as calls end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Sizing {
+    size: usize,
+    debt: usize,
+}
+
+impl Slots {
+    /// An empty pool: nothing runs until the sidecar has advertised a size.
+    fn new() -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(0)),
+            sizing: std::sync::Mutex::new(Sizing { size: 0, debt: 0 }),
+        }
+    }
+
+    fn sizing(&self) -> std::sync::MutexGuard<'_, Sizing> {
+        self.sizing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Size the pool to `concurrency` permits, live ones included.
+    fn resize(&self, concurrency: usize) {
+        let mut sizing = self.sizing();
+        if concurrency > sizing.size {
+            let grow = concurrency - sizing.size;
+            // A pending debt is cancelled first: a permit still to be
+            // forgotten and a permit to be added are the same permit.
+            let cancelled = grow.min(sizing.debt);
+            sizing.debt -= cancelled;
+            self.semaphore.add_permits(grow - cancelled);
+        } else if concurrency < sizing.size {
+            let shrink = sizing.size - concurrency;
+            let forgotten = self.semaphore.forget_permits(shrink);
+            sizing.debt += shrink - forgotten;
+        }
+        sizing.size = concurrency;
+    }
+
+    /// One permit, when one is free.
+    async fn acquire(&self) -> Result<OwnedSemaphorePermit, ExtractorError> {
+        Arc::clone(&self.semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|_| ExtractorError("the extractor queue is closed".to_owned()))
+    }
+
+    /// A call ended: its permit goes back to the pool, or pays one of the
+    /// debt a shrink left behind.
+    fn release(&self, permit: OwnedSemaphorePermit) {
+        let mut sizing = self.sizing();
+        if sizing.debt > 0 {
+            sizing.debt -= 1;
+            permit.forget();
+        } else {
+            drop(permit);
+        }
+    }
+
+    /// Free permits right now (tests).
+    #[cfg(test)]
+    fn available(&self) -> usize {
+        self.semaphore.available_permits()
+    }
+}
+
+/// The client. Clone-cheap: one channel, one learned sidecar, one permit
+/// pool, shared.
 #[derive(Clone)]
 pub(crate) struct ExtractorClient {
     channel: Channel,
     socket: PathBuf,
     /// Learned on the first document; forgotten after a failure.
-    sidecar: Arc<Mutex<Option<Arc<Sidecar>>>>,
+    sidecar: Arc<Mutex<Option<Sidecar>>>,
+    /// In-flight calls, at most the advertised concurrency. Outlives every
+    /// `sidecar` the client learns.
+    slots: Arc<Slots>,
     deadline_margin: Duration,
 }
 
@@ -184,6 +278,7 @@ impl ExtractorClient {
             channel,
             socket: socket.to_path_buf(),
             sidecar: Arc::new(Mutex::new(None)),
+            slots: Arc::new(Slots::new()),
             deadline_margin: DEADLINE_MARGIN,
         })
     }
@@ -202,15 +297,23 @@ impl ExtractorClient {
 
     /// What the sidecar advertised, as learned so far (tests).
     #[cfg(test)]
-    pub(crate) async fn sidecar_for_tests(&self) -> Option<Arc<Sidecar>> {
-        self.sidecar.lock().await.clone()
+    pub(crate) async fn sidecar_for_tests(&self) -> Option<Sidecar> {
+        *self.sidecar.lock().await
     }
 
-    /// The sidecar's capabilities, asked once and kept until a failure.
-    async fn sidecar(&self) -> Result<Arc<Sidecar>, ExtractorError> {
+    /// Free permits in the pool right now (tests).
+    #[cfg(test)]
+    pub(crate) fn free_slots_for_tests(&self) -> usize {
+        self.slots.available()
+    }
+
+    /// The sidecar's capabilities, asked once and kept until a failure. The
+    /// permit pool is resized to the answer under the same lock, so two
+    /// documents that ask at once size it once.
+    async fn sidecar(&self) -> Result<Sidecar, ExtractorError> {
         let mut learned = self.sidecar.lock().await;
         if let Some(sidecar) = learned.as_ref() {
-            return Ok(Arc::clone(sidecar));
+            return Ok(*sidecar);
         }
         let mut client = DocumentExtractServiceClient::new(self.channel.clone());
         let answer = tokio::time::timeout(
@@ -230,21 +333,25 @@ impl ExtractorClient {
             ))
         })?
         .into_inner();
-        let sidecar = Arc::new(Sidecar::from_capabilities(&answer));
+        let sidecar = Sidecar::from_capabilities(&answer);
         tracing::info!(
             event = "index_extractor_capabilities",
             socket = %self.socket.display(),
             version = %answer.version,
             concurrency = sidecar.concurrency,
+            busy = answer.busy,
+            overruns = answer.overruns,
             timeout_ms = u64::try_from(sidecar.timeout.as_millis()).unwrap_or(u64::MAX),
             slot_wait_ms = u64::try_from(sidecar.slot_wait.as_millis()).unwrap_or(u64::MAX),
         );
-        *learned = Some(Arc::clone(&sidecar));
+        self.slots.resize(sidecar.concurrency);
+        *learned = Some(sidecar);
         Ok(sidecar)
     }
 
     /// Forget what the sidecar advertised: the next document asks again (a
-    /// restarted sidecar may answer differently).
+    /// restarted sidecar may answer differently). The permit pool is kept:
+    /// the calls in flight hold its permits, and the next answer resizes it.
     async fn forget(&self) {
         *self.sidecar.lock().await = None;
     }
@@ -266,11 +373,10 @@ impl ExtractorClient {
     ) -> Result<Extraction, ExtractorError> {
         let sidecar = self.sidecar().await?;
         // The local queue: no more calls in flight than the sidecar has
-        // slots. Waiting here costs nothing on the sidecar's side.
-        let _slot = Arc::clone(&sidecar.slots)
-            .acquire_owned()
-            .await
-            .map_err(|_| ExtractorError("the extractor queue is closed".to_owned()))?;
+        // slots. Waiting here costs nothing on the sidecar's side. The
+        // permit is given back through the pool (`release`), never dropped
+        // on its own, so a shrink in between is honoured.
+        let slot = self.slots.acquire().await?;
         let timeout = sidecar.effective_timeout(timeout);
         let deadline = sidecar.call_deadline(timeout, self.deadline_margin);
         let header = ExtractHeader {
@@ -284,6 +390,7 @@ impl ExtractorClient {
             }),
         };
         let result = self.call(header, Bytes::from(bytes), deadline).await;
+        self.slots.release(slot);
         match result {
             Ok(Extraction::Skipped(reason)) => {
                 tracing::info!(
@@ -381,6 +488,8 @@ mod tests {
             concurrency,
             slot_wait_millis: slot_wait,
             stream_idle_millis: idle,
+            busy: 0,
+            overruns: 0,
         })
     }
 
@@ -412,6 +521,57 @@ mod tests {
         assert_eq!(sidecar.slot_wait, FALLBACK_SLOT_WAIT);
         assert_eq!(sidecar.stream_idle, FALLBACK_STREAM_IDLE);
         assert_eq!(sidecar.concurrency, FALLBACK_CONCURRENCY);
-        assert_eq!(sidecar.slots.available_permits(), 1);
+        let slots = Slots::new();
+        slots.resize(sidecar.concurrency);
+        assert_eq!(slots.available(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_pool_is_one_for_the_clients_life_and_resizes_around_live_permits() {
+        let slots = Slots::new();
+        assert_eq!(slots.available(), 0, "nothing runs before the first answer");
+        // Four advertised: four permits, all taken by four calls in flight.
+        slots.resize(4);
+        assert_eq!(slots.available(), 4);
+        let mut live: Vec<OwnedSemaphorePermit> = Vec::new();
+        for _ in 0..4 {
+            live.push(slots.acquire().await.expect("permit"));
+        }
+        assert_eq!(slots.available(), 0);
+        // One call fails; the client forgets the sidecar and, on the next
+        // document, learns four again while the other calls still hold
+        // their permits. The OLD code made a second Semaphore(4) here, so
+        // seven calls could run at once. Now: nothing is added, the pool is
+        // still the four live permits.
+        slots.resize(4);
+        assert_eq!(
+            slots.available(),
+            0,
+            "re-learning the same size adds no permits next to the live ones"
+        );
+        slots.release(live.pop().expect("one"));
+        assert_eq!(slots.available(), 1, "a finished call's permit is back");
+        // The restarted sidecar advertises two while three are live: the one
+        // free permit is forgotten at once, the other one as a call ends.
+        slots.resize(2);
+        assert_eq!(slots.available(), 0);
+        assert_eq!(*slots.sizing(), Sizing { size: 2, debt: 1 });
+        slots.release(live.pop().expect("two"));
+        assert_eq!(slots.available(), 0, "the debt is paid, not returned");
+        assert_eq!(*slots.sizing(), Sizing { size: 2, debt: 0 });
+        slots.release(live.pop().expect("three"));
+        assert_eq!(slots.available(), 1, "live 1 + free 1 = the advertised 2");
+        // Growing with a debt pending cancels the debt first, then adds.
+        slots.resize(1);
+        assert_eq!(*slots.sizing(), Sizing { size: 1, debt: 0 });
+        assert_eq!(slots.available(), 0, "the free one was forgotten at once");
+        slots.resize(0);
+        assert_eq!(*slots.sizing(), Sizing { size: 0, debt: 1 });
+        slots.resize(3);
+        assert_eq!(*slots.sizing(), Sizing { size: 3, debt: 0 });
+        assert_eq!(slots.available(), 2, "1 live + 2 free = 3");
+        slots.release(live.pop().expect("four"));
+        assert_eq!(slots.available(), 3);
+        assert!(live.is_empty());
     }
 }

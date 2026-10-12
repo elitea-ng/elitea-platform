@@ -19,6 +19,16 @@
 #     `extractor_socket` names the socket inside that directory — a socket
 #     the worker dials in a directory only the sidecar writes to would fail
 #     every document `extract_failed` with every pod Ready;
+#   * the default memory limit is at least maxInputBytes × concurrency × 6 × 2
+#     (Config::memory_limit_for_caps: 2400 MiB at the defaults), so the
+#     sidecar's memory fit does NOT lower the 50 MiB cap at the default
+#     concurrency — a round 2Gi would, quietly, to ~44 MiB;
+#   * the sidecar has a small memory-backed /tmp of its own (xberg may need
+#     temp files on a read-only root);
+#   * peerUids that do NOT include the sidecar's own runAsUser render as
+#     given, and the probes stay the binary's own healthcheck: the service
+#     serves Capabilities to its own uid whatever peerUids lists, so the
+#     liveness probe cannot be configured into failing;
 #   * the sidecar has no Service and no NetworkPolicy of its own: it listens on
 #     no port;
 #   * the Python worker, and the Rust worker on the python indexing runtime,
@@ -121,11 +131,33 @@ assert sc["capabilities"] == {"drop": ["ALL"]}, sc
 assert sc["runAsUser"] == 10001 and sc["runAsNonRoot"] is True, sc
 assert x["livenessProbe"]["exec"]["command"] == ["/usr/local/bin/elitea-doc-extractor", "healthcheck"], x["livenessProbe"]
 assert x["readinessProbe"]["exec"]["command"] == ["/usr/local/bin/elitea-doc-extractor", "healthcheck"], x["readinessProbe"]
-assert x["resources"]["limits"]["memory"] == "2Gi", x["resources"]
 assert "ports" not in x, "the sidecar listens on no port"
+
+# The memory limit against the caps: fit_memory lowers the input cap to
+# limit / 2 / concurrency / 6, so the limit must be at least
+# cap × concurrency × 6 × 2 for the configured cap to stand (the service's
+# Config::memory_limit_for_caps; its unit test pins the same arithmetic).
+def mebibytes(quantity):
+    units = {"Mi": 1, "Gi": 1024}
+    for suffix, factor in units.items():
+        if quantity.endswith(suffix):
+            return int(quantity[: -len(suffix)]) * factor
+    raise AssertionError(f"unexpected memory quantity {quantity!r}")
+limit_mib = mebibytes(x["resources"]["limits"]["memory"])
+needed_mib = int(env["ELITEA_EXTRACTOR_MAX_INPUT_BYTES"]) * int(env["ELITEA_EXTRACTOR_CONCURRENCY"]) * 6 * 2 // (1024 * 1024)
+assert needed_mib == 2400, needed_mib
+assert x["resources"]["limits"]["memory"] == "2560Mi", x["resources"]
+assert limit_mib >= needed_mib, f"the default limit {limit_mib} MiB would make fit_memory lower the {env['ELITEA_EXTRACTOR_MAX_INPUT_BYTES']}-byte cap (needs {needed_mib} MiB)"
+assert mebibytes("2Gi") < needed_mib, "the figure this assertion exists for: a round 2Gi does not fit"
 
 volume = next(v for v in spec["volumes"] if v["name"] == "extractor-socket")
 assert volume["emptyDir"] == {"medium": "Memory", "sizeLimit": "1Mi"}, volume
+# The sidecar's own small memory-backed /tmp, and not the worker's tmp.
+tmp_volume = next(v for v in spec["volumes"] if v["name"] == "extractor-tmp")
+assert tmp_volume["emptyDir"] == {"medium": "Memory", "sizeLimit": "64Mi"}, tmp_volume
+tmp_mount = next(m for m in x["volumeMounts"] if m["name"] == "extractor-tmp")
+assert tmp_mount["mountPath"] == "/tmp", tmp_mount
+assert all(m["name"] != "extractor-tmp" for m in containers["worker"]["volumeMounts"]), "the worker does not share the sidecar's /tmp"
 worker_mount = next(m for m in containers["worker"]["volumeMounts"] if m["name"] == "extractor-socket")
 sidecar_mount = next(m for m in x["volumeMounts"] if m["name"] == "extractor-socket")
 assert worker_mount["mountPath"] == sidecar_mount["mountPath"] == "/run/elitea-extract", (worker_mount, sidecar_mount)
@@ -150,6 +182,27 @@ dep = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"
 x = next(c for c in dep["spec"]["template"]["spec"]["containers"] if c["name"] == "doc-extractor")
 env = {e["name"]: e["value"] for e in x["env"]}
 assert env["ELITEA_EXTRACTOR_PEER_UIDS"] == "10001,20002", env
+PY
+
+echo "== peer uids that do not include the sidecar's own uid =="
+# A worker image that runs as another uid: Extract is served to 20002 only,
+# and the probes are untouched — the service always serves Capabilities to
+# its own uid (runAsUser), so the health probe cannot be configured into
+# failing. The render must show the uids as given, the sidecar still running
+# as the chart's runAsUser, and the probe commands unchanged.
+"$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" --set worker.extractor.enabled=true \
+  --set 'worker.extractor.peerUids={20002}' >"$TMP/other-peer.yaml" 2>"$TMP/other-peer.err" \
+  && python3 - "$TMP/other-peer.yaml" <<'PY' && ok "peerUids without runAsUser render as given and the probes stay the binary's own healthcheck" || bad "peerUids without runAsUser: $(tail -1 "$TMP/other-peer.err")"
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+dep = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-worker")
+x = next(c for c in dep["spec"]["template"]["spec"]["containers"] if c["name"] == "doc-extractor")
+env = {e["name"]: e["value"] for e in x["env"]}
+assert env["ELITEA_EXTRACTOR_PEER_UIDS"] == "20002", env
+assert x["securityContext"]["runAsUser"] == 10001, x["securityContext"]
+assert "10001" not in env["ELITEA_EXTRACTOR_PEER_UIDS"].split(","), "the sidecar's own uid is deliberately NOT a configured peer here"
+for probe in ("livenessProbe", "readinessProbe"):
+    assert x[probe]["exec"]["command"] == ["/usr/local/bin/elitea-doc-extractor", "healthcheck"], x[probe]
 PY
 
 echo "== refusals =="

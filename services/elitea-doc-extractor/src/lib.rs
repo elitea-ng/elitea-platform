@@ -9,8 +9,13 @@
 //! a crash or an OOM kill here is one skipped document to the worker.
 //!
 //! * [`config`] — the environment the process reads;
-//! * [`service`] — the gRPC service, its limits and its capacity;
-//! * [`client`] — a client over the socket, for `healthcheck` and tests.
+//! * [`service`] — the gRPC service, its limits and its capacity.
+//!
+//! There is no client module: the worker carries the one client of this
+//! service (`services/elitea-worker-rust/src/transport/extractor_client.rs`),
+//! the binary's `healthcheck` is a bare `Capabilities` call in `main.rs`, and
+//! the integration tests (`tests/socket.rs`) carry their own streaming
+//! helper. One implementation per consumer, none duplicated here.
 
 #![cfg_attr(
     not(test),
@@ -23,7 +28,6 @@
     )
 )]
 
-pub mod client;
 pub mod config;
 pub mod service;
 

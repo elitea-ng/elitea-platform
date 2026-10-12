@@ -3,11 +3,11 @@
 //! | Variable | Meaning | Default |
 //! | --- | --- | --- |
 //! | `ELITEA_EXTRACTOR_SOCKET` | the Unix socket to serve on; its directory is shared with the worker | `/run/elitea-extract/extractor.sock` |
-//! | `ELITEA_EXTRACTOR_PEER_UIDS` | the uids whose connections are served (comma-separated; the worker's), read from the peer's `SO_PEERCRED`; any other peer is `PERMISSION_DENIED` | this process's own uid |
+//! | `ELITEA_EXTRACTOR_PEER_UIDS` | the uids whose connections are served (comma-separated; the worker's), read from the peer's `SO_PEERCRED`; any other peer is `PERMISSION_DENIED`. `Capabilities` (the health probe) is served to this process's own uid as well, whatever is listed, because the probe is this binary asking itself | this process's own uid |
 //! | `ELITEA_EXTRACTOR_MAX_INPUT_BYTES` | the most bytes accepted for one document; a request's own limit is lowered to it | `52428800` (50 MiB) |
 //! | `ELITEA_EXTRACTOR_MAX_PAGES` | the most pages read from a paged format | `1000` |
 //! | `ELITEA_EXTRACTOR_MAX_OUTPUT_BYTES` | the most text returned for one document | `20971520` (20 MiB) |
-//! | `ELITEA_EXTRACTOR_TIMEOUT_MILLIS` | the longest one extraction may run after its bytes arrived | `120000` |
+//! | `ELITEA_EXTRACTOR_TIMEOUT_MILLIS` | the longest one extraction may run after its bytes arrived; rounded UP to whole seconds for the parser, which the request then waits for plus a short grace | `120000` |
 //! | `ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS` | the longest wait for the next chunk of a document | `30000` |
 //! | `ELITEA_EXTRACTOR_CONCURRENCY` | documents extracted at once; not below the worker's own document concurrency (4), so a worker that keeps that many in flight never waits | `4` |
 //! | `ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS` | the longest a further request waits for a slot before `RESOURCE_EXHAUSTED`; separate from the extraction timeout, so queueing is never reported as exhaustion | `600000` (10 min) |
@@ -21,13 +21,18 @@
 //! so that `concurrency` documents at the cap fit in a fraction of the
 //! limit ([`Config::fit_memory`]); a document over that is skipped
 //! `too_large` instead of ending the process with an OOM kill the worker
-//! would read as `extract_failed`. The fit only ever LOWERS the cap.
+//! would read as `extract_failed`. The fit only ever LOWERS the cap. The
+//! limit the defaults need to stand as configured is
+//! [`Config::memory_limit_for_caps`]: 50 MiB × 4 × 6 × 2 = 2400 MiB, which
+//! is why the chart's and the compose file's default limit is 2560 MiB and
+//! not a round 2 GiB (under which the fit would quietly lower the cap to
+//! ~44 MiB).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::service::{Capacity, Caps};
+use crate::service::{Capacity, Caps, own_uid};
 
 /// Bytes of memory the extractor is assumed to need per byte of input, at
 /// the worst. The document is held ONCE (the bytes read off the stream move
@@ -181,12 +186,22 @@ impl Config {
         }
         None
     }
-}
 
-/// This process's real uid: the default peer, since the worker and the
-/// extractor run as the same non-root user in every shipped deployment.
-fn own_uid() -> u32 {
-    rustix::process::getuid().as_raw()
+    /// The smallest container memory limit under which [`Config::fit_memory`]
+    /// leaves this configuration's input cap as it is: the cap, times the
+    /// concurrency, times the expansion, times two (the half kept for the
+    /// process). The deployment defaults (Helm `worker.extractor.resources.
+    /// limits.memory`, compose `mem_limit`) are set at or above this figure
+    /// for the default caps, and the render test asserts it.
+    #[must_use]
+    pub fn memory_limit_for_caps(&self) -> u64 {
+        let concurrency = u64::try_from(self.capacity.concurrency.max(1)).unwrap_or(1);
+        self.caps
+            .max_input_bytes
+            .saturating_mul(concurrency)
+            .saturating_mul(MEMORY_PER_INPUT_BYTE)
+            .saturating_mul(2)
+    }
 }
 
 #[cfg(test)]
@@ -273,6 +288,26 @@ mod tests {
         assert_eq!(config.fit_memory(1 << 20), Some(1 << 20));
         // The floor itself does not fit again: the cap is already there.
         assert_eq!(config.fit_memory(1 << 20), None);
+    }
+
+    #[test]
+    fn the_default_deployment_limit_keeps_the_default_cap() {
+        // The defaults need 50 MiB × 4 × 6 × 2 = 2400 MiB. The chart and the
+        // compose file set 2560 MiB (deploy/helm/elitea/values.yaml
+        // worker.extractor.resources.limits.memory, docker-compose.
+        // standalone-rust-agent.yml mem_limit; the render test asserts the
+        // chart's figure against this one): the fit leaves the cap alone
+        // there, and would NOT at a round 2 GiB.
+        let config = config(&[]).expect("config");
+        assert_eq!(config.memory_limit_for_caps(), 2400 << 20);
+        let mut at_default = config.clone();
+        assert_eq!(at_default.fit_memory(2560 << 20), None);
+        assert_eq!(at_default.caps.max_input_bytes, 50 << 20);
+        let mut exact = config.clone();
+        assert_eq!(exact.fit_memory(2400 << 20), None);
+        let mut two_gib = config;
+        assert_eq!(two_gib.fit_memory(2 << 30), Some((2u64 << 30) / 2 / 4 / 6));
+        assert!(two_gib.caps.max_input_bytes < 50 << 20);
     }
 
     #[test]

@@ -292,7 +292,11 @@ type ExtractLimits struct {
 	MaxPages uint32 `protobuf:"varint,2,opt,name=max_pages,json=maxPages,proto3" json:"max_pages,omitempty"`
 	// Bytes of extracted text returned; more is refused as OUTPUT_TOO_LARGE.
 	MaxOutputBytes uint64 `protobuf:"varint,3,opt,name=max_output_bytes,json=maxOutputBytes,proto3" json:"max_output_bytes,omitempty"`
-	// Wall time for the extraction itself, after the bytes arrived.
+	// Wall time for the extraction itself, after the bytes arrived. The
+	// extractor's parser takes whole seconds, so the figure is rounded UP to
+	// the next second (never under one) and the extraction is bounded from
+	// outside at that rounded figure plus a short grace, so the parser's own
+	// cooperative timeout fires first and an ordinary overrun ends by itself.
 	TimeoutMillis uint32 `protobuf:"varint,4,opt,name=timeout_millis,json=timeoutMillis,proto3" json:"timeout_millis,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -599,8 +603,17 @@ type CapabilitiesResponse struct {
 	// The longest the extractor waits for a document's next chunk before
 	// DEADLINE_EXCEEDED.
 	StreamIdleMillis uint32 `protobuf:"varint,6,opt,name=stream_idle_millis,json=streamIdleMillis,proto3" json:"stream_idle_millis,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Slots held at this moment: by an extraction under way, or by one that
+	// outran its timeout and cannot be killed (counted in `overruns` too).
+	// `concurrency - busy` requests would run at once without waiting.
+	Busy uint32 `protobuf:"varint,7,opt,name=busy,proto3" json:"busy,omitempty"`
+	// Slots held by an extraction that outran its timeout, or whose request
+	// was cancelled while it ran, and that still runs. Such a slot comes back
+	// only when the thread ends. `overruns == concurrency` is a wedged
+	// process: it exits by itself, and the health probe fails on it.
+	Overruns      uint32 `protobuf:"varint,8,opt,name=overruns,proto3" json:"overruns,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CapabilitiesResponse) Reset() {
@@ -675,6 +688,20 @@ func (x *CapabilitiesResponse) GetStreamIdleMillis() uint32 {
 	return 0
 }
 
+func (x *CapabilitiesResponse) GetBusy() uint32 {
+	if x != nil {
+		return x.Busy
+	}
+	return 0
+}
+
+func (x *CapabilitiesResponse) GetOverruns() uint32 {
+	if x != nil {
+		return x.Overruns
+	}
+	return 0
+}
+
 var File_elitea_extract_v1_extract_proto protoreflect.FileDescriptor
 
 const file_elitea_extract_v1_extract_proto_rawDesc = "" +
@@ -704,14 +731,16 @@ const file_elitea_extract_v1_extract_proto_rawDesc = "" +
 	"\vExtractSkip\x125\n" +
 	"\x06reason\x18\x01 \x01(\x0e2\x1d.elitea.extract.v1.SkipReasonR\x06reason\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\"\x15\n" +
-	"\x13CapabilitiesRequest\"\x89\x02\n" +
+	"\x13CapabilitiesRequest\"\xb9\x02\n" +
 	"\x14CapabilitiesResponse\x12#\n" +
 	"\rcontent_types\x18\x01 \x03(\tR\fcontentTypes\x128\n" +
 	"\x06limits\x18\x02 \x01(\v2 .elitea.extract.v1.ExtractLimitsR\x06limits\x12\x18\n" +
 	"\aversion\x18\x03 \x01(\tR\aversion\x12 \n" +
 	"\vconcurrency\x18\x04 \x01(\rR\vconcurrency\x12(\n" +
 	"\x10slot_wait_millis\x18\x05 \x01(\rR\x0eslotWaitMillis\x12,\n" +
-	"\x12stream_idle_millis\x18\x06 \x01(\rR\x10streamIdleMillis*\x87\x02\n" +
+	"\x12stream_idle_millis\x18\x06 \x01(\rR\x10streamIdleMillis\x12\x12\n" +
+	"\x04busy\x18\a \x01(\rR\x04busy\x12\x1a\n" +
+	"\boverruns\x18\b \x01(\rR\boverruns*\x87\x02\n" +
 	"\n" +
 	"SkipReason\x12\x1b\n" +
 	"\x17SKIP_REASON_UNSPECIFIED\x10\x00\x12\x19\n" +

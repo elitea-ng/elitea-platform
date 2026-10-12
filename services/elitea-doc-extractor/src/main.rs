@@ -2,8 +2,13 @@
 //!
 //! `serve` (the default) binds the socket and serves `elitea.extract.v1`
 //! until SIGTERM or SIGINT. `healthcheck` connects to the same socket and
-//! asks `Capabilities`; it exits 0 when the service answers, so a distroless
-//! image, which has no shell and no curl, can probe itself.
+//! asks `Capabilities`; it exits 0 when the service answers AND has a slot
+//! that is not held by an overrun (`service::is_healthy`), so a distroless
+//! image, which has no shell and no curl, can probe itself, and a wedged
+//! process (every slot held by an extraction that cannot be killed) fails
+//! its liveness probe and is restarted even if its own exit did not happen.
+//! The probe runs as the process's own uid, which the service serves
+//! `Capabilities` to whatever peer uids are configured.
 
 #![cfg_attr(
     not(test),
@@ -16,23 +21,23 @@
     )
 )]
 
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use elitea_doc_extractor::client;
 use elitea_doc_extractor::config::Config;
+use elitea_doc_extractor::pb::CapabilitiesRequest;
+use elitea_doc_extractor::pb::document_extract_service_client::DocumentExtractServiceClient;
 use elitea_doc_extractor::pb::document_extract_service_server::DocumentExtractServiceServer;
-use elitea_doc_extractor::service::{ExitProcess, Extractor};
+use elitea_doc_extractor::service::{ExitProcess, Extractor, MAX_MESSAGE_BYTES, is_healthy};
 use elitea_engine_sidecar::cgroup::Cgroup;
+use hyper_util::rt::TokioIo;
 use tokio_stream::wrappers::UnixListenerStream;
-use tonic::transport::Server;
+use tonic::transport::{Endpoint, Server, Uri};
+use tower::service_fn;
 
 const USAGE: &str = "usage: elitea-doc-extractor [serve | healthcheck | --version]";
-
-/// The largest gRPC message accepted: one streamed chunk plus its framing.
-/// The document itself is bounded by the input cap, not by this.
-const MAX_MESSAGE_BYTES: usize = 4 << 20;
 
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
@@ -76,18 +81,21 @@ fn config() -> Option<Config> {
     }
 }
 
+/// The probe: one `Capabilities` call over the socket, read for health.
 async fn healthcheck() -> ExitCode {
     let Some(config) = config() else {
         return ExitCode::FAILURE;
     };
-    let probe = async {
-        let channel = client::channel(&config.socket).map_err(|error| error.to_string())?;
-        client::capabilities(channel)
-            .await
-            .map_err(|status| status.to_string())
-    };
-    match tokio::time::timeout(Duration::from_secs(2), probe).await {
-        Ok(Ok(_)) => ExitCode::SUCCESS,
+    match tokio::time::timeout(Duration::from_secs(2), probe(&config.socket)).await {
+        Ok(Ok(answer)) if is_healthy(&answer) => ExitCode::SUCCESS,
+        Ok(Ok(answer)) => {
+            eprintln!(
+                "elitea-doc-extractor: wedged: {} of {} slots are held by extractions that \
+                 outran their timeout",
+                answer.overruns, answer.concurrency
+            );
+            ExitCode::FAILURE
+        }
         Ok(Err(error)) => {
             eprintln!("elitea-doc-extractor: not serving: {error}");
             ExitCode::FAILURE
@@ -97,6 +105,28 @@ async fn healthcheck() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `Capabilities` over the socket at `path`. The authority is a placeholder:
+/// HTTP/2 needs one, and nothing routes on it.
+async fn probe(
+    path: &Path,
+) -> Result<elitea_doc_extractor::pb::CapabilitiesResponse, Box<dyn std::error::Error>> {
+    let path = path.to_path_buf();
+    let channel = Endpoint::try_from("http://extractor.local")?
+        .connect_timeout(Duration::from_secs(1))
+        .connect_with_connector_lazy(service_fn(move |_: Uri| {
+            let path = path.clone();
+            async move {
+                tokio::net::UnixStream::connect(path)
+                    .await
+                    .map(TokioIo::new)
+            }
+        }));
+    Ok(DocumentExtractServiceClient::new(channel)
+        .capabilities(CapabilitiesRequest {})
+        .await?
+        .into_inner())
 }
 
 async fn serve() -> ExitCode {
@@ -115,6 +145,7 @@ async fn serve() -> ExitCode {
         tracing::warn!(
             event = "extractor_input_cap_lowered",
             memory_limit = limit,
+            memory_limit_for_caps = config.memory_limit_for_caps(),
             max_input_bytes = lowered,
             "the configured input cap does not fit the container's memory limit \
              several times over; lowered (never raised) to what does"

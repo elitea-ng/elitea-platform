@@ -13,7 +13,6 @@
   "platform_origin": "https://elitea-platform-edge",
   "vector_target": "elitea-vector:9470",
   "index_egress_allowlist": "elitea-platform-edge ado-mock github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com",
-  "extractor_socket": "/run/elitea-extract/extractor.sock",
   "ca_path": "/run/elitea-runtime/runtime-ca.crt",
   "certificate_path": "/run/elitea-runtime/agent-worker-client.crt",
   "private_key_path": "/run/elitea-runtime/agent-worker-client.key",

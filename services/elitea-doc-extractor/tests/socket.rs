@@ -15,16 +15,81 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use elitea_doc_extractor::client;
 use elitea_doc_extractor::pb::document_extract_service_server::DocumentExtractServiceServer;
 use elitea_doc_extractor::pb::{
     ExtractHeader, ExtractLimits, ExtractRequest, ExtractResponse, SkipReason, extract_request,
     extract_response,
 };
-use elitea_doc_extractor::service::{Capacity, Caps, Exhausted, Extractor};
+use elitea_doc_extractor::service::{Capacity, Caps, Exhausted, Extractor, outer_timeout};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Server};
+
+/// The tests' client over the socket: a lazily connected channel and the two
+/// RPCs, the document streamed in chunks the way the worker's client does
+/// it (`services/elitea-worker-rust/src/transport/extractor_client.rs`,
+/// which is the one production client). The binary's `healthcheck` carries
+/// its own bare `Capabilities` call; nothing in the library duplicates this.
+mod client {
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    use elitea_doc_extractor::pb::document_extract_service_client::DocumentExtractServiceClient;
+    use elitea_doc_extractor::pb::{
+        CapabilitiesRequest, CapabilitiesResponse, ExtractHeader, ExtractRequest, ExtractResponse,
+        extract_request,
+    };
+    use hyper_util::rt::TokioIo;
+    use prost::bytes::Bytes;
+    use tokio::net::UnixStream;
+    use tonic::transport::{Channel, Endpoint, Uri};
+    use tower::service_fn;
+
+    /// Bytes per streamed chunk (the worker's figure).
+    pub(super) const CHUNK_BYTES: usize = 256 * 1024;
+
+    /// A lazily connected channel to the socket at `path`.
+    pub(super) fn channel(path: &Path) -> Result<Channel, tonic::transport::Error> {
+        let path: PathBuf = path.to_path_buf();
+        Ok(Endpoint::try_from("http://extractor.local")?
+            .connect_timeout(Duration::from_secs(5))
+            .connect_with_connector_lazy(service_fn(move |_: Uri| {
+                let path = path.clone();
+                async move { UnixStream::connect(path).await.map(TokioIo::new) }
+            })))
+    }
+
+    pub(super) async fn capabilities(
+        channel: Channel,
+    ) -> Result<CapabilitiesResponse, tonic::Status> {
+        DocumentExtractServiceClient::new(channel)
+            .capabilities(CapabilitiesRequest {})
+            .await
+            .map(tonic::Response::into_inner)
+    }
+
+    /// `header`, then `bytes` in [`CHUNK_BYTES`] slices of one buffer.
+    pub(super) async fn extract(
+        channel: Channel,
+        header: ExtractHeader,
+        bytes: Vec<u8>,
+    ) -> Result<ExtractResponse, tonic::Status> {
+        let bytes = Bytes::from(bytes);
+        let chunks = (0..bytes.len()).step_by(CHUNK_BYTES).map(move |start| {
+            let end = (start + CHUNK_BYTES).min(bytes.len());
+            ExtractRequest {
+                message: Some(extract_request::Message::Chunk(bytes.slice(start..end))),
+            }
+        });
+        let header = std::iter::once(ExtractRequest {
+            message: Some(extract_request::Message::Header(header)),
+        });
+        DocumentExtractServiceClient::new(channel)
+            .extract(tokio_stream::iter(header.chain(chunks)))
+            .await
+            .map(tonic::Response::into_inner)
+    }
+}
 
 const DOCX: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -81,17 +146,31 @@ fn serve(caps: Caps, concurrency: usize) -> Served {
 }
 
 fn serve_with(caps: Caps, capacity: Capacity, peer_uids: BTreeSet<u32>) -> Served {
+    serve_delayed(caps, capacity, peer_uids, Duration::ZERO)
+}
+
+/// [`serve_with`] whose every extraction thread pauses `delay` before it
+/// extracts: a document that takes that long.
+fn serve_delayed(
+    caps: Caps,
+    capacity: Capacity,
+    peer_uids: BTreeSet<u32>,
+    delay: Duration,
+) -> Served {
     let n = NEXT.fetch_add(1, Ordering::SeqCst);
     // A short path: macOS caps a socket path at 104 bytes.
     let socket = std::env::temp_dir().join(format!("dx-{}-{n}.sock", std::process::id()));
     let listener = elitea_engine_sidecar::bind(&socket).expect("bind");
     let exhausted = Arc::new(Counting::default());
-    let service = Arc::new(Extractor::new(
-        caps,
-        capacity,
-        peer_uids,
-        Arc::clone(&exhausted) as Arc<dyn Exhausted>,
-    ));
+    let service = Arc::new(
+        Extractor::new(
+            caps,
+            capacity,
+            peer_uids,
+            Arc::clone(&exhausted) as Arc<dyn Exhausted>,
+        )
+        .with_extraction_delay(delay),
+    );
     let (stop, stopped) = oneshot::channel::<()>();
     tokio::spawn(
         Server::builder()
@@ -466,25 +545,42 @@ async fn capabilities_names_the_formats_and_the_caps() {
     assert_eq!(answer.concurrency, 1);
     assert_eq!(answer.slot_wait_millis, 30_000);
     assert_eq!(answer.stream_idle_millis, 500);
+    // The load, idle: nothing held, nothing overrun; healthy.
+    assert_eq!((answer.busy, answer.overruns), (0, 0));
+    assert!(elitea_doc_extractor::service::is_healthy(&answer));
+    // With the one slot held (as an extraction would) the answer says so.
+    let held = served.service.hold_slot().await;
+    let busy = client::capabilities(served.channel.clone())
+        .await
+        .expect("capabilities");
+    assert_eq!((busy.busy, busy.overruns), (1, 0));
+    assert!(
+        elitea_doc_extractor::service::is_healthy(&busy),
+        "busy is not wedged"
+    );
+    drop(held);
 }
 
 // ── the peer check ──────────────────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_peer_outside_the_configured_uids_is_refused_permission_denied() {
-    // Served uids: anything but this process. Both RPCs are refused before
-    // a byte of the document is read; nothing is extracted, nothing is
-    // counted.
+async fn a_peer_outside_the_configured_uids_is_refused_extract_but_served_the_health_probe() {
+    // Served uids: anything but this process. Extract is refused before a
+    // byte of the document is read; nothing is extracted, nothing is
+    // counted. Capabilities from this process's OWN uid is served all the
+    // same: it is the health probe (`elitea-doc-extractor healthcheck`, the
+    // binary asking itself), and a deployment whose worker runs as another
+    // uid must not fail its liveness probe for it.
     let served = serve_with(
         Caps::default(),
         capacity(1),
         BTreeSet::from([own_uid().wrapping_add(1)]),
     );
-    let status = client::capabilities(served.channel.clone())
+    let answer = client::capabilities(served.channel.clone())
         .await
-        .expect_err("refused");
-    assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status}");
-    assert!(status.message().contains("uid"), "{status}");
+        .expect("the probe is served to the process's own uid");
+    assert_eq!(answer.concurrency, 1);
+    assert_eq!((answer.busy, answer.overruns), (0, 0));
     let bytes = pdf(&["Never read."]);
     let status = client::extract(
         served.channel.clone(),
@@ -494,7 +590,9 @@ async fn a_peer_outside_the_configured_uids_is_refused_permission_denied() {
     .await
     .expect_err("refused");
     assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status}");
+    assert!(status.message().contains("uid"), "{status}");
     assert_eq!(served.service.overruns(), 0);
+    assert_eq!(served.service.held_body_bytes(), 0);
     // The same socket, this uid among the served: answered.
     let allowed = serve_with(
         Caps::default(),
@@ -791,20 +889,23 @@ async fn a_document_without_text_is_skipped_empty() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_timeout_is_a_skip_and_exhausting_every_slot_is_reported_once() {
-    // One slot, a timeout no extraction can meet: the first request times
-    // out and holds the slot, which is every slot there is.
-    let served = serve(
+    // One slot, a 1 ms timeout (the parser gets a whole second, the request
+    // waits that plus the grace) and an extraction held for longer than
+    // that: the request is answered TIMEOUT after the outer timeout and
+    // holds the slot, which is every slot there is. Capabilities (the health
+    // probe's answer) reports the wedged state while it lasts.
+    let asked = Duration::from_millis(1);
+    let served = serve_delayed(
         Caps {
-            timeout: Duration::from_millis(1),
+            timeout: asked,
             ..Caps::default()
         },
-        1,
+        capacity(1),
+        BTreeSet::from([own_uid()]),
+        outer_timeout(asked) + Duration::from_secs(1),
     );
-    let pages: Vec<String> = (0..400)
-        .map(|i| format!("Page {i} of a long document."))
-        .collect();
-    let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
-    let bytes = pdf(&refs);
+    let bytes = pdf(&["Slow page."]);
+    let started = std::time::Instant::now();
     let (reason, detail) = skip_of(
         client::extract(
             served.channel.clone(),
@@ -815,7 +916,165 @@ async fn a_timeout_is_a_skip_and_exhausting_every_slot_is_reported_once() {
         .expect("answered"),
     );
     assert_eq!(reason, SkipReason::Timeout, "{detail}");
+    assert!(
+        started.elapsed() >= outer_timeout(asked),
+        "answered before the outer timeout: {:?}",
+        started.elapsed()
+    );
     assert_eq!(served.exhausted.0.load(Ordering::SeqCst), 1);
+    let answer = client::capabilities(served.channel.clone())
+        .await
+        .expect("served");
+    assert_eq!(
+        (answer.busy, answer.overruns, answer.concurrency),
+        (1, 1, 1)
+    );
+    assert!(
+        !elitea_doc_extractor::service::is_healthy(&answer),
+        "every slot held by an overrun is not healthy"
+    );
+    // The thread ends; the slot and the body come back, health returns.
+    let waited = std::time::Instant::now();
+    while served.service.overruns() != 0 && waited.elapsed() < Duration::from_secs(10) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(served.service.overruns(), 0);
+    assert_eq!(served.service.held_body_bytes(), 0);
+    let answer = client::capabilities(served.channel.clone())
+        .await
+        .expect("served");
+    assert_eq!((answer.busy, answer.overruns), (0, 0));
+    assert!(elitea_doc_extractor::service::is_healthy(&answer));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_cancels_a_hung_extraction_leaves_its_thread_counted() {
+    // One slot; the extraction is held for 2 s; the client gives up after
+    // 300 ms (drops its call, which resets the stream and drops the
+    // server's request future) — long before the request's own 10 s
+    // timeout. Without the request's guard the thread would hold the only
+    // slot uncounted: no TIMEOUT answer, no overrun, no exhaustion, a
+    // process that serves nothing and looks healthy. With it the thread is
+    // an overrun from the moment the request is dropped, exhaustion is
+    // reported once, and everything is released when the thread ends.
+    let served = serve_delayed(
+        Caps {
+            timeout: Duration::from_secs(10),
+            ..Caps::default()
+        },
+        capacity(1),
+        BTreeSet::from([own_uid()]),
+        Duration::from_secs(2),
+    );
+    let bytes = pdf(&["Abandoned page."]);
+    let cancelled = tokio::time::timeout(
+        Duration::from_millis(300),
+        client::extract(
+            served.channel.clone(),
+            header("abandoned.pdf", "application/pdf", bytes.len()),
+            bytes,
+        ),
+    )
+    .await;
+    assert!(
+        cancelled.is_err(),
+        "the client gave up, nothing was answered"
+    );
+    // The reset reaches the server a moment later.
+    let waited = std::time::Instant::now();
+    while served.service.overruns() != 1 && waited.elapsed() < Duration::from_secs(1) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(served.service.overruns(), 1, "counted at the drop");
+    assert_eq!(served.exhausted.0.load(Ordering::SeqCst), 1);
+    assert_eq!(served.service.busy(), 1);
+    let answer = client::capabilities(served.channel.clone())
+        .await
+        .expect("the probe is served while wedged");
+    assert_eq!((answer.busy, answer.overruns), (1, 1));
+    assert!(!elitea_doc_extractor::service::is_healthy(&answer));
+    // A second request now queues for the slot (the slot wait is 30 s in
+    // this harness) and is served once the thread ends — without holding a
+    // body while it waits.
+    let queued_bytes = pdf(&["Served after the overrun ended."]);
+    let queued = tokio::spawn(client::extract(
+        served.channel.clone(),
+        header("queued.pdf", "application/pdf", queued_bytes.len()),
+        queued_bytes,
+    ));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        served.service.held_body_bytes(),
+        pdf(&["Abandoned page."]).len() as u64,
+        "only the abandoned document's body is held; the queued one holds none"
+    );
+    let text = text_of(queued.await.expect("joined").expect("served"));
+    assert!(text.contains("Served after the overrun ended"), "{text:?}");
+    assert_eq!(served.service.overruns(), 0);
+    assert_eq!(served.service.held_body_bytes(), 0);
+    assert_eq!(
+        served.exhausted.0.load(Ordering::SeqCst),
+        1,
+        "reported once"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queued_request_holds_no_body_bytes_until_it_has_a_slot() {
+    // One slot, held. Two requests stream their whole document and queue
+    // for the slot: while they wait the process holds NONE of their bytes
+    // (the slot is taken before the body is read), so the bodies in memory
+    // are bounded by the concurrency, not by what a client has in flight.
+    // When the slot frees they are read and served one after the other.
+    let served = serve_with(
+        Caps::default(),
+        Capacity {
+            concurrency: 1,
+            slot_wait: Duration::from_secs(30),
+            stream_idle: Duration::from_secs(5),
+        },
+        BTreeSet::from([own_uid()]),
+    );
+    let held = served.service.hold_slot().await;
+    let first = pdf(&["First queued document."]);
+    let second = pdf(&["Second queued document."]);
+    let a = tokio::spawn(client::extract(
+        served.channel.clone(),
+        header("a.pdf", "application/pdf", first.len()),
+        first,
+    ));
+    let b = tokio::spawn(client::extract(
+        served.channel.clone(),
+        header("b.pdf", "application/pdf", second.len()),
+        second,
+    ));
+    // Both requests have reached the server and wait for the slot. Sample
+    // the held total several times: it stays at zero the whole while.
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            served.service.held_body_bytes(),
+            0,
+            "a queued request holds no body"
+        );
+        assert_eq!(served.service.busy(), 1, "only the held slot");
+    }
+    assert!(!a.is_finished() && !b.is_finished(), "both still queued");
+    drop(held);
+    let texts = [
+        text_of(a.await.expect("joined").expect("served")),
+        text_of(b.await.expect("joined").expect("served")),
+    ];
+    assert!(
+        texts.iter().any(|t| t.contains("First queued")),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("Second queued")),
+        "{texts:?}"
+    );
+    assert_eq!(served.service.held_body_bytes(), 0);
+    assert_eq!(served.service.overruns(), 0);
 }
 
 // ── the protocol ────────────────────────────────────────────────────────────

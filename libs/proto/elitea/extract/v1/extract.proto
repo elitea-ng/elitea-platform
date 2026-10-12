@@ -39,10 +39,17 @@ service DocumentExtractService {
   // the size limit is refused as soon as the limit is crossed).
   rpc Extract(stream ExtractRequest) returns (ExtractResponse);
   // Capabilities names the media types this build extracts, the limits it
-  // caps a request's own limits at, and its capacity (how many documents it
-  // extracts at once, how long a request may wait for a slot). A client
-  // sizes its own queue and its call deadline from it. It is also the
-  // health probe: an extractor that answers it is serving.
+  // caps a request's own limits at, its capacity (how many documents it
+  // extracts at once, how long a request may wait for a slot) and its
+  // present load (slots held, slots held by an extraction that outran its
+  // timeout). A client sizes its own queue and its call deadline from it.
+  // It is also the health probe: an extractor that answers it is serving,
+  // and one whose every slot is held by an overrun is NOT healthy, whatever
+  // it answers — the probe (`elitea-doc-extractor healthcheck`) reads
+  // `overruns` against `concurrency` and fails, so the container is
+  // restarted. The extractor serves this RPC to its own uid as well as to
+  // the configured peer uids, because the probe is the binary asking itself;
+  // Extract is served to the configured peer uids only.
   rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
 }
 
@@ -78,7 +85,11 @@ message ExtractLimits {
   uint32 max_pages = 2;
   // Bytes of extracted text returned; more is refused as OUTPUT_TOO_LARGE.
   uint64 max_output_bytes = 3;
-  // Wall time for the extraction itself, after the bytes arrived.
+  // Wall time for the extraction itself, after the bytes arrived. The
+  // extractor's parser takes whole seconds, so the figure is rounded UP to
+  // the next second (never under one) and the extraction is bounded from
+  // outside at that rounded figure plus a short grace, so the parser's own
+  // cooperative timeout fires first and an ordinary overrun ends by itself.
   uint32 timeout_millis = 4;
 }
 
@@ -141,4 +152,13 @@ message CapabilitiesResponse {
   // The longest the extractor waits for a document's next chunk before
   // DEADLINE_EXCEEDED.
   uint32 stream_idle_millis = 6;
+  // Slots held at this moment: by an extraction under way, or by one that
+  // outran its timeout and cannot be killed (counted in `overruns` too).
+  // `concurrency - busy` requests would run at once without waiting.
+  uint32 busy = 7;
+  // Slots held by an extraction that outran its timeout, or whose request
+  // was cancelled while it ran, and that still runs. Such a slot comes back
+  // only when the thread ends. `overruns == concurrency` is a wedged
+  // process: it exits by itself, and the health probe fails on it.
+  uint32 overruns = 8;
 }
