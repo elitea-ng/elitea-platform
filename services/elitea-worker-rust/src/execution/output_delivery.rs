@@ -2377,7 +2377,10 @@ impl AgentOutputPreflight {
     /// Returns a stable failure for a producer-policy mismatch, unsafe or
     /// corrupt spool, invalid durable frame shape, or blocking-task failure.
     /// No capacity, Begin, input, authorization, or command-bus effect occurs.
-    #[allow(clippy::too_many_lines, reason = "Keep the ordered spool admission checks together.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep the ordered spool admission checks together."
+    )]
     pub async fn prepare(
         &self,
         fresh: FreshAgentDelivery,

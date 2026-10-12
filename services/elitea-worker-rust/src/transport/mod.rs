@@ -6,9 +6,9 @@ pub mod control_grpc;
 pub(crate) mod embeddings_facade;
 pub(crate) mod extractor_client;
 pub mod input_content;
-pub(crate) mod keepalive;
 #[cfg(test)]
 mod input_content_tests;
+pub(crate) mod keepalive;
 pub(crate) mod model_facade;
 pub mod nats_jetstream;
 pub(crate) mod openai_compatible_facade;

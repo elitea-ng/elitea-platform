@@ -200,9 +200,11 @@ impl FreshAgentDelivery {
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
     ) -> Result<bool, ProtocolError> {
-        Ok(self.validate_output_frame(frame)? == ValidatedAgentOutputFrameKind::Progress
-            && frame.sequence > self.claim_handoff_watermark
-            && self.claim.supersedes_output_fence(frame))
+        Ok(
+            self.validate_output_frame(frame)? == ValidatedAgentOutputFrameKind::Progress
+                && frame.sequence > self.claim_handoff_watermark
+                && self.claim.supersedes_output_fence(frame),
+        )
     }
 
     pub(crate) fn validate_output_frame(
@@ -407,12 +409,10 @@ impl NodeRecoveryAgentDelivery {
                 "the node recovery output identity is invalid",
             ));
         }
-        Ok(
-            validate_restored_agent_output_frame(&self.verified, frame)?
-                == ValidatedAgentOutputFrameKind::Progress
-                && frame.sequence > self.inspection.output_watermark()
-                && self.inspection.supersedes_output_fence(frame),
-        )
+        Ok(validate_restored_agent_output_frame(&self.verified, frame)?
+            == ValidatedAgentOutputFrameKind::Progress
+            && frame.sequence > self.inspection.output_watermark()
+            && self.inspection.supersedes_output_fence(frame))
     }
     pub(crate) fn into_parts(
         self,
@@ -479,9 +479,11 @@ impl CheckpointAgentDelivery {
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
     ) -> Result<bool, ProtocolError> {
-        Ok(self.validate_output(frame)? == ValidatedAgentOutputFrameKind::Progress
-            && frame.sequence > self.inspection.output_watermark()
-            && self.inspection.supersedes_output_fence(frame))
+        Ok(
+            self.validate_output(frame)? == ValidatedAgentOutputFrameKind::Progress
+                && frame.sequence > self.inspection.output_watermark()
+                && self.inspection.supersedes_output_fence(frame),
+        )
     }
 
     /// The canonical failure that replaces a pending nonterminal frame.

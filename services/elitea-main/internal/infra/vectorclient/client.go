@@ -246,7 +246,7 @@ func (c *Client) DeleteIndexVectors(ctx context.Context, namespace indexingapp.I
 		Selector: &vectorv1.DeleteRequest_WholeNamespace{WholeNamespace: &vectorv1.WholeNamespace{}},
 	})
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr := callerEnded(ctx); ctxErr != nil {
 			// The caller's context ended (a shutdown, a request cut off): the
 			// sweeper tells that apart from a failure of the store.
 			return ctxErr
@@ -298,7 +298,7 @@ func (c *Client) DeleteProjectData(ctx context.Context, projectID int64) (string
 	defer cancel()
 	response, err := c.vectors.DropProject(callCtx, &vectorv1.DropProjectRequest{ProjectId: projectID})
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr := callerEnded(ctx); ctxErr != nil {
 			// The caller's context ended (a shutdown, the run's bound): the
 			// journal tells that apart from a failure of the store.
 			return "", ctxErr
@@ -332,3 +332,17 @@ func (c *Client) classifyProjectDrop(projectID int64, err error) error {
 }
 
 var _ indexingapp.IndexVectorDeleter = (*Client)(nil)
+
+// callerEnded reports the caller's context ending: its error, or
+// context.DeadlineExceeded once its deadline has passed. gRPC enforces the
+// same deadline with its own timer, so a call can fail with DeadlineExceeded
+// a moment before ctx.Err() turns non-nil.
+func callerEnded(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}

@@ -414,13 +414,13 @@ async fn connect_private_grpc(
             .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?,
     )
     .tls_config(
-            ClientTlsConfig::new()
-                .ca_certificate(private_ca)
-                .identity(client_identity),
-        )
-        .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
-        .connect_timeout(deadline)
-        .tcp_nodelay(true);
+        ClientTlsConfig::new()
+            .ca_certificate(private_ca)
+            .identity(client_identity),
+    )
+    .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
+    .connect_timeout(deadline)
+    .tcp_nodelay(true);
     tokio::time::timeout(deadline, endpoint.connect())
         .await
         .map_err(|_| ProductionBootstrapError::DependencyUnavailable)?

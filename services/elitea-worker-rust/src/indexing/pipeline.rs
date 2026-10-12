@@ -368,6 +368,15 @@ struct Runner<'a> {
     tally: Tally,
 }
 
+/// The version the store holds for each key that holds exactly one.
+fn single_versions(prior: &BTreeMap<String, Vec<(String, u64)>>) -> BTreeMap<String, String> {
+    prior
+        .iter()
+        .filter(|(_, versions)| versions.len() == 1)
+        .map(|(key, versions)| (key.clone(), versions[0].0.clone()))
+        .collect()
+}
+
 impl Runner<'_> {
     async fn run(mut self) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
         let plan = match self.plan().await {
@@ -397,26 +406,9 @@ impl Runner<'_> {
     /// (ADR-0030 decision 3).
     async fn plan(&mut self) -> Result<RunPlan, Halt> {
         let parameters = self.parameters;
-        let listing = self
-            .source
-            .list()
-            .await
-            .map_err(|error| halt(&source_text(&error)))?;
-        self.check_liveness()?;
-        let filter = PathFilter::new(&parameters.whitelist, &parameters.blacklist);
-        let listing: Vec<DocumentRef> = listing
-            .into_iter()
-            .filter(|reference| filter.keeps(&reference.key))
-            .collect();
-        if listing.len() > self.runtime.limits.max_documents {
-            return Err(halt(&format!(
-                "the source holds {} documents after filtering; one run indexes at most {}",
-                listing.len(),
-                self.runtime.limits.max_documents
-            )));
-        }
         let namespace = toolkit_namespace(&self.run.command.index_id);
         let mut prior: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
+        let filter = PathFilter::new(&parameters.whitelist, &parameters.blacklist);
         if !parameters.clean_index {
             // The listing is read where the index lives: the expected space's
             // collection when the index is stamped, every collection before
@@ -468,6 +460,26 @@ impl Runner<'_> {
             }
         }
         self.check_liveness()?;
+        // The source lists after the store is read, so a connector that can
+        // skip re-reading what has not moved is told what the index holds.
+        self.source.remember_versions(single_versions(&prior));
+        let listing = self
+            .source
+            .list()
+            .await
+            .map_err(|error| halt(&source_text(&error)))?;
+        self.check_liveness()?;
+        let listing: Vec<DocumentRef> = listing
+            .into_iter()
+            .filter(|reference| filter.keeps(&reference.key))
+            .collect();
+        if listing.len() > self.runtime.limits.max_documents {
+            return Err(halt(&format!(
+                "the source holds {} documents after filtering; one run indexes at most {}",
+                listing.len(),
+                self.runtime.limits.max_documents
+            )));
+        }
         let mut to_write: Vec<(DocumentRef, Plan)> = Vec::new();
         let listed: BTreeSet<&str> = listing.iter().map(|r| r.key.as_str()).collect();
         for reference in &listing {
@@ -1179,7 +1191,16 @@ fn acl_entries(acl: &Acl) -> Vec<String> {
 
 /// The points of one prepared document: the chunk's metadata over the
 /// document's, the chunk id as text, the chunk type, the text and the ACL.
+/// A dependent document (an attachment, a discussion; ADR-0030 "Dependent
+/// documents") names its parent in `parent_id`, from the connector's
+/// `parent_key` metadata.
 fn points_of(prepared: &Prepared, vectors: Vec<Vec<f32>>) -> Vec<pb::Point> {
+    let parent_id = prepared
+        .metadata
+        .get("parent_key")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     prepared
         .chunks
         .iter()
@@ -1192,7 +1213,7 @@ fn points_of(prepared: &Prepared, vectors: Vec<Vec<f32>>) -> Vec<pb::Point> {
             pb::Point {
                 document_key: prepared.reference.key.clone(),
                 document_version: prepared.reference.version.clone(),
-                parent_id: String::new(),
+                parent_id: parent_id.clone(),
                 chunk_id: chunk.chunk_id.to_string(),
                 chunk_type: chunk.chunk_type.to_owned(),
                 acl: prepared.acl.clone(),
@@ -1291,6 +1312,7 @@ pub(super) fn failure_for_test(index_name: &str, reason: &str) -> IndexIngestSum
             branch: None,
             whitelist: Vec::new(),
             blacklist: Vec::new(),
+            raw: Map::new(),
         },
         reason,
     )

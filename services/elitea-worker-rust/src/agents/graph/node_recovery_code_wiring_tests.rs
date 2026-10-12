@@ -62,7 +62,10 @@ struct FakeMain {
     calls: Arc<StdMutex<MainCalls>>,
     pool: sqlx::PgPool,
 }
-fn json_response(status: http::StatusCode, value: &serde_json::Value) -> http::Response<tonic::body::Body> {
+fn json_response(
+    status: http::StatusCode,
+    value: &serde_json::Value,
+) -> http::Response<tonic::body::Body> {
     let raw = serde_json::to_vec(value).unwrap();
     http::Response::builder()
         .status(status)
@@ -89,10 +92,17 @@ impl InputContentRpc for FakeMain {
         let ok = http::StatusCode::OK;
         if path.ends_with("/code-sandbox/visits") {
             if self.script.refuse_visit {
-                return Ok(json_response(http::StatusCode::FORBIDDEN, &serde_json::json!({})));
+                return Ok(json_response(
+                    http::StatusCode::FORBIDDEN,
+                    &serde_json::json!({}),
+                ));
             }
             let pre = URL_SAFE_NO_PAD
-                .decode(body["pre_workspace_prepared_job_json_base64url"].as_str().unwrap())
+                .decode(
+                    body["pre_workspace_prepared_job_json_base64url"]
+                        .as_str()
+                        .unwrap(),
+                )
                 .unwrap();
             return Ok(json_response(
                 ok,
@@ -149,7 +159,9 @@ impl InputContentRpc for FakeMain {
             }
             let answer = *self.effects.lock().unwrap();
             return Ok(match answer {
-                Effects::Refused => json_response(http::StatusCode::FORBIDDEN, &serde_json::json!({})),
+                Effects::Refused => {
+                    json_response(http::StatusCode::FORBIDDEN, &serde_json::json!({}))
+                }
                 Effects::None => json_response(
                     ok,
                     &serde_json::json!({"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"none"}),
@@ -186,55 +198,73 @@ impl RuntimeControlService for FakeControl {
         &self,
         _: Request<pb::AuthorizeRustCompiledSnapshotRequestV1>,
     ) -> Result<Response<pb::AuthorizeRustCompiledSnapshotResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn claim_command(
         &self,
         _: Request<pb::ClaimCommandRequestV1>,
     ) -> Result<Response<pb::ClaimCommandResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn begin_execution(
         &self,
         _: Request<pb::BeginExecutionRequestV1>,
     ) -> Result<Response<pb::BeginExecutionResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn authorize_invocation(
         &self,
         _: Request<pb::AuthorizeInvocationRequestV1>,
     ) -> Result<Response<pb::AuthorizeInvocationResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn authorize_agent_model_checkpoint(
         &self,
         _: Request<pb::AuthorizeAgentModelCheckpointRequestV1>,
     ) -> Result<Response<pb::AuthorizeAgentModelCheckpointResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn renew_lease(
         &self,
         _: Request<pb::RenewLeaseRequestV1>,
     ) -> Result<Response<pb::RenewLeaseResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn observe_desired_state(
         &self,
         _: Request<pb::ObserveDesiredStateRequestV1>,
     ) -> Result<Response<pb::ObserveDesiredStateResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn prepare_settlement(
         &self,
         _: Request<pb::PrepareSettlementRequestV1>,
     ) -> Result<Response<pb::PrepareSettlementResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn remove_index(
         &self,
         _: Request<pb::RemoveIndexRequestV1>,
     ) -> Result<Response<pb::RemoveIndexResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
 }
 
@@ -290,43 +320,57 @@ impl SandboxSupervisorService for FakeSupervisor {
         &self,
         _: Request<pb::LookupSandboxDependenciesRequestV1>,
     ) -> Result<Response<pb::LookupSandboxDependenciesResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn submit_rust_compiled_snapshot(
         &self,
         _: Request<pb::SubmitRustCompiledSnapshotRequestV1>,
     ) -> Result<Response<pb::SubmitRustCompiledSnapshotResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn publish_rust_compiled_snapshot(
         &self,
         _: Request<pb::PublishRustCompiledSnapshotRequestV1>,
     ) -> Result<Response<pb::PublishRustCompiledSnapshotResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn hydrate_sandbox_dependencies(
         &self,
         _: Request<pb::HydrateSandboxDependenciesRequestV1>,
     ) -> Result<Response<pb::HydrateSandboxDependenciesResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn prepare_sandbox_dependencies(
         &self,
         _: Request<pb::PrepareSandboxDependenciesRequestV1>,
     ) -> Result<Response<pb::PrepareSandboxDependenciesResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn publish_sandbox_dependencies(
         &self,
         _: Request<pb::PublishSandboxDependenciesRequestV1>,
     ) -> Result<Response<pb::PublishSandboxDependenciesResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
     async fn hydrate_sandbox_workspace(
         &self,
         _: Request<pb::HydrateSandboxWorkspaceRequestV1>,
     ) -> Result<Response<pb::HydrateSandboxWorkspaceResponseV1>, Status> {
-        Err(Status::unimplemented("not part of the Code attempt fixture"))
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
     }
 }
 
@@ -355,19 +399,27 @@ struct Harness {
     supervisor: Arc<StdMutex<SupervisorCalls>>,
 }
 
+#[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
 async fn harness(script: MainScript, fail_after: Duration) -> Harness {
-    let url = std::env::var("ELITEA_TEST_DATABASE_URL")
-        .expect("ELITEA_TEST_DATABASE_URL is required");
+    let url =
+        std::env::var("ELITEA_TEST_DATABASE_URL").expect("ELITEA_TEST_DATABASE_URL is required");
     let database = IsolatedPostgres::create(&url).await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
         .execute(&database.pool)
         .await
         .unwrap();
     for migration in [
-        include_str!("../../../../elitea-main/migrations/agentstate/0007_sandbox_dispatch_journal.sql"),
-        include_str!("../../../../elitea-main/migrations/agentstate/0014_sandbox_dispatch_submission_marker.sql"),
+        include_str!(
+            "../../../../elitea-main/migrations/agentstate/0007_sandbox_dispatch_journal.sql"
+        ),
+        include_str!(
+            "../../../../elitea-main/migrations/agentstate/0014_sandbox_dispatch_submission_marker.sql"
+        ),
     ] {
-        sqlx::raw_sql(migration).execute(&database.pool).await.unwrap();
+        sqlx::raw_sql(migration)
+            .execute(&database.pool)
+            .await
+            .unwrap();
     }
     let authority = Arc::new(ClaimBoundSandboxAuthority::original_code_visit_conformance_fixture());
     let scope = authority.dispatch_scope().unwrap();
@@ -390,7 +442,9 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
     tokio::spawn(
         tonic::transport::Server::builder()
             .add_service(RuntimeControlServiceServer::new(FakeControl))
-            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(control_listener)),
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(
+                control_listener,
+            )),
     );
     let supervisor_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let supervisor_address = supervisor_listener.local_addr().unwrap();
@@ -422,8 +476,12 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
         .unwrap()
         .connect_lazy();
     let client = |config: &SandboxRuntimeConfig| {
-        SandboxClient::from_channel(channel.clone(), config.audience.clone(), Duration::from_secs(5))
-            .unwrap()
+        SandboxClient::from_channel(
+            channel.clone(),
+            config.audience.clone(),
+            Duration::from_secs(5),
+        )
+        .unwrap()
     };
     let (pure, broker) = (runtime_config(false), runtime_config(true));
     let factory = CodeRuntimeFactory::new(
@@ -558,7 +616,12 @@ async fn recovered_attempt_with_a_registered_but_unsubmitted_row_fails_typed() {
     let h = harness(REFUSED_VISIT, Duration::ZERO).await;
     let run = run(&h, PLATFORM_YAML, true).await;
     h.dispatch
-        .register_unsubmitted(&h.scope, &run.dispatch_activation, &[2; 32], "dns:sandbox-a")
+        .register_unsubmitted(
+            &h.scope,
+            &run.dispatch_activation,
+            &[2; 32],
+            "dns:sandbox-a",
+        )
         .await
         .unwrap();
     let error = run.node.execute(&run.context).await.err().unwrap();
@@ -575,11 +638,21 @@ async fn recovered_attempt_with_a_submitted_row_keeps_the_effect_unknown() {
     let h = harness(REFUSED_VISIT, Duration::ZERO).await;
     let run = run(&h, PLATFORM_YAML, true).await;
     h.dispatch
-        .register_unsubmitted(&h.scope, &run.dispatch_activation, &[2; 32], "dns:sandbox-a")
+        .register_unsubmitted(
+            &h.scope,
+            &run.dispatch_activation,
+            &[2; 32],
+            "dns:sandbox-a",
+        )
         .await
         .unwrap();
     h.dispatch
-        .mark_submission_started(&h.scope, &run.dispatch_activation, &[2; 32], "dns:sandbox-a")
+        .mark_submission_started(
+            &h.scope,
+            &run.dispatch_activation,
+            &[2; 32],
+            "dns:sandbox-a",
+        )
         .await
         .unwrap();
     assert!(run.node.execute(&run.context).await.is_err());
@@ -601,21 +674,45 @@ async fn the_submission_marker_reads_conservatively_and_moves_one_way() {
     let h = harness(QUIET, Duration::ZERO).await;
     let (earlier, hydrating, unknown) = ([1_u8; 32], [2_u8; 32], [3_u8; 32]);
     let digest = [9_u8; 32];
-    h.dispatch.register(&h.scope, &earlier, &digest, "dns:a").await.unwrap();
-    assert!(h.dispatch.submission_started(&h.scope, &earlier).await.unwrap());
+    h.dispatch
+        .register(&h.scope, &earlier, &digest, "dns:a")
+        .await
+        .unwrap();
+    assert!(
+        h.dispatch
+            .submission_started(&h.scope, &earlier)
+            .await
+            .unwrap()
+    );
     h.dispatch
         .register_unsubmitted(&h.scope, &hydrating, &digest, "dns:a")
         .await
         .unwrap();
-    assert!(!h.dispatch.submission_started(&h.scope, &hydrating).await.unwrap());
-    assert!(!h.dispatch.submission_started(&h.scope, &unknown).await.unwrap(), "no row");
+    assert!(
+        !h.dispatch
+            .submission_started(&h.scope, &hydrating)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !h.dispatch
+            .submission_started(&h.scope, &unknown)
+            .await
+            .unwrap(),
+        "no row"
+    );
     // A second registration never turns a pending row into a submitted one, and
     // never turns a submitted one back.
     h.dispatch
         .register_unsubmitted(&h.scope, &hydrating, &digest, "dns:a")
         .await
         .unwrap();
-    assert!(!h.dispatch.submission_started(&h.scope, &hydrating).await.unwrap());
+    assert!(
+        !h.dispatch
+            .submission_started(&h.scope, &hydrating)
+            .await
+            .unwrap()
+    );
     h.dispatch
         .mark_submission_started(&h.scope, &hydrating, &digest, "dns:a")
         .await
@@ -628,7 +725,12 @@ async fn the_submission_marker_reads_conservatively_and_moves_one_way() {
         .register_unsubmitted(&h.scope, &hydrating, &digest, "dns:a")
         .await
         .unwrap();
-    assert!(h.dispatch.submission_started(&h.scope, &hydrating).await.unwrap());
+    assert!(
+        h.dispatch
+            .submission_started(&h.scope, &hydrating)
+            .await
+            .unwrap()
+    );
     // The marker needs the exact registered identity.
     assert!(
         h.dispatch
@@ -659,7 +761,10 @@ async fn the_submission_marker_is_durable_before_the_supervisor_sees_the_job() {
     let run = run(&h, PURE_YAML, false).await;
     let _ = run.node.execute(&run.context).await;
     // The row existed, unsubmitted, when the exact Execute intent was frozen.
-    assert_eq!(h.main.lock().unwrap().pending_at_intent.first(), Some(&Some(true)));
+    assert_eq!(
+        h.main.lock().unwrap().pending_at_intent.first(),
+        Some(&Some(true))
+    );
     // And it was already marked submitted when the submission reached the supervisor.
     {
         let supervisor = h.supervisor.lock().unwrap();
@@ -764,7 +869,14 @@ async fn a_refused_journal_query_keeps_the_effect_possible() {
     )
     .await;
     let run = run(&h, PLATFORM_YAML, false).await;
-    assert!(run.node.execute(&run.context).await.unwrap().interrupt.is_some());
+    assert!(
+        run.node
+            .execute(&run.context)
+            .await
+            .unwrap()
+            .interrupt
+            .is_some()
+    );
     assert_eq!(
         run.failure().await.replay,
         ReplaySafety::UnknownExternalEffect {
@@ -790,7 +902,14 @@ async fn a_platform_step_dropped_mid_flight_keeps_the_effect_possible() {
     .await;
     let run = run(&h, PLATFORM_YAML, false).await;
     let started = std::time::Instant::now();
-    assert!(run.node.execute(&run.context).await.unwrap().interrupt.is_some());
+    assert!(
+        run.node
+            .execute(&run.context)
+            .await
+            .unwrap()
+            .interrupt
+            .is_some()
+    );
     // The receipt waited for the in-flight step, then gave up on it.
     assert!(started.elapsed() >= crate::agents::graph::code_timing::PLATFORM_STEP_SETTLE_GRACE);
     assert_eq!(h.main.lock().unwrap().effects, 0);
@@ -859,8 +978,15 @@ async fn raw_path_hydration_failure_releases_the_hydrated_job() {
         .factory
         .raw_hydration_failure_fixture(h.authority.clone(), activation, digest)
         .await;
-    assert!(result.is_err(), "no preparation is configured: hydration fails");
-    assert_eq!(h.supervisor.lock().unwrap().cancels, 1, "the job was released");
+    assert!(
+        result.is_err(),
+        "no preparation is configured: hydration fails"
+    );
+    assert_eq!(
+        h.supervisor.lock().unwrap().cancels,
+        1,
+        "the job was released"
+    );
     assert!(
         h.dispatch.pending(&h.scope).await.unwrap().is_empty(),
         "the dispatch row is resolved"

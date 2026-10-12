@@ -177,7 +177,10 @@ async fn connection_loss_after_submission_is_reconcilable() {
 /// the HTTP/2 keepalive within its bound, the call fails `Unavailable`, and the
 /// channel reconnects once the peer answers again.
 #[tokio::test]
-#[allow(clippy::too_many_lines, reason = "One ordered fault scenario: proxy, black hole, bound, reconnect.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "One ordered fault scenario: proxy, black hole, bound, reconnect."
+)]
 async fn black_holed_peer_fails_within_the_keepalive_bound_and_the_channel_reconnects() {
     use crate::transport::keepalive::{KeepAlive, with_schedule};
     use std::sync::atomic::{AtomicBool, Ordering};

@@ -8,8 +8,15 @@
 //! credentials. Here that connection is one [`client::AdoClient`] over a
 //! single bounded, HTTPS-only, redirect-free transport.
 
+#[cfg(feature = "content-source")]
+pub mod boards_source;
 pub mod client;
 pub mod config;
+#[cfg(feature = "content-source")]
+pub mod plans_source;
 pub mod repos;
 #[cfg(feature = "content-source")]
 pub mod source;
+pub mod text;
+#[cfg(feature = "content-source")]
+pub mod wiki_source;
