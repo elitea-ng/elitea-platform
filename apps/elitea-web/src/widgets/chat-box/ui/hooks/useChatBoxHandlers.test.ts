@@ -852,6 +852,64 @@ describe("continueHitl — the REST continuation", () => {
   });
 });
 
+describe("continueHitl — a continuation the route refused", () => {
+  it("shows the route’s own reason, restores the card and never emits on the socket", async () => {
+    const history = makeHistory([pausedMessage]);
+    const emitSocket = vi.fn(() => true);
+    const calls: ContinuationCall[] = [];
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        chatHistory: [pausedMessage],
+        emitSocket,
+        continueStreamedExecution: (params) => {
+          calls.push(params);
+          return Promise.resolve<StreamStartOutcome>({
+            started: false,
+            reason: "rejected",
+            message: "This agent turn requires the current execution path.",
+          });
+        },
+      }),
+    );
+
+    await handlers.continueHitl({ action: "approve" });
+
+    expect(calls).toHaveLength(1);
+    // The socket client is a stub here: emitting would replace the server's
+    // answer with "no chat connection is available".
+    expect(emitSocket).not.toHaveBeenCalled();
+    const restored = history.read()[0];
+    expect(restored?.hitlInterrupt).toEqual(pausedMessage.hitlInterrupt);
+    expect(restored?.isLoading).toBe(false);
+    expect(restored?.isStreaming).toBe(false);
+    expect(restored?.exception).toBe(
+      "This agent turn requires the current execution path.",
+    );
+  });
+
+  it("still falls back to the socket when the route is absent", async () => {
+    const history = makeHistory([pausedMessage]);
+    const emitSocket = vi.fn(() => true);
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        chatHistory: [pausedMessage],
+        emitSocket,
+        continueStreamedExecution: () =>
+          Promise.resolve<StreamStartOutcome>({
+            started: false,
+            reason: "no-transport",
+          }),
+      }),
+    );
+
+    await handlers.continueHitl({ action: "approve" });
+
+    expect(emitSocket).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("continueTokenLimit / resumeMcpFlow transport", () => {
   const tokenLimitMessage: ChatMessage = {
     ...pausedMessage,

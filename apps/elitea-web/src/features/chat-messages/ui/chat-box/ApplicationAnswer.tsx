@@ -33,7 +33,10 @@ import { useCallback, useEffect, useMemo } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
+import { messageNodeRecoveryBinding } from '../../lib/nodeRecoveryBinding';
+import { NodeRecoveryNotice } from './NodeRecoveryNotice';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
+import { ApplicationAnswerLoading } from './ApplicationAnswerLoading';
 import { ApplicationAnswerAuthorization } from './ApplicationAnswerAuthorization';
 import { AssistantAvatar } from './MessageAvatar';
 import { MessageFeedbackControl } from './MessageFeedbackControl';
@@ -101,8 +104,10 @@ export function ApplicationAnswer({
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
   feedback: { projectId: feedbackProjectId, enabled: feedbackEnabled = true } = {},
 }: ApplicationAnswerProps): ReactNode {
+  const recovery = messageNodeRecoveryBinding(answer);
   const isProcessing = isLoading || isRegenerating || isStreaming;
-  const isLoadingOrRegenerating = isLoading || isRegenerating;
+  const isActivelyProcessing = isProcessing && !recovery;
+  const isLoadingOrRegenerating = (isLoading || isRegenerating) && !recovery;
   const showFeedback = Boolean(feedbackProjectId) && feedbackEnabled && !isProcessing;
   const exception = answer.exception;
   const canRenderContent = !isLoadingOrRegenerating;
@@ -197,14 +202,14 @@ export function ApplicationAnswer({
     !!exception ||
     (authRequiredActions.length > 0 && !!onContinueMcpExecution) ||
     (!!requiresConfirmationSignal && !!onContinueTokenLimitExecution) ||
-    effectiveHitlInterrupts.length > 0;
+    effectiveHitlInterrupts.length > 0 || !!recovery;
 
   const renderedContent = canRenderContent && hasTextContent ? (
     <AnswerContent
       content={answer.content}
       items={items}
       messageGroupUuid={answer.id}
-      isStreaming={isStreaming}
+      isStreaming={isStreaming && !recovery}
       spokenRange={currentSpokenRange}
       onEditCanvas={onEditCanvas}
       selectedCodeBlockInfo={selectedCodeBlockInfo}
@@ -260,7 +265,7 @@ export function ApplicationAnswer({
 
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
-      {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isProcessing} />}
+      {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isActivelyProcessing} />}
 
       {!isProcessing && swarmChildActions.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 0.5 }}>
@@ -299,6 +304,7 @@ export function ApplicationAnswer({
             marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
           })}
         >
+          {recovery && <NodeRecoveryNotice binding={recovery} />}
           {continuationFailed ? (
             <ContinuationError error={exception} partialOutput={partialOutput}>
               {renderedContent}
@@ -336,22 +342,7 @@ export function ApplicationAnswer({
             !exception &&
             nonSwarmChildActions.length === 0 &&
             effectiveHitlInterrupts.length === 0 && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Box
-                  component="span"
-                  sx={{
-                    display: 'inline-block',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: 'primary.main',
-                    animation: 'pulse 1.5s infinite',
-                  }}
-                />
-                <Typography variant="bodyMedium" component="p" sx={{ color: 'text.secondary' }}>
-                  {isStreaming ? 'Streaming...' : 'Loading...'}
-                </Typography>
-              </Box>
+              <ApplicationAnswerLoading isStreaming={isStreaming} />
             )}
 
           <Box
@@ -381,7 +372,7 @@ export function ApplicationAnswer({
             <ApplicationAnswerActions
               hasContent={hasTextContent || !!exception}
               isProcessing={isProcessing}
-              shouldDisableRegenerate={shouldDisableRegenerate}
+              shouldDisableRegenerate={shouldDisableRegenerate || Boolean(recovery)}
               hasSpeakableText={hasTextContent}
               isSpeaking={!!speakingMessageId}
               onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}

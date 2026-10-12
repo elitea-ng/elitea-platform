@@ -5,6 +5,7 @@ pub mod command_bus;
 pub mod control_grpc;
 pub(crate) mod embeddings_facade;
 pub mod input_content;
+pub(crate) mod keepalive;
 #[cfg(test)]
 mod input_content_tests;
 pub(crate) mod model_facade;

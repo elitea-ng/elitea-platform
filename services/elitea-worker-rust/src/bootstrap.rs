@@ -395,9 +395,11 @@ async fn connect_private_grpc(
     private_ca: tonic::transport::Certificate,
     client_identity: tonic::transport::Identity,
 ) -> Result<Channel, ProductionBootstrapError> {
-    let endpoint = Endpoint::from_shared(format!("https://{target}"))
-        .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
-        .tls_config(
+    let endpoint = crate::transport::keepalive::with_keepalive(
+        Endpoint::from_shared(format!("https://{target}"))
+            .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?,
+    )
+    .tls_config(
             ClientTlsConfig::new()
                 .ca_certificate(private_ca)
                 .identity(client_identity),

@@ -275,6 +275,25 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .await
     }
 
+    /// Release a job this claim reserved and hydrated but never dispatched. This
+    /// is the same claim-bound stop as a cancellation: the supervisor terminates
+    /// its inert runtime once, and a repeat finds the terminal job.
+    pub(crate) async fn release_undispatched_sandbox_job(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+    ) -> Result<
+        crate::protocol::elitea::runtime::v1::SandboxJobStatusV1,
+        crate::sandbox::client::SandboxCallError,
+    > {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .cancel_digest(&self.control, authority.request(activation), digest)
+            .await
+    }
+
     pub(crate) async fn read_compiled_snapshot(
         &self,
         sandbox: &crate::sandbox::client::SandboxClient,
@@ -485,6 +504,23 @@ impl<R: ControlRpc> AgentControlClient<R> {
         self.require_sandbox_authority(authority)?;
         sandbox
             .submit_with_dependencies(&self.control, authority.request(activation), job, bundle)
+            .await
+    }
+
+    pub(crate) async fn lookup_sandbox_dependencies(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::preparation::PreparationJob,
+        root: &str,
+    ) -> Result<
+        Option<crate::sandbox::dependency_bundle::DependencyBundle>,
+        crate::sandbox::client::SandboxCallError,
+    > {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .lookup_dependencies(&self.control, authority.request(activation), job, root)
             .await
     }
 

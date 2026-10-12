@@ -891,7 +891,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
 	// database, so its ledger advances independently of the tenant one.
+	// 14: agentstate/0014_sandbox_dispatch_submission_marker.sql, the
+	// submission_pending marker that tells a hydration-phase lease loss apart
+	// from a submitted Code job (#1084).
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 13, Head(agentState))
+	require.EqualValues(t, 14, Head(agentState))
 }

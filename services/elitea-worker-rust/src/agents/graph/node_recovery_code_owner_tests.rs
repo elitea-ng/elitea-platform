@@ -18,6 +18,9 @@ use std::collections::BTreeMap;
 struct InterruptedCode(AtomicU64);
 #[path = "node_recovery_code_debug_caller_tests.rs"]
 mod debug_caller_tests;
+#[cfg(feature = "sandbox-supervisor")]
+#[path = "node_recovery_code_wiring_tests.rs"]
+mod wiring_tests;
 
 struct CaptureOriginalVisit(Mutex<Vec<Vec<u8>>>);
 #[async_trait]
@@ -616,4 +619,378 @@ async fn actual_code_owner_tombstone_preserves_history_and_stays_suspended_until
     assert_eq!(runtime.0.load(Ordering::SeqCst), 1);
     assert_eq!(context.state["count"], -1);
     assert_eq!(context.state["private"], "preserved");
+}
+
+/// CR-WK-P09-hyd: a claim lease lost during Python dependency preparation, then
+/// a redelivery. The decision comes from the dispatch ledger, not the error kind.
+mod preparation_recovery {
+    use super::*;
+    use crate::agents::graph::code_remote::attempt_remote::{classify, prior_dispatch_possible};
+    use crate::agents::graph::code_runtime::CodePreparationFailure;
+    use crate::protocol::elitea::runtime::v1::ExecutionIdentityV1;
+    use crate::sandbox::dispatch::{DispatchJournal, DispatchScope};
+    use crate::state::postgres_session_tests::IsolatedPostgres;
+
+    /// Runs the production dispatch proof and classification for a preparation
+    /// that fails with the same unclassified cause on every attempt.
+    struct PreparationLost {
+        journal: DispatchJournal,
+        scope: DispatchScope,
+        calls: AtomicU64,
+    }
+    #[async_trait]
+    impl CodeSandboxRuntime for PreparationLost {
+        async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+            panic!("raw Code invocation cannot enter preparation recovery")
+        }
+        async fn execute_attempt(
+            &self,
+            _: CodeInvocation<'_>,
+            authority: &NodeAttemptAuthority,
+        ) -> Result<Vec<u8>, CodeAttemptFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let possible = prior_dispatch_possible(
+                &self.journal,
+                Some(&self.scope),
+                &authority.dispatch_activation(),
+                authority.recovering_started(),
+            )
+            .await;
+            Err(classify(
+                CodeAttemptPhase::Preparation,
+                NodeFailureClass::Unknown,
+                authority.dispatch_activation(),
+                possible,
+            )
+            .with_preparation_failure(CodePreparationFailure::Failed))
+        }
+    }
+
+    struct Fixture {
+        _database: IsolatedPostgres,
+        runtime: Arc<PreparationLost>,
+        factory: Arc<Factory>,
+        context: NodeContext,
+        dispatch_activation: [u8; 32],
+    }
+
+    async fn fixture(register_execute_dispatch: bool) -> Fixture {
+        let url = std::env::var("ELITEA_TEST_DATABASE_URL")
+            .expect("ELITEA_TEST_DATABASE_URL is required");
+        let database = IsolatedPostgres::create(&url).await;
+        sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        for migration in [
+            include_str!(
+                "../../../../elitea-main/migrations/agentstate/0007_sandbox_dispatch_journal.sql"
+            ),
+            include_str!(
+                "../../../../elitea-main/migrations/agentstate/0014_sandbox_dispatch_submission_marker.sql"
+            ),
+        ] {
+            sqlx::raw_sql(migration).execute(&database.pool).await.unwrap();
+        }
+        let scope = DispatchScope::from_identity(&ExecutionIdentityV1 {
+            tenant_id: "dispatch-test".into(),
+            resource_project_id: "2".into(),
+            execution_id: "execution-a".into(),
+            generation: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let factory = factory();
+        let context = ctx();
+        let definition = definition();
+        let activation =
+            NodeAttemptActivation::from_context("code", definition.validated_digest(), &context)
+                .unwrap();
+        let journal = factory.open(&activation, &policy()).await.unwrap();
+        // The crash window: Started is durable, no outcome was ever recorded.
+        let snapshot = journal.load().await.unwrap();
+        let started = snapshot.ledger.start_attempt(100).unwrap();
+        journal.append(&snapshot, started, None).await.unwrap();
+        let dispatch_activation =
+            NodeAttemptAuthority::committed(&activation, journal.activation_id, 1, true)
+                .dispatch_activation();
+        let dispatch = DispatchJournal::new(database.pool.clone());
+        if register_execute_dispatch {
+            // The earlier attempt reached the execute submission.
+            dispatch
+                .register(&scope, &dispatch_activation, &[2; 32], "dns:sandbox-a")
+                .await
+                .unwrap();
+        }
+        Fixture {
+            _database: database,
+            runtime: Arc::new(PreparationLost {
+                journal: dispatch,
+                scope,
+                calls: AtomicU64::new(0),
+            }),
+            factory,
+            context,
+            dispatch_activation,
+        }
+    }
+
+    fn node(
+        fixture: &Fixture,
+        sender: crate::agents::graph::node_events::PipelineNodeEventSender,
+    ) -> RecoverableNode {
+        let definition = definition();
+        let digest = definition.validated_digest();
+        let body = Arc::new(
+            CodeNode::new(definition, types(), fixture.runtime.clone())
+                .unwrap()
+                .with_events(Some(sender)),
+        );
+        let mut node = RecoverableNode::new(body, digest, policy(), fixture.factory.clone(), None);
+        node.clock = Arc::new(Clock(AtomicU64::new(200)));
+        node
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL"]
+    async fn preparation_failure_in_recovery_without_a_dispatch_row_settles_typed_once() {
+        let fixture = fixture(false).await;
+        let (sender, receiver) =
+            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
+        let node = node(&fixture, sender);
+        let error = node.execute(&fixture.context).await.err().unwrap();
+        assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+        // One typed, readable settlement for this failure.
+        let event = drain.try_recv().unwrap().unwrap_err();
+        assert_eq!(event.code, "pipeline.code_preparation_failed");
+        assert!(drain.try_recv().is_none());
+        assert_eq!(fixture.runtime.calls.load(Ordering::SeqCst), 1);
+        let activation = NodeAttemptActivation::from_context(
+            "code",
+            definition().validated_digest(),
+            &fixture.context,
+        )
+        .unwrap();
+        let journal = fixture.factory.open(&activation, &policy()).await.unwrap();
+        let stored = journal.load().await.unwrap();
+        assert!(matches!(
+            stored.ledger.phase(),
+            NodeAttemptPhase::Failed(RecoveryDecision::Stop(_))
+        ));
+        let failure = stored.ledger.effective_failure().unwrap();
+        assert_eq!(failure.class, NodeFailureClass::Unknown);
+        // The user's code never started, so the failure carries no effect doubt.
+        assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+        // A further redelivery runs nothing and changes nothing.
+        let revision = stored.ledger.revision();
+        assert!(node.execute(&fixture.context).await.is_err());
+        assert_eq!(fixture.runtime.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(journal.load().await.unwrap().ledger.revision(), revision);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL"]
+    async fn preparation_failure_in_recovery_with_a_dispatch_row_stays_reconcile_with_an_accepted_receipt()
+     {
+        let fixture = fixture(true).await;
+        let (sender, receiver) =
+            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
+        let node = node(&fixture, sender);
+        let output = node.execute(&fixture.context).await.unwrap();
+        // The pause is the operator card, never a silent failure or a repeat.
+        let interrupt = output.interrupt.expect("effect reconciliation pause");
+        assert!(drain.try_recv().is_none());
+        assert_eq!(fixture.runtime.calls.load(Ordering::SeqCst), 1);
+        let activation = NodeAttemptActivation::from_context(
+            "code",
+            definition().validated_digest(),
+            &fixture.context,
+        )
+        .unwrap();
+        let journal = fixture.factory.open(&activation, &policy()).await.unwrap();
+        let stored = journal.load().await.unwrap();
+        let NodeAttemptPhase::Failed(RecoveryDecision::Reconcile { effect_id, .. }) =
+            stored.ledger.phase()
+        else {
+            panic!("a possibly dispatched execution must reconcile");
+        };
+        assert_eq!(effect_id, Some(fixture.dispatch_activation));
+        let receipt =
+            NodeRecoveryRequiredReceipt::from_ledger(&activation, &stored.ledger).unwrap();
+        assert!(receipt.validate());
+        let adk_rust::graph::interrupt::Interrupt::Dynamic {
+            data: Some(data), ..
+        } = interrupt
+        else {
+            panic!("dynamic recovery interrupt");
+        };
+        assert_eq!(data["receipt"], serde_json::to_value(&receipt).unwrap());
+        // The receipt has exactly the shape of the golden vector Main accepts.
+        let mut shaped = serde_json::to_value(&receipt).unwrap();
+        let golden: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../libs/jsonschema/runtime/v1/fixtures/",
+                "node-recovery-required-v1.reconcile-unknown-class.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        for key in [
+            "activation_id",
+            "journal_revision",
+            "node_id",
+            "graph_thread",
+            "step",
+        ] {
+            shaped[key] = golden[key].clone();
+        }
+        shaped["replay_safety"]["effect_id"] = golden["replay_safety"]["effect_id"].clone();
+        assert_eq!(shaped, golden);
+    }
+
+    #[tokio::test]
+    async fn dispatch_proof_is_conservative_without_a_ledger_answer() {
+        let lazy = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(200))
+            .connect_lazy("postgres://nobody@127.0.0.1:1/none")
+            .unwrap();
+        let journal = DispatchJournal::new(lazy);
+        let scope = DispatchScope::from_identity(&ExecutionIdentityV1 {
+            tenant_id: "t".into(),
+            resource_project_id: "2".into(),
+            execution_id: "e".into(),
+            generation: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        // A first attempt needs no ledger answer.
+        assert!(!prior_dispatch_possible(&journal, Some(&scope), &[1; 32], false).await);
+        // A recovered attempt without a scope or an answer may have dispatched.
+        assert!(prior_dispatch_possible(&journal, None, &[1; 32], true).await);
+        assert!(prior_dispatch_possible(&journal, Some(&scope), &[1; 32], true).await);
+    }
+}
+
+/// A runtime that reached a terminal `failed` phase is a known outcome. Only an
+/// unreceipted platform-client effect leaves it unknown (CR-SK-P09-hyd H).
+mod terminal_runtime_failure {
+    use super::*;
+    use crate::agents::graph::code_remote::attempt_remote::{classify, platform_effects_possible};
+    use crate::transport::InputContentError;
+    use crate::transport::input_content::code_platform_content::CodePlatformEffects;
+
+    struct FailedRuntime {
+        effect_possible: bool,
+        calls: AtomicU64,
+    }
+    #[async_trait]
+    impl CodeSandboxRuntime for FailedRuntime {
+        async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+            panic!("typed attempt only")
+        }
+        async fn execute_attempt(
+            &self,
+            _: CodeInvocation<'_>,
+            authority: &NodeAttemptAuthority,
+        ) -> Result<Vec<u8>, CodeAttemptFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(classify(
+                CodeAttemptPhase::Observation,
+                NodeFailureClass::InvalidResult,
+                authority.dispatch_activation(),
+                self.effect_possible,
+            ))
+        }
+    }
+
+    fn run(
+        effect_possible: bool,
+        sender: crate::agents::graph::node_events::PipelineNodeEventSender,
+    ) -> (RecoverableNode, NodeContext, Arc<FailedRuntime>) {
+        let runtime = Arc::new(FailedRuntime {
+            effect_possible,
+            calls: AtomicU64::new(0),
+        });
+        let definition = definition();
+        let digest = definition.validated_digest();
+        let body = Arc::new(
+            CodeNode::new(definition, types(), runtime.clone())
+                .unwrap()
+                .with_events(Some(sender)),
+        );
+        let mut node = RecoverableNode::new(body, digest, policy(), factory(), None);
+        node.clock = Arc::new(Clock(AtomicU64::new(100)));
+        (node, ctx(), runtime)
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_without_a_possible_effect_settles_typed_and_needs_no_operator() {
+        let (sender, receiver) =
+            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
+        let (node, context, runtime) = run(false, sender);
+        let error = node.execute(&context).await.err().unwrap();
+        assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
+        // One readable, typed settlement; no operator card.
+        let event = drain.try_recv().unwrap().unwrap_err();
+        assert_eq!(event.code, "pipeline.code_failed");
+        assert!(drain.try_recv().is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_with_an_unreceipted_platform_effect_still_reconciles() {
+        let (sender, receiver) =
+            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
+        let (node, context, runtime) = run(true, sender);
+        let output = node.execute(&context).await.unwrap();
+        assert!(output.interrupt.is_some());
+        assert!(drain.try_recv().is_none());
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Main's journal answers "nothing unresolved" or the effect stays possible.
+    #[tokio::test(start_paused = true)]
+    async fn platform_journal_proof_clears_the_effect_only_on_an_explicit_none() {
+        // The only answer that proves a known outcome.
+        assert!(!platform_effects_possible(|| async { Ok(CodePlatformEffects::None) }).await);
+        // A call dispatched or uncertain in the journal, a refusal of the query
+        // and an unusable answer all keep the effect possible.
+        assert!(platform_effects_possible(|| async { Ok(CodePlatformEffects::Possible) }).await);
+        assert!(
+            platform_effects_possible(|| async {
+                Err(InputContentError::AuthorizationFailed("refused"))
+            })
+            .await
+        );
+        // Main briefly unavailable is retried, not a verdict.
+        let mut calls = 0;
+        let recovered = platform_effects_possible(|| {
+            calls += 1;
+            let attempt = calls;
+            async move {
+                if attempt < 3 {
+                    Err(InputContentError::DependencyUnavailable("main restarting"))
+                } else {
+                    Ok(CodePlatformEffects::None)
+                }
+            }
+        })
+        .await;
+        assert!(!recovered);
+        assert_eq!(calls, 3);
+        // Main down for the whole budget never proves the outcome.
+        let started = tokio::time::Instant::now();
+        assert!(
+            platform_effects_possible(|| async {
+                Err(InputContentError::DependencyUnavailable("main down"))
+            })
+            .await
+        );
+        assert!(tokio::time::Instant::now() - started >= std::time::Duration::from_secs(30));
+    }
 }

@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 import receipt from './fixtures/node-recovery-required.json';
 import { nodeRecoveryBinding, nodeRecoveryFromEvent } from './nodeRecovery';
@@ -21,6 +24,14 @@ describe('authoritative node recovery receipt', () => {
   ])('rejects malformed or unknown contracts', (raw) => {
     expect(nodeRecoveryBinding(response, '1', raw)).toBeUndefined();
   });
+  it('accepts an unclassified failure only for effect reconciliation', () => {
+    const reconcile = { ...receipt, failure_class: 'unknown', stop_reason: 'effect_reconciliation_required',
+      replay_safety: { kind: 'unknown_external_effect', effect_id: 'b'.repeat(64) }, allowed_actions: ['reconcile'] };
+    expect(nodeRecoveryBinding(response, '1', reconcile)?.receipt.failure_class).toBe('unknown');
+    expect(nodeRecoveryBinding(response, '1', { ...receipt, failure_class: 'unknown' })).toBeUndefined();
+    expect(nodeRecoveryBinding(response, '1', { ...reconcile, replay_safety: { kind: 'completed_external_effect', receipt_id: 'c'.repeat(64) },
+      allowed_actions: ['resume_result'] })).toBeUndefined();
+  });
   it.each(['', 'a'.repeat(513), '1\n'])('rejects invalid generation %s', (generation) => {
     expect(nodeRecoveryBinding(response, generation, receipt)).toBeUndefined();
   });
@@ -33,5 +44,28 @@ describe('authoritative node recovery receipt', () => {
   });
   it('does not treat another event as a recovery pause', () => {
     expect(nodeRecoveryFromEvent({ ...frame, type: 'unknown_recovery_event' })).toBeUndefined();
+  });
+  // The vectors live next to the JSON schema. Main (noderecovery/contract_test.go)
+  // and the Worker (node_recovery_receipt.rs) read the same files, so a receipt
+  // one side builds and another refuses fails a test on every side. A name with
+  // ".invalid." must be refused; every other vector must be accepted.
+  it('agrees with Main and the Worker on every shared golden vector', () => {
+    const dir = resolve(import.meta.dirname, '../../../../../libs/jsonschema/runtime/v1/fixtures');
+    const names = readdirSync(dir).filter((name) => name.startsWith('node-recovery-required-v1') && name.endsWith('.json'));
+    let valid = 0;
+    let invalid = 0;
+    for (const name of names) {
+      const raw: unknown = JSON.parse(readFileSync(resolve(dir, name), 'utf8'));
+      const accepted = nodeRecoveryBinding(response, '1', raw) !== undefined;
+      if (name.includes('.invalid.')) {
+        invalid += 1;
+        expect(accepted, `${name}: invalid vector accepted`).toBe(false);
+      } else {
+        valid += 1;
+        expect(accepted, `${name}: valid vector rejected`).toBe(true);
+      }
+    }
+    expect(valid).toBeGreaterThanOrEqual(6);
+    expect(invalid).toBeGreaterThanOrEqual(8);
   });
 });

@@ -1,5 +1,11 @@
 # Source-to-Rust mapping
 
+The [Code live canvas terminal mapping](code-live-canvas-terminal-20261008.md) records the matching-run callback correction and its separate deployment requirements.
+The [pending preparation Stop mapping](code-pending-stop-owner-recovery-20261008.md) records accepted Worker-loss recovery and normal reloaded History.
+The [preparer cancellation boundary](code-preparer-cancellation-boundary-20261008.md) separates verified UI Stop from the internal diagnostic and records a pending scope decision.
+The [live owner recovery mapping](code-live-owner-recovery-20261008.md) records the original JavaScript result after Worker and Supervisor loss.
+The [compiled publication mapping](code-compiled-publication-main-recovery-20261008.md) records the original compiler receipt after Main loss and normal browser reload.
+
 These ledgers map observable Elitea behavior to concrete Rust ownership. They
 are compatibility evidence, not a byte-for-byte port plan.
 
@@ -46,6 +52,11 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.
+
+- [Deployed Code on NATS](code-nats-deployed-acceptance-20261007.md) records current image boundaries, browser cases, retained failures, and open completion requirements.
+
+- [Main merge continuation](main-integration-20261007.md) records the verified handoff, complete listener reruns, and pending current-image and NATS/Code acceptance.
 - [Runtime-crate log visibility 2026-10-09](runtime-crate-log-visibility-20261009.md) makes `ELITEA_RUST_LOG`/`ELITEA_RUST_TRACE` cover `elitea_agent_runtime` as well as the Worker crate (its events were dropped since ADR-0027), names runtime spans in failure diagnostics, stops logging a profile-authored settings key, and proves with child-process capture tests that representative runtime paths log no data values; a manifest guard keeps future hosted crates visible.
 - [Helm Code owner-recovery guard 2026-10-09](helm-code-owner-recovery-guard-20261009.md) refuses to render `worker.runtime.agentNodeRecovery=true` with `sandboxRuntimes` unless `main.runtime.codeOwnerRecovery` is enabled with a supervisor for every runtime audience (otherwise every Code node fails at Main admission as `INTERNAL`); proved by `render-worker-node-recovery.sh` and `render-worker-sandbox.sh` with mutation proof; records why there is no Worker startup refusal and defers the readable failure kind to G-ADV-01.
 - [Helm Worker node-recovery key 2026-10-09](helm-worker-node-recovery-20261009.md) closes G-WORKER-01: `worker.runtime.agentNodeRecovery` refuses non-boolean values and is proved by `task helm:worker-node-recovery`; the default stays false because the key also turns on model-step resume, which D1/TG-12 keep closed on Kubernetes.

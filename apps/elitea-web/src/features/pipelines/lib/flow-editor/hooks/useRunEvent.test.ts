@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { installWebStorageShim } from '../../../../../test/webstorage';
 
+import receipt from '@/shared/lib/fixtures/node-recovery-required.json';
 import { PipelineStatus } from '../constants/flowEditor.constants';
 import type { YamlPipelineDocument } from '../helpers/pipelineFlow.types';
 import type { FlowNode, SetFlowNodes } from '../reactFlowTypes';
@@ -19,6 +20,28 @@ function makeStatefulSetFlowNodes(initial: readonly FlowNode[]) {
 }
 
 describe('useRunEvent', () => {
+  it('clears performing only for the exact suspended response while retaining Stop state', () => {
+    const response = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const { setFlowNodes, getNodes } = makeStatefulSetFlowNodes([{ id: 'python', type: 'code', position: { x: 0, y: 0 }, data: {} }]);
+    const { result } = renderHook(() => useRunEvent(setFlowNodes, { nodes: [{ id: 'python' }] }));
+    act(() => result.current.onRcvAgentEvent({ type: 'agent_start', message_id: response, execution_generation: '1', response_metadata: {} }));
+    act(() => result.current.onRcvAgentEvent({ type: 'agent_llm_start', response_metadata: { metadata: { langgraph_node: 'python' } } }));
+    const pause = { type: 'agent_node_recovery_required', message_id: response, execution_generation: '1', response_metadata: { node_recovery_required_v1: receipt } };
+    for (const bad of [
+      { ...pause, execution_generation: '2' }, { ...pause, message_id: 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee' },
+      { ...pause, response_metadata: { ...pause.response_metadata, parent_agent_path: 'malformed' } },
+      { ...pause, response_metadata: { node_recovery_required_v1: { ...receipt, schema: 'unknown' } } },
+    ]) {
+      act(() => result.current.onRcvAgentEvent(bad));
+      expect(getNodes()[0]?.data.isPerforming).toBe(true);
+    }
+    act(() => result.current.onRcvAgentEvent(pause));
+    expect(getNodes()[0]?.data.isPerforming).toBeUndefined();
+    expect(result.current.isRunningPipeline).toBe(true);
+    expect(result.current.pipelineRunNodes[0]?.data).toMatchObject({ status: PipelineStatus.Interrupt, recoveryPaused: true });
+    expect(result.current.pipelineRunNodes[0]?.data.timeline[0]?.status).toBe(PipelineStatus.Interrupt);
+  });
+
   it('agent_start creates a running pipeline entry and marks the running flag', () => {
     const { setFlowNodes } = makeStatefulSetFlowNodes([{ id: 'Agent 1', type: 'agent', position: { x: 0, y: 0 }, data: {} }]);
     const yamlJsonObject: YamlPipelineDocument = { nodes: [{ id: 'Agent 1' }] };

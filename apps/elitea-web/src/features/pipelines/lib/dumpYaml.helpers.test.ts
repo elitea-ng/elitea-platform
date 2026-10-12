@@ -84,6 +84,27 @@ describe('pipeline compatibility serialization', () => {
   const source =
     '# Original spelling\r\nstate:\r\n  "10": list\r\n  "2": {type: dict, value: null, future: {unknown: true}}\r\n  input: str\r\nnodes: []\r\n';
 
+  it.each(['', ' \n', '# comment only\n'])('retains an empty original document and permits its first edit: %j', (originalYaml) => {
+    expect(serializePipelineYaml({}, { originalYaml })).toBe(originalYaml);
+    const next = { entry_point: 'LLM_1', nodes: [{ id: 'LLM_1', type: 'llm', transition: 'END' }] };
+    expect(load(serializePipelineYaml(next, { originalYaml }))).toEqual(next);
+  });
+
+  it.each(['state: [', 'nodes: []\n---\nnodes: []\n'])('refuses malformed or multiple original documents: %j', (originalYaml) => {
+    expect(() => serializePipelineYaml({ nodes: [] }, { originalYaml })).toThrow();
+  });
+
+  it('keeps explicit null distinct from an empty document', () => {
+    expect(serializePipelineYaml(null, { originalYaml: 'null' })).toBe('null');
+    expect(load(serializePipelineYaml({}, { originalYaml: 'null' }))).toEqual({});
+  });
+
+  it('retains strict roundtrip refusal for an unrelated undefined field in the first edit', () => {
+    expect(() => serializePipelineYaml({ nodes: [], opaque: undefined }, { originalYaml: '' })).toThrow(
+      'Pipeline YAML serialization changed its contract',
+    );
+  });
+
   it('returns the exact original bytes for no-op and layout-only instructions', () => {
     expect(serializePipelineYaml(load(source), { originalYaml: source })).toBe(source);
     expect(dumpYaml(load(source), { originalYaml: source })).toBe(source);

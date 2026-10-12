@@ -1,5 +1,7 @@
 import { nodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
 import { staticPauseBinding } from './staticPipelinePause';
+import { getParticipantName } from './participantName';
+import { DEFAULT_PARTICIPANT_NAME } from '@/shared/lib/hooks/useEnvironmentSettingByKey';
 /**
  * Ported from `apps/elitea-ui/src/common/convertChatConversationMessages.js`
  * (392 lines) — the full message-group → chat-history converter used by a
@@ -312,8 +314,11 @@ export function convertMessagesToChatHistory(
     );
 
     const meta = messageGroup.meta;
+    const statesAuthor = author_participant_id !== undefined && author_participant_id !== '';
+    const author = participants.find((row) => isParticipant(row.id, author_participant_id));
     const aiMessage: ChatMessage = {
       ...normalised,
+      ...(statesAuthor ? { authorName: getParticipantName(author, DEFAULT_PARTICIPANT_NAME) || DEFAULT_PARTICIPANT_NAME } : {}),
       ...(meta?.execution_generation ? { executionGeneration: meta.execution_generation } : {}),
       ...(meta?.thread_id ? { threadId: meta.thread_id } : {}),
       nodeRecoveryRequired: messageGroup.is_streaming === true && meta?.is_error !== true && !normalised.exception && !normalised.failureCode

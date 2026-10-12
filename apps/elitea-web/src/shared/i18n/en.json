@@ -4497,7 +4497,7 @@
   "features.chatMessages.nodeRecovery.visit": "Node {{node}}, attempt {{attempt}} requires operator recovery.",
   "features.chatMessages.nodeRecovery.timeout": "The node reached its execution time limit.",
   "features.chatMessages.nodeRecovery.required": "The node cannot continue without an authorized recovery action.",
-  "features.chatMessages.nodeRecovery.disabled": "Operator recovery is not enabled for this deployment. Stop this execution before starting another test or message.",
+  "features.chatMessages.nodeRecovery.disabled": "Contact an operator to recover this execution. You can stop this execution before starting another test or message.",
   "pages.admin.identityProviders.dialog.error.loginDomain": "“{{domain}}” is not a domain name such as example.com.",
   "pages.admin.identityProviders.dialog.loginDomains": "Login domains",
   "pages.admin.identityProviders.dialog.loginDomainsHelp": "Optional. Separate domains with commas. On the sign-in page, a person who types a work email in one of these domains goes to this provider.",

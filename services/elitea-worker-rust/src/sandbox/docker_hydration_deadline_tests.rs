@@ -419,6 +419,159 @@ impl DeliveryFixture {
     }
 }
 
+fn assert_no_hydration_effects(runtime: &Runtime) {
+    assert_eq!(runtime.0.prepares.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.imports.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.exports.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.cleanups.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL and ELITEA_TEST_BUNDLE_TLS"]
+async fn hydration_retained_dispatch_is_ready_with_the_only_execution_slot_occupied() {
+    let database = database().await;
+    let bundle = bundle();
+    let request = request()
+        .with_python_dependency_bundle(bundle.root().into())
+        .unwrap();
+    let delivery = DeliveryFixture::new(&request, &bundle);
+    let scope = delivery.execution.scope();
+    let runtime = Runtime::new(true);
+    let supervisor = supervisor(database.pool.clone(), runtime.clone(), OWNER);
+    let lease = bound(&supervisor, scope).await;
+    supervisor.ledger.mark_dispatched(&lease).await.unwrap();
+    let _execution_owner = supervisor.capacity.try_acquire().unwrap();
+
+    assert!(
+        supervisor
+            .hydrate_authorized(
+                &delivery.execution,
+                &request,
+                delivery.delivery(&bundle),
+                &bundle,
+                0,
+            )
+            .await
+            .unwrap()
+    );
+    let retained = supervisor.ledger.read(scope).await.unwrap();
+    assert_eq!(retained.phase, Phase::Dispatched);
+    assert_eq!(retained.runtime_id.as_deref(), Some(RUNTIME_ID));
+    assert!(retained.result_json.is_none());
+    assert!(retained.failure_code.is_none());
+    assert_eq!(supervisor.capacity.available_permits(), 0);
+    assert_no_hydration_effects(&runtime);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL and ELITEA_TEST_BUNDLE_TLS"]
+async fn hydration_retained_dispatch_keeps_authority_index_and_digest_refusals() {
+    let database = database().await;
+    let bundle = bundle();
+    let request = request()
+        .with_python_dependency_bundle(bundle.root().into())
+        .unwrap();
+    let delivery = DeliveryFixture::new(&request, &bundle);
+    let runtime = Runtime::new(true);
+    let supervisor = supervisor(database.pool.clone(), runtime.clone(), OWNER);
+    let scope = delivery.execution.scope();
+    let conflicting =
+        JobScope::new(scope.tenant.clone(), scope.project, scope.key, [0xff; 32]).unwrap();
+    let lease = bound(&supervisor, &conflicting).await;
+    supervisor.ledger.mark_dispatched(&lease).await.unwrap();
+    let _execution_owner = supervisor.capacity.try_acquire().unwrap();
+
+    // These refuse before retained state can acknowledge readiness.
+    for index in [u32::try_from(bundle.file_count()).unwrap() + 1, u32::MAX] {
+        assert!(matches!(
+            supervisor
+                .hydrate_authorized(
+                    &delivery.execution,
+                    &request,
+                    delivery.delivery(&bundle),
+                    &bundle,
+                    index,
+                )
+                .await,
+            Err(SupervisorError::Invalid)
+        ));
+    }
+    let changed = PreparedJob::new(
+        Language::Python,
+        "print(43)".into(),
+        BTreeMap::new(),
+        format!("sha256:{}", "a".repeat(64)),
+        POLICY.into(),
+        30,
+    )
+    .unwrap()
+    .with_python_dependency_bundle(bundle.root().into())
+    .unwrap();
+    assert!(matches!(
+        supervisor
+            .hydrate_authorized(
+                &delivery.execution,
+                &changed,
+                delivery.delivery(&bundle),
+                &bundle,
+                0,
+            )
+            .await,
+        Err(SupervisorError::Invalid)
+    ));
+    assert!(matches!(
+        supervisor
+            .hydrate_authorized(
+                &delivery.execution,
+                &request,
+                delivery.delivery(&bundle),
+                &bundle,
+                0,
+            )
+            .await,
+        Err(SupervisorError::Ledger(LedgerError::Conflict))
+    ));
+    assert_no_hydration_effects(&runtime);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL and ELITEA_TEST_BUNDLE_TLS"]
+async fn hydration_missing_and_reserved_jobs_remain_capacity_bound() {
+    let database = database().await;
+    let bundle = bundle();
+    let request = request()
+        .with_python_dependency_bundle(bundle.root().into())
+        .unwrap();
+    let delivery = DeliveryFixture::new(&request, &bundle);
+    let runtime = Runtime::new(false);
+    let supervisor = supervisor(database.pool.clone(), runtime.clone(), OWNER);
+    let _execution_owner = supervisor.capacity.try_acquire().unwrap();
+    for reserved in [false, true] {
+        if reserved {
+            supervisor
+                .ledger
+                .reserve(delivery.execution.scope())
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            supervisor
+                .hydrate_authorized(
+                    &delivery.execution,
+                    &request,
+                    delivery.delivery(&bundle),
+                    &bundle,
+                    0,
+                )
+                .await,
+            Err(SupervisorError::Busy)
+        ));
+    }
+    assert_no_hydration_effects(&runtime);
+}
+
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL through ELITEA_TEST_DATABASE_URL"]
 async fn hydration_fresh_binding_preserves_old_reservation() {
@@ -935,5 +1088,54 @@ async fn hydration_unknown_termination_remains_reserved_and_retries_original_cle
     assert_eq!(runtime.0.prepares.load(Ordering::SeqCst), 0);
     assert_eq!(runtime.0.dispatches.load(Ordering::SeqCst), 0);
     assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 2);
+    assert_eq!(runtime.0.cleanups.load(Ordering::SeqCst), 1);
+}
+
+/// CR-SK-P09-hyd F: a job reserved during hydration and never dispatched, whose
+/// execution already settled failed, is reaped at once instead of after the
+/// hour-long hydration retention. The Worker's release is a claim-bound stop;
+/// the supervisor owns the termination, exactly once.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL through ELITEA_TEST_DATABASE_URL"]
+async fn hydrated_never_dispatched_job_is_reaped_once_after_a_settled_failure() {
+    let database = database().await;
+    let request = request();
+    let scope = scope(&request, 21);
+    let runtime = Runtime::new(true);
+    let supervisor = supervisor(database.pool.clone(), runtime.clone(), OWNER);
+    let lease = bound(&supervisor, &scope).await;
+    // The last hydration index released the lease; nothing was ever dispatched.
+    supervisor.ledger.release(&lease).await.unwrap();
+    let before = supervisor.ledger.read(&scope).await.unwrap();
+    assert_eq!(before.phase, Phase::Reserved);
+    assert_eq!(before.runtime_id.as_deref(), Some(RUNTIME_ID));
+    // Young, so the retention sweep must not be what reaps it.
+    supervisor.reconcile_expired_hydrations().await.unwrap();
+    assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 0);
+    // The execution settled failed; the Worker releases the job (a stop).
+    supervisor
+        .ledger
+        .request_cancellation(&scope, OWNER)
+        .await
+        .unwrap();
+    expire_leases(&database.pool).await;
+    tokio::time::timeout(WAIT, supervisor.reconcile_cancellations())
+        .await
+        .unwrap()
+        .unwrap();
+    let after = supervisor.ledger.read(&scope).await.unwrap();
+    assert_eq!(after.phase, Phase::Cancelled);
+    assert_eq!(after.failure_code.as_deref(), Some("sandbox.cancelled"));
+    assert_eq!(runtime.0.dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.0.cleanups.load(Ordering::SeqCst), 1);
+    // A second pass, or a repeated release, deletes nothing again.
+    supervisor
+        .ledger
+        .request_cancellation(&scope, OWNER)
+        .await
+        .unwrap();
+    supervisor.reconcile_cancellations().await.unwrap();
+    assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 1);
     assert_eq!(runtime.0.cleanups.load(Ordering::SeqCst), 1);
 }

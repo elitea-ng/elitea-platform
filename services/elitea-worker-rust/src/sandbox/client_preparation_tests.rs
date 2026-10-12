@@ -80,8 +80,13 @@ impl ControlRpc for RecordingControl {
     }
 }
 
+type LookupReply = Option<Result<Vec<u8>, Status>>;
+
 #[derive(Clone, Default)]
 struct RecordingSupervisor {
+    lookup_reply: Arc<Mutex<LookupReply>>,
+    lookup_requests:
+        Arc<Mutex<Vec<crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesRequestV1>>>,
     indices: Arc<Mutex<Vec<u32>>>,
     hydration_indices: Arc<Mutex<Vec<u32>>>,
     hydration_jobs: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -91,6 +96,30 @@ struct RecordingSupervisor {
 
 #[tonic::async_trait]
 impl SandboxSupervisorService for RecordingSupervisor {
+    async fn lookup_sandbox_dependencies(
+        &self,
+        request: Request<crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesResponseV1>,
+        Status,
+    > {
+        self.lookup_requests
+            .lock()
+            .unwrap()
+            .push(request.into_inner());
+        let reply = self
+            .lookup_reply
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| Status::unimplemented("frozen lookup is outside this fixture"))??;
+        Ok(Response::new(
+            crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesResponseV1 {
+                bundle_json: reply,
+            },
+        ))
+    }
+
     async fn submit_rust_compiled_snapshot(
         &self,
         _request: Request<
@@ -518,4 +547,96 @@ async fn broker_hydration_rejects_missing_or_excess_intent_before_requesting_aut
         ));
     }
     assert!(control.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn frozen_lookup_uses_current_root_grant_and_never_starts_preparation_on_rpc_error() {
+    let (job, bundle) = crate::sandbox::preparation::frozen_lookup_tests::fixture();
+    let service = RecordingSupervisor::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown, receive) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(SandboxSupervisorServiceServer::new(service.clone()))
+            .serve_with_incoming_shutdown(
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+                async {
+                    let _ = receive.await;
+                },
+            ),
+    );
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let sandbox =
+        SandboxClient::from_channel(channel, "dns:sandbox.test".into(), Duration::from_secs(2))
+            .unwrap();
+    let control = RecordingControl::default();
+    let client = ControlGrpcClient::new(
+        control.clone(),
+        ControlGrpcConfig {
+            deadline: Duration::from_secs(2),
+            workload_session_id: "workload".into(),
+            producer_id: "worker".into(),
+        },
+    )
+    .unwrap();
+    let authorization = AuthorizeSandboxJobRequestV1 {
+        activation_id: "original-preparation".into(),
+        ..Default::default()
+    };
+    *service.lookup_reply.lock().unwrap() = Some(Ok(bundle.record_json().to_vec()));
+    let found = sandbox
+        .lookup_dependencies(&client, authorization.clone(), &job, bundle.root())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.root(), bundle.root());
+    *service.lookup_reply.lock().unwrap() = Some(Ok(Vec::new()));
+    assert!(
+        sandbox
+            .lookup_dependencies(&client, authorization.clone(), &job, bundle.root())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    for status in [
+        Status::permission_denied("fixture"),
+        Status::data_loss("fixture"),
+        Status::unavailable("fixture"),
+    ] {
+        *service.lookup_reply.lock().unwrap() = Some(Err(status));
+        assert!(
+            sandbox
+                .lookup_dependencies(&client, authorization.clone(), &job, bundle.root())
+                .await
+                .is_err()
+        );
+    }
+    let requests = control.0.lock().unwrap().clone();
+    assert_eq!(requests.len(), 5);
+    for request in requests {
+        assert_eq!(request.activation_id, authorization.activation_id);
+        assert_eq!(request.audience, "dns:sandbox.test");
+        assert_eq!(request.request_digest, job.fingerprint().unwrap().to_vec());
+        assert_eq!(
+            crate::sandbox::dependency_bundle::hex(&request.dependency_bundle_sha256),
+            bundle.root()
+        );
+        assert!(!request.cancel_only);
+    }
+    let lookups = service.lookup_requests.lock().unwrap().clone();
+    assert_eq!(lookups.len(), 5);
+    for lookup in lookups {
+        assert_eq!(lookup.preparation_job_json, job.to_transport().unwrap());
+        assert!(lookup.content_grant.is_some());
+    }
+    assert!(service.grants.lock().unwrap().is_empty());
+    assert!(service.indices.lock().unwrap().is_empty());
+    assert!(service.hydration_jobs.lock().unwrap().is_empty());
+    let _ = shutdown.send(());
+    server.await.unwrap().unwrap();
 }

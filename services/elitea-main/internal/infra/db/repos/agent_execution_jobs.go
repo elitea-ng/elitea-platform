@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -613,6 +614,12 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		turn := *admission.CurrentContinueTurn
 		var resumeErr error
 		switch turn.ContinuationKind {
+		case agentexecutionapp.CurrentContinuationStatic:
+			if turn.PipelineStaticTools != nil {
+				resumeErr = resumeCurrentAgentStaticTools(ctx, txQueries, admission.Record.Job.ID, turn)
+			} else {
+				resumeErr = resumeCurrentAgentStatic(ctx, txQueries, admission.Record.Job.ID, turn)
+			}
 		case agentexecutionapp.CurrentContinuationOutputLimit:
 			resumeErr = resumeCurrentAgentOutputLimit(ctx, txQueries, admission.Record.Job.ID, turn)
 		case agentexecutionapp.CurrentContinuationAuthorization:
@@ -1276,4 +1283,118 @@ func narrowRowID(value int64) (int32, bool) {
 		return 0, false
 	}
 	return int32(value), true
+}
+
+func resumeCurrentAgentStatic(ctx context.Context, queries *sqlcgen.Queries, executionID string, turn agentexecutionapp.CurrentContinueTurn) error {
+	if turn.Validate() != nil || turn.PipelineStaticPause == nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	project, ok := currentAgentDatabaseID(turn.ProjectID)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
+	participant, ok := currentAgentDatabaseID(turn.TargetParticipantID)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
+	application, ok := currentAgentDatabaseID(turn.ApplicationID)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
+	version, ok := currentAgentDatabaseID(turn.ApplicationVersionID)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
+	conversation, err := currentPGUUID(turn.ConversationUUID)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	question, err := currentPGUUID(turn.QuestionID)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	response, err := currentPGUUID(turn.ResponseMessageID)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	proof, err := json.Marshal(turn.PipelineStaticPause.Proof)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	row, err := queries.ResumeCurrentAgentStatic(ctx, sqlcgen.ResumeCurrentAgentStaticParams{
+		ActorUserID: turn.ActorUserID, ProjectID: project, TargetParticipantID: participant, ApplicationID: application, ApplicationVersionID: version,
+		ConversationUuid: conversation, QuestionID: question, ResponseMessageID: response, ExecutionGeneration: turn.ExecutionGeneration, ThreadID: turn.ThreadID,
+		StaticPauseJson: proof, InputDigest: turn.PipelineStaticPause.InputDigest, ExecutionID: executionID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+	}
+	if err != nil {
+		return fmt.Errorf("resume current static continuation: %w", err)
+	}
+	if row.ResponseMessageGroupID <= 0 || row.ResponseMessageID != response {
+		return executionapp.ErrInvalidAdmission
+	}
+	return nil
+}
+
+func resumeCurrentAgentStaticTools(ctx context.Context, queries *sqlcgen.Queries, executionID string, turn agentexecutionapp.CurrentContinueTurn) error {
+	if turn.Validate() != nil || turn.PipelineStaticTools == nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	project, ok := currentAgentDatabaseID(turn.ProjectID)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
+	participant, ok := currentAgentDatabaseID(turn.TargetParticipantID)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
+	application, ok := currentAgentDatabaseID(turn.ApplicationID)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
+	version, ok := currentAgentDatabaseID(turn.ApplicationVersionID)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
+	conversation, err := currentPGUUID(turn.ConversationUUID)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	question, err := currentPGUUID(turn.QuestionID)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	response, err := currentPGUUID(turn.ResponseMessageID)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	proof, err := json.Marshal(turn.PipelineStaticTools.Inventory)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	ids := make([]string, 0, len(turn.PipelineStaticTools.Selected))
+	for _, decision := range turn.PipelineStaticTools.Selected {
+		ids = append(ids, decision.PauseID)
+	}
+	selected, err := json.Marshal(ids)
+	if err != nil {
+		return executionapp.ErrInvalidAdmission
+	}
+	row, err := queries.ResumeCurrentAgentStaticTools(ctx, sqlcgen.ResumeCurrentAgentStaticToolsParams{
+		ActorUserID: turn.ActorUserID, ProjectID: project, TargetParticipantID: participant, ApplicationID: application, ApplicationVersionID: version,
+		ConversationUuid: conversation, QuestionID: question, ResponseMessageID: response, ExecutionGeneration: turn.ExecutionGeneration, ThreadID: turn.ThreadID,
+		StaticToolsJson: proof, StaticPauseIds: selected, InputDigest: turn.PipelineStaticTools.InputDigest, ExecutionID: executionID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+	}
+	if err != nil {
+		return fmt.Errorf("resume current static continuation: %w", err)
+	}
+	if row.ResponseMessageGroupID <= 0 || row.ResponseMessageID != response {
+		return executionapp.ErrInvalidAdmission
+	}
+	return nil
 }

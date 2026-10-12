@@ -26,7 +26,7 @@ import { act, render, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useConversationLifecycle } from '@/entities/conversation';
+import { conversationApi, useConversationLifecycle } from '@/entities/conversation';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
@@ -367,4 +367,66 @@ it("never allocates an ordinary conversation from a Test composer before identit
     "validated Test context",
   );
   expect(create).not.toHaveBeenCalled();
+});
+describe("useChatBoxSend — a resume the continuation route answers", () => {
+  const CONTINUE = `${BASE}/elitea_core/continue_predict/prompt_lib/7/${CONVERSATION_UUID}`;
+  const contracts = conversationApi.contracts;
+
+  // The handlers read `reason: "rejected"` to show the route's own refusal. The
+  // transport layer used to collapse every non-static resume to a boolean, so a
+  // 422 reached them as "no transport" and the user read "no chat connection is
+  // available" for a refusal Main had named.
+  it.each([
+    ["HITL", contracts.continueHitl],
+    ["authorization", contracts.continueAuthorization],
+    ["output limit", contracts.continueOutputLimit],
+  ])("hands a %s refusal to the caller with the server's reason", async (_label, contract) => {
+    server.use(
+      http.post(CONTINUE, () =>
+        HttpResponse.json(
+          { error: "unsupported_agent_execution", message: "This agent turn requires the current execution path." },
+          { status: 422 },
+        ),
+      ),
+    );
+    const { api, Probe } = harness();
+    render(withQueryClient(<Probe />));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await api.current?.continueStreamedExecution({
+        conversationUuid: CONVERSATION_UUID,
+        contract,
+        body: { project_id: 7, conversation_uuid: CONVERSATION_UUID, message_id: "resp-1" },
+      });
+    });
+    expect(outcome).toEqual({
+      started: false,
+      reason: "rejected",
+      message: "This agent turn requires the current execution path.",
+    });
+  });
+
+  it("still reports no transport for a deployment without the route, and started for an accepted resume", async () => {
+    const { api, Probe } = harness();
+    render(withQueryClient(<Probe />));
+    const resume = async (): Promise<unknown> => {
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await api.current?.continueStreamedExecution({
+          conversationUuid: CONVERSATION_UUID,
+          contract: contracts.continueHitl,
+          body: { project_id: 7, conversation_uuid: CONVERSATION_UUID, message_id: "resp-1" },
+        });
+      });
+      return outcome;
+    };
+    server.use(http.post(CONTINUE, () => new HttpResponse(null, { status: 404 })));
+    expect(await resume()).toEqual({ started: false, reason: "no-transport" });
+    server.use(
+      http.post(CONTINUE, () =>
+        HttpResponse.json({ task_id: "exec-1", events_url: EVENTS_URL, response_message_id: "resp-1" }),
+      ),
+    );
+    expect(await resume()).toEqual({ started: true });
+  });
 });

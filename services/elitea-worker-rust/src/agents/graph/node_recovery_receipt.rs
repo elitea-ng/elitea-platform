@@ -97,11 +97,13 @@ impl NodeRecoveryRequiredReceipt {
                 ReplaySafety::UnknownExternalEffect { .. } | ReplaySafety::Unclassified,
                 [NodeRecoveryAction::Reconcile],
             ) => true,
+            // An unclassified failure is reconcile-only: Main refuses it for a
+            // retry or a result resume (shared vectors `unknown-class-*`).
             (
                 StopReason::EffectReconciliationRequired,
                 ReplaySafety::CompletedExternalEffect { .. },
                 [NodeRecoveryAction::ResumeResult],
-            ) => true,
+            ) => self.failure_class != NodeFailureClass::Unknown,
             _ => false,
         }
     }
@@ -185,5 +187,49 @@ mod canonical_fixture_tests {
             hex(digest.as_ref().try_into().unwrap()),
             "8f592df47f70a2b2f5c4bf0bd97832856cd194d139a0eeab7dc37a82ca4b1351"
         );
+    }
+}
+
+#[cfg(test)]
+mod shared_vector_tests {
+    use super::*;
+
+    const VECTOR_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../libs/jsonschema/runtime/v1/fixtures"
+    );
+
+    /// Main reads the same files (`noderecovery/contract_test.go`). A name that
+    /// contains `.invalid.` must be refused; every other vector must be accepted,
+    /// so the Worker never builds a receipt Main rejects and never refuses one
+    /// Main accepts.
+    #[test]
+    fn worker_and_main_agree_on_every_shared_receipt_vector() {
+        let (mut valid, mut invalid) = (0, 0);
+        for entry in std::fs::read_dir(VECTOR_DIR).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.starts_with("node-recovery-required-v1")
+                || path.extension().is_none_or(|extension| extension != "json")
+            {
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            let accepted = serde_json::from_slice::<NodeRecoveryRequiredReceipt>(&bytes)
+                .is_ok_and(|receipt| {
+                    receipt.validate()
+                        // Canonical, so the Go side hashes the same bytes.
+                        && serde_json::to_vec(&serde_json::to_value(&receipt).unwrap()).unwrap()
+                            == bytes
+                });
+            if name.contains(".invalid.") {
+                invalid += 1;
+                assert!(!accepted, "{name}: invalid vector accepted by the Worker");
+            } else {
+                valid += 1;
+                assert!(accepted, "{name}: valid vector rejected by the Worker");
+            }
+        }
+        assert!(valid >= 6 && invalid >= 8, "{valid} valid, {invalid} invalid");
     }
 }

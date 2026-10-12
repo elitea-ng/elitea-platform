@@ -100,9 +100,18 @@ function renderChat(mode: 'editor' | 'main' | 'reload') {
   '/pipelines/all/143', { projectId: '2' });
 }
 
+function labelledButton(text: HTMLElement, name: string | RegExp): HTMLButtonElement {
+  const button = text.closest('button');
+  if (!button) throw new Error('Expected a button containing the trace label');
+  expect(button).toBeVisible();
+  expect(button).toHaveAccessibleName(name);
+  return button;
+}
+
 async function openGroupedExport(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole('button', { name: /Thought for/ }));
-  await user.click(screen.getByRole('button', { name: /^debug_probe$/i }));
+  // Check the selected button without recomputing every composer button's accessible name.
+  await user.click(labelledButton(await screen.findByText(/Thought for/), /Thought for/));
+  await user.click(labelledButton(screen.getByText(/^debug_probe$/i), /^debug_probe$/i));
   await user.click(screen.getByText('debug_probe / debug export'));
   expect(await screen.findByRole('dialog')).toHaveTextContent('Code debug · debug_probe · attempt 1');
   expect(artifactReads).toBe(0);
@@ -112,7 +121,7 @@ async function verifyDownload(user: ReturnType<typeof userEvent.setup>) {
   const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:verified-code-debug');
   const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
   const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-  await user.click(screen.getByRole('button', { name: 'Download verified snapshot' }));
+  await user.click(labelledButton(screen.getByText('Download verified snapshot'), 'Download verified snapshot'));
   await waitFor(() => expect(createUrl).toHaveBeenCalledTimes(1));
   expect(artifactReads).toBe(1);
   expect(anchorClick).toHaveBeenCalledTimes(1);

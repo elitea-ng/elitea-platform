@@ -477,6 +477,32 @@ FROM elitea_runtime.code_platform_jobs j WHERE j.execution_id=$1 AND j.original_
 	return facts, nil
 }
 
+// ReadOriginalCodePlatformUnresolvedEffects answers one narrow question for the
+// Worker's typed-failure gate: does the journal of this exact job hold a call
+// whose outcome is unknown? It is a plain read inside the caller's authorized
+// transaction. A call is unresolved when it is 'dispatching' or 'uncertain'
+// (Dispatch was granted), or when its toolkit child execution is not terminal.
+// 'prepared' means Dispatch was never granted, so no effect ran. A job without
+// a registration row cannot have a call: registration precedes the first frame.
+func (r *CodePlatformCallsRepository) ReadOriginalCodePlatformUnresolvedEffects(ctx context.Context, tx storage.CodeTransaction, execution string, generation uint64, dispatch, fingerprint string) (bool, error) {
+	if r == nil || ctx == nil || tx == nil || execution == "" || len(execution) > 256 || generation < 1 || generation > math.MaxInt64 || !code.NonzeroDigest(dispatch) || !code.NonzeroDigest(fingerprint) {
+		return false, domain.ErrConflict
+	}
+	var possible bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM elitea_runtime.code_platform_jobs j JOIN elitea_runtime.code_platform_calls c ON c.execution_id=j.execution_id AND c.activation_sha256=j.activation_sha256
+WHERE j.execution_id=$1 AND j.original_generation=$2 AND encode(j.activation_sha256,'hex')=$3 AND encode(j.prepared_sha256,'hex')=$4
+AND (c.state IN ('dispatching','uncertain') OR EXISTS(SELECT 1 FROM elitea_runtime.code_platform_toolkit_children relation JOIN elitea_runtime.execution_jobs child ON child.execution_id=relation.child_execution_id AND child.generation=relation.child_generation
+WHERE relation.effect_id=c.effect_id AND child.state IN ('PENDING','DISPATCHED','CLAIMED','RUNNING','SETTLING'))))`, execution, int64(generation), dispatch, fingerprint).Scan(&possible)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, domain.ErrUnavailable
+	}
+	return possible, nil
+}
+
 var _ storage.CodeCallEffectResolver = (*CodePlatformCallsRepository)(nil)
 var _ storage.CodeBrokerEffectReader = (*CodePlatformCallsRepository)(nil)
 var _ storage.CodePlatformJobRegistrar = (*CodePlatformCallsRepository)(nil)
+var _ storage.CodePlatformUnresolvedEffectReader = (*CodePlatformCallsRepository)(nil)

@@ -23,12 +23,15 @@ pub(crate) use elitea_agent_runtime::graph::http_action;
 mod code_remote;
 mod code_result;
 mod code_runtime;
+mod code_timing;
 pub(crate) mod code_trace;
 mod code_workspace;
 pub(crate) use code_remote::CodeRuntimeFactory;
 mod aggregate;
 #[cfg(test)]
 mod aggregate_tests;
+#[cfg(test)]
+mod code_platform_drive_tests;
 mod code_state;
 #[cfg(test)]
 mod code_state_tests;

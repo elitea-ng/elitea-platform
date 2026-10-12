@@ -20,7 +20,6 @@ import { t } from "@/shared/i18n";
 import { pickIdAndUuid } from "../ChatBox.helpers";
 import {
   NO_STREAM_TRANSPORT,
-  STREAM_STARTED,
   type StreamStartOutcome,
 } from "./useChatBoxHandlers.helpers";
 import {
@@ -175,7 +174,7 @@ export function useChatBoxSend(
     context: buildChatStreamContext(params),
     onAgentEvent: params.onAgentEvent,
   });
-  const { startDetailed, resume, resumeDetailed, regenerateDetailed } = transport;
+  const { startDetailed, resumeDetailed, regenerateDetailed } = transport;
   const requireTestTransport = useEditorTestTransport(params.editorTest, transport);
 
   const startStreamedExecution = useCallback(
@@ -253,18 +252,13 @@ export function useChatBoxSend(
       readonly body: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
       if (projectId === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
-      if (contract === 'agent.continue.static.v1') {
-        return requireTestTransport(await resumeDetailed({ projectId, conversationUuid, contract, body }));
-      }
-      const resumed = await resume({
-        projectId,
-        conversationUuid,
-        contract,
-        body,
-      });
-      return requireTestTransport(resumed ? STREAM_STARTED : NO_STREAM_TRANSPORT);
+      // Every contract keeps the route's own answer. Collapsing it to a boolean
+      // turned a 422 for a HITL, authorization or output-limit resume into
+      // "no transport", so the handlers never saw `rejected` and reported a
+      // missing chat connection instead of the server's reason.
+      return requireTestTransport(await resumeDetailed({ projectId, conversationUuid, contract, body }));
     },
-    [resume, resumeDetailed, projectId, requireTestTransport],
+    [resumeDetailed, projectId, requireTestTransport],
   );
 
   const regenerateStreamedExecution = useCallback(

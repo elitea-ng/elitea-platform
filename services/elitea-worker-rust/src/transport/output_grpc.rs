@@ -380,6 +380,74 @@ impl PreparedOutputSpool {
         self.replace_rebound_pending(expected, replacement)
     }
 
+    /// CAS one exact pending frame to the canonical failure terminal that a
+    /// bound refusal, cancellation or deadline decision selected.
+    ///
+    /// The replacement keeps the sequence. A frame still bound to the current
+    /// fence is replaced exactly; a frame spooled under a superseded claim is
+    /// rebound to the fresh fence, which must be strictly newer.
+    ///
+    /// # Errors
+    ///
+    /// Returns authorization failure unless exactly one byte-identical frame is
+    /// pending and the replacement is the exact canonical failure for it.
+    pub(crate) fn replace_pending_with_failure(
+        &mut self,
+        expected: &ExecutionOutputFrameV1,
+        replacement: &ExecutionOutputFrameV1,
+    ) -> Result<(), OutputGrpcError> {
+        self.require_single_expected(expected)?;
+        if expected.fence == replacement.fence
+            && expected.claim_handoff_watermark == replacement.claim_handoff_watermark
+        {
+            if !replacement.terminal
+                || !matches!(
+                    replacement.payload,
+                    Some(execution_output_frame_v1::Payload::RuntimeError(_))
+                )
+            {
+                return Err(recovery_binding_error(RecoveryKind::Rejected));
+            }
+            return self.replace_pending_exact(expected, replacement);
+        }
+        validate_recovery_rebind(expected, replacement, RecoveryKind::Rejected)?;
+        self.replace_rebound_pending(expected, replacement)
+    }
+
+    /// Set aside one exact pending progress frame spooled under a superseded
+    /// claim. Main can never accept it under the old fence, and the resumed run
+    /// publishes its own events from Main's watermark. The frame stays on disk
+    /// as an encrypted retired record and is never replayed.
+    ///
+    /// # Errors
+    ///
+    /// Returns authorization failure unless exactly one byte-identical
+    /// nonterminal frame is pending.
+    pub(crate) fn retire_superseded_progress(
+        &mut self,
+        expected: &ExecutionOutputFrameV1,
+    ) -> Result<(), OutputGrpcError> {
+        self.require_single_expected(expected)?;
+        if expected.terminal {
+            return Err(OutputGrpcError::Protocol(OutputSessionError::InvalidInput(
+                "a terminal frame cannot be retired as superseded progress",
+            )));
+        }
+        let sequence = NonZeroU64::new(expected.sequence).ok_or(OutputGrpcError::Protocol(
+            OutputSessionError::InvalidInput("the retired output sequence is malformed"),
+        ))?;
+        let fence = expected.fence.as_ref();
+        let tag = crate::spool::RetiredFrameTag {
+            claim_attempt: fence.map_or(0, |fence| fence.claim_attempt),
+            lease_epoch: fence.map_or(0, |fence| fence.lease_epoch),
+        };
+        self.spool
+            .retire_pending(sequence, &expected.encode_to_vec(), tag)?;
+        self.pending.clear();
+        self.reconciled = true;
+        Ok(())
+    }
+
     /// Rebind a validated agent terminal while preserving every result byte.
     pub(crate) fn replace_pending_agent_terminal_recovery(
         &mut self,
@@ -811,6 +879,12 @@ impl<S: OutputStreamIo> OutputSession<S> {
                 .await?;
         }
         self.state.commit_ack(plan);
+        if plan.retire_spool_through().is_some() && self.state.terminal_settled() {
+            // The terminal frame is acknowledged: the execution settled, and the
+            // digest of every frame it set aside is in the durable log.
+            self.with_spool(|spool| spool.discard_retired_records().map(|_| ()))
+                .await?;
+        }
         Ok(())
     }
 
@@ -989,6 +1063,9 @@ impl Drop for ProgressReplaySession {
 pub(crate) enum ProgressRejectionWinner {
     Cancelled,
     DeadlineExceeded,
+    /// Main refused the frame itself (`PROTOCOL_VIOLATION`). Settles as the
+    /// canonical internal failure; the frame is never replayed again.
+    FrameRefused,
 }
 
 /// Exact frame-bound Main decision authorizing a same-sequence failure.
@@ -1076,6 +1153,9 @@ fn progress_rejection_winner(error: &OutputGrpcError) -> Option<ProgressRejectio
         }
         OutputGrpcError::Protocol(OutputSessionError::DeadlineWon) => {
             Some(ProgressRejectionWinner::DeadlineExceeded)
+        }
+        OutputGrpcError::Protocol(OutputSessionError::FrameRefused) => {
+            Some(ProgressRejectionWinner::FrameRefused)
         }
         _ => None,
     }
@@ -1740,6 +1820,8 @@ enum RecoveryKind {
     Ambiguous,
     Deadline,
     Terminal,
+    /// A pending frame replaced by the failure a bound decision selected.
+    Rejected,
 }
 
 fn validate_recovery_rebind(
@@ -1809,6 +1891,17 @@ fn validate_recovery_rebind(
                 && error.retryable
                 && settlement.requested_outcome == ExecutionOutcomeV1::Failed as i32
         }
+        (
+            RecoveryKind::Rejected,
+            Some(execution_output_frame_v1::Payload::RuntimeError(error)),
+        ) => {
+            let outcome = settlement.requested_outcome;
+            (error.code == RuntimeErrorCodeV1::Cancelled as i32
+                && outcome == ExecutionOutcomeV1::Cancelled as i32)
+                || ((error.code == RuntimeErrorCodeV1::Internal as i32
+                    || error.code == RuntimeErrorCodeV1::DeadlineExceeded as i32)
+                    && outcome == ExecutionOutcomeV1::Failed as i32)
+        }
         _ => false,
     };
     if !valid_payload {
@@ -1823,6 +1916,7 @@ fn recovery_binding_error(kind: RecoveryKind) -> OutputGrpcError {
         RecoveryKind::Ambiguous => "the ambiguous recovery replacement is not exactly bound",
         RecoveryKind::Deadline => "the deadline recovery replacement is not exactly bound",
         RecoveryKind::Terminal => "the terminal recovery replacement is not exactly bound",
+        RecoveryKind::Rejected => "the rejected frame replacement is not exactly bound",
     };
     OutputGrpcError::Protocol(OutputSessionError::AuthorizationFailed(message))
 }
@@ -2135,6 +2229,12 @@ mod tests {
                 "The execution deadline was exceeded.",
                 true,
             ),
+            ProgressRejectionWinner::FrameRefused => (
+                DesiredExecutionStateV1::Unspecified,
+                RuntimeErrorCodeV1::ProtocolViolation,
+                "The output frame is malformed.",
+                false,
+            ),
         };
         rejection.desired_state = desired_state as i32;
         rejection.rejection = Some(RuntimeErrorV1 {
@@ -2166,17 +2266,18 @@ mod tests {
                 "Execution was cancelled.",
                 ExecutionOutcomeV1::Cancelled,
             ),
-            RecoveryKind::Ambiguous => (
-                RuntimeErrorCodeV1::Internal,
-                "The runtime operation failed.",
-                ExecutionOutcomeV1::Failed,
-            ),
+
             RecoveryKind::Deadline => (
                 RuntimeErrorCodeV1::DeadlineExceeded,
                 "The execution deadline was exceeded.",
                 ExecutionOutcomeV1::Failed,
             ),
             RecoveryKind::Terminal => return replacement,
+            RecoveryKind::Ambiguous | RecoveryKind::Rejected => (
+                RuntimeErrorCodeV1::Internal,
+                "The runtime operation failed.",
+                ExecutionOutcomeV1::Failed,
+            ),
         };
         replacement.payload = Some(execution_output_frame_v1::Payload::RuntimeError(
             RuntimeErrorV1 {
@@ -2488,6 +2589,70 @@ mod tests {
         let pending = spool(&root).pending().expect("preserved progress spool");
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].payload, progress.encode_to_vec());
+    }
+
+    /// CR-WK-P09-hyd: Main refuses a pending frame as malformed. The bound,
+    /// non-retryable refusal is replacement authority; an unbound or retryable
+    /// one never is.
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_protocol_violation_mints_a_frame_refused_rejection_and_nothing_else_does() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root-frame-refused-progress-replay");
+        let progress = frame(1, false);
+        let mut prepared =
+            PreparedOutputSpool::prepare(spool(&root), config()).expect("prepared spool");
+        prepared
+            .persist(progress.clone())
+            .expect("durable progress");
+        drop(prepared);
+        for (name, ack, minted) in [
+            (
+                "bound",
+                progress_winner(&progress, ProgressRejectionWinner::FrameRefused),
+                true,
+            ),
+            ("retryable", {
+                let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
+                ack.rejection.as_mut().unwrap().retryable = true;
+                ack
+            }, false),
+            ("foreign stream", {
+                let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
+                ack.stream_id = "another-stream".into();
+                ack
+            }, false),
+            ("with credit", {
+                let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
+                ack.credit_frames = 1;
+                ack
+            }, false),
+        ] {
+            let restored =
+                PreparedOutputSpool::prepare(spool(&root), config()).expect("restored progress");
+            let io = FakeStream {
+                acknowledgements: VecDeque::from([Ok(Some(bootstrap())), Ok(Some(ack))]),
+                writes: Vec::new(),
+                closed: false,
+            };
+            let mut replay = restored
+                .start_progress_replay_over(io, &progress)
+                .expect("owned replay");
+            let decision = replay.wait().await;
+            replay.close().await.expect("joined replay task");
+            match (minted, decision) {
+                (true, Ok(ProgressReplayDecision::Rejected(rejected))) => {
+                    let (sequence, sha, winner) = rejected.into_binding();
+                    assert_eq!(sequence, progress.sequence, "{name}");
+                    assert_eq!(sha, progress_frame_sha256(&progress), "{name}");
+                    assert!(winner == ProgressRejectionWinner::FrameRefused, "{name}");
+                }
+                (false, Err(OutputGrpcError::Protocol(_))) => {}
+                _ => panic!("{name}: unexpected replay decision"),
+            }
+            // The frame stays durable until a replacement is bound and accepted.
+            let pending = spool(&root).pending().expect("preserved progress spool");
+            assert_eq!(pending.len(), 1, "{name}");
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3129,6 +3294,84 @@ mod tests {
                 .value,
             expected.as_ref()
         );
+    }
+
+    fn retired_record_count(root: &Path) -> usize {
+        std::fs::read_dir(root)
+            .expect("spool root")
+            .map(|child| {
+                std::fs::read_dir(child.expect("child").path())
+                    .expect("child directory")
+                    .filter(|entry| {
+                        entry
+                            .as_ref()
+                            .expect("entry")
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".retired")
+                    })
+                    .count()
+            })
+            .sum()
+    }
+
+    fn spool_with_retired_records(root: &Path) -> EncryptedOutputSpool {
+        let mut spool = spool(root);
+        for attempt in 1..=2 {
+            let sequence = NonZeroU64::new(9).expect("sequence");
+            spool.put(sequence, b"superseded").expect("put");
+            spool
+                .retire_pending(
+                    sequence,
+                    b"superseded",
+                    crate::spool::RetiredFrameTag {
+                        claim_attempt: attempt,
+                        lease_epoch: 1,
+                    },
+                )
+                .expect("retire");
+        }
+        spool
+    }
+
+    /// The execution settles when its terminal frame is acknowledged: the
+    /// retired records of superseded claims go with it. A progress ACK keeps them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_acknowledged_terminal_discards_retired_records_and_progress_does_not() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
+        let progress = frame(1, false);
+        let io = FakeStream {
+            acknowledgements: VecDeque::from([Ok(Some(bootstrap())), Ok(Some(bound_ack(&progress)))]),
+            writes: Vec::new(),
+            closed: false,
+        };
+        let mut session = OutputSession::open(io, spool_with_retired_records(&root), config())
+            .await
+            .expect("session");
+        session.send(progress).await.expect("acknowledged progress");
+        assert_eq!(retired_record_count(&root), 2);
+        drop(session);
+
+        let root = temp.path().join("terminal-root");
+        let verified = verified_agent_command("signed_command_output_session");
+        let terminal = terminal_frame();
+        let io = FakeStream {
+            acknowledgements: VecDeque::from([Ok(Some(bootstrap())), Ok(Some(bound_ack(&terminal)))]),
+            writes: Vec::new(),
+            closed: false,
+        };
+        let settings = config();
+        let inner = OutputSession::open(io, spool_with_retired_records(&root), settings.clone())
+            .await
+            .expect("output session");
+        assert_eq!(retired_record_count(&root), 2);
+        let mut output = spawn_output_actor(inner, settings.max_frame_bytes);
+        output
+            .send_terminal(&verified, terminal)
+            .await
+            .expect("durably acknowledged terminal");
+        assert_eq!(retired_record_count(&root), 0);
     }
 
     #[tokio::test(flavor = "current_thread")]

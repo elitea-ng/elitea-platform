@@ -33,7 +33,7 @@ export interface ChatBoxConversationProp {
   readonly active?: ChatBoxActiveConversation;
   readonly isLoading?: boolean;
   /** Promote a newly persisted conversation into the page route and state. */
-  readonly onCreated?: ((conversation: { readonly id?: string | number; readonly uuid?: string }) => void) | undefined;
+  readonly onCreated?: ((conversation: { readonly id?: string | number; readonly uuid?: string; readonly activeParticipantId?: string }) => void) | undefined;
 }
 
 /** Flattens the `conversation` bundle back into the two values `ChatBox` reads (baseline: the separate `activeConversation`/`isLoadingConversation` props, bundled to stay under the §3.5 component-props budget once `ref` became a prop). */

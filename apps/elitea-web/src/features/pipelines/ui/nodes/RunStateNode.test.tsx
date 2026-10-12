@@ -32,6 +32,20 @@ describe('RunStateNode', () => {
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
   });
 
+  it('preserves Stop without a spinner for an actual recovery suspension', async () => {
+    const onStopRun = vi.fn();
+    const { container } = renderRunStateNode({ id: 'paused-run', onStopRun,
+      data: { status: 'Interrupt', label: 'Paused run', recoveryPaused: true } });
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    const stopIcon = container.querySelector('[aria-label="Stop run"] svg');
+    expect(stopIcon).toBeTruthy();
+    fireEvent.click(stopIcon as SVGElement);
+    expect(onStopRun).toHaveBeenCalledWith('paused-run');
+    fireEvent.click(screen.getByText('Paused run'));
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Stop/ })).toBeInTheDocument();
+  });
+
   it('shows no spinner for a completed run', () => {
     renderRunStateNode({ data: { status: 'Completed', label: 'Run #1' } });
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();

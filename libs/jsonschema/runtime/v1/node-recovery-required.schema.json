@@ -62,7 +62,8 @@
         "invalid_configuration",
         "invalid_input",
         "invalid_result",
-        "model_output_incomplete"
+        "model_output_incomplete",
+        "unknown"
       ]
     },
     "stop_reason": {
@@ -173,7 +174,7 @@
       }
     }
   },
-  "description": "Strict nonterminal receipt. Main and Worker additionally reject duplicate JSON keys, enforce UTF-8 byte bounds and exact unsigned integers.",
+  "description": "Strict nonterminal receipt. The unknown failure class is valid only with effect reconciliation. Main and Worker additionally reject duplicate JSON keys, enforce UTF-8 byte bounds and exact unsigned integers.",
   "allOf": [
     {
       "if": {
@@ -271,6 +272,11 @@
           },
           "stop_reason": {
             "const": "effect_reconciliation_required"
+          },
+          "failure_class": {
+            "not": {
+              "const": "unknown"
+            }
           }
         }
       }

@@ -26,7 +26,6 @@ const (
 type GRPCServerPolicy struct {
 	MaxConcurrentStreams  uint32
 	MaxConnections        int
-	MinClientPingInterval time.Duration
 	KeepaliveTime         time.Duration
 	KeepaliveTimeout      time.Duration
 	MaxConnectionIdle     time.Duration
@@ -163,7 +162,7 @@ func validateGRPCServerPolicy(policy GRPCServerPolicy) error {
 	if policy.MaxConcurrentStreams == 0 || policy.MaxConcurrentStreams > maxPrivateConcurrentStreams || policy.MaxConnections <= 0 || policy.MaxConnections > maxPrivateConnections {
 		return errors.New("stream or connection limit is invalid")
 	}
-	if policy.MinClientPingInterval < time.Second || policy.KeepaliveTime < time.Second || policy.KeepaliveTimeout < time.Second || policy.MaxConnectionIdle < time.Second || policy.MaxConnectionAge < time.Second || policy.MaxConnectionAgeGrace < time.Second {
+	if policy.KeepaliveTime < time.Second || policy.KeepaliveTimeout < time.Second || policy.MaxConnectionIdle < time.Second || policy.MaxConnectionAge < time.Second || policy.MaxConnectionAgeGrace < time.Second {
 		return errors.New("keepalive durations must be at least one second")
 	}
 	if policy.KeepaliveTimeout > policy.KeepaliveTime || policy.MaxConnectionIdle > policy.MaxConnectionAge || policy.MaxConnectionAgeGrace > policy.MaxConnectionAge {
@@ -177,10 +176,7 @@ func privateGRPCServerOptions(codec *StrictProtoCodec, serverTLS *tls.Config, po
 	return append(options,
 		grpc.Creds(credentials.NewTLS(serverTLS.Clone())),
 		grpc.MaxConcurrentStreams(policy.MaxConcurrentStreams),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime:             policy.MinClientPingInterval,
-			PermitWithoutStream: false,
-		}),
+		grpc.KeepaliveEnforcementPolicy(RuntimeKeepaliveEnforcementPolicy()),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle:     policy.MaxConnectionIdle,
 			MaxConnectionAge:      policy.MaxConnectionAge,

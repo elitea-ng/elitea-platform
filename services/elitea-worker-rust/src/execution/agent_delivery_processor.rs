@@ -285,14 +285,48 @@ where
                 .map_err(AgentDeliveryProcessError::OutputPreflight)?
             {
                 CheckpointPendingOutput::Progress(recovery) => {
-                    self.output
+                    use super::output_delivery::CheckpointProgressReplay;
+                    match self
+                        .output
                         .replay_checkpoint_progress(*recovery, self.replay.as_ref())
                         .await
-                        .map_err(AgentDeliveryProcessError::OutputPreflight)?;
-                    return Ok(AgentDeliveryProcessOutcome::retained(
-                        "agent_delivery.checkpoint_output_reclaim",
-                        true,
-                    ));
+                        .map_err(AgentDeliveryProcessError::OutputPreflight)?
+                    {
+                        CheckpointProgressReplay::Settled => {
+                            return Ok(AgentDeliveryProcessOutcome::retained(
+                                "agent_delivery.checkpoint_output_reclaim",
+                                true,
+                            ));
+                        }
+                        CheckpointProgressReplay::Rejected { recovery, failure } => {
+                            // Main refused this exact frame (a stop, the deadline,
+                            // or the frame itself). Retrying cannot change that:
+                            // settle the failure it selected, once, and retire.
+                            let terminal = self
+                                .output
+                                .settle_rejected_checkpoint_progress(
+                                    *recovery,
+                                    failure,
+                                    self.clock.now_unix_millis(),
+                                )
+                                .await
+                                .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+                            recover_accepted_terminal(
+                                self.control.clone(),
+                                self.retirer.as_ref(),
+                                self.replay.as_ref(),
+                                terminal,
+                                self.clock.clone(),
+                                self.preparation.lease_config(),
+                                self.terminal_recovery,
+                            )
+                            .await
+                            .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+                            return Ok(AgentDeliveryProcessOutcome::completed(
+                                "agent_delivery.rejected_progress_settled",
+                            ));
+                        }
+                    }
                 }
                 CheckpointPendingOutput::Terminal(terminal) => {
                     recover_accepted_terminal(
@@ -428,7 +462,7 @@ where
         }
         let Some(recovery) = self
             .output
-            .prepare_empty_recovery(recovery)
+            .prepare_empty_recovery(recovery, true)
             .await
             .map_err(AgentDeliveryProcessError::OutputPreflight)?
         else {

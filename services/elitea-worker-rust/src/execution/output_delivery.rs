@@ -179,6 +179,29 @@ impl AgentOutputRecoveryRequiredNoAck {
     }
 }
 
+/// How replaying a retained checkpoint progress frame ended.
+pub(crate) enum CheckpointProgressReplay {
+    /// Main acknowledged it, or the transport left it retained for a retry.
+    Settled,
+    /// Main refused this exact frame with a bound decision. The delivery goes
+    /// back to the caller so the failure it selected can be settled.
+    Rejected {
+        recovery: Box<super::agent_delivery::CheckpointAgentDelivery>,
+        failure: RuntimeFailureKind,
+    },
+}
+
+const fn rejection_failure(
+    winner: crate::transport::output_grpc::ProgressRejectionWinner,
+) -> RuntimeFailureKind {
+    use crate::transport::output_grpc::ProgressRejectionWinner as W;
+    match winner {
+        W::Cancelled => RuntimeFailureKind::Cancelled,
+        W::DeadlineExceeded => RuntimeFailureKind::DeadlineExceeded,
+        W::FrameRefused => RuntimeFailureKind::Internal,
+    }
+}
+
 pub(crate) enum CheckpointPendingOutput {
     Progress(Box<super::agent_delivery::CheckpointAgentDelivery>),
     Terminal(Box<AcceptedTerminalOutputRecovery>),
@@ -241,7 +264,18 @@ impl PreparedAgentOutput {
         let durable = frame.clone();
         let expected = frame.encode_to_vec();
         let prepared = tokio::task::spawn_blocking(move || {
-            prepared.persist(durable)?;
+            // A recovery claim may find one unaccepted nonterminal frame at the
+            // terminal's own sequence (a stop or an internal failure won over
+            // it). The canonical failure replaces that exact frame.
+            if let Some(pending) = prepared.pending_replay_frame()
+                && prepared.pending_frame_count() == 1
+                && !pending.terminal
+                && pending.sequence == durable.sequence
+            {
+                prepared.replace_pending_with_failure(&pending, &durable)?;
+            } else {
+                prepared.persist(durable)?;
+            }
             Ok::<_, OutputGrpcError>(prepared)
         })
         .await
@@ -2343,6 +2377,7 @@ impl AgentOutputPreflight {
     /// Returns a stable failure for a producer-policy mismatch, unsafe or
     /// corrupt spool, invalid durable frame shape, or blocking-task failure.
     /// No capacity, Begin, input, authorization, or command-bus effect occurs.
+    #[allow(clippy::too_many_lines, reason = "Keep the ordered spool admission checks together.")]
     pub async fn prepare(
         &self,
         fresh: FreshAgentDelivery,
@@ -2435,6 +2470,21 @@ impl AgentOutputPreflight {
                 },
             ));
         }
+        if fresh.superseded_progress(&frame).map_err(|_| {
+            AgentOutputPreflightError::InvalidDurableState(
+                "the pending agent output contract is malformed",
+            )
+        })? {
+            let sequence = frame.sequence;
+            retire_superseded_frame(&factory, prepared, frame).await?;
+            return Ok(AgentOutputPreflightOutcome::RecoveryRequiredNoAck(
+                AgentOutputRecoveryRequiredNoAck {
+                    execution_kind: fresh.execution_kind(),
+                    kind: AgentOutputRecoveryRequiredKind::ReconciledStaleProgress,
+                    sequence,
+                },
+            ));
+        }
         Err(AgentOutputPreflightError::InvalidDurableState(
             "the pending agent output does not match the accepted claim",
         ))
@@ -2472,6 +2522,14 @@ impl AgentOutputPreflight {
                     "the recovery output frame is malformed",
                 )
             })? {
+                if recovery.superseded_progress(&frame).map_err(|_| {
+                    AgentOutputPreflightError::InvalidDurableState(
+                        "the recovery output frame is malformed",
+                    )
+                })? {
+                    let prepared = retire_superseded_frame(&factory, prepared, frame).await?;
+                    return Ok(Some(PreparedAgentOutput { prepared, factory }));
+                }
                 return Ok(None);
             }
             let watermark = recovery.output_watermark();
@@ -2523,6 +2581,14 @@ impl AgentOutputPreflight {
                     "the recovery output frame is malformed",
                 )
             })? {
+                if recovery.superseded_progress(&frame).map_err(|_| {
+                    AgentOutputPreflightError::InvalidDurableState(
+                        "the recovery output frame is malformed",
+                    )
+                })? {
+                    let prepared = retire_superseded_frame(&factory, prepared, frame).await?;
+                    return Ok(Some(PreparedAgentOutput { prepared, factory }));
+                }
                 return Ok(None);
             }
             let watermark = recovery.output_watermark();
@@ -2613,7 +2679,7 @@ impl AgentOutputPreflight {
         &self,
         recovery: super::agent_delivery::CheckpointAgentDelivery,
         connector: &C,
-    ) -> Result<(), AgentOutputPreflightError> {
+    ) -> Result<CheckpointProgressReplay, AgentOutputPreflightError> {
         if !recovery.matches_output_transport(
             &self.policy.output_config.workload_session_id,
             &self.policy.output_config.producer_id,
@@ -2628,7 +2694,7 @@ impl AgentOutputPreflight {
         };
         let prepared = factory.reopen().await?;
         let Some(frame) = prepared.pending_replay_frame() else {
-            return Ok(());
+            return Ok(CheckpointProgressReplay::Settled);
         };
         if prepared.pending_frame_count() != 1 {
             return Err(AgentOutputPreflightError::InvalidDurableState(
@@ -2640,7 +2706,7 @@ impl AgentOutputPreflight {
         })?;
         if kind != ValidatedAgentOutputFrameKind::Progress {
             // Terminal bytes require terminal replay and settlement ownership.
-            return Ok(());
+            return Ok(CheckpointProgressReplay::Settled);
         }
         let mut replay = connector
             .start_progress_replay(prepared, &frame)
@@ -2650,9 +2716,81 @@ impl AgentOutputPreflight {
         // Close after every observed outcome, including rejection and error.
         // On uncertainty the encrypted spool remains the replay authority.
         let close = replay.close().await;
-        decision.map_err(AgentOutputPreflightError::Output)?;
+        let decision = decision.map_err(AgentOutputPreflightError::Output)?;
         close.map_err(AgentOutputPreflightError::Output)?;
-        Ok(())
+        match decision {
+            ProgressReplayDecision::Acknowledged(_) => Ok(CheckpointProgressReplay::Settled),
+            ProgressReplayDecision::Rejected(rejected) => {
+                let (_, _, winner) = rejected.into_binding();
+                Ok(CheckpointProgressReplay::Rejected {
+                    recovery: Box::new(recovery),
+                    failure: rejection_failure(winner),
+                })
+            }
+        }
+    }
+
+    /// Replace the one retained, Main-refused progress frame with the canonical
+    /// failure its decision selected, and hand back the exact terminal to replay
+    /// and settle. The frame is replaced at its own sequence, so nothing resends
+    /// it; the replacement is bound to the current claim.
+    pub(crate) async fn settle_rejected_checkpoint_progress(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+        failure: RuntimeFailureKind,
+        occurred_at_unix_millis: i64,
+    ) -> Result<AcceptedTerminalOutputRecovery, AgentOutputPreflightError> {
+        let factory = AgentOutputSpoolFactory {
+            policy: self.policy.clone(),
+            binding: Arc::new(recovery.spool_identity()),
+        };
+        let mut prepared = factory.reopen().await?;
+        let Some(frame) = prepared.pending_replay_frame() else {
+            return Err(AgentOutputPreflightError::InvalidDurableState(
+                "the rejected progress frame is not durably recoverable",
+            ));
+        };
+        if prepared.pending_frame_count() != 1 {
+            return Err(AgentOutputPreflightError::InvalidDurableState(
+                "multiple pending recovery frames",
+            ));
+        }
+        let replacement = recovery
+            .failure_replacement(&frame, failure, occurred_at_unix_millis)
+            .map_err(|_| {
+                AgentOutputPreflightError::InvalidDurableState(
+                    "the rejected progress has no failure replacement authority",
+                )
+            })?;
+        let expected = frame.clone();
+        let rebound = replacement.clone();
+        prepared = tokio::task::spawn_blocking(move || {
+            prepared.replace_pending_with_failure(&expected, &rebound)?;
+            Ok::<_, OutputGrpcError>(prepared)
+        })
+        .await
+        .map_err(|_| {
+            AgentOutputPreflightError::Unavailable("the failure replacement did not complete")
+        })?
+        .map_err(AgentOutputPreflightError::Output)?;
+        tracing::error!(
+            event = "agent_output_rejected_frame_replaced",
+            sequence = frame.sequence,
+            frame_sha256 = %crate::sandbox::code_recovery::hex(
+                &crate::transport::output_grpc::progress_frame_sha256(&frame)
+            ),
+            "a progress frame Main refused was replaced by its canonical failure and is not resent"
+        );
+        let encoded = replacement.encode_to_vec();
+        let (delivery, verified, claim) = recovery.into_terminal_parts();
+        Ok(AcceptedTerminalOutputRecovery {
+            delivery,
+            verified,
+            claim,
+            spool: prepared,
+            frame: replacement,
+            reopener: factory.seal_terminal(encoded),
+        })
     }
 
     /// Open the exact recovery spool without granting fresh execution.
@@ -2660,9 +2798,16 @@ impl AgentOutputPreflight {
     /// `None` means durable output is already pending and needs a separate
     /// exact-frame recovery path. Only an empty spool may receive the bounded
     /// canonical failure used to reconcile a stale ambiguous invocation.
+    ///
+    /// With `settle_pending`, one unaccepted nonterminal frame at the sequence
+    /// right after Main's watermark does not block the recovery. The terminal
+    /// the caller binds replaces that exact frame, so a stop or an internal
+    /// failure settles instead of waiting behind a frame nothing can deliver.
+    /// A frame Main already covers is reconciled away first.
     pub(crate) async fn prepare_empty_recovery(
         &self,
         recovery: OutputRecoveryAgentDelivery,
+        settle_pending: bool,
     ) -> Result<Option<EmptyAgentOutputRecovery>, AgentOutputPreflightError> {
         if !recovery.matches_output_transport(
             &self.policy.output_config.workload_session_id,
@@ -2678,12 +2823,37 @@ impl AgentOutputPreflight {
             binding,
         };
         tracing::info!(event = "agent_output_recovery_spool_open_started");
-        let prepared = factory.reopen().await?;
+        let mut prepared = factory.reopen().await?;
         tracing::info!(
             event = "agent_output_recovery_spool_open_completed",
             pending_frame_count = prepared.pending_frame_count(),
         );
-        if prepared.pending_frame_count() != 0 {
+        if settle_pending
+            && prepared.pending_frame_count() == 1
+            && let Some(frame) = prepared.pending_replay_frame()
+            && !frame.terminal
+        {
+            let watermark = recovery.claim_handoff_watermark();
+            if frame.sequence <= watermark {
+                tokio::task::spawn_blocking(move || {
+                    prepared.reconcile_pending_through(watermark)?;
+                    Ok::<_, OutputGrpcError>(())
+                })
+                .await
+                .map_err(|_| {
+                    AgentOutputPreflightError::Unavailable(
+                        "the output recovery reconciliation did not complete",
+                    )
+                })?
+                .map_err(AgentOutputPreflightError::Output)?;
+                prepared = factory.reopen().await?;
+            } else if Some(frame.sequence) != watermark.checked_add(1) {
+                return Ok(None);
+            }
+        }
+        if prepared.pending_frame_count() > 1
+            || (prepared.pending_frame_count() == 1 && !settle_pending)
+        {
             return Ok(None);
         }
         Ok(Some(EmptyAgentOutputRecovery {
@@ -2691,6 +2861,39 @@ impl AgentOutputPreflight {
             output: PreparedAgentOutput { prepared, factory },
         }))
     }
+}
+
+/// Set a superseded claim's unaccepted progress frame aside and reopen the
+/// spool empty. Main refuses that frame under the old fence, so it is retired
+/// as an encrypted record (never replayed, never silently dropped) and logged
+/// with its digest. The resumed run publishes its own events from Main's
+/// watermark; the claim route, not this frame, decides how the run ends.
+async fn retire_superseded_frame(
+    factory: &AgentOutputSpoolFactory,
+    prepared: PreparedOutputSpool,
+    frame: ExecutionOutputFrameV1,
+) -> Result<PreparedOutputSpool, AgentOutputPreflightError> {
+    let sequence = frame.sequence;
+    let digest = crate::transport::output_grpc::progress_frame_sha256(&frame);
+    let superseded_claim_attempt = frame.fence.as_ref().map_or(0, |fence| fence.claim_attempt);
+    let mut prepared = prepared;
+    tokio::task::spawn_blocking(move || {
+        prepared.retire_superseded_progress(&frame)?;
+        Ok::<_, OutputGrpcError>(())
+    })
+    .await
+    .map_err(|_| {
+        AgentOutputPreflightError::Unavailable("the superseded frame retirement did not complete")
+    })?
+    .map_err(AgentOutputPreflightError::Output)?;
+    tracing::error!(
+        event = "agent_output_superseded_frame_retired",
+        sequence,
+        frame_sha256 = %crate::sandbox::code_recovery::hex(&digest),
+        superseded_claim_attempt,
+        "an unaccepted progress frame from a superseded claim was retired and is not replayed"
+    );
+    factory.reopen().await
 }
 
 async fn open_prepared_spool(
