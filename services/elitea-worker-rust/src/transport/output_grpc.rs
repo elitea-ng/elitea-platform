@@ -436,8 +436,13 @@ impl PreparedOutputSpool {
         let sequence = NonZeroU64::new(expected.sequence).ok_or(OutputGrpcError::Protocol(
             OutputSessionError::InvalidInput("the retired output sequence is malformed"),
         ))?;
+        let fence = expected.fence.as_ref();
+        let tag = crate::spool::RetiredFrameTag {
+            claim_attempt: fence.map_or(0, |fence| fence.claim_attempt),
+            lease_epoch: fence.map_or(0, |fence| fence.lease_epoch),
+        };
         self.spool
-            .retire_pending(sequence, &expected.encode_to_vec())?;
+            .retire_pending(sequence, &expected.encode_to_vec(), tag)?;
         self.pending.clear();
         self.reconciled = true;
         Ok(())
@@ -874,6 +879,12 @@ impl<S: OutputStreamIo> OutputSession<S> {
                 .await?;
         }
         self.state.commit_ack(plan);
+        if plan.retire_spool_through().is_some() && self.state.terminal_settled() {
+            // The terminal frame is acknowledged: the execution settled, and the
+            // digest of every frame it set aside is in the durable log.
+            self.with_spool(|spool| spool.discard_retired_records().map(|_| ()))
+                .await?;
+        }
         Ok(())
     }
 
@@ -3283,6 +3294,84 @@ mod tests {
                 .value,
             expected.as_ref()
         );
+    }
+
+    fn retired_record_count(root: &Path) -> usize {
+        std::fs::read_dir(root)
+            .expect("spool root")
+            .map(|child| {
+                std::fs::read_dir(child.expect("child").path())
+                    .expect("child directory")
+                    .filter(|entry| {
+                        entry
+                            .as_ref()
+                            .expect("entry")
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".retired")
+                    })
+                    .count()
+            })
+            .sum()
+    }
+
+    fn spool_with_retired_records(root: &Path) -> EncryptedOutputSpool {
+        let mut spool = spool(root);
+        for attempt in 1..=2 {
+            let sequence = NonZeroU64::new(9).expect("sequence");
+            spool.put(sequence, b"superseded").expect("put");
+            spool
+                .retire_pending(
+                    sequence,
+                    b"superseded",
+                    crate::spool::RetiredFrameTag {
+                        claim_attempt: attempt,
+                        lease_epoch: 1,
+                    },
+                )
+                .expect("retire");
+        }
+        spool
+    }
+
+    /// The execution settles when its terminal frame is acknowledged: the
+    /// retired records of superseded claims go with it. A progress ACK keeps them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_acknowledged_terminal_discards_retired_records_and_progress_does_not() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
+        let progress = frame(1, false);
+        let io = FakeStream {
+            acknowledgements: VecDeque::from([Ok(Some(bootstrap())), Ok(Some(bound_ack(&progress)))]),
+            writes: Vec::new(),
+            closed: false,
+        };
+        let mut session = OutputSession::open(io, spool_with_retired_records(&root), config())
+            .await
+            .expect("session");
+        session.send(progress).await.expect("acknowledged progress");
+        assert_eq!(retired_record_count(&root), 2);
+        drop(session);
+
+        let root = temp.path().join("terminal-root");
+        let verified = verified_agent_command("signed_command_output_session");
+        let terminal = terminal_frame();
+        let io = FakeStream {
+            acknowledgements: VecDeque::from([Ok(Some(bootstrap())), Ok(Some(bound_ack(&terminal)))]),
+            writes: Vec::new(),
+            closed: false,
+        };
+        let settings = config();
+        let inner = OutputSession::open(io, spool_with_retired_records(&root), settings.clone())
+            .await
+            .expect("output session");
+        assert_eq!(retired_record_count(&root), 2);
+        let mut output = spawn_output_actor(inner, settings.max_frame_bytes);
+        output
+            .send_terminal(&verified, terminal)
+            .await
+            .expect("durably acknowledged terminal");
+        assert_eq!(retired_record_count(&root), 0);
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -459,6 +459,12 @@ impl OutputSessionState {
         self.acknowledged_sequence
     }
 
+    /// The terminal frame was admitted and Main acknowledged every admitted
+    /// frame through it: nothing of this execution's output remains pending.
+    pub(crate) fn terminal_settled(&self) -> bool {
+        self.terminal_admitted && self.acknowledged_sequence >= self.highest_admitted_sequence
+    }
+
     pub(crate) fn validate_replacement_binding(
         &self,
         frame: &ExecutionOutputFrameV1,
