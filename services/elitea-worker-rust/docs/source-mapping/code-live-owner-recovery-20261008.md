@@ -575,3 +575,24 @@ Source: the PR #1084 performance review (findings F1, F2, F3, F4, F8, F9). Costs
 Deliberately not done (follow-ups in the review): byte projection of the access query (F1.2), long-poll pump and no-op write skip (F2.2, F2.3), reattach-to-owner and intent reuse (F4.2, F4.3), batched hydration (F5), retention (F6), single stored result (F7).
 
 Test counts: Worker lib `cargo test --offline --locked --all-features --lib` 1778 passed, 0 failed, 74 ignored (run with the PostgreSQL environment, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`). The new tests are 9 Rust unit tests and 1 Go test, plus one added assertion block in the ignored real-PostgreSQL journal test. Main `./internal/...` passes in `golang:1.26.9`.
+
+## Re-verification of #1258 and #1199 on the production configuration (2026-10-12)
+
+#1258 (session-write deadlock) and #1199 (nested child ids across Worker processes) were browser-proven on their own
+stacks, which ran without Main Code owner recovery. That configuration hid Part J. Both journeys were re-run on
+`elitea-code1084` with the production configuration (Worker `agent_node_recovery` and
+`agent_model_checkpoint_recovery` true, Main owner recovery and code consumers on, Code sandbox with Python
+preparation) and the final images built from `9bf82d60d` (this branch merged with main `719d12178`: Main
+`sha256:811f516d53d9…`, Worker `sha256:4bfaea5b9720…`, Supervisor `sha256:efacee7226c2…`, Web `sha256:f18101e4ef63…`).
+Fixture: pipeline 138 / agent 137 from the real-model dump (the #1258 and #1199 fixture).
+
+| Journey | Chat | Executions (message → answer 1 → answer 2) | Result |
+|---|---|---|---|
+| J1, no restart | 934 | `feaf9024…`, `bac040bd…`, `48f3c39c…` | all SUCCEEDED, attempt 1; final OVERRIDE/DEFAULT sections |
+| J2, Worker restart while card 1 pending + reload | 933 | `95069a39…`, `e7a0af51…`, `e42593fb…` (images 3c5c88096/e9cdbaa1f) | all SUCCEEDED, attempt 1 |
+| J3, Worker restart while card 2 pending + reload (the #1258 incident step) | 935 | `bf156977…`, `25ccaf72…`, `58ba66f9…` | all SUCCEEDED, attempt 1; final sections |
+
+After reload each chat shows one final answer with both sections and no card. Server side over the window from
+15:28:37Z: 0 agentstate backends `idle in transaction`; Worker 0 `lock_not_available`, `storage_unavailable`,
+`driven_task_failed` or panic lines, 0 ERROR lines, 0 `too_many_pings`/GOAWAY; Main 0 `current agent continuation
+failed`.
