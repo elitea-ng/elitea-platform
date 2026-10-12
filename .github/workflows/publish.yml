@@ -288,6 +288,13 @@ jobs:
           - name: elitea-vector
             context: .
             dockerfile: ./services/elitea-vector/Containerfile
+          # elitea-doc-extractor (ADR-0030 I1): the Rust worker's document
+          # extraction sidecar. Repo ROOT context for the same reason: the
+          # Containerfile COPYs services/elitea-doc-extractor, libs/proto and
+          # libs/rust from there.
+          - name: elitea-doc-extractor
+            context: .
+            dockerfile: ./services/elitea-doc-extractor/Containerfile
         platform:
           - runner: ubuntu-latest
             arch: linux/amd64
@@ -492,6 +499,11 @@ jobs:
           - name: elitea-vector
             expect_type: rustbinary
             blocking: true
+          # elitea-doc-extractor (ADR-0030 I1): the same distroless base and
+          # cargo-auditable build, so `rustbinary` and blocking too.
+          - name: elitea-doc-extractor
+            expect_type: rustbinary
+            blocking: true
 
     steps:
       - name: Checkout
@@ -644,6 +656,11 @@ jobs:
           # cargo-auditable build as the engines, so `rustbinary` and
           # blocking for the same reason.
           - name: elitea-vector
+            expect_type: rustbinary
+            blocking: true
+          # elitea-doc-extractor (ADR-0030 I1): the same distroless base and
+          # cargo-auditable build, so `rustbinary` and blocking too.
+          - name: elitea-doc-extractor
             expect_type: rustbinary
             blocking: true
 
@@ -1006,7 +1023,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

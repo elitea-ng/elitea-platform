@@ -304,8 +304,8 @@ impl ProductionTransportBundle {
         };
         let platform = Arc::new(PlatformClient::new(runtime_context));
         let index_runtime = match deployment.vector_target.as_deref() {
-            Some(target) => Some(Arc::new(
-                crate::indexing::IndexIngestRuntime::new(
+            Some(target) => {
+                let mut runtime = crate::indexing::IndexIngestRuntime::new(
                     target,
                     trust.ca_pem(),
                     trust.identity_pem(),
@@ -319,8 +319,22 @@ impl ProductionTransportBundle {
                 .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
                 // The `remove_index` tool asks Main over the same control
                 // plane the claim came from (ADR-0030 I1).
-                .with_removal_control(Arc::clone(&control) as Arc<dyn IndexRemovalControl>),
-            )),
+                .with_removal_control(Arc::clone(&control) as Arc<dyn IndexRemovalControl>);
+                // PDF and Office documents go to the extraction sidecar when
+                // the deployment names its socket; the dial is lazy, so a
+                // sidecar that is still starting costs nothing here.
+                if let Some(socket) = deployment.extractor_socket.as_deref() {
+                    let extractor =
+                        crate::transport::extractor_client::ExtractorClient::connect_lazy(socket)
+                            .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+                    tracing::info!(
+                        event = "index_extractor_configured",
+                        socket = %extractor.socket().display()
+                    );
+                    runtime = runtime.with_extractor(Arc::new(extractor));
+                }
+                Some(Arc::new(runtime))
+            }
             None => None,
         };
         Ok(Self {
@@ -633,6 +647,7 @@ mod tests {
             sandbox_runtimes: Vec::new(),
             vector_target: None,
             index_egress_allowlist: None,
+            extractor_socket: None,
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),

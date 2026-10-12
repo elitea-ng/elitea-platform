@@ -218,6 +218,7 @@ async fn harness_failing(
             embedding_retry_backoff: Duration::from_millis(1),
             ..IndexRunLimits::default()
         },
+        extractor: None,
     };
     let token = VectorClaimToken::from_receipt(Some(VectorClaimTokenV1 {
         bearer: TOKEN.to_owned(),
@@ -1424,4 +1425,388 @@ fn a_failure_summary_names_the_index_and_is_bounded() {
     assert_eq!(summary.indexed_documents, 0);
     assert_eq!(summary.total_documents, None);
     assert!(!summary.whole_index_record);
+}
+
+// ── the extraction sidecar ──────────────────────────────────────────────────
+
+/// A scripted `elitea.extract.v1` server over a REAL Unix socket, standing
+/// in for elitea-doc-extractor. The document's key decides the answer:
+/// `skip-<reason>.<ext>` is that skip, `crash.<ext>` stops the server with
+/// the call in flight, anything else is text. Every header it read is
+/// recorded with the bytes that followed.
+mod fake_extractor {
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    use tokio::sync::Notify;
+    use tonic::{Request, Response, Status, Streaming};
+
+    use crate::protocol::extract::document_extract_service_server::{
+        DocumentExtractService, DocumentExtractServiceServer,
+    };
+    use crate::protocol::extract::{
+        CapabilitiesRequest, CapabilitiesResponse, ExtractRequest, ExtractResponse, ExtractSkip,
+        ExtractedText, SkipReason, extract_request, extract_response,
+    };
+
+    pub(super) const TEXT: &str = "Refunds within thirty days.\n\nExchanges within sixty days.\n";
+
+    /// (filename, content type, declared length, bytes received, input cap).
+    pub(super) type Seen = (String, String, u64, usize, u64);
+
+    #[derive(Default)]
+    pub(super) struct Fake {
+        pub(super) seen: Mutex<Vec<Seen>>,
+        crash: Notify,
+    }
+
+    #[tonic::async_trait]
+    impl DocumentExtractService for Fake {
+        async fn extract(
+            &self,
+            request: Request<Streaming<ExtractRequest>>,
+        ) -> Result<Response<ExtractResponse>, Status> {
+            let mut stream = request.into_inner();
+            let Some(ExtractRequest {
+                message: Some(extract_request::Message::Header(header)),
+            }) = stream.message().await?
+            else {
+                return Err(Status::invalid_argument("header first"));
+            };
+            let mut received = 0usize;
+            while let Some(message) = stream.message().await? {
+                match message.message {
+                    Some(extract_request::Message::Chunk(chunk)) => received += chunk.len(),
+                    _ => return Err(Status::invalid_argument("chunks after the header")),
+                }
+            }
+            self.seen.lock().expect("lock").push((
+                header.filename.clone(),
+                header.content_type.clone(),
+                header.content_length,
+                received,
+                header.limits.map_or(0, |limits| limits.max_input_bytes),
+            ));
+            let stem = header
+                .filename
+                .rsplit('/')
+                .next()
+                .and_then(|name| name.split('.').next())
+                .unwrap_or_default()
+                .to_owned();
+            if stem == "crash" {
+                self.crash.notify_one();
+                std::future::pending::<()>().await;
+            }
+            let outcome = match stem.strip_prefix("skip-") {
+                Some(reason) => {
+                    let reason = match reason {
+                        "too_large" => SkipReason::TooLarge,
+                        "too_many_pages" => SkipReason::TooManyPages,
+                        "encrypted" => SkipReason::Encrypted,
+                        "unsupported" => SkipReason::Unsupported,
+                        "corrupt" => SkipReason::Corrupt,
+                        "timeout" => SkipReason::Timeout,
+                        "output_too_large" => SkipReason::OutputTooLarge,
+                        "empty" => SkipReason::Empty,
+                        other => panic!("unknown scripted reason {other}"),
+                    };
+                    extract_response::Outcome::Skip(ExtractSkip {
+                        reason: reason as i32,
+                        detail: format!("scripted {reason:?}"),
+                    })
+                }
+                None => extract_response::Outcome::Text(ExtractedText {
+                    text: TEXT.to_owned(),
+                    extractor: "xberg".to_owned(),
+                }),
+            };
+            Ok(Response::new(ExtractResponse {
+                outcome: Some(outcome),
+            }))
+        }
+
+        async fn capabilities(
+            &self,
+            _request: Request<CapabilitiesRequest>,
+        ) -> Result<Response<CapabilitiesResponse>, Status> {
+            Ok(Response::new(CapabilitiesResponse::default()))
+        }
+    }
+
+    /// Serve a fake at `socket`, on a runtime of its own. That runtime is
+    /// SHUT DOWN when a `crash` document arrives, which ends the accept loop
+    /// AND every connection task (tonic spawns one per connection, so
+    /// aborting the server task alone would leave the connections alive):
+    /// the client's call fails with the connection, as a crashed sidecar's
+    /// would.
+    pub(super) fn serve(socket: &Path) -> Arc<Fake> {
+        let fake = Arc::new(Fake::default());
+        let listener = bind(socket);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("fake runtime");
+        let service = DocumentExtractServiceServer::from_arc(Arc::clone(&fake));
+        runtime.spawn(async move {
+            let listener = tokio::net::UnixListener::from_std(listener).expect("listener");
+            let _ = tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::UnixListenerStream::new(listener))
+                .await;
+        });
+        let crashing = Arc::clone(&fake);
+        tokio::spawn(async move {
+            crashing.crash.notified().await;
+            runtime.shutdown_background();
+        });
+        fake
+    }
+
+    /// What `elitea_engine_sidecar::bind` does; the worker does not link
+    /// that crate. A std listener, handed to the fake's own runtime.
+    fn bind(socket: &Path) -> std::os::unix::net::UnixListener {
+        if let Some(parent) = socket.parent() {
+            std::fs::create_dir_all(parent).expect("socket dir");
+        }
+        let _ = std::fs::remove_file(socket);
+        let listener = std::os::unix::net::UnixListener::bind(socket).expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        listener
+    }
+}
+
+fn socket_path(name: &str) -> std::path::PathBuf {
+    // Short: macOS caps a socket path at 104 bytes.
+    std::env::temp_dir().join(format!("wx-{}-{name}.sock", std::process::id()))
+}
+
+fn with_extractor(mut harness: Harness, socket: &std::path::Path) -> Harness {
+    let client = crate::transport::extractor_client::ExtractorClient::connect_lazy(socket)
+        .expect("client")
+        .with_call_timeout(Duration::from_secs(5));
+    harness.runtime.extractor = Some(Arc::new(client));
+    harness
+}
+
+/// A document whose bytes are not text: what a connector fetched for a PDF
+/// or an Office file. The fake extractor does not read them; the pipeline
+/// must not try to either.
+fn binary_document(key: &str, bytes: &[u8]) -> Document {
+    let mut document = document(key, "v1", "");
+    document.reference.size = bytes.len() as u64;
+    document.bytes = bytes.to_vec();
+    document
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn documents_go_to_the_extractor_and_are_indexed() {
+    let socket = socket_path("ok");
+    let fake = fake_extractor::serve(&socket);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let pdf = vec![0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0xff, 0xfe];
+    // Larger than one streamed chunk (256 KiB): the bytes arrive whole.
+    #[allow(clippy::cast_possible_truncation, reason = "a byte pattern")]
+    let pptx: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("docs/policy.pdf", &pdf),
+            binary_document("decks/overview.pptx", &pptx),
+            document("README.md", "v1", "# Title\n\nSome words.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_documents, 3);
+    assert!(summary.skipped.is_empty(), "{:?}", summary.skipped);
+    let mut seen = fake.seen.lock().expect("lock").clone();
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec![
+            (
+                "decks/overview.pptx".to_owned(),
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    .to_owned(),
+                pptx.len() as u64,
+                pptx.len(),
+                IndexRunLimits::default().max_document_bytes,
+            ),
+            (
+                "docs/policy.pdf".to_owned(),
+                "application/pdf".to_owned(),
+                pdf.len() as u64,
+                pdf.len(),
+                IndexRunLimits::default().max_document_bytes,
+            ),
+        ],
+        "the two documents, whole, with the run's document cap; README.md stays local"
+    );
+    // The sidecar's text is what was chunked and written.
+    let points = stored(&harness).await;
+    assert!(points.iter().any(|p| p.document_key == "docs/policy.pdf"));
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extractor_skip_reasons_become_summary_labels() {
+    let socket = socket_path("skips");
+    let _fake = fake_extractor::serve(&socket);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("skip-encrypted.pdf", b"x"),
+            binary_document("skip-too_many_pages.pdf", b"x"),
+            binary_document("skip-corrupt.docx", b"x"),
+            binary_document("skip-too_large.pdf", b"x"),
+            binary_document("skip-output_too_large.pdf", b"x"),
+            binary_document("skip-timeout.pdf", b"x"),
+            binary_document("skip-empty.xlsx", b"x"),
+            binary_document("skip-unsupported.pdf", b"x"),
+            document("kept.md", "v1", "# Kept\n\nIndexed as usual.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1);
+    let mut skipped: Vec<(&str, u64)> = summary
+        .skipped
+        .iter()
+        .map(|(k, v)| (k.as_str(), *v))
+        .collect();
+    skipped.sort_unstable();
+    assert_eq!(
+        skipped,
+        vec![
+            ("empty", 1),
+            ("encrypted", 1),
+            ("extract_timeout", 1),
+            ("too_large", 2),
+            ("too_many_pages", 1),
+            ("unreadable", 1),
+            ("unsupported_type", 1),
+        ]
+    );
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_extractor_crash_is_one_skipped_document_and_the_run_goes_on() {
+    let socket = socket_path("crash");
+    let _crashing = fake_extractor::serve(&socket);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("crash.pdf", b"x"),
+            document("kept.md", "v1", "# Kept\n\nIndexed as usual.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&1),
+        "{summary:?}"
+    );
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnected_extractor_serves_the_documents_a_crash_skipped() {
+    let socket = socket_path("reconnect");
+    let _crashing = fake_extractor::serve(&socket);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let summary = run(
+        &harness,
+        vec![binary_document("crash.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&1),
+        "{summary:?}"
+    );
+    // The sidecar is restarted on the same socket (a new container, the
+    // same shared directory): the SAME client reaches it without any
+    // reconfiguration, and a document is indexed again.
+    let restarted = fake_extractor::serve(&socket);
+    let summary = run(
+        &harness,
+        vec![binary_document("policy.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert!(summary.skipped.is_empty(), "{summary:?}");
+    assert_eq!(restarted.seen.lock().expect("lock").len(), 1);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_an_extractor_a_document_is_unsupported_and_without_a_socket_extract_failed() {
+    // No sidecar configured: the pre-sidecar behaviour, byte for byte.
+    let harness = harness(4, None).await;
+    let summary = run(
+        &harness,
+        vec![binary_document("policy.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.skipped.get("unsupported_type"),
+        Some(&1),
+        "{summary:?}"
+    );
+    // A sidecar configured but not running (nothing listens at the path):
+    // the document is skipped `extract_failed`, the run goes on.
+    let socket = socket_path("absent");
+    let _ = std::fs::remove_file(&socket);
+    let harness = with_extractor(harness, &socket);
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("policy.pdf", b"x"),
+            document("kept.md", "v1", "# Kept\n\nIndexed as usual.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&1),
+        "{summary:?}"
+    );
 }

@@ -79,6 +79,10 @@ services:
       - ./runtime/worker-runtime.rust.json:/run/elitea/runtime.json:ro
       - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
       - standalone_mcp_mock_trust:/run/elitea-mcp-trust:ro
+      # The document extractor's socket (worker-runtime.rust.json
+      # `extractor_socket`): the directory is shared with the sidecar below
+      # and nothing else mounts it.
+      - standalone_doc_extractor_sock:/run/elitea-extract
     depends_on:
       elitea-agentstate-migrate:
         condition: service_completed_successfully
@@ -87,6 +91,11 @@ services:
       # The index runs' vector store (worker-runtime.rust.json `vector_target`).
       elitea-vector:
         condition: service_healthy
+      # Not `service_healthy`: the worker dials the socket lazily, per
+      # document, and a sidecar that is still starting costs one document
+      # skipped `extract_failed`, not a failed start.
+      elitea-doc-extractor:
+        condition: service_started
       # The bundle SSL_CERT_FILE names must exist before the worker's first MCP
       # connection. `rustls-native-certs` reads it lazily, per client build, so
       # a late file would only break the runs that raced it — the worst kind of
@@ -95,3 +104,51 @@ services:
         condition: service_completed_successfully
       mcp-mock:
         condition: service_healthy
+
+  # ── The document extraction sidecar (ADR-0030 I1) ─────────────────────────
+  # PDF and Office documents an index run fetched are read HERE, not in the
+  # worker: the worker's Cargo.lock cannot hold the PDF backend (its kube
+  # client caps smallvec below the backend's floor), and a parser of untrusted
+  # documents belongs behind a process boundary anyway — a crash or an OOM kill
+  # here is one document skipped `extract_failed`, never a dead worker.
+  #
+  # gRPC over a Unix socket in the shared volume; no port, no TLS, no identity,
+  # and NO NETWORK: `network_mode: none` leaves the container with loopback
+  # only, which is exactly what a process that reads untrusted bytes and must
+  # send nothing anywhere should have. The memory limit is what the extractor
+  # reads from its cgroup to lower its input cap (README.md, "Memory").
+  elitea-doc-extractor:
+    image: ghcr.io/elitea-ng/elitea-doc-extractor:standalone
+    build:
+      context: ..
+      dockerfile: services/elitea-doc-extractor/Containerfile
+    # The image's own ENTRYPOINT/CMD: `elitea-doc-extractor serve`.
+    network_mode: none
+    mem_limit: 2g
+    pids_limit: 128
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ELITEA_EXTRACTOR_SOCKET: /run/elitea-extract/extractor.sock
+      # The worker's own document cap (IndexRunLimits::max_document_bytes).
+      ELITEA_EXTRACTOR_MAX_INPUT_BYTES: "52428800"
+      ELITEA_EXTRACTOR_MAX_PAGES: "1000"
+      ELITEA_EXTRACTOR_TIMEOUT_MILLIS: "120000"
+      ELITEA_EXTRACTOR_CONCURRENCY: "2"
+      RUST_LOG: "${ELITEA_EXTRACTOR_LOG:-info}"
+    volumes:
+      - standalone_doc_extractor_sock:/run/elitea-extract
+    healthcheck:
+      # Distroless: no shell. The binary asks Capabilities over its own socket.
+      test: ["CMD", "/usr/local/bin/elitea-doc-extractor", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  # The extractor's Unix socket, shared between the native worker and the
+  # sidecar. Nothing else mounts it.
+  standalone_doc_extractor_sock:

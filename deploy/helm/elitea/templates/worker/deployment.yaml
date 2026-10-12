@@ -273,6 +273,64 @@ spec:
               mountPath: {{ .Values.worker.runtime.spoolRoot }}
             - name: tmp
               mountPath: /tmp
+            {{- if (.Values.worker.extractor | default dict).enabled }}
+            # The document extractor's socket directory (runtime.json
+            # `extractor_socket`), shared with the sidecar below.
+            - name: extractor-socket
+              mountPath: {{ .Values.worker.extractor.socketDir }}
+            {{- end }}
+        {{- if (.Values.worker.extractor | default dict).enabled }}
+        {{- $x := .Values.worker.extractor }}
+        # The document extraction sidecar (ADR-0030 I1): elitea-doc-extractor
+        # reads the PDF and Office documents the worker's index runs fetched
+        # and answers over the shared socket. One distroless binary whose
+        # ENTRYPOINT/CMD is `serve`; its probe is the binary itself. No port
+        # and no identity: the socket directory is the only way in, and the
+        # process opens no connection, so no NetworkPolicy names it. A crash
+        # or an OOM kill here is one skipped document to the worker (its
+        # client reconnects by itself), which is why it is a separate
+        # container and not a thread of the worker.
+        - name: doc-extractor
+          image: "{{ $x.image.repository }}:{{ $x.image.tag | default .Values.image.tag }}"
+          imagePullPolicy: {{ $x.image.pullPolicy }}
+          securityContext:
+            runAsUser: {{ .Values.worker.runAsUser }}
+            runAsGroup: {{ .Values.worker.runAsGroup }}
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            # It writes nothing but the socket, which lives in the emptyDir.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: ELITEA_EXTRACTOR_SOCKET
+              value: {{ printf "%s/extractor.sock" (trimSuffix "/" $x.socketDir) | quote }}
+            - name: ELITEA_EXTRACTOR_MAX_INPUT_BYTES
+              value: {{ $x.maxInputBytes | int64 | toString | quote }}
+            - name: ELITEA_EXTRACTOR_MAX_PAGES
+              value: {{ $x.maxPages | int64 | toString | quote }}
+            - name: ELITEA_EXTRACTOR_TIMEOUT_MILLIS
+              value: {{ $x.timeoutMillis | int64 | toString | quote }}
+            - name: ELITEA_EXTRACTOR_CONCURRENCY
+              value: {{ $x.concurrency | int64 | toString | quote }}
+            - name: RUST_LOG
+              value: {{ $x.logLevel | quote }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/elitea-doc-extractor", "healthcheck"]
+            periodSeconds: {{ $x.probes.periodSeconds }}
+            failureThreshold: {{ $x.probes.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/elitea-doc-extractor", "healthcheck"]
+            periodSeconds: {{ $x.probes.periodSeconds }}
+            failureThreshold: {{ $x.probes.failureThreshold }}
+          resources:
+            {{- toYaml $x.resources | nindent 12 }}
+          volumeMounts:
+            - name: extractor-socket
+              mountPath: {{ $x.socketDir }}
+        {{- end }}
       volumes:
         - name: runtime-config
           configMap:
@@ -304,6 +362,14 @@ spec:
             sizeLimit: {{ .Values.worker.runtime.spoolSizeLimit }}
         - name: tmp
           emptyDir: {}
+        {{- if (.Values.worker.extractor | default dict).enabled }}
+        # The extractor's socket: memory-backed and tiny, like the engine
+        # sidecars' (templates/deepwiki). Shared by exactly two containers.
+        - name: extractor-socket
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- end }}
       {{- with .Values.worker.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

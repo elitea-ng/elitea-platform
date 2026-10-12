@@ -89,6 +89,14 @@ data:
     {{- if $r.indexEgressAllowlist }}
     {{- $_ := set $config "index_egress_allowlist" $r.indexEgressAllowlist }}
     {{- end }}
+    {{- /* The document extraction sidecar (ADR-0030 I1): the worker streams
+    PDF and Office documents to this socket, in the emptyDir the Deployment
+    shares between the two containers. Written only while the sidecar renders
+    (guards.yaml refuses it outside the Rust indexing runtime), so the
+    runtime.json of every other deployment is unchanged. */}}
+    {{- if (.Values.worker.extractor | default dict).enabled }}
+    {{- $_ := set $config "extractor_socket" (printf "%s/extractor.sock" (trimSuffix "/" .Values.worker.extractor.socketDir)) }}
+    {{- end }}
     {{- end }}
     {{ toJson $config }}
   {{- if eq (include "elitea-worker.isRust" .) "true" }}

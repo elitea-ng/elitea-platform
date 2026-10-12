@@ -54,9 +54,12 @@ elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["to
 # `xberg-native-pdf` 1.3.6 requires `smallvec ^1.16`, while `kube-client`
 # 4.2.0 (the `sandbox-supervisor` feature) pins `serde-saphyr ^0.0.29`, which
 # caps smallvec `< 1.16`; one lock file cannot hold both and no kube release
-# lifts the cap yet. Until it does, an index run reports a PDF or Office
-# document as skipped `unsupported_type`; text, markdown, HTML, JSON and code
-# are extracted and chunked.
+# lifts the cap yet. Those formats are read by services/elitea-doc-extractor,
+# a separate process with its own lock, which an index run reaches over a
+# Unix socket (`extractor_socket` in the runtime document,
+# src/transport/extractor_client.rs); without one such a document is
+# reported skipped `unsupported_type`. Text, markdown, HTML, JSON and code
+# are extracted and chunked here.
 elitea-connectors = { path = "../../libs/rust/connectors", default-features = false, features = ["providers", "content-source", "reqwest-012"] }
 elitea-content-source = { path = "../../libs/rust/content-source" }
 elitea-doc-chunk = { path = "../../libs/rust/doc-chunk" }

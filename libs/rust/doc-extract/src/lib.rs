@@ -434,50 +434,187 @@ mod documents {
 }
 
 #[cfg(feature = "documents")]
+pub use documents::{DocumentError, DocumentLimits, DocumentText, extract_document};
+
+/// Whether `mime` is one of the formats the document extractor reads (PDF,
+/// Office, spreadsheets, e-mail, e-books); text and HTML are not. True
+/// whether or not this build has the `documents` feature: a consumer
+/// without it hands such a document to the extractor sidecar
+/// (`services/elitea-doc-extractor`) or reports it unsupported.
+#[must_use]
+pub fn is_document_type(mime: &str) -> bool {
+    DOCUMENT_TYPES.contains(&mime)
+}
+
+/// The media types [`is_document_type`] accepts.
+#[must_use]
+pub fn document_types() -> &'static [&'static str] {
+    DOCUMENT_TYPES
+}
+
+#[cfg(feature = "documents")]
 mod documents {
     //! xberg, as measured for the engines (ADR-0028 D4): its cache off (a
     //! distroless root filesystem is read-only), a timeout, a page and a
     //! size cap, and its own thread with a large stack — its extraction can
     //! recurse deeper than a runtime worker's default stack allows.
 
-    use super::{Extracted, STACK_BYTES, TIMEOUT_SECONDS};
+    use super::{Extracted, STACK_BYTES, TIMEOUT_SECONDS, is_document_type};
+    use std::time::Duration;
 
     /// Pages read from one document (where the format has pages).
     const MAX_PAGES: usize = 1000;
     /// Bytes of content one document may hold.
     const MAX_CONTENT_BYTES: usize = 50 * 1024 * 1024;
 
-    pub(super) fn extract(mime: &str, bytes: &[u8]) -> Extracted {
-        let (mime, bytes) = (mime.to_owned(), bytes.to_vec());
-        let worker = std::thread::Builder::new()
-            .name("doc-extract".to_owned())
-            .stack_size(STACK_BYTES)
-            .spawn(move || run(&mime, bytes));
-        match worker.map(std::thread::JoinHandle::join) {
-            Ok(Ok(extracted)) => extracted,
-            Ok(Err(_)) => Extracted::Unreadable("the document extractor failed".to_owned()),
-            Err(error) => {
-                Extracted::Unreadable(format!("the extraction thread did not start: {error}"))
+    /// The bounds one document extraction runs under.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct DocumentLimits {
+        /// Pages read from a paged format; a longer document is refused
+        /// ([`DocumentError::TooManyPages`]), not truncated.
+        pub max_pages: usize,
+        /// Bytes of content the extractor may produce or decode in one
+        /// operation; more is refused ([`DocumentError::TooLarge`]).
+        pub max_content_bytes: usize,
+        /// How long the extractor may run.
+        pub timeout: Duration,
+    }
+
+    impl Default for DocumentLimits {
+        fn default() -> Self {
+            Self {
+                max_pages: MAX_PAGES,
+                max_content_bytes: MAX_CONTENT_BYTES,
+                timeout: Duration::from_secs(TIMEOUT_SECONDS),
             }
         }
     }
 
-    fn run(mime: &str, bytes: Vec<u8>) -> Extracted {
-        let runtime = match tokio::runtime::Builder::new_current_thread()
+    /// A document's text.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DocumentText {
+        pub text: String,
+        /// Which extractor produced it (`xberg`).
+        pub extractor: &'static str,
+    }
+
+    /// Why a document gave no text. Each variant is a reason a caller can
+    /// report as such (the extractor sidecar's typed skip reasons); the
+    /// detail is the extractor's own sentence, for a log line.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum DocumentError {
+        /// No extractor handles this media type.
+        Unsupported(String),
+        /// The document is password-protected, or uses an encryption the
+        /// extractor does not implement.
+        Encrypted(String),
+        /// More pages than [`DocumentLimits::max_pages`].
+        TooManyPages(String),
+        /// More content than [`DocumentLimits::max_content_bytes`], or
+        /// another of the extractor's security limits (archive size,
+        /// nesting, entity length) was hit.
+        TooLarge(String),
+        /// The extractor ran past [`DocumentLimits::timeout`].
+        Timeout(String),
+        /// The bytes are not what the media type says, or are damaged.
+        Corrupt(String),
+        /// The document parsed but holds no text (a scanned PDF, an empty
+        /// sheet).
+        NoText,
+        /// The extractor itself failed: a panic on its thread, no thread, no
+        /// runtime. Not a statement about the document.
+        Extractor(String),
+    }
+
+    impl std::fmt::Display for DocumentError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Unsupported(detail) => write!(f, "unsupported document type: {detail}"),
+                Self::Encrypted(detail) => write!(f, "the document is encrypted: {detail}"),
+                Self::TooManyPages(detail) => {
+                    write!(f, "the document has too many pages: {detail}")
+                }
+                Self::TooLarge(detail) => write!(f, "the document is too large: {detail}"),
+                Self::Timeout(detail) => write!(f, "the extraction timed out: {detail}"),
+                Self::Corrupt(detail) => write!(f, "the document is corrupt: {detail}"),
+                Self::NoText => f.write_str("the document has no text"),
+                Self::Extractor(detail) => write!(f, "the document extractor failed: {detail}"),
+            }
+        }
+    }
+
+    impl std::error::Error for DocumentError {}
+
+    impl From<DocumentError> for Extracted {
+        fn from(error: DocumentError) -> Self {
+            match error {
+                DocumentError::Unsupported(_) => Self::Unsupported,
+                other => Self::Unreadable(other.to_string()),
+            }
+        }
+    }
+
+    /// [`super::extract`] for the formats behind the `documents` feature.
+    pub(super) fn extract(mime: &str, bytes: &[u8]) -> Extracted {
+        match extract_document(mime, bytes, &DocumentLimits::default()) {
+            Ok(DocumentText { text, extractor }) => Extracted::Text { text, extractor },
+            Err(error) => error.into(),
+        }
+    }
+
+    /// `bytes` of media type `mime` as text, under `limits`, with the reason
+    /// typed when there is none.
+    ///
+    /// The extraction runs on its own thread with a large stack. A thread
+    /// that overruns the timeout CANNOT be killed: the extractor's own
+    /// cooperative timeout ends most overruns, and a caller that must bound
+    /// the worst case runs this in a process it can end (the extractor
+    /// sidecar does).
+    ///
+    /// # Errors
+    ///
+    /// [`DocumentError`], one variant per reason.
+    pub fn extract_document(
+        mime: &str,
+        bytes: &[u8],
+        limits: &DocumentLimits,
+    ) -> Result<DocumentText, DocumentError> {
+        if !is_document_type(mime) {
+            return Err(DocumentError::Unsupported(mime.to_owned()));
+        }
+        let (mime, bytes, limits) = (mime.to_owned(), bytes.to_vec(), *limits);
+        let worker = std::thread::Builder::new()
+            .name("doc-extract".to_owned())
+            .stack_size(STACK_BYTES)
+            .spawn(move || run(&mime, bytes, &limits));
+        match worker.map(std::thread::JoinHandle::join) {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(DocumentError::Extractor(
+                "the extraction thread panicked".to_owned(),
+            )),
+            Err(error) => Err(DocumentError::Extractor(format!(
+                "the extraction thread did not start: {error}"
+            ))),
+        }
+    }
+
+    fn run(
+        mime: &str,
+        bytes: Vec<u8>,
+        limits: &DocumentLimits,
+    ) -> Result<DocumentText, DocumentError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
-        {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                return Extracted::Unreadable(format!("no runtime for the extractor: {error}"));
-            }
-        };
+            .map_err(|error| {
+                DocumentError::Extractor(format!("no runtime for the extractor: {error}"))
+            })?;
         let config = xberg::ExtractionConfig {
             use_cache: false,
-            extraction_timeout_secs: Some(TIMEOUT_SECONDS),
+            extraction_timeout_secs: Some(limits.timeout.as_secs().max(1)),
             security_limits: Some(xberg::SecurityLimits {
-                max_pages: Some(MAX_PAGES),
-                max_content_size: MAX_CONTENT_BYTES,
+                max_pages: Some(limits.max_pages),
+                max_content_size: limits.max_content_bytes,
                 ..xberg::SecurityLimits::default()
             }),
             ..xberg::ExtractionConfig::default()
@@ -485,13 +622,60 @@ mod documents {
         let input = xberg::ExtractInput::from_bytes(bytes, mime.to_owned(), None);
         match runtime.block_on(xberg::extract(input, &config)) {
             Ok(result) => match result.results.into_iter().next() {
-                Some(document) if !document.content.trim().is_empty() => Extracted::Text {
+                Some(document) if !document.content.trim().is_empty() => Ok(DocumentText {
                     text: document.content,
                     extractor: "xberg",
-                },
-                _ => Extracted::Unreadable("the document has no text".to_owned()),
+                }),
+                _ => Err(DocumentError::NoText),
             },
-            Err(error) => Extracted::Unreadable(error.to_string()),
+            Err(error) => Err(classify(&error)),
+        }
+    }
+
+    /// The typed reason behind an xberg error. The PDF backend's own errors
+    /// arrive wrapped as `Parsing` with the PDF error as the source; the
+    /// security limits as `Security` with a sentence naming the limit.
+    fn classify(error: &xberg::XbergError) -> DocumentError {
+        use xberg::XbergError;
+        let detail = error.to_string();
+        match error {
+            XbergError::Timeout { .. } | XbergError::Cancelled => DocumentError::Timeout(detail),
+            XbergError::UnsupportedFormat(_) | XbergError::MissingDependency(_) => {
+                DocumentError::Unsupported(detail)
+            }
+            XbergError::Security { message, .. } => {
+                if message.contains("too many pages") {
+                    DocumentError::TooManyPages(detail)
+                } else {
+                    DocumentError::TooLarge(detail)
+                }
+            }
+            XbergError::Parsing { message, source } => {
+                use xberg::pdf::error::PdfError;
+                // The native PDF backend reports a document it cannot open
+                // without a password as a `Parsing` error with this sentence
+                // and no source (`pdf/native/mod.rs`); its typed errors
+                // arrive as the source.
+                let password_sentence = message.starts_with("PDF is encrypted");
+                match source
+                    .as_ref()
+                    .and_then(|source| source.downcast_ref::<PdfError>())
+                {
+                    Some(
+                        PdfError::PasswordRequired
+                        | PdfError::InvalidPassword
+                        | PdfError::EncryptionNotSupported(_),
+                    ) => DocumentError::Encrypted(detail),
+                    _ if password_sentence => DocumentError::Encrypted(detail),
+                    _ => DocumentError::Corrupt(detail),
+                }
+            }
+            XbergError::Io(_)
+            | XbergError::Validation { .. }
+            | XbergError::ImageProcessing { .. }
+            | XbergError::Serialization { .. }
+            | XbergError::Other(_) => DocumentError::Corrupt(detail),
+            _ => DocumentError::Extractor(detail),
         }
     }
 }

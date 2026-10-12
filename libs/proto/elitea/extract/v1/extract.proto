@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+// elitea.extract.v1 is the contract between the Rust indexing worker and
+// elitea-doc-extractor, the document extraction sidecar (ADR-0030 I1
+// follow-up: PDF and Office extraction runs in a SEPARATE process).
+//
+// WHY A PROCESS. The worker's `kube-client` (its sandbox supervisor feature)
+// caps `smallvec < 1.16`, and the pure-Rust PDF backend needs `>= 1.16`; one
+// Cargo.lock cannot hold both. The extractor is its own crate with its own
+// lock. The split also puts the parser of untrusted documents behind a
+// process boundary: a crash or an OOM kill in the extractor is one skipped
+// document to the worker, never a dead worker.
+//
+// TRANSPORT. Local only: gRPC over a Unix domain socket in a directory the
+// two containers share (an emptyDir, a compose volume). No TLS, no identity,
+// no network listener — the socket directory is the only way in, and the
+// extractor opens no connection of its own.
+//
+// FLOW. The worker streams one document per call: a header (name, media
+// type, declared length, the limits for this document), then the bytes in
+// chunks. The extractor answers with the text, or with a typed skip reason
+// the worker records in the run's summary. Anything that is not a statement
+// about the document (a malformed stream, no capacity, an internal failure)
+// is a gRPC status, which the worker reports as `extract_failed`.
+
+package elitea.extract.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/extract/v1;extractv1";
+
+// DocumentExtractService is served by elitea-doc-extractor on its socket.
+service DocumentExtractService {
+  // Extract turns one document into text. The first message must be the
+  // header; every later message is a chunk of the document's bytes, in
+  // order. The extractor may answer before the stream ends (a document over
+  // the size limit is refused as soon as the limit is crossed).
+  rpc Extract(stream ExtractRequest) returns (ExtractResponse);
+  // Capabilities names the media types this build extracts and the limits
+  // it caps a request's own limits at. It is also the health probe: an
+  // extractor that answers it is serving.
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+}
+
+message ExtractRequest {
+  oneof message {
+    ExtractHeader header = 1;
+    bytes chunk = 2;
+  }
+}
+
+message ExtractHeader {
+  // The document's name (its key in the source), for log lines and for the
+  // extractors that read an extension. Never a path the extractor opens.
+  string filename = 1;
+  // The media type the source declared (`application/pdf`, the Office
+  // types). The extractor reads the bytes as this type and never sniffs
+  // another.
+  string content_type = 2;
+  // The document's size in bytes when the caller knows it; 0 otherwise.
+  // A declared size over the input limit is refused before any chunk.
+  uint64 content_length = 3;
+  // The limits for this document. Each field at 0 means the extractor's
+  // configured default; a value above the extractor's own cap is lowered to
+  // the cap (the extractor protects itself, whatever a caller asks).
+  ExtractLimits limits = 4;
+}
+
+message ExtractLimits {
+  // Bytes of input accepted for one document.
+  uint64 max_input_bytes = 1;
+  // Pages read from a paged format (PDF, PPTX); a longer document is
+  // refused as TOO_MANY_PAGES, not truncated.
+  uint32 max_pages = 2;
+  // Bytes of extracted text returned; more is refused as OUTPUT_TOO_LARGE.
+  uint64 max_output_bytes = 3;
+  // Wall time for the extraction itself, after the bytes arrived.
+  uint32 timeout_millis = 4;
+}
+
+message ExtractResponse {
+  oneof outcome {
+    ExtractedText text = 1;
+    ExtractSkip skip = 2;
+  }
+}
+
+message ExtractedText {
+  string text = 1;
+  // Which extractor produced it (`xberg`).
+  string extractor = 2;
+}
+
+// A document the extractor read and will not turn into text, and why. The
+// caller records the reason; the detail is the extractor's own sentence,
+// for its log line, never shown as the reason itself.
+message ExtractSkip {
+  SkipReason reason = 1;
+  string detail = 2;
+}
+
+enum SkipReason {
+  SKIP_REASON_UNSPECIFIED = 0;
+  // The input is over the input limit (declared or counted).
+  SKIP_REASON_TOO_LARGE = 1;
+  // The document has more pages than the page limit.
+  SKIP_REASON_TOO_MANY_PAGES = 2;
+  // The document is password-protected or uses an unsupported encryption.
+  SKIP_REASON_ENCRYPTED = 3;
+  // This build has no extractor for the media type.
+  SKIP_REASON_UNSUPPORTED = 4;
+  // The bytes are not what the media type says, or are damaged.
+  SKIP_REASON_CORRUPT = 5;
+  // The extraction ran past its wall-time limit.
+  SKIP_REASON_TIMEOUT = 6;
+  // The text is over the output limit.
+  SKIP_REASON_OUTPUT_TOO_LARGE = 7;
+  // The document parsed but holds no text (a scanned PDF, an empty sheet).
+  SKIP_REASON_EMPTY = 8;
+}
+
+message CapabilitiesRequest {}
+
+message CapabilitiesResponse {
+  // The media types this build extracts.
+  repeated string content_types = 1;
+  // The caps a request's limits are lowered to.
+  ExtractLimits limits = 2;
+  // The extractor's crate version.
+  string version = 3;
+}

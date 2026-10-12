@@ -45,6 +45,7 @@ use elitea_vector_index::{ClientConfig, VectorClient};
 
 use crate::protocol::control::IndexRemovalControl;
 use crate::transport::embeddings_facade::EmbeddingsClient;
+use crate::transport::extractor_client::ExtractorClient;
 
 pub(crate) use pipeline::{IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index};
 
@@ -63,6 +64,10 @@ pub(crate) struct IndexIngestRuntime {
     pub(crate) allowlist: HostAllowlist,
     pub(crate) transport: Arc<dyn Transport>,
     pub(crate) limits: IndexRunLimits,
+    /// The document extraction sidecar (`elitea-doc-extractor`), when the
+    /// deployment names its socket; `None` reports a PDF or Office document
+    /// skipped `unsupported_type`.
+    pub(crate) extractor: Option<Arc<ExtractorClient>>,
 }
 
 /// Bounds of one run.
@@ -131,6 +136,7 @@ impl IndexIngestRuntime {
             allowlist,
             transport: Arc::new(transport),
             limits,
+            extractor: None,
         })
     }
 
@@ -139,6 +145,13 @@ impl IndexIngestRuntime {
     #[must_use]
     pub(crate) fn with_removal_control(mut self, control: Arc<dyn IndexRemovalControl>) -> Self {
         self.removal = Some(control);
+        self
+    }
+
+    /// Send PDF and Office documents to the extraction sidecar.
+    #[must_use]
+    pub(crate) fn with_extractor(mut self, extractor: Arc<ExtractorClient>) -> Self {
+        self.extractor = Some(extractor);
         self
     }
 }
