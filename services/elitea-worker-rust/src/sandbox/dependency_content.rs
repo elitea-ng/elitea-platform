@@ -156,7 +156,7 @@ impl DependencyContentClient {
             .tcp_keepalive(Some(crate::transport::keepalive::TCP_KEEPALIVE_IDLE))
             .http2_keep_alive_interval(crate::transport::keepalive::HTTP2_KEEPALIVE_INTERVAL)
             .http2_keep_alive_timeout(crate::transport::keepalive::HTTP2_KEEPALIVE_TIMEOUT)
-            .http2_keep_alive_while_idle(true)
+            .http2_keep_alive_while_idle(crate::transport::keepalive::KEEPALIVE_WHILE_IDLE)
             .pool_max_idle_per_host(capacity)
             .build()
             .map_err(|_| DependencyContentError::Configuration)?;

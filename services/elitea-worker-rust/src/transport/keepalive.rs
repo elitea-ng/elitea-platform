@@ -12,9 +12,22 @@ use tonic::transport::Endpoint;
 
 /// Idle time before an HTTP/2 PING is sent. `keep_alive_while_idle` makes it
 /// apply to a channel with no call in flight.
-pub(crate) const HTTP2_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+///
+/// Main's private runtime servers enforce a floor on ping spacing and accept
+/// idle pings (`RuntimeKeepaliveMinTime` and `RuntimeKeepalivePermitWithoutStream`
+/// in `services/elitea-main/internal/transport/runtimegrpc/private_servers.go`).
+/// The interval must stay above [`MAIN_ENFORCEMENT_MIN_TIME`] by a margin, or
+/// grpc-go counts ping strikes and sends GOAWAY `too_many_pings`, which aborts
+/// idle control and output connections and long silent output streams.
+pub(crate) const HTTP2_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 /// How long an unanswered PING waits before the connection is closed.
 pub(crate) const HTTP2_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// PINGs are sent with no call in flight; Main permits that on its private servers.
+pub(crate) const KEEPALIVE_WHILE_IDLE: bool = true;
+/// Mirror of Main's `RuntimeKeepaliveMinTime`. A test pins the margin; the Go
+/// test pins the same value on Main's side, so changing one side fails a test.
+#[cfg(test)]
+pub(crate) const MAIN_ENFORCEMENT_MIN_TIME: Duration = Duration::from_secs(10);
 /// TCP keepalive idle time, a second line for a peer that stops mid-frame.
 pub(crate) const TCP_KEEPALIVE_IDLE: Duration = Duration::from_secs(15);
 /// The shortest claim lease a dead peer must be found within. A dead Main is
@@ -54,7 +67,7 @@ pub(crate) fn with_schedule(endpoint: Endpoint, schedule: KeepAlive) -> Endpoint
     endpoint
         .http2_keep_alive_interval(schedule.http2_interval)
         .keep_alive_timeout(schedule.http2_timeout)
-        .keep_alive_while_idle(true)
+        .keep_alive_while_idle(KEEPALIVE_WHILE_IDLE)
         .tcp_keepalive(Some(schedule.tcp_idle))
 }
 
@@ -65,13 +78,43 @@ mod tests {
     #[test]
     fn production_schedule_finds_a_dead_peer_well_within_the_claim_lease() {
         let schedule = KeepAlive::PRODUCTION;
-        assert_eq!(schedule.http2_interval, Duration::from_secs(10));
+        assert_eq!(schedule.http2_interval, Duration::from_secs(15));
         assert_eq!(schedule.http2_timeout, Duration::from_secs(5));
         assert_eq!(schedule.tcp_idle, Duration::from_secs(15));
-        // At most a quarter of the shortest lease: several renewals remain.
-        assert!(schedule.detection_bound() * 4 <= MIN_CLAIM_LEASE_FOR_DETECTION);
+        assert_eq!(schedule.detection_bound(), Duration::from_secs(20));
+        // At most a third of the shortest lease: renewals remain after detection.
+        assert!(schedule.detection_bound() * 3 <= MIN_CLAIM_LEASE_FOR_DETECTION);
         // The PING must time out before the next one is due.
         assert!(schedule.http2_timeout < schedule.http2_interval);
+    }
+
+    /// Main's floor on ping spacing sits below the Worker's interval with room
+    /// for jitter and a delayed timer, so an idle channel is never struck.
+    #[test]
+    fn worker_ping_interval_clears_the_floor_main_enforces() {
+        assert_eq!(MAIN_ENFORCEMENT_MIN_TIME, Duration::from_secs(10));
+        assert!(
+            KeepAlive::PRODUCTION.http2_interval
+                >= MAIN_ENFORCEMENT_MIN_TIME + Duration::from_secs(5)
+        );
+        // Pings are sent on an idle channel (`keep_alive_while_idle(true)`), so
+        // Main must accept them without an open stream; Main's constant is
+        // pinned by the Go test next to the policy.
+    }
+
+    /// The production schedule is exactly the named constants, and pings are
+    /// sent on an idle channel (Main accepts them without an open stream).
+    #[test]
+    fn production_schedule_is_built_from_the_named_constants() {
+        assert_eq!(
+            KeepAlive::PRODUCTION,
+            KeepAlive {
+                http2_interval: HTTP2_KEEPALIVE_INTERVAL,
+                http2_timeout: HTTP2_KEEPALIVE_TIMEOUT,
+                tcp_idle: TCP_KEEPALIVE_IDLE,
+            }
+        );
+        const { assert!(KEEPALIVE_WHILE_IDLE) };
     }
 
     /// `Endpoint` hides its settings, so this guards the wiring instead: every
