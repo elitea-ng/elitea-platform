@@ -237,6 +237,18 @@ class VerdictTest(unittest.TestCase):
         p['settlements'][0]['disposition'] = 'SUCCEEDED'
         self.assertEqual(verdict.evaluate(SCENARIO, run)['invariants']['I1']['status'], 'violated')
 
+    def test_two_prepared_nodes_prepare_once_each_without_an_oracle(self):
+        run = _run()
+        sandbox = run['final']['agentstate']['sandbox']
+        sandbox[:] = [dict(sandbox[0], job_key=f'x{i}', activation_id=f'a{i}', audience='dns:elitea-sandbox-deno')
+                      for i in range(2)]
+        sandbox += [dict(sandbox[0], job_key=f'p{i}', activation_id=f'pa{i}', runtime_label=f'pl{i}',
+                         audience='dns:elitea-sandbox-preparation') for i in range(2)]
+        run['events'] = {f'pl{i}': {'start': 1} for i in range(2)}
+        self.assertEqual(verdict.i2p_preparation(run, SCENARIO)['status'], 'hold')
+        sandbox.append(dict(sandbox[-1], job_key='p9', runtime_label='pl9'))
+        self.assertEqual(verdict.i2p_preparation(run, SCENARIO)['status'], 'violated')
+
     def test_stop_on_takeover_needs_no_new_checkpoint_writer(self):
         run = _run()
         run['final']['product']['settlements'][0]['disposition'] = 'CANCELLED'

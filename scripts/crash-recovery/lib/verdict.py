@@ -87,11 +87,15 @@ def i2p_preparation(run, scenario):
         if job['job_key'] in committed and t_fault_ms:
             after_commit[job['job_key'][:12]] = sum(1 for t in entry.get('start_times', []) if t > t_fault_ms)
     jobs = len({j['job_key'] for j in final})
-    facts = {'preparation_jobs': jobs, 'preparation_dispatch_rows': len(final), 'oracle': oracle,
+    # Without a baseline, the bound is one preparation per Code activation (each prepared node prepares once).
+    activations = len({j['activation_id'] for j in run['final']['agentstate']['sandbox'] or []
+                       if not is_preparation_audience(j.get('audience')) and j.get('activation_id')})
+    limit = oracle or max(1, activations)
+    facts = {'preparation_jobs': jobs, 'preparation_dispatch_rows': len(final), 'oracle': oracle, 'limit': limit,
              'committed_before_fault': len(committed), 'preparer_starts': starts,
              'preparer_starts_after_commit': after_commit,
              'phases': sorted({j.get('phase') for j in final})}
-    bad = (jobs > (oracle or 1) or any(n > 1 for n in starts.values()) or any(after_commit.values()))
+    bad = (jobs > limit or any(n > 1 for n in starts.values()) or any(after_commit.values()))
     return _inv(VIOLATED if bad else HOLD, **facts)
 
 
