@@ -323,4 +323,17 @@ if helm template sandbox "$chart" "${base[@]}" -f "$work/profiles-8.yaml" \
   echo 'Empty supervisor profile list accepted' >&2; exit 1
 fi
 grep -Fq 'one to eight profiles' "$work/invalid"
+# A Code runtime in the execution namespace has no network. Original Code with a
+# platform client relies on exactly this boundary: a failed runtime cannot have
+# reached anything but Main's receipted broker. NetworkPolicies are additive, so
+# the deny-all policy must render whenever the Kubernetes sandbox is enabled, and
+# nothing else in that namespace may allow traffic.
+helm template sandbox "$chart" "${base[@]}" "${supervisor[@]}" > "$work/full-supervisor.yaml"
+python3 - "$work/full-supervisor.yaml" <<'PYTEST'
+import sys, yaml
+docs = list(filter(None, yaml.safe_load_all(open(sys.argv[1]))))
+policies = [d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata'].get('namespace') == 'code-execution']
+assert [d['metadata']['name'] for d in policies] == ['elitea-code-deny-network'], policies
+assert policies[0]['spec'] == dict(podSelector={}, policyTypes=['Ingress', 'Egress'], ingress=[], egress=[])
+PYTEST
 echo 'Kubernetes sandbox and optional Python preparation rendering checks passed'
