@@ -404,8 +404,9 @@ CR-SK-P09-hyd r2, execution `4e160a9d8aeca4f419e2517aff77fa3e`, #1084 parts E/F 
 
 Snapshots for the deployed re-proof are local (mode 600) under each run's `hang-snapshot/` or `orphan-snapshot-r2/`.
 Each holds full dumps of both databases, the Worker spool, the NATS store and the logs. The F3 and F4 snapshots
-already contain the user's Stop. When restored with the #1084 images, each should settle `CANCELLED` once. The F1
-snapshot is partial: the `elitea_runtime` schema only, and no NATS store.
+already contain the user's Stop. When restored with the #1084 images (`crashctl restore-snapshot`), each should
+settle `CANCELLED` once. The F1 snapshot is partial: the `elitea_runtime` schema only, and no NATS store.
+`restore-snapshot` refuses it; `CR-WSP-P09-lease` stands in for F1.
 
 ### 9.4 Recovery-guarantee rows, T0b
 
@@ -455,7 +456,7 @@ There are no response mocks. Each result file stores a DOM text digest and a scr
 
 | Suite | Count | Result |
 |---|---|---|
-| `python3 -m unittest discover -s scripts/crash-recovery/tests` | 28 | pass, no skip |
+| `python3 -m unittest discover -s scripts/crash-recovery/tests` | 33 | pass, no skip |
 | `deploy/mock-llm` `unittest discover` (CI workflow `ci-mock-llm`) | 29 (20 existing + 9 new) | pass |
 | `deploy/mock-mcp` `unittest discover` (no CI) | 10 | pass |
 | `oxlint --deny-warnings` on the crash Playwright files | 4 files | pass |

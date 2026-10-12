@@ -6,13 +6,15 @@ import copy
 import json
 import pathlib
 import sys
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 SUITE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SUITE))
 
-from lib import catalog, compiled_manifest, report, verdict  # noqa: E402
+from lib import catalog, compiled_manifest, report, stack_compose, verdict  # noqa: E402
 from lib.api import _FormParser  # noqa: E402
 from lib.common import parse_iso, seconds_between  # noqa: E402
 from lib.redact import scan_bytes, scan_tree, scrub_text  # noqa: E402
@@ -306,6 +308,107 @@ class CompiledManifestTest(unittest.TestCase):
             digest = compiled_manifest.write(path, raw)
             self.assertEqual(path.stat().st_mode & 0o777, 0o644)
             self.assertEqual(len(checker.profiles(str(path), digest)), 1)
+
+
+class SnapshotRestoreTest(unittest.TestCase):
+    """restore-snapshot touches only this project's volumes and refuses to merge into an existing stack."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = pathlib.Path(self.tmp.name)
+        (root / 'stack').mkdir()
+        (root / 'stack' / 'stack.json').write_text(json.dumps({'project': 'elitea-crash', 'host': 'crash.localhost'}))
+        self.stack = stack_compose.Stack(root / 'stack')
+        self.src = root / 'snap'
+        self.src.mkdir()
+        for name in ('elitea.dump', 'agentstate.dump', 'worker-spool.tar', 'nats-store.tar'):
+            (self.src / name).write_bytes(b'x')
+        self.manifest = {'volumes': {'worker-spool.tar': 'elitea-crash-worker-spool-9',
+                                     'nats-store.tar': 'elitea-crash_crash_nats_data'},
+                         'images': {'postgres': 'sha256:' + 'a' * 64}}
+        self._write_manifest()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_manifest(self):
+        (self.src / 'manifest.json').write_text(json.dumps(self.manifest))
+
+    def test_plan_accepts_only_this_projects_volumes(self):
+        self.assertEqual(self.stack.snapshot_plan(self.src)['worker-spool.tar'], 'elitea-crash-worker-spool-9')
+        good = dict(self.manifest['volumes'])
+        for name, foreign in (('nats-store.tar', 'elitea-verify-0def77b2_crash_nats_data'),
+                              ('worker-spool.tar', 'centry_pg_data'),
+                              ('worker-spool.tar', 'elitea-crash-worker-spool-9/../x')):
+            self.manifest['volumes'] = dict(good, **{name: foreign})
+            self._write_manifest()
+            with self.assertRaises(stack_compose.HarnessError):
+                self.stack.snapshot_plan(self.src)
+
+    def test_plan_refuses_an_incomplete_snapshot(self):
+        (self.src / 'nats-store.tar').unlink()
+        with self.assertRaisesRegex(stack_compose.HarnessError, 'nats-store.tar'):
+            self.stack.snapshot_plan(self.src)
+
+    def _fake_run(self, calls, ps=b'', volumes=b'', existing=()):
+        def fake(args, check=True, **_):
+            calls.append(args)
+            out = b''
+            if args[:2] == ['docker', 'ps']:
+                out = ps
+            elif args[:3] == ['docker', 'volume', 'ls']:
+                out = volumes
+            rc = 0 if args[:3] != ['docker', 'volume', 'inspect'] or args[3] in existing else 1
+            return subprocess.CompletedProcess(args, rc, out, b'')
+        return fake
+
+    def test_refuses_while_the_stack_has_containers_or_volumes(self):
+        for kwargs in ({'ps': b'abc\n'}, {'volumes': b'elitea-crash_standalone_pg_data\n'},
+                       {'existing': ('elitea-crash_crash_nats_data',)}):
+            calls = []
+            with mock.patch.object(stack_compose, 'run', self._fake_run(calls, **kwargs)), \
+                    mock.patch.object(stack_compose, 'refuse_if_kind_running'):
+                with self.assertRaises(stack_compose.HarnessError):
+                    self.stack.restore_snapshot(self.src)
+            self.assertFalse([c for c in calls if c[:3] == ['docker', 'volume', 'create']], kwargs)
+
+    def test_refuses_when_the_kind_guard_trips(self):
+        calls = []
+        guard = mock.Mock(side_effect=stack_compose.HarnessError('kind cluster elitea-crash exists'))
+        with mock.patch.object(stack_compose, 'run', self._fake_run(calls)), \
+                mock.patch.object(stack_compose, 'refuse_if_kind_running', guard):
+            with self.assertRaisesRegex(stack_compose.HarnessError, 'kind'):
+                self.stack.restore_snapshot(self.src)
+        self.assertEqual(calls, [])
+
+    def test_restores_volumes_then_databases_then_starts(self):
+        calls, piped, order = [], [], []
+        def fake_subprocess(args, stdin=None, **_):
+            piped.append((args, pathlib.Path(stdin.name).name))
+            return subprocess.CompletedProcess(args, 0, b'', b'')
+        with mock.patch.object(stack_compose, 'run', self._fake_run(calls)), \
+                mock.patch.object(stack_compose, 'refuse_if_kind_running'), \
+                mock.patch.object(stack_compose.subprocess, 'run', fake_subprocess), \
+                mock.patch.object(stack_compose, '_postgres_settled', return_value=True), \
+                mock.patch.object(stack_compose.Stack, 'compose', lambda s, *a, **k: order.append(('compose',) + a)), \
+                mock.patch.object(stack_compose.Stack, 'container_id', return_value='pg1'), \
+                mock.patch.object(stack_compose.Stack, 'up', lambda s: order.append(('up',))):
+            result = self.stack.restore_snapshot(self.src)
+        created = [c[-1] for c in calls if c[:3] == ['docker', 'volume', 'create']]
+        self.assertEqual(created, ['elitea-crash-worker-spool-9', 'elitea-crash_crash_nats_data'])
+        for c in calls:
+            if c[:3] == ['docker', 'volume', 'create']:
+                self.assertIn('com.docker.compose.project=elitea-crash', c)
+        unpacked = [(a[a.index('-v') + 1], f) for a, f in piped if 'tar' in a]
+        self.assertEqual(unpacked, [('elitea-crash-worker-spool-9:/v', 'worker-spool.tar'),
+                                    ('elitea-crash_crash_nats_data:/v', 'nats-store.tar')])
+        restored = [f for a, f in piped if 'pg_restore' in a]
+        self.assertEqual(restored, ['elitea.dump', 'agentstate.dump'])
+        self.assertTrue(all('--no-acl' in a and '--exit-on-error' in a for a, f in piped if 'pg_restore' in a))
+        self.assertEqual(order[-1], ('up',))
+        self.assertEqual(self.stack.state()['spool_name'], 'elitea-crash-worker-spool-9')
+        self.assertEqual(self.stack.state()['spool_generation'], 9)
+        self.assertEqual(result['spool'], 'elitea-crash-worker-spool-9')
 
 
 if __name__ == '__main__':

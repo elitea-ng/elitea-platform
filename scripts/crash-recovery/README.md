@@ -106,6 +106,19 @@ python3 scripts/crash-recovery/crashctl.py down --volumes && python3 scripts/cra
 
 The snapshot is local only: mode 600 files in a mode 700 directory. NATS is paused while its store is copied.
 
+To replay a stuck state on new images (for example, a fix's deployed re-proof), bring the stack fully down and
+restore:
+
+```bash
+python3 scripts/crash-recovery/crashctl.py down --volumes
+python3 scripts/crash-recovery/crashctl.py restore-snapshot <run-dir>/<scenario>/r1/hang-snapshot
+```
+
+`restore-snapshot` refuses when the kind guard trips, when `elitea-crash` still has containers or volumes, or when a
+snapshot volume is not one of this project's. It unpacks the spool and the NATS store into newly created,
+project-labelled volumes and restores both databases (owners kept, grants re-applied). It then starts the stack on
+the images currently configured.
+
 ## Invariants and verdicts
 
 | Id | Checked from |

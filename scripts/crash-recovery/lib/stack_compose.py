@@ -477,6 +477,77 @@ class Stack:
         return sorted(p.name for p in dest.iterdir())
 
 
+    # Compose keys of the volumes a snapshot carries (the spool's name varies per Worker generation).
+    SNAPSHOT_VOLUMES = {'worker-spool.tar': 'crash_worker_spool', 'nats-store.tar': 'crash_nats_data'}
+    SNAPSHOT_DUMPS = ('elitea.dump', 'agentstate.dump')
+
+    def snapshot_plan(self, src):
+        """Validate a snapshot directory; return {tar file: volume name}. Only this project's volumes qualify."""
+        src = pathlib.Path(src)
+        manifest = read_json(src / 'manifest.json')
+        if not manifest or not isinstance(manifest.get('volumes'), dict):
+            raise HarnessError(f'{src} has no snapshot manifest.json')
+        missing = [n for n in (*self.SNAPSHOT_DUMPS, *self.SNAPSHOT_VOLUMES) if not (src / n).is_file()]
+        if missing:
+            raise HarnessError(f'snapshot is incomplete: {", ".join(missing)} missing')
+        volumes = {}
+        for name in self.SNAPSHOT_VOLUMES:
+            volume = manifest['volumes'].get(name, '')
+            wanted = (re.fullmatch(rf'{re.escape(self.project)}-worker-spool-\d+', volume) if name == 'worker-spool.tar'
+                      else volume == f'{self.project}_crash_nats_data')
+            if not wanted:
+                raise HarnessError(f'snapshot volume {volume!r} for {name} is not a volume of {self.project}')
+            volumes[name] = volume
+        return volumes
+
+    def restore_snapshot(self, src):
+        """Recreate this stack from a `snapshot`: both databases, the Worker spool and the NATS store, then start it
+        with the current images. Refuses unless the stack is down with no volumes left, so nothing is merged."""
+        src = pathlib.Path(src)
+        volumes = self.snapshot_plan(src)
+        refuse_if_kind_running()
+        label = f'label=com.docker.compose.project={self.project}'
+        if run(['docker', 'ps', '-aq', '--filter', label]).stdout.strip():
+            raise HarnessError(f'{self.project} has containers; run `crashctl down --volumes` first')
+        if run(['docker', 'volume', 'ls', '-q', '--filter', label]).stdout.strip():
+            raise HarnessError(f'{self.project} still has volumes; run `crashctl down --volumes` first')
+        for volume in volumes.values():
+            if run(['docker', 'volume', 'inspect', volume], check=False).returncode == 0:
+                raise HarnessError(f'volume {volume} already exists; it is not overwritten')
+        manifest = read_json(src / 'manifest.json')
+        tar_image = manifest.get('images', {}).get('postgres')
+        if not tar_image or not re.fullmatch(r'sha256:[0-9a-f]{64}', tar_image):
+            raise HarnessError('the snapshot manifest names no postgres image id to unpack with')
+        for name, volume in volumes.items():
+            run(['docker', 'volume', 'create', '--label', f'com.docker.compose.project={self.project}',
+                 '--label', f'com.docker.compose.volume={self.SNAPSHOT_VOLUMES[name]}',
+                 '--label', f'io.elitea.crash.stack={self.project}', volume])
+            with open(src / name, 'rb') as archive:
+                proc = subprocess.run(['docker', 'run', '--rm', '-i', '--network', 'none', '-v', f'{volume}:/v',
+                                       '--entrypoint', 'tar', tar_image, '-C', '/v', '-xf', '-'],
+                                      stdin=archive, capture_output=True, timeout=900)
+            if proc.returncode != 0:
+                raise HarnessError(f'unpacking {name} failed: ' + proc.stderr.decode('utf-8', 'replace')[-300:])
+        spool = volumes['worker-spool.tar']
+        self.save_state({**self.state(), 'spool_name': spool, 'spool_generation': int(spool.rsplit('-', 1)[1]),
+                         'retired_spools': [], 'restored_from': str(src)})
+        self.compose('up', '-d', '--wait', 'postgres', timeout=300)
+        pg = self.container_id('postgres')
+        ready, _ = poll(lambda: _postgres_settled(pg), timeout_s=120, interval_s=1)
+        if not ready:
+            raise HarnessError('postgres did not accept connections within 120 s')
+        for dump in self.SNAPSHOT_DUMPS:
+            # Owners are kept (all `elitea`); grants are re-applied by crash-reader-init after start.
+            with open(src / dump, 'rb') as handle:
+                proc = subprocess.run(['docker', 'exec', '-i', pg, 'pg_restore', '-U', 'elitea', '-d', 'postgres',
+                                       '--create', '--clean', '--if-exists', '--no-acl', '--exit-on-error'],
+                                      stdin=handle, capture_output=True, timeout=1800)
+            if proc.returncode != 0:
+                raise HarnessError(f'pg_restore {dump} failed: ' + proc.stderr.decode('utf-8', 'replace')[-400:])
+        self.up()
+        return {'volumes': volumes, 'databases': list(self.SNAPSHOT_DUMPS), 'spool': spool}
+
+
 def image_id(ref):
     if not ref:
         raise HarnessError('a sandbox image reference is missing from stack.json')
