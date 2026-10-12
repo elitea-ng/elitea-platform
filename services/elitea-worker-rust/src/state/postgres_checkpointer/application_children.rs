@@ -7,10 +7,11 @@ use adk_rust::graph::checkpoint::RetentionPolicy;
 use adk_rust::graph::{Checkpoint, Checkpointer, GraphError};
 use async_trait::async_trait;
 
-use super::{PostgresCheckpointError, PostgresCheckpointer};
+use super::{CheckpointWriterAuthority, PostgresCheckpointError, PostgresCheckpointer};
 use crate::agents::graph::{
     ParallelActivation, ParallelBranchDefinition, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
+    ParallelChildRequest, ParentHead, ParentSaveProbe, PreparedChildCheckpoint,
 };
 
 pub(crate) struct ApplicationCheckpointers {
@@ -71,41 +72,45 @@ impl PostgresCheckpointer {
     }
 
     /// Activate only complete paths derived from frozen admitted definitions.
+    /// All descendant writers are activated in one transaction.
     pub(crate) async fn with_application_paths(
         self,
         paths: &[String],
     ) -> Result<ApplicationCheckpointers, PostgresCheckpointError> {
-        let paths = admitted_application_paths(paths)?;
-        let branch_paths =
-            ApplicationBranchCatalog::from_admitted_paths(&self.scope.authority.thread_id, &paths);
         // Validate all derived authorities before the first activation write.
-        let authorities = paths
-            .iter()
-            .map(|path| {
-                let thread_id = format!("{}/{path}", self.scope.authority.thread_id);
+        let (catalog, mut authorities) =
+            self.application_family(self.scope.authority.thread_id.clone(), paths)?;
+        authorities.remove(0);
+        let descendants = if authorities.is_empty() {
+            Vec::new()
+        } else {
+            self.activate_children(authorities).await?
+        };
+        Ok(ApplicationCheckpointers::assemble(
+            std::iter::once(self).chain(descendants),
+            catalog,
+        ))
+    }
+
+    /// One branch family: its root thread first, then every admitted path.
+    fn application_family(
+        &self,
+        root_thread: String,
+        paths: &[String],
+    ) -> Result<(ApplicationBranchCatalog, Vec<CheckpointWriterAuthority>), PostgresCheckpointError>
+    {
+        let paths = admitted_application_paths(paths)?;
+        let catalog = ApplicationBranchCatalog::from_admitted_paths(&root_thread, &paths);
+        let mut authorities = Vec::with_capacity(paths.len() + 1);
+        for path in &paths {
+            authorities.push(
                 self.scope
                     .authority
-                    .for_thread(thread_id.clone())
-                    .map(|authority| (thread_id, authority))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut threads = BTreeMap::new();
-        for (thread_id, authority) in authorities {
-            let child = Self::activate_under_root(
-                self.pool.clone(),
-                authority,
-                &self.run_root_thread_id,
-                self.limits,
-                Arc::clone(&self.state_writer_lease),
-            )
-            .await?;
-            threads.insert(thread_id, child);
+                    .for_thread(format!("{root_thread}/{path}"))?,
+            );
         }
-        threads.insert(self.scope.authority.thread_id.clone(), self);
-        Ok(ApplicationCheckpointers {
-            threads,
-            branch_paths,
-        })
+        authorities.insert(0, self.scope.authority.for_thread(root_thread)?);
+        Ok((catalog, authorities))
     }
 }
 
@@ -149,6 +154,19 @@ fn admitted_application_paths(paths: &[String]) -> Result<BTreeSet<&str>, Postgr
 }
 
 impl ApplicationCheckpointers {
+    fn assemble(
+        writers: impl IntoIterator<Item = PostgresCheckpointer>,
+        branch_paths: ApplicationBranchCatalog,
+    ) -> Self {
+        Self {
+            threads: writers
+                .into_iter()
+                .map(|writer| (writer.scope.authority.thread_id.clone(), writer))
+                .collect(),
+            branch_paths,
+        }
+    }
+
     pub(in crate::state) fn for_thread(
         &self,
         thread_id: &str,
@@ -214,6 +232,32 @@ impl ParallelCheckpointAppender for ApplicationCheckpointers {
             .append_after(expected_latest, candidate)
             .await
     }
+
+    async fn probe_parent(
+        &self,
+        thread_id: &str,
+        candidate_id: &str,
+    ) -> Result<ParentSaveProbe, GraphError> {
+        self.for_thread(thread_id)?
+            .probe_parent(thread_id, candidate_id)
+            .await
+    }
+
+    async fn append_after_head(
+        &self,
+        expected: Option<&ParentHead>,
+        candidate: &Checkpoint,
+    ) -> Result<String, GraphError> {
+        if expected.is_some_and(|parent| parent.thread_id != candidate.thread_id) {
+            return Err(PostgresCheckpointError::InvalidScope(
+                "the checkpoint append crosses application threads",
+            )
+            .into());
+        }
+        self.for_thread(&candidate.thread_id)?
+            .append_after_head(expected, candidate)
+            .await
+    }
 }
 
 #[async_trait]
@@ -263,6 +307,72 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
             checkpointer: Arc::new(child),
             admitted_threads,
         })
+    }
+
+    /// Two transactions for every branch family together: one activation of
+    /// each branch root and its admitted application threads, one read of the
+    /// branch roots' latest receipts.
+    async fn prepare_children(
+        &self,
+        activation: &ParallelActivation,
+        children: &[ParallelChildRequest<'_>],
+        origin: &crate::agents::graph::ParallelChildOrigin,
+    ) -> Result<Vec<PreparedChildCheckpoint>, GraphError> {
+        let parent = self.for_thread(&activation.root_thread_id)?;
+        let mut catalogs = Vec::with_capacity(children.len());
+        let mut sizes = Vec::with_capacity(children.len());
+        let mut authorities = Vec::new();
+        for request in children {
+            let paths = self
+                .branch_paths
+                .for_owned_node(&activation.root_thread_id, request.branch.node())?;
+            let thread_id = parent.branch_thread_id(
+                activation,
+                request.branch,
+                request.ordinal,
+                request.input_digest,
+                origin,
+            )?;
+            let (catalog, family) = parent.application_family(thread_id, paths)?;
+            catalogs.push(catalog);
+            sizes.push(family.len());
+            authorities.extend(family);
+        }
+        let mut writers = parent.activate_children(authorities).await?.into_iter();
+        let families = sizes
+            .into_iter()
+            .map(|size| writers.by_ref().take(size).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let roots = families
+            .iter()
+            .map(|family| {
+                family
+                    .first()
+                    .ok_or(PostgresCheckpointError::CorruptStoredState)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let latest = parent.load_children_latest(&roots).await?;
+        Ok(families
+            .into_iter()
+            .zip(catalogs)
+            .zip(latest)
+            .map(|((family, catalog), latest)| {
+                let thread_id = family
+                    .first()
+                    .map(|root| root.scope.authority.thread_id.clone())
+                    .unwrap_or_default();
+                let child = ApplicationCheckpointers::assemble(family, catalog);
+                let admitted_threads = child.threads.keys().cloned().collect();
+                PreparedChildCheckpoint {
+                    child: ParallelChildCheckpoint {
+                        thread_id,
+                        checkpointer: Arc::new(child),
+                        admitted_threads,
+                    },
+                    latest,
+                }
+            })
+            .collect())
     }
 }
 

@@ -11,7 +11,8 @@ use ring::digest;
 use super::PostgresCheckpointer;
 use crate::agents::graph::{
     ParallelActivation, ParallelBranchDefinition, ParallelChildCheckpoint,
-    ParallelChildCheckpointerFactory, ParallelChildOrigin,
+    ParallelChildCheckpointerFactory, ParallelChildOrigin, ParallelChildRequest,
+    PreparedChildCheckpoint,
 };
 
 const CHILD_THREAD_DOMAIN: &[u8] = b"elitea.graph.parallel.child-thread.v1\0";
@@ -66,6 +67,50 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
             checkpointer,
         })
     }
+
+    /// Two transactions for any child count: one batched writer activation,
+    /// one `DISTINCT ON` read of every child's latest receipt.
+    async fn prepare_children(
+        &self,
+        activation: &ParallelActivation,
+        children: &[ParallelChildRequest<'_>],
+        origin: &ParallelChildOrigin,
+    ) -> Result<Vec<PreparedChildCheckpoint>, adk_rust::graph::GraphError> {
+        self.check_parallel_root(activation)?;
+        let mut authorities = Vec::with_capacity(children.len());
+        for request in children {
+            let ordinal = branch_ordinal(request.ordinal)?;
+            let thread_id = child_thread_id(
+                self,
+                activation,
+                request.branch,
+                ordinal,
+                request.input_digest,
+                origin,
+            )?;
+            authorities.push(self.scope.authority.for_thread(thread_id)?);
+        }
+        let writers = self.activate_children(authorities).await?;
+        let latest = self
+            .load_children_latest(&writers.iter().collect::<Vec<_>>())
+            .await?;
+        Ok(writers
+            .into_iter()
+            .zip(latest)
+            .map(|(writer, latest)| {
+                let thread_id = writer.scope.authority.thread_id.clone();
+                let checkpointer: Arc<dyn Checkpointer> = Arc::new(writer);
+                PreparedChildCheckpoint {
+                    child: ParallelChildCheckpoint {
+                        admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
+                        thread_id,
+                        checkpointer,
+                    },
+                    latest,
+                }
+            })
+            .collect())
+    }
 }
 
 fn branch_ordinal(ordinal: usize) -> Result<u64, adk_rust::graph::GraphError> {
@@ -108,6 +153,7 @@ impl PostgresCheckpointer {
             &self.run_root_thread_id,
             self.limits,
             Arc::clone(&self.state_writer_lease),
+            &self.io,
         )
         .await?;
         Ok(child)

@@ -43,7 +43,7 @@ import { load } from 'js-yaml';
 import { normalizePipelineNodeIdentifiers } from '@/shared/lib/pipelineNodeIdentifiers';
 
 import type { YamlPipelineDocument } from './flow-editor/helpers/pipelineFlow.types';
-import { collectGraphAdmissionIssues } from './graphAdmission.helpers';
+import { blockingIssues, collectGraphAdmissionIssues } from './graphAdmission.helpers';
 import type { GraphAdmissionIssue } from './graphAdmission.types';
 import { usePipelineYamlStore } from '../model/pipelineYamlStore';
 
@@ -105,7 +105,7 @@ export function judgeLivePipelineGraph(yamlCode: string): LivePipelineGraphAdmis
   document = normalizePipelineNodeIdentifiers(document);
 
   const issues = collectGraphAdmissionIssues(document);
-  return { document, parseFailed: false, issues, hasGraph: true, isAdmissible: issues.length === 0 };
+  return { document, parseFailed: false, issues, hasGraph: true, isAdmissible: blockingIssues(issues).length === 0 };
 }
 
 /**
