@@ -18,7 +18,7 @@ use adk_rust::graph::GraphError;
 use async_trait::async_trait;
 use std::{sync::Arc, time::Duration};
 #[path = "code_attempt_remote.rs"]
-mod attempt_remote;
+pub(in crate::agents::graph) mod attempt_remote;
 #[path = "code_compiled.rs"]
 mod compiled;
 use elitea_agent_runtime::graph::code_platform_drive as platform_drive;

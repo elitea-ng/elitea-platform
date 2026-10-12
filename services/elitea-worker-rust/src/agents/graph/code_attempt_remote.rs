@@ -36,12 +36,21 @@ impl RemoteCodeRuntime {
         invocation: CodeInvocation<'_>,
         authority: &NodeAttemptAuthority,
     ) -> Result<Vec<u8>, CodeAttemptFailure> {
+        // Durable proof decides whether a previous attempt may have started the
+        // user's code. The error kind never does.
+        let prior_dispatch = prior_dispatch_possible(
+            &self.journal,
+            self.authority.dispatch_scope().ok().as_ref(),
+            &authority.dispatch_activation(),
+            authority.recovering_started(),
+        )
+        .await;
         let before = |phase, class| {
             classify(
                 phase,
                 class,
                 authority.dispatch_activation(),
-                authority.recovering_started(),
+                prior_dispatch,
             )
         };
         if invocation.activation != authority.dispatch_activation() {
@@ -107,7 +116,7 @@ impl RemoteCodeRuntime {
                     &error,
                     CodeAttemptPhase::Admission,
                     invocation.activation,
-                    authority.recovering_started(),
+                    prior_dispatch,
                 )
             })?;
         let trace = invocation
@@ -166,7 +175,7 @@ impl RemoteCodeRuntime {
                     error,
                     CodeAttemptPhase::Preparation,
                     invocation.activation,
-                    authority.recovering_started(),
+                    prior_dispatch,
                 )
             })?;
         let selected = self
@@ -248,7 +257,7 @@ impl RemoteCodeRuntime {
                     &error,
                     CodeAttemptPhase::Admission,
                     invocation.activation,
-                    authority.recovering_started(),
+                    prior_dispatch,
                 )
             })?;
         if let Some(workspace) = workspace.as_ref() {
@@ -270,7 +279,7 @@ impl RemoteCodeRuntime {
                             error,
                             CodeAttemptPhase::Hydration,
                             invocation.activation,
-                            authority.recovering_started(),
+                            prior_dispatch,
                         )
                     })
                 },
@@ -317,7 +326,7 @@ impl RemoteCodeRuntime {
                             CodeAttemptPhase::Observation,
                             NodeFailureClass::InvalidInput,
                             invocation.activation,
-                            authority.recovering_started(),
+                            prior_dispatch,
                         ),
                     };
                     let mut idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
@@ -350,7 +359,7 @@ impl RemoteCodeRuntime {
                     }
                 };
                 let submission = async {
-                    let mut dispatch_possible = authority.recovering_started();
+                    let mut dispatch_possible = prior_dispatch;
                     let mut backoff = code_timing::PendingBackoff::new();
                     loop {
                         let descriptor = selected
@@ -581,6 +590,32 @@ impl RemoteCodeRuntime {
     }
 }
 
+/// Whether user code may already have been dispatched for this activation.
+///
+/// A recovered `Running` journal says only that an earlier attempt began. The
+/// Worker registers the execution's dispatch row before it submits the first
+/// execute request, so with no row for the activation no submission was ever
+/// sent and a failure before dispatch (for example a lost preparation job)
+/// repeats nothing. A row, a missing scope or a lookup error keep the
+/// conservative answer: the effect may have happened.
+pub(in crate::agents::graph) async fn prior_dispatch_possible(
+    journal: &crate::sandbox::dispatch::DispatchJournal,
+    scope: Option<&crate::sandbox::dispatch::DispatchScope>,
+    activation: &[u8; 32],
+    recovering_started: bool,
+) -> bool {
+    if !recovering_started {
+        return false;
+    }
+    let Some(scope) = scope else {
+        return true;
+    };
+    journal
+        .contains_activation(scope, activation)
+        .await
+        .unwrap_or(true)
+}
+
 pub(super) fn workspace_attempt_failure(
     error: super::workspace_remote::CodeWorkspaceFailure,
     phase: CodeAttemptPhase,
@@ -624,7 +659,7 @@ fn submission_control_failure(
         true,
     ))
 }
-fn classify(
+pub(in crate::agents::graph) fn classify(
     phase: CodeAttemptPhase,
     class: NodeFailureClass,
     activation: [u8; 32],
