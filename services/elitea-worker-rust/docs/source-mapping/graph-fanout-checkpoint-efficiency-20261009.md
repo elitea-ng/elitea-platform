@@ -93,7 +93,7 @@ per child, from the I/O counters; "before" is the code on `origin/main` read pat
 | ≤ 2 transactions per fresh child | ADK start probe + terminal save; verify reload gone (`parallel.rs:926,943`), second empty probe reused (`parallel_checkpoint.rs:645`) | `a_completed_child_is_proven_by_its_fenced_save_without_a_reload` (child loads counted), load test asserts 24 transactions for one 8-child activation | 2. Before: 4 (prepare load, two ADK empty probes, verify reload) plus its own activation. |
 | Wrapped parent save reads no state | `parallel_checkpoint.rs:470`, `parallel_append.rs:109` | load-test transaction totals; span capture | 1 head read (metadata only) + 1 append. Before: by-id load + full latest load + append that re-read and re-serialized the parent (3 full reads, 2 serializations). |
 | 0 pool-acquire timeouts at 32 executions × 8 children | Batched preparation; pool sized 32 / 5 s like production | `fanout_load_meets_the_postgres_budgets` | 0 failures and max 2 parent rows in all 3 release runs (wall 428 / 971 / 666 ms). |
-| Per-child overhead p99 ≤ 30 ms; restore of 64 children p95 ≤ 500 ms | As above | Same test; wall-clock asserts gated by `ELITEA_FANOUT_LATENCY_BUDGETS=enforce` | Release build, local PostgreSQL 18 in Docker, shared host (load average 11–12 on 16 cores, other stacks running), 96 child samples per run: p50/p99 = 11.0/**21.2**, 16.1/33.6, 24.0/256 ms; restore of 64 p95 = 11.2 / 23.1 / 12.3 ms. **Restore met in every run; per-child p99 met in 1 of 3 runs.** The transaction count was identical in every run (24 per 8-child activation), so the spread is host contention, not work. Not reliably demonstrated on this host; see the follow-up. |
+| Per-child overhead p99 ≤ 30 ms; restore of 64 children p95 ≤ 500 ms | As above | Same test; wall-clock asserts gated by `ELITEA_FANOUT_LATENCY_BUDGETS=enforce` | Release build, local PostgreSQL 18 in Docker, shared host (load average 11–12 on 16 cores, other stacks running), 96 child samples per run: p50/p99 = 11.0/**21.2**, 16.1/33.6, 24.0/256 ms; restore of 64 p95 = 11.2 / 23.1 / 12.3 ms. **Restore met in every run; per-child p99 met in 1 of 3 runs.** After merging `main` 0f8fea2fe (bounded lock waits, load average 25–27): p50/p99 = 11.1/**28.2**, 20.8/51.9, 12.6/45.2 ms; restore of 64 p95 = 6.4 / 6.6 / 6.2 ms; 0 failures, ≤ 2 rows, 24 transactions per 8-child activation in every run. Again met in 1 of 3. The transaction count was identical in every run (24 per 8-child activation), so the spread is host contention, not work. Not reliably demonstrated on this host; see the follow-up. |
 | Coalescing: ≤ 4 progress frames/s per activation, one frame ≤ 64 KiB, lifecycle frames immediate, byte-exact | `fanout_progress.rs` (unwired) | `rate_budget_and_lossless_reassembly`, `byte_bound_at_limit_and_limit_plus_one`, `multibyte_split_stays_valid_and_byte_exact`, `lifecycle_flushes_buffer_first_at_same_instant`, `flush_deadline_is_window_start_plus_interval` | 8 children × 30 deltas/s × 10 s: ≤ 41 frames, ≤ 4 per second, lossless. |
 
 **C2e (`spawn_blocking` for ≥ 256 KiB)** and **C2f (writer-row byte counters)**: **not done**, per the brief's condition.
@@ -180,13 +180,23 @@ transaction as the effect (yes); bounded input (yes); parameterized SQL only (ye
     families, concurrent append, crash windows, load, span capture + its child).
 - Updated: `a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier` now asserts the refusal at the ADK pause
   save, where staged cards meet the parent.
-- `libs/rust`: `cargo test --offline --locked --workspace --all-targets --all-features` **1018 passed, 0 failed**;
-  `-p elitea-agent-runtime --features toolkit-sql` **521 passed**; `--features test-preserve-order,toolkit-sql`
-  **521 passed**; `fmt --check` and `clippy --workspace --all-targets --all-features -D warnings` clean.
-- Worker: `cargo test --offline --locked --all-targets --all-features` with a disposable PostgreSQL 18,
-  `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` and `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`: **1843 passed,
-  0 failed, 71 ignored** (pre-existing `#[ignore]` suites run by separate CI steps; none new). `fmt --check` and
-  `clippy --all-targets --all-features -D warnings` clean.
+- After merging `main` 0f8fea2fe, with CI flags (`--locked`, offline after one `cargo fetch --locked`):
+  - `libs/rust`:
+    - `cargo test --all-targets --all-features` (also `--workspace`): **1619 passed, 0 failed**.
+    - `-p elitea-agent-runtime --features toolkit-sql`: **754 passed**. With `test-preserve-order,toolkit-sql`:
+      **754 passed**.
+    - `fmt --check`, `clippy --all-targets --all-features -D warnings` (root and `--workspace`) and
+      `RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features`: clean.
+  - Worker:
+    - `cargo test --all-targets --all-features` with a disposable PostgreSQL 18,
+      `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` and `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`: **1975 passed,
+      0 failed, 71 ignored**. The 71 are pre-existing `#[ignore]` suites; none is new.
+    - `fmt --check`, `clippy -D warnings` and `cargo doc` with `-D warnings`: clean.
+  - Ignored real-PostgreSQL suites under `state::` (`-- --ignored`): **13 passed**, covering run-root fencing,
+    direct-tool journal and sandbox receipts.
+    - 3 `sandbox_supervisor_*` tests need Docker, TLS fixtures and a cached adapter image. They fail on missing
+      environment (`NotPresent`) before reaching any code this PR touches, and CI does not run them.
+- Before the merge, on base `58abb650c`: `libs/rust` 1018 passed; Worker 1843 passed.
 - Fixtures: every PostgreSQL test builds its own isolated database (`IsolatedPostgres`) and claims through
   `CheckpointWriterAuthority::new`; no shared database was touched.
 
@@ -251,6 +261,6 @@ the same for the fan-out spans. Agent chats (B, C) persist through the session s
 7. **Pre-existing, tracked separately:** after a Worker restart between two pauses of a pipeline with two nested
    agents, the second continuation fails assembly with `native_agent.invalid_configuration` (identical on main).
    Session-store `session.invalid_scope` / `agent_session_terminal_completion_unavailable` signals also occur on main.
-8. **Per-child p99 ≤ 30 ms was met in 1 of 3 release runs on the shared host.** Re-run
+8. **Per-child p99 ≤ 30 ms was met in 1 of 3 release runs on the shared host, both before and after the merge with main.** Re-run
    `ELITEA_FANOUT_LATENCY_BUDGETS=enforce cargo test --release … fanout_load_meets_the_postgres_budgets` on a quiet
    host or CI-like runner. CI runs the deterministic budgets only (rows, transactions, failures).
