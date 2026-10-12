@@ -309,6 +309,7 @@ impl RemoteCodeRuntime {
             .await?;
         }
         let mut platform_call_effect = None;
+        let mut platform_unknown_effect = false;
         let result=observe_typed(
             trace.as_ref(),
             CodePhase::Execution,
@@ -347,12 +348,16 @@ impl RemoteCodeRuntime {
                         use crate::transport::input_content::code_platform_content::CodePlatformStep;
                         match step {
                             CodePlatformStep::Idle => idle = code_timing::next_idle_interval(idle),
-                            CodePlatformStep::Committed { call_effect }
-                            | CodePlatformStep::Unknown { call_effect } => {
+                            CodePlatformStep::Committed { call_effect } => {
+                                idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
+                                platform_call_effect = Some(call_effect);
+                            }
+                            CodePlatformStep::Unknown { call_effect } => {
                                 idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
                                 // Retain the exact call for recovery. An unknown
                                 // result never grants another effect dispatch.
                                 platform_call_effect = Some(call_effect);
+                                platform_unknown_effect = true;
                             }
                         }
                         tokio::time::sleep(idle).await;
@@ -553,11 +558,29 @@ impl RemoteCodeRuntime {
                                 profile.client.audience(),
                             )
                             .await;
+                        // The runtime reached a definite terminal phase. It has no
+                        // network, so only a platform-client call can have left an
+                        // effect. The platform journal decides, not the failure kind.
+                        let effect_possible = invocation.platform_client
+                            && (platform_unknown_effect
+                                || match job.fingerprint() {
+                                    Ok(prepared) => {
+                                        unreceipted_platform_effect_possible(|| {
+                                            content.step_code_platform(
+                                                &self.authority,
+                                                invocation.activation,
+                                                prepared,
+                                            )
+                                        })
+                                        .await
+                                    }
+                                    Err(_) => true,
+                                });
                         Err(classify(
                             CodeAttemptPhase::Observation,
                             NodeFailureClass::InvalidResult,
                             invocation.activation,
-                            true,
+                            effect_possible,
                         ))
                     }
                     SandboxOutcome::Uncertain { .. } => {
@@ -614,6 +637,36 @@ pub(in crate::agents::graph) async fn prior_dispatch_possible(
         .contains_activation(scope, activation)
         .await
         .unwrap_or(true)
+}
+
+/// Bound for the final platform-journal drain after a terminal runtime phase.
+const PLATFORM_DRAIN_STEPS: usize = 8;
+
+/// Read the platform-call journal once the runtime is terminal. `true` means
+/// an effectful call may exist without its receipt (an unknown step), or the
+/// journal could not prove otherwise (an error, or more steps than the bound).
+/// A runtime without a pending broker call leaves the outcome known.
+pub(in crate::agents::graph) async fn unreceipted_platform_effect_possible<F, Fut>(
+    mut step: F,
+) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<
+            Output = Result<
+                crate::transport::input_content::code_platform_content::CodePlatformStep,
+                crate::transport::InputContentError,
+            >,
+        >,
+{
+    use crate::transport::input_content::code_platform_content::CodePlatformStep;
+    for _ in 0..PLATFORM_DRAIN_STEPS {
+        match step().await {
+            Ok(CodePlatformStep::Idle) => return false,
+            Ok(CodePlatformStep::Committed { .. }) => {}
+            Ok(CodePlatformStep::Unknown { .. }) | Err(_) => return true,
+        }
+    }
+    true
 }
 
 pub(super) fn workspace_attempt_failure(

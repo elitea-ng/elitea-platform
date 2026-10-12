@@ -866,3 +866,129 @@ mod preparation_recovery {
         assert!(prior_dispatch_possible(&journal, Some(&scope), &[1; 32], true).await);
     }
 }
+
+/// A runtime that reached a terminal `failed` phase is a known outcome. Only an
+/// unreceipted platform-client effect leaves it unknown (CR-SK-P09-hyd H).
+mod terminal_runtime_failure {
+    use super::*;
+    use crate::agents::graph::code_remote::attempt_remote::{
+        classify, unreceipted_platform_effect_possible,
+    };
+    use crate::transport::InputContentError;
+    use crate::transport::input_content::code_platform_content::CodePlatformStep;
+
+    struct FailedRuntime {
+        effect_possible: bool,
+        calls: AtomicU64,
+    }
+    #[async_trait]
+    impl CodeSandboxRuntime for FailedRuntime {
+        async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+            panic!("typed attempt only")
+        }
+        async fn execute_attempt(
+            &self,
+            _: CodeInvocation<'_>,
+            authority: &NodeAttemptAuthority,
+        ) -> Result<Vec<u8>, CodeAttemptFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(classify(
+                CodeAttemptPhase::Observation,
+                NodeFailureClass::InvalidResult,
+                authority.dispatch_activation(),
+                self.effect_possible,
+            ))
+        }
+    }
+
+    fn run(
+        effect_possible: bool,
+        sender: crate::agents::graph::node_events::PipelineNodeEventSender,
+    ) -> (RecoverableNode, NodeContext, Arc<FailedRuntime>) {
+        let runtime = Arc::new(FailedRuntime {
+            effect_possible,
+            calls: AtomicU64::new(0),
+        });
+        let definition = definition();
+        let digest = definition.validated_digest();
+        let body = Arc::new(
+            CodeNode::new(definition, types(), runtime.clone())
+                .unwrap()
+                .with_events(Some(sender)),
+        );
+        let mut node = RecoverableNode::new(body, digest, policy(), factory(), None);
+        node.clock = Arc::new(Clock(AtomicU64::new(100)));
+        (node, ctx(), runtime)
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_without_a_possible_effect_settles_typed_and_needs_no_operator() {
+        let (sender, receiver) =
+            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
+        let (node, context, runtime) = run(false, sender);
+        let error = node.execute(&context).await.err().unwrap();
+        assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
+        // One readable, typed settlement; no operator card.
+        let event = drain.try_recv().unwrap().unwrap_err();
+        assert_eq!(event.code, "pipeline.code_failed");
+        assert!(drain.try_recv().is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_with_an_unreceipted_platform_effect_still_reconciles() {
+        let (sender, receiver) =
+            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
+        let (node, context, runtime) = run(true, sender);
+        let output = node.execute(&context).await.unwrap();
+        assert!(output.interrupt.is_some());
+        assert!(drain.try_recv().is_none());
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn script(
+        steps: Vec<Result<CodePlatformStep, InputContentError>>,
+    ) -> impl FnMut() -> std::future::Ready<Result<CodePlatformStep, InputContentError>> {
+        let mut steps = std::collections::VecDeque::from(steps);
+        move || std::future::ready(steps.pop_front().unwrap_or(Ok(CodePlatformStep::Idle)))
+    }
+
+    #[tokio::test]
+    async fn platform_journal_drain_proves_or_withholds_the_known_outcome() {
+        let receipt = || CodePlatformStep::Committed {
+            call_effect: [4; 32],
+        };
+        // An empty journal, and receipted calls, leave the outcome known.
+        assert!(!unreceipted_platform_effect_possible(script(vec![])).await);
+        assert!(
+            !unreceipted_platform_effect_possible(script(vec![
+                Ok(receipt()),
+                Ok(receipt()),
+                Ok(CodePlatformStep::Idle),
+            ]))
+            .await
+        );
+        // An unreceipted call, an unreadable journal and an unbounded drain do not.
+        assert!(
+            unreceipted_platform_effect_possible(script(vec![
+                Ok(receipt()),
+                Ok(CodePlatformStep::Unknown {
+                    call_effect: [5; 32]
+                }),
+            ]))
+            .await
+        );
+        assert!(
+            unreceipted_platform_effect_possible(script(vec![Err(
+                InputContentError::DependencyUnavailable("journal unavailable")
+            )]))
+            .await
+        );
+        assert!(
+            unreceipted_platform_effect_possible(script((0..16).map(|_| Ok(receipt())).collect()))
+                .await
+        );
+    }
+}
