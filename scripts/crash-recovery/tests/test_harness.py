@@ -237,6 +237,16 @@ class VerdictTest(unittest.TestCase):
         p['settlements'][0]['disposition'] = 'SUCCEEDED'
         self.assertEqual(verdict.evaluate(SCENARIO, run)['invariants']['I1']['status'], 'violated')
 
+    def test_preparation_jobs_do_not_count_as_code_reruns(self):
+        run = _run()
+        sandbox = run['final']['agentstate']['sandbox']
+        sandbox.append(dict(sandbox[0], job_key='p1', activation_id='pa1', runtime_label='pl1',
+                            audience='dns:elitea-sandbox-javascript-preparation'))
+        scenario = dict(SCENARIO, _oracle={'jobs': 1})
+        self.assertEqual(verdict.i2_no_code_rerun(run, scenario)['extra_jobs'], 0)
+        sandbox.append(dict(sandbox[0], job_key='k2', activation_id='a2'))
+        self.assertEqual(verdict.i2_no_code_rerun(run, scenario)['extra_jobs'], 1)
+
     def test_two_prepared_nodes_prepare_once_each_without_an_oracle(self):
         run = _run()
         sandbox = run['final']['agentstate']['sandbox']

@@ -49,15 +49,19 @@ def i2_no_code_rerun(run, scenario):
     unmatched = [j['activation_id'] for j in final_jobs if not j.get('job_matched')]
     changed_runtime = [k for k, j in pre_jobs.items() if j.get('runtime_id') and any(
         f['job_key'] == k and f.get('runtime_id') != j['runtime_id'] for f in final_jobs)]
-    oracle_jobs = scenario.get('_oracle', {}).get('jobs')
-    extra_jobs = (len(final_jobs) - oracle_jobs) if oracle_jobs is not None else None
+    # Execution jobs only: preparation jobs are I2P's, and their count depends on the stack's features.
+    oracle = scenario.get('_oracle', {})
+    oracle_jobs = (oracle['jobs'] - (oracle.get('preparations') or 0)) if oracle.get('jobs') is not None else None
+    execution_jobs = [j for j in final_jobs if not is_preparation_audience(j.get('audience'))]
+    extra_jobs = (len(execution_jobs) - oracle_jobs) if oracle_jobs is not None else None
     probe = run.get('answer', {}).get('probe') or {}
     t_fault_ms = run.get('t_fault_ms')
     sentinel = None
     if probe.get('started_at_ms') is not None and t_fault_ms and run.get('trigger', {}).get('predicate') in (
             'code_runtime_running',):
         sentinel = probe['started_at_ms'] < t_fault_ms
-    facts = {'jobs': len(final_jobs), 'oracle_jobs': oracle_jobs, 'extra_jobs': extra_jobs,
+    facts = {'jobs': len(final_jobs), 'execution_jobs': len(execution_jobs), 'oracle_jobs': oracle_jobs,
+             'extra_jobs': extra_jobs,
              'runtime_starts_over_one': multi_start, 'labelled_jobs_started': len(starts),
              'unmatched_dispatches': unmatched,
              'runtime_changed_for_pre_fault_job': changed_runtime, 'started_before_fault': sentinel,

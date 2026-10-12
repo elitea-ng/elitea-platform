@@ -544,3 +544,136 @@ dependency changed. The code-review and security-review results are recorded in 
 
 Raw evidence (`evidence.json`, `verdict.json`, Docker event streams, browser results) stays in the local run
 directory `handoffs/crash-recovery-suite/runs/` and is not committed. Its paths and execution ids are cited above.
+
+## 13. Re-proof on the #1084 fix images (2026-10-12)
+
+Images were built from #1084 commit `9bf82d60d` (merged with main `719d12178`):
+
+| Service | Tag | Image | Binary |
+|---|---|---|---|
+| Main | `elitea-main:code1084-9bf82d60d` | `sha256:811f516d53d9` | `ae39dfb9c01d73ce…` |
+| Worker | `elitea-worker-rust:code1084-9bf82d60d` | `sha256:4bfaea5b9720` | `d38a613217dcc1a4…` |
+| Supervisor | `elitea-sandbox-supervisor:code1084-9bf82d60d` | `sha256:efacee7226c2` | `a673eea7218c8819…` |
+| Web | `elitea-web:code1084-9bf82d60d` | `sha256:f18101e4ef63` | — |
+
+The Code runners, the gateway and the sub-app images are unchanged.
+
+**§3b binary check.** The fix markers are present: Worker `code_platform_effects` ×6, `release_undispatched` ×3,
+`code_hydration_failed` ×1; Main `resource_project_id=$1::integer` ×1, `original source application handle differs` ×1;
+Supervisor `sandbox_hydration_refused` ×1. The old images (Worker `c0f2e5f9b`, Main `c0f2e5f9b`, Supervisor
+`58abb650c`) are the negative controls and show 0. `524165ed09` (#1160) is an ancestor of `9bf82d60d`.
+
+**Stack.** The merge of main into this branch brought in elitea-vector, the Rust Inventory engine and a new sub-app
+host contract.
+- The fix-image stack runs elitea-vector from the local `:standalone` image and Qdrant `v1.19.2`.
+- It sets `INVENTORY_RUNNER=legacy`, as the `elitea-code1084` stack does.
+- Compose built the missing `elitea-inventory-engine:local` image (a sidecar not under test) once from this branch.
+- The old-image baseline ran from a detached checkout of the pre-merge commit `3e0be8244`, with the same stack
+  material.
+
+**Baseline on the old images.** `CR-WSP-P09-lease` reproduced F1 deterministically, with no host sleep, as execution
+`d86f6b9385518f966e4896f273ba1f2a`:
+1. `sandbox.deadline_exceeded` on the preparation job;
+2. the recovery event was rejected as `PROTOCOL_VIOLATION`;
+3. a `STALE_FENCE` / `invalid_durable_state` loop followed;
+4. Stop returned 204 and did not settle it.
+
+Its full snapshot is the F1 restore below.
+
+### #1084 gap re-proof (fix images, run fix1084-gap-20261012)
+
+| Row | Verdict (repeats) | Observed | fault→settled s (each; admit→settled for no-fault rows) | median | Executions |
+|---|---|---|---|---|---|
+| CR-MK-P09-hyd | PASS (3/3) | R | 118.1, 115.5, 115.2 | 115.5 | 1c751aa0, a2278cb0, a8206c5d |
+| CR-MK-P11 | PASS (3/3) | R | 62.8, 62.6, 65.2 | 62.8 | f19c726f, 827c1a5a, d004a230 |
+| CR-SK-P09-hyd | PASS (3/3) | R | 63.3, 114.4, 114.1 | 114.1 | 75ac42cb, 76ec9c68, fcc33e54 |
+| CR-WSP-P09-lease | PASS (3/3) | F,R | 161.5, 159.4, 158.9 | 159.4 | 89b2b8e4, de542983, e461343a |
+| CR-WSP-P09-lease-stop | PASS (1/1) | R | 101.5 | 101.5 | f4f5a084 |
+
+### Language matrix (fix images; runs fix1084-lm-20261012, fix1084-npm-20261012)
+
+| Row | Verdict (repeats) | Observed | fault→settled s (each; admit→settled for no-fault rows) | median | Executions |
+|---|---|---|---|---|---|
+| BASE-python-prepared | PASS (1/1) | R | 67.5 | 67.5 | a6c0c21b |
+| CR-WK-P09 | PASS (3/3) | R | 113.1, 113.4, 114.9 | 113.4 | e58c70af, 4b89bd9b, 29237bf9 |
+| LM-BASE-javascript | PASS (2/2) | R | 52.4, 55.2 | 53.8 | 113fa7f3, 57c9d853 |
+| LM-BASE-python | PASS (4/4) | R | 109.2, 65.6, 68.5, 67.5 | 68.0 | eb9f75da, 92a0de97, a3abf314, cb063390 |
+| LM-BASE-typescript | PASS (1/1) | R | 55.0 | 55.0 | 1d97523e |
+| LM-MK-javascript | PASS (3/3) | R | 48.0, 65.6, 47.7 | 48.0 | 21de35de, 2e584bc4, ad94ae2b |
+| LM-MK-python | PASS (3/3) | R | 67.8, 56.6, 69.7 | 67.8 | 21771006, 15c9808c, 216d4126 |
+| LM-PREP-WK-javascript | PASS (2/2, 1 inconclusive) | R | 116.2, 113.0 | 114.6 | df89944b, 76f47b89, 18e5dc41 |
+| LM-PREP-WK-typescript | PASS (1/1, 2 inconclusive) | R | 112.4 | 112.4 | 015a358f, 9f236c24, 4199852c |
+| LM-PREP-javascript | PASS (1/1) | R | 57.0 | 57.0 | 727c2419 |
+| LM-PREP-typescript | PASS (1/1) | R | 56.8 | 56.8 | 911d33dd |
+| LM-SK-javascript | PASS (3/3) | R | 60.3, 59.4, 59.0 | 59.4 | 1055f0d5, d40c6723, 35846c06 |
+| LM-SK-python | PASS (3/3) | R | 172.2, 67.0, 66.2 | 67.0 | 9f221e93, a057c7b1, 102113af |
+| LM-STOP-javascript | PASS (2/2) | R | 5.5, 4.7 | 5.1 | a9062a19, 651bdfe0 |
+| LM-STOP-python | PASS (3/3) | R | 1.4, 9.7, 0.9 | 1.4 | f60bc826, 6826fa90, b6706252 |
+| LM-THROW-python | PASS (1/1) | F | 6.2 | 6.2 | dc43acf3 |
+| LM-WK-javascript | PASS (3/3) | R | 56.4, 57.3, 61.7 | 57.3 | 679570a1, 228d5eb9, 3407c649 |
+| LM-WK-python | PASS (3/3) | R | 79.8, 127.6, 130.8 | 127.6 | f65e3e53, e5374766, 9f85a8c1 |
+
+### Snapshot restores on the fix images (run fix1084-restore-20261012)
+
+| Snapshot | Execution | Expected | Result | Settlements | NATS drained | Live jobs | Running runtimes | waited s |
+|---|---|---|---|---|---|---|---|---|
+| F1-lease-baseline | d86f6b93… | CANCELLED | PASS (CANCELLED) | 1 | True | 0 | 0 | 0.2 |
+| F3-main-hydration | 0b19b052… | CANCELLED | PASS (CANCELLED) | 1 | True | 0 | 0 | 0.3 |
+| F4-main-p11 | 3fc85dad… | CANCELLED | PASS (CANCELLED) | 1 | True | 0 | 0 | 0.2 |
+| F2-orphan | 4e160a9d… | FAILED | PASS (FAILED) | 1 | True | 0 | 0 | 0.2 |
+
+
+**Restores.** Each restore ran `crashctl restore-snapshot` into a fresh stack on the fix images, then
+`crashctl observe <execution>`. "waited s" is the time from the end of the restore until the settlement was seen;
+every restored run settled while the stack started. F2 (CR-SK-P09-hyd r2) had already settled FAILED, so its restore
+proves the reaping only: no reserved job and no runtime is left.
+
+On the fix images the four §9.3 findings are proven fixed (#1084):
+- F1 settles typed (`PIPELINE_CODE_FAILED`, "Code dependency preparation failed. Later nodes did not run. Share the
+  support reference with your administrator before retrying.") or completes. The typed code is on the replay terminal
+  and the chat answer; the settlement `error_code` stays NULL.
+- F2–F4 resume (R).
+- Stop settles CANCELLED once in every restored hang.
+
+## 14. Code language matrix (fix images; in progress)
+
+Every Code language is tested under the same faults, using one language-parameterised fixture (`code-lang.yaml` and
+`seed.py` `LANGUAGES`; no YAML is copied per language). The catalog expands `catalog/language-matrix.json` into
+`LM-<FAULT>-<lang>` rows:
+- languages: python, javascript, typescript, rust;
+- faults: BASE, WK, SK, MK (kill9 at P10), STOP (user Stop at P10), THROW (no fault; the user's Code throws).
+
+A row the deployment cannot run is reported NOT-SUPPORTED with its reason, never skipped.
+
+**Package preparation per language:**
+- **Python, PyPI.** The `preparation` profile, rows aliased to BASE-python-prepared and CR-WK-P09.
+- **Rust.** A dependency-free node uses the compiled-snapshot path (BASE-rust-compiled, CR-MK-P11).
+- **JS/TS, npm.** This needs the native Deno profile (stack feature `npm`).
+  - JavaScript and TypeScript each get a native preparation listener.
+  - JS/TS execution moves to a native Deno listener (`dns:elitea-sandbox-deno-native`); Python keeps the Deno
+    listener.
+  - The preparers share the resolver bridge.
+  - Compose cannot restrict egress to `registry.npmjs.org` and `jsr.io` (§9.2).
+  - With `npm` off, the JS/TS npm rows report NOT-SUPPORTED.
+
+Results so far are in the language-matrix table above. The fault→settle medians are the baseline for FU-215 (AckWait
+and leases toward ≤ 20 s forced-crash recovery):
+- a Worker or Supervisor kill at P10 settles in about 57–67 s, dominated by the 60 s AckWait;
+- a Main kill at P10 settles in about 48–68 s;
+- a kill during preparation settles in about 113 s;
+- a Stop settles in 1–10 s.
+
+**Still to run** (the session paused on 2026-10-12):
+- LM-STOP-javascript r3 and LM-THROW-javascript;
+- the TypeScript fault rows with `npm` off;
+- all Rust rows;
+- the T0+T0b regression ×1;
+- three npm Worker-kill repeats whose trigger missed the ~2 s resolve (the trigger now polls every 0.1 s).
+
+**Harness incidents fixed during the run:**
+- I2P allowed only one preparation per run, but a pipeline with two prepared nodes prepares twice; it now allows one
+  per Code activation.
+- I2 counted preparation jobs as Code re-runs.
+- The crash stack's Postgres ran as PID 1 and reaped an orphaned process that exited 2, which restarted every backend.
+  It now runs with `init: true`. This was a test-stack configuration issue, not a product defect.
+
