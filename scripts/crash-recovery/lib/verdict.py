@@ -155,8 +155,15 @@ def i5_claims_and_fencing(run, scenario):
           and facts['takeovers'] in allowed and facts['stale_outputs_after_takeover'] == 0
           and facts['stale_checkpoints_after_takeover'] == 0 and facts['stale_session_events_after_takeover'] == 0
           and (settlement is None or facts['settlement_bound_to_last_claim'])
-          and facts['writer_on_last_claim'] is not False)
+          and (facts['writer_on_last_claim'] is not False or _cancelled_without_resume(settlement, facts)))
     return _inv(HOLD if ok else VIOLATED, **facts)
+
+
+def _cancelled_without_resume(settlement, facts):
+    """A Stop honoured on takeover settles CANCELLED without resuming, so the newest checkpoint may predate the last
+    claim. Writes after the takeover by a superseded claim are still counted by the stale_* facts."""
+    return bool(settlement and settlement['disposition'] == 'CANCELLED' and facts['settlement_bound_to_last_claim']
+                and facts['stale_checkpoints_after_takeover'] == 0)
 
 
 def i6_no_orphan(run):

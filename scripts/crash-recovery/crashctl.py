@@ -11,6 +11,7 @@ Standard library only. Local and opt-in: CI never runs it. Subcommands:
   verify RUN_ID        re-evaluate the verdicts of a run from its stored evidence
   report RUN_ID...     summarize runs: per-scenario verdicts, measurements, matrix-cell proposals
   binary-check         §3b image identity check: extract each evidence binary and look for a marker
+  snapshot DEST        replayable local snapshot of a stuck run: both DB dumps, the Worker spool, the NATS store
   down [--volumes]     stop the crash stack (only the crash project; never another stack)
 """
 import argparse
@@ -153,6 +154,10 @@ def cmd_binary_check(args):
     print(json.dumps(report.binary_check(json.loads(pathlib.Path(args.spec).read_text())), indent=2))
 
 
+def cmd_snapshot(args):
+    print('\n'.join(Stack(args.stack_dir).snapshot(args.dest)))
+
+
 def cmd_down(args):
     Stack(args.stack_dir).down(volumes=args.volumes)
 
@@ -188,6 +193,9 @@ def main():
     p = sub.add_parser('binary-check')
     p.add_argument('spec', help='JSON: [{"image": ref, "path": in-image binary, "marker": string, "expect": true}]')
     p.set_defaults(fn=cmd_binary_check)
+    p = sub.add_parser('snapshot')
+    p.add_argument('dest')
+    p.set_defaults(fn=cmd_snapshot)
     p = sub.add_parser('down')
     p.add_argument('--volumes', action='store_true')
     p.set_defaults(fn=cmd_down)

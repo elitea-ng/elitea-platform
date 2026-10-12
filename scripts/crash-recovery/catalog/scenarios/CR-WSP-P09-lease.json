@@ -1,0 +1,58 @@
+{
+  "id": "CR-WSP-P09-lease",
+  "cell": "Worker + Supervisor frozen past the claim and job leases x P09, preparer resolving",
+  "matrix_cell": "Worker (container restart) x P09",
+  "now": "L (finding: preparation failure on a recovery visit never settles; fix in #1084, pending)",
+  "target": "F",
+  "fixture": "python-prepared-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "preparation_resolving",
+    "timeout_s": 180,
+    "params": {
+      "min_age_s": 1
+    }
+  },
+  "faults": [
+    {
+      "action": "pause",
+      "target": "supervisor"
+    },
+    {
+      "action": "pause",
+      "target": "worker"
+    },
+    {
+      "action": "wait",
+      "seconds": 100
+    },
+    {
+      "action": "unpause",
+      "target": "worker"
+    },
+    {
+      "action": "unpause",
+      "target": "supervisor"
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [
+      "pipeline.code_preparation_failed"
+    ],
+    "budget_s": 480,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    }
+  },
+  "notes": "Deterministic stand-in for the host-sleep hang of 2026-10-09 (execution 097ca8e5...): freeze the Worker and the Supervisor (docker pause) for 100 s, longer than the 30 s claim lease, the 60 s sandbox job lease and AckWait, while the preparer resolves; then thaw both. The preparer container itself keeps running. Target F as the floor (planning decision for #1084): a typed pipeline.code_preparation_failed with one settlement, or R (completes). Note: a re-preparation under the same job would trip I2P (one preparation per job). Leaves the stack blocked when the gap reproduces: run it alone and last, snapshot, then reset.",
+  "gap": "#1084 (pending): a preparation failure seen on a recovery visit becomes an unknown-effect node-recovery receipt that Main rejects; the delivery loops and Stop does not settle",
+  "expected_gap_class": "L",
+  "repeat": 1,
+  "browser": false,
+  "tier": "T0b-gap"
+}

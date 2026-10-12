@@ -11,7 +11,7 @@ import shutil
 import stat
 import subprocess
 
-from .common import REPO, HarnessError, read_json, run, write_json
+from .common import REPO, HarnessError, poll, read_json, run, write_json
 
 DEFAULT_STACK_DIR = pathlib.Path(os.environ.get(
     'CRASH_STACK_DIR', '/Users/romanmitusov/Documents/Work/.claude/handoffs/crash-recovery-suite/stack'))
@@ -356,6 +356,10 @@ class Stack:
         """Restore the real-model product dump into an empty product DB (real-model runbook steps 3-4)."""
         self.compose('up', '-d', '--wait', 'postgres', timeout=300)
         pg = self.container_id('postgres')
+        # A fresh volume's first boot restarts the server after initdb; healthy can be reported in between.
+        ready, _ = poll(lambda: _postgres_settled(pg), timeout_s=120, interval_s=1)
+        if not ready:
+            raise HarnessError('postgres did not accept connections within 120 s')
         tables = run(['docker', 'exec', pg, 'psql', '-U', 'elitea', '-d', 'elitea', '-At', '-c',
                       "SELECT count(*) FROM pg_tables WHERE schemaname = 'centry'"]).stdout.decode().strip()
         if tables != '0':
@@ -441,6 +445,37 @@ class Stack:
         self.save_state(state)
         return state['spool_name']
 
+    def snapshot(self, dest):
+        """Replayable local snapshot of a stuck run: full dumps of both databases, the Worker spool and the NATS
+        store (NATS paused while copied). Files are mode 600 in a mode 700 directory; nothing leaves the machine."""
+        dest = pathlib.Path(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        os.chmod(dest, 0o700)
+        pg = self.container_id('postgres')
+        tar_image = inspect(pg)['image']
+        files = {}
+        for db in ('elitea', 'agentstate'):
+            files[f'{db}.dump'] = ['docker', 'exec', pg, 'pg_dump', '-U', 'elitea', '-Fc', '-d', db]
+        volumes = {'worker-spool.tar': self.state()['spool_name'], 'nats-store.tar': f'{self.project}_crash_nats_data'}
+        for name, volume in volumes.items():
+            files[name] = ['docker', 'run', '--rm', '--network', 'none', '-v', f'{volume}:/v:ro', '--entrypoint', 'tar',
+                           tar_image, '-C', '/v', '-cf', '-', '.']
+        nats = self.container_id('nats')
+        run(['docker', 'pause', nats])
+        try:
+            for name, args in files.items():
+                fd = os.open(dest / name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, 'wb') as out:
+                    proc = subprocess.run(args, stdout=out, stderr=subprocess.PIPE, timeout=900)
+                if proc.returncode != 0:
+                    raise HarnessError(f'snapshot {name} failed: ' + proc.stderr.decode('utf-8', 'replace')[-300:])
+        finally:
+            run(['docker', 'unpause', nats], check=False)
+        manifest = {'volumes': volumes, 'images': {t: inspect(self.container_id(svc)).get('image')
+                                                    for t, svc in TARGETS.items()}}
+        _write_private(dest / 'manifest.json', json.dumps(manifest, indent=2))
+        return sorted(p.name for p in dest.iterdir())
+
 
 def image_id(ref):
     if not ref:
@@ -462,6 +497,16 @@ def inspect(container_id):
             'restart_count': data.get('RestartCount', 0),
             'health': (st.get('Health') or {}).get('Status')}
 
+
+def _postgres_settled(container):
+    """The final server accepts connections (not the entrypoint's temporary init server)."""
+    proc = subprocess.run(['docker', 'logs', container], capture_output=True, timeout=30)
+    logs = (proc.stdout + proc.stderr).decode('utf-8', 'replace')
+    if 'The files belonging to this database system' in logs:
+        done = logs.find('PostgreSQL init process complete')
+        if done < 0 or 'ready to accept connections' not in logs[done:]:
+            return False
+    return run(['docker', 'exec', container, 'pg_isready', '-U', 'elitea', '-d', 'elitea'], check=False).returncode == 0
 
 def refuse_if_kind_running():
     """Compose and the kind crash cluster never run together (16 GB VM, DESIGN §3.6)."""

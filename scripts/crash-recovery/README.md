@@ -94,6 +94,18 @@ Each repeat runs these steps:
 
 The stack is restored after every repeat.
 
+`T0b-gap` holds scenarios that reproduce known gaps: `CR-WSP-P09-lease` and its Stop variant. Before the fix lands
+they leave an unsettled execution, which blocks every later preflight. Run them alone and last. Then snapshot the
+stuck state and reset:
+
+```bash
+python3 scripts/crash-recovery/crashctl.py run CR-WSP-P09-lease --run-id <run-id>
+python3 scripts/crash-recovery/crashctl.py snapshot <run-dir>/<scenario>/r1/hang-snapshot   # both DB dumps, spool, NATS store
+python3 scripts/crash-recovery/crashctl.py down --volumes && python3 scripts/crash-recovery/crashctl.py up
+```
+
+The snapshot is local only: mode 600 files in a mode 700 directory. NATS is paused while its store is copied.
+
 ## Invariants and verdicts
 
 | Id | Checked from |

@@ -218,6 +218,18 @@ class VerdictTest(unittest.TestCase):
         p['settlements'][0]['disposition'] = 'SUCCEEDED'
         self.assertEqual(verdict.evaluate(SCENARIO, run)['invariants']['I1']['status'], 'violated')
 
+    def test_stop_on_takeover_needs_no_new_checkpoint_writer(self):
+        run = _run()
+        run['final']['product']['settlements'][0]['disposition'] = 'CANCELLED'
+        run['final']['agentstate']['checkpoints']['writers'][0]['writer_claim_attempt'] = 1
+        scenario = dict(SCENARIO, expect=dict(SCENARIO['expect'], settlement='CANCELLED'))
+        self.assertEqual(verdict.evaluate(scenario, run)['invariants']['I5']['status'], 'hold')
+        run['final']['agentstate']['checkpoints']['stale_checkpoints_after_takeover'] = 1
+        self.assertEqual(verdict.evaluate(scenario, run)['invariants']['I5']['status'], 'violated')
+        run['final']['agentstate']['checkpoints']['stale_checkpoints_after_takeover'] = 0
+        run['final']['product']['settlements'][0]['disposition'] = 'SUCCEEDED'
+        self.assertEqual(verdict.evaluate(SCENARIO, run)['invariants']['I5']['status'], 'violated')
+
     def test_inconclusive_is_never_credited(self):
         result = verdict.evaluate(SCENARIO, {'inconclusive': 'trigger code_runtime_running timeout'})
         self.assertEqual(result['verdict'], 'INCONCLUSIVE')

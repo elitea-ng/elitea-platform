@@ -68,5 +68,9 @@
   "T0b-compiled": [
     "BASE-rust-compiled",
     "CR-MK-P11"
+  ],
+  "T0b-gap": [
+    "CR-WSP-P09-lease",
+    "CR-WSP-P09-lease-stop"
   ]
 }

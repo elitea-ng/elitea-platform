@@ -29,6 +29,10 @@ runners), over the NATS transport, with both recovery flags on:
 | NATS, with a claimed run or a queued command | **Resumes (R) / runs once (I)** | CR-NK-P10, CR-NK-P01q (3/3 each) |
 | Main, Worker and Supervisor together | **Resumes (R)** | CX-03b (3/3) |
 | Worker, with stock Helm flags (D1) | **Typed failure (F)**, generic text | CR-WK-P03-stock (1/1) |
+| Worker, Supervisor or Main during dependency resolve, or a prepared job (T0b) | **Resumes (R)**, no re-download | CR-{W,S,M}K-P09, CR-{W,S,M}K-P10-prep (3/3 each) |
+| Worker during hydration (T0b) | **Resumes (R)** | CR-WK-P09-hyd (3/3) |
+| Main during hydration or compiled publication; leases lost during preparation (T0b) | **Hangs (L)**; Stop does not settle. Fix: #1084 | CR-MK-P09-hyd, CR-MK-P11, F1 (§9.3) |
+| Supervisor during hydration (T0b) | R 2/3; once **failed and orphaned its runtime**. Fix: #1084 | CR-SK-P09-hyd (§9.3 F2) |
 
 Across every R run:
 - **No user Code ran again.** Each sandbox job had one runtime start, and the fixture's start time precedes the cut.
@@ -39,7 +43,7 @@ Across every R run:
 
 A recovery on the model path calls the model once more. This is the documented "recovery can bill once more".
 
-T0b results are in §9.
+T0b results and the four Code-durability findings are in §9.
 
 ## 2. What was built (work packages)
 
@@ -119,6 +123,11 @@ R/I/C/F/L. The harness follows two rules from the PR #1084 private controller:
   The pipelines are: `crash-code-nonce-sleep-50` (app 166, version 192), `-150` (167/193), `crash-model-slow`
   (168/194) and `crash-python-prepared-sleep-50` (172/198). `rust-compiled` is created fresh per run: an identical
   source would reuse a Ready snapshot.
+- **Resets during T0b (2026-10-12).** `elitea-crash` was recreated from the same dump three times (`down --volumes`,
+  `up`, `seed --all`), each time after a stuck run had been snapshotted (§9). It was brought down after the last one.
+  The fixtures were re-seeded through the API, so T0b pipeline ids differ between resets. The image IDs were unchanged. One orphaned Code runtime of this
+  stack (`30f187e676d9`, F2) was removed by container id after its snapshot. Nothing else on the shared daemon was
+  touched.
 - **Database writes** were limited to the `crash_reader` role (`CREATE ROLE`, grants). That role is the collector's
   read-only login. No product or AgentState row was written by the harness.
 - **Inherited rows.** The restored dump holds 25 non-terminal executions from August with expired deadlines. 23 of
@@ -277,7 +286,149 @@ These invariants are enforced by SQL (`scripts/crash-recovery/invariants/**`) an
 
 ## 9. Results, tier T0b (run `t0b-20261009`)
 
-T0B_RESULTS_PENDING
+T0b covers Python dependency preparation (chat 850), hydration, prepared execution, and compiled Rust publication
+(chat 852). It ran on the same images as T0. The preparation profile uses the existing Deno runner image
+`sha256:76813e683650` as its `image_digest` with `purpose: preparation`, so no image was built. The compiled-release
+material is the hand-measured manifest (§5).
+
+The run took place on 2026-10-09 and 2026-10-12. Two hangs and one orphan (below) blocked the stack. After each one I
+snapshotted the stuck state and recreated `elitea-crash` from the dump with `crashctl down --volumes`, `up` and
+`seed --all`; the fixtures were recreated through the public API. No SQL was written. The same image IDs were
+re-checked against the §3b binary check before every re-run. Repeats that were blocked by a stuck predecessor are
+INCONCLUSIVE and are never credited.
+
+### 9.1 Verdicts
+
+| Scenario | Cut | Verdict | Repeats | Observed | t→settled median (s) | Executions |
+|---|---|---|---|---|---|---|
+| BASE-python-prepared | no fault | PASS | 1/1 | R | 63.0 | `149b051717249dd4a6f68f4c01b13dc2` (preparation about 8 s, hydration about 1 s) |
+| BASE-rust-compiled | no fault | PASS | 1/1 | R | 66.7 | `9ce3a642d78e408af5054847e527a5f1` (compile about 64 s, `publishing` then Ready) |
+| CR-WK-P09 | Worker kill9, preparer resolving | PASS | 3/3 | R | 113.7 | `47327213…`, `2ecb9521…`, `510c8cc2…` |
+| CR-SK-P09 | Supervisor kill9, preparer resolving | PASS | 3/3 | R | 114.7 | `49688227…`, `039b7b4f…`, `5e3ac0e9…` |
+| CR-MK-P09 | Main kill9, preparer resolving | PASS | 3/3 | R | 60.7 | `3ea14829…`, `934df5fc…`, `6702a063…` |
+| CR-WK-P09-hyd | Worker kill9, hydration | PASS | 3/3 | R | 115.2 | `fe75b8ca…`, `d56aa032…`, `547e9862…` |
+| CR-SK-P09-hyd | Supervisor kill9, hydration | **REGRESSION** | 3/3 | R, **L**, R | 115.9 | `b0aba844…`, **`4e160a9d8aeca4f419e2517aff77fa3e`** (§9.3 F2), `79c31341…` |
+| CR-MK-P09-hyd | Main kill9, hydration | **REGRESSION** | 1/3 | **L** | — | **`0b19b052f3345b52d60c61116ead7b47`** (§9.3 F3); r2 and r3 inconclusive |
+| CR-WK-P10-prep | Worker kill9, prepared job executing | PASS | 3/3 | R | 60.3 | `169f9d3a…`, `a85fd91d…`, `6f417c32…` |
+| CR-SK-P10-prep | Supervisor kill9, prepared job executing | PASS | 3/3 | R | 60.7 | `1793f3dd…`, `990ff5ab…`, `ed206153…` |
+| CR-MK-P10-prep | Main kill9, prepared job executing | PASS | 3/3 | R | 72.0 | `3343ec3e…`, `2959d386…`, `203ad769…` |
+| CR-WPK-P09 | user Stop, then Worker kill9 and pod replacement during preparation (chat 850) | PASS | 3/3 | R (CANCELLED once) | 59.4 | `723425d5…`, `0c7e9c3f…`, `99ac65e3…` |
+| CR-MK-P11 | Main kill9 after compile, snapshot publishing (chat 852) | **REGRESSION** | 1/3 | **L** | — | **`3fc85dada0e76311b12bfffc043f5b45`** (§9.3 F4); r2 and r3 inconclusive |
+| CR-WSP-P09-lease | Worker + Supervisor frozen past the leases, preparer resolving | pending | 0/1 | — | — | Deterministic stand-in for F1. Not run yet: the disk floor stopped the session (§9.5). |
+
+What held in every R run:
+- **One preparation per job (I2P).** One preparation dispatch row and one preparer start, and no preparer start
+  after the bundle was committed. A recovery after commit did not download again.
+- **One settlement and one answer (I1).**
+- **Fencing (I5) and drained NATS (I7).**
+- **No foreign member on the resolver bridge (NET).**
+
+CR-WPK-P09 settled `CANCELLED` exactly once on every repeat, from the takeover claim. Its preparation job ended
+`cancelled`. The Stop behaviour of chat 850 therefore holds on `main` for this cut.
+
+### 9.2 Observations
+
+- **Hydration bumps the execution job's lease epoch once per file.** Epochs 4, 8 and 11 were observed. A takeover
+  during hydration resumes at the next index. This is expected behaviour (`code_preparation.rs:306-358`, fresh
+  authority per index), but epoch values are not a takeover count for Code jobs.
+- **The resolver network cannot be restricted to registry hostnames on Compose.**
+  - `elitea-python-preparation-resolver` is a plain, non-internal bridge that the harness creates and labels
+    `io.elitea.crash.stack=elitea-crash`.
+  - Compose and Docker have no per-hostname egress filter. The only destination limit is the preparer's own Deno
+    `--allow-net` list (pypi.org, files.pythonhosted.org, cdn.jsdelivr.net, registry.npmjs.org).
+  - The harness proves membership instead: only this stack's preparers ever joined the bridge (`NET` held in every
+    run).
+  - The Kubernetes profile (`deploy/kind-crash/manifests/`) carries the equivalent NetworkPolicy. It needs Calico,
+    which has not been pulled (it needs approval).
+
+### 9.3 Findings (all in the scope of #1084, which owns Code durability; this branch changes no product code)
+
+**F1. A preparation failure seen on a recovery visit never settles (class L).** Execution
+`097ca8e5a5e41a99623f98fd546bacad` (2026-10-09), #1084 parts 1–4.
+
+- **Trigger.** The host slept for about 16 minutes while the preparer was resolving. No fault had been applied yet,
+  and that attempt was not credited. The Worker's claim lease failed (`claim_lease_control_failure`, kept without an
+  ack). On the next delivery the Supervisor expired the preparation job with `sandbox.preparation_failed`
+  (`src/sandbox/docker_preparation.rs:430`).
+- **Why it never settles:**
+  1. Preparation errors are `NodeFailureClass::Unknown` (`src/agents/graph/code_attempt_remote.rs:140-147`). On a
+     recovery visit `recovering_started` makes them `UnknownExternalEffect` (`code_attempt_remote.rs:606-620`), which
+     always decides `Reconcile` (`libs/rust/agent-runtime/src/graph/node_recovery.rs:335-343`). The typed-failure
+     branch (`src/agents/graph/node_recovery_runtime.rs:1045-1052`) is skipped, and the node emits
+     `agent_node_recovery_required` (`src/agents/events.rs:1531-1571`).
+  2. The Worker's receipt check passes `failure_class: unknown` (`src/agents/graph/node_recovery_receipt.rs:68-75,95-99`).
+     Main's contract refuses it (`services/elitea-main/internal/domain/noderecovery/contract.go:94-100`) as
+     `PROTOCOL_VIOLATION` ("invalid node event output").
+  3. A non-retryable output rejection is not a terminal (`src/execution/native_agent_lifecycle.rs:874-879`; only
+     cancellation or deadline winners are, `src/transport/output_grpc.rs:1072-1082`). The rejected frame stays in the
+     spool, and every redelivery replays it (`src/execution/output_delivery.rs:2598-2652`), which yields
+     `agent_output.invalid_durable_state`.
+  4. Delivery failures only Nak (`src/execution/agent_delivery_processor.rs:238-253`,
+     `src/execution/command_delivery.rs:820-821`). The consumer has `max_deliver=-1`
+     (`deploy/helm/nats-bootstrap/files/bootstrap.sh:441-464`). Result: more than 430 deliveries and 14 claims over
+     2.6 days.
+- **Stop does not end it.** The public Stop returned 204 and set `desired_state = CANCELLED`. Eight minutes later the
+  run was still `RUNNING`, and deliveries reported `agent_delivery.output_recovery_pending`.
+- **Repro.** `CR-WSP-P09-lease` (tier `T0b-gap`) freezes the Worker and the Supervisor with `docker pause` for 100 s
+  during resolve. Its floor is F: a typed `pipeline.code_preparation_failed` with one settlement, or R. Its Stop
+  variant `CR-WSP-P09-lease-stop` expects `CANCELLED` once.
+
+**F2. A Code node fails at the end of hydration, and its reserved job and runtime are orphaned (REGRESSION).**
+CR-SK-P09-hyd r2, execution `4e160a9d8aeca4f419e2517aff77fa3e`, #1084 parts E/F (FU-197/198).
+
+- The node failed about 0.3 s *before* the Supervisor kill: `agent_tool_end` was published at 12:06:43.10 and the
+  kill was issued after 12:06:43.17 host time. The VM clock runs about 0.1 s ahead.
+- It settled FAILED: replay `INTERNAL` with generic text, settlement `error_code` NULL.
+- The cause is not observable. `hydrate_python_dependencies` errors are discarded by
+  `.map_err(|_| before(Hydration, Unknown))` (`code_attempt_remote.rs:295`), and nothing logs them.
+- After settlement, the execution job stayed `reserved` (lease released at 12:06:43.095, epoch 8) and its runtime kept
+  running more than 4 minutes later (I6). Cleanup on a settled failure does not cover a reserved, never-dispatched job.
+
+**F3. A Main restart during hydration hangs the run (class L).** CR-MK-P09-hyd r1, execution
+`0b19b052f3345b52d60c61116ead7b47`, #1084 part I (FU-207).
+
+- With Main down, hydration (intent finalization and content on `:9445`) failed the node instead of retrying.
+- The `agent_tool_end` publish got `output_unavailable`, and the run was kept without an ack, with the frame spooled
+  under claim 1.
+- The takeover replays that frame under the old fence. Main rejects it with `STALE_FENCE` ("stale execution fence"),
+  and every later delivery is `agent_output.invalid_durable_state`. That is the F1 loop with a different rejection.
+- The public Stop returned 204 and the run stayed `RUNNING`.
+
+**F4. A Main restart while a compiled snapshot is publishing hangs the run (class L).** CR-MK-P11 r1, execution
+`3fc85dada0e76311b12bfffc043f5b45`, #1084 part I.
+
+- The compile finished and the snapshot was recorded, but the compiled `execute` job stayed `reserved`.
+- The node's `agent_tool_end` publish failed while Main was down (`output_unavailable`). The takeover replay was
+  rejected with `STALE_FENCE`, and the run looped with no settlement.
+- The public Stop returned 204 and the run stayed `RUNNING`.
+
+Snapshots for the deployed re-proof are local (mode 600) under each run's `hang-snapshot/` or `orphan-snapshot-r2/`.
+Each holds full dumps of both databases, the Worker spool, the NATS store and the logs. The F3 and F4 snapshots
+already contain the user's Stop. When restored with the #1084 images, each should settle `CANCELLED` once. The F1
+snapshot is partial: the `elitea_runtime` schema only, and no NATS store.
+
+### 9.4 Recovery-guarantee rows, T0b
+
+| Component | Phase | Class | Status | Enforcing code | Proof |
+|---|---|---|---|---|---|
+| Worker (container) | P09 resolve | R | P | Preparation job committed before hydration; I2P | CR-WK-P09 ×3 |
+| Supervisor (process loss) | P09 resolve | R | P (deployed) | Preparation lease reclaim | CR-SK-P09 ×3 |
+| Main | P09 resolve | R | P | Worker keeps claim; preparer independent of Main | CR-MK-P09 ×3 |
+| Worker (container) | P09 hydration | R | P | Per-index fresh authority `code_preparation.rs:306-358` | CR-WK-P09-hyd ×3 |
+| Supervisor (process loss) | P09 hydration | **L** (1/3) | gap → #1084 E/F | Error discarded at `code_attempt_remote.rs:295`; no reap of a reserved job | CR-SK-P09-hyd r2 |
+| Main | P09 hydration | **L** | gap → #1084 I | Node fails on Main loss; stale-fence spool loop | CR-MK-P09-hyd r1 |
+| Worker / Supervisor / Main | P10 prepared execution | R | P | As P10 (§7) | CR-{W,S,M}K-P10-prep ×3 |
+| Worker (pod) + user Stop | P09 | R (CANCELLED once) | P | Stop honoured on takeover | CR-WPK-P09 ×3 |
+| Main | P11 compiled publication | **L** | gap → #1084 I | Stale-fence spool loop | CR-MK-P11 r1 |
+| Worker + Supervisor (frozen past leases) | P09 | **L** | gap → #1084 1–4 | Unknown-effect receipt refused by Main; no terminal | F1 (host sleep); `CR-WSP-P09-lease` pending |
+
+### 9.5 Not done
+
+- `CR-WSP-P09-lease` and its Stop variant have not run. On 2026-10-12 free disk fell from 99 GiB to 15 GiB (this suite's local
+  evidence is about 0.1 GiB), below the agreed 20 GiB floor for scenario runs. The session stopped there and brought
+  `elitea-crash` down. Its result will be added to this PR.
+- CR-MK-P09-hyd and CR-MK-P11 have one decisive repeat each. Their remaining repeats belong in the #1084 re-proof set,
+  together with CR-SK-P09-hyd ×3, CR-WSP-P09-lease ×3 and the Stop variant.
 
 ## 10. Browser evidence (I9)
 
@@ -304,9 +455,9 @@ There are no response mocks. Each result file stores a DOM text digest and a scr
 
 | Suite | Count | Result |
 |---|---|---|
-| `python3 -m unittest discover -s scripts/crash-recovery/tests` | 26 | pass, no skip |
+| `python3 -m unittest discover -s scripts/crash-recovery/tests` | 28 | pass, no skip |
 | `deploy/mock-llm` `unittest discover` (CI workflow `ci-mock-llm`) | 29 (20 existing + 9 new) | pass |
-| `deploy/mock-mcp` `unittest discover` (no CI) | 9 | pass |
+| `deploy/mock-mcp` `unittest discover` (no CI) | 10 | pass |
 | `oxlint --deny-warnings` on the crash Playwright files | 4 files | pass |
 | `tsc --noEmit --strict` on the crash Playwright files | 4 files | pass |
 | `deploy/scripts/check-compiled-sandbox-material.py` on the generated manifest and configs | 1 profile | pass |
@@ -336,7 +487,18 @@ dependency changed. The code-review and security-review results are recorded in 
    decision.
 6. **Inherited hangs in real data.** The real-model dump carries 23 executions with authority granted and expired
    deadlines that never settled. This is G-NATS-01/G-MAIN-02 in the data, not caused by this suite.
-7. **Not yet built:** crashpoints (WP-2/WP-3, after #1084), the second Worker (T1: CX-05, CX-09 zombie fencing), the K
+7. **Code durability under Main loss, lease loss and hydration (§9.3 F1–F4).** These are three hangs (class L) and
+   one failure that orphaned its runtime. Stop does not settle any of the hangs. They are fixed in #1084 (pending): the
+   unknown-effect preparation receipt, a terminal for a non-retryable output rejection, re-fencing pending frames on
+   takeover, Stop settling while output recovery is pending, and reaping a reserved job that was never dispatched.
+   The re-proof set on the #1084 images:
+   - CR-SK-P09-hyd ×3, CR-MK-P09-hyd ×3, CR-MK-P11 ×3;
+   - CR-WSP-P09-lease ×3 and its Stop variant;
+   - restoring the F3 and F4 snapshots, each of which must settle `CANCELLED` once.
+8. **Supervisor preparation observability.** The Supervisor logs nothing for preparation or hydration, and the
+   Worker discards hydration error kinds (`code_attempt_remote.rs:295`). F1 and F2 had to be reconstructed from Docker
+   events.
+9. **Not yet built:** crashpoints (WP-2/WP-3, after #1084), the second Worker (T1: CX-05, CX-09 zombie fencing), the K
    tier (prepared in `deploy/kind-crash/`; it needs registry and Calico approvals), and the T2 gap scenarios.
 
 ### Proposed matrix diff (for a human to apply; this PR does not edit `recovery-guarantees.md`)
@@ -362,6 +524,21 @@ dependency changed. The code-review and security-review results are recorded in 
  §6 "Supervisor x P10 | crash, exit (runtime alive)":
 -| R | P (PostgreSQL component only) | ...
 +| R | P (component + deployed: CR-SK-P10, CX-01) | ...
+ §6, T0b (crash-recovery-suite-20261009 §9):
+-| Main x P09 | crash | R/F² | P* | ...
++| Main x P09 | crash (resolve) | R/F² | P | ... | CR-MK-P09 ×3 | ...
++| Main x P09 | crash (hydration) | L | gap: #1084 | Node fails on Main loss; stale-fence spool loop | CR-MK-P09-hyd r1 | Stop does not settle. |
+-| Main x P10 | crash | R/F² | U | ...
++| Main x P10 | crash | R/F² | P | ... | CR-MK-P10 ×3, CR-MK-P10-prep ×3 | ...
+-| Main x P11 | crash | R | P* | ...
++| Main x P11 | crash | L | gap: #1084 | ... | CR-MK-P11 r1: Main killed after compile while publishing; stale-fence spool loop, no settlement | Supersedes chat 809's narrow P*. |
+-| Worker x P09 | crash | R/F² | P* (container), U (pod) | ...
++| Worker x P09 | crash | R/F² | P (container: resolve and hydration), P (pod, Stop path) | ... | CR-WK-P09 ×3, CR-WK-P09-hyd ×3, CR-WPK-P09 ×3 (CANCELLED once) | ...
++| Worker + Supervisor x P09 | frozen past the claim and job leases | L | gap: #1084 | Unknown-effect receipt refused by Main; no terminal; Stop does not settle | F1 (`097ca8e5…`), CR-WSP-P09-lease (pending) | |
+-| Supervisor x P09 | crash, exit | R | P | ...
++| Supervisor x P09 | crash, exit | R (resolve) / R 2 of 3, L 1 of 3 (hydration) | P / gap: #1084 | ... | CR-SK-P09 ×3; CR-SK-P09-hyd r2: node failed at the end of hydration and its runtime was orphaned | |
+ Supervisor x P10:
++| ... | CR-SK-P10-prep ×3 (prepared job) | ...
 ```
 
 Raw evidence (`evidence.json`, `verdict.json`, Docker event streams, browser results) stays in the local run
