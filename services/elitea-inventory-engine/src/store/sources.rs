@@ -338,6 +338,29 @@ impl Drop for Lease {
     }
 }
 
+impl Lease {
+    /// Releases the lease now: unlocks on its own connection, then closes
+    /// it. Dropping also releases, but only once the server notices the
+    /// closed connection, so a caller that acts on the release right away
+    /// (a test, or a delete that follows a run) uses this.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Database`] when the
+    /// unlock fails; the connection is closed either way.
+    pub async fn release(mut self) -> Result<()> {
+        let Some(mut connection) = self.connection.take() else {
+            return Ok(());
+        };
+        let unlocked = sqlx::query("SELECT pg_advisory_unlock_all()")
+            .execute(&mut *connection)
+            .await;
+        drop(connection.detach());
+        unlocked?;
+        Ok(())
+    }
+}
+
 /// Take the ingestion lease of `key`, or `None` when another run holds it.
 ///
 /// The lease is also the **deletion fence** (migration 0007): once held,

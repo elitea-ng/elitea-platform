@@ -217,7 +217,7 @@ async fn a_delete_during_an_ingestion_is_refused_and_leaves_the_graph_whole() {
         GraphDeletion::Busy
     );
     assert_eq!(rows(&pool, key).await, [1, 3, 2, 1, 2], "whole, not half");
-    drop(run);
+    run.release().await.expect("release");
     assert!(matches!(
         delete::delete_graph(&pool, key).await.expect("delete"),
         GraphDeletion::Deleted { removed } if removed.graphs == 1
@@ -284,7 +284,7 @@ async fn a_project_delete_covers_every_toolkit_of_the_project_and_no_other() {
     assert_eq!(done.busy, vec![2]);
     assert_eq!(rows(&pool, key(5, 2)).await, [1, 3, 2, 1, 2], "untouched");
     assert_eq!(rows(&pool, key(6, 1)).await, [1, 3, 2, 1, 2]);
-    drop(run);
+    run.release().await.expect("release");
 
     // Repeated once the run ended, it finishes the job.
     let done = delete::delete_project(&pool, 5).await.expect("delete");
@@ -769,7 +769,7 @@ async fn the_platform_tools_delete_a_graph_and_a_projects_graphs() {
         text.contains("An ingestion is running on toolkit(s) 71"),
         "{text}"
     );
-    drop(run);
+    run.release().await.expect("release");
     let answer = call(
         &runner,
         "delete_project_graphs",
