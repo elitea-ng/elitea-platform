@@ -381,10 +381,10 @@ Suites (2026-10-12, this branch): Worker `cargo clippy --offline --locked --all-
 |---|---|---|---|
 | Worker x P09, claim lease lost during preparation, redelivered | L (hang) | F | Typed `pipeline.code_preparation_failed`, support reference, one settlement. If a dispatch row exists: C (operator card Main accepts). |
 | Worker x P09, hydration fails (supervisor refusal, content error) | F, generic cause lost | F typed | `pipeline.code_preparation_failed` or `_unconfirmed`; transient Main or content errors retry (I, R). |
-| Worker x P10, runtime `failed` phase | C (operator for a user code error) | F | Known outcome; C only for an unreceipted platform effect. |
+| Worker x P10, runtime `failed` phase | C (operator for a user code error) | F | Known outcome; C unless Main's platform-call journal proves nothing unresolved (see "Review fixes"). |
 | Worker x P14 / Main x P14, refused or superseded pending frame | L (infinite redelivery) | F or R | Refused: F (internal failure, once). Superseded claim: frame retired, run resumes (R) or settles. |
 | Main x P14, stop with a pending frame | L | F (cancelled) | One settlement, writer fencing unchanged. |
-| Worker x Main channel, dead peer | L for about 16 minutes | R | Detected within 15 s by HTTP/2 PING (60 s lease). |
+| Worker x Main channel, dead peer | L for about 16 minutes | R | Detected within 20 s by HTTP/2 PING (15 s interval, 5 s timeout; 60 s lease). |
 | Supervisor x P09, job hydrated and never dispatched after a failure | L (hour-long orphan) | I | Released at once; the retention sweep remains the backstop. |
 
 ### Follow-ups
@@ -430,6 +430,76 @@ Suites (2026-10-12): Main `go build ./...`, `go vet`, and `go test` for `interna
 **Recovery class.** Main x P06/P07, a HITL or authorization continuation with owner recovery on, for a turn containing a stored-`openai` application tool: was F with a generic refusal (the run stayed paused, no way forward); after the fix R, as for every other agent type. The refusal reason is now named in the Main log.
 
 **Real-browser proof: pending** on the rebuilt stack (pipeline 138, answer card 1, reload). Fixture: the existing pipeline 138 and agent 137 rows on the deployed stack; how they were created is not re-verified here.
+
+## Review fixes (code review of PR #1084)
+
+A read-only review of parts A to I found nine items. This section records the fix for each, with the evidence. Part J above is a separate change.
+
+### 1. H lost class C (HIGH)
+
+**Defect.** After a terminal `failed` runtime the Worker "drained" `step_code_platform`, but Main's `CodePlatformPump.Step` answers idle once the retained runtime is completed, so the drain never read Main's journal. Claim 2 after a takeover never saw claim 1's call, `prior_dispatch` was ignored, and the node settled a plain failure. The pump future was also dropped mid-`service.Call` when the submission won.
+
+**Mechanism (changed paths).**
+
+| Step | Path |
+|---|---|
+| Main: read-only, fenced, authorized query of the platform-call journal, `POST .../code-platform/effects`. It runs inside `WithRegisteredCodePlatformIntent`, so claim fence, lease, RUNNING state, registered intent and project scope are checked in the same transaction as the read. `possible` iff a call is `dispatching` or `uncertain`, or a call's toolkit child is not terminal. No registration row means no frame was ever read: `none`. A missing reader, or any error, is an error, never `none` | `services/elitea-main/internal/infra/storage/runtime_code_platform_effects.go` (`PostCodePlatformEffects`, `CodePlatformPump.Effects`), `internal/infra/db/repos/code_platform_calls.go:487`, wiring `internal/runtimecomposition/code_consumers.go`, contract `libs/proto/elitea/runtime/v1/code_platform.proto` |
+| Worker client; only an explicit `none` clears the effect, a refusal or unreadable answer (after a 30 s retry of transient Main errors) keeps it possible | `src/transport/code_platform_content.rs:72` `code_platform_effects`, `src/agents/graph/code_attempt_remote.rs:809` `platform_effects_possible` |
+| Reusable step tracking: a pump dropped inside a Main step marks the tracker interrupted. When the terminal receipt wins with a step in flight, the step may finish for up to 5 s (`PLATFORM_STEP_SETTLE_GRACE`), so the pump is dropped at a boundary | `libs/rust/agent-runtime/src/graph/code_platform_drive.rs` `StepTracker`, `drive_tracked` (ADR-0027: reusable logic in the library) |
+| Decision: `effect_possible = platform_client && (unknown call seen by the pump \|\| step interrupted \|\| journal answer is not an explicit none)`. A runtime without the platform client has no network and asks nothing | `code_attempt_remote.rs:618` |
+
+**Why the journal query and the pump grace are both needed.** The journal answers for claim 1's calls and for calls the pump never observed. It cannot settle a step that is still running on Main for this claim, because Main's handler is not serialized with the query; the grace lets that step finish, and an unfinished one is treated as possible. A stale claim cannot begin or dispatch a call (`lockCodeCallClaim` needs the live current claim), so after claim 2 holds the lease the journal is stable.
+
+**Decisions not taken.** A `prepared` call is `none`: Dispatch was never granted, so no effect ran (a test pins this; counting it as an effect also failed the journal test). The existing `ReadOriginalCodeBrokerEffects` was not reused: it errors without a registration row and counts any observed call, which is correct for the supervisor's no-dispatch proof but would turn every receipted read into an operator card.
+
+### 2. G keepalive against Main's enforcement policy (HIGH)
+
+Worker pings every idle channel; Main enforced `MinTime 30 s, PermitWithoutStream false`, so grpc-go counted strikes and sent GOAWAY `too_many_pings` after about 40 s idle, aborting idle control and output connections and long silent output streams. Now: Worker interval 15 s, timeout 5 s, idle pings on (`src/transport/keepalive.rs`, a dead peer in 20 s against the 60 s lease); Main `RuntimeKeepaliveMinTime` 10 s and `RuntimeKeepalivePermitWithoutStream` true (`services/elitea-main/internal/transport/runtimegrpc/keepalive.go`), one constructor used by every Main gRPC server. Both private servers are created only after `validateServerTLSConfig` (TLS 1.3, `RequireAndVerifyClientCert`), so only mTLS-verified internal peers can ping while idle. Audit: Main's content server is `net/http` HTTP/2 (no strike policy); the sandbox supervisor and `elitea-vector` are tonic servers without enforcement; the subapp-host SPI is not reached by the Worker. Tests: Worker `keepalive.rs` (3 constant and margin tests plus the wiring guard), Main `keepalive_test.go` (values and margin; Worker constants read from the Rust source; every server uses the one constructor; a real grpc-go server accepts idle pings for more than 3 strike windows with scaled time; three negative controls are closed with `too_many_pings`).
+
+### 3. Retired-frame cap wedged the spool (MEDIUM)
+
+The rename happened before the cap check, so at 17 every `entries()` failed (open, pending, acknowledge, usage). Records were never deleted, and `renameat` overwrote an existing `N.retired` when a later claim reused a sequence. Now (`src/spool.rs`): the record name is `{sequence}-{claim_attempt}-{epoch}.retired` and is created with `link` then `unlink` (no replace; a crash between the two resumes); the cap is checked before the link and **prunes the oldest record with a logged event** (chosen over failing the execution: a record is audit evidence, every retired frame's digest is already in the durable log, and failing an execution on record capacity would turn a recoverable takeover into a loss); enumeration never fails on the number of records; records are deleted when the terminal frame is acknowledged (`output_grpc.rs` `apply_ack`) and swept after 7 days at open. Legacy `{sequence}.retired` records still enumerate and count as the oldest. Tests: 6 spool cases (cap, cap+1, 3x cap, sequence reuse across claims, interrupted retirement, settlement and sweep, legacy) and one output-session case.
+
+### 4. A and H were not tested through production wiring (MEDIUM)
+
+New `src/agents/graph/node_recovery_code_wiring_tests.rs` (feature `sandbox-supervisor`, real PostgreSQL, ignored by default like the other database tests). It drives the real Code node, recovery journal and `RemoteCodeRuntime::execute_recovery_attempt`, with a Main content fixture, a real tonic Main control server and a real tonic supervisor server on loopback. 13 cases (see the recovery rows). **Revert checks:** (a) `prior_dispatch = authority.recovering_started()` (reverting the proof at `code_attempt_remote.rs:41-55`) fails 2 cases (`recovered_attempt_without_a_dispatch_row_fails_typed_before_dispatch`, `recovered_attempt_with_a_registered_but_unsubmitted_row_fails_typed`); (b) `effect_possible = platform_client || unknown` (reverting the proof at `:583-603`) fails 4 cases; (c) removing the interrupted-step check fails `a_platform_step_dropped_mid_flight_keeps_the_effect_possible`. Each was restored.
+
+### 5. A missed a lease lost during hydration (LOW)
+
+The dispatch row is written before hydration, so a row did not mean a submission. Now the row is registered `submission_pending` and a durable marker is written just before the first execute submission (`code_attempt_remote.rs:214` and `:343`; `src/sandbox/dispatch.rs`). `prior_dispatch_possible` reads the marker. Migration `services/elitea-main/migrations/agentstate/0014_sandbox_dispatch_submission_marker.sql` adds `submission_pending BOOLEAN NOT NULL DEFAULT FALSE`: rows from earlier Workers, and any registration that does not opt in, read as submitted, so a mixed-version rollout stays conservative. **The migration is unmerged; its number must be re-checked at merge and it must not be applied to a shared stack before then.** Tests: `recovered_attempt_with_a_registered_but_unsubmitted_row_fails_typed`, `recovered_attempt_with_a_submitted_row_keeps_the_effect_unknown`, `the_submission_marker_is_durable_before_the_supervisor_sees_the_job` (the fixture supervisor reads the row when the submission arrives), `the_submission_marker_reads_conservatively_and_moves_one_way`.
+
+### 6. F only released on the recovery path (LOW)
+
+The raw `execute` path now releases a job hydrated for a failed attempt (`src/agents/graph/code_remote.rs:225` `hydrate_or_release`, shared `release_hydrated_job`). Test: `raw_path_hydration_failure_releases_the_hydrated_job` calls the helper the raw path uses; it does not run the full raw `execute`, because reaching hydration there needs a dependency-preparation exchange with the supervisor that the fixture does not serve.
+
+### 7, 8. Web parser and Main log (LOW)
+
+`apps/elitea-web/src/shared/lib/nodeRecovery.test.ts` reads `libs/jsonschema/runtime/v1/fixtures/node-recovery-required-v1*.json` and refuses every `.invalid.` vector, like Go and Rust. Main `logClaimRejection` logs one of 11 fixed reason strings and never the error text; its test feeds driver-like and payload-like text and asserts it is absent.
+
+### 9. Documentation accuracy (LOW)
+
+E: Main down for longer than the hydration deadline settles the terminal `pipeline.code_preparation_unconfirmed` (class F), it is not resumed or retried. H on Kubernetes relies on the execution namespace default-deny NetworkPolicy. The chart renders `elitea-code-deny-network` whenever `sandboxKubernetes.enabled`; `deploy/helm/tests/render-sandbox-kubernetes.sh` already asserted its content and now also asserts that it is the only NetworkPolicy in that namespace (policies are additive). The rows in `recovery-guarantees.md` are updated.
+
+### Performance / Durability / Resilience / Security
+
+| Property | Mechanism | Proving test | Measured |
+|---|---|---|---|
+| Performance | The journal query is one `SELECT EXISTS`, asked once per failed platform runtime; the grace adds at most 5 s only when a step is in flight; spool retirement enumerates one bounded directory | `failed_runtime_with_a_clean_journal_settles_typed_without_an_operator_card` asserts one query; `a_platform_step_dropped_mid_flight_keeps_the_effect_possible` asserts the wait is at least the grace | Wiring suite 13 cases in about 7 s |
+| Durability | Marker written before the effect; the journal read is claim-fenced; class C is never lost | the wiring suite; Main real-PostgreSQL journal and matrix tests | all pass |
+| Resilience | Everything bounded: proof retry 30 s, step grace 5 s, record cap 16, retention 7 days; typed outcomes; idle channels survive | spool, keepalive and wiring suites | all pass |
+| Security | The effects route is claim-bound and answers only `none` or `possible`; authorization in the effect transaction; keepalive relaxed only on mTLS-verified private servers; no payload text in claim-rejection logs | Main authorization matrix (16 refusal cases) and body pins; `keepalive_test.go`; `claim_rejection_log_test.go` | all pass |
+
+### Tests (counts)
+
+Worker `cargo test --offline --locked --all-features --no-fail-fast`: 2035 passed, 0 failed, 90 ignored across all targets (lib 1933). The 90 ignored need a disposable database or a container runtime; the 15 ignored cases of this change (13 wiring cases, plus 2 `preparation_recovery::*`) passed against a disposable PostgreSQL 18 (`--include-ignored`). Worker `cargo clippy --offline --locked --all-targets --all-features -- -D warnings` clean. `libs/rust`: clippy `--workspace --all-targets --all-features -D warnings` clean; `cargo test --workspace` plus `-p elitea-agent-runtime --features toolkit-sql` and `--features test-preserve-order,toolkit-sql` pass (agent-runtime 736 tests, 4 new step-tracker cases). Main: `go build ./...`, `go vet` and `go test` for storage, repos (full package against a disposable PostgreSQL), runtimecomposition, runtimegrpc/..., `cmd/elitea-runtime-material` and `cmd/elitea-main` pass. Web: `tsc --noEmit` clean, `nodeRecovery.test.ts` 30 passed. Helm: `render-sandbox-kubernetes.sh` passes.
+
+### Follow-ups
+
+- Python proto stubs for `code_platform.proto` (`libs/proto/gen/python/...`) are not regenerated: the pinned grpcio-tools is not installed. Run `scripts/contract/generate_proto.sh` before the CI regenerate-and-diff.
+- Deployed re-proof (real browser, reload) of the typed-failure and operator-card cases: pending on a rebuilt stack. Fixtures in the tests are created by the test code, not through the UI.
+- Migration 0014 number to confirm at merge.
+- A raw-path end-to-end hydration test needs the dependency-preparation exchange in the fixture.
+- Main `control/server.go` still logs a raw error for "vector claim token not minted" (same class as item 8, outside this review).
 
 
 ## Performance (PERF-1084)
