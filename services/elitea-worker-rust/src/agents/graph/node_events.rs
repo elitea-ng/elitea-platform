@@ -192,6 +192,12 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
+    /// Free slots left in the bounded channel (tests prove it filled).
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
     pub(crate) async fn send_routed_application_event(&self, event: Event) -> adk_rust::Result<()> {
         self.inner
             .send(PipelineNodeEventSignal::RoutedEvent(Box::new(event)))

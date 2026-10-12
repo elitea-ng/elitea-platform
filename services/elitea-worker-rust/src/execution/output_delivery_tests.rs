@@ -285,6 +285,8 @@ struct RecoveryControl {
     authorize_disposition: Option<AuthorizeInvocationDispositionV1>,
     authorize_unavailable: bool,
     renew_fail_after: Option<usize>,
+    /// Fails every renewal once set, independent of how many ran before.
+    renew_fail_switch: Option<Arc<AtomicBool>>,
     renew_attempts: AtomicUsize,
     observe_states: Mutex<VecDeque<i32>>,
 }
@@ -380,6 +382,13 @@ impl ControlRpc for RecoveryControl {
     ) -> Result<Response<RenewLeaseResponseV1>, Status> {
         self.trace.lock().expect("trace").push("renew");
         let attempt = self.renew_attempts.fetch_add(1, Ordering::SeqCst);
+        if self
+            .renew_fail_switch
+            .as_ref()
+            .is_some_and(|switch| switch.load(Ordering::SeqCst))
+        {
+            return Err(Status::unavailable("test lease renewal unavailable"));
+        }
         if self
             .renew_fail_after
             .is_some_and(|successful| attempt >= successful)
@@ -519,6 +528,7 @@ fn recovery_control_with_policy(
                 authorize_disposition: None,
                 authorize_unavailable: false,
                 renew_fail_after,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(
                     observe_states
@@ -550,6 +560,7 @@ fn authorization_control_with_disposition(
                 authorize_disposition: Some(disposition),
                 authorize_unavailable: false,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(VecDeque::new()),
             },
@@ -591,6 +602,7 @@ fn authorized_control_with_policy(
                 authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
                 authorize_unavailable: false,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(
                     observe_states
@@ -621,6 +633,7 @@ fn ambiguous_output_recovery_control(
                 authorize_disposition: None,
                 authorize_unavailable: false,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(VecDeque::new()),
             },
@@ -646,6 +659,7 @@ fn unavailable_authorization_control(
                 authorize_disposition: None,
                 authorize_unavailable: true,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(VecDeque::new()),
             },
@@ -4722,6 +4736,7 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
                     authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
                     authorize_unavailable: false,
                     renew_fail_after: None,
+                    renew_fail_switch: None,
                     renew_attempts: AtomicUsize::new(0),
                     observe_states: Mutex::new(VecDeque::new()),
                 },
@@ -4858,6 +4873,7 @@ impl Agent for ParkedAgent {
 
 fn authorized_control_failing_renewal(
     trace: Arc<Mutex<Vec<&'static str>>>,
+    switch: Arc<AtomicBool>,
 ) -> Arc<AgentControlClient<RecoveryControl>> {
     Arc::new(
         AgentControlClient::new(
@@ -4867,8 +4883,8 @@ fn authorized_control_failing_renewal(
                 settlement_fails: false,
                 authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
                 authorize_unavailable: false,
-                // Activation's renewal succeeds; the first in-flight one fails.
-                renew_fail_after: Some(1),
+                renew_fail_after: None,
+                renew_fail_switch: Some(switch),
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(VecDeque::new()),
             },
@@ -4894,7 +4910,9 @@ async fn lease_loss_releases_a_parked_agent_stream_and_retains_the_command() {
     let AgentOutputPreflightOutcome::Empty(empty) = outcome else {
         panic!("new lease-loss lifecycle spool must be empty");
     };
-    let control = authorized_control_failing_renewal(Arc::clone(&trace));
+    let renewals_fail = Arc::new(AtomicBool::new(false));
+    let control =
+        authorized_control_failing_renewal(Arc::clone(&trace), Arc::clone(&renewals_fail));
     let admission = InvocationAdmission::new(
         InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("invocation admission"),
     );
@@ -4959,7 +4977,8 @@ async fn lease_loss_releases_a_parked_agent_stream_and_retains_the_command() {
         !released.load(Ordering::SeqCst),
         "the agent stream is parked mid-turn"
     );
-    // Paused time advances to the next lease renewal, which fails.
+    // From here every renewal fails; paused time advances to the next one.
+    renewals_fail.store(true, Ordering::SeqCst);
     let completion = invocation
         .wait()
         .await

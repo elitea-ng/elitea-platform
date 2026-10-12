@@ -667,6 +667,7 @@ mod tests {
         .await
         .unwrap();
         let (events, node_receiver) = pipeline_node_event_channel();
+        let node_probe = events.clone();
         let runtime = PipelineApplicationNodeRuntime::new(
             scope,
             "child".to_owned(),
@@ -731,14 +732,20 @@ mod tests {
                     .map_err(|_| ())
                     .unwrap();
             }
-            // The consumer now waits on the writer the child holds, so the
-            // node-event channel fills and the next forward blocks.
-            while received.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-                tokio::task::yield_now().await;
-            }
-            for _ in 0..256 {
-                tokio::task::yield_now().await;
-            }
+            // Precondition: the consumer waits on the writer the child holds
+            // and the node-event channel is full, so the next forward blocks.
+            let filled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while received.load(std::sync::atomic::Ordering::SeqCst) == 0
+                    || node_probe.capacity() > 0
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            assert!(
+                filled.is_ok(),
+                "precondition: the node-event channel never filled"
+            );
             io_done.send(()).unwrap();
         };
         let Ok(result) = tokio::time::timeout(std::time::Duration::from_secs(10), async {

@@ -304,29 +304,28 @@ fn no_select_arm_polls_a_raw_agent_stream() {
                 }
                 let source = std::fs::read_to_string(&path).expect("read source");
                 let relative = format!(
-                    "{label}{}",
-                    path.to_string_lossy()
-                        .split_once(label)
-                        .map_or(String::new(), |(_, rest)| rest.to_owned())
+                    "{label}/{}",
+                    path.strip_prefix(root)
+                        .expect("walked path stays under its root")
+                        .to_string_lossy()
                 );
-                for ident in raw_select_polls(&source) {
-                    let driven = source.contains(&format!("let mut {ident} =")) && {
-                        let start = source
-                            .find(&format!("let mut {ident} ="))
-                            .unwrap_or_default();
-                        source[start..]
-                            .split(';')
-                            .next()
-                            .is_some_and(|binding| binding.contains("DrivenEventStream::new"))
+                for (select_at, receiver) in raw_select_polls(&source) {
+                    let Some(ident) = receiver else {
+                        violations.push(format!(
+                            "{relative}: a select! arm polls a non-local receiver"
+                        ));
+                        continue;
                     };
-                    if driven {
+                    if driven_binding_before(&source, &ident, select_at) {
                         continue;
                     }
                     if ALLOWED
                         .iter()
                         .any(|(file, allowed, _)| *file == relative && *allowed == ident)
                     {
-                        seen_allowed.push((relative.clone(), ident));
+                        if !seen_allowed.contains(&(relative.clone(), ident.clone())) {
+                            seen_allowed.push((relative.clone(), ident));
+                        }
                         continue;
                     }
                     violations.push(format!("{relative}: `{ident}`"));
@@ -345,22 +344,49 @@ fn no_select_arm_polls_a_raw_agent_stream() {
     );
 }
 
-/// Identifiers polled with `.next()` / `.next_event()` inside `select!` bodies.
-fn raw_select_polls(source: &str) -> Vec<String> {
+/// Whether the nearest `let mut ident` binding before `select_at` wraps the
+/// stream in a `DrivenEventStream`.
+fn driven_binding_before(source: &str, ident: &str, select_at: usize) -> bool {
+    let head = &source[..select_at];
+    let pattern = format!("let mut {ident}");
+    let mut nearest = None;
+    let mut cursor = 0;
+    while let Some(found) = head[cursor..].find(&pattern) {
+        let at = cursor + found;
+        let next = head[at + pattern.len()..].chars().next();
+        if matches!(next, Some(' ' | ':' | '=')) {
+            nearest = Some(at);
+        }
+        cursor = at + pattern.len();
+    }
+    nearest.is_some_and(|at| {
+        source[at..]
+            .split(';')
+            .next()
+            .is_some_and(|binding| binding.contains("DrivenEventStream::new"))
+    })
+}
+
+/// Every `.next()` / `.next_event()` poll inside a `select!` body: the body's
+/// offset and the polled local identifier, or `None` when the receiver is not
+/// a plain local (a field, a call result, a re-borrow), which the guard cannot
+/// trace and therefore refuses.
+fn raw_select_polls(source: &str) -> Vec<(usize, Option<String>)> {
     let mut found = Vec::new();
-    let mut rest = source;
-    while let Some(start) = rest.find("select!") {
-        let after = &rest[start..];
+    let mut offset = 0;
+    while let Some(start) = source[offset..].find("select!") {
+        let select_at = offset + start;
+        let after = &source[select_at..];
         let Some(open) = after.find('{') else { break };
         let mut depth = 0_usize;
         let mut end = open;
-        for (offset, ch) in after[open..].char_indices() {
+        for (index, ch) in after[open..].char_indices() {
             match ch {
                 '{' => depth += 1,
                 '}' => {
                     depth -= 1;
                     if depth == 0 {
-                        end = open + offset;
+                        end = open + index;
                         break;
                     }
                 }
@@ -369,9 +395,11 @@ fn raw_select_polls(source: &str) -> Vec<String> {
         }
         let body = &after[open..end];
         for marker in [".next()", ".next_event()"] {
-            let mut cursor = body;
-            while let Some(at) = cursor.find(marker) {
-                let ident = cursor[..at]
+            let mut cursor = 0;
+            while let Some(at) = body[cursor..].find(marker) {
+                let at = cursor + at;
+                let before = &body[..at];
+                let ident = before
                     .chars()
                     .rev()
                     .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
@@ -379,13 +407,43 @@ fn raw_select_polls(source: &str) -> Vec<String> {
                     .chars()
                     .rev()
                     .collect::<String>();
-                if !ident.is_empty() && !found.contains(&ident) {
-                    found.push(ident);
+                let preceded_by = before[..before.len() - ident.len()].chars().next_back();
+                let local = !ident.is_empty() && !matches!(preceded_by, Some('.' | ')' | ']'));
+                let receiver = local.then_some(ident);
+                if !found.contains(&(select_at, receiver.clone())) {
+                    found.push((select_at, receiver));
                 }
-                cursor = &cursor[at + marker.len()..];
+                cursor = at + marker.len();
             }
         }
-        rest = &after[end.max(open) + 1..];
+        offset = select_at + end.max(open) + 1;
     }
     found
+}
+
+#[test]
+fn the_guard_refuses_untraceable_receivers_and_uses_the_nearest_binding() {
+    let source = "let mut events = DrivenEventStream::new(x);\n\
+                  let mut events = raw;\n\
+                  tokio::select! { e = events.next() => {}, f = self.inner.next() => {}, \
+                  g = stream.as_mut().next() => {} }";
+    let polls = raw_select_polls(source);
+    assert!(
+        polls
+            .iter()
+            .any(|(_, receiver)| receiver.as_deref() == Some("events"))
+    );
+    assert_eq!(
+        polls
+            .iter()
+            .filter(|(_, receiver)| receiver.is_none())
+            .count(),
+        1,
+        "field and call-result receivers are untraceable: {polls:?}"
+    );
+    let (select_at, _) = polls[0];
+    assert!(
+        !driven_binding_before(source, "events", select_at),
+        "the nearest binding is the raw one"
+    );
 }

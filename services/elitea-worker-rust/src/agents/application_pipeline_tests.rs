@@ -304,6 +304,8 @@ struct Harness {
     /// Also the way a test puts a node event on the child's channel — the
     /// real producer is the child's `llm` node factory.
     node_events: super::graph::PipelineNodeEventSender,
+    /// A clone of the parent channel's sender, to observe when it is full.
+    parent_probe: mpsc::Sender<ApplicationEventSignal>,
 }
 
 fn harness(yaml: &str) -> Harness {
@@ -318,6 +320,7 @@ fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRunt
     let definition = PipelineDefinition::from_yaml(yaml).expect("pipeline definition");
     let (node_sender, node_receiver) = pipeline_node_event_channel();
     let (sender, events) = mpsc::channel(64);
+    let parent_probe = sender.clone();
     let resume = ApplicationResumeCoordinator::default();
     let tool = ApplicationPipelineTool::new(
         tool_name.to_owned(),
@@ -336,6 +339,7 @@ fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRunt
         events,
         resume,
         node_events: node_sender,
+        parent_probe,
     }
 }
 
@@ -1585,6 +1589,7 @@ async fn a_full_parent_channel_never_strands_a_child_holding_the_root_writer() {
         tool,
         mut events,
         node_events,
+        parent_probe,
         ..
     } = harness(PLAIN_PIPELINE);
     let writer = Arc::new(tokio::sync::Mutex::new(()));
@@ -1641,14 +1646,20 @@ async fn a_full_parent_channel_never_strands_a_child_holding_the_root_writer() {
                 .await
                 .expect("queue node event");
         }
-        // Let the parent channel fill: the consumer waits on the writer the
-        // child holds, so every forward beyond its capacity now blocks.
-        while received.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-            tokio::task::yield_now().await;
-        }
-        for _ in 0..256 {
-            tokio::task::yield_now().await;
-        }
+        // Precondition: the consumer waits on the writer the child holds and
+        // the parent channel is full, so the next forward blocks.
+        let filled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while received.load(std::sync::atomic::Ordering::SeqCst) == 0
+                || parent_probe.capacity() > 0
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            filled.is_ok(),
+            "precondition: the parent channel never filled"
+        );
         io_done.send(()).expect("complete the child's I/O");
     };
     let outcome = tokio::time::timeout(
