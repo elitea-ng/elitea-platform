@@ -2369,33 +2369,22 @@ fn parse_pipeline_nodes(
     Ok((nodes, node_ids))
 }
 
+/// Whether the compiler has a parse arm for `node_type`: any refusal other than
+/// the unknown-type one counts as admitted. The shared admission-parity test
+/// probes every node type of the fixture through the real parser.
+#[cfg(test)]
+pub(super) fn node_type_has_parse_arm(node_type: &str) -> bool {
+    let mut node = serde_yaml_ng::Mapping::new();
+    node.insert("id".into(), "probe".into());
+    node.insert("type".into(), node_type.into());
+    !matches!(
+        parse_pipeline_node(&serde_yaml_ng::Value::Mapping(node)),
+        Err(PipelineConfigurationError::Unsupported(_))
+    )
+}
+
 fn parse_pipeline_node(
     raw_node: &serde_yaml_ng::Value,
-) -> Result<PipelineNodeDefinition, PipelineConfigurationError> {
-    parse_pipeline_node_admitting(raw_node, SHAPING_INTEGRATION_READY)
-}
-
-/// The typed cause code of [`PipelineConfigurationError::NodeTypeNotAvailable`];
-/// the lifecycle maps it to its own registered, data-free message.
-pub(crate) const NODE_TYPE_NOT_AVAILABLE_CODE: &str = "graph.pipeline.node_type_not_available";
-
-/// Production admission of data shaping nodes waits for deployed acceptance.
-/// Only rehearsal builds (`graph-extensions-rehearsal`) admit them.
-const SHAPING_INTEGRATION_READY: bool = cfg!(feature = "graph-extensions-rehearsal");
-
-#[cfg(test)]
-pub(super) fn shaping_node_admission(
-    raw_node: &serde_yaml_ng::Value,
-    shaping_admitted: bool,
-) -> Result<(), &'static str> {
-    parse_pipeline_node_admitting(raw_node, shaping_admitted)
-        .map(|_| ())
-        .map_err(|error| error.code())
-}
-
-fn parse_pipeline_node_admitting(
-    raw_node: &serde_yaml_ng::Value,
-    shaping_admitted: bool,
 ) -> Result<PipelineNodeDefinition, PipelineConfigurationError> {
     let node_type = yaml_string_field(raw_node, "type")?;
     let encoded = serde_yaml_ng::to_string(raw_node)
@@ -2475,20 +2464,12 @@ fn parse_pipeline_node_admitting(
                 }
                 _ => PipelineConfigurationError::Invalid("a state modifier node is invalid"),
             }),
-        "split_out" if shaping_admitted => SplitOutNodeDefinition::from_yaml(&encoded)
+        "split_out" => SplitOutNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::SplitOut)
             .map_err(|_| PipelineConfigurationError::Invalid("a SplitOut node is invalid")),
-        "aggregate" if shaping_admitted => AggregateNodeDefinition::from_yaml(&encoded)
+        "aggregate" => AggregateNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Aggregate)
             .map_err(|_| PipelineConfigurationError::Invalid("an Aggregate node is invalid")),
-        // Known to this runtime, not admitted by this build: named as a
-        // deployment limit rather than as an unknown type.
-        "split_out" => Err(PipelineConfigurationError::NodeTypeNotAvailable(
-            PipelineGatedNodeType::SplitOut,
-        )),
-        "aggregate" => Err(PipelineConfigurationError::NodeTypeNotAvailable(
-            PipelineGatedNodeType::Aggregate,
-        )),
         _ => Err(PipelineConfigurationError::Unsupported(
             "the pipeline contains a node type that is not enabled",
         )),
@@ -2964,30 +2945,6 @@ impl fmt::Display for PipelineIdentifierField {
     }
 }
 
-/// A node type this runtime knows but admits only in graph-extensions
-/// rehearsal builds (`SHAPING_INTEGRATION_READY`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PipelineGatedNodeType {
-    SplitOut,
-    Aggregate,
-}
-
-impl PipelineGatedNodeType {
-    #[must_use]
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::SplitOut => "split_out",
-            Self::Aggregate => "aggregate",
-        }
-    }
-}
-
-impl std::fmt::Display for PipelineGatedNodeType {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 /// Stable, data-free stored-pipeline admission failure.
 #[derive(Debug, Error)]
 pub(crate) enum PipelineConfigurationError {
@@ -3006,8 +2963,6 @@ pub(crate) enum PipelineConfigurationError {
     Invalid(&'static str),
     #[error("the stored pipeline requests an unavailable capability: {0}")]
     Unsupported(&'static str),
-    #[error("the stored pipeline uses a node type this deployment does not admit: {0}")]
-    NodeTypeNotAvailable(PipelineGatedNodeType),
     #[error("the stored pipeline graph could not be compiled")]
     Graph(#[source] GraphError),
 }
@@ -3027,7 +2982,6 @@ impl PipelineConfigurationError {
             Self::MalformedYaml { .. } => "graph.pipeline.malformed_yaml",
             Self::Invalid(_) => "graph.pipeline.invalid_configuration",
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
-            Self::NodeTypeNotAvailable(_) => NODE_TYPE_NOT_AVAILABLE_CODE,
             Self::Graph(_) => "graph.pipeline.compile_failed",
         }
     }
@@ -3038,7 +2992,6 @@ impl PipelineConfigurationError {
         match self {
             Self::LimitExceeded(limit) => Some(limit.as_str()),
             Self::InvalidIdentifier(field) => Some(field.as_str()),
-            Self::NodeTypeNotAvailable(node_type) => Some(node_type.as_str()),
             Self::ResourceExhausted
             | Self::MalformedYaml { .. }
             | Self::Invalid(_)

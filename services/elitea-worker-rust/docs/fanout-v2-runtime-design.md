@@ -392,7 +392,7 @@ Wave 2 starts after #1084 merges and Code acceptance closes. Sizes: S/M/L.
 | 11 | Progress coalescer; child permits; per-model limiter; separate agentstate pool | `execution/native_agent_lifecycle.rs`, `agents/graph/node_events*.rs`, new `execution/fanout_admission.rs`, `config.rs`, `bootstrap.rs` | M | 3 |
 | 12 | Root (non-fan-out) pauses onto the same ledger; remove complete-set checks | Main + `resume.rs` | L | 7 |
 | 13 | Web wiring (Track W, PR-touched files) | `apps/elitea-web` | L | 7 |
-| 14 | Gate flips, one at a time after deployed acceptance: `split_out`/`aggregate`, Parallel, Map V2 | the constants above, `CompilerAdmittedNodeTypes` | S | all |
+| 14 | Admission of the remaining node families after deployed acceptance: Parallel and Map V2 (`split_out`/`aggregate` are admitted by default, no flag). Each lands as an update to `libs/proto/contracts/pipeline-node-admission-v1.json`, which must empty `pending_wave_2a` | the constants above, `CompilerAdmittedNodeTypes` | S | all |
 
 Wave 3: Code workers inside fan-out (Code-slot semaphore, deadline admission, Gate 6); database actions.
 

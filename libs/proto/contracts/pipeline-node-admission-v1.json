@@ -1,0 +1,33 @@
+{
+  "contract": "pipeline-node-admission-v1",
+  "description": "The single source of truth for the pipeline node `type:` values each layer admits. Read by the Worker compiler test (services/elitea-worker-rust src/agents/graph/node_admission_parity_tests.rs), the Main save-time admission test (services/elitea-main internal/domain/pipelinelimits) and the Web editor test (apps/elitea-web runtimeContract.constants.test.ts). A node type is added here and in every layer in the same change; there are no feature flags for admission.",
+  "admitted": [
+    "agent",
+    "aggregate",
+    "code",
+    "decision",
+    "hitl",
+    "llm",
+    "mcp",
+    "printer",
+    "router",
+    "split_out",
+    "state_modifier",
+    "toolkit"
+  ],
+  "pending_wave_2a": {
+    "comment": "KNOWN DRIFT, recorded so that any new drift fails. `parallel` and `map` are not composed yet: the Worker compiler parses them but refuses them when the graph is bound, Main's save check admits both, the Web editor lists `parallel` (the Add-node menu hides it behind FIXED_PARALLEL_AUTHORING_ENABLED) and omits `map`. This object MUST become empty (and move the two types into `admitted`) when Wave 2a composes Parallel and Map. Each layer's test asserts its admitted set equals `admitted` plus exactly its own entry below.",
+    "worker": ["map", "parallel"],
+    "main": ["map", "parallel"],
+    "web": ["parallel"]
+  },
+  "refused": [
+    "condition",
+    "custom",
+    "function",
+    "loop",
+    "loop_from_tool",
+    "pipeline",
+    "tool"
+  ]
+}

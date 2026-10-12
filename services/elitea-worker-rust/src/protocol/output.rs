@@ -741,9 +741,9 @@ impl RuntimeFailureKind {
     }
 }
 
-/// A stored pipeline holds a node type this build does not admit (`SplitOut` or
-/// `Aggregate` outside a graph-extensions rehearsal build). Data-free: the node is
-/// named by Main's start check and by the editor; Main registers this exact text.
+/// A stored pipeline holds a direct node on a toolkit its position cannot serve.
+/// Data-free: the node is named by Main's start check and by the editor; Main
+/// registers this exact text.
 pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it.";
 
 // Keep every registered code/message/retry tuple in one exhaustive policy table.
