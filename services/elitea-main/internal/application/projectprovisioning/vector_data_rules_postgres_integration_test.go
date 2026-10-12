@@ -1,13 +1,17 @@
 package projectprovisioning_test
 
 // The vector step's own rules against a real PostgreSQL (ADR-0031 decision 4;
-// application_data.go): which replica records it, which closes it, a refused
-// identity that must not close it, and the settle after a forced delete.
+// application_data.go): which replica records it, that no replica closes it on
+// its configuration and only the operator's abandon switch does, a refused
+// identity that must not close it or delay the other steps, and the settle
+// after a forced delete as a planned wait.
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,48 +97,149 @@ func TestADrainOnlyReplicaRunsTheVectorStepButRecordsNone(t *testing.T) {
 	}
 }
 
-func TestAReplicaWithTheStoreOffClosesTheStepAndAnUnwiredRustReplicaLeavesItPending(t *testing.T) {
+// The owner's rule for the vector step (review round 2): a Rust-indexing
+// replica records it with or without a client; no replica ever closes it on
+// its own configuration; only the operator's abandon switch closes it.
+func TestTheVectorStepIsRecordedWithoutAClientAndClosedOnlyByTheAbandonSwitch(t *testing.T) {
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	recorded, remover := recordedByRustReplica(ctx, t, pool)
 
-	// A Rust-indexing replica without a client (a rollout): pending, as for
-	// any unwired application.
-	unwired := newApplicationProvisioner(pool)
-	makeDue(ctx, t, pool, recorded)
-	if completed, err := unwired.ResumeDeletion(ctx, recorded); completed || !errors.Is(err, projectprovisioning.ErrApplicationDataNotRemoved) {
-		t.Fatalf("unwired resume: completed=%v err=%v, want pending", completed, err)
+	// A Rust-indexing replica WITHOUT a client (a rollout): its own delete
+	// records the step and leaves it pending.
+	unwiredRust := newApplicationProvisioner(pool, projectprovisioning.WithApplicationDataRecorded(vectorclient.App))
+	if wired := unwiredRust.ApplicationsWired(); len(wired) != 1 || wired[0] != "vector" {
+		t.Fatalf("ApplicationsWired = %v on a Rust replica without a client, want [vector]", wired)
 	}
-	entry := readJournal(ctx, t, pool, recorded)
+	created, err := unwiredRust.Provision(ctx, projectprovisioning.Request{
+		Name: "Rust Without A Client", OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := unwiredRust.Deprovision(ctx, created.ProjectID)
+	if !errors.Is(err, projectprovisioning.ErrApplicationDataNotRemoved) {
+		t.Fatalf("err = %v, want ErrApplicationDataNotRemoved: the step is recorded and pending", err)
+	}
+	if !slices.Contains(result.Pending, projectprovisioning.StepVectorData) {
+		t.Fatalf("pending = %v, want the vector step", result.Pending)
+	}
+	entry := readJournal(ctx, t, pool, created.ProjectID)
+	if apps := journalApps(entry); len(apps) != 1 || apps[0] != "vector" {
+		t.Fatalf("apps on the row = %v, want [vector]", apps)
+	}
 	if entry.Completed || journalDone(entry, projectprovisioning.StepVectorData) {
-		t.Fatalf("journal = %+v, want the vector step still pending", entry)
+		t.Fatalf("journal = %+v, want the vector step pending", entry)
 	}
 
-	// A replica whose configuration has the store explicitly off closes it
-	// with the note, without a store call.
-	off := newApplicationProvisioner(pool, projectprovisioning.WithVectorStoreOff())
-	makeDue(ctx, t, pool, recorded)
-	if completed, err := off.ResumeDeletion(ctx, recorded); err != nil || !completed {
-		t.Fatalf("store-off resume: completed=%v err=%v", completed, err)
+	// A Python-indexing replica without a client NEVER closes it: run after
+	// run the step stays pending (attempts grow, the row backs off), and the
+	// row carries no note.
+	python := newApplicationProvisioner(pool)
+	for run := 1; run <= 2; run++ {
+		makeDue(ctx, t, pool, created.ProjectID)
+		if completed, err := python.ResumeDeletion(ctx, created.ProjectID); completed || !errors.Is(err, projectprovisioning.ErrApplicationDataNotRemoved) {
+			t.Fatalf("python resume %d: completed=%v err=%v, want pending", run, completed, err)
+		}
 	}
-	entry = readJournal(ctx, t, pool, recorded)
+	entry = readJournal(ctx, t, pool, created.ProjectID)
+	if entry.Completed || journalDone(entry, projectprovisioning.StepVectorData) || entry.Attempts != 3 || !entry.BackedOff {
+		t.Fatalf("journal = %+v, want the vector step still pending after three runs", entry)
+	}
+	if notes := journalNotes(entry); notes[projectprovisioning.StepVectorData] != nil {
+		t.Fatalf("notes = %v, want none: a replica never closes the step on its configuration", notes)
+	}
+	// Nor does a Rust replica without a client, on a later run.
+	makeDue(ctx, t, pool, created.ProjectID)
+	if completed, err := unwiredRust.ResumeDeletion(ctx, created.ProjectID); completed || err == nil {
+		t.Fatalf("unwired rust resume: completed=%v err=%v, want pending", completed, err)
+	}
+
+	// The operator's switch, on a replica without a client, closes it with
+	// the note and no store call.
+	abandoned := newApplicationProvisioner(pool, projectprovisioning.WithVectorCleanupAbandoned())
+	makeDue(ctx, t, pool, created.ProjectID)
+	if completed, err := abandoned.ResumeDeletion(ctx, created.ProjectID); err != nil || !completed {
+		t.Fatalf("abandon resume: completed=%v err=%v", completed, err)
+	}
+	entry = readJournal(ctx, t, pool, created.ProjectID)
 	if !entry.Completed || !journalDone(entry, projectprovisioning.StepVectorData) {
 		t.Fatalf("journal = %+v, want complete", entry)
 	}
-	if notes := journalNotes(entry); notes[projectprovisioning.StepVectorData] != projectprovisioning.NoteVectorStoreNotConfigured ||
-		projectprovisioning.NoteVectorStoreNotConfigured != "vector store not configured" {
-		t.Fatalf("notes = %v, want %q", notes, projectprovisioning.NoteVectorStoreNotConfigured)
+	if notes := journalNotes(entry); notes[projectprovisioning.StepVectorData] != projectprovisioning.NoteVectorCleanupAbandoned ||
+		projectprovisioning.NoteVectorCleanupAbandoned != "vector cleanup abandoned by operator" {
+		t.Fatalf("notes = %v, want %q", notes, projectprovisioning.NoteVectorCleanupAbandoned)
 	}
-	if remover.calls != 1 {
-		t.Fatalf("the rust replica's store was called %d times, want only the deciding run's", remover.calls)
+
+	// The switch beside a wired remover is ignored: the remover runs.
+	remover := &scriptedRemover{summary: "dropped the project's vectors in 1 collection(s)"}
+	wiredAndAbandoned := newApplicationProvisioner(pool,
+		projectprovisioning.WithVectorCleanupAbandoned(),
+		projectprovisioning.WithApplicationData(vectorclient.App, remover))
+	created, err = wiredAndAbandoned.Provision(ctx, projectprovisioning.Request{
+		Name: "Wired And Abandoned", OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	// WithVectorStoreOff beside a wired remover is ignored: the remover runs.
-	wiredAndOff := newApplicationProvisioner(pool,
-		projectprovisioning.WithVectorStoreOff(),
-		projectprovisioning.WithApplicationData(vectorclient.App, &scriptedRemover{summary: "dropped"}))
-	if wired := wiredAndOff.ApplicationsWired(); len(wired) != 1 {
-		t.Fatalf("ApplicationsWired = %v", wired)
+	if _, err := wiredAndAbandoned.Deprovision(ctx, created.ProjectID); err != nil || remover.calls != 1 {
+		t.Fatalf("wired delete: err=%v calls=%d, want the store called once", err, remover.calls)
+	}
+	if notes := journalNotes(readJournal(ctx, t, pool, created.ProjectID)); notes[projectprovisioning.StepVectorData] != "dropped the project's vectors in 1 collection(s)" {
+		t.Fatalf("notes = %v", notes)
+	}
+}
+
+// One refused step does not delay the others: a row with a refused vector step
+// AND an engine step that fails on its ordinary schedule is retried on the
+// engine's schedule (a minute), not parked for the hour the refused step asks
+// for — and a row with ONLY the refused step is parked.
+func TestARefusedStepDoesNotDelayTheOtherStepsRetry(t *testing.T) {
+	pool := newProvisioningPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	refusing := &scriptedRemover{err: fmt.Errorf("%w: elitea-vector drop_project: refused (PermissionDenied)", platformops.ErrNotAllowed)}
+	flaky := &scriptedRemover{err: fmt.Errorf("%w: inventory is still stopping a build", platformops.ErrRetryLater)}
+	both := newApplicationProvisioner(pool,
+		projectprovisioning.WithApplicationData(vectorclient.App, refusing),
+		projectprovisioning.WithApplicationData(platformops.AppInventory, flaky))
+	created, err := both.Provision(ctx, projectprovisioning.Request{
+		Name: "Refused Beside Flaky", OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := both.Deprovision(ctx, created.ProjectID); !errors.Is(err, projectprovisioning.ErrApplicationDataNotRemoved) {
+		t.Fatalf("err = %v", err)
+	}
+	var soon bool
+	if err := pool.QueryRow(ctx, `
+SELECT next_attempt_at BETWEEN clock_timestamp() + interval '30 seconds' AND clock_timestamp() + interval '2 minutes'
+FROM centry.project_deletions WHERE project_id = $1`, created.ProjectID).Scan(&soon); err != nil || !soon {
+		t.Fatalf("the row is not on the engine step's first-attempt schedule (err=%v)", err)
+	}
+	entry := readJournal(ctx, t, pool, created.ProjectID)
+	if entry.Attempts != 1 || entry.LastError == nil ||
+		!strings.Contains(*entry.LastError, projectprovisioning.StepVectorData) || !strings.Contains(*entry.LastError, projectprovisioning.StepInventoryData) {
+		t.Fatalf("journal = %+v, want one attempt naming both steps", entry)
+	}
+	// The engine recovers: its step closes, and now ONLY the refused step is
+	// left — the row parks at the longest pause.
+	flaky.err, flaky.summary = nil, "deleted 1 graph(s)"
+	makeDue(ctx, t, pool, created.ProjectID)
+	if completed, err := both.ResumeDeletion(ctx, created.ProjectID); completed || !errors.Is(err, projectprovisioning.ErrApplicationDataNotRemoved) {
+		t.Fatalf("resume: completed=%v err=%v", completed, err)
+	}
+	entry = readJournal(ctx, t, pool, created.ProjectID)
+	if !journalDone(entry, projectprovisioning.StepInventoryData) || journalDone(entry, projectprovisioning.StepVectorData) {
+		t.Fatalf("journal = %+v, want the engine step done and the vector step pending", entry)
+	}
+	var farOff bool
+	if err := pool.QueryRow(ctx, `
+SELECT next_attempt_at > clock_timestamp() + interval '50 minutes' FROM centry.project_deletions WHERE project_id = $1`,
+		created.ProjectID).Scan(&farOff); err != nil || !farOff {
+		t.Fatalf("a row with only the refused step left is not parked at the longest pause (err=%v)", err)
 	}
 }
 
@@ -221,11 +326,11 @@ func TestTheVectorStepWaitsOutTheClaimTokenCacheAfterAForcedDelete(t *testing.T)
 		t.Fatalf("err = %v, want ErrProjectWorkActive", err)
 	}
 	result, err := deciding.Deprovision(ctx, created.ProjectID, projectprovisioning.SkipActiveWorkCheck())
-	if !errors.Is(err, projectprovisioning.ErrApplicationDataNotRemoved) {
-		t.Fatalf("forced delete err = %v, want the vector step pending", err)
+	if err != nil {
+		t.Fatalf("forced delete err = %v, want nil: the settle is a planned wait, not a failure", err)
 	}
-	// Pending (not initialized, not failed on the store's account), like an
-	// unwired application's step.
+	// Pending (not initialized, not failed on the store's account), reported
+	// in Result.Pending and nowhere else.
 	pending := false
 	for _, step := range result.Pending {
 		pending = pending || step == projectprovisioning.StepVectorData
@@ -240,6 +345,18 @@ func TestTheVectorStepWaitsOutTheClaimTokenCacheAfterAForcedDelete(t *testing.T)
 	if entry.Completed || journalDone(entry, projectprovisioning.StepVectorData) {
 		t.Fatalf("journal = %+v, want open with the vector step pending", entry)
 	}
+	// A planned wait: no attempt counted, no last_error, and the next attempt
+	// is the END of the settle (within VectorDropSettle of the decision), not
+	// the journal's first-attempt minute.
+	if entry.Attempts != 0 || entry.LastError != nil {
+		t.Fatalf("journal = %+v, want no attempt and no last_error for a planned wait", entry)
+	}
+	var atSettleEnd bool
+	if err := pool.QueryRow(ctx, `
+SELECT next_attempt_at BETWEEN clock_timestamp() AND clock_timestamp() + $2 * interval '1 second'
+FROM centry.project_deletions WHERE project_id = $1`, created.ProjectID, projectprovisioning.VectorDropSettle.Seconds()).Scan(&atSettleEnd); err != nil || !atSettleEnd {
+		t.Fatalf("next_attempt_at is not the end of the settle (err=%v)", err)
+	}
 	if active, _ := entry.Cleanup["active_runs"].(float64); active != 1 {
 		t.Fatalf("active_runs recorded = %v, want 1", entry.Cleanup["active_runs"])
 	}
@@ -252,10 +369,14 @@ func TestTheVectorStepWaitsOutTheClaimTokenCacheAfterAForcedDelete(t *testing.T)
 		t.Fatalf("jobs after the decision = %d err=%v", jobs, err)
 	}
 
-	// Inside the settle window a retry still waits.
+	// Inside the settle window a retry still waits, still without an error or
+	// an attempt.
 	makeDue(ctx, t, pool, created.ProjectID)
-	if completed, err := deciding.ResumeDeletion(ctx, created.ProjectID); completed || remover.calls != 0 {
-		t.Fatalf("resume inside the settle: completed=%v calls=%d err=%v", completed, remover.calls, err)
+	if completed, err := deciding.ResumeDeletion(ctx, created.ProjectID); completed || err != nil || remover.calls != 0 {
+		t.Fatalf("resume inside the settle: completed=%v calls=%d err=%v, want (false, nil) and no call", completed, remover.calls, err)
+	}
+	if entry := readJournal(ctx, t, pool, created.ProjectID); entry.Attempts != 0 || entry.LastError != nil {
+		t.Fatalf("journal after the second wait = %+v, want still no attempt", entry)
 	}
 	// Once the window has passed (the decision is moved back in time), the
 	// retry drops the project.

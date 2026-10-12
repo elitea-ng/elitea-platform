@@ -133,19 +133,24 @@ func (c Config) Validate() error {
 	if err != nil || host == "" || port == "" {
 		return fmt.Errorf("%w: the elitea-vector gRPC target %q must be host:port", ErrConfig, c.Target)
 	}
-	for _, file := range []struct{ name, value string }{
-		{"client certificate", c.ClientCertFile},
-		{"client key", c.ClientKeyFile},
-		{"CA bundle", c.CAFile},
-	} {
-		if strings.TrimSpace(file.value) == "" {
-			return fmt.Errorf("%w: the elitea-vector gRPC client needs a %s file", ErrConfig, file.name)
-		}
+	// The material's own rules (the three files, a derivable server name) are
+	// mtlsclient's: one definition for every mTLS hop this process makes.
+	if err := c.material().Validate(); err != nil {
+		return fmt.Errorf("%w: the elitea-vector gRPC client: %w", ErrConfig, err)
 	}
 	if c.IndexDeleteTimeout < 0 || c.ProjectDropTimeout < 0 {
 		return fmt.Errorf("%w: a call timeout cannot be negative", ErrConfig)
 	}
 	return nil
+}
+
+// material is the mutual-TLS hop the configuration names, in mtlsclient's
+// terms.
+func (c Config) material() mtlsclient.Material {
+	return mtlsclient.Material{
+		CertFile: c.ClientCertFile, KeyFile: c.ClientKeyFile, CAFile: c.CAFile,
+		ServerName: c.ServerName, Target: c.Target,
+	}
 }
 
 // Client calls elitea-vector as the platform's administrator identity.
@@ -171,10 +176,7 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 		logger = slog.Default()
 	}
 	logger = logger.With("target", cfg.Target)
-	creds, err := mtlsclient.NewCredentials(mtlsclient.Material{
-		CertFile: cfg.ClientCertFile, KeyFile: cfg.ClientKeyFile, CAFile: cfg.CAFile,
-		ServerName: cfg.ServerName, Target: cfg.Target,
-	}, func(err error) {
+	creds, err := mtlsclient.NewCredentials(cfg.material(), func(err error) {
 		logger.Error("elitea-vector client material could not be reloaded", "err", err)
 	})
 	if err != nil {

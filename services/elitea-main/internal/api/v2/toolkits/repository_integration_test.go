@@ -27,9 +27,12 @@ import (
 )
 
 func TestToolkitRepositoryLifecycleAgainstPostgres(t *testing.T) {
-	// The shared migrations too: DeleteToolkit tombstones the toolkit's
-	// index_registry rows (shared/0162).
-	pool, ctx := migratedToolkitsPool(t)
+	pool := newToolkitsIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	if err := db.RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("run baseline migrations: %v", err)
+	}
 	repo := &pgRepo{pool: pool}
 
 	created, err := repo.CreateToolkit(ctx, "1", map[string]any{

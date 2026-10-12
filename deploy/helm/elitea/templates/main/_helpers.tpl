@@ -653,6 +653,11 @@ another's paths, so it is refused.
 {{- $mountPath := $clientMaterial.mountPath | toString -}}
 {{- $target := get $env "ELITEA_VECTOR_GRPC_TARGET" | toString -}}
 {{- $chartClient := include "elitea-vector.mainClientEnabled" . -}}
+{{- /* ELITEA_VECTOR_CLEANUP_ABANDON is for a deployment WITHOUT a vector client; beside one it would be read as permission to skip deletions a working client can make. The accepted "true" forms are strconv.ParseBool's. */ -}}
+{{- $abandon := get $env "ELITEA_VECTOR_CLEANUP_ABANDON" | toString | lower -}}
+{{- if and (has $abandon (list "1" "t" "true")) (or $target $chartClient) -}}
+{{- fail "env.ELITEA_VECTOR_CLEANUP_ABANDON=true while elitea-main has an elitea-vector client (vector.mainClient.enabled with vector.enabled, or env.ELITEA_VECTOR_GRPC_TARGET): a vector store that is dialled is not abandoned, and cmd/elitea-main refuses the same at boot. Clear the switch, or remove the client to abandon the store." -}}
+{{- end -}}
 {{- if and $chartClient $clientMaterial.enabled -}}
 {{- fail "fileConfig.vectorClientMaterial.enabled is true while vector.enabled and vector.mainClient.enabled already issue and mount elitea-main's elitea-vector client certificate. One Deployment volume cannot have two sources: disable fileConfig.vectorClientMaterial, or set vector.mainClient.enabled=false and name the external elitea-vector in env.ELITEA_VECTOR_GRPC_TARGET." -}}
 {{- end -}}

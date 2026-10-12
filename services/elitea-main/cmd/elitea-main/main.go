@@ -1656,12 +1656,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		indexVectorDeleter = vectorClient
 		projectVectorData = vectorClient
 	}
-	// The vector step is recorded on a project delete only by a replica that
-	// indexes into the store (Rust indexing with a client); a Python-indexing
-	// replica with a client only drains, and one without a client has the
-	// store explicitly off (RouterConfig.ProjectVectorStoreOff).
+	// The vector step is recorded on a project delete by every replica that
+	// indexes into the store (Rust indexing), with or without a client; a
+	// Python-indexing replica with a client only drains. No replica closes a
+	// recorded step on its own configuration: only the operator's abandon
+	// switch does (RouterConfig.ProjectVectorCleanupAbandoned), which is
+	// refused beside a client.
 	vectorStepRecorded := runtimeConfig.RustIndexing()
-	vectorStoreOff := !runtimeConfig.RustIndexing() && vectorClient == nil
+	vectorCleanupAbandoned, err := vectorCleanupAbandonSwitch(logger, os.LookupEnv, vectorClient != nil)
+	if err != nil {
+		return err
+	}
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -2458,35 +2463,35 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	r := api.NewRouter(api.RouterConfig{
-		OnProjectProvisioner:         startDeletionReconciler,
-		OnToolkitCleanupJournal:      startToolkitReconciler,
-		ProjectCleanupContext:        ctx,
-		ProjectDeleteBudget:          projectDeleteBudget,
-		ApplicationData:              applicationData,
-		ProjectVectorData:            projectVectorData,
-		ProjectVectorDataRecorded:    vectorStepRecorded,
-		ProjectVectorStoreOff:        vectorStoreOff,
-		AdminUI:                      adminUICfg,
-		Pool:                         pool,
-		Branding:                     brandingResolver,
-		DeploymentKind:               deploymentKind,
-		PublicOrigin:                 publicOrigin,
-		NativeClients:                native.registry,
-		NativeStore:                  native.store,
-		NativePolicy:                 nativePolicy,
-		NativeAccess:                 native.validator,
-		NativeSecureCookies:          os.Getenv("COOKIE_SECURE") != "false",
-		Mailer:                       mailComposer,
-		EmailSettings:                emailResolver,
-		BrandingPackages:             brandingPackages,
-		ToolkitArgumentSchemas:       toolkitArgumentSchemas,
-		ToolkitCatalogue:             toolkitCatalogue,
-		ToolkitWorkerCapability:      workerToolkitCapability,
-		ToolkitSettingsDefinitions:   toolkitSettingsDefinitions,
-		ToolkitSettingsValidator:     toolkitSettingsValidator,
-		ToolkitRegistry:              toolkitArgumentSchemas,
-		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
-		WorkerImplementation:         workerImplementation,
+		OnProjectProvisioner:          startDeletionReconciler,
+		OnToolkitCleanupJournal:       startToolkitReconciler,
+		ProjectCleanupContext:         ctx,
+		ProjectDeleteBudget:           projectDeleteBudget,
+		ApplicationData:               applicationData,
+		ProjectVectorData:             projectVectorData,
+		ProjectVectorDataRecorded:     vectorStepRecorded,
+		ProjectVectorCleanupAbandoned: vectorCleanupAbandoned,
+		AdminUI:                       adminUICfg,
+		Pool:                          pool,
+		Branding:                      brandingResolver,
+		DeploymentKind:                deploymentKind,
+		PublicOrigin:                  publicOrigin,
+		NativeClients:                 native.registry,
+		NativeStore:                   native.store,
+		NativePolicy:                  nativePolicy,
+		NativeAccess:                  native.validator,
+		NativeSecureCookies:           os.Getenv("COOKIE_SECURE") != "false",
+		Mailer:                        mailComposer,
+		EmailSettings:                 emailResolver,
+		BrandingPackages:              brandingPackages,
+		ToolkitArgumentSchemas:        toolkitArgumentSchemas,
+		ToolkitCatalogue:              toolkitCatalogue,
+		ToolkitWorkerCapability:       workerToolkitCapability,
+		ToolkitSettingsDefinitions:    toolkitSettingsDefinitions,
+		ToolkitSettingsValidator:      toolkitSettingsValidator,
+		ToolkitRegistry:               toolkitArgumentSchemas,
+		DelegatedAuthToolkitSettings:  delegatedAuthToolkitSettings,
+		WorkerImplementation:          workerImplementation,
 		// Readiness is the database alone. The Form graph's sign-in state is
 		// in this same database (shared migration 0153), so it adds no
 		// dependency of its own; the auth Redis it once pinged is gone.

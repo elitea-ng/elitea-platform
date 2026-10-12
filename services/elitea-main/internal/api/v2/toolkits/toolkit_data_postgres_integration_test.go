@@ -252,3 +252,34 @@ VALUES ('other', 'github', '', 1, 1) RETURNING id::text`).Scan(&otherID); err !=
 		t.Fatal("a row survived")
 	}
 }
+
+// A database on the baseline alone — no shared migrations, so no
+// elitea_runtime.index_registry (shared/0162) — still deletes toolkits: the
+// tombstone statement is skipped when the table is absent, and the journal
+// still runs in the same transaction.
+func TestDeleteToolkitRowFirstOnADatabaseWithoutTheIndexRegistryTable(t *testing.T) {
+	pool := newToolkitsIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	if err := db.RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("run baseline migrations: %v", err)
+	}
+	var present bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('elitea_runtime.index_registry') IS NOT NULL`).Scan(&present); err != nil || present {
+		t.Fatalf("the baseline must not have the registry table (present=%v err=%v)", present, err)
+	}
+	repo := &pgRepo{pool: pool}
+	id := seedOneToolkit(ctx, t, repo)
+	journal := &txJournal{}
+	if err := repo.DeleteToolkitRowFirst(ctx, "1", id, journal); err != nil {
+		t.Fatalf("delete on a baseline-only database: %v", err)
+	}
+	if countToolkits(ctx, t, repo) != 0 || len(journal.types) != 1 {
+		t.Fatalf("toolkits left=%d journaled=%v, want the row gone and the journal written", countToolkits(ctx, t, repo), journal.types)
+	}
+	// The journal-less path too.
+	id = seedOneToolkit(ctx, t, repo)
+	if err := repo.DeleteToolkit(ctx, "1", id); err != nil || countToolkits(ctx, t, repo) != 0 {
+		t.Fatalf("DeleteToolkit on a baseline-only database: err=%v left=%d", err, countToolkits(ctx, t, repo))
+	}
+}

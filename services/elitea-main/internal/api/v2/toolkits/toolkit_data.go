@@ -35,7 +35,9 @@ package toolkits
 // tombstone sweeper deletes each namespace and purges the row afterwards,
 // with its backoff; a row whose run is still active waits until the run ends
 // (the sweeper's claim skips it). Under the Python runtime the toolkit has no
-// registry rows and the statement touches nothing.
+// registry rows and the statement touches nothing; on a database that has not
+// applied the shared migrations the table does not exist and the statement is
+// skipped (tombstoneToolkitIndexes).
 
 import (
 	"context"
@@ -44,7 +46,6 @@ import (
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
@@ -118,10 +119,27 @@ func (r *pgRepo) DeleteToolkitRowFirst(ctx context.Context, projectID, toolkitID
 // tombstoneToolkitIndexes marks every live index_registry row of the toolkit
 // deleted, inside the delete's own transaction (see the file comment). The
 // sweeper owns them from here.
-func tombstoneToolkitIndexes(ctx context.Context, q interface {
-	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-}, projectID, toolkitID int64) error {
-	if _, err := q.Exec(ctx, `
+//
+// The table is OPTIONAL to this statement: it arrives with the platform's
+// shared migration 0162, and a deployment on the baseline alone (the Python
+// indexing runtime with no shared migrations applied) must still delete
+// toolkits. So the transaction first asks the catalogue whether the table
+// exists (to_regclass, NULL when it or its schema does not) and skips the
+// update when it is absent — the way #1255's toolkit journal guards the
+// tables it only sometimes has (toolkitcleanup.Journal.toolkitRowExists).
+// Both reads are in the delete's transaction, so a table that appears between
+// them is impossible.
+func tombstoneToolkitIndexes(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64) error {
+	var present bool
+	if err := tx.QueryRow(ctx,
+		`SELECT to_regclass('elitea_runtime.index_registry') IS NOT NULL`,
+	).Scan(&present); err != nil {
+		return fmt.Errorf("look for the index registry table: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.index_registry
 SET deleted_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE project_id = $1 AND toolkit_id = $2 AND deleted_at IS NULL`, projectID, toolkitID); err != nil {

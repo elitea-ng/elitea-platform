@@ -22,18 +22,28 @@ package projectprovisioning
 // THE VECTOR STORE IS THE THIRD APPLICATION, WITH THREE DIFFERENCES (ADR-0031
 // decision 4; AppVector, infra/vectorclient):
 //
-//   - RECORDED ONLY BY A REPLICA THAT INDEXES INTO IT. Under the Python
-//     indexing runtime no toolkit index is in elitea-vector, so a replica
-//     there does not record the step even when it has a client
+//   - RECORDED BY EVERY REPLICA THAT INDEXES INTO IT, CLIENT OR NOT. A delete
+//     decided under the Rust indexing runtime records the step whether or not
+//     the deciding replica has an elitea-vector client
+//     (WithApplicationDataRecorded without one): the project's indexes ARE in
+//     the store, and a replica without the client (a rollout; the chart's
+//     guard refuses the steady state) leaves the step pending for one that
+//     has it, like any unwired application. Under the Python indexing
+//     runtime no toolkit index is in elitea-vector, so a replica there does
+//     not record the step even when it has a client
 //     (WithApplicationDataDrain: it still RUNS a step another replica
-//     recorded, which is harmless and correct). A replica whose
-//     configuration has the vector store explicitly OFF — Python indexing
-//     and no vector target (WithVectorStoreOff) — closes a recorded step with
-//     NoteVectorStoreNotConfigured at Warn instead of waiting: the deployment
-//     turned the store off after the row was written, and no replica will
-//     ever drain it. A replica that indexes into the store but has no client
-//     (a rollout, the chart's guard refuses the steady state) leaves it
-//     pending, like any unwired application.
+//     recorded, which is harmless and correct).
+//   - NO REPLICA CLOSES A RECORDED STEP ON ITS OWN CONFIGURATION. A pending
+//     vector step is vectors still in Qdrant; a replica that lacks the client
+//     cannot know whether another replica will get one, so it never marks the
+//     step done for want of a client: it logs at Error, on every run, naming
+//     the variable that wires the client, and the row backs off. The ONE way
+//     to close a vector step without the store is the operator's explicit
+//     switch, ELITEA_VECTOR_CLEANUP_ABANDON=true (WithVectorCleanupAbandoned),
+//     for a deployment that has genuinely abandoned the vector store: under
+//     it a replica without a client closes pending vector steps with
+//     NoteVectorCleanupAbandoned, at Warn per row. A replica WITH a client
+//     ignores the switch (the composition root refuses the pair at boot).
 //   - A REFUSED CERTIFICATE DOES NOT CLOSE THE STEP. For an engine, a refusal
 //     closes the step with NoteRefused: the engine's data is the engine's. The
 //     vector store's data is the platform's, and a "done" over vectors still
@@ -52,9 +62,10 @@ package projectprovisioning
 //     be followed by vectors nothing will ever delete. So the decision
 //     records how many runs it cut off (deletionCleanup.ActiveRuns, DecidedAt)
 //     and the vector step waits VectorDropSettle after the decision while
-//     that count is positive: the step is left pending, the journal's first
-//     retry (a minute later) drops the project. A delete that cut off nothing
-//     drops at once.
+//     that count is positive: the step is left pending as a PLANNED wait (no
+//     attempt counted, no error reported, no last_error) and the row's next
+//     attempt is the end of the settle, when the retry drops the project. A
+//     delete that cut off nothing drops at once.
 //
 // HOW THE ENGINE'S ANSWERS ARE READ:
 //
@@ -112,12 +123,21 @@ const (
 	NoteUnsupported    = cleanupjournal.NoteUnsupported
 	NoteRefused        = cleanupjournal.NoteRefused
 	NoteInvalidRequest = cleanupjournal.NoteInvalidRequest
-	// NoteVectorStoreNotConfigured closes a recorded vector step on a replica
-	// whose configuration has the vector store off (WithVectorStoreOff): the
-	// deployment no longer indexes into elitea-vector, so nothing will ever
-	// drain the step, and nothing is there to delete under the runtime that
-	// replaced it.
-	NoteVectorStoreNotConfigured = "vector store not configured"
+	// NoteVectorCleanupAbandoned closes a pending vector step on a replica
+	// whose operator set ELITEA_VECTOR_CLEANUP_ABANDON=true
+	// (WithVectorCleanupAbandoned): the deployment abandoned the vector store
+	// and nothing will ever drain the step. Whatever vectors the project had
+	// stay wherever the abandoned store is.
+	NoteVectorCleanupAbandoned = "vector cleanup abandoned by operator"
+)
+
+// VectorClientEnv is the variable that wires elitea-main's elitea-vector
+// client (cmd/elitea-main/vector_client_config.go); VectorCleanupAbandonEnv
+// is the operator switch that closes pending vector steps without it. Named
+// here so the Error log of a step that waits for a client says what to set.
+const (
+	VectorClientEnv         = "ELITEA_VECTOR_GRPC_TARGET"
+	VectorCleanupAbandonEnv = "ELITEA_VECTOR_CLEANUP_ABANDON"
 )
 
 // AppVector is the vector store's application name (infra/vectorclient.App):
@@ -164,6 +184,9 @@ func ApplicationDataStep(app string) string { return app + "_data" }
 // one: the composition root declares the interface type, and a typed nil would
 // pass the nil checks and then panic inside a journal run.
 func WithApplicationData(app string, remover ApplicationDataRemover) Option {
+	if remover == nil || cleanupjournal.IsNilPointer(remover) {
+		return func(*Provisioner) {}
+	}
 	return withApplication(app, remover, true)
 }
 
@@ -171,20 +194,36 @@ func WithApplicationData(app string, remover ApplicationDataRemover) Option {
 // replicas recorded, without recording the step on deletes this replica
 // decides: a replica that has an elitea-vector client under the Python
 // indexing runtime, whose own projects hold no toolkit index there. A
-// WithApplicationData for the same name upgrades it to recorded.
+// WithApplicationData for the same name upgrades it to recorded. A nil remover
+// is ignored, as for WithApplicationData.
 func WithApplicationDataDrain(app string, remover ApplicationDataRemover) Option {
+	if remover == nil || cleanupjournal.IsNilPointer(remover) {
+		return func(*Provisioner) {}
+	}
 	return withApplication(app, remover, false)
+}
+
+// WithApplicationDataRecorded records an application's step on the deletes
+// this replica decides WITHOUT a remover for it: the data is in the engine (a
+// Rust-indexing replica's projects have their indexes in elitea-vector) but
+// this replica cannot reach it, so every step it records waits, pending, for
+// a replica that has the client. A WithApplicationData for the same name adds
+// the remover.
+func WithApplicationDataRecorded(app string) Option {
+	return withApplication(app, nil, true)
 }
 
 func withApplication(app string, remover ApplicationDataRemover, recorded bool) Option {
 	return func(p *Provisioner) {
 		app = strings.TrimSpace(app)
-		if app == "" || remover == nil || cleanupjournal.IsNilPointer(remover) {
+		if app == "" {
 			return
 		}
 		for i := range p.applications {
 			if p.applications[i].app == app {
-				p.applications[i].remover = remover
+				if remover != nil {
+					p.applications[i].remover = remover
+				}
 				p.applications[i].recorded = p.applications[i].recorded || recorded
 				return
 			}
@@ -194,13 +233,14 @@ func withApplication(app string, remover ApplicationDataRemover, recorded bool) 
 	}
 }
 
-// WithVectorStoreOff declares that this replica's configuration has the vector
-// store explicitly off: the Python indexing runtime and no elitea-vector
-// target. A recorded vector step is then closed with
-// NoteVectorStoreNotConfigured instead of waiting for a replica that will
-// never come. It is ignored when a vector remover is wired.
-func WithVectorStoreOff() Option {
-	return func(p *Provisioner) { p.vectorStoreOff = true }
+// WithVectorCleanupAbandoned is the operator's switch
+// (ELITEA_VECTOR_CLEANUP_ABANDON=true): this deployment has abandoned the
+// vector store, so a pending vector step on a replica WITHOUT a vector remover
+// is closed with NoteVectorCleanupAbandoned (at Warn, per row) instead of
+// waiting for a client that will never come. It is ignored when a vector
+// remover is wired: with a client the step runs.
+func WithVectorCleanupAbandoned() Option {
+	return func(p *Provisioner) { p.vectorCleanupAbandoned = true }
 }
 
 // ApplicationsWired names the applications whose step a delete decided on this
@@ -247,11 +287,13 @@ type closedWithNote struct{ note string }
 func (e closedWithNote) Error() string { return "step closed: " + e.note }
 
 // waitingForRuns is the outcome of the vector step inside VectorDropSettle of a
-// decision that cut off active runs: pending, not failed on the store's
-// account, retried by the journal's ordinary backoff.
+// decision that cut off active runs: a planned wait, not a failure. The step
+// is pending, no attempt is counted, and the row's next attempt is the end of
+// the settle (remaining from now).
 type waitingForRuns struct {
-	active int64
-	since  time.Duration
+	active    int64
+	since     time.Duration
+	remaining time.Duration
 }
 
 func (e waitingForRuns) Error() string {
@@ -290,10 +332,17 @@ func runApplicationStep(app string, following []string) func(context.Context, *P
 		attrs := []slog.Attr{slog.String("app", app), slog.Int64("project_id", projectID)}
 		remover := p.applicationRemover(app)
 		if remover == nil {
-			if app == AppVector && p.vectorStoreOff {
-				p.logger.LogAttrs(ctx, slog.LevelWarn, "project delete cleanup: the journal recorded the vector store but this replica's configuration has it off (Python indexing, no elitea-vector target); the step is closed as not configured",
+			if app == AppVector {
+				if p.vectorCleanupAbandoned {
+					p.logger.LogAttrs(ctx, slog.LevelWarn, "project delete cleanup: the journal recorded the vector store, this replica has no elitea-vector client, and the operator abandoned the vector cleanup ("+VectorCleanupAbandonEnv+"=true); the step is closed and whatever vectors the project had stay in the abandoned store",
+						attrs...)
+					return "", closedWithNote{note: NoteVectorCleanupAbandoned}
+				}
+				// Pending for ever, unless something changes: say so where an
+				// operator looks, on every run, with what to change.
+				p.logger.LogAttrs(ctx, slog.LevelError, "project delete cleanup: the journal recorded the vector store but this replica has no elitea-vector client ("+VectorClientEnv+" unset); the project's vectors stay in Qdrant and the step stays pending until a replica with the client runs it (or the operator sets "+VectorCleanupAbandonEnv+"=true for a deployment that abandoned the store)",
 					attrs...)
-				return "", closedWithNote{note: NoteVectorStoreNotConfigured}
+				return "", notWiredError{app: app}
 			}
 			p.logger.LogAttrs(ctx, slog.LevelWarn, "project delete cleanup: this replica has no client for the application the journal recorded; the step is left pending for a replica that has",
 				attrs...)
@@ -306,7 +355,7 @@ func runApplicationStep(app string, following []string) func(context.Context, *P
 			if since := time.Since(cleanup.DecidedAt); since < VectorDropSettle {
 				p.logger.LogAttrs(ctx, slog.LevelWarn, "project delete cleanup: the delete cut off active runs; the vector drop waits for their claim tokens to lapse in elitea-vector",
 					append(attrs, slog.Int64("active_runs", cleanup.ActiveRuns), slog.Duration("since_decision", since))...)
-				return "", waitingForRuns{active: cleanup.ActiveRuns, since: since}
+				return "", waitingForRuns{active: cleanup.ActiveRuns, since: since, remaining: VectorDropSettle - since}
 			}
 		}
 		callCtx, cancel := applicationCallContext(ctx, stepsStillToRun(following, cleanup))

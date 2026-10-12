@@ -1264,6 +1264,12 @@ services:
       ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE: /run/elitea-vector-client/main-client.crt
       ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE: /run/elitea-vector-client/main-client.key
       ELITEA_VECTOR_GRPC_CA_FILE: /run/elitea-vector-client/runtime-ca.crt
+      # A project delete records a vector_data cleanup step under the Rust
+      # indexing runtime whether or not this replica has the client, and no
+      # replica closes it on its own configuration. A deployment that has
+      # ABANDONED its vector store (no target above) closes those pending
+      # steps with ELITEA_VECTOR_CLEANUP_ABANDON=true ("vector cleanup
+      # abandoned by operator"); beside the target it is refused at boot.
     volumes:
       # Only the gateway-client keypair and its CA — three files, not the
       # ./certs directory. Bind-mounting the parent handed elitea-main the whole

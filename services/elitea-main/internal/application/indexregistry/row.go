@@ -217,8 +217,13 @@ type Tombstone struct {
 	// ends and another replica may claim the row. It fences the claimer's own
 	// writes (TombstoneSweeperStore.PurgeClaimed, RescheduleClaimed): a write
 	// that finds a different value belongs to a run whose lease expired, and
-	// touches nothing.
+	// touches nothing. Zero on a tombstone that was listed, not claimed.
 	LeaseUntil time.Time
+	// ClaimedAt is the database's clock at the claim that stamped LeaseUntil.
+	// LeaseUntil − ClaimedAt is the lease's length on ONE clock; the sweeper
+	// measures what is left of it from its own claim moment and never compares
+	// its clock with the database's (the two may disagree by any amount).
+	ClaimedAt time.Time
 }
 
 // Stamped reports whether the first terminal result has stamped the embedding

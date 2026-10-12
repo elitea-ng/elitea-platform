@@ -115,12 +115,21 @@ func (c Config) Validate() error {
 	if err != nil || host == "" || port == "" {
 		return fmt.Errorf("%w: the %s platform gRPC target %q must be host:port", ErrConfig, c.App, c.Target)
 	}
-	for name, value := range map[string]string{"client certificate": c.ClientCertFile, "client key": c.ClientKeyFile, "CA bundle": c.CAFile} {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("%w: the %s platform gRPC client needs a %s file", ErrConfig, c.App, name)
-		}
+	// The material's own rules (the three files, a derivable server name) are
+	// mtlsclient's: one definition for every mTLS hop this process makes.
+	if err := c.material().Validate(); err != nil {
+		return fmt.Errorf("%w: the %s platform gRPC client: %w", ErrConfig, c.App, err)
 	}
 	return nil
+}
+
+// material is the mutual-TLS hop the configuration names, in mtlsclient's
+// terms.
+func (c Config) material() mtlsclient.Material {
+	return mtlsclient.Material{
+		CertFile: c.ClientCertFile, KeyFile: c.ClientKeyFile, CAFile: c.CAFile,
+		ServerName: c.ServerName, Target: c.Target,
+	}
 }
 
 // Client calls one application's platform service.
@@ -148,10 +157,7 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 		logger = slog.Default()
 	}
 	hopLogger := logger.With("app", cfg.App, "target", cfg.Target)
-	creds, err := mtlsclient.NewCredentials(mtlsclient.Material{
-		CertFile: cfg.ClientCertFile, KeyFile: cfg.ClientKeyFile, CAFile: cfg.CAFile,
-		ServerName: cfg.ServerName, Target: cfg.Target,
-	}, func(err error) {
+	creds, err := mtlsclient.NewCredentials(cfg.material(), func(err error) {
 		hopLogger.Error("platform gRPC client material could not be reloaded", "err", err)
 	})
 	if err != nil {

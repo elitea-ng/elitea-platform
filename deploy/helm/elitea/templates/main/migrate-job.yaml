@@ -18,7 +18,7 @@
   the ConfigMap, so a deployment without a vector store carries no
   ELITEA_VECTOR_* at all.
 */ -}}
-{{- range $key := list "ELITEA_VECTOR_GRPC_TARGET" "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" "ELITEA_VECTOR_GRPC_CA_FILE" "ELITEA_VECTOR_GRPC_SERVER_NAME" }}
+{{- range $key := list "ELITEA_VECTOR_GRPC_TARGET" "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" "ELITEA_VECTOR_GRPC_CA_FILE" "ELITEA_VECTOR_GRPC_SERVER_NAME" "ELITEA_VECTOR_CLEANUP_ABANDON" }}
 {{- if and (hasKey $env $key) (eq (get $env $key | toString) "") }}{{- $env = omit $env $key }}{{- end }}
 {{- end }}
 {{- $aiProjectId := include "elitea.aiProjectId" . }}

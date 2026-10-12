@@ -435,16 +435,20 @@ type RouterConfig struct {
 	ProjectVectorData projectprovisioning.ApplicationDataRemover
 	// ProjectVectorDataRecorded says whether a delete decided on this replica
 	// RECORDS the vector step on the journal row: true under the Rust indexing
-	// runtime, whose toolkit indexes live in elitea-vector. False (the Python
-	// runtime) with ProjectVectorData set makes the client drain-only: it runs
-	// the step rows other replicas recorded and records none itself.
+	// runtime, whose toolkit indexes live in elitea-vector, WITH OR WITHOUT a
+	// client (without one the step is recorded and left pending for a replica
+	// that has it). False (the Python runtime) with ProjectVectorData set makes
+	// the client drain-only: it runs the step rows other replicas recorded and
+	// records none itself.
 	ProjectVectorDataRecorded bool
-	// ProjectVectorStoreOff says this replica's configuration has the vector
-	// store explicitly off: the Python indexing runtime AND no elitea-vector
-	// target. A recorded vector step is then closed with
-	// projectprovisioning.NoteVectorStoreNotConfigured instead of waiting for
-	// a replica that never comes. Ignored when ProjectVectorData is set.
-	ProjectVectorStoreOff bool
+	// ProjectVectorCleanupAbandoned is the operator's
+	// ELITEA_VECTOR_CLEANUP_ABANDON=true: the deployment abandoned the vector
+	// store, so a pending vector step is closed with
+	// projectprovisioning.NoteVectorCleanupAbandoned instead of waiting for a
+	// client that never comes. No replica closes one on its own configuration
+	// (application_data.go). Ignored when ProjectVectorData is set; the
+	// composition root refuses that pair at boot.
+	ProjectVectorCleanupAbandoned bool
 	// OnToolkitCleanupJournal, when set, is called once with the toolkit
 	// cleanup journal the toolkit handler enqueues into (#1244), after it is
 	// built. The process uses it to start the toolkit-deletion reconciler over
@@ -798,16 +802,19 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	// deployment without an engine has no data there to delete.
 	options = append(options, applicationDataOptions(cfg.ApplicationData)...)
 	// elitea-vector (ADR-0031 decision 4): the project's vectors, every
-	// source, one journal step. Optional like the engines; recorded only by a
-	// replica that indexes into the store (projectprovisioning/
-	// application_data.go explains the three shapes).
+	// source, one journal step. Optional like the engines; recorded by every
+	// replica that indexes into the store, client or not (projectprovisioning/
+	// application_data.go explains the shapes and the abandon switch).
 	switch {
 	case cfg.ProjectVectorData != nil && cfg.ProjectVectorDataRecorded:
 		options = append(options, projectprovisioning.WithApplicationData(vectorclient.App, cfg.ProjectVectorData))
 	case cfg.ProjectVectorData != nil:
 		options = append(options, projectprovisioning.WithApplicationDataDrain(vectorclient.App, cfg.ProjectVectorData))
-	case cfg.ProjectVectorStoreOff:
-		options = append(options, projectprovisioning.WithVectorStoreOff())
+	case cfg.ProjectVectorDataRecorded:
+		options = append(options, projectprovisioning.WithApplicationDataRecorded(vectorclient.App))
+	}
+	if cfg.ProjectVectorCleanupAbandoned {
+		options = append(options, projectprovisioning.WithVectorCleanupAbandoned())
 	}
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)

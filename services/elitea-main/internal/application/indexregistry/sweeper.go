@@ -22,6 +22,16 @@ const (
 	// even a batch of deletions that each run to their bound ends before the
 	// first claim's lease does, and a tombstone is never worked by two runs.
 	TombstoneLease = 5 * time.Minute
+	// TombstoneActiveRunBound is how long a tombstone defers to a non-terminal
+	// execution job of its run, measured from the job's admission. Within it
+	// the worker may still be writing the index's vectors and the claim skips
+	// the tombstone; past it the job has outlived every bound a run has — the
+	// index admission deadline is 24 hours (runtimecomposition's
+	// indexDeadlineTTL; a test there pins this constant above it) — so it is
+	// presumed dead and the deletion proceeds, logged. Without the bound a job
+	// stuck non-terminal (a lost worker, a settle that never landed) would
+	// keep the index's vectors for ever.
+	TombstoneActiveRunBound = 24*time.Hour + time.Hour
 )
 
 // deleteBudget bounds one tombstone's deletion inside a run of batch
@@ -52,10 +62,12 @@ type TombstoneSweeperStore interface {
 	// next_attempt_at out by lease so no other replica takes it meanwhile.
 	// Replicas never claim the same row (FOR UPDATE SKIP LOCKED); no lock is
 	// held after it returns.
-	// Each returned tombstone carries the lease's end (Tombstone.LeaseUntil).
-	// A tombstone whose run is still active (its execution job is not
-	// terminal) is not due: its worker may still be writing the vectors, and
-	// a deletion now would leave the ones written after it.
+	// Each returned tombstone carries the lease's end (Tombstone.LeaseUntil)
+	// and the store's clock at the claim (Tombstone.ClaimedAt), on the store's
+	// clock. A tombstone whose run is still active (its execution job is not
+	// terminal and younger than TombstoneActiveRunBound) is not due: its
+	// worker may still be writing the vectors, and a deletion now would leave
+	// the ones written after it.
 	ClaimTombstones(ctx context.Context, limit int, lease time.Duration) ([]Tombstone, error)
 	// PurgeClaimed removes a claimed tombstone and its documents, ONLY while
 	// the claim stands (the row's next_attempt_at is still the claim's
@@ -114,6 +126,9 @@ func (s *TombstoneSweeper) RunOnce(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	tombstones, err := s.store.ClaimTombstones(ctx, s.batch, TombstoneLease)
+	// The claim moment on THIS clock: every lease is measured from here as a
+	// duration (leaseLeft), never by comparing this clock with the store's.
+	claimedAt := s.now()
 	if err != nil {
 		return 0, err
 	}
@@ -121,9 +136,25 @@ func (s *TombstoneSweeper) RunOnce(ctx context.Context) (int, error) {
 		if err := ctx.Err(); err != nil {
 			return i, err
 		}
-		s.sweep(ctx, tombstone)
+		s.sweep(ctx, tombstone, claimedAt)
 	}
 	return len(tombstones), nil
+}
+
+// leaseLeft is how much of the tombstone's lease remains, on this process's
+// clock: the lease's length on the store's clock (LeaseUntil − ClaimedAt) less
+// the time this process has spent since its claim. The two clocks are never
+// compared with each other. ok is false for a tombstone that carries no lease.
+// A tombstone with a lease but no claim clock (a store that does not report
+// one) falls back to the store's absolute end against this clock.
+func (s *TombstoneSweeper) leaseLeft(tombstone Tombstone, claimedAt time.Time) (time.Duration, bool) {
+	if tombstone.LeaseUntil.IsZero() {
+		return 0, false
+	}
+	if tombstone.ClaimedAt.IsZero() {
+		return tombstone.LeaseUntil.Sub(s.now()), true
+	}
+	return tombstone.LeaseUntil.Sub(tombstone.ClaimedAt) - s.now().Sub(claimedAt), true
 }
 
 // ErrTombstoneLeaseExpired reports a claimed tombstone this run did not touch
@@ -132,20 +163,19 @@ func (s *TombstoneSweeper) RunOnce(ctx context.Context) (int, error) {
 // reported, never acted on.
 var ErrTombstoneLeaseExpired = errors.New("index tombstone lease expired before this run reached it")
 
-func (s *TombstoneSweeper) sweep(ctx context.Context, tombstone Tombstone) {
+func (s *TombstoneSweeper) sweep(ctx context.Context, tombstone Tombstone, claimedAt time.Time) {
 	// A tombstone whose lease has ended is another run's now (or nobody's
 	// until the next claim); this run has no fence on it and leaves it.
-	if !tombstone.LeaseUntil.IsZero() && !s.now().Before(tombstone.LeaseUntil) {
+	left, leased := s.leaseLeft(tombstone, claimedAt)
+	if leased && left <= 0 {
 		s.report(fmt.Errorf("%w: index %s", ErrTombstoneLeaseExpired, tombstone.IndexID))
 		return
 	}
 	// One deletion's bound: its share of the lease, and never past the lease
 	// itself.
 	budget := deleteBudget(s.batch)
-	if !tombstone.LeaseUntil.IsZero() {
-		if left := tombstone.LeaseUntil.Sub(s.now()); left < budget {
-			budget = left
-		}
+	if leased && left < budget {
+		budget = left
 	}
 	deleteCtx, cancel := context.WithTimeout(ctx, budget)
 	vectorErr := s.vectors.DeleteIndexVectors(deleteCtx, indexingapp.IndexVectorNamespace{

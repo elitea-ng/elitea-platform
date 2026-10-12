@@ -108,3 +108,30 @@ func TestComposeVectorClientWithoutATargetIsNilAndLogged(t *testing.T) {
 		t.Fatalf("missing files: err = %v, want ErrConfig", err)
 	}
 }
+
+// ELITEA_VECTOR_CLEANUP_ABANDON: default off, boolean forms, refused beside a
+// client, a typo is a boot error rather than "false".
+func TestTheVectorCleanupAbandonSwitch(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, raw := range []string{"", " ", "false", "0", "FALSE"} {
+		if on, err := vectorCleanupAbandonSwitch(logger, lookupFrom(map[string]string{vectorCleanupAbandonEnv: raw}), false); err != nil || on {
+			t.Errorf("%q: on=%v err=%v, want off", raw, on, err)
+		}
+	}
+	for _, raw := range []string{"true", " TRUE ", "1"} {
+		if on, err := vectorCleanupAbandonSwitch(logger, lookupFrom(map[string]string{vectorCleanupAbandonEnv: raw}), false); err != nil || !on {
+			t.Errorf("%q: on=%v err=%v, want on", raw, on, err)
+		}
+	}
+	if _, err := vectorCleanupAbandonSwitch(logger, lookupFrom(map[string]string{vectorCleanupAbandonEnv: "yes please"}), false); err == nil {
+		t.Error("an unparsable value passed")
+	}
+	// Beside a client the switch is a contradiction and a boot error.
+	if _, err := vectorCleanupAbandonSwitch(logger, lookupFrom(map[string]string{vectorCleanupAbandonEnv: "true"}), true); err == nil || !strings.Contains(err.Error(), vectorTargetEnv) {
+		t.Errorf("abandon beside a client: err = %v, want a refusal naming %s", err, vectorTargetEnv)
+	}
+	// Off beside a client is fine.
+	if on, err := vectorCleanupAbandonSwitch(logger, lookupFrom(map[string]string{}), true); err != nil || on {
+		t.Errorf("unset beside a client: on=%v err=%v", on, err)
+	}
+}

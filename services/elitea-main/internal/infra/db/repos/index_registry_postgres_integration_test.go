@@ -984,18 +984,50 @@ WHERE index_id = $1::uuid`, row.IndexID); err != nil {
 			t.Fatalf("%s: claimed %+v err=%v", state, claimed, err)
 		}
 	}
+	// A job that has been RUNNING for longer than any run can last is presumed
+	// dead: the tombstone is claimed (and the claim logged) rather than kept
+	// for ever by a job that never settles.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET admitted_at = clock_timestamp() - $2 * interval '1 second' WHERE execution_id = $1`,
+		executionID, (indexregistryapp.TombstoneActiveRunBound + time.Minute).Seconds()); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := repo.ClaimTombstones(ctx, 10, time.Minute); err != nil || len(claimed) != 1 || claimed[0].IndexID != row.IndexID {
+		t.Fatalf("a tombstone whose RUNNING job outlived the active-run bound was not claimed: %+v err=%v", claimed, err)
+	}
+	// Put the row and the job back: due again, the job young and RUNNING.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET next_attempt_at = NULL WHERE index_id = $1::uuid`, row.IndexID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET admitted_at = clock_timestamp() WHERE execution_id = $1`, executionID); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := repo.ClaimTombstones(ctx, 10, time.Minute); err != nil || len(claimed) != 0 {
+		t.Fatalf("a young RUNNING job's tombstone was claimed: %+v err=%v", claimed, err)
+	}
 	setJobState(t, pool, executionID, "SUCCEEDED")
 	claimed, err := repo.ClaimTombstones(ctx, 10, time.Minute)
 	if err != nil || len(claimed) != 1 || claimed[0].IndexID != row.IndexID {
 		t.Fatalf("after the job ended: claimed %+v err=%v", claimed, err)
 	}
 	tombstone := claimed[0]
-	if tombstone.LeaseUntil.IsZero() || !tombstone.LeaseUntil.After(time.Now().Add(50*time.Second)) {
-		t.Fatalf("LeaseUntil = %v, want the claim's lease", tombstone.LeaseUntil)
+	// The lease and the claim clock are both the DATABASE's: their difference
+	// is the lease's length, whatever this process's clock says.
+	if tombstone.LeaseUntil.IsZero() || tombstone.ClaimedAt.IsZero() {
+		t.Fatalf("LeaseUntil=%v ClaimedAt=%v, want both stamped by the claim", tombstone.LeaseUntil, tombstone.ClaimedAt)
 	}
+	if length := tombstone.LeaseUntil.Sub(tombstone.ClaimedAt); length > time.Minute || length < time.Minute-time.Second {
+		t.Fatalf("LeaseUntil - ClaimedAt = %v, want the minute's lease", length)
+	}
+	// An inspection carries no lease: it cannot be fed to the fenced writes.
 	listed, err := repo.ListTombstones(ctx, 10)
-	if err != nil || len(listed) != 1 || !listed[0].LeaseUntil.Equal(tombstone.LeaseUntil) {
-		t.Fatalf("ListTombstones = %+v err=%v, want the same lease", listed, err)
+	if err != nil || len(listed) != 1 || !listed[0].LeaseUntil.IsZero() || !listed[0].ClaimedAt.IsZero() {
+		t.Fatalf("ListTombstones = %+v err=%v, want no lease on a listed tombstone", listed, err)
+	}
+	if err := repo.PurgeClaimed(ctx, listed[0]); err == nil {
+		t.Fatal("PurgeClaimed accepted a listed (unclaimed) tombstone")
+	}
+	if err := repo.RescheduleClaimed(ctx, listed[0], time.Now(), true); err == nil {
+		t.Fatal("RescheduleClaimed accepted a listed (unclaimed) tombstone")
 	}
 
 	// A stale lease (another run's claim superseded this one) writes nothing.

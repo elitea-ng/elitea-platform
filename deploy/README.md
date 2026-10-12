@@ -142,11 +142,18 @@ material (and the DeepWiki / Inventory platform hops') is re-read when its
 files change, so a renewed certificate or CA is used by the next connection
 without a restart. Deleting a TOOLKIT tombstones every index_registry row of
 the toolkit in the delete's own transaction; the sweeper deletes their
-namespaces afterwards. The `vector_data` step is recorded only by a replica
-that indexes into the store (`ELITEA_INDEXING_RUNTIME=rust` with the client);
-a Python-indexing replica without a target closes a recorded step as
-"vector store not configured". A store that refuses the certificate never
-closes the step: it waits at the journal's longest backoff, logged at Error.
+namespaces afterwards. The `vector_data` step is recorded by every replica that
+indexes into the store (`ELITEA_INDEXING_RUNTIME=rust`), with or without the
+client; a Python-indexing replica with a client only drains steps others
+recorded. No replica closes a recorded step on its own configuration: without
+a client the step stays pending, logged at Error on every run naming
+`ELITEA_VECTOR_GRPC_TARGET`. The one way to close such steps without the store
+is the operator's `ELITEA_VECTOR_CLEANUP_ABANDON=true` (note "vector cleanup
+abandoned by operator", Warn per row), for a deployment that has genuinely
+abandoned its vector store; beside a target it is refused at boot. A store that
+refuses the certificate never closes the step either: it waits at the journal's
+longest backoff, logged at Error, without delaying the retry of the row's other
+steps.
 
 ### DeepWiki and Inventory — canned data, or the real engines
 

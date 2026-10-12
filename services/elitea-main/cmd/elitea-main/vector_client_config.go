@@ -30,23 +30,31 @@ package main
 // deleted project's vectors stay in Qdrant. Under the Rust indexing runtime
 // that is the leak ADR-0031 decision 4 closes, and it is logged at Warn at
 // boot; under the Python runtime no toolkit index is in elitea-vector, and
-// the absence is logged at Info.
+// the absence is logged at Info. A project delete's recorded vector step then
+// waits, pending and logged at Error on every run, for a replica with a
+// client — unless the operator sets ELITEA_VECTOR_CLEANUP_ABANDON=true
+// (vectorCleanupAbandonSwitch), the one way to close those steps without the
+// store, for a deployment that has genuinely abandoned it. The switch beside
+// a target is a contradiction and a boot error.
 
 import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
 )
 
 const (
-	vectorTargetEnv     = "ELITEA_VECTOR_GRPC_TARGET"
-	vectorClientCertEnv = "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE"
-	vectorClientKeyEnv  = "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE"
-	vectorCAFileEnv     = "ELITEA_VECTOR_GRPC_CA_FILE"
-	vectorServerNameEnv = "ELITEA_VECTOR_GRPC_SERVER_NAME"
+	vectorTargetEnv         = projectprovisioning.VectorClientEnv // "ELITEA_VECTOR_GRPC_TARGET"
+	vectorClientCertEnv     = "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE"
+	vectorClientKeyEnv      = "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE"
+	vectorCAFileEnv         = "ELITEA_VECTOR_GRPC_CA_FILE"
+	vectorServerNameEnv     = "ELITEA_VECTOR_GRPC_SERVER_NAME"
+	vectorCleanupAbandonEnv = projectprovisioning.VectorCleanupAbandonEnv // "ELITEA_VECTOR_CLEANUP_ABANDON"
 )
 
 // errNoVectorClient reports that no target is set: the deployment has no
@@ -127,4 +135,34 @@ func composeVectorClient(
 	logger.Info("elitea-vector client is wired: deleted indexes and deleted projects lose their vectors",
 		"target", cfg.Target, "rust_indexing", rustIndexing)
 	return client, func() { _ = client.Close() }, nil
+}
+
+// vectorCleanupAbandonSwitch reads ELITEA_VECTOR_CLEANUP_ABANDON (default
+// false; strconv.ParseBool forms). true says the deployment has abandoned the
+// vector store: a project delete's pending vector step is closed as
+// "vector cleanup abandoned by operator" instead of waiting for a client. It
+// is refused beside a client (clientWired): a store that is dialled is not
+// abandoned, and the switch would be read as permission to skip deletions a
+// working client can make. An unparsable value is a boot error, so a typo
+// never passes as "false".
+func vectorCleanupAbandonSwitch(logger *slog.Logger, lookup func(string) (string, bool), clientWired bool) (bool, error) {
+	raw, _ := lookup(vectorCleanupAbandonEnv)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false, nil
+	}
+	abandon, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s=%q is not a boolean (true/false)", vectorCleanupAbandonEnv, raw)
+	}
+	if !abandon {
+		return false, nil
+	}
+	if clientWired {
+		return false, fmt.Errorf("%s=true while %s is set: a vector store that is dialled is not abandoned. Clear the switch, or clear the target and its material to abandon the store",
+			vectorCleanupAbandonEnv, vectorTargetEnv)
+	}
+	logger.Warn("vector cleanup is ABANDONED by the operator: a deleted project's pending vector_data step is closed without deleting anything, and whatever vectors it had stay in the abandoned store",
+		"set", vectorCleanupAbandonEnv)
+	return true, nil
 }

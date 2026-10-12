@@ -311,6 +311,18 @@ expect_refusal "a vector target without its material" "env.ELITEA_VECTOR_GRPC_CA
   --set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/run/x/tls.crt --set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/x/tls.key
 expect_refusal "vector material beside no target" "env.ELITEA_VECTOR_GRPC_TARGET is empty" \
   --set vector.mainClient.enabled=false --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/x/ca.crt
+expect_refusal "the abandon switch beside the chart's client" "a vector store that is dialled is not abandoned" \
+  --set main.env.ELITEA_VECTOR_CLEANUP_ABANDON=true
+expect_refusal "the abandon switch beside an explicit target" "a vector store that is dialled is not abandoned" \
+  $EXTERNAL_CLIENT --set main.env.ELITEA_VECTOR_CLEANUP_ABANDON=True
+# Without any client the switch renders into elitea-main's ConfigMap; empty it is omitted.
+abandoned="$(render $COMPLETE --set vector.mainClient.enabled=false --set main.env.ELITEA_VECTOR_CLEANUP_ABANDON=true)" || fail "abandon without a client refused: $abandoned"
+[ "$(select_one "$abandoned" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_CLEANUP_ABANDON')" = "true" ] \
+  && note "ELITEA_VECTOR_CLEANUP_ABANDON=true renders without a client" \
+  || fail "ELITEA_VECTOR_CLEANUP_ABANDON=true did not reach elitea-main's ConfigMap"
+[ -z "$(select_one "$noclient" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_CLEANUP_ABANDON // ""')" ] \
+  && note "an empty ELITEA_VECTOR_CLEANUP_ABANDON is omitted" \
+  || fail "an empty ELITEA_VECTOR_CLEANUP_ABANDON rendered into the ConfigMap"
 expect_refusal "both the chart's client and fileConfig.vectorClientMaterial" "One Deployment volume cannot have two sources" \
   --set main.fileConfig.vectorClientMaterial.enabled=true --set main.fileConfig.vectorClientMaterial.secretName=x
 expect_refusal "explicit vector material path outside the chart's mount while mainClient is on" "nothing else is mounted for it" \

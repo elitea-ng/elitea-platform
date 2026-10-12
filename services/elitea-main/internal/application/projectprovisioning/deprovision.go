@@ -187,8 +187,8 @@ var (
 
 // activeWorkSQL counts the project's execution_jobs in any non-terminal state,
 // whatever the capability. The state list is the shared definition in
-// domain/execution (execution.NonTerminalJobStates; migration 0033 carries a SQL
-// copy of the same set), bound as one text[] parameter. QUARANTINED is terminal
+// domain/execution (execution.NonTerminalJobStateStrings; migration 0033
+// carries a SQL copy of the same set), bound as one text[] parameter. QUARANTINED is terminal
 // for this purpose: a quarantined job is not executing, and counting it would
 // make a project with one stuck job undeletable.
 //
@@ -199,15 +199,6 @@ const activeWorkSQL = `
 SELECT count(*) FROM elitea_runtime.execution_jobs
 WHERE (resource_project_id = $1 OR projection_project_id = $1)
   AND state = ANY($2::text[])`
-
-func nonTerminalStates() []string {
-	states := execution.NonTerminalJobStates()
-	values := make([]string, len(states))
-	for i, state := range states {
-		values[i] = string(state)
-	}
-	return values
-}
 
 // DeprovisionOption adjusts one Deprovision call.
 type DeprovisionOption func(*deprovisionConfig)
@@ -680,7 +671,7 @@ func (p *Provisioner) decideDeletion(ctx context.Context, projectID int64, skipA
 	// Counted whether or not it is enforced: a skipped check records how many
 	// runs the delete cut off, which the vector step reads.
 	var active int64
-	if err := transaction.QueryRow(ctx, activeWorkSQL, projectID, nonTerminalStates()).Scan(&active); err != nil {
+	if err := transaction.QueryRow(ctx, activeWorkSQL, projectID, execution.NonTerminalJobStateStrings()).Scan(&active); err != nil {
 		return nil, notRemoved("count active work", err)
 	}
 	if active > 0 && !skipActiveWork {
@@ -950,12 +941,11 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 	result := Result{ProjectID: projectID}
 	var (
 		failures    []error
-		failedSteps []string
 		interrupted bool
-		// slowRetry: a failed step wants the journal's longest backoff rather
-		// than the attempt-based one (the vector store refused this process's
-		// identity; only an operator changes that).
-		slowRetry bool
+		// close is what the run leaves for the journal row: which steps failed
+		// (an attempt, named in last_error), which merely wait (a planned
+		// pause, neither), and the schedule each asks for.
+		closing runClose
 	)
 	for _, step := range p.cleanupSteps(cleanup) {
 		status := StepStatus{Step: step.name, Initialized: true}
@@ -974,7 +964,7 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			// The run's bound is spent: leave the step to the journal.
 			result.RollbackSteps = append(result.RollbackSteps, StepStatus{Step: step.name})
 			result.Pending = append(result.Pending, step.name)
-			failedSteps = append(failedSteps, step.name)
+			closing.fail(step.name, 0)
 			continue
 		}
 
@@ -1019,16 +1009,23 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			result.RollbackSteps = append(result.RollbackSteps, StepStatus{Step: step.name})
 			result.Pending = append(result.Pending, step.name)
 			continue
-		case errors.As(err, &notWired), errors.As(err, &waiting):
-			// This replica cannot run the step the row recorded (application_
-			// data.go), or the vector step waits for the project's runs to
-			// end: pending, not failed on the engine's account. The run counts
-			// it as not finished, so the row stays open with a backoff, and
-			// the run's error names the step and the reason for the
-			// reconciler's log. Both are logged by the step.
+		case errors.As(err, &waiting):
+			// The vector step waits out the settle after a forced delete
+			// (application_data.go): a PLANNED pause, not a failure. The step
+			// is pending, no attempt is counted, no error is reported, and the
+			// row's next attempt is the end of the pause. Logged by the step.
 			status = StepStatus{Step: step.name}
 			result.Pending = append(result.Pending, step.name)
-			failedSteps = append(failedSteps, step.name)
+			closing.wait(step.name, waiting.remaining)
+		case errors.As(err, &notWired):
+			// This replica cannot run the step the row recorded (application_
+			// data.go): pending, not failed on the engine's account. The run
+			// counts it as not finished, so the row stays open with a backoff,
+			// and the run's error names the step and the reason for the
+			// reconciler's log. Logged by the step.
+			status = StepStatus{Step: step.name}
+			result.Pending = append(result.Pending, step.name)
+			closing.fail(step.name, 0)
 			failures = append(failures, step.failure(cleanup, err))
 		case errors.As(err, &closed):
 			// Done without the work, for a reason a retry cannot change; the
@@ -1056,21 +1053,24 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 				"limit", p.quietDropLimit, "err", err)
 			p.recordQuietFailures(ctx, projectID, cleanup.QuietDropFailures)
 			status.Msg = "skipped: no vector store recorded"
-			failedSteps = append(failedSteps, step.name)
-		case errors.As(err, &refused):
-			// The vector store refused this process's identity (logged by the
-			// step, at Error): a failed step like any other, except that the
-			// row backs off to the journal's longest pause at once.
-			slowRetry = true
-			fallthrough
+			closing.fail(step.name, 0)
 		default:
-			if !errors.As(err, &refused) {
+			// A failed step. The vector store refusing this process's identity
+			// (identityRefused, logged by the step at Error) is one too, except
+			// that THIS step asks for the journal's longest pause: only an
+			// operator unblocks it. Any other failed step keeps its attempt-
+			// based schedule, and the row's next attempt is the earliest of
+			// the steps' own.
+			retryAfter := time.Duration(0)
+			if errors.As(err, &refused) {
+				retryAfter = deletionRetryMax
+			} else {
 				p.logger.ErrorContext(ctx, "project delete cleanup step failed; the cleanup journal retries it",
 					"step", step.name, "project_id", projectID, "err", err)
 			}
 			status.setFailed(safeStepMessage(step.name))
 			failures = append(failures, step.failure(cleanup, err))
-			failedSteps = append(failedSteps, step.name)
+			closing.fail(step.name, retryAfter)
 			result.Pending = append(result.Pending, step.name)
 			if step.name == StepProjectPgvectorDrop {
 				result.VectorDatabase = cleanup.VectorDatabase
@@ -1093,9 +1093,54 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 		p.releaseInterrupted(ctx, projectID)
 		return result, false, errors.Join(failures...)
 	}
-	completed := p.finishCleanupRun(ctx, projectID, failedSteps, slowRetry)
+	completed := p.finishCleanupRun(ctx, projectID, closing)
 	return result, completed, errors.Join(failures...)
 }
+
+// runClose is what one cleanup run leaves for finishCleanupRun: the steps that
+// FAILED (named in last_error, counted as one attempt) and the steps that
+// merely WAIT (a planned pause: not counted, not an error), with the schedule
+// each asks for. The row's next attempt is the EARLIEST schedule any step
+// asks for: a step that wants the longest pause (the vector store refused this
+// process's identity) never delays a step that would succeed on its ordinary
+// retry.
+type runClose struct {
+	failed  []string
+	waiting []string
+	// attemptBased: some failed step takes the attempt-based schedule
+	// (deletionRetryBase doubling per run, capped at deletionRetryMax).
+	attemptBased bool
+	// fixed is the shortest fixed pause any step asked for (a refused
+	// identity: deletionRetryMax; a settle wait: what is left of it); zero
+	// when none did.
+	fixed time.Duration
+}
+
+// fail records a failed step. retryAfter is the fixed pause the step asks for;
+// zero means the attempt-based schedule.
+func (c *runClose) fail(step string, retryAfter time.Duration) {
+	c.failed = append(c.failed, step)
+	c.ask(retryAfter)
+}
+
+// wait records a step that waits out a planned pause of retryAfter.
+func (c *runClose) wait(step string, retryAfter time.Duration) {
+	c.waiting = append(c.waiting, step)
+	c.ask(max(retryAfter, time.Second))
+}
+
+func (c *runClose) ask(retryAfter time.Duration) {
+	if retryAfter <= 0 {
+		c.attemptBased = true
+		return
+	}
+	if c.fixed == 0 || retryAfter < c.fixed {
+		c.fixed = retryAfter
+	}
+}
+
+// complete reports whether the run left nothing undone.
+func (c runClose) complete() bool { return len(c.failed) == 0 && len(c.waiting) == 0 }
 
 // quietGaveUpNote is the note of a step the journal marked done after the
 // retries of a quiet failure ran out.
@@ -1211,40 +1256,59 @@ WHERE project_id = $1 AND completed_at IS NULL`, projectID); err != nil {
 	}
 }
 
-// finishCleanupRun closes one run in the journal row. With no failed step the
-// row is complete. Otherwise last_error names the failed steps (names only: a
-// raw error can carry SQL or addresses) and next_attempt_at backs off by the
-// number of runs so far — or, with slowRetry, by the longest pause at once
-// (deletionRetryMax: a step that only an operator unblocks). It reports
-// whether the row is now complete.
-func (p *Provisioner) finishCleanupRun(runCtx context.Context, projectID int64, failedSteps []string, slowRetry bool) bool {
+// finishCleanupRun closes one run in the journal row. With nothing undone the
+// row is complete. Otherwise the row stays open and its next attempt is the
+// EARLIEST pause any undone step asks for (runClose): the attempt-based
+// backoff (deletionRetryBase doubling per failed run, capped at
+// deletionRetryMax) when a failed step takes it, a fixed pause when every step
+// asked for one (the longest, for an identity the store refused; the rest of
+// the settle, for the vector step's planned wait). A run with FAILED steps
+// counts one attempt and names them in last_error (names only: a raw error can
+// carry SQL or addresses); a run that left only planned waits counts nothing
+// and clears last_error. It reports whether the row is now complete.
+func (p *Provisioner) finishCleanupRun(runCtx context.Context, projectID int64, closing runClose) bool {
 	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
-	var lastError *string
-	if len(failedSteps) > 0 {
-		message := "steps did not complete: " + fmt.Sprint(failedSteps)
+	var (
+		lastError *string
+		fixed     *float64
+	)
+	if len(closing.failed) > 0 {
+		message := "steps did not complete: " + fmt.Sprint(closing.failed)
 		lastError = &message
 	}
-	base := deletionRetryBase
-	if slowRetry {
-		base = deletionRetryMax
+	if closing.fixed > 0 {
+		seconds := closing.fixed.Seconds()
+		fixed = &seconds
 	}
+	attemptBased := closing.attemptBased
+	if !closing.complete() && fixed == nil {
+		// Open with no schedule asked for cannot happen (every fail/wait asks
+		// for one); keep the row retrying rather than parked for ever.
+		attemptBased = true
+	}
+	// LEAST ignores NULL: the attempt-based pause when it applies, the fixed
+	// one when asked for, the smaller of the two when both. `attempts` in SET
+	// reads the row's value before this run's increment.
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
-SET attempts = attempts + 1,
+SET attempts = attempts + CASE WHEN $2::text IS NULL THEN 0 ELSE 1 END,
     last_error = $2::text,
-    completed_at = CASE WHEN $2::text IS NULL THEN clock_timestamp() END,
-    next_attempt_at = CASE WHEN $2::text IS NULL THEN next_attempt_at
-        ELSE clock_timestamp() + make_interval(secs => LEAST($3::float8 * power(2, LEAST(attempts, 30)), $4::float8)) END,
+    completed_at = CASE WHEN $3::boolean THEN clock_timestamp() END,
+    next_attempt_at = CASE WHEN $3::boolean THEN next_attempt_at
+        ELSE clock_timestamp() + make_interval(secs => LEAST(
+            CASE WHEN $4::boolean THEN LEAST($5::float8 * power(2, LEAST(attempts, 30)), $6::float8) END,
+            $7::float8)) END,
     claimed_until = NULL
 WHERE project_id = $1`,
-		projectID, lastError, base.Seconds(), deletionRetryMax.Seconds(),
+		projectID, lastError, closing.complete(), attemptBased,
+		deletionRetryBase.Seconds(), deletionRetryMax.Seconds(), fixed,
 	); err != nil {
 		p.logger.WarnContext(ctx, "could not close the cleanup run in the journal; the reconciler retries the row",
 			"project_id", projectID, "err", err)
 		return false
 	}
-	return len(failedSteps) == 0
+	return closing.complete()
 }
 
 // ClaimNextDeletion claims ONE incomplete journal row that is older than grace,
@@ -1295,10 +1359,13 @@ RETURNING journal.project_id`,
 // ResumeDeletion runs the remaining cleanup steps of a journal row the caller
 // has claimed (ClaimNextDeletion). completed is true only when the journal row
 // ends complete: every step done, the row superseded by a live project, or the
-// row already complete. A run that leaves a step undone is (false, err), where
-// err joins the leftovers, or (false, nil) when the process stopped it (the
-// lease is released and the attempt is not counted). A project with no journal
-// row is ErrProjectNotFound.
+// row already complete. A run that leaves a step FAILED is (false, err), where
+// err joins the leftovers. (false, nil) is a run that left nothing failed but
+// the row open: the process stopped it (the lease is released and the attempt
+// is not counted), or every undone step is a planned wait (the vector step's
+// settle after a forced delete; the row's next attempt is the end of the
+// wait, no attempt is counted). A project with no journal row is
+// ErrProjectNotFound.
 //
 // ctx is the context whose end means the process is stopping.
 func (p *Provisioner) ResumeDeletion(ctx context.Context, projectID int64) (completed bool, err error) {

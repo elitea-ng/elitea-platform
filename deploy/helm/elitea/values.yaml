@@ -1570,6 +1570,17 @@ main:
     # Overrides the name verified against elitea-vector's certificate. Empty
     # means the target's host.
     ELITEA_VECTOR_GRPC_SERVER_NAME: ""
+    # The operator's switch for a deployment that has ABANDONED its vector
+    # store. A project deleted under the Rust indexing runtime records a
+    # `vector_data` cleanup step whether or not the deciding replica had the
+    # client; without a client that step stays pending for ever (logged at
+    # Error on every run), because no replica may close it on its own
+    # configuration. "true" closes those pending steps as "vector cleanup
+    # abandoned by operator" (Warn per row) — whatever vectors the projects
+    # had stay in the abandoned store. Refused beside a target (the chart's
+    # client or env.ELITEA_VECTOR_GRPC_TARGET): a store that is dialled is
+    # not abandoned. Empty is "false".
+    ELITEA_VECTOR_CLEANUP_ABANDON: ""
 
     # --- The Inventory facade's source expansion (ADR-0023 H4c I2) ---
     #

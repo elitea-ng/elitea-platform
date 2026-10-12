@@ -757,7 +757,7 @@ func (r *IndexRegistryRepository) ListTombstones(ctx context.Context, limit int)
 		return nil, errors.New("tombstone limit is invalid")
 	}
 	rows, err := r.pool.Query(ctx, `
-SELECT index_id::text, project_id, toolkit_id, name, deleted_at, attempts, next_attempt_at
+SELECT index_id::text, project_id, toolkit_id, name, deleted_at, attempts
 FROM elitea_runtime.index_registry
 WHERE deleted_at IS NOT NULL
 ORDER BY deleted_at, index_id
@@ -766,34 +766,50 @@ LIMIT $1`, limit)
 		return nil, fmt.Errorf("list index registry tombstones: %w", err)
 	}
 	defer rows.Close()
-	return scanTombstones(rows)
-}
-
-type tombstoneRows interface {
-	Next() bool
-	Scan(...any) error
-	Err() error
-}
-
-func scanTombstones(rows tombstoneRows) ([]indexregistryapp.Tombstone, error) {
+	// An inspection carries NO lease: LeaseUntil and ClaimedAt stay zero, so a
+	// listed tombstone handed to PurgeClaimed or RescheduleClaimed is refused
+	// ("unclaimed") rather than fenced on a next_attempt_at this caller never
+	// stamped.
 	var out []indexregistryapp.Tombstone
 	for rows.Next() {
-		var (
-			tombstone indexregistryapp.Tombstone
-			lease     *time.Time
-		)
+		var tombstone indexregistryapp.Tombstone
 		if err := rows.Scan(
 			&tombstone.IndexID, &tombstone.ProjectID, &tombstone.ToolkitID, &tombstone.Name,
-			&tombstone.DeletedAt, &tombstone.Attempts, &lease,
+			&tombstone.DeletedAt, &tombstone.Attempts,
 		); err != nil {
 			return nil, err
-		}
-		if lease != nil {
-			tombstone.LeaseUntil = *lease
 		}
 		out = append(out, tombstone)
 	}
 	return out, rows.Err()
+}
+
+// scanClaimedTombstones reads the rows ClaimTombstones returns: the tombstone,
+// the lease the claim stamped (LeaseUntil) and the database clock at the claim
+// (ClaimedAt), both on the database's clock, and whether the claim proceeded
+// over a run whose job is still non-terminal past the active-run bound.
+func scanClaimedTombstones(rows pgx.Rows) ([]indexregistryapp.Tombstone, []string, error) {
+	var (
+		out   []indexregistryapp.Tombstone
+		stale []string
+	)
+	for rows.Next() {
+		var (
+			tombstone indexregistryapp.Tombstone
+			staleRun  bool
+		)
+		if err := rows.Scan(
+			&tombstone.IndexID, &tombstone.ProjectID, &tombstone.ToolkitID, &tombstone.Name,
+			&tombstone.DeletedAt, &tombstone.Attempts, &tombstone.LeaseUntil, &tombstone.ClaimedAt, &staleRun,
+		); err != nil {
+			return nil, nil, err
+		}
+		if staleRun {
+			stale = append(stale, tombstone.IndexID)
+		}
+		out = append(out, tombstone)
+	}
+	return out, stale, rows.Err()
 }
 
 // ClaimTombstones implements indexregistry.TombstoneSweeperStore. The claim is
@@ -805,8 +821,16 @@ func scanTombstones(rows tombstoneRows) ([]indexregistryapp.Tombstone, error) {
 // execution_generation) is in a non-terminal state — is NOT due: the worker
 // may still be writing the index's vectors (a toolkit delete tombstones an
 // index whatever its run is doing), and deleting the namespace under it would
-// leave the chunks written afterwards. It becomes due when the job ends. The
-// returned rows carry the lease's end for the fenced writes.
+// leave the chunks written afterwards. It becomes due when the job ends, OR
+// when the job has been non-terminal for longer than any run can last
+// (indexregistry.TombstoneActiveRunBound from its admission): a job stuck
+// non-terminal for ever (a lost worker, a settle that never landed) must not
+// keep the vectors for ever. Such a claim is logged at Warn per row.
+//
+// The returned rows carry the lease's end (LeaseUntil) and the database clock
+// at the claim (ClaimedAt), both on the DATABASE's clock, so the sweeper
+// measures the lease as a duration from its own claim moment and never
+// compares its clock with the database's.
 func (r *IndexRegistryRepository) ClaimTombstones(
 	ctx context.Context,
 	limit int,
@@ -817,32 +841,49 @@ func (r *IndexRegistryRepository) ClaimTombstones(
 	}
 	rows, err := r.pool.Query(ctx, `
 WITH due AS (
-    SELECT index_id
-    FROM elitea_runtime.index_registry
-    WHERE deleted_at IS NOT NULL
-      AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp())
+    SELECT registry.index_id,
+           EXISTS (
+               SELECT 1 FROM elitea_runtime.execution_jobs AS job
+               WHERE job.execution_id = registry.execution_id
+                 AND job.generation = registry.execution_generation
+                 AND job.state = ANY($3::text[])
+           ) AS stale_run
+    FROM elitea_runtime.index_registry AS registry
+    WHERE registry.deleted_at IS NOT NULL
+      AND (registry.next_attempt_at IS NULL OR registry.next_attempt_at <= clock_timestamp())
       AND NOT EXISTS (
           SELECT 1 FROM elitea_runtime.execution_jobs AS job
-          WHERE job.execution_id = index_registry.execution_id
-            AND job.generation = index_registry.execution_generation
+          WHERE job.execution_id = registry.execution_id
+            AND job.generation = registry.execution_generation
             AND job.state = ANY($3::text[])
+            AND job.admitted_at > clock_timestamp() - make_interval(secs => $4)
       )
-    ORDER BY next_attempt_at NULLS FIRST, deleted_at, index_id
+    ORDER BY registry.next_attempt_at NULLS FIRST, registry.deleted_at, registry.index_id
     LIMIT $1
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF registry SKIP LOCKED
 )
 UPDATE elitea_runtime.index_registry AS registry
 SET next_attempt_at = clock_timestamp() + make_interval(secs => $2)
 FROM due
 WHERE registry.index_id = due.index_id
 RETURNING registry.index_id::text, registry.project_id, registry.toolkit_id,
-          registry.name, registry.deleted_at, registry.attempts, registry.next_attempt_at`,
-		limit, lease.Seconds(), nonTerminalJobStates())
+          registry.name, registry.deleted_at, registry.attempts, registry.next_attempt_at,
+          clock_timestamp(), due.stale_run`,
+		limit, lease.Seconds(), executiondomain.NonTerminalJobStateStrings(),
+		indexregistryapp.TombstoneActiveRunBound.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("claim index registry tombstones: %w", err)
 	}
 	defer rows.Close()
-	return scanTombstones(rows)
+	claimed, stale, err := scanClaimedTombstones(rows)
+	if err != nil {
+		return nil, fmt.Errorf("claim index registry tombstones: %w", err)
+	}
+	for _, indexID := range stale {
+		r.logger().WarnContext(ctx, "index tombstone claimed although its run's execution job is still non-terminal: the job has outlived every bound a run has, so it is presumed dead and the index's vectors are deleted",
+			"index_id", indexID, "active_run_bound", indexregistryapp.TombstoneActiveRunBound.String())
+	}
+	return claimed, nil
 }
 
 // RescheduleTombstone implements indexregistry.TombstoneSweeperStore. It only
@@ -911,16 +952,6 @@ WHERE index_id = $1::uuid AND deleted_at IS NOT NULL AND next_attempt_at = $4`,
 		return fmt.Errorf("reschedule index registry tombstone: %w", err)
 	}
 	return nil
-}
-
-// nonTerminalJobStates is execution.NonTerminalJobStates as a text[] parameter.
-func nonTerminalJobStates() []string {
-	states := executiondomain.NonTerminalJobStates()
-	values := make([]string, len(states))
-	for i, state := range states {
-		values[i] = string(state)
-	}
-	return values
 }
 
 // UpsertDocuments records the (document_key, version) of documents a run has
