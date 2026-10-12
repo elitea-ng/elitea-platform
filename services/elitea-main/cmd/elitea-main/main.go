@@ -1657,6 +1657,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load pinned worker toolkit capability: %w", err)
 	}
+	// Under the Rust indexing runtime the Rust worker serves the index tools
+	// inside the I1 indexing families (ADR-0030 I1), which the pinned
+	// snapshot cannot express: the same image serves them under one setting
+	// and not the other. The runtime below re-reads and validates the same
+	// variable; here only its value decides the catalogue.
+	indexingRuntime, err := runtimecomposition.IndexingRuntimeFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("read indexing runtime: %w", err)
+	}
+	if indexingRuntime == runtimecomposition.IndexingRuntimeRust {
+		workerToolkitCapability = workerToolkitCapability.WithRustIndexTools()
+	}
 	logger.Info(
 		"toolkit type catalogue composed",
 		"worker_implementation", workerImplementation,

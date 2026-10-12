@@ -179,7 +179,7 @@ impl VectorClaimToken {
     /// (the runtime-context authority an agent run receives). Crate-private,
     /// and deliberately not `Clone`, so copies are made only at those seams.
     #[must_use]
-    pub(super) fn duplicate(&self) -> Self {
+    pub(crate) fn duplicate(&self) -> Self {
         Self {
             bearer: Zeroizing::new(self.bearer.as_str().to_owned()),
             expires_at_unix_millis: self.expires_at_unix_millis,

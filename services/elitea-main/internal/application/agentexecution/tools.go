@@ -14,6 +14,7 @@ import (
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
@@ -81,6 +82,26 @@ type CurrentApplicationToolSnapshotService struct {
 	guardrails      CurrentAgentGuardrailResolver
 	projectContext  CurrentProjectContextResolver
 	publicProjectID int32
+	// indexes freezes a toolkit's index catalog into the frozen tool object
+	// (ADR-0030 I1). nil on the Python indexing path, where the key is not
+	// written and the SDK worker serves the index tools.
+	indexes CurrentAgentIndexCatalogResolver
+}
+
+// CurrentAgentIndexCatalogResolver lists the searchable indexes of one toolkit
+// from the index registry (ELITEA_INDEXING_RUNTIME=rust).
+type CurrentAgentIndexCatalogResolver interface {
+	ToolkitIndexCatalog(ctx context.Context, projectID, toolkitID int32) ([]map[string]any, error)
+}
+
+// WithIndexCatalog makes the freezer write each I1 indexing toolkit's index
+// catalog next to its settings (ADR-0030 I1). Without it no `indexes` key is
+// written, which is the Python indexing path.
+func (service *CurrentApplicationToolSnapshotService) WithIndexCatalog(
+	resolver CurrentAgentIndexCatalogResolver,
+) *CurrentApplicationToolSnapshotService {
+	service.indexes = resolver
+	return service
 }
 
 // CurrentAgentGuardrailResolver supplies the live toolkit guardrails policy.
@@ -283,6 +304,19 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		tool["id"] = toolID
 		tool["settings"] = withoutBlockedSelectedTools(ctx, policy, toolType, toolkitName, frozen)
 		tool["toolkit_name"] = toolkitName
+		if service.indexes != nil && indexcatalog.Family(toolType) {
+			if toolID > math.MaxInt32 {
+				return nil, unsupportedStart("a tool entry id exceeds the registry's range")
+			}
+			catalog, err := service.indexes.ToolkitIndexCatalog(ctx, request.ProjectID, int32(toolID))
+			if err != nil {
+				if contextErr := ctx.Err(); contextErr != nil {
+					return nil, contextErr
+				}
+				return nil, unsupportedStartBecause("index catalog resolution", err)
+			}
+			tool[indexcatalog.Key] = catalog
+		}
 		frozenTools = append(frozenTools, tool)
 	}
 	frozenTools, err = freezeCurrentInternalMCP(version, request.InternalTools, frozenTools, policy)

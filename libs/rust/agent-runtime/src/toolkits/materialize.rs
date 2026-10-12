@@ -14,6 +14,14 @@
 //! is in scope (pipelines, nested applications) it stays exactly what it was:
 //! skipped with `agent_toolkit_skipped`, which is the honest answer for a
 //! runtime that cannot serve it there.
+//!
+//! The index tools (ADR-0030 I1) are the second lent authority: for an
+//! indexing family whose frozen toolkit carries Main's `indexes` catalog, the
+//! toolset is composed of the family's tools and the five index tools, acting
+//! under an [`IndexToolAuthority`] the host lends
+//! (`materialize_configured_toolsets_with_authorities`). No catalog (the
+//! Python indexing path) means no index tools; a catalog without an
+//! authority means they are left out with a warning.
 
 use std::fmt;
 use std::sync::Arc;
@@ -25,6 +33,10 @@ use super::families::UnsupportedSetting;
 use super::families::artifact::ArtifactToolAuthority;
 use super::families::bigquery;
 use super::families::confluence;
+use super::families::index_tools::{
+    CompositeToolset, IndexCatalog, IndexToolAuthority, IndexToolsetErrorCode, build_index_toolset,
+    is_index_family,
+};
 use super::families::jira;
 use super::families::qtest;
 #[cfg(feature = "toolkit-sql")]
@@ -248,12 +260,34 @@ pub async fn materialize_configured_toolsets_with_artifact_authority(
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
 ) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
+    materialize_configured_toolsets_with_authorities(
+        snapshot,
+        policy,
+        delegated_tokens,
+        artifacts,
+        None,
+    )
+    .await
+}
+
+/// The same materialization, with both lent authorities: the claim for the
+/// `artifact` family and the index tools' host for the indexing families
+/// (ADR-0030 I1). Either may be `None`, with the consequences each family
+/// documents: no artifact family, or no index tools.
+pub async fn materialize_configured_toolsets_with_authorities(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+    index_tools: Option<&IndexToolAuthority>,
+) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
     let mut refusal = None;
     let materialized = materialize_all(
         snapshot,
         policy,
         delegated_tokens,
         artifacts,
+        index_tools,
         &mut |_, setting| {
             refusal.get_or_insert(ToolsetMaterializationError::refused(setting));
         },
@@ -274,6 +308,7 @@ pub async fn materialize_configured_toolsets_reporting_refusals(
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
+    index_tools: Option<&IndexToolAuthority>,
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     let mut refused = Vec::new();
     let mut materialized = materialize_all(
@@ -281,6 +316,7 @@ pub async fn materialize_configured_toolsets_reporting_refusals(
         policy,
         delegated_tokens,
         artifacts,
+        index_tools,
         &mut |reference, setting| refused.push(RefusedToolkit::new(reference, setting)),
     )
     .await?;
@@ -293,6 +329,7 @@ async fn materialize_all(
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
+    index_tools: Option<&IndexToolAuthority>,
     on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, UnsupportedSetting) + Send),
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
@@ -343,13 +380,58 @@ async fn materialize_all(
         delegated_authorization
             .merge(authorization)
             .map_err(|()| invalid_configuration())?;
-        toolsets.push(toolset);
+        toolsets.push(with_index_tools(reference, toolset, policy, index_tools)?);
     }
     Ok(ConfiguredToolsets {
         toolsets,
         delegated_authorization,
         refused: Vec::new(),
     })
+}
+
+/// The family toolset of an indexing family, composed with its index tools
+/// when Main froze a catalog into the toolkit and the host lent an authority
+/// (ADR-0030 I1). Any other toolset is returned as it is.
+fn with_index_tools(
+    reference: &FrozenToolReference<'_>,
+    toolset: Arc<dyn Toolset>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    index_tools: Option<&IndexToolAuthority>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let Some(catalog) = reference
+        .indexes()
+        .filter(|_| is_index_family(reference.tool_type()))
+    else {
+        return Ok(toolset);
+    };
+    let Some(authority) = index_tools else {
+        tracing::warn!(
+            event = "agent_index_tools_unavailable",
+            reason_code = "no_vector_target",
+            toolkit_type = reference.tool_type(),
+            toolkit_id = reference.tool_id(),
+            "the toolkit carries an index catalog, but this worker has no vector store; its index tools were left out"
+        );
+        return Ok(toolset);
+    };
+    let catalog = IndexCatalog::parse(catalog).map_err(|_| invalid_configuration())?;
+    let settings = reference.settings().ok_or_else(invalid_configuration)?;
+    let index_toolset = build_index_toolset(
+        reference.toolkit_name(),
+        reference.tool_type(),
+        settings,
+        catalog,
+        policy,
+        authority,
+    )
+    .map_err(|error| match error.code() {
+        IndexToolsetErrorCode::InvalidConfiguration => invalid_configuration(),
+        IndexToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+    })?;
+    Ok(Arc::new(CompositeToolset::new(
+        reference.toolkit_name(),
+        vec![toolset, Arc::new(index_toolset)],
+    )))
 }
 
 async fn materialize(

@@ -1,0 +1,32 @@
+package runtimecomposition
+
+import (
+	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+)
+
+// This file hands the Rust indexing runtime's index catalog (ADR-0030 I1) to
+// the three freeze paths. Each takes an optional resolver; a nil *CatalogResolver
+// must reach them as a nil INTERFACE (or no option at all), not as a typed nil
+// that reads as "configured" and then fails every freeze.
+
+// indexCatalogResolver is the agent freezer's view of the catalog resolver, or
+// nil when the deployment indexes with Python.
+func indexCatalogResolver(
+	resolver *indexregistryapp.CatalogResolver,
+) agentexecutionapp.CurrentAgentIndexCatalogResolver {
+	if resolver == nil {
+		return nil
+	}
+	return resolver
+}
+
+// indexCatalogOption is the tool-run resolver option for the catalog, or a
+// no-op when the deployment indexes with Python.
+func indexCatalogOption(resolver *indexregistryapp.CatalogResolver) toolkitcalltoolapp.ResolverOption {
+	if resolver == nil {
+		return func(*toolkitcalltoolapp.CurrentAuthoritativeInputResolver) {}
+	}
+	return toolkitcalltoolapp.WithIndexCatalog(resolver)
+}

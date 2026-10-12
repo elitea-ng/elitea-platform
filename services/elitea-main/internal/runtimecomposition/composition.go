@@ -384,6 +384,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// tombstone, and nothing is reported as deleted that was not.
 	var indexVectors indexingapp.IndexVectorDeleter = indexingapp.DeferredIndexVectorDeleter{}
 	var indexRegistry *indexRegistryComposition
+	// indexCatalog freezes each I1 indexing toolkit's indexes into the frozen
+	// toolkit for the Rust worker's index tools (ADR-0030 I1). nil on the
+	// Python path: no `indexes` key is written, the SDK serves the tools.
+	var indexCatalog *indexregistryapp.CatalogResolver
 	if rustIndexing {
 		indexRegistry, err = newIndexRegistryComposition(
 			dependencies.AdmissionPool,
@@ -396,6 +400,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct index registry: %w", err)
 		}
 		indexRegistry.repo.WithLogger(dependencies.Logger)
+		indexCatalog, err = indexregistryapp.NewCatalogResolver(indexRegistry.repo)
+		if err != nil {
+			return nil, fmt.Errorf("construct index catalog resolver: %w", err)
+		}
 		terminalRegistry, registryErr := repos.NewIndexRegistryRepository(dependencies.TerminalEffectsPool)
 		if registryErr != nil {
 			return nil, fmt.Errorf("construct index registry terminal repository: %w", registryErr)
@@ -705,6 +713,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		agentVersions, targetErr := newCurrentAgentVersionFreezer(
 			dependencies.AdmissionPool,
 			dependencies.CurrentConfigurations,
+			indexCatalogResolver(indexCatalog),
 		)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent version freezer: %w", targetErr)
@@ -860,6 +869,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		)
 		if toolkitErr != nil {
 			return nil, fmt.Errorf("construct current direct toolkit freezer: %w", toolkitErr)
+		}
+		if indexCatalog != nil {
+			toolkitFreezer = toolkitFreezer.WithIndexCatalog(indexCatalog)
 		}
 		toolkitInputs, toolkitErr := toolkitexecutionapp.NewInputBundleFactory(
 			toolkitexecutionapp.InputProfile{
@@ -1987,6 +1999,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			0,
 			toolCallRecords,
 			dependencies.Logger,
+			indexCatalogOption(indexCatalog),
 		)
 		if toolRunErr != nil {
 			return nil, toolRunErr

@@ -96,6 +96,8 @@ mod gitlab_tests;
 #[cfg(test)]
 mod google_places_tests;
 #[cfg(test)]
+mod index_tools_tests;
+#[cfg(test)]
 mod invocation_tests;
 #[cfg(test)]
 mod jira_tests;
@@ -169,10 +171,15 @@ pub use delegated_auth::{
     encode_delegated_authorization_requirement, hide_model_tools,
 };
 pub use families::artifact::ArtifactToolAuthority;
+pub use families::index_tools::{
+    INDEXES_KEY, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
+    IndexToolFailure, IndexToolHost, IndexToolName, is_index_family,
+};
 pub use materialize::{
     ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,
     ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,
     materialize_configured_toolsets_with_artifact_authority,
+    materialize_configured_toolsets_with_authorities,
     materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
 };
 pub use mcp::{

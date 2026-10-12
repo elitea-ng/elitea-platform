@@ -184,7 +184,14 @@ pub(crate) fn build_toolset<K: AdoToolKind>(
             .copied()
             .filter(|kind| selected.iter().any(|name| name.as_ref() == kind.name()))
             .collect::<Vec<_>>();
-        if kinds.is_empty() {
+        // A selection of index tools alone (ADR-0030 I1, the repos family)
+        // selects none of this family's tools and is served by the index
+        // toolset composed next to it; it is not an unsupported selection.
+        if kinds.is_empty()
+            && !selected
+                .iter()
+                .all(|name| crate::toolkits::families::index_tools::is_sdk_index_tool_name(name))
+        {
             return Err(AdoToolsetError::new(
                 AdoToolsetErrorCode::UnsupportedSelection,
             ));

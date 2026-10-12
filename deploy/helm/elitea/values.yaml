@@ -3764,11 +3764,16 @@ worker:
   #       memory, vectorstore, sandbox, delta_lake, aws and localgit (each
   #       blocked on a platform decision recorded in the worker's
   #       SOURCE_PARITY.md). #865's other 17 types are now Rust families.
-  #     - single tools inside partial Rust families: every indexing tool
-  #       (index_data, search_index, stepback_*), tools that need a vision
-  #       model or LLM (for example confluence get_page_with_image_descriptions,
-  #       figma analyze_file) and tools that upload artifact bytes (for
-  #       example aha attach_file, testrail add_file_to_case). The capability
+  #     - single tools inside partial Rust families: the indexing tools
+  #       (index_data, search_index, stepback_*) under indexingRuntime=python
+  #       — under indexingRuntime=rust the Rust worker serves search_index,
+  #       stepback_search_index, stepback_summary_index, list_indexes and
+  #       remove_index inside the I1 families (artifact, github, gitlab,
+  #       bitbucket, ado_repos; ADR-0030 I1), and index_data runs through
+  #       the Indexes tab — tools that need a vision model or LLM (for
+  #       example confluence get_page_with_image_descriptions, figma
+  #       analyze_file) and tools that upload artifact bytes (for example
+  #       aha attach_file, testrail add_file_to_case). The capability
   #       snapshot's `supported_tools` lists exactly what is served; the
   #       remaining tools are shown greyed with a reason (#865).
   #     - six internal chat-agent tools that
@@ -4091,6 +4096,28 @@ worker:
     # image_digest, policy_revision, and timeout_seconds.
     # The target hostname must match the supervisor certificate SAN.
     sandboxRuntimes: []
+    # Rust worker, indexingRuntime=rust only (ADR-0030 I1, ADR-0031): where
+    # the worker finds elitea-vector, as `host:port`, reached with the
+    # worker's own runtime mTLS identity (agent-worker-client.crt, issued by
+    # the runtime CA elitea-vector's server certificate chains to). It is
+    # written to runtime.json as `vector_target`, which turns on
+    # index.ingest.v1 and the index tools inside the indexing families
+    # (search_index and the rest). Empty derives
+    # `<vector.service.name>:<vector.service.port>` from this chart's own
+    # elitea-vector when vector.enabled is true; indexingRuntime=rust with
+    # neither is refused at render time, because a Rust-indexing deployment
+    # whose worker has no vector store refuses every index run and lists no
+    # index tools, silently.
+    vectorTarget: ""
+    # Rust worker, indexingRuntime=rust only: the egress allowlist of the
+    # indexing connectors (ADR-0030 decision 3), hosts separated by spaces or
+    # commas; `*.example.com` admits direct subdomains; `*` disables the
+    # control. Written to runtime.json as `index_egress_allowlist`. EMPTY
+    # REFUSES EVERY SOURCE HOST (fail-closed): an index run against github.com
+    # fails with an egress refusal until the host is named here. The default
+    # names the public SaaS hosts the I1 families index from; add your
+    # self-hosted GitLab, Bitbucket or Azure DevOps hosts.
+    indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com"
     # Broader than the current `artifact.delete_file` rule, so metadata drift
     # cannot bypass approval.
     sensitiveTools: '{"*":["delete_file"]}'

@@ -8,6 +8,7 @@ import (
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 )
 
 const (
@@ -134,6 +135,22 @@ type CurrentReadToolFreezer struct {
 	toolkits   CurrentMCPToolkitReader
 	settings   CurrentToolkitSettingsResolver
 	guardrails CurrentGuardrailResolver
+	// indexes freezes an I1 indexing toolkit's index catalog into the toolkit
+	// JSON (ADR-0030 I1); nil on the Python indexing path.
+	indexes IndexCatalogResolver
+}
+
+// IndexCatalogResolver lists the searchable indexes of one toolkit from the
+// index registry (ELITEA_INDEXING_RUNTIME=rust).
+type IndexCatalogResolver interface {
+	ToolkitIndexCatalog(ctx context.Context, projectID, toolkitID int32) ([]map[string]any, error)
+}
+
+// WithIndexCatalog makes the freezer write an I1 indexing toolkit's index
+// catalog next to its settings (ADR-0030 I1).
+func (f *CurrentReadToolFreezer) WithIndexCatalog(resolver IndexCatalogResolver) *CurrentReadToolFreezer {
+	f.indexes = resolver
+	return f
 }
 
 func NewCurrentReadToolFreezer(
@@ -239,12 +256,22 @@ func (f *CurrentReadToolFreezer) Freeze(
 	// entries authorize nothing and duplicates collapse deterministically.
 	resolved["selected_tools"] = canonicalSelected
 
-	toolkitJSON, err := boundedJSON(map[string]any{
+	frozenToolkit := map[string]any{
 		"id":           toolkit.ID,
 		"type":         toolkit.Type,
 		"toolkit_name": toolkit.Name,
 		"settings":     resolved,
-	}, MaxCurrentReadToolSnapshotBytes)
+	}
+	if f.indexes != nil && indexcatalog.Family(toolkit.Type) {
+		catalog, err := f.indexes.ToolkitIndexCatalog(ctx, request.ProjectID, request.ToolkitID)
+		if err != nil {
+			return FrozenCurrentReadTool{}, currentReadToolAdmissionError(
+				CurrentReadToolAdmissionSettings, err,
+			)
+		}
+		frozenToolkit[indexcatalog.Key] = catalog
+	}
+	toolkitJSON, err := boundedJSON(frozenToolkit, MaxCurrentReadToolSnapshotBytes)
 	if err != nil {
 		return FrozenCurrentReadTool{}, currentReadToolAdmissionError(
 			CurrentReadToolAdmissionSnapshot, err,

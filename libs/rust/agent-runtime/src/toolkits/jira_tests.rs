@@ -1271,6 +1271,7 @@ async fn a_refused_setting_is_named_to_the_user_not_silently_skipped() {
         &policy(&[]),
         &Map::new(),
         None,
+        None,
     )
     .await
     .expect("a refused toolkit does not fail the agent");

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"sort"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 )
 
 const (
@@ -315,6 +317,40 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 			toolkitType + " toolkit."
 	default:
 		return true, ""
+	}
+}
+
+// WithRustIndexTools is the capability of a Rust worker whose deployment
+// indexes with the Rust runtime (ELITEA_INDEXING_RUNTIME=rust, ADR-0030 I1):
+// the five index tools are then served inside every I1 indexing family, so a
+// partial family's allow list gains them. The pinned snapshot cannot say this
+// itself — the same worker image serves them under one setting and not the
+// other — and the SDK conformance gate that generates the snapshot builds the
+// families without them, so the rule lives here, beside the setting that
+// decides it. A Python capability, or a family that is not partial (serves
+// every SDK tool already), is returned unchanged.
+func (c *WorkerToolkitCapability) WithRustIndexTools() *WorkerToolkitCapability {
+	if c == nil || c.implementation != RustWorkerImplementation {
+		return c
+	}
+	tools := make(map[string]map[string]struct{}, len(c.supportedTools))
+	for toolkitType, names := range c.supportedTools {
+		copied := make(map[string]struct{}, len(names)+len(indexcatalog.ToolNames))
+		for name := range names {
+			copied[name] = struct{}{}
+		}
+		if indexcatalog.Family(toolkitType) {
+			for _, name := range indexcatalog.ToolNames {
+				copied[name] = struct{}{}
+			}
+		}
+		tools[toolkitType] = copied
+	}
+	return &WorkerToolkitCapability{
+		implementation:        c.implementation,
+		unsupportedImportKeys: c.unsupportedImportKeys,
+		supportedToolTypes:    c.supportedToolTypes,
+		supportedTools:        tools,
 	}
 }
 

@@ -250,9 +250,14 @@ async fn schemas_selection_and_argument_shapes_follow_the_sdk() {
         subset.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
         ["read_file"]
     );
-    assert_eq!(
-        tools_for(&api, &["search_index"]).await.err(),
-        Some(GitLabToolsetErrorCode::UnsupportedSelection)
+    // An index-only selection selects none of THIS family's tools; the index
+    // toolset composed next to it serves them (ADR-0030 I1), so it is not an
+    // unsupported selection.
+    assert!(
+        tools_for(&api, &["search_index"])
+            .await
+            .expect("index-only selection")
+            .is_empty()
     );
     assert_eq!(
         tools_for(&api, &["no_such_tool"]).await.err(),

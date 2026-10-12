@@ -30,19 +30,22 @@ use super::sensitive_tools::{
     SensitiveToolCatalog, policy_for_guardrails, sensitive_tools_for_kind,
 };
 use super::session::{
-    ApplicationRuntimeProjection, NativeSessionBackend, NativeToolExecutionMode,
-    OrdinaryAgentCompletion, OrdinaryRuntimeBindings,
+    ApplicationRuntimeProjection, BoundOrdinaryAgentModel as _, NativeSessionBackend,
+    NativeToolExecutionMode, OrdinaryAgentCompletion, OrdinaryRuntimeBindings,
     assemble_delegated_authorization_resume_with_sessions,
     assemble_direct_hitl_resume_with_sessions_and_applications,
     assemble_ordinary_native_with_sessions_and_runtime_catalogs,
 };
 use super::tool_namespacing::RenamedTool;
+use crate::indexing::IndexIngestRuntime;
+use crate::indexing::tools::{ClaimIndexToolHost, StepbackBinding};
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
-    AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind, McpConnector,
-    McpMaterializationError, McpMaterializationErrorCode, RefusedToolkit, ToolAdmissionPolicy,
-    ToolBindingError, ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
+    AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind,
+    IndexToolAuthority, McpConnector, McpMaterializationError, McpMaterializationErrorCode,
+    RefusedToolkit, ToolAdmissionPolicy, ToolBindingError, ToolsetMaterializationError,
+    ToolsetMaterializationErrorCode, bind_toolsets,
     materialize_configured_toolsets_reporting_refusals,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -68,6 +71,10 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     tool_policy: Arc<ToolAdmissionPolicy>,
     mcp_connector: Arc<dyn McpConnector>,
     sessions: NativeSessionBackend,
+    /// The vector client and embeddings route the index tools act over
+    /// (ADR-0030 I1); `None` on a deployment without a `vector_target`,
+    /// where the indexing families carry no index tools.
+    index_runtime: Option<Arc<IndexIngestRuntime>>,
 }
 
 /// Shared provider/session dependencies; constructing them never starts Runner.
@@ -102,7 +109,19 @@ impl OrdinaryNativeAgentAssembler {
             tool_policy,
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             sessions: NativeSessionBackend::invocation_local(),
+            index_runtime: None,
         }
+    }
+
+    /// Lend the indexing runtime, so the indexing families serve the index
+    /// tools under the claim's vector token (ADR-0030 I1).
+    #[must_use]
+    pub(crate) fn with_index_runtime(
+        mut self,
+        index_runtime: Option<Arc<IndexIngestRuntime>>,
+    ) -> Self {
+        self.index_runtime = index_runtime;
+        self
     }
 
     /// Select claim-fenced `PostgreSQL` session persistence for the common Runner.
@@ -303,6 +322,10 @@ impl OrdinaryNativeAgentAssembler {
             Arc::clone(runtime_context),
         ));
         let artifact_authority = ArtifactToolAuthority::new(Arc::clone(&platform_writer));
+        // The index tools (ADR-0030 I1) act under the same claim: its vector
+        // token, its redeemed context for the query embedding, and a chat
+        // model bound on the agent's own model for the step-back tools.
+        let index_authority = self.index_tool_authority(runtime_context, &context, profile);
         let DirectToolsets {
             mut toolsets,
             sensitive: sensitive_tools,
@@ -314,6 +337,7 @@ impl OrdinaryNativeAgentAssembler {
             tool_policy,
             mcp_tokens,
             &artifact_authority,
+            index_authority.as_ref(),
         )
         .await?;
         let internal_tools = profile.internal_tools();
@@ -436,6 +460,70 @@ impl OrdinaryNativeAgentAssembler {
             .with_toolkit_attribution(toolkit_attribution),
             fresh_execution_mode,
         ))
+    }
+
+    /// The index tools' authority for this claim, or `None` where this
+    /// worker has no vector store or the claim carries no vector token (the
+    /// families then serve no index tools). The step-back model is bound on
+    /// the agent's model; a binding failure leaves the two step-back tools
+    /// refusing with a sentence and the other three working.
+    fn index_tool_authority(
+        &self,
+        runtime_context: &ClaimBoundRuntimeContextAuthority,
+        context: &Arc<ClaimScopedEliteaContext>,
+        profile: &super::assembly::OrdinaryNoToolProfile,
+    ) -> Option<IndexToolAuthority> {
+        let runtime = self.index_runtime.as_ref()?;
+        let token = runtime_context.vector_token()?;
+        let model = match self.bind_stepback_model(profile, context) {
+            Ok(binding) => Some(binding),
+            Err(error) => {
+                tracing::warn!(
+                    event = "index_tools_stepback_model_unbound",
+                    error = %error,
+                    "the step-back model could not be bound; stepback_search_index and stepback_summary_index will refuse"
+                );
+                None
+            }
+        };
+        Some(IndexToolAuthority::new(Arc::new(ClaimIndexToolHost::new(
+            Arc::clone(runtime),
+            token,
+            Arc::clone(context),
+            model,
+        ))))
+    }
+
+    /// A second binding of the agent's model, with no instruction and no
+    /// tools, for the step-back prompts: the agent's own binding captures
+    /// its final answer, which a tool's model call must not touch.
+    fn bind_stepback_model(
+        &self,
+        profile: &super::assembly::OrdinaryNoToolProfile,
+        context: &ClaimScopedEliteaContext,
+    ) -> Result<StepbackBinding, ModelFacadeError> {
+        let invocation = ModelInvocation {
+            response_schema: None,
+            allow_text_continuation: false,
+            context_budget: profile.context_budget(),
+            model_name: profile.model_name().to_owned(),
+            system_instruction: String::new(),
+            max_tokens: profile.max_tokens(),
+            reasoning_effort: None,
+            temperature: profile.temperature(),
+            max_model_turns: profile.step_limit(),
+        };
+        let adapter = match profile.model_provider() {
+            OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
+            OrdinaryModelProvider::NativeAnthropic => ModelAdapterKind::Anthropic,
+        };
+        let bound =
+            self.model_facade
+                .bind(adapter, context, profile.model_project_id(), invocation)?;
+        Ok(StepbackBinding {
+            model: bound.adk_model(),
+            model_name: profile.model_name().to_owned(),
+        })
     }
 
     fn bind_model(
@@ -671,6 +759,7 @@ async fn materialize_direct_toolsets(
     policy: &Arc<ToolAdmissionPolicy>,
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: &ArtifactToolAuthority,
+    index_tools: Option<&IndexToolAuthority>,
 ) -> Result<DirectToolsets, NativeAgentAssemblyError> {
     let crate::toolkits::ConfiguredToolsets {
         mut toolsets,
@@ -681,6 +770,7 @@ async fn materialize_direct_toolsets(
         policy,
         mcp_tokens,
         Some(artifacts),
+        index_tools,
     )
     .await
     .map_err(tool_materialization_error)?;

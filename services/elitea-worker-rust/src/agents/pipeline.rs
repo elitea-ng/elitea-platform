@@ -50,14 +50,16 @@ use super::session::{
     ApplicationRuntimeProjection, BoundOrdinaryAgentModel, NativePipelineStateBackend,
     PipelineAgentCompletion, PipelineRuntimeBindings, assemble_pipeline_native,
 };
+use crate::indexing::IndexIngestRuntime;
+use crate::indexing::tools::ClaimIndexToolHost;
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::{CheckpointLimits, SessionLimits};
 use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority,
-    DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot, FrozenToolset, McpConnector,
-    SensitiveToolPolicy, ToolAdmissionDecision, ToolAdmissionPolicy, ToolBindingError,
-    ToolBindingPlan, bind_frozen_toolsets, freeze_toolsets,
-    materialize_configured_toolsets_with_artifact_authority,
+    DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot, FrozenToolset,
+    IndexToolAuthority, McpConnector, SensitiveToolPolicy, ToolAdmissionDecision,
+    ToolAdmissionPolicy, ToolBindingError, ToolBindingPlan, bind_frozen_toolsets, freeze_toolsets,
+    materialize_configured_toolsets_with_authorities,
     materialize_configured_toolsets_with_tokens_and_authorization,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -367,6 +369,9 @@ pub(crate) struct PipelineNativeAgentAssembler {
     platform: Option<Arc<PlatformClient>>,
     model_facade: Option<Arc<ModelFacade>>,
     mcp_connector: Arc<dyn McpConnector>,
+    /// The index tools' vector client and embeddings route (ADR-0030 I1);
+    /// `None` on a deployment without a `vector_target`.
+    index_runtime: Option<Arc<IndexIngestRuntime>>,
 }
 
 impl PipelineNativeAgentAssembler {
@@ -375,6 +380,16 @@ impl PipelineNativeAgentAssembler {
         sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
     ) -> Self {
         self.sandbox = sandbox;
+        self
+    }
+
+    /// Lend the indexing runtime (ADR-0030 I1).
+    #[must_use]
+    pub(crate) fn with_index_runtime(
+        mut self,
+        index_runtime: Option<Arc<IndexIngestRuntime>>,
+    ) -> Self {
+        self.index_runtime = index_runtime;
         self
     }
     /// Use the shared `agentstate` database for both ADK sessions and graph
@@ -395,6 +410,7 @@ impl PipelineNativeAgentAssembler {
             platform: Some(platform),
             model_facade: Some(model_facade),
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
+            index_runtime: None,
         }
     }
 
@@ -415,6 +431,7 @@ impl PipelineNativeAgentAssembler {
             platform: None,
             model_facade: None,
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
+            index_runtime: None,
         }
     }
 
@@ -500,12 +517,27 @@ impl PipelineNativeAgentAssembler {
                 Arc::clone(runtime_context),
             )))
         });
+        // The index tools (ADR-0030 I1) need the redeemed context for the
+        // query embedding, which this path holds only when the pipeline has
+        // LLM or application nodes. No pipeline node binds a chat model to a
+        // tool, so the two step-back tools refuse here; the other three work.
+        let index_tools = match (
+            self.index_runtime.as_ref(),
+            runtime_context.vector_token(),
+            context.as_ref(),
+        ) {
+            (Some(runtime), Some(token), Some(context)) => Some(IndexToolAuthority::new(Arc::new(
+                ClaimIndexToolHost::new(Arc::clone(runtime), token, Arc::clone(context), None),
+            ))),
+            _ => None,
+        };
         let (mut materialized, mut delegated_authorization) =
-            materialize_configured_toolsets_with_artifact_authority(
+            materialize_configured_toolsets_with_authorities(
                 &selected_snapshot,
                 tool_policy,
                 mcp_tokens,
                 artifacts.as_ref(),
+                index_tools.as_ref(),
             )
             .await
             .map_err(tool_materialization_error)?;

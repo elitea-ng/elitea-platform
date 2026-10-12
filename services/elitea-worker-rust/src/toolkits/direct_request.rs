@@ -242,6 +242,15 @@ impl DirectToolkitRequest {
         &self.arguments
     }
 
+    /// Whether Main froze an index catalog into the toolkit (`indexes`,
+    /// ADR-0030 I1): only then is a claim context worth redeeming for the
+    /// index tools.
+    pub(crate) fn carries_index_catalog(&self) -> bool {
+        self.toolkit
+            .get(elitea_agent_runtime::toolkits::INDEXES_KEY)
+            .is_some_and(Value::is_array)
+    }
+
     pub(crate) fn tokens(&self) -> &Map<String, Value> {
         &self.tokens
     }

@@ -1048,6 +1048,7 @@ async fn a_refused_setting_is_named_in_the_run_notice() {
         &policy(&[]),
         &Map::new(),
         None,
+        None,
     )
     .await
     .expect("a refused toolkit does not fail the agent");

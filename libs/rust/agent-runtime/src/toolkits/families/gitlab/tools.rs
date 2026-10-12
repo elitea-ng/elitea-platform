@@ -151,7 +151,11 @@ fn validate_selection(selected: &[Box<str>]) -> Result<Vec<String>, GitLabToolse
         }
     }
     if !selected.is_empty() && served.is_empty() {
-        return Err(unsupported_selection());
+        // Index tools alone (ADR-0030 I1): none of this family's tools are
+        // selected, so the names are returned as they are — non-empty, so
+        // `build_with_api` serves nothing rather than everything — and the
+        // index toolset composed next to this one serves them.
+        return Ok(selected.iter().map(ToString::to_string).collect());
     }
     Ok(served)
 }

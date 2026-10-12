@@ -2747,6 +2747,7 @@ async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
         &policy,
         &serde_json::Map::new(),
         None,
+        None,
     )
     .await
     .expect("a refused toolkit does not fail the agent");

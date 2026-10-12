@@ -840,6 +840,39 @@ where
         request.map_err(|error| request_failure(error.code()))
     }
 
+    /// The index tools' authority for a `toolkit.call_tool.v1` run whose
+    /// toolkit carries an index catalog: this worker's vector store, the
+    /// claim's vector token and its redeemed context, with no chat model (the
+    /// step-back pair refuse here). `None` without a vector store or token.
+    async fn index_tool_authority(
+        &self,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+    ) -> Result<Option<crate::toolkits::IndexToolAuthority>, RuntimeFailureKind> {
+        let (Some(runtime), Some(token)) = (
+            self.index_runtime.as_ref(),
+            authorized.execution().vector_token(),
+        ) else {
+            return Ok(None);
+        };
+        let context = lease
+            .run_pre_invocation(
+                self.platform
+                    .redeem_elitea_context(authorized.runtime_context()),
+            )
+            .await
+            .map_err(|error| lease_failure(&error))?
+            .map_err(|error| runtime_context_failure(&error))?;
+        Ok(Some(crate::toolkits::IndexToolAuthority::new(Arc::new(
+            crate::indexing::tools::ClaimIndexToolHost::new(
+                Arc::clone(runtime),
+                token,
+                Arc::new(context),
+                None,
+            ),
+        ))))
+    }
+
     async fn execute_shared(
         &self,
         verified: &VerifiedToolkitExecuteReadCommand,
@@ -853,10 +886,25 @@ where
         if deadline_exceeded(verified, self.clock.as_ref()) {
             return Err(RuntimeFailureKind::DeadlineExceeded);
         }
+        // The index tools (ADR-0030 I1) act under this claim's vector token
+        // and its redeemed context (the query embedding), so the context is
+        // redeemed here — only when the toolkit carries an index catalog
+        // and this worker has a vector store, since the redemption is a
+        // platform round trip every other tool call does not need.
+        let index_tools = if is_call && request.carries_index_catalog() {
+            self.index_tool_authority(authorized, lease).await?
+        } else {
+            None
+        };
         let operation = async {
             if is_call {
                 self.runtime
-                    .execute_test(request, &command.execution_id, &command.command_id)
+                    .execute_test(
+                        request,
+                        &command.execution_id,
+                        &command.command_id,
+                        index_tools.as_ref(),
+                    )
                     .await
             } else {
                 self.runtime.discover(request).await

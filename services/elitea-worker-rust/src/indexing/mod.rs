@@ -29,9 +29,12 @@ pub(crate) mod inputs;
 pub(crate) mod pipeline;
 pub(crate) mod slug;
 pub(crate) mod source;
+pub(crate) mod tools;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tools_tests;
 
 use std::sync::Arc;
 use std::time::Duration;
