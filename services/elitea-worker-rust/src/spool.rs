@@ -31,6 +31,8 @@ const AAD_DOMAIN: &[u8] = b"elitea.runtime.output-spool-aad.v1\0";
 const FILE_MAGIC: &[u8] = b"ELITEASPOOL1\0";
 const NONCE_BYTES: usize = 12;
 const TAG_BYTES: usize = 16;
+/// Retired frames one execution spool keeps as records.
+const MAX_RETIRED_FRAMES: usize = 16;
 const FILE_OVERHEAD_BYTES: usize = FILE_MAGIC.len() + NONCE_BYTES + TAG_BYTES;
 const MAX_IDENTITY_BYTES: usize = 256;
 const TEMP_CREATE_ATTEMPTS: usize = 8;
@@ -420,6 +422,62 @@ impl EncryptedOutputSpool {
         result.and(cleanup)
     }
 
+    /// Set one exact pending frame aside, durably and still encrypted, so it is
+    /// never replayed. The frame becomes a `.retired` record beside the live
+    /// frames: it leaves `pending()` and the capacity accounting, and it blocks
+    /// removal of the directory so the record outlives the execution's output.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded [`SpoolError`] when the frame is absent or changed,
+    /// too many frames are already retired, or the rename fails.
+    pub fn retire_pending(
+        &mut self,
+        sequence: NonZeroU64,
+        expected: &[u8],
+    ) -> Result<(), SpoolError> {
+        let Some((current, _)) = self.read_entry(sequence)? else {
+            return Err(SpoolError::InvalidInput(
+                "the output spool changed before retirement",
+            ));
+        };
+        if current != expected {
+            return Err(SpoolError::InvalidInput(
+                "the output spool changed before retirement",
+            ));
+        }
+        let retired = format!("{:020}.retired", sequence.get());
+        renameat(
+            &self.directory,
+            frame_name(sequence).as_str(),
+            &self.directory,
+            retired.as_str(),
+        )
+        .map_err(|error| unavailable_errno("the output frame cannot be retired", error))?;
+        sync_directory(&self.directory)?;
+        // A bound check after the rename keeps the directory enumerable.
+        self.entries(false).map(|_| ())
+    }
+
+    /// Whether any retired record remains in this spool.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded [`SpoolError`] for unsafe entries or enumeration failure.
+    pub fn has_retired_frames(&mut self) -> Result<bool, SpoolError> {
+        let mut directory = Dir::read_from(&self.directory)
+            .map_err(|error| unavailable_errno("the output spool cannot be enumerated", error))?;
+        while let Some(entry) = directory.read() {
+            let entry = entry.map_err(|error| {
+                unavailable_errno("the output spool cannot be enumerated", error)
+            })?;
+            if classify_entry(entry.file_name()).is_ok_and(|kind| kind.retired) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Delete durably acknowledged frames through the inclusive sequence.
     ///
     /// # Errors
@@ -454,7 +512,7 @@ impl EncryptedOutputSpool {
     /// Returns a bounded [`SpoolError`] for unexpected entries, identity
     /// replacement, removal, or durability failures.
     pub fn remove_if_empty(mut self) -> Result<bool, SpoolError> {
-        if !self.entries(false)?.is_empty() {
+        if !self.entries(false)?.is_empty() || self.has_retired_frames()? {
             return Ok(false);
         }
         let held = fstat(&self.directory).map_err(|error| {
@@ -536,11 +594,13 @@ impl EncryptedOutputSpool {
         Ok((entries.len(), bytes))
     }
 
+    #[allow(clippy::too_many_lines, reason = "One bounded pass validates every directory entry.")]
     fn entries(&mut self, allow_temporary: bool) -> Result<Vec<DirectoryEntry>, SpoolError> {
         let mut directory = Dir::read_from(&self.directory)
             .map_err(|error| unavailable_errno("the output spool cannot be enumerated", error))?;
         let mut entries = Vec::new();
         let mut final_frames = 0_usize;
+        let mut retired_frames = 0_usize;
         let mut temporary_files = 0_usize;
         let mut final_bytes = 0_u64;
         let maximum_entry = u64::try_from(
@@ -563,6 +623,20 @@ impl EncryptedOutputSpool {
                 continue;
             }
             let kind = classify_entry(name)?;
+            if kind.retired {
+                // Set aside, never replayed: the record of a retired frame.
+                let stat = statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(
+                    |error| unavailable_errno("the output spool entry is unavailable", error),
+                )?;
+                validate_private_file_stat(&stat, false)?;
+                retired_frames += 1;
+                if retired_frames > MAX_RETIRED_FRAMES {
+                    return Err(SpoolError::ResourceExhausted(
+                        "the output spool holds too many retired frames",
+                    ));
+                }
+                continue;
+            }
             if kind.sequence.is_none() && !allow_temporary {
                 return Err(SpoolError::InvalidInput(
                     "the output spool contains an unexpected entry",
@@ -862,6 +936,8 @@ struct DirectoryEntry {
 
 struct EntryKind {
     sequence: Option<NonZeroU64>,
+    /// An encrypted frame set aside by [`EncryptedOutputSpool::retire_pending`].
+    retired: bool,
 }
 
 fn encode_binding(components: &[&str]) -> Result<Vec<u8>, SpoolError> {
@@ -949,9 +1025,15 @@ fn derive_key_bytes(master_key: &SpoolMasterKey, binding: &[u8]) -> Result<[u8; 
 fn classify_entry(name: &CStr) -> Result<EntryKind, SpoolError> {
     let name = name.to_bytes();
     if is_temporary_name(name) {
-        return Ok(EntryKind { sequence: None });
+        return Ok(EntryKind {
+            sequence: None,
+            retired: false,
+        });
     }
-    if name.len() != 26 || !name[..20].iter().all(u8::is_ascii_digit) || &name[20..] != b".frame" {
+    let retired = name.len() == 28 && &name[20..] == b".retired";
+    if !retired
+        && (name.len() != 26 || !name[..20].iter().all(u8::is_ascii_digit) || &name[20..] != b".frame")
+    {
         return Err(SpoolError::InvalidInput(
             "the output spool contains an unexpected entry",
         ));
@@ -968,6 +1050,7 @@ fn classify_entry(name: &CStr) -> Result<EntryKind, SpoolError> {
             ))?;
     Ok(EntryKind {
         sequence: Some(sequence),
+        retired,
     })
 }
 

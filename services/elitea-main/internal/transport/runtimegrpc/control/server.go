@@ -133,6 +133,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	}
 	command, err := s.verifier.Verify(ctx, request.GetSignedCommand())
 	if err != nil {
+		logClaimRejection(ctx, "verify_command", nil, err)
 		return claimRejectionFor(err), nil
 	}
 	canonicalEnvelope, err := proto.MarshalOptions{Deterministic: true}.Marshal(request.GetSignedCommand())
@@ -154,6 +155,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		NodeRecovery:                 request.GetNodeRecovery(),
 	})
 	if err != nil {
+		logClaimRejection(ctx, "claim", command, err)
 		return claimRejectionFor(err), nil
 	}
 	lease := decision.Lease
@@ -653,6 +655,18 @@ func fenceProto(fence runtimedomain.Fence) *runtimev1.ExecutionFenceV1 {
 		ProducerId:        fence.ProducerID,
 		FenceToken:        append([]byte(nil), fence.Token[:]...),
 	}
+}
+
+// logClaimRejection records why a claim was refused. The worker only sees the
+// safe code, so without this a redelivery loop ends in an unexplained
+// control_rejected. Only identifiers and the sentinel cause are logged.
+func logClaimRejection(ctx context.Context, stage string, command *runtimev1.WorkerCommandV1, err error) {
+	code, _, retryable := safeRuntimeError(err)
+	attrs := []any{"stage", stage, "error_code", code.String(), "retryable", retryable, "cause", err}
+	if command != nil {
+		attrs = append(attrs, "execution_id", command.GetExecutionId(), "generation", command.GetGeneration(), "command_id", command.GetCommandId())
+	}
+	slog.WarnContext(ctx, "runtime claim rejected", attrs...)
 }
 
 func claimRejectionFor(err error) *runtimev1.ClaimCommandResponseV1 {

@@ -48,6 +48,11 @@ pub enum OutputSessionError {
     /// The output plane refused the terminal result on its content
     /// (`RESULT_REFUSED`): the worker replaces it with a FAILED terminal.
     ResultRefused,
+    /// Main refused this exact frame as malformed or conflicting
+    /// (`PROTOCOL_VIOLATION`, not retryable) in an ACK bound to the stream.
+    /// The same bytes can never be accepted: a progress frame is replaced by a
+    /// canonical internal failure terminal instead of being replayed again.
+    FrameRefused,
     DependencyUnavailable,
     Draining,
 }
@@ -67,6 +72,9 @@ impl fmt::Display for OutputSessionError {
             }
             Self::ResultRefused => {
                 formatter.write_str("the output plane refused the terminal result")
+            }
+            Self::FrameRefused => {
+                formatter.write_str("the output plane refused the frame as not acceptable")
             }
             Self::DependencyUnavailable => {
                 formatter.write_str("the output dependency is unavailable")
@@ -574,6 +582,19 @@ impl OutputSessionState {
                     ));
                 }
                 Err(OutputSessionError::ResultRefused)
+            }
+            RuntimeErrorCodeV1::ProtocolViolation
+                if self.validate_ack_binding(ack).is_ok()
+                    && ack
+                        .rejection
+                        .as_ref()
+                        .is_some_and(|rejection| !rejection.retryable)
+                    && ack.committed_contiguous_sequence == 0
+                    && ack.credit_frames == 0
+                    && ack.credit_bytes == 0
+                    && ack.desired_state == DesiredExecutionStateV1::Unspecified as i32 =>
+            {
+                Err(OutputSessionError::FrameRefused)
             }
             RuntimeErrorCodeV1::AuthenticationFailed
             | RuntimeErrorCodeV1::AuthorizationFailed

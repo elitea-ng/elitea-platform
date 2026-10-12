@@ -84,6 +84,9 @@ impl NodeRecoveryInspection {
     pub(crate) fn output_watermark(&self) -> u64 {
         self.claim.claim_handoff_watermark()
     }
+    pub(crate) fn supersedes_output_fence(&self, frame: &super::ExecutionOutputFrameV1) -> bool {
+        self.claim.supersedes_output_fence(frame)
+    }
     fn parse(
         verified: &VerifiedAgentCommand,
         response: ClaimCommandResponseV1,

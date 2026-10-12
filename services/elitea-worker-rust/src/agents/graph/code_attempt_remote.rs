@@ -102,16 +102,20 @@ impl RemoteCodeRuntime {
             Some(provider)=>Some(provider.for_visit(declaration.graph_thread,declaration.node_id,crate::agents::pipeline::saved_child_scope_provider::SavedChildPurpose::CodeRecovery).await.map_err(|_|before(CodeAttemptPhase::Admission,NodeFailureClass::AuthorizationDenied))?),
             None=>None,
         };
-        let original_visit = content
-            .admit_original_code_visit(
+        // Main being briefly unavailable is never a node failure: retry the same
+        // idempotent call until the attempt's own observation deadline.
+        let main_deadline = observation_deadline(profile.timeout_seconds);
+        let original_visit = retry_transient_main(main_deadline, || {
+            content.admit_original_code_visit(
                 &self.authority,
                 &declaration,
                 authority,
                 &original_job,
                 saved_child_scope.as_ref(),
             )
-            .await
-            .map_err(|error| {
+        })
+        .await
+        .map_err(|error| {
                 intent_failure(
                     &error,
                     CodeAttemptPhase::Admission,
@@ -240,8 +244,8 @@ impl RemoteCodeRuntime {
             .as_ref()
             .and_then(|value| value.control.descriptor_sha256.as_ref())
             .map(crate::sandbox::compiled_snapshot::ContentSha256::as_str);
-        content
-            .finalize_original_code_intent(
+        retry_transient_main(main_deadline, || {
+            content.finalize_original_code_intent(
                 &self.authority,
                 &original_visit,
                 invocation.activation,
@@ -251,8 +255,9 @@ impl RemoteCodeRuntime {
                 selected.as_ref().map(|value| &value.control.binding),
                 descriptor,
             )
-            .await
-            .map_err(|error| {
+        })
+        .await
+        .map_err(|error| {
                 intent_failure(
                     &error,
                     CodeAttemptPhase::Admission,
@@ -384,8 +389,8 @@ impl RemoteCodeRuntime {
                             .as_ref()
                             .and_then(|selected| selected.control.descriptor_sha256.as_ref())
                             .map(crate::sandbox::compiled_snapshot::ContentSha256::as_str);
-                        let signed_intent = content
-                            .finalize_original_code_intent(
+                        let signed_intent = retry_transient_main(deadline, || {
+                            content.finalize_original_code_intent(
                                 &self.authority,
                                 &original_visit,
                                 invocation.activation,
@@ -395,8 +400,9 @@ impl RemoteCodeRuntime {
                                 selected.as_ref().map(|selected| &selected.control.binding),
                                 descriptor,
                             )
-                            .await
-                            .map_err(|error| {
+                        })
+                        .await
+                        .map_err(|error| {
                                 intent_failure(
                                     &error,
                                     CodeAttemptPhase::Admission,
@@ -712,6 +718,36 @@ pub(in crate::agents::graph) async fn prior_dispatch_possible(
         .unwrap_or(true)
 }
 
+/// Retry one idempotent Main call while it reports a transient condition
+/// (unavailable, transport, timeout) until `deadline`. Any other error, and the
+/// last transient one at the deadline, is returned unchanged.
+pub(in crate::agents::graph) async fn retry_transient_main<T, F, Fut>(
+    deadline: tokio::time::Instant,
+    mut call: F,
+) -> Result<T, crate::transport::InputContentError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, crate::transport::InputContentError>>,
+{
+    loop {
+        match call().await {
+            Err(error) if error.retryable() && tokio::time::Instant::now() < deadline => {
+                tracing::warn!(
+                    event = "code_main_call_retrying",
+                    reason = error.code(),
+                    "Main was unavailable for a Code intent call; retrying"
+                );
+                tokio::time::sleep_until(
+                    (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL)
+                        .min(deadline),
+                )
+                .await;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Bound for the final platform-journal drain after a terminal runtime phase.
 const PLATFORM_DRAIN_STEPS: usize = 8;
 
@@ -804,6 +840,45 @@ pub(in crate::agents::graph) fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::InputContentError;
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_main_errors_retry_until_the_deadline_and_others_do_not() {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_mins(10);
+        // Main back after two transient errors: the call succeeds, it never failed the node.
+        let mut calls = 0;
+        let result = retry_transient_main(deadline, || {
+            calls += 1;
+            let attempt = calls;
+            async move {
+                if attempt < 3 {
+                    Err(InputContentError::DependencyUnavailable("main restarting"))
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap(), 3);
+        // An authorization refusal is final at once.
+        let mut calls = 0;
+        let refused = retry_transient_main(deadline, || {
+            calls += 1;
+            async { Err::<(), _>(InputContentError::AuthorizationFailed("refused")) }
+        })
+        .await;
+        assert!(matches!(refused, Err(InputContentError::AuthorizationFailed(_))));
+        assert_eq!(calls, 1);
+        // A Main that never returns ends at the deadline with the last error.
+        let near = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let down = retry_transient_main(near, || async {
+            Err::<(), _>(InputContentError::Timeout("main down"))
+        })
+        .await;
+        assert!(matches!(down, Err(InputContentError::Timeout(_))));
+        assert!(tokio::time::Instant::now() >= near);
+    }
+
     #[test]
     fn broker_call_detail_never_replaces_the_whole_code_recovery_identity() {
         let failure = classify(

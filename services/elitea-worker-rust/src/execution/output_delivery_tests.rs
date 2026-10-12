@@ -303,10 +303,18 @@ impl ControlRpc for RecoveryControl {
                 crate::protocol::elitea::runtime::v1::ClaimDispositionV1::RecoverAgentModelCheckpoint as i32;
             return Ok(Response::new(response));
         }
-        Ok(Response::new(
-            ClaimCommandResponseV1::decode(bytes(self.claim_fixture).as_slice())
-                .expect("claim fixture"),
-        ))
+        // `name+cancelled` is the fixture with a stop already requested.
+        let (fixture, cancelled) = self
+            .claim_fixture
+            .strip_suffix("+cancelled")
+            .map_or((self.claim_fixture, false), |name| (name, true));
+        let mut response =
+            ClaimCommandResponseV1::decode(bytes(fixture).as_slice()).expect("claim fixture");
+        if cancelled {
+            response.receipt.as_mut().expect("receipt").desired_state =
+                crate::protocol::elitea::runtime::v1::DesiredExecutionStateV1::Cancelled as i32;
+        }
+        Ok(Response::new(response))
     }
 
     async fn authorize_agent_model_checkpoint(
@@ -612,11 +620,18 @@ fn authorized_control_with_policy(
 fn ambiguous_output_recovery_control(
     trace: Arc<Mutex<Vec<&'static str>>>,
 ) -> Arc<AgentControlClient<RecoveryControl>> {
+    output_recovery_control(trace, "claim_recover_ambiguous_invocation_noack")
+}
+
+fn output_recovery_control(
+    trace: Arc<Mutex<Vec<&'static str>>>,
+    claim_fixture: &'static str,
+) -> Arc<AgentControlClient<RecoveryControl>> {
     Arc::new(
         AgentControlClient::new(
             RecoveryControl {
                 trace,
-                claim_fixture: "claim_recover_ambiguous_invocation_noack",
+                claim_fixture,
                 settlement_fails: false,
                 authorize_disposition: None,
                 authorize_unavailable: false,
@@ -947,6 +962,7 @@ enum LiveProgressAction {
     PersistChangedFrameThenUnavailable,
     AuthorizationFailed,
     RejectCancellation,
+    RejectFrame,
     RetainAcknowledgementThenWait,
 }
 
@@ -955,6 +971,10 @@ enum ReplayProgressAction {
     Acknowledge,
     AuthorizationFailed,
     RetainAcknowledgementThenWait,
+    /// Main refuses the exact frame (`PROTOCOL_VIOLATION`).
+    RejectFrame,
+    /// Main reports that the stop won before the frame became durable.
+    RejectCancelled,
 }
 
 struct FakeProgressState {
@@ -1057,6 +1077,10 @@ impl AgentProgressSession for FakeProgressSession {
                 test_rejected_progress(frame, ProgressRejectionWinner::Cancelled)
                     .expect("synthetic progress rejection"),
             )),
+            LiveProgressAction::RejectFrame => Ok(ProgressReplayDecision::Rejected(
+                test_rejected_progress(frame, ProgressRejectionWinner::FrameRefused)
+                    .expect("synthetic frame refusal"),
+            )),
             LiveProgressAction::RetainAcknowledgementThenWait => {
                 *self.retained.lock().expect("retained progress decision") =
                     Some(ProgressReplayDecision::Acknowledged(
@@ -1124,6 +1148,19 @@ impl AgentProgressReplaySession for FakeProgressReplaySession {
                 "the scripted replay spool is unavailable",
             ))?;
             assert!(prepared.replays(&self.expected));
+            if let ReplayProgressAction::RejectFrame | ReplayProgressAction::RejectCancelled =
+                self.action
+            {
+                let winner = if matches!(self.action, ReplayProgressAction::RejectFrame) {
+                    ProgressRejectionWinner::FrameRefused
+                } else {
+                    ProgressRejectionWinner::Cancelled
+                };
+                return Ok(ProgressReplayDecision::Rejected(
+                    test_rejected_progress(&self.expected, winner)
+                        .expect("synthetic bound rejection"),
+                ));
+            }
             prepared.reconcile_pending_through(self.expected.sequence)?;
             self.retained = Some(ProgressReplayDecision::Acknowledged(
                 test_acknowledged_progress(&self.expected)
@@ -2109,6 +2146,28 @@ async fn frame_bound_main_rejection_is_retained_without_resending() {
 }
 
 #[tokio::test]
+async fn frame_refused_by_main_is_retained_as_a_rejection_and_never_resent() {
+    let state = FakeProgressState::new([LiveProgressAction::RejectFrame], []);
+    let (_temporary, verified, mut publisher) =
+        fresh_progress_publisher(Arc::clone(&state), 3).await;
+    let outcome = publisher
+        .publish(&verified, browser_progress("malformed"), NOW)
+        .await
+        .expect("bound Main frame refusal is a rejection, not a loop");
+    assert_eq!(
+        outcome,
+        AgentProgressPublishOutcome::Rejected { sequence: 5 }
+    );
+    // The exact rejected frame stays the sole replaceable one; nothing resends it.
+    assert_eq!(
+        publisher.resume_pending().await.expect("retained refusal"),
+        AgentProgressPublishOutcome::Rejected { sequence: 5 }
+    );
+    assert_eq!(state.sends.load(Ordering::SeqCst), 1);
+    assert_eq!(state.replays.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn cancelled_live_wait_recovers_the_retained_ack_without_resending() {
     let state = FakeProgressState::new([LiveProgressAction::RetainAcknowledgementThenWait], []);
     let (_temporary, verified, mut publisher) =
@@ -2250,6 +2309,11 @@ fn only_an_exact_bound_winner_can_replace_pending_progress_at_the_same_sequence(
         (
             ProgressRejectionWinner::DeadlineExceeded,
             RuntimeErrorCodeV1::DeadlineExceeded,
+        ),
+        // Main refused the frame itself: the execution settles an internal failure.
+        (
+            ProgressRejectionWinner::FrameRefused,
+            RuntimeErrorCodeV1::Internal,
         ),
     ] {
         let fresh = fresh();
@@ -4813,4 +4877,315 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
         }
         assert_eq!(admission.available_capacity(), 1);
     }
+}
+
+/// One whole checkpoint delivery over a spool that holds an unaccepted progress
+/// frame. `superseded` binds the frame to the previous claim's fence.
+struct CheckpointSpoolCase {
+    trace: Arc<Mutex<Vec<&'static str>>>,
+    state: Arc<FakeProgressState>,
+    root: PathBuf,
+    _temporary: tempfile::TempDir,
+    admission: InvocationAdmission,
+}
+
+async fn run_checkpoint_delivery_with_pending_progress(
+    superseded: bool,
+    action: ReplayProgressAction,
+) -> CheckpointSpoolCase {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let (temporary, output_root) = root();
+    let output = preflight(output_root.clone(), "worker-1");
+    let AgentOutputPreflightOutcome::Empty(empty) =
+        output.prepare(fresh()).await.expect("spool")
+    else {
+        panic!("empty")
+    };
+    let (accepted, prepared) = empty.into_parts();
+    let watermark = accepted.claim_handoff_watermark();
+    let mut fence = claim_response()
+        .receipt
+        .expect("receipt")
+        .fence
+        .expect("fence");
+    if superseded {
+        // The pending frame was spooled under claim 1; this delivery is claim 2.
+        fence.claim_attempt -= 1;
+        fence.lease_epoch -= 1;
+        fence.fence_token[0] ^= 1;
+    }
+    let frame = progress_frame(&accepted, fence, watermark + 1, watermark);
+    prepared.into_test_spool().persist(frame).expect("pending");
+    let control = Arc::new(
+        AgentControlClient::new(
+            RecoveryControl {
+                trace: trace.clone(),
+                claim_fixture: "checkpoint",
+                settlement_fails: false,
+                authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
+                authorize_unavailable: false,
+                renew_fail_after: None,
+                renew_attempts: AtomicUsize::new(0),
+                observe_states: Mutex::new(VecDeque::new()),
+            },
+            ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "workload-1".to_owned(),
+                producer_id: "worker-1".to_owned(),
+            },
+        )
+        .expect("control"),
+    );
+    let admission = InvocationAdmission::new(
+        InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
+    );
+    let retirer = Arc::new(recovery_retirer(trace.clone(), Ok(())));
+    let state = FakeProgressState::new([], [action]);
+    let replay = Arc::new(FakeProgressConnector {
+        state: state.clone(),
+    });
+    let lifecycle = Arc::new(GatedAuthorizedLifecycle {
+        trace: trace.clone(),
+        started: Mutex::new(None),
+        release: Arc::new(Semaphore::new(1)),
+    });
+    let clock = Arc::new(|| NOW);
+    let coordinator = super::agent_coordinator::AgentInvocationCoordinator::new(
+        admission.clone(),
+        control.clone(),
+        retirer.clone(),
+        replay.clone(),
+        clock.clone(),
+        recovery_config(1),
+        lifecycle,
+    );
+    let processor = super::agent_delivery_processor::AgentDeliveryProcessor::new(
+        Arc::new(TestOnlyConformanceHmacAuthenticator),
+        output,
+        control,
+        retirer,
+        replay,
+        Arc::new(ValidAgentInput {
+            trace: trace.clone(),
+        }),
+        clock,
+        admission.clone(),
+        AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation"),
+        recovery_config(1),
+        coordinator,
+    )
+    .with_checkpoint_recovery(true);
+    let raw = bytes("signed_command");
+    let verified = parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+        .expect("verified");
+    processor
+        .process_verified_delivery(bus_delivery(raw), verified)
+        .await;
+    processor.close().await.expect("drain");
+    CheckpointSpoolCase {
+        trace,
+        state,
+        root: output_root,
+        _temporary: temporary,
+        admission,
+    }
+}
+
+fn retired_records(root: &std::path::Path) -> usize {
+    fn walk(dir: &std::path::Path, count: &mut usize) {
+        for entry in std::fs::read_dir(dir).expect("spool directory") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                walk(&path, count);
+            } else if path.extension().is_some_and(|extension| extension == "retired") {
+                *count += 1;
+            }
+        }
+    }
+    let mut count = 0;
+    walk(root, &mut count);
+    count
+}
+
+/// CR-MK-P09-hyd: claim 2 finds claim 1's unaccepted progress frame. Main can
+/// only answer `STALE_FENCE` under the old fence, so the frame is retired as a
+/// durable record and never replayed; the resumed run proceeds exactly once.
+#[tokio::test]
+async fn a_takeover_never_replays_a_superseded_claims_pending_progress() {
+    let case = run_checkpoint_delivery_with_pending_progress(
+        true,
+        ReplayProgressAction::AuthorizationFailed,
+    )
+    .await;
+    assert_eq!(case.state.replays.load(Ordering::SeqCst), 0);
+    assert_eq!(case.state.sends.load(Ordering::SeqCst), 0);
+    assert_eq!(retired_records(&case.root), 1);
+    let events = case.trace.lock().expect("trace");
+    // The takeover resumes under claim 2 once; nothing settles a failure.
+    assert_eq!(
+        events.iter().filter(|x| **x == "authorized").count(),
+        1,
+        "{events:?}"
+    );
+    assert!(!events.contains(&"settlement") && !events.contains(&"retire"));
+    assert_eq!(case.admission.available_capacity(), 1);
+}
+
+/// A frame Main refuses as malformed, replayed under the current fence, settles
+/// the canonical internal failure once, replaces the frame, and retires.
+#[tokio::test]
+async fn a_frame_main_refuses_settles_an_internal_failure_once_and_is_not_resent() {
+    let case = run_checkpoint_delivery_with_pending_progress(
+        false,
+        ReplayProgressAction::RejectFrame,
+    )
+    .await;
+    assert_eq!(case.state.replays.load(Ordering::SeqCst), 1);
+    let events = case.trace.lock().expect("trace");
+    assert_eq!(events.iter().filter(|x| **x == "settlement").count(), 1);
+    assert_eq!(events.iter().filter(|x| **x == "retire").count(), 1);
+    assert!(!events.contains(&"authorized"));
+    let frames = case.state.frames.lock().expect("frames");
+    // Only the replacement terminal was delivered, at the refused frame's sequence.
+    assert_eq!(frames.len(), 1);
+    assert!(frames[0].terminal);
+    let Some(execution_output_frame_v1::Payload::RuntimeError(error)) = &frames[0].payload else {
+        panic!("the replacement is a runtime failure");
+    };
+    assert_eq!(error.code, RuntimeErrorCodeV1::Internal as i32);
+}
+
+/// Stop wins while a progress frame is pending: the cancelled terminal replaces
+/// it and settles once.
+#[tokio::test]
+async fn a_stop_wins_over_a_pending_progress_frame_and_settles_once() {
+    let case = run_checkpoint_delivery_with_pending_progress(
+        false,
+        ReplayProgressAction::RejectCancelled,
+    )
+    .await;
+    let events = case.trace.lock().expect("trace");
+    assert_eq!(events.iter().filter(|x| **x == "settlement").count(), 1);
+    assert_eq!(events.iter().filter(|x| **x == "retire").count(), 1);
+    let frames = case.state.frames.lock().expect("frames");
+    assert_eq!(frames.len(), 1);
+    let Some(execution_output_frame_v1::Payload::RuntimeError(error)) = &frames[0].payload else {
+        panic!("the replacement is a runtime failure");
+    };
+    assert_eq!(error.code, RuntimeErrorCodeV1::Cancelled as i32);
+}
+
+/// Output recovery over a spool that holds claim 1's unaccepted progress frame
+/// at the sequence after Main's watermark (CR-MK-P09-hyd, parts D and I).
+async fn output_recovery_over_pending_progress(
+    claim_fixture: &'static str,
+) -> (
+    Vec<&'static str>,
+    Vec<ExecutionOutputFrameV1>,
+    usize,
+    tempfile::TempDir,
+) {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let (temporary, output_root) = root();
+    let seeding = preflight(output_root.clone(), "worker-1");
+    let AgentOutputPreflightOutcome::Empty(empty) =
+        seeding.prepare(fresh()).await.expect("spool")
+    else {
+        panic!("empty")
+    };
+    let (accepted, prepared) = empty.into_parts();
+    let watermark = accepted.claim_handoff_watermark();
+    let mut fence = claim_response()
+        .receipt
+        .expect("receipt")
+        .fence
+        .expect("fence");
+    // Spooled by claim 1; the recovery claim in the fixture is newer.
+    fence.claim_attempt -= 1;
+    fence.lease_epoch -= 1;
+    fence.fence_token[0] ^= 1;
+    prepared
+        .into_test_spool()
+        .persist(progress_frame(&accepted, fence, watermark + 1, watermark))
+        .expect("pending claim-1 progress");
+    drop(seeding);
+    let control = output_recovery_control(Arc::clone(&trace), claim_fixture);
+    let admission = InvocationAdmission::new(
+        InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("invocation admission"),
+    );
+    let progress_state = FakeProgressState::new([], []);
+    let connector = FakeProgressConnector {
+        state: Arc::clone(&progress_state),
+    };
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
+    let processor = native_agent_delivery_processor(
+        Arc::new(TestOnlyConformanceHmacAuthenticator),
+        preflight(output_root.clone(), "worker-1"),
+        control,
+        retirer,
+        Arc::new(KindAgentInput {
+            trace: Arc::clone(&trace),
+            kind: AgentExecutionKind::Application,
+        }),
+        Arc::new(|| NOW),
+        admission.clone(),
+        AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation config"),
+        Arc::new(TestNativeAssembler {
+            trace: Arc::clone(&trace),
+            agent: Arc::new(ImmediateTextAgent),
+            sensitive: false,
+        }),
+        connector,
+        1,
+        recovery_config(1),
+    );
+    processor
+        .process(bus_delivery(signed_command_for_kind(
+            AgentExecutionKind::Application,
+        )))
+        .await;
+    processor.close().await.expect("delivery processor drain");
+    assert_eq!(admission.available_capacity(), 1);
+    let events = trace.lock().expect("trace").clone();
+    let frames = progress_state.frames.lock().expect("frames").clone();
+    let replays = progress_state.replays.load(Ordering::SeqCst);
+    drop(processor);
+    (events, frames, replays, temporary)
+}
+
+fn failure_code(frame: &ExecutionOutputFrameV1) -> i32 {
+    let Some(execution_output_frame_v1::Payload::RuntimeError(error)) = frame.payload.as_ref()
+    else {
+        panic!("a runtime failure terminal");
+    };
+    error.code
+}
+
+/// The ambiguous-invocation recovery used to wait forever behind the pending
+/// frame ("`output_recovery_pending`"). The canonical failure now replaces the
+/// exact frame at its own sequence and settles once; nothing is replayed.
+#[tokio::test]
+async fn output_recovery_replaces_a_pending_superseded_frame_and_settles_once() {
+    let (events, frames, replays, _temporary) =
+        output_recovery_over_pending_progress("claim_recover_ambiguous_invocation_noack").await;
+    assert_eq!(events, ["claim", "renew", "observe", "settlement", "retire"]);
+    assert_eq!(replays, 0);
+    assert_eq!(frames.len(), 1);
+    assert!(frames[0].terminal);
+    assert_eq!(frames[0].sequence, 5);
+    assert_eq!(failure_code(&frames[0]), RuntimeErrorCodeV1::Internal as i32);
+}
+
+/// Part D: Stop wins while output recovery is pending. The cancelled terminal
+/// replaces the pending frame and settles exactly once.
+#[tokio::test]
+async fn a_stop_settles_cancelled_once_while_output_recovery_is_pending() {
+    let (events, frames, replays, _temporary) =
+        output_recovery_over_pending_progress("claim_recover_running_noack+cancelled").await;
+    assert_eq!(events, ["claim", "renew", "observe", "settlement", "retire"]);
+    assert_eq!(replays, 0);
+    assert_eq!(frames.len(), 1);
+    assert!(frames[0].terminal);
+    assert_eq!(frames[0].sequence, 5);
+    assert_eq!(failure_code(&frames[0]), RuntimeErrorCodeV1::Cancelled as i32);
 }

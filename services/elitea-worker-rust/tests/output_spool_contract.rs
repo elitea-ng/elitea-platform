@@ -586,3 +586,32 @@ fn binding_and_limit_validation_reject_ambiguous_inputs() {
         Err(SpoolError::InvalidInput(message)) if message.contains("must fit")
     ));
 }
+
+#[test]
+fn a_retired_frame_leaves_replay_but_stays_as_an_encrypted_record() {
+    let (_temporary, root) = root();
+    let binding = spool_binding("execution-retired");
+    let key = master(b'k');
+    let mut spool = open(&root, &key, &binding, limits());
+    spool.put(sequence(8), b"superseded-progress").unwrap();
+    // Only the exact bytes can be retired.
+    assert!(spool.retire_pending(sequence(8), b"other").is_err());
+    assert!(spool.retire_pending(sequence(9), b"superseded-progress").is_err());
+    spool.retire_pending(sequence(8), b"superseded-progress").unwrap();
+    assert!(spool.pending().unwrap().is_empty());
+    assert!(spool.has_retired_frames().unwrap());
+    // The record is encrypted and the sequence is free for the new claim.
+    let record = child(&root, &binding).join(format!("{:020}.retired", 8));
+    let raw = fs::read(&record).unwrap();
+    assert!(!raw.windows(10).any(|window| window == b"superseded"));
+    spool.put(sequence(8), b"fresh-progress").unwrap();
+    assert_eq!(spool.pending().unwrap().len(), 1);
+    spool.acknowledge_through(sequence(8)).unwrap();
+    // The record outlives the output: the directory is not removed under it.
+    assert!(!spool.remove_if_empty().unwrap());
+    assert!(record.exists());
+    // A reopened spool still enumerates cleanly and keeps the record.
+    let mut reopened = open(&root, &key, &binding, limits());
+    assert!(reopened.pending().unwrap().is_empty());
+    assert!(reopened.has_retired_frames().unwrap());
+}
