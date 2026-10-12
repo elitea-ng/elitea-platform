@@ -83,6 +83,12 @@ so it was removed as redundant.
     `Internal`.
   - Proved by a unit test on `intent_failure` and a Main handler test.
 
+**Not a feature flag (user decision 2026-10-12).** Point 5 has no feature flags. `agentNodeRecovery` will default to
+`true` after the #1084 Kubernetes proof, and the setting will be removed before Point 5 closes. The guard stays valid
+through both steps. It checks configuration consistency, namely that a journaled Code runtime needs Main's
+original-Code owner recovery for its audience. When the setting is removed, the condition becomes "`sandboxRuntimes`
+is non-empty".
+
 ## Tests
 
 Local: helm v4.1.0+g4553a0a, Python 3 with PyYAML, macOS arm64, `f7c6a6028` plus this change.
