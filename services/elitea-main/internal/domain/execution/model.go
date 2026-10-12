@@ -170,6 +170,19 @@ func NonTerminalJobStates() []JobState {
 	return []JobState{JobPending, JobDispatched, JobClaimed, JobRunning, JobSettling}
 }
 
+// NonTerminalJobStateStrings is NonTerminalJobStates as text: the form a
+// `state = ANY($n::text[])` query parameter takes. Every SQL reader of the set
+// (the project delete's active-work count, the index tombstone claim) binds
+// this one list.
+func NonTerminalJobStateStrings() []string {
+	states := NonTerminalJobStates()
+	values := make([]string, len(states))
+	for i, state := range states {
+		values[i] = string(state)
+	}
+	return values
+}
+
 func (s JobState) Valid() bool {
 	switch s {
 	case JobPending, JobDispatched, JobClaimed, JobRunning, JobSettling, JobSucceeded, JobFailed, JobCancelled, JobQuarantined:

@@ -236,6 +236,13 @@ type IndexVectorNamespace struct {
 // tombstone instead of forgetting vectors it never deleted.
 var ErrIndexVectorDeletionDeferred = errors.New("index vector deletion is deferred until elitea-vector is wired")
 
+// ErrIndexVectorDeletionRefused reports that the vector store refused this
+// process's identity (its administrator allowlist or the certificate is
+// wrong). No retry fixes it until an operator does; the tombstone sweeper
+// backs such a tombstone off to its longest pause at once rather than
+// counting up to it, and the implementation logs what to fix.
+var ErrIndexVectorDeletionRefused = errors.New("index vector deletion refused: the vector store does not admit this process's identity")
+
 // IndexVectorDeleter is the hook to elitea-vector's Delete (ADR-0031 decision
 // 4: "a toolkit index: deleting it calls Delete on its namespace").
 //
@@ -243,10 +250,12 @@ var ErrIndexVectorDeletionDeferred = errors.New("index vector deletion is deferr
 // for every tombstone it still holds. It is NOT called when a run is stopped:
 // a stop keeps the index's vectors (see RegistryManualStopCleaner).
 //
-// TODO(ADR-0031 V2): elitea-main has no elitea-vector client yet. Until it
-// does, the composition root installs DeferredIndexVectorDeleter, which keeps
-// every deletion pending and makes the sweeper idle. The implementation must be
-// idempotent: the sweeper calls it again for a tombstone it still holds.
+// The implementation is infra/vectorclient.Client (elitea-vector's Delete of
+// the whole namespace over gRPC with mutual TLS). It must be idempotent: the
+// sweeper calls it again for a tombstone it still holds. A deployment that
+// configures no elitea-vector target (ELITEA_VECTOR_GRPC_TARGET) gets
+// DeferredIndexVectorDeleter instead, which keeps every deletion pending and
+// makes the sweeper idle rather than count attempts it can never win.
 type IndexVectorDeleter interface {
 	DeleteIndexVectors(context.Context, IndexVectorNamespace) error
 	// Deferred reports that this deleter can never delete anything (no vector

@@ -240,6 +240,11 @@ type Provisioner struct {
 	// (a DeepWiki wiki index, an Inventory graph), one journal step each. See
 	// application_data.go. Empty where none is wired.
 	applications []applicationCleanup
+	// vectorCleanupAbandoned: the operator declared the vector store abandoned
+	// (WithVectorCleanupAbandoned, ELITEA_VECTOR_CLEANUP_ABANDON=true); a
+	// pending vector step on a replica without a vector remover is closed as
+	// abandoned rather than left pending (application_data.go).
+	vectorCleanupAbandoned bool
 
 	// lifecycle is the context whose end means the process is shutting down.
 	// The detached cleanup runs of a delete derive from it, so a shutdown

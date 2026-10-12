@@ -1515,6 +1515,86 @@ async fn an_administrator_names_the_project_and_cannot_search() {
     assert_eq!(h.truth(PROJECT_B).await, 4);
 }
 
+/// elitea-main's two deletions (ADR-0031 decision 4), as its vectorclient
+/// sends them: a whole-namespace `Delete` of one toolkit index for the named
+/// project (no space: every collection), and `DropProject`. Both are
+/// idempotent — a namespace that holds nothing, a repeat, a project never
+/// written — and a delete under one project never touches another project's
+/// points in the SAME namespace id (the sweeper's tombstone names both).
+#[tokio::test]
+async fn an_administrator_deletes_a_namespace_and_a_project_idempotently() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed().await;
+    // A holds 2 points in NAMESPACE_A; B holds 2 in NAMESPACE_B and 2 in
+    // NAMESPACE_A (its own, under the same namespace id).
+    assert_eq!(h.truth(PROJECT_A).await, 2);
+    assert_eq!(h.truth(PROJECT_B).await, 4);
+
+    let whole = |project_id: i64, namespace: &str| pb::DeleteRequest {
+        project_id,
+        space: None,
+        namespace: Some(Harness::namespace(namespace)),
+        selector: Some(pb::delete_request::Selector::WholeNamespace(
+            pb::WholeNamespace {},
+        )),
+    };
+
+    // An administrator must name the project on Delete too.
+    let status = h
+        .admin
+        .delete(whole(0, NAMESPACE_A))
+        .await
+        .expect_err("unnamed");
+    assert_eq!(status.code(), Code::InvalidArgument);
+
+    // A's index namespace goes; B's points under the same namespace id stay.
+    let deleted = h
+        .admin
+        .delete(whole(PROJECT_A, NAMESPACE_A))
+        .await
+        .expect("delete")
+        .into_inner();
+    assert!(deleted.collections >= 1, "{deleted:?}");
+    assert_eq!(h.truth(PROJECT_A).await, 0);
+    assert_eq!(h.truth(PROJECT_B).await, 4);
+
+    // Repeating it, and deleting a namespace that was never written, are
+    // clean successes: the sweeper replays a tombstone it is not sure of.
+    h.admin
+        .delete(whole(PROJECT_A, NAMESPACE_A))
+        .await
+        .expect("repeat");
+    h.admin
+        .delete(whole(PROJECT_A, "7c9e6679-7425-40de-944b-e07fc1f90ae7"))
+        .await
+        .expect("unknown namespace");
+    assert_eq!(h.truth(PROJECT_B).await, 4);
+
+    // DropProject on a project that was never written is a clean success and
+    // touches nobody; on B it removes every namespace of B.
+    h.admin
+        .drop_project(pb::DropProjectRequest {
+            project_id: 999_999,
+        })
+        .await
+        .expect("unknown project");
+    assert_eq!(h.truth(PROJECT_B).await, 4);
+    h.admin
+        .drop_project(pb::DropProjectRequest {
+            project_id: PROJECT_B,
+        })
+        .await
+        .expect("drop b");
+    assert_eq!(h.truth(PROJECT_B).await, 0);
+    h.admin
+        .drop_project(pb::DropProjectRequest {
+            project_id: PROJECT_B,
+        })
+        .await
+        .expect("repeat drop");
+}
+
 // ── shape ───────────────────────────────────────────────────────────────────
 
 #[tokio::test]
