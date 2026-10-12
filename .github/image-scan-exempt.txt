@@ -82,14 +82,3 @@
 #   image. Size it before taking it.
 elitea-worker-python
 
-# findings #635 — Debian base packages with no published fix. Measured
-#   2026-09-06 on a cold local build of the retired elitea-deepwiki image,
-#   which had this image's base: python:3.12.14-slim with the same
-#   --only-upgrade of the three packages Debian trixie has a fix for (trivy
-#   0.74.0, --severity HIGH,CRITICAL, the scan job's settings): 54 lines, 3
-#   CRITICAL and 51 HIGH, ALL Debian base packages, NONE in this project's own
-#   packages, and NO fixed version published for any of them.
-# retirement #636 — re-measure on each base bump. perl-base is 8 of the 54, so
-#   removing it does not end this entry on its own; the entry ends when Debian
-#   ships the fixes.
-elitea-inventory

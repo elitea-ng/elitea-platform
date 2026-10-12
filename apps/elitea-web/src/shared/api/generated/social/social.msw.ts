@@ -52,6 +52,7 @@ import type {
   SocialAuthorProfile,
   SocialAuthorSummary,
   SocialTrendingAuthor,
+  ThemePreference,
 } from "../model";
 
 export const getGetCurrentAuthorResponseMock = (
@@ -138,6 +139,26 @@ export const getGetCurrentAuthorResponseMock = (
 export const getUpdateCurrentAuthorResponseMock = (
   overrideResponse: Partial<Extract<OkResponse, object>> = {},
 ): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
+
+export const getGetCurrentAuthorThemeResponseMock = (
+  overrideResponse: Partial<Extract<ThemePreference, object>> = {},
+): ThemePreference => ({
+  theme_mode: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getUpdateCurrentAuthorThemeResponseMock = (
+  overrideResponse: Partial<Extract<ThemePreference, object>> = {},
+): ThemePreference => ({
+  theme_mode: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
 
 export const getListSocialAuthorsResponseMock = (): SocialAuthorSummary[] =>
   Array.from(
@@ -283,6 +304,58 @@ export const getUpdateCurrentAuthorMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getUpdateCurrentAuthorResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetCurrentAuthorThemeMockHandler = (
+  overrideResponse?:
+    | ThemePreference
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ThemePreference> | ThemePreference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/social/author/theme",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetCurrentAuthorThemeResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateCurrentAuthorThemeMockHandler = (
+  overrideResponse?:
+    | ThemePreference
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ThemePreference> | ThemePreference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/social/author/theme",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateCurrentAuthorThemeResponseMock(),
         { status: 200 },
       );
     },
@@ -604,6 +677,8 @@ export const getCreateFeedbackMockHandler = (
 export const getSocialMock = () => [
   getGetCurrentAuthorMockHandler(),
   getUpdateCurrentAuthorMockHandler(),
+  getGetCurrentAuthorThemeMockHandler(),
+  getUpdateCurrentAuthorThemeMockHandler(),
   getListSocialAuthorsMockHandler(),
   getGetCurrentSocialAvatarMockHandler(),
   getUploadCurrentSocialAvatarMockHandler(),

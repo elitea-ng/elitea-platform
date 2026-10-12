@@ -17,9 +17,14 @@ import (
 // newCurrentAgentVersionFreezer reuses the same schema-driven, provider-neutral
 // Configurations graph as index admission. It freezes references but never
 // places plaintext credentials in the durable agent input.
+//
+// indexes is the index-catalog resolver of the Rust indexing runtime
+// (ADR-0030 I1): when it is non-nil every I1 indexing toolkit is frozen with
+// its `indexes` catalog; nil (the Python path) writes no such key.
 func newCurrentAgentVersionFreezer(
 	pool *pgxpool.Pool,
 	configurations *CurrentConfigurationsRuntime,
+	indexes agentexecutionapp.CurrentAgentIndexCatalogResolver,
 ) (*agentexecutionapp.CurrentApplicationToolSnapshotService, error) {
 	if pool == nil || configurations == nil || configurations.expander == nil ||
 		configurations.models == nil || configurations.unsecreter == nil ||
@@ -34,13 +39,20 @@ func newCurrentAgentVersionFreezer(
 	if err != nil {
 		return nil, fmt.Errorf("construct current agent guardrail policy source: %w", err)
 	}
-	return agentexecutionapp.NewCurrentApplicationToolSnapshotService(
+	service, err := agentexecutionapp.NewCurrentApplicationToolSnapshotService(
 		currentAgentToolkitSettingsResolver{inner: settings, prebuilt: prebuilt},
 		currentAgentToolkitNameAdapter{names: names},
 		configurations.models,
 		guardrailPolicies, repos.NewCurrentAgentProjectContextRepository(pool),
 		configurations.publicProjectID,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if indexes != nil {
+		service = service.WithIndexCatalog(indexes)
+	}
+	return service, nil
 }
 
 type currentAgentToolkitNameAdapter struct {
@@ -161,7 +173,11 @@ func NewClientApplicationVersionService(
 	pool *pgxpool.Pool,
 	configurations *CurrentConfigurationsRuntime,
 ) (*storage.ClientApplicationVersionService, error) {
-	freezer, err := newCurrentAgentVersionFreezer(pool, configurations)
+	// No index catalog: the desktop reaches a credentialed toolkit through
+	// RemoteToolkit (ADR-0029 decision 3), where the cloud worker's own
+	// freeze carries the catalog; a definition resolved for the desktop
+	// never serves the index tools locally.
+	freezer, err := newCurrentAgentVersionFreezer(pool, configurations, nil)
 	if err != nil {
 		return nil, err
 	}

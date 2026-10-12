@@ -251,26 +251,11 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 	// intended". It carries the same obligation as declaredAbsent above: a
 	// reason, and a tracking issue.
 	darkFlags := map[string]string{
-		// Off on purpose. The reason recorded here before was the retired
-		// LiteLLM lifecycle facade; that reason is stale (#460), because the
-		// lifecycle takes no LLM transport now.
-		//
-		// It also cannot be set on its own.
-		// currentConfigurationsConfigFromEnv rejects a deployment that sets it
-		// while ELITEA_CONFIGURATIONS_ENABLED is off, so it can never be the
-		// only flag standing between a route and its handler.
-		//
-		// Two earlier claims here were wrong, and the correction is the point
-		// of this entry. "Nothing answers in its place" and "dark here means
-		// 404" both fail: router.go mounts the compatibility configuration
-		// handler on the same three methods and the same two paths, with no
-		// flag on the mount. So the flag does not darken a route — it decides
-		// WHICH of two handlers answers.
-		// TestConfigurationWriteRouteWinnerDependsOnTheMutationComposition
-		// runs both compositions and records the answer: the reviewed route
-		// wins when it is composed, and the compatibility mount serves the
-		// path in every shipped install, where it is not.
-		"ELITEA_CONFIGURATIONS_MUTATION_ENABLED": "#460 — the compatibility write routes serve this path in every install; turning the flag on is a cutover to a second route with a different request shape",
+		// ELITEA_CONFIGURATIONS_MUTATION_ENABLED was listed here (#460) until
+		// docker-compose.standalone-rust-validate.yml started setting it for the
+		// Rust configuration.validate worker. Which of the two configuration write
+		// handlers answers is still pinned by
+		// TestConfigurationWriteRouteWinnerDependsOnTheMutationComposition.
 		// ELITEA_INDEX_TYPES_ENABLED was listed here, first against #367 and
 		// then against #394. Its route answered {document_types, image_types,
 		// code_types} only, and the published contract for the same path is

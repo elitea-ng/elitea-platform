@@ -28,6 +28,7 @@
           "bucket",
           "llm_model",
           "embedding_model",
+          "reasoning_effort",
           "sources"
         ],
         "parameters": {
@@ -75,6 +76,12 @@
             "json_schema_extra": {
               "hidden": true
             }
+          },
+          "reasoning_effort": {
+            "type": "String",
+            "required": false,
+            "description": "Reasoning effort for model calls: none, low, medium or high (empty keeps the model's default). Use none for reasoning models such as Qwen3 to avoid long thinking. A caller-supplied llm_settings.reasoning_effort overrides it.",
+            "default": ""
           }
         }
       },
@@ -739,7 +746,7 @@
         },
         {
           "name": "smart_normalize_types",
-          "description": "Use the configured LLM to map uncommon entity types onto the canonical set. Runs automatically after a successful ingestion; exposed here so it can be re-run on an existing graph.",
+          "description": "Use the configured LLM to map uncommon entity types onto the canonical set, on the graph as it is stored now. No engine runs it after an ingestion; run it when the graph has stray types.",
           "args_schema": {
             "threshold": {
               "type": "Integer",
@@ -764,6 +771,48 @@
               "required": false,
               "description": "'json' or 'text'",
               "default": "json"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "import_graph",
+          "description": "Import a graph.json document (the node-link graph the Python engine kept in this toolkit's artifact bucket) into the graph store, replacing the stored graph. Re-running it replaces the graph again. Refused while an ingestion runs, and refused over native ingestion state unless replace_ingestion_state is set.",
+          "args_schema": {
+            "artifact_name": {
+              "type": "String",
+              "required": false,
+              "description": "Name of the graph document in this toolkit's artifact bucket",
+              "default": "graph.json"
+            },
+            "replace_ingestion_state": {
+              "type": "Boolean",
+              "required": false,
+              "description": "Delete the toolkit's native ingestion state (source status, document versions) with the old graph",
+              "default": false
+            },
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "'json' or 'text'",
+              "default": "text"
+            }
+          },
+          "tool_result_type": "String",
+          "sync_invocation_supported": true,
+          "async_invocation_supported": true
+        },
+        {
+          "name": "export_graph",
+          "description": "Write the stored graph to this toolkit's artifact bucket as graph.json (the Python engine's node-link layout), replacing the object there.",
+          "args_schema": {
+            "output_format": {
+              "type": "String",
+              "required": false,
+              "description": "'json' or 'text'",
+              "default": "text"
             }
           },
           "tool_result_type": "String",

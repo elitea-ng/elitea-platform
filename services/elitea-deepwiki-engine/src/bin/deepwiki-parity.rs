@@ -363,11 +363,9 @@ async fn stage_and_publish(
     let stage_time = stage_started.elapsed();
     rss("staged");
     eprintln!(
-        "staged {} nodes, {} edges (collapsed), {} bm25 documents, {} bm25 postings in {:.2}s",
+        "staged {} nodes, {} edges (collapsed) in {:.2}s",
         staged.nodes,
         staged.edges,
-        staged.bm25_documents,
-        staged.bm25_postings,
         stage_time.as_secs_f64()
     );
 
@@ -402,11 +400,10 @@ async fn stage_and_publish(
     let publish_time = publish_started.elapsed();
     rss("published");
     eprintln!(
-        "published {} nodes, {} edges, {} vectors, {} bm25 documents, {} fts documents in {:.2}s",
+        "published {} nodes, {} edges, {} vectors, {} fts documents in {:.2}s",
         counts.nodes,
         counts.edges,
         counts.embeddings,
-        counts.bm25_documents,
         counts.fts_documents,
         publish_time.as_secs_f64()
     );
@@ -427,17 +424,7 @@ async fn probe_queries(reader: &IndexReader, dimension: Option<usize>) -> Result
             .await
             .map_err(|e| e.to_string())?;
         let fts_ms = fts_started.elapsed().as_secs_f64() * 1e3;
-        let bm25_started = Instant::now();
-        let bm25 = reader
-            .search_bm25(query, 10)
-            .await
-            .map_err(|e| e.to_string())?;
-        eprintln!(
-            "query {query:?}: fts {} hits in {fts_ms:.0} ms, bm25 {} hits in {:.0} ms",
-            fts.len(),
-            bm25.len(),
-            bm25_started.elapsed().as_secs_f64() * 1e3
-        );
+        eprintln!("query {query:?}: fts {} hits in {fts_ms:.0} ms", fts.len());
     }
     if let Some(dimension) = dimension {
         let query = pseudo_vector("query", dimension);

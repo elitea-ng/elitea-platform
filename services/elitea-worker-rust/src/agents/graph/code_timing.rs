@@ -70,7 +70,6 @@ pub(crate) fn jitter_sample() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::docker_supervisor::{HEARTBEAT_INTERVAL, LEASE_SECONDS};
 
     #[test]
     fn idle_interval_grows_and_is_capped() {
@@ -129,8 +128,11 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "sandbox-supervisor")]
     #[test]
     fn observation_margin_covers_supervisor_lease_and_heartbeat() {
+        use crate::sandbox::docker_supervisor::{HEARTBEAT_INTERVAL, LEASE_SECONDS};
+
         let lease = Duration::from_secs(u64::try_from(LEASE_SECONDS).unwrap());
         assert!(OBSERVATION_MARGIN >= lease + HEARTBEAT_INTERVAL);
     }

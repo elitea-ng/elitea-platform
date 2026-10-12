@@ -14,6 +14,18 @@
 //! is in scope (pipelines, nested applications) it stays exactly what it was:
 //! skipped with `agent_toolkit_skipped`, which is the honest answer for a
 //! runtime that cannot serve it there.
+//!
+//! The index tools (ADR-0030 I1) are the second lent authority: for an
+//! indexing family whose frozen toolkit carries Main's `indexes` catalog, the
+//! toolset is composed of the family's tools and the five index tools, acting
+//! under an `IndexToolAuthority` the host lends
+//! (`materialize_configured_toolsets_with_authorities`). No catalog (the
+//! Python indexing path) means no index tools; a catalog with the authority
+//! withheld ([`IndexToolSupport::Withheld`]) means they are left out, logged
+//! with the reason the host states. Only where the index toolset IS composed
+//! is an index-only `selected_tools` admissible — it then selects none of the
+//! family's own tools and the family is not built at all; elsewhere every
+//! family refuses it as the unsupported selection it always was.
 
 use std::fmt;
 use std::sync::Arc;
@@ -21,14 +33,27 @@ use std::sync::Arc;
 use adk_core::Toolset;
 
 use super::DelegatedAuthorizationCatalog;
+use super::families::UnsupportedSetting;
 use super::families::artifact::ArtifactToolAuthority;
+use super::families::bigquery;
+use super::families::confluence;
+use super::families::index_tools::{
+    CompositeToolset, IndexCatalog, IndexToolSupport, IndexToolsWithheld, IndexToolsetErrorCode,
+    build_index_toolset, is_index_family, selection_is_index_only,
+};
+use super::families::jira;
+use super::families::qtest;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
+use super::families::testio;
+use super::families::testrail;
+use super::families::xray_cloud;
 use super::families::{
-    artifact, azure, azure_search, elastic, gcp, github, gitlab_org, google_places, keycloak,
-    kubernetes, openapi, postman, rally, report_portal, salesforce, service_now, sharepoint, slack,
-    sonar, yagmail, zephyr, zephyr_squad,
+    aha, artifact, azure, azure_search, bitbucket, carrier, elastic, figma, gcp, github, gitlab,
+    gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
+    salesforce, service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
 };
+use super::family_error::family_error;
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
 
@@ -45,12 +70,42 @@ pub enum ToolsetMaterializationErrorCode {
 #[derive(Clone, Copy)]
 pub struct ToolsetMaterializationError {
     code: ToolsetMaterializationErrorCode,
+    /// Set when the toolkit's configuration asks for a setting this runtime
+    /// deliberately refuses (#1207 review round 2). Within one
+    /// materialization pass such a toolkit is collected as a
+    /// [`RefusedToolkit`]; a caller that cannot report one receives it as an
+    /// `UnsupportedToolkit` error carrying the reason.
+    refusal: Option<UnsupportedSetting>,
 }
 
 impl ToolsetMaterializationError {
+    pub(super) const fn new(code: ToolsetMaterializationErrorCode) -> Self {
+        Self {
+            code,
+            refusal: None,
+        }
+    }
+
+    pub(super) const fn refused(setting: UnsupportedSetting) -> Self {
+        Self {
+            code: ToolsetMaterializationErrorCode::UnsupportedToolkit,
+            refusal: Some(setting),
+        }
+    }
+
     #[must_use]
     pub const fn code(self) -> ToolsetMaterializationErrorCode {
         self.code
+    }
+
+    /// The refused setting, as a sentence that carries no configuration
+    /// value; `None` for every other failure.
+    #[must_use]
+    pub const fn refusal_reason(self) -> Option<&'static str> {
+        match self.refusal {
+            Some(setting) => Some(setting.reason()),
+            None => None,
+        }
     }
 }
 
@@ -59,12 +114,17 @@ impl fmt::Debug for ToolsetMaterializationError {
         formatter
             .debug_struct("ToolsetMaterializationError")
             .field("code", &self.code)
+            .field("refusal", &self.refusal)
             .finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for ToolsetMaterializationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(setting) = self.refusal {
+            formatter.write_str("the frozen toolkit configuration is refused: ")?;
+            return formatter.write_str(setting.reason());
+        }
         formatter.write_str(match self.code {
             ToolsetMaterializationErrorCode::DependencyUnavailable => {
                 "the toolkit specification could not be retrieved"
@@ -83,6 +143,89 @@ impl fmt::Display for ToolsetMaterializationError {
 }
 
 impl std::error::Error for ToolsetMaterializationError {}
+
+/// A configured toolkit left out of the agent because its configuration asks
+/// for a setting this runtime refuses (#1207 review round 2).
+///
+/// Before, such a toolkit was skipped exactly like an unported family — one
+/// warning in the worker log — while the capability snapshot listed it as
+/// supported, so the user saw an enabled toolkit that did nothing. The
+/// ordinary agent path now names every refused toolkit in the run's opening
+/// notice ([`refused_toolkits_notice_text`]), in the same place and shape as
+/// the skipped internal tools (#866) and application children (#973).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefusedToolkit {
+    toolkit_name: String,
+    toolkit_type: String,
+    reason: &'static str,
+}
+
+impl RefusedToolkit {
+    fn new(reference: &FrozenToolReference<'_>, setting: UnsupportedSetting) -> Self {
+        Self {
+            toolkit_name: bounded_label(reference.toolkit_name()),
+            toolkit_type: bounded_label(reference.tool_type()),
+            reason: setting.reason(),
+        }
+    }
+
+    #[must_use]
+    pub fn toolkit_name(&self) -> &str {
+        &self.toolkit_name
+    }
+
+    #[must_use]
+    pub fn toolkit_type(&self) -> &str {
+        &self.toolkit_type
+    }
+
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+/// The longest toolkit name or type a notice repeats, in characters. Both
+/// come from stored rows the runtime does not otherwise bound.
+const MAX_NOTICE_LABEL_CHARS: usize = 128;
+
+fn bounded_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_NOTICE_LABEL_CHARS)
+        .collect()
+}
+
+/// One deterministic line per refused toolkit, naming the toolkit and the
+/// reason; `None` when nothing was refused. The set decides the text, never
+/// the order the version listed the toolkits in.
+#[must_use]
+pub fn refused_toolkits_notice_text(refused: &[RefusedToolkit]) -> Option<String> {
+    if refused.is_empty() {
+        return None;
+    }
+    let mut lines = refused
+        .iter()
+        .map(|toolkit| {
+            format!(
+                "toolkit '{}' ({}) is not enabled on this worker: {}",
+                toolkit.toolkit_name, toolkit.toolkit_type, toolkit.reason
+            )
+        })
+        .collect::<Vec<_>>();
+    lines.sort_unstable();
+    lines.dedup();
+    Some(lines.join("\n"))
+}
+
+/// The configured toolsets one pass built, and the toolkits it refused.
+pub struct ConfiguredToolsets {
+    pub toolsets: Vec<Arc<dyn Toolset>>,
+    pub delegated_authorization: DelegatedAuthorizationCatalog,
+    /// Toolkits left out for a refused setting, for the caller to report.
+    pub refused: Vec<RefusedToolkit>,
+}
 
 pub async fn materialize_configured_toolsets_with_tokens_and_authorization(
     snapshot: &AdmittedToolSnapshot<'_>,
@@ -108,12 +251,92 @@ pub async fn materialize_configured_toolsets_with_tokens_and_authorization(
 /// error — the toolkit is a real capability of the product that this runtime
 /// cannot serve in that position, and refusing the whole profile would turn
 /// one unavailable tool into an agent that stops answering.
+///
+/// These callers (pipelines, nested applications, direct tool calls) have no
+/// opening notice to name a refused toolkit in, so a refused setting is an
+/// `UnsupportedToolkit` ERROR here, carrying the reason — visible as
+/// "configuration type is not supported" rather than a toolkit that silently
+/// does nothing. The ordinary agent path uses
+/// [`materialize_configured_toolsets_reporting_refusals`] instead.
 pub async fn materialize_configured_toolsets_with_artifact_authority(
     snapshot: &AdmittedToolSnapshot<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
 ) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
+    materialize_configured_toolsets_with_authorities(
+        snapshot,
+        policy,
+        delegated_tokens,
+        artifacts,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+    )
+    .await
+}
+
+/// The same materialization, with both lent authorities: the claim for the
+/// `artifact` family and the index tools' host for the indexing families
+/// (ADR-0030 I1). Either may be withheld, with the consequences each family
+/// documents: no artifact family (unless its index tools are composed, which
+/// then stand alone), or no index tools.
+pub async fn materialize_configured_toolsets_with_authorities(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
+) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
+    let mut refusal = None;
+    let materialized = materialize_all(
+        snapshot,
+        policy,
+        delegated_tokens,
+        artifacts,
+        index_tools,
+        &mut |_, setting| {
+            refusal.get_or_insert(ToolsetMaterializationError::refused(setting));
+        },
+    )
+    .await?;
+    if let Some(error) = refusal {
+        return Err(error);
+    }
+    Ok((materialized.toolsets, materialized.delegated_authorization))
+}
+
+/// The ordinary agent path: build every configured toolkit, and REPORT the
+/// ones refused for a setting this runtime does not honour instead of
+/// failing the agent, so the run can name them
+/// ([`refused_toolkits_notice_text`]).
+pub async fn materialize_configured_toolsets_reporting_refusals(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
+) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
+    let mut refused = Vec::new();
+    let mut materialized = materialize_all(
+        snapshot,
+        policy,
+        delegated_tokens,
+        artifacts,
+        index_tools,
+        &mut |reference, setting| refused.push(RefusedToolkit::new(reference, setting)),
+    )
+    .await?;
+    materialized.refused = refused;
+    Ok(materialized)
+}
+
+async fn materialize_all(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, UnsupportedSetting) + Send),
+) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
         return Err(resource_exhausted());
     }
@@ -123,33 +346,185 @@ pub async fn materialize_configured_toolsets_with_artifact_authority(
         .iter()
         .filter(|reference| reference.kind() == FrozenToolKind::Configured)
     {
-        let (toolset, authorization) = match materialize(
-            reference,
-            policy,
-            delegated_tokens,
-            artifacts,
-        )
-        .await
-        {
-            Ok(materialized) => materialized,
-            Err(error) if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit => {
-                tracing::warn!(
-                    event = "agent_toolkit_skipped",
-                    reason_code = "unsupported_toolkit_family",
-                    toolkit_type = reference.tool_type(),
-                    toolkit_id = reference.tool_id(),
-                    "agent toolkit is unavailable in this runtime and was omitted from the native toolsets"
-                );
-                continue;
+        let index_toolset = index_toolset_for(reference, policy, index_tools)?;
+        // With the index toolset composed, two toolkits have no family half
+        // to build: one whose stored selection names index tools only (none
+        // of the family's own tools are selected, so the family would refuse
+        // the selection), and an `artifact` toolkit on a path that lends no
+        // artifact authority (the family is skipped there; its index tools
+        // are not). Without the index toolset both keep their old answer.
+        //
+        // A family half that is REFUSED (an unsupported setting, reported to
+        // the run) or SKIPPED (a selection or family this runtime does not
+        // serve) is left out alone: the toolkit's index tools, which depend
+        // on none of the family's settings, are still served (review round
+        // 2). Without an index toolset such a toolkit is omitted as before.
+        let family = if index_toolset.is_some() && index_tools_stand_alone(reference, artifacts)? {
+            None
+        } else {
+            match materialize(reference, policy, delegated_tokens, artifacts).await {
+                Ok((toolset, authorization)) => {
+                    delegated_authorization
+                        .merge(authorization)
+                        .map_err(|()| invalid_configuration())?;
+                    Some(toolset)
+                }
+                Err(ToolsetMaterializationError {
+                    refusal: Some(setting),
+                    ..
+                }) => {
+                    tracing::warn!(
+                        event = "agent_toolkit_refused",
+                        reason_code = "unsupported_setting",
+                        toolkit_type = reference.tool_type(),
+                        toolkit_id = reference.tool_id(),
+                        reason = setting.reason(),
+                        index_tools_kept = index_toolset.is_some(),
+                        "agent toolkit configuration asks for a setting this runtime refuses; the toolkit's own tools were left out"
+                    );
+                    on_refused(reference, setting);
+                    None
+                }
+                Err(error)
+                    if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit =>
+                {
+                    tracing::warn!(
+                        event = "agent_toolkit_skipped",
+                        reason_code = "unsupported_toolkit_family",
+                        toolkit_type = reference.tool_type(),
+                        toolkit_id = reference.tool_id(),
+                        index_tools_kept = index_toolset.is_some(),
+                        "agent toolkit is unavailable in this runtime and its own tools were omitted from the native toolsets"
+                    );
+                    None
+                }
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
         };
-        delegated_authorization
-            .merge(authorization)
-            .map_err(|()| invalid_configuration())?;
+        let toolset: Arc<dyn Toolset> = match (family, index_toolset) {
+            (Some(family), Some(index)) => Arc::new(CompositeToolset::new(
+                reference.toolkit_name(),
+                vec![family, Arc::new(index)],
+            )),
+            (Some(family), None) => family,
+            (None, Some(index)) => Arc::new(CompositeToolset::new(
+                reference.toolkit_name(),
+                vec![Arc::new(index)],
+            )),
+            (None, None) => continue,
+        };
         toolsets.push(toolset);
     }
-    Ok((toolsets, delegated_authorization))
+    Ok(ConfiguredToolsets {
+        toolsets,
+        delegated_authorization,
+        refused: Vec::new(),
+    })
+}
+
+/// Whether, with the index toolset composed, this toolkit has no family
+/// half: its stored selection is index-only, or it is an `artifact` toolkit
+/// on a path lending no artifact authority (logged, since the family's own
+/// tools are then left out while its index tools are served).
+fn index_tools_stand_alone(
+    reference: &FrozenToolReference<'_>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<bool, ToolsetMaterializationError> {
+    let settings = reference.settings().ok_or_else(invalid_configuration)?;
+    if selection_is_index_only(settings).map_err(|_| invalid_configuration())? {
+        return Ok(true);
+    }
+    if reference.tool_type() == "artifact" && artifacts.is_none() {
+        tracing::warn!(
+            event = "agent_toolkit_tools_skipped",
+            reason_code = "no_artifact_authority",
+            toolkit_type = reference.tool_type(),
+            toolkit_id = reference.tool_id(),
+            "this path lends no artifact authority, so the artifact toolkit serves only its index tools"
+        );
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// The index toolset of an indexing family whose frozen toolkit carries
+/// Main's catalog, when the host lends an authority (ADR-0030 I1); `None`
+/// otherwise — logged with the host's reason when a catalog is present and
+/// the authority is withheld.
+fn index_toolset_for(
+    reference: &FrozenToolReference<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    index_tools: IndexToolSupport<'_>,
+) -> Result<Option<adk_tool::BasicToolset>, ToolsetMaterializationError> {
+    let Some(catalog) = reference
+        .indexes()
+        .filter(|_| is_index_family(reference.tool_type()))
+    else {
+        return Ok(None);
+    };
+    let authority = match index_tools {
+        IndexToolSupport::Lent(authority) => authority,
+        IndexToolSupport::Withheld(reason) => {
+            if reason.is_warning() {
+                tracing::warn!(
+                    event = "agent_index_tools_unavailable",
+                    reason_code = reason.reason_code(),
+                    toolkit_type = reference.tool_type(),
+                    toolkit_id = reference.tool_id(),
+                    "{}",
+                    reason.message()
+                );
+            } else {
+                tracing::info!(
+                    event = "agent_index_tools_unavailable",
+                    reason_code = reason.reason_code(),
+                    toolkit_type = reference.tool_type(),
+                    toolkit_id = reference.tool_id(),
+                    "{}",
+                    reason.message()
+                );
+            }
+            return Ok(None);
+        }
+    };
+    // A catalog Main froze that this runtime cannot read is a disagreement
+    // between the two freeze rules (both sides apply `indexcatalog`'s entry
+    // rule and its 1024-entry cap), not a configuration the user can fix:
+    // the toolkit's index tools are left out with a warning and the family's
+    // own tools are served (review round 2).
+    let catalog = match IndexCatalog::parse(catalog) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            tracing::warn!(
+                event = "agent_index_tools_unavailable",
+                reason_code = "invalid_catalog",
+                toolkit_type = reference.tool_type(),
+                toolkit_id = reference.tool_id(),
+                error = %error,
+                "the toolkit's frozen index catalog is not readable; its index tools were left out"
+            );
+            return Ok(None);
+        }
+    };
+    let settings = reference.settings().ok_or_else(invalid_configuration)?;
+    // A toolkit without an id cannot be addressed by Main's index delete
+    // flow, which `remove_index` runs through; Main freezes every configured
+    // toolkit with one.
+    let toolkit_id = reference.tool_id().ok_or_else(invalid_configuration)?;
+    build_index_toolset(
+        reference.toolkit_name(),
+        toolkit_id,
+        reference.tool_type(),
+        settings,
+        catalog,
+        policy,
+        authority,
+    )
+    .map(Some)
+    .map_err(|error| match error.code() {
+        IndexToolsetErrorCode::InvalidConfiguration => invalid_configuration(),
+        IndexToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+    })
 }
 
 async fn materialize(
@@ -176,6 +551,13 @@ async fn materialize(
     }
     if matches!(
         reference.tool_type(),
+        "aha" | "bigquery" | "bitbucket" | "carrier" | "confluence" | "figma" | "gitlab" | "jira"
+    ) {
+        let toolset = materialize_ported_saas(reference.tool_type(), name, settings, policy)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
+    if matches!(
+        reference.tool_type(),
         "azure"
             | "azure_search"
             | "elastic"
@@ -183,8 +565,8 @@ async fn materialize(
             | "github"
             | "gitlab_org"
             | "google_places"
-            | "keycloak"
             | "k8s"
+            | "keycloak"
     ) {
         let toolset = materialize_a_to_k(reference.tool_type(), name, settings, policy)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
@@ -195,9 +577,9 @@ async fn materialize(
             .map_err(|error| match error {
                 openapi::source::SourceError::Invalid => invalid_configuration(),
                 openapi::source::SourceError::TooLarge => resource_exhausted(),
-                openapi::source::SourceError::Unavailable => ToolsetMaterializationError {
-                    code: ToolsetMaterializationErrorCode::DependencyUnavailable,
-                },
+                openapi::source::SourceError::Unavailable => ToolsetMaterializationError::new(
+                    ToolsetMaterializationErrorCode::DependencyUnavailable,
+                ),
             })?;
         let config = match remote.as_ref() {
             Some(spec) => openapi::config::OpenApiToolkitConfig::parse_with_spec(
@@ -229,8 +611,101 @@ async fn materialize(
             materialized.delegated_authorization,
         ));
     }
+    if let Some(toolset) = materialize_zephyr_rest(reference.tool_type(), name, settings, policy)? {
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
+    if reference.tool_type().starts_with("ado_") {
+        let toolset = materialize_ado(reference.tool_type(), name, settings, policy)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
+    if matches!(
+        reference.tool_type(),
+        "qtest" | "testio" | "testrail" | "xray_cloud"
+    ) {
+        let toolset = materialize_test_management(reference.tool_type(), name, settings, policy)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
     let toolset = materialize_p_to_z(reference.tool_type(), name, settings, policy)?;
     Ok((toolset, DelegatedAuthorizationCatalog::default()))
+}
+
+/// The bearer-token Zephyr REST families (shared `zephyr_rest` transport);
+/// `None` for any other type.
+fn materialize_zephyr_rest(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> Result<Option<Arc<dyn Toolset>>, ToolsetMaterializationError> {
+    use super::families::{zephyr_enterprise, zephyr_essential, zephyr_scale};
+    let toolset = match tool_type {
+        "zephyr_enterprise" => zephyr_enterprise::tools::build_zephyr_enterprise_toolset(
+            name,
+            zephyr_enterprise::config::ZephyrEnterpriseToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        ),
+        "zephyr_essential" => zephyr_essential::tools::build_zephyr_essential_toolset(
+            name,
+            zephyr_essential::config::ZephyrEssentialToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        ),
+        "zephyr_scale" => zephyr_scale::tools::build_zephyr_scale_toolset(
+            name,
+            zephyr_scale::config::ZephyrScaleToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        ),
+        _ => return Ok(None),
+    }
+    .map_err(|error| family_error(error.code()))?;
+    Ok(Some(Arc::new(toolset)))
+}
+
+/// The Azure DevOps families, which share one client (`families::ado`).
+fn materialize_ado(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    use super::families::ado_boards;
+    use super::families::ado_plans;
+    use super::families::ado_repos;
+    use super::families::ado_wiki;
+    let toolset = match tool_type {
+        "ado_boards" => ado_boards::tools::build_ado_boards_toolset(
+            name,
+            ado_boards::config::AdoBoardsToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "ado_plans" => ado_plans::tools::build_ado_plans_toolset(
+            name,
+            ado_plans::config::AdoPlansToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "ado_repos" => ado_repos::tools::build_ado_repos_toolset(
+            name,
+            ado_repos::config::AdoReposToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "ado_wiki" => ado_wiki::tools::build_ado_wiki_toolset(
+            name,
+            ado_wiki::config::AdoWikiToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        _ => return Err(unsupported_toolkit()),
+    };
+    Ok(Arc::new(toolset))
 }
 
 fn materialize_a_to_k(
@@ -302,6 +777,83 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
+        _ => return Err(unsupported_toolkit()),
+    };
+    Ok(Arc::new(toolset))
+}
+
+/// The hosted-service families ported from the Python-only set in one batch
+/// (`aha`, `bigquery`, `bitbucket`, `carrier`, `confluence`, `figma`, `gitlab`,
+/// `jira`). They live outside
+/// `materialize_a_to_k` only to keep each dispatch function under clippy's
+/// line limit; the arms stay at the indentation the elitea-main capability
+/// gates read.
+fn materialize_ported_saas(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let toolset = match tool_type {
+        // No runtime host has an artifact-read grant plane, so Aha is built
+        // without one and serves every tool but attach_file.
+        "aha" => aha::tools::build_aha_toolset(
+            name,
+            aha::config::AhaToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+            None,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "bigquery" => bigquery::tools::build_bigquery_toolset(
+            name,
+            bigquery::config::BigQueryToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "bitbucket" => bitbucket::tools::build_bitbucket_toolset(
+            name,
+            bitbucket::config::BitbucketToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "carrier" => carrier::tools::build_carrier_toolset(
+            name,
+            carrier::config::CarrierToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "confluence" => confluence::tools::build_confluence_toolset(
+            name,
+            confluence::config::ConfluenceToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "figma" => figma::tools::build_figma_toolset(
+            name,
+            figma::config::FigmaToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "gitlab" => gitlab::tools::build_gitlab_toolset(
+            name,
+            gitlab::config::GitLabToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "jira" => jira::tools::build_jira_toolset(
+            name,
+            jira::config::JiraToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))
@@ -393,29 +945,65 @@ fn materialize_p_to_z(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
-        // Aha needs a sealed artifact resolver. MCP and nested applications
-        // are rejected above by kind.
+        // MCP and nested applications are rejected above by kind.
+        _ => return Err(unsupported_toolkit()),
+    };
+    Ok(Arc::new(toolset))
+}
+
+/// The test-management families. A selection that names only tools a
+/// partial family does not serve skips the toolkit, as an unsupported family
+/// is skipped.
+fn materialize_test_management(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let toolset = match tool_type {
+        "qtest" => qtest::tools::build_qtest_toolset(
+            name,
+            qtest::config::QtestToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "testio" => testio::tools::build_testio_toolset(
+            name,
+            testio::config::TestIoToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "testrail" => testrail::tools::build_testrail_toolset(
+            name,
+            testrail::config::TestRailToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "xray_cloud" => xray_cloud::tools::build_xray_cloud_toolset(
+            name,
+            xray_cloud::config::XrayToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+        )
+        .map_err(|error| family_error(error.code()))?,
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))
 }
 
 const fn invalid_configuration() -> ToolsetMaterializationError {
-    ToolsetMaterializationError {
-        code: ToolsetMaterializationErrorCode::InvalidConfiguration,
-    }
+    ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::InvalidConfiguration)
 }
 
 const fn unsupported_toolkit() -> ToolsetMaterializationError {
-    ToolsetMaterializationError {
-        code: ToolsetMaterializationErrorCode::UnsupportedToolkit,
-    }
+    ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::UnsupportedToolkit)
 }
 
 const fn resource_exhausted() -> ToolsetMaterializationError {
-    ToolsetMaterializationError {
-        code: ToolsetMaterializationErrorCode::ResourceExhausted,
-    }
+    ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::ResourceExhausted)
 }
 
 const fn artifact_config_materialization_error(

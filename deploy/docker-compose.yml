@@ -237,7 +237,9 @@ services:
       #
       # Turn the whole thing on with:
       #     bash deploy/scripts/gen-deepwiki-certs.sh
-      #     ELITEA_DEEPWIKI_ENABLED=true podman compose --profile deepwiki up -d
+      #     ELITEA_DEEPWIKI_ENABLED=true \
+      #     ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki:9443 \
+      #     podman compose --profile deepwiki up -d
       ELITEA_DEEPWIKI_ENABLED: "${ELITEA_DEEPWIKI_ENABLED:-false}"
       # 8080: the port the provider listens on (the sub-application host's
       # default, EXPOSE in its Containerfile, the Helm chart). This said 8443 and nothing checked
@@ -253,6 +255,20 @@ services:
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "changeme"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+      # The engine's platform gRPC listener (#1243): where this service deletes
+      # a project's wiki search indexes when the project is deprovisioned. Set
+      # it to elitea-deepwiki:9443 TOGETHER with ELITEA_DEEPWIKI_ENABLED=true
+      # (see above): the hop presents the same client certificate as the
+      # facade, so a target beside a disabled facade is a boot error, and a
+      # facade without the target deletes projects while the engine keeps
+      # their indexes (logged at boot). The server certificate's SANs name
+      # elitea-deepwiki (gen-deepwiki-certs.sh), which is what this verifies.
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "${ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET:-}"
+      # The toolkit-deletion reconciler (#1244): drains centry.toolkit_deletions,
+      # the engine-side deletion an Inventory toolkit's delete owes. On by
+      # default (its own flag, apart from ELITEA_PROJECT_DELETION_RECONCILER_
+      # ENABLED); "false" stops the loop on this replica.
+      ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "${ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED:-true}"
     volumes:
       # Read-only, and shared with the gateway hop: one dev CA signs both, and
       # `CN=elitea-main` is the same client on both.
@@ -325,6 +341,16 @@ services:
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
       ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "https://elitea-deepwiki:8080"
+      # The platform gRPC service (elitea.subapp.v1.PlatformOperations):
+      # project deprovisioning, authorised by the verified client certificate
+      # alone. The certificate elitea-main presents is CN=elitea-main
+      # (gen-deepwiki-certs.sh). A second listener behind the same TLS
+      # configuration, reachable on the compose network only (no published
+      # port). Remove PLATFORM_CLIENTS to turn the service off.
+      ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+    expose:
+      - "9443"
     volumes:
       - ./certs:/certs:ro
       - deepwiki-engine-sock:/run/deepwiki

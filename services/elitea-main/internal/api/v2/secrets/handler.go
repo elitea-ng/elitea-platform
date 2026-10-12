@@ -1396,15 +1396,29 @@ func (h *Handler) RemoveProjectVault(ctx context.Context, projectID string) erro
 	}
 	defer func() { _ = transaction.Rollback(context.WithoutCancel(ctx)) }()
 
+	if err := h.RemoveProjectVaultTx(ctx, transaction, projectID); err != nil {
+		return err
+	}
+	return transaction.Commit(ctx)
+}
+
+// RemoveProjectVaultTx is RemoveProjectVault inside a transaction the caller
+// owns: it deletes the vault rows through tx and neither commits nor rolls
+// back. The project delete uses it to revoke the vault in the transaction that
+// removes the project row (#1211), so the credentials die with the row. The two
+// statements run in the caller's transaction, which keeps the key and data rows
+// together.
+func (h *Handler) RemoveProjectVaultTx(ctx context.Context, tx pgx.Tx, projectID string) error {
+	vaultID := dbKey(projectID)
 	for _, statement := range []string{
 		`DELETE FROM centry.secrets_data WHERE id = $1`,
 		`DELETE FROM centry.secrets_key WHERE id = $1`,
 	} {
-		if _, err := transaction.Exec(ctx, statement, vaultID); err != nil {
+		if _, err := tx.Exec(ctx, statement, vaultID); err != nil {
 			return fmt.Errorf("delete %s vault rows: %w", vaultID, err)
 		}
 	}
-	return transaction.Commit(ctx)
+	return nil
 }
 
 // StoreProjectSecrets writes several regular secrets to one project vault in a

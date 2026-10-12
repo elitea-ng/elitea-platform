@@ -1,10 +1,14 @@
-//! Complete capability-disabled Aha! toolkit family.
+//! Aha! toolkit family.
 //!
-//! The family owns one claim-scoped Aha origin and bearer credential. Remote
-//! effects, including artifact attachment, remain unavailable to production
-//! activation until durable effect receipts and artifact-read grants are wired.
+//! The family owns one claim-scoped Aha origin and bearer credential.
+//! `materialize` serves 32 of the SDK's 33 tools: `attach_file` uploads an
+//! artifact through a sealed, digest-verified resolver, and no runtime host
+//! has the artifact-read grant plane that resolver needs, so production builds
+//! the family without one and omits that tool.
 
-#![allow(dead_code)] // Production toolkit assembly remains capability-gated.
+// Artifact claims are constructed only by the test fixture until a grant
+// plane exists; the production resolver holds none.
+#![allow(dead_code)]
 
 pub(in crate::toolkits) mod artifact;
 pub(in crate::toolkits) mod client;

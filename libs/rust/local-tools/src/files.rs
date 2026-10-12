@@ -78,7 +78,24 @@ pub(crate) fn read(workspace: &Workspace, ledger: &ReadLedger, args: Value) -> T
     let args: ReadArgs = parse(args)?;
     let path = workspace.resolve(&args.path, Intent::Read)?;
     let file = workspace.read(&path, MAX_FILE_BYTES)?;
-    let text = text_of(&file)?;
+    // Read as ingestion indexes it (a legacy encoding is decoded), so a file
+    // the index holds can be read back. Editing stays UTF-8 only: writing a
+    // decoded legacy file back would change its encoding.
+    let has_nul = file.bytes[..file.bytes.len().min(8192)].contains(&0);
+    let text = if has_nul || is_text(&file.bytes) {
+        // UTF-8, or a NUL byte: binary, as before.
+        text_of(&file)?.to_owned()
+    } else {
+        elitea_doc_extract::decode_text(&file.bytes).map_err(|reason| {
+            ToolError::new(
+                ErrorCode::Binary,
+                format!(
+                    "`{}` is not text ({reason}); use read_document for documents",
+                    file.path
+                ),
+            )
+        })?
+    };
     ledger.record(&file.path, file.stamp.clone());
     let lines: Vec<&str> = text.lines().collect();
     let start = args.offset.unwrap_or(1).max(1);
@@ -419,20 +436,38 @@ fn base_dir(workspace: &Workspace, path: Option<&str>) -> ToolResult<WsPath> {
     }
 }
 
-fn walker(
+/// A walk of the workspace from `base` the way every listing tool walks it:
+/// `.gitignore` honoured (with or without a git repository), hidden files
+/// included, `.git` and `path_deny` matches pruned (never descended into),
+/// symlinks yielded as entries but never followed, names in byte order.
+/// `glob` narrows it to matching paths; `depth` limits it.
+///
+/// Public for the desktop's local index (ADR-0029 decision 7), which lists
+/// a workspace exactly as the agent's tools see it. A caller that wants
+/// files keeps only the entries whose `file_type()` is a regular file.
+///
+/// # Errors
+///
+/// `glob` is not a glob.
+pub fn walker(
     workspace: &Workspace,
     base: &WsPath,
     glob: Option<&str>,
     depth: Option<usize>,
 ) -> ToolResult<ignore::Walk> {
     let mut builder = ignore::WalkBuilder::new(workspace.absolute(base));
+    let denied = workspace.read_denied_filter();
     builder
         .hidden(false)
         .require_git(false)
         .follow_links(false)
         .max_depth(depth)
         .sort_by_file_name(Ord::cmp)
-        .filter_entry(|entry| !entry.file_name().to_str().is_some_and(is_protected_name));
+        // `path_deny` matches are pruned here, not filtered after: a denied
+        // tree is never descended into, so it cannot use up a walk's limit.
+        .filter_entry(move |entry| {
+            !entry.file_name().to_str().is_some_and(is_protected_name) && !denied(entry.path())
+        });
     if let Some(glob) = glob {
         let mut overrides = ignore::overrides::OverrideBuilder::new(workspace.root());
         overrides
@@ -447,7 +482,10 @@ fn walker(
     Ok(builder.build())
 }
 
-fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
+/// A path [`walker`] yielded, as a workspace path; `None` for one outside
+/// the root or not UTF-8.
+#[must_use]
+pub fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
     WsPath::from_relative(path.strip_prefix(workspace.root()).ok()?).ok()
 }
 
@@ -658,6 +696,26 @@ mod tests {
                 .code(),
             ErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn read_decodes_a_legacy_encoding_and_refuses_binary_without_a_nul() {
+        let (dir, ws, ledger) = setup(&[]);
+        let (sjis, _, _) = encoding_rs::SHIFT_JIS
+            .encode("これは日本語の文章です。\n返金は三十日以内に受け付けます。\n");
+        std::fs::write(dir.path().join("jp.txt"), &*sjis).expect("write");
+        let shown = read(&ws, &ledger, json!({ "path": "jp.txt" })).expect("read");
+        assert!(
+            shown["content"].as_str().unwrap_or("").contains("返金"),
+            "{shown}"
+        );
+        // Binary with no NUL byte is still refused.
+        let noise: Vec<u8> = (0..2000_usize)
+            .map(|i| [1_u8, 2, 3, 0x81, 4][i % 5])
+            .collect();
+        std::fs::write(dir.path().join("noise"), noise).expect("noise");
+        let refused = read(&ws, &ledger, json!({ "path": "noise" })).expect_err("noise");
+        assert_eq!(refused.code(), ErrorCode::Binary);
     }
 
     #[test]

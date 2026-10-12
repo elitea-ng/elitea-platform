@@ -29,6 +29,10 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 if ! ls "$DIR"/helm/nats/charts/nats-*.tgz >/dev/null 2>&1; then
+  # `helm dependency build` refuses an http(s) repository it has no definition
+  # for ("no repository definition for ..."), so register the subchart's
+  # repository first. Idempotent, and a no-op on a machine that already has it.
+  "$HELM" repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update >/dev/null
   "$HELM" dependency build "$DIR/helm/nats" >/dev/null
 fi
 

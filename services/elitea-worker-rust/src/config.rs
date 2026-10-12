@@ -89,6 +89,17 @@ pub struct RuntimeDeployConfig {
     pub output_target: String,
     pub content_origin: String,
     pub platform_origin: String,
+    /// `host:port` of elitea-vector (ADR-0031), reached with this worker's
+    /// mTLS identity. Absent, the worker refuses `index.ingest.v1` as
+    /// unsupported; an agent-only or validate-only deployment needs none.
+    #[serde(default)]
+    pub vector_target: Option<String>,
+    /// The egress allowlist of the indexing connectors (ADR-0030 decision 3):
+    /// hosts, comma or space separated; `*.example.com` for direct
+    /// subdomains; `*` disables the control. Absent or blank refuses every
+    /// source host (fail-closed), so a deployment names what it indexes.
+    #[serde(default)]
+    pub index_egress_allowlist: Option<String>,
     pub ca_path: PathBuf,
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,
@@ -308,6 +319,12 @@ impl RuntimeDeployConfig {
         }
         validate_grpc_target(&self.control_target)?;
         validate_grpc_target(&self.output_target)?;
+        if let Some(target) = &self.vector_target {
+            validate_grpc_target(target)?;
+        }
+        if let Some(allowlist) = &self.index_egress_allowlist {
+            require_bounded_text(allowlist, MAX_ORIGIN_BYTES)?;
+        }
         if self.sandbox_runtimes.len() > 4 {
             return Err(invalid_config());
         }

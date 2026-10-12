@@ -132,6 +132,20 @@ impl RuntimeTrustMaterial {
         Identity::from_pem(self.certificate_pem.clone(), &self.private_key_pem)
     }
 
+    /// The runtime CA bundle, PEM, for a client built outside tonic's
+    /// `Certificate` (the `vector-index` client takes PEM bytes).
+    #[must_use]
+    pub fn ca_pem(&self) -> Vec<u8> {
+        self.ca_pem.clone()
+    }
+
+    /// The workload certificate chain and private key, PEM. The key copy is
+    /// the caller's to hold; it lives as long as the client built from it.
+    #[must_use]
+    pub fn identity_pem(&self) -> (Vec<u8>, Vec<u8>) {
+        (self.certificate_pem.clone(), self.private_key_pem.to_vec())
+    }
+
     #[must_use]
     pub fn spool_master_key(&self) -> SpoolMasterKey {
         SpoolMasterKey::new(*self.spool_key)

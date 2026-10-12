@@ -163,6 +163,11 @@ type Querier interface {
 	// independent guarantees; this query is the first.
 	DeleteTokenProjectBinding(ctx context.Context, tokenID int32) error
 	EnsureRuntimeAdmissionPolicy(ctx context.Context, arg EnsureRuntimeAdmissionPolicyParams) error
+	// Whether the project's system PgVector row exists. It reads the same four
+	// identity predicates the upsert and the delete above use, so a user-created
+	// configuration that happens to carry the title does not count. The project
+	// delete asks it inside its deciding transaction (#1211).
+	ExistsCurrentProjectPgvectorConfiguration(ctx context.Context, arg ExistsCurrentProjectPgvectorConfigurationParams) (bool, error)
 	FinalizeCurrentAgentAuthorizationPause(ctx context.Context, arg FinalizeCurrentAgentAuthorizationPauseParams) (int64, error)
 	FinalizeCurrentAgentFullMessage(ctx context.Context, arg FinalizeCurrentAgentFullMessageParams) (int64, error)
 	FinalizeCurrentAgentHITLPause(ctx context.Context, arg FinalizeCurrentAgentHITLPauseParams) (int64, error)

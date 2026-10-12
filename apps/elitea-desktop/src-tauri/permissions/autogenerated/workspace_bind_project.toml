@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-workspace-bind-project"
+description = "Enables the workspace_bind_project command without any pre-configured scope."
+commands.allow = ["workspace_bind_project"]
+
+[[permission]]
+identifier = "deny-workspace-bind-project"
+description = "Denies the workspace_bind_project command without any pre-configured scope."
+commands.deny = ["workspace_bind_project"]

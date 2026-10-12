@@ -334,7 +334,7 @@ impl ClaimScopedEliteaContext {
     /// Parent and nested agents share the same accepted actor, but each ADK
     /// model instance owns its own zeroizing header value and turn budget. The
     /// authority itself remains non-cloneable and cannot outlive assembly.
-    pub(super) fn model_facade_token(&self) -> Zeroizing<String> {
+    pub(crate) fn model_facade_token(&self) -> Zeroizing<String> {
         Zeroizing::new(self.token.to_string())
     }
 
@@ -347,7 +347,7 @@ impl ClaimScopedEliteaContext {
     /// gateway sends this as `X-Elitea-Execution-Id` so the gateway's request
     /// log can attribute LLM cost per execution.
     #[must_use]
-    pub(super) fn execution_id(&self) -> &str {
+    pub(crate) fn execution_id(&self) -> &str {
         self.execution_id.as_str()
     }
 
@@ -362,7 +362,7 @@ impl ClaimScopedEliteaContext {
     }
 
     #[cfg(test)]
-    pub(super) fn fixture(project_id: u64, token: &str) -> Self {
+    pub(crate) fn fixture(project_id: u64, token: &str) -> Self {
         Self::fixture_with_execution_id(project_id, token, "0123456789abcdef0123456789abcdef")
     }
 

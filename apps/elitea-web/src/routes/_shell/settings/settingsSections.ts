@@ -87,6 +87,9 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
         // Ungated: the page itself says when the workspace enables none.
         { id: 'devices', label: 'Devices' },
         { id: 'notifications', label: 'Notifications' },
+        // ADR-0029: the desktop app's Doctor. `MODE` is a build-time literal,
+        // so the web build drops the row (and its label) entirely.
+        ...(import.meta.env.MODE === 'desktop' ? [{ id: 'troubleshoot', label: 'Troubleshoot' }] : []),
       ],
     },
   ];

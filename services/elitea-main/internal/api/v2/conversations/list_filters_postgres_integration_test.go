@@ -260,3 +260,22 @@ func TestAnUnknownHiddenValueTakesTheDefault(t *testing.T) {
 		}
 	}
 }
+
+// Local work threads (LocalWorkSource) are left out of an unfiltered listing —
+// the web cannot continue them — and come back only when `source=local_work`
+// asks for them by name. `total` counts the same rows the page carries.
+func TestTheDefaultListingLeavesOutLocalWorkThreads(t *testing.T) {
+	pool := newListFiltersPool(t)
+	seedTheListingCorpus(t, pool)
+	seedConversation(t, pool, "a local work thread", LocalWorkSource, 7, map[string]any{})
+
+	if got := listNames(t, pool, "", "7"); fmt.Sprint(got) != fmt.Sprint([]string{"an ordinary chat"}) {
+		t.Fatalf("the default listing returned %v, want the ordinary chat alone", got)
+	}
+	if got := listNames(t, pool, "source=local_work", "7"); fmt.Sprint(got) != fmt.Sprint([]string{"a local work thread"}) {
+		t.Fatalf("source=local_work returned %v, want the local work thread alone", got)
+	}
+	if got := listNames(t, pool, "source=elitea", "7"); fmt.Sprint(got) != fmt.Sprint([]string{"an ordinary chat"}) {
+		t.Fatalf("source=elitea returned %v", got)
+	}
+}

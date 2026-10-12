@@ -11,7 +11,6 @@ import (
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
-	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -177,7 +176,9 @@ func callOutput(t *testing.T, address string, clientTLS *tls.Config) {
 
 func callContent(t *testing.T, address string, clientTLS *tls.Config) {
 	t.Helper()
-	client := &http.Client{Transport: &http2.Transport{TLSClientConfig: clientTLS}, Timeout: 15 * time.Second}
+	transport := &http.Transport{TLSClientConfig: clientTLS, Protocols: new(http.Protocols)}
+	transport.Protocols.SetHTTP2(true)
+	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
 	defer client.CloseIdleConnections()
 
 	response, err := client.Get("https://" + address + "/execution-content")

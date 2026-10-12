@@ -88,7 +88,7 @@ jobs:
       # as an error (#338).
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.work
           cache-dependency-path: services/elitea-main/go.sum
       # -count=1 is required, not tidiness. The gate reads YAML from deploy/,
       # which is outside this module, so the Go test cache does not notice an

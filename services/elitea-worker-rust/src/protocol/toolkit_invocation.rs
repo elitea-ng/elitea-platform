@@ -13,12 +13,30 @@ pub(crate) struct ToolkitInvocationPayload;
 /// be consumed to request another invocation permit.
 pub(crate) struct AuthorizedToolkitExecution {
     execution: LeaseMonitoredAgentExecution,
+    runtime_context: ClaimBoundRuntimeContextAuthority,
     _permit: InvocationSubmissionPermit,
 }
 
 impl AuthorizedToolkitExecution {
     pub(crate) fn execution(&self) -> &LeaseMonitoredAgentExecution {
         &self.execution
+    }
+
+    /// The claim-bound authority an index run redeems its platform PAT with
+    /// (the gateway embeddings call and the artifact object API, ADR-0030
+    /// I1). Minted at `AUTHORIZED_NOW` like the agent's.
+    pub(crate) fn runtime_context(&self) -> &ClaimBoundRuntimeContextAuthority {
+        &self.runtime_context
+    }
+
+    /// The elitea-vector token of the authorized claim (ADR-0031): the handle
+    /// a toolkit's vector-index client uses. `None` when Main minted none.
+    #[allow(
+        dead_code,
+        reason = "The vector-index client (ADR-0030) is its consumer."
+    )]
+    pub(crate) fn vector_token(&self) -> Option<&super::super::vector_token::VectorClaimToken> {
+        self.execution.vector_token()
     }
 
     pub(crate) fn into_output_authority(self) -> AgentExecutionOutputAuthority {
@@ -45,13 +63,14 @@ impl InvocationAuthorizationPayload for ToolkitInvocationPayload {
         self,
         permit: InvocationSubmissionPermit,
         output: AgentExecutionOutputAuthority,
-        _runtime_context: ClaimBoundRuntimeContextAuthority,
+        runtime_context: ClaimBoundRuntimeContextAuthority,
         _session: ClaimBoundSessionAuthority,
     ) -> Self::Authorized {
         AuthorizedToolkitExecution {
             execution: LeaseMonitoredAgentExecution {
                 claim: output.claim,
             },
+            runtime_context,
             _permit: permit,
         }
     }

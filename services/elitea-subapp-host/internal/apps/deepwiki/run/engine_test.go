@@ -28,6 +28,13 @@ type fakeSidecar struct {
 	mu       sync.Mutex
 	requests []map[string]any
 	stops    []string
+	// byTool scripts a tool's own stream; a tool not in it streams lines.
+	byTool map[string][]string
+	// tools is what GET /engine/health lists; nil leaves the field out, as
+	// an engine of an older release does.
+	tools []string
+	// healthCalls counts GET /engine/health.
+	healthCalls int
 }
 
 func newFakeSidecar(t *testing.T, lines []string, pause time.Duration) *fakeSidecar {
@@ -63,6 +70,18 @@ func (f *fakeSidecar) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	if r.URL.Path == "/engine/health" {
+		f.mu.Lock()
+		f.healthCalls++
+		tools := append([]string(nil), f.tools...)
+		f.mu.Unlock()
+		body := map[string]any{"status": "UP", "runner": "native", "active": 0}
+		if tools != nil {
+			body["tools"] = tools
+		}
+		_ = json.NewEncoder(w).Encode(body)
+		return
+	}
 	if r.URL.Path != "/engine/invoke" {
 		http.NotFound(w, r)
 		return
@@ -71,13 +90,21 @@ func (f *fakeSidecar) handle(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&request)
 	f.mu.Lock()
 	f.requests = append(f.requests, request)
+	lines := f.lines
+	if scripted, ok := f.byTool[str(request["tool"])]; ok {
+		lines = scripted
+	}
 	f.mu.Unlock()
+	invocation := str(request["invocation_id"])
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	for _, line := range f.lines {
+	for _, line := range lines {
 		f.mu.Lock()
-		stopped := len(f.stops) > 0
+		stopped := false
+		for _, id := range f.stops {
+			stopped = stopped || id == invocation
+		}
 		f.mu.Unlock()
 		if stopped {
 			return

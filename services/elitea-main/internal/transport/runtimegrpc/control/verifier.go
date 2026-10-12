@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimegrpc "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"google.golang.org/protobuf/proto"
@@ -330,6 +331,18 @@ func validateIndexIngestCommand(command *runtimev1.WorkerCommandV1, config comma
 	switch indexing.GetInitiator() {
 	case "user", "llm", "schedule":
 	default:
+		return ErrMalformedWorkerCommand
+	}
+	// The expected embedding space is a pair, set from the index registry's
+	// stamp or absent; a half is malformed.
+	model, dimension := indexing.GetExpectedEmbeddingModel(), indexing.GetExpectedEmbeddingDimension()
+	if (model == "") != (dimension == 0) || dimension > 65535 ||
+		len(model) > 256 || len(model) > config.MaxStringBytes || strings.ContainsAny(model, "\x00\r\n") {
+		return ErrMalformedWorkerCommand
+	}
+	// The index registry row the run writes: absent on the Python path, a
+	// canonical lower-case UUID under the Rust indexing runtime.
+	if indexID := indexing.GetIndexId(); indexID != "" && !indexingapp.ValidCanonicalUUID(indexID) {
 		return ErrMalformedWorkerCommand
 	}
 	return nil

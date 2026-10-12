@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
@@ -172,6 +173,13 @@ func writeCurrentIndexMetaDeleteError(
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaNotFound):
 		writeJSON(writer, http.StatusNotFound, map[string]any{
 			"ok": false, "error": "index_meta " + indexMetaID + " not found",
+		})
+	case errors.Is(err, indexingapp.ErrCurrentIndexMetaConflict):
+		// Only the registry service returns this: an index whose run is still
+		// writing cannot be deleted. The Python path deletes regardless and
+		// never reaches this arm.
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"ok": false, "error": "index_meta " + indexMetaID + " has a run in progress; stop it before deleting",
 		})
 	case errors.As(err, &toolkitMissing):
 		writeJSON(writer, http.StatusNotFound, map[string]any{

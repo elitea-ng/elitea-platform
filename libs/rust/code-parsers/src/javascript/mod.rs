@@ -51,6 +51,7 @@ use super::LanguageParser;
 use super::java::os_error_text;
 use super::java::source::Source;
 use super::limits;
+use crate::input::Sources;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use visitor::FileOutput;
@@ -68,8 +69,13 @@ impl LanguageParser for JavaScriptParser {
         "javascript"
     }
 
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, super::model::ParseResult> {
-        let parse_all = || -> Vec<FileOutput> { files.par_iter().map(|f| parse_path(f)).collect() };
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: Sources<'_>,
+    ) -> BTreeMap<String, super::model::ParseResult> {
+        let parse_all =
+            || -> Vec<FileOutput> { files.par_iter().map(|f| parse_path(f, sources)).collect() };
         let outputs = match limits::on_worker_pool("JavaScript", WORKER_STACK, parse_all) {
             Ok(outputs) => outputs,
             Err(error) => {
@@ -86,8 +92,8 @@ impl LanguageParser for JavaScriptParser {
 
 /// Read and parse one file as `parse_file` does: any failure (a missing
 /// file, an invalid UTF-8 byte) is the exception text.
-fn parse_path(path: &str) -> FileOutput {
-    let bytes = match std::fs::read(path) {
+fn parse_path(path: &str, sources: Sources<'_>) -> FileOutput {
+    let bytes = match sources.read(path) {
         Ok(bytes) => bytes,
         Err(error) => return visitor::failed(path, os_error_text(&error, path)),
     };

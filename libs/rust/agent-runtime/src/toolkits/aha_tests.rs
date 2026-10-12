@@ -388,10 +388,68 @@ async fn catalog_metadata_selection_policy_and_schemas_match_runtime_contract() 
 
     let unknown = AhaToolkitConfig::parse(&settings(Some(json!(["unknown_tool"]))))
         .expect("unknown selection remains data until closed by catalog");
-    let Err(error) = build_aha_toolset("product", unknown, &policy(&[]), empty_artifacts()) else {
+    let Err(error) = build_aha_toolset("product", unknown, &policy(&[]), Some(empty_artifacts()))
+    else {
         panic!("unknown selection must fail closed");
     };
     assert_eq!(error.code(), AhaToolsetErrorCode::UnsupportedSelection);
+}
+
+#[tokio::test]
+async fn production_profile_without_an_artifact_grant_plane_omits_only_attach_file() {
+    // Empty selection: every tool this runtime serves, which is all but one.
+    let toolset =
+        build_aha_toolset("product", config(), &policy(&[]), None).expect("production Aha toolset");
+    let names = toolset
+        .tools(context())
+        .await
+        .expect("production tools")
+        .iter()
+        .map(|tool| tool.name().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(names.len(), 32);
+    assert!(!names.iter().any(|name| name == "attach_file"));
+
+    // A mixed selection keeps the served tool and drops attach_file.
+    let mixed = AhaToolkitConfig::parse(&settings(Some(json!(["attach_file", "get_feature"]))))
+        .expect("mixed selection");
+    let toolset = build_aha_toolset("product", mixed, &policy(&[]), None).expect("mixed toolset");
+    let names = toolset
+        .tools(context())
+        .await
+        .expect("mixed tools")
+        .iter()
+        .map(|tool| tool.name().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["get_feature"]);
+
+    // Selecting only the unserved tool leaves nothing to serve: the toolkit
+    // is skipped as unsupported, not bound empty.
+    let only = AhaToolkitConfig::parse(&settings(Some(json!(["attach_file"])))).expect("selection");
+    let Err(error) = build_aha_toolset("product", only, &policy(&[]), None) else {
+        panic!("an attach_file-only selection has nothing to serve");
+    };
+    assert_eq!(error.code(), AhaToolsetErrorCode::UnsupportedSelection);
+
+    // The fail-closed resolver refuses any path even if a call reached it.
+    let unavailable = Arc::new(AhaArtifactResolver::unavailable());
+    let client = AhaClient::with_transport(
+        &config(),
+        Arc::new(FixtureTransport::new(Vec::new())),
+        unavailable,
+    );
+    let Err(error) = client
+        .execute(AhaOperation::AttachFile {
+            resource_type: "feature",
+            resource_id: "DEVELOP-1",
+            filepath: "/bucket/file.bin",
+            filename: None,
+        })
+        .await
+    else {
+        panic!("no artifact grant plane means no attachment");
+    };
+    assert_eq!(error.code(), AhaClientErrorCode::Authorization);
 }
 
 #[tokio::test]
@@ -1300,9 +1358,13 @@ async fn description_attachment_route_and_post_accept_bound_are_effect_aware() {
 
 #[tokio::test]
 async fn every_tool_keeps_the_sdk_contract() {
+    // The gate checks what production materializes: without an artifact-read
+    // grant plane that is every tool but attach_file, which the capability
+    // snapshot lists as supported_tools.aha.
     let api: Arc<dyn AhaApi> = Arc::new(FixtureApi::default());
     let toolset =
-        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete aha toolset");
+        super::families::aha::tools::test_build_production_with_api("gate", &policy(&[]), &api)
+            .expect("production aha toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
     let tools = toolset.tools(readonly).await.expect("aha tools");
     super::sdk_conformance::assert_sdk_conformance("aha", &tools);

@@ -5,7 +5,7 @@
  * into the bundled webview, rather than the `@tauri-apps/api` package: the
  * surface is seven commands, and one fewer dependency keeps the default web
  * build's lockfile and audit surface unchanged. The host exposes only
- * SHORT-LIVED ACCESS TOKENS; the refresh token never leaves the OS keychain.
+ * SHORT-LIVED ACCESS TOKENS; the refresh token never leaves the host.
  */
 
 /** What the host knows about this install. Mirrors `HostState` in `src-tauri/src/commands.rs`. */
@@ -40,6 +40,8 @@ export interface HostBridge {
   state(): Promise<HostState>;
   connect(url: string): Promise<HostDeployment>;
   signIn(): Promise<HostState>;
+  /** Abandon the sign-in waiting for the browser; the pending `signIn()` rejects. */
+  cancelSignIn(): Promise<void>;
   accessToken(): Promise<HostAccessToken | null>;
   /** Force a refresh-token exchange. `ended`: the server refused the refresh token. `unavailable`: try again later. */
   refresh(): Promise<'refreshed' | 'ended' | 'unavailable' | 'upgrade_required'>;
@@ -56,6 +58,7 @@ export function createHostBridge(invoke: HostInvoke): HostBridge {
     state: () => invoke<HostState>('host_state'),
     connect: (url) => invoke<HostDeployment>('host_connect', { url }),
     signIn: () => invoke<HostState>('host_sign_in'),
+    cancelSignIn: () => invoke<void>('host_sign_in_cancel'),
     accessToken: () => invoke<HostAccessToken | null>('host_access_token'),
     refresh: () => invoke<'refreshed' | 'ended' | 'unavailable' | 'upgrade_required'>('host_refresh'),
     signOut: () => invoke<void>('host_sign_out'),

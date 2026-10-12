@@ -90,7 +90,7 @@ describe('the invocation envelope', () => {
       top_k: 200,
     });
     expect(sent.bodies[0]).toEqual({
-      configuration: { parameters: { bucket: 'graphs', llm_model: 'gpt-5' } },
+      configuration: { application_id: 42, parameters: { bucket: 'graphs', llm_model: 'gpt-5' } },
       parameters: { query: 'checkout', top_k: 200 },
     });
   });
@@ -102,7 +102,7 @@ describe('startInventoryTool', () => {
     await expect(startInventoryTool(TARGET, INVENTORY_FAMILY, 'get_stats', {})).resolves.toBe('inv-1');
     expect(sent.urls).toEqual(['/api/v2/inventory/tools/7/inventory/get_stats/invoke']);
     expect(sent.bodies[0]).toEqual({
-      configuration: { parameters: { bucket: 'graphs', llm_model: 'gpt-5' } },
+      configuration: { application_id: 42, parameters: { bucket: 'graphs', llm_model: 'gpt-5' } },
       parameters: {},
     });
   });

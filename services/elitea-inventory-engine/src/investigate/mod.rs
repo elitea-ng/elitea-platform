@@ -37,6 +37,7 @@ pub use run::investigate;
 use crate::retrieval::{self, Call, view::GraphView};
 use elitea_conversation::Policy;
 use elitea_engine_core::errors::EngineError;
+use elitea_inventory_core::extract::assets::ASSET;
 use elitea_model_client::chat::{ChatRequest, ChatResponse, ToolDefinition};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -45,7 +46,6 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
 const SOURCE_TOOLS: &str = include_str!("../../assets/source_tools.json");
-const ASSET: &str = include_str!("../../assets/python_inventory.json");
 
 /// The answer the model gives when the rounds run out (the SDK's message).
 pub(crate) const LIMIT_MESSAGE: &str =

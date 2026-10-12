@@ -304,32 +304,7 @@ impl GcpClient {
     }
 
     fn token_request(&self, scopes: &[String], now: SystemTime) -> Result<Request, GcpClientError> {
-        validate_scopes(scopes)?;
-        let assertion = service_account_jwt(&self.config, scopes, now)?;
-        let mut body = Zeroizing::new(String::new());
-        body.push_str("grant_type=");
-        write!(
-            body,
-            "{}",
-            utf8_percent_encode(GRANT_TYPE, NON_ALPHANUMERIC)
-        )
-        .map_err(|_| invalid_configuration())?;
-        body.push_str("&assertion=");
-        write!(
-            body,
-            "{}",
-            utf8_percent_encode(assertion.as_str(), NON_ALPHANUMERIC)
-        )
-        .map_err(|_| invalid_configuration())?;
-        if body.len() > MAX_REQUEST_BYTES {
-            return Err(resource_exhausted());
-        }
-        request_with_body(
-            Method::POST,
-            Url::parse(TOKEN_URL).map_err(|_| invalid_configuration())?,
-            body.as_bytes(),
-            FORM_CONTENT_TYPE,
-        )
+        service_account_token_request(&self.config, scopes, now)
     }
 
     async fn access_token(&self, scopes: &[String]) -> Result<Zeroizing<String>, GcpClientError> {
@@ -343,25 +318,7 @@ impl GcpClient {
         )
         .await
         .map_err(|_| timeout_error(true))??;
-        map_token_status(response.status)?;
-        let bytes = Zeroizing::new(response.body);
-        let mut body: Value = serde_json::from_slice(&bytes).map_err(|_| invalid_response())?;
-        let token = body
-            .as_object_mut()
-            .and_then(|body| body.remove("access_token"))
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .ok_or_else(invalid_response)?;
-        if token.is_empty()
-            || token.len() > MAX_ACCESS_TOKEN_BYTES
-            || token.bytes().any(|byte| byte.is_ascii_control())
-        {
-            return Err(if token.len() > MAX_ACCESS_TOKEN_BYTES {
-                resource_exhausted()
-            } else {
-                invalid_response()
-            });
-        }
-        Ok(Zeroizing::new(token))
+        access_token_from_response(response.status, response.body)
     }
 
     async fn execute_inner(
@@ -433,6 +390,69 @@ impl GcpApi for GcpClient {
     ) -> Result<Value, GcpClientError> {
         self.execute_inner(method, scopes, url, optional_args).await
     }
+}
+
+/// The OAuth JWT-bearer token request for one service account and scope set.
+///
+/// Shared with the `bigquery` family, which signs with the same sealed
+/// service-account authority but owns its own `BigQuery` API projection.
+pub(in crate::toolkits) fn service_account_token_request(
+    config: &GcpToolkitConfig,
+    scopes: &[String],
+    now: SystemTime,
+) -> Result<Request, GcpClientError> {
+    validate_scopes(scopes)?;
+    let assertion = service_account_jwt(config, scopes, now)?;
+    let mut body = Zeroizing::new(String::new());
+    body.push_str("grant_type=");
+    write!(
+        body,
+        "{}",
+        utf8_percent_encode(GRANT_TYPE, NON_ALPHANUMERIC)
+    )
+    .map_err(|_| invalid_configuration())?;
+    body.push_str("&assertion=");
+    write!(
+        body,
+        "{}",
+        utf8_percent_encode(assertion.as_str(), NON_ALPHANUMERIC)
+    )
+    .map_err(|_| invalid_configuration())?;
+    if body.len() > MAX_REQUEST_BYTES {
+        return Err(resource_exhausted());
+    }
+    request_with_body(
+        Method::POST,
+        Url::parse(TOKEN_URL).map_err(|_| invalid_configuration())?,
+        body.as_bytes(),
+        FORM_CONTENT_TYPE,
+    )
+}
+
+/// The bounded access token from one OAuth token-endpoint response.
+pub(in crate::toolkits) fn access_token_from_response(
+    status: StatusCode,
+    body: Vec<u8>,
+) -> Result<Zeroizing<String>, GcpClientError> {
+    map_token_status(status)?;
+    let bytes = Zeroizing::new(body);
+    let mut body: Value = serde_json::from_slice(&bytes).map_err(|_| invalid_response())?;
+    let token = body
+        .as_object_mut()
+        .and_then(|body| body.remove("access_token"))
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(invalid_response)?;
+    if token.is_empty()
+        || token.len() > MAX_ACCESS_TOKEN_BYTES
+        || token.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(if token.len() > MAX_ACCESS_TOKEN_BYTES {
+            resource_exhausted()
+        } else {
+            invalid_response()
+        });
+    }
+    Ok(Zeroizing::new(token))
 }
 
 fn service_account_jwt(
