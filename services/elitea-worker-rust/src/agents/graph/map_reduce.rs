@@ -27,6 +27,8 @@ pub(crate) const MAX_ITEM_BYTES: usize = 512 * 1024;
 pub(crate) const MAX_PLAN_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) const MAX_COLLECTED_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_CHECKPOINT_BYTES: usize = 8 * 1024 * 1024;
+// A typed state channel at its bound fits the whole-state fan-out boundary.
+const _: () = assert!(super::state_reducers::MAX_REDUCED_BYTES <= MAX_CHECKPOINT_BYTES);
 
 /// Sequence fields retain compiler declaration order. They are never sorted.
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
