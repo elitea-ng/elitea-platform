@@ -284,12 +284,14 @@ spec:
         # The document extraction sidecar (ADR-0030 I1): elitea-doc-extractor
         # reads the PDF and Office documents the worker's index runs fetched
         # and answers over the shared socket. One distroless binary whose
-        # ENTRYPOINT/CMD is `serve`; its probe is the binary itself. No port
-        # and no identity: the socket directory is the only way in, and the
-        # process opens no connection, so no NetworkPolicy names it. A crash
-        # or an OOM kill here is one skipped document to the worker (its
-        # client reconnects by itself), which is why it is a separate
-        # container and not a thread of the worker.
+        # ENTRYPOINT/CMD is `serve`; its probe is the binary itself. No port:
+        # the socket directory is the only way in, the process opens no
+        # connection, so no NetworkPolicy names it; and it serves only the
+        # worker's uid (SO_PEERCRED, ELITEA_EXTRACTOR_PEER_UIDS), refusing any
+        # other peer PERMISSION_DENIED. A crash or an OOM kill here is one
+        # skipped document to the worker (its client reconnects by itself),
+        # which is why it is a separate container and not a thread of the
+        # worker.
         - name: doc-extractor
           image: "{{ $x.image.repository }}:{{ $x.image.tag | default .Values.image.tag }}"
           imagePullPolicy: {{ $x.image.pullPolicy }}
@@ -313,17 +315,31 @@ spec:
               value: {{ $x.timeoutMillis | int64 | toString | quote }}
             - name: ELITEA_EXTRACTOR_CONCURRENCY
               value: {{ $x.concurrency | int64 | toString | quote }}
+            - name: ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS
+              value: {{ $x.slotWaitMillis | int64 | toString | quote }}
+            # The worker container's uid unless the values list others: the
+            # two containers share runAsUser, so the default is exact.
+            - name: ELITEA_EXTRACTOR_PEER_UIDS
+              {{- if $x.peerUids }}
+              value: {{ join "," ($x.peerUids | toStrings) | quote }}
+              {{- else }}
+              value: {{ .Values.worker.runAsUser | int64 | toString | quote }}
+              {{- end }}
             - name: RUST_LOG
               value: {{ $x.logLevel | quote }}
+          # timeoutSeconds covers the probe's own 2 s answer budget plus the
+          # exec start-up (values.yaml, worker.extractor.probes).
           livenessProbe:
             exec:
               command: ["/usr/local/bin/elitea-doc-extractor", "healthcheck"]
             periodSeconds: {{ $x.probes.periodSeconds }}
+            timeoutSeconds: {{ $x.probes.timeoutSeconds }}
             failureThreshold: {{ $x.probes.failureThreshold }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/elitea-doc-extractor", "healthcheck"]
             periodSeconds: {{ $x.probes.periodSeconds }}
+            timeoutSeconds: {{ $x.probes.timeoutSeconds }}
             failureThreshold: {{ $x.probes.failureThreshold }}
           resources:
             {{- toYaml $x.resources | nindent 12 }}

@@ -8,32 +8,61 @@
 //! the documents in flight (each reported `extract_failed`) and nothing
 //! after it.
 //!
+//! The client learns the sidecar's capacity and caps from `Capabilities`
+//! on the first document (and again after any failure, since a restarted
+//! sidecar may be configured differently) and shapes itself to them:
+//!
+//! * it keeps no more calls in flight than the sidecar's advertised
+//!   `concurrency`, queueing further documents HERE, so the sidecar's slot
+//!   wait is never what turns ordinary queueing into `RESOURCE_EXHAUSTED`;
+//! * it asks for an extraction timeout (the run's, lowered to the sidecar's
+//!   cap) in the header, and sets its own call deadline from that timeout
+//!   plus the advertised slot wait and stream idle limit plus a margin,
+//!   instead of a fixed figure that would be wrong for any other
+//!   configuration.
+//!
+//! The document is streamed as slices of one reference-counted buffer
+//! (`bytes::Bytes`): nothing here copies it, and the buffer is released as
+//! the call completes.
+//!
 //! Nothing here is a statement about the document except what the sidecar
 //! said: a transport failure, a gRPC status and a response without an
 //! outcome are all [`ExtractorError`], which the run records as
 //! `extract_failed`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use hyper_util::rt::TokioIo;
 use tokio::net::UnixStream;
+use tokio::sync::{Mutex, Semaphore};
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 
 use crate::protocol::extract::document_extract_service_client::DocumentExtractServiceClient;
 use crate::protocol::extract::{
-    ExtractHeader, ExtractLimits, ExtractRequest, SkipReason as WireSkipReason, extract_request,
-    extract_response,
+    CapabilitiesRequest, CapabilitiesResponse, ExtractHeader, ExtractLimits, ExtractRequest,
+    SkipReason as WireSkipReason, extract_request, extract_response,
 };
 
 /// Bytes per streamed chunk; the sidecar's message limit is 4 MiB.
 const CHUNK_BYTES: usize = 256 * 1024;
-/// The whole call: the sidecar's default extraction timeout (120 s) plus
-/// the stream and a slot wait.
-const CALL_TIMEOUT: Duration = Duration::from_mins(5);
+/// The `Capabilities` probe that precedes the first document.
+const CAPABILITIES_TIMEOUT: Duration = Duration::from_secs(10);
+/// Added to the derived call deadline: the header and the chunks over a
+/// local socket, the answer, and scheduling slack on both sides.
+const DEADLINE_MARGIN: Duration = Duration::from_secs(30);
 /// The largest answer accepted: the sidecar's default output cap is 20 MiB.
 const MAX_RESPONSE_BYTES: usize = 64 << 20;
+
+/// What stands in for a `Capabilities` field the sidecar left at 0 (an
+/// older build): the sidecar's own defaults.
+const FALLBACK_TIMEOUT: Duration = Duration::from_mins(2);
+const FALLBACK_SLOT_WAIT: Duration = Duration::from_mins(10);
+const FALLBACK_STREAM_IDLE: Duration = Duration::from_secs(30);
+const FALLBACK_CONCURRENCY: usize = 1;
 
 /// Why the sidecar read a document and gave no text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,12 +97,70 @@ impl std::fmt::Display for ExtractorError {
 
 impl std::error::Error for ExtractorError {}
 
-/// The client. Clone-cheap: one channel, shared.
+/// What the sidecar advertised, and the local queue sized to it.
+#[derive(Debug)]
+pub(crate) struct Sidecar {
+    /// The sidecar's extraction timeout cap.
+    pub(crate) timeout: Duration,
+    /// How long the sidecar lets a request wait for a slot.
+    pub(crate) slot_wait: Duration,
+    /// How long the sidecar waits for a document's next chunk.
+    pub(crate) stream_idle: Duration,
+    /// Documents the sidecar extracts at once.
+    pub(crate) concurrency: usize,
+    /// This process's in-flight calls, at most `concurrency`.
+    slots: Arc<Semaphore>,
+}
+
+impl Sidecar {
+    fn from_capabilities(answer: &CapabilitiesResponse) -> Self {
+        let limits = answer.limits.unwrap_or_default();
+        let or = |millis: u32, fallback: Duration| {
+            if millis == 0 {
+                fallback
+            } else {
+                Duration::from_millis(u64::from(millis))
+            }
+        };
+        let concurrency = usize::try_from(answer.concurrency)
+            .ok()
+            .filter(|n| *n > 0)
+            .unwrap_or(FALLBACK_CONCURRENCY);
+        Self {
+            timeout: or(limits.timeout_millis, FALLBACK_TIMEOUT),
+            slot_wait: or(answer.slot_wait_millis, FALLBACK_SLOT_WAIT),
+            stream_idle: or(answer.stream_idle_millis, FALLBACK_STREAM_IDLE),
+            concurrency,
+            slots: Arc::new(Semaphore::new(concurrency)),
+        }
+    }
+
+    /// The extraction timeout asked of the sidecar for a document the run
+    /// gives `asked`: never more than the sidecar's cap, so the header
+    /// states what will really apply.
+    pub(crate) fn effective_timeout(&self, asked: Duration) -> Duration {
+        asked.min(self.timeout)
+    }
+
+    /// The whole call's deadline for a document extracted under `timeout`:
+    /// the extraction itself, the longest the sidecar may hold the request
+    /// for a slot, its idle limit on the stream, and `margin`.
+    pub(crate) fn call_deadline(&self, timeout: Duration, margin: Duration) -> Duration {
+        timeout
+            .saturating_add(self.slot_wait)
+            .saturating_add(self.stream_idle)
+            .saturating_add(margin)
+    }
+}
+
+/// The client. Clone-cheap: one channel, one learned sidecar, shared.
 #[derive(Clone)]
 pub(crate) struct ExtractorClient {
     channel: Channel,
     socket: PathBuf,
-    call_timeout: Duration,
+    /// Learned on the first document; forgotten after a failure.
+    sidecar: Arc<Mutex<Option<Arc<Sidecar>>>>,
+    deadline_margin: Duration,
 }
 
 impl ExtractorClient {
@@ -96,14 +183,15 @@ impl ExtractorClient {
         Ok(Self {
             channel,
             socket: socket.to_path_buf(),
-            call_timeout: CALL_TIMEOUT,
+            sidecar: Arc::new(Mutex::new(None)),
+            deadline_margin: DEADLINE_MARGIN,
         })
     }
 
-    /// The same client with another call timeout (tests).
+    /// The same client with another deadline margin (tests).
     #[cfg(test)]
-    pub(crate) fn with_call_timeout(mut self, call_timeout: Duration) -> Self {
-        self.call_timeout = call_timeout;
+    pub(crate) fn with_deadline_margin(mut self, margin: Duration) -> Self {
+        self.deadline_margin = margin;
         self
     }
 
@@ -112,8 +200,58 @@ impl ExtractorClient {
         &self.socket
     }
 
+    /// What the sidecar advertised, as learned so far (tests).
+    #[cfg(test)]
+    pub(crate) async fn sidecar_for_tests(&self) -> Option<Arc<Sidecar>> {
+        self.sidecar.lock().await.clone()
+    }
+
+    /// The sidecar's capabilities, asked once and kept until a failure.
+    async fn sidecar(&self) -> Result<Arc<Sidecar>, ExtractorError> {
+        let mut learned = self.sidecar.lock().await;
+        if let Some(sidecar) = learned.as_ref() {
+            return Ok(Arc::clone(sidecar));
+        }
+        let mut client = DocumentExtractServiceClient::new(self.channel.clone());
+        let answer = tokio::time::timeout(
+            CAPABILITIES_TIMEOUT,
+            client.capabilities(CapabilitiesRequest {}),
+        )
+        .await
+        .map_err(|_| {
+            ExtractorError(format!(
+                "the extractor did not state its capabilities within {} s",
+                CAPABILITIES_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(|status| {
+            ExtractorError(format!(
+                "the extractor refused the capabilities probe: {status}"
+            ))
+        })?
+        .into_inner();
+        let sidecar = Arc::new(Sidecar::from_capabilities(&answer));
+        tracing::info!(
+            event = "index_extractor_capabilities",
+            socket = %self.socket.display(),
+            version = %answer.version,
+            concurrency = sidecar.concurrency,
+            timeout_ms = u64::try_from(sidecar.timeout.as_millis()).unwrap_or(u64::MAX),
+            slot_wait_ms = u64::try_from(sidecar.slot_wait.as_millis()).unwrap_or(u64::MAX),
+        );
+        *learned = Some(Arc::clone(&sidecar));
+        Ok(sidecar)
+    }
+
+    /// Forget what the sidecar advertised: the next document asks again (a
+    /// restarted sidecar may answer differently).
+    async fn forget(&self) {
+        *self.sidecar.lock().await = None;
+    }
+
     /// `bytes` of media type `mime`, named `filename`, as the sidecar reads
-    /// them; `max_input_bytes` is this run's document cap.
+    /// them; `max_input_bytes` is this run's document cap and `timeout` the
+    /// extraction time it asks for (lowered to the sidecar's cap).
     ///
     /// # Errors
     ///
@@ -124,33 +262,73 @@ impl ExtractorClient {
         mime: &str,
         bytes: Vec<u8>,
         max_input_bytes: u64,
+        timeout: Duration,
     ) -> Result<Extraction, ExtractorError> {
+        let sidecar = self.sidecar().await?;
+        // The local queue: no more calls in flight than the sidecar has
+        // slots. Waiting here costs nothing on the sidecar's side.
+        let _slot = Arc::clone(&sidecar.slots)
+            .acquire_owned()
+            .await
+            .map_err(|_| ExtractorError("the extractor queue is closed".to_owned()))?;
+        let timeout = sidecar.effective_timeout(timeout);
+        let deadline = sidecar.call_deadline(timeout, self.deadline_margin);
         let header = ExtractHeader {
             filename: filename.to_owned(),
             content_type: mime.to_owned(),
             content_length: bytes.len() as u64,
             limits: Some(ExtractLimits {
                 max_input_bytes,
+                timeout_millis: u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX),
                 ..ExtractLimits::default()
             }),
         };
-        let mut messages = Vec::with_capacity(1 + bytes.len() / CHUNK_BYTES + 1);
-        messages.push(ExtractRequest {
-            message: Some(extract_request::Message::Header(header)),
+        let result = self.call(header, Bytes::from(bytes), deadline).await;
+        match result {
+            Ok(Extraction::Skipped(reason)) => {
+                tracing::info!(
+                    event = "index_document_extractor_skip",
+                    filename,
+                    content_type = mime,
+                    reason = ?reason,
+                );
+                Ok(Extraction::Skipped(reason))
+            }
+            Ok(text) => Ok(text),
+            Err(error) => {
+                self.forget().await;
+                Err(error)
+            }
+        }
+    }
+
+    /// One `Extract` call: the header, then `bytes` as slices of itself.
+    async fn call(
+        &self,
+        header: ExtractHeader,
+        bytes: Bytes,
+        deadline: Duration,
+    ) -> Result<Extraction, ExtractorError> {
+        let total = bytes.len();
+        let chunks = (0..total).step_by(CHUNK_BYTES).map(move |start| {
+            let end = (start + CHUNK_BYTES).min(total);
+            ExtractRequest {
+                message: Some(extract_request::Message::Chunk(bytes.slice(start..end))),
+            }
         });
-        messages.extend(bytes.chunks(CHUNK_BYTES).map(|chunk| ExtractRequest {
-            message: Some(extract_request::Message::Chunk(chunk.to_vec())),
-        }));
-        drop(bytes);
+        let messages = std::iter::once(ExtractRequest {
+            message: Some(extract_request::Message::Header(header)),
+        })
+        .chain(chunks);
         let mut client = DocumentExtractServiceClient::new(self.channel.clone())
             .max_decoding_message_size(MAX_RESPONSE_BYTES);
         let call = client.extract(tokio_stream::iter(messages));
-        let response = tokio::time::timeout(self.call_timeout, call)
+        let response = tokio::time::timeout(deadline, call)
             .await
             .map_err(|_| {
                 ExtractorError(format!(
                     "the extractor did not answer within {} s",
-                    self.call_timeout.as_secs()
+                    deadline.as_secs()
                 ))
             })?
             .map_err(|status| ExtractorError(format!("the extractor refused: {status}")))?
@@ -174,10 +352,8 @@ impl ExtractorClient {
                         )));
                     }
                 };
-                tracing::info!(
-                    event = "index_document_extractor_skip",
-                    filename,
-                    content_type = mime,
+                tracing::debug!(
+                    event = "index_document_extractor_skip_detail",
                     reason = ?reason,
                     detail = %skip.detail
                 );
@@ -187,5 +363,55 @@ impl ExtractorClient {
                 "the extractor answered without an outcome".to_owned(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn advertised(timeout: u32, slot_wait: u32, idle: u32, concurrency: u32) -> Sidecar {
+        Sidecar::from_capabilities(&CapabilitiesResponse {
+            content_types: vec![],
+            limits: Some(ExtractLimits {
+                timeout_millis: timeout,
+                ..ExtractLimits::default()
+            }),
+            version: "t".to_owned(),
+            concurrency,
+            slot_wait_millis: slot_wait,
+            stream_idle_millis: idle,
+        })
+    }
+
+    #[test]
+    fn the_deadline_is_the_sidecars_figures_plus_the_margin() {
+        let sidecar = advertised(120_000, 600_000, 30_000, 4);
+        assert_eq!(sidecar.concurrency, 4);
+        // The run asks for more than the cap: the cap applies.
+        let timeout = sidecar.effective_timeout(Duration::from_mins(5));
+        assert_eq!(timeout, Duration::from_mins(2));
+        assert_eq!(
+            sidecar.call_deadline(timeout, Duration::from_secs(30)),
+            // 120 s + 600 s + 30 s + 30 s.
+            Duration::from_mins(13)
+        );
+        // The run asks for less: its own figure travels and bounds the call.
+        let timeout = sidecar.effective_timeout(Duration::from_secs(10));
+        assert_eq!(timeout, Duration::from_secs(10));
+        assert_eq!(
+            sidecar.call_deadline(timeout, Duration::ZERO),
+            Duration::from_secs(10 + 600 + 30)
+        );
+    }
+
+    #[test]
+    fn zero_fields_fall_back_to_the_sidecars_defaults() {
+        let sidecar = Sidecar::from_capabilities(&CapabilitiesResponse::default());
+        assert_eq!(sidecar.timeout, FALLBACK_TIMEOUT);
+        assert_eq!(sidecar.slot_wait, FALLBACK_SLOT_WAIT);
+        assert_eq!(sidecar.stream_idle, FALLBACK_STREAM_IDLE);
+        assert_eq!(sidecar.concurrency, FALLBACK_CONCURRENCY);
+        assert_eq!(sidecar.slots.available_permits(), 1);
     }
 }

@@ -3951,8 +3951,10 @@ worker:
   # own lock, its own image. The process boundary is also the right place for
   # a parser of untrusted documents: a crash or an OOM kill here is one
   # document skipped `extract_failed` in the run's summary, never a dead
-  # worker. It has no port, no TLS and no identity; the socket directory is
-  # the only way in, and the process opens no connection of its own.
+  # worker. It has no port and no TLS; the socket directory is the only way
+  # in, the process opens no connection of its own, and it serves only the
+  # peer uid(s) in `peerUids` (SO_PEERCRED) — the pod-local Unix-socket
+  # sidecar exception to the gRPC-over-mTLS rule (AGENTS.md).
   #
   # OFF by default: without it a PDF or Office document is reported skipped
   # `unsupported_type`, as it was before the sidecar existed.
@@ -3975,12 +3977,30 @@ worker:
     maxInputBytes: 52428800
     maxPages: 1000
     timeoutMillis: 120000
-    # Documents extracted at once. Each holds the document and its expansion
-    # in memory; the request below is for one, the limit for two.
-    concurrency: 2
+    # Documents extracted at once. Not below the worker's own document
+    # concurrency (4): the worker keeps at most this many calls in flight
+    # (it reads the figure from the sidecar's Capabilities) and queues the
+    # rest itself, so a busy run never meets the sidecar's slot wait. Each
+    # slot holds a document and its expansion in memory; `fit_memory`
+    # lowers the input cap to what `resources.limits.memory` can hold for
+    # this many at once.
+    concurrency: 4
+    # How long a request may still wait for a slot before RESOURCE_EXHAUSTED;
+    # apart from timeoutMillis on purpose, since queueing is not a timeout.
+    slotWaitMillis: 600000
+    # The uids the sidecar serves, read from each connection's SO_PEERCRED;
+    # any other peer is refused PERMISSION_DENIED. Empty means the worker
+    # container's uid (worker.runAsUser), which is the right answer for every
+    # deployment of this chart; list uids only for a worker image that runs
+    # as something else.
+    peerUids: []
     logLevel: info
     probes:
       periodSeconds: 10
+      # The probe (`healthcheck`) gives the socket 2 s to answer Capabilities
+      # and exits; 5 s is that budget plus the exec's own start-up and a
+      # margin, so a loaded node does not read a serving sidecar as dead.
+      timeoutSeconds: 5
       failureThreshold: 3
     resources:
       requests:

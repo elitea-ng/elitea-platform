@@ -12,9 +12,13 @@ syntax = "proto3";
 // document to the worker, never a dead worker.
 //
 // TRANSPORT. Local only: gRPC over a Unix domain socket in a directory the
-// two containers share (an emptyDir, a compose volume). No TLS, no identity,
-// no network listener — the socket directory is the only way in, and the
-// extractor opens no connection of its own.
+// two containers share (an emptyDir, a compose volume). No TLS and no
+// network listener — the socket directory is the only way in, and the
+// extractor opens no connection of its own. The peer IS checked: the
+// extractor reads the connecting process's credentials (SO_PEERCRED) and
+// serves only the configured worker uid(s); any other peer is refused
+// PERMISSION_DENIED. This is the pod-local Unix-socket sidecar exception to
+// the platform's gRPC-over-mTLS rule (AGENTS.md).
 //
 // FLOW. The worker streams one document per call: a header (name, media
 // type, declared length, the limits for this document), then the bytes in
@@ -34,9 +38,11 @@ service DocumentExtractService {
   // order. The extractor may answer before the stream ends (a document over
   // the size limit is refused as soon as the limit is crossed).
   rpc Extract(stream ExtractRequest) returns (ExtractResponse);
-  // Capabilities names the media types this build extracts and the limits
-  // it caps a request's own limits at. It is also the health probe: an
-  // extractor that answers it is serving.
+  // Capabilities names the media types this build extracts, the limits it
+  // caps a request's own limits at, and its capacity (how many documents it
+  // extracts at once, how long a request may wait for a slot). A client
+  // sizes its own queue and its call deadline from it. It is also the
+  // health probe: an extractor that answers it is serving.
   rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
 }
 
@@ -126,4 +132,13 @@ message CapabilitiesResponse {
   ExtractLimits limits = 2;
   // The extractor's crate version.
   string version = 3;
+  // Documents extracted at once. A client that keeps no more than this many
+  // calls in flight is never refused for capacity; more wait for a slot.
+  uint32 concurrency = 4;
+  // The longest a request waits for a slot before RESOURCE_EXHAUSTED. Apart
+  // from the extraction timeout: queueing is not a timeout.
+  uint32 slot_wait_millis = 5;
+  // The longest the extractor waits for a document's next chunk before
+  // DEADLINE_EXCEEDED.
+  uint32 stream_idle_millis = 6;
 }

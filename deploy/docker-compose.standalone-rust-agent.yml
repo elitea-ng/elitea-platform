@@ -112,11 +112,17 @@ services:
   # documents belongs behind a process boundary anyway — a crash or an OOM kill
   # here is one document skipped `extract_failed`, never a dead worker.
   #
-  # gRPC over a Unix socket in the shared volume; no port, no TLS, no identity,
-  # and NO NETWORK: `network_mode: none` leaves the container with loopback
-  # only, which is exactly what a process that reads untrusted bytes and must
-  # send nothing anywhere should have. The memory limit is what the extractor
-  # reads from its cgroup to lower its input cap (README.md, "Memory").
+  # gRPC over a Unix socket in the shared volume; no port, no TLS, and NO
+  # NETWORK: `network_mode: none` leaves the container with loopback only,
+  # which is exactly what a process that reads untrusted bytes and must send
+  # nothing anywhere should have. The peer IS checked: the service reads the
+  # connecting process's uid (SO_PEERCRED) and serves ELITEA_EXTRACTOR_PEER_UIDS
+  # only — the worker's uid, 10001 in its image — refusing any other peer
+  # PERMISSION_DENIED (the pod-local Unix-socket sidecar exception in
+  # AGENTS.md). The socket directory ships in the image owned 10001:10001
+  # mode 0770, which is what the named volume below is seeded with. The
+  # memory limit is what the extractor reads from its cgroup to lower its
+  # input cap (README.md, "Memory").
   elitea-doc-extractor:
     image: ghcr.io/elitea-ng/elitea-doc-extractor:standalone
     build:
@@ -135,7 +141,18 @@ services:
       ELITEA_EXTRACTOR_MAX_INPUT_BYTES: "52428800"
       ELITEA_EXTRACTOR_MAX_PAGES: "1000"
       ELITEA_EXTRACTOR_TIMEOUT_MILLIS: "120000"
-      ELITEA_EXTRACTOR_CONCURRENCY: "2"
+      # Not below the worker's document concurrency (IndexRunLimits, 4): the
+      # worker keeps at most this many calls in flight (it reads the figure
+      # from Capabilities) and queues the rest itself, so the sidecar's slot
+      # wait below is never what a busy run runs into.
+      ELITEA_EXTRACTOR_CONCURRENCY: "4"
+      # How long a request may still wait for a slot before RESOURCE_EXHAUSTED;
+      # apart from the extraction timeout on purpose (queueing is not a
+      # timeout). The worker derives its call deadline from this figure too.
+      ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS: "600000"
+      # The worker container's uid (services/elitea-worker-rust/Containerfile
+      # `USER 10001:10001`). Every other peer on the socket is refused.
+      ELITEA_EXTRACTOR_PEER_UIDS: "10001"
       RUST_LOG: "${ELITEA_EXTRACTOR_LOG:-info}"
     volumes:
       - standalone_doc_extractor_sock:/run/elitea-extract

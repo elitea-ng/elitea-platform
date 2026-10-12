@@ -16,9 +16,13 @@
 // document to the worker, never a dead worker.
 //
 // TRANSPORT. Local only: gRPC over a Unix domain socket in a directory the
-// two containers share (an emptyDir, a compose volume). No TLS, no identity,
-// no network listener — the socket directory is the only way in, and the
-// extractor opens no connection of its own.
+// two containers share (an emptyDir, a compose volume). No TLS and no
+// network listener — the socket directory is the only way in, and the
+// extractor opens no connection of its own. The peer IS checked: the
+// extractor reads the connecting process's credentials (SO_PEERCRED) and
+// serves only the configured worker uid(s); any other peer is refused
+// PERMISSION_DENIED. This is the pod-local Unix-socket sidecar exception to
+// the platform's gRPC-over-mTLS rule (AGENTS.md).
 //
 // FLOW. The worker streams one document per call: a header (name, media
 // type, declared length, the limits for this document), then the bytes in
@@ -57,9 +61,11 @@ type DocumentExtractServiceClient interface {
 	// order. The extractor may answer before the stream ends (a document over
 	// the size limit is refused as soon as the limit is crossed).
 	Extract(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ExtractRequest, ExtractResponse], error)
-	// Capabilities names the media types this build extracts and the limits
-	// it caps a request's own limits at. It is also the health probe: an
-	// extractor that answers it is serving.
+	// Capabilities names the media types this build extracts, the limits it
+	// caps a request's own limits at, and its capacity (how many documents it
+	// extracts at once, how long a request may wait for a slot). A client
+	// sizes its own queue and its call deadline from it. It is also the
+	// health probe: an extractor that answers it is serving.
 	Capabilities(ctx context.Context, in *CapabilitiesRequest, opts ...grpc.CallOption) (*CapabilitiesResponse, error)
 }
 
@@ -105,9 +111,11 @@ type DocumentExtractServiceServer interface {
 	// order. The extractor may answer before the stream ends (a document over
 	// the size limit is refused as soon as the limit is crossed).
 	Extract(grpc.ClientStreamingServer[ExtractRequest, ExtractResponse]) error
-	// Capabilities names the media types this build extracts and the limits
-	// it caps a request's own limits at. It is also the health probe: an
-	// extractor that answers it is serving.
+	// Capabilities names the media types this build extracts, the limits it
+	// caps a request's own limits at, and its capacity (how many documents it
+	// extracts at once, how long a request may wait for a slot). A client
+	// sizes its own queue and its call deadline from it. It is also the
+	// health probe: an extractor that answers it is serving.
 	Capabilities(context.Context, *CapabilitiesRequest) (*CapabilitiesResponse, error)
 	mustEmbedUnimplementedDocumentExtractServiceServer()
 }

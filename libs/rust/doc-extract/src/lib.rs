@@ -555,8 +555,10 @@ mod documents {
     }
 
     /// [`super::extract`] for the formats behind the `documents` feature.
+    /// The one copy of the document on this path is made here, for the
+    /// borrowed API; [`extract_document`] itself takes the bytes by value.
     pub(super) fn extract(mime: &str, bytes: &[u8]) -> Extracted {
-        match extract_document(mime, bytes, &DocumentLimits::default()) {
+        match extract_document(mime, bytes.to_vec(), &DocumentLimits::default()) {
             Ok(DocumentText { text, extractor }) => Extracted::Text { text, extractor },
             Err(error) => error.into(),
         }
@@ -564,6 +566,12 @@ mod documents {
 
     /// `bytes` of media type `mime` as text, under `limits`, with the reason
     /// typed when there is none.
+    ///
+    /// The bytes are taken by value and MOVED onto the extraction thread and
+    /// into the parser: this function makes no copy of the document, so a
+    /// caller's memory budget counts the one buffer it hands over plus the
+    /// parser's own expansion. (The borrowed [`super::extract`] copies once,
+    /// before calling this.)
     ///
     /// The extraction runs on its own thread with a large stack. A thread
     /// that overruns the timeout CANNOT be killed: the extractor's own
@@ -576,13 +584,13 @@ mod documents {
     /// [`DocumentError`], one variant per reason.
     pub fn extract_document(
         mime: &str,
-        bytes: &[u8],
+        bytes: Vec<u8>,
         limits: &DocumentLimits,
     ) -> Result<DocumentText, DocumentError> {
         if !is_document_type(mime) {
             return Err(DocumentError::Unsupported(mime.to_owned()));
         }
-        let (mime, bytes, limits) = (mime.to_owned(), bytes.to_vec(), *limits);
+        let (mime, limits) = (mime.to_owned(), *limits);
         let worker = std::thread::Builder::new()
             .name("doc-extract".to_owned())
             .stack_size(STACK_BYTES)

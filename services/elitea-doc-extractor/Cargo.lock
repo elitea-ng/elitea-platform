@@ -938,6 +938,7 @@ dependencies = [
  "hyper-util",
  "prost",
  "protoc-bin-vendored",
+ "rustix",
  "tokio",
  "tokio-stream",
  "tonic",

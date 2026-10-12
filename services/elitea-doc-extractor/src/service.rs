@@ -2,6 +2,10 @@
 //!
 //! What a request goes through, in order:
 //!
+//! 0. the peer: the connecting process's credentials (`SO_PEERCRED`) must
+//!    name one of the configured worker uids, else `PERMISSION_DENIED`
+//!    before anything is read (the pod-local Unix-socket sidecar exception
+//!    to the gRPC-over-mTLS rule, AGENTS.md);
 //! 1. the header: a media type this build extracts, else the document is
 //!    skipped `UNSUPPORTED`; its limits, each lowered to the process's
 //!    [`Caps`]; a declared length over the input cap is `TOO_LARGE` before a
@@ -11,7 +15,11 @@
 //!    never held whole; a stream that goes quiet for longer than the idle
 //!    limit is `DEADLINE_EXCEEDED`;
 //! 3. a slot: at most `concurrency` extractions run at once, and a request
-//!    waits at most its own timeout for one (`RESOURCE_EXHAUSTED` after);
+//!    waits at most [`Capacity::slot_wait`] for one (`RESOURCE_EXHAUSTED`
+//!    after). The slot wait is a separate, generous bound: a client that
+//!    keeps no more calls in flight than the advertised concurrency never
+//!    waits at all, and one that does is queued, not refused, for as long
+//!    as its own deadline allows;
 //! 4. the extraction, on a dedicated large-stack thread, under the timeout.
 //!    A thread that overruns cannot be killed; the request is answered
 //!    `TIMEOUT` and the thread keeps its slot until it ends. When every slot
@@ -26,14 +34,16 @@
 //! A malformed stream, no capacity and an extractor failure are gRPC
 //! statuses, which the worker records as `extract_failed`.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use elitea_doc_extract::{
     DocumentError, DocumentLimits, document_types, extract_document, is_document_type,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tonic::transport::server::UdsConnectInfo;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::pb::document_extract_service_server::DocumentExtractService;
@@ -97,9 +107,35 @@ impl Caps {
             max_input_bytes: self.max_input_bytes,
             max_pages: u32::try_from(self.max_pages).unwrap_or(u32::MAX),
             max_output_bytes: self.max_output_bytes,
-            timeout_millis: u32::try_from(self.timeout.as_millis()).unwrap_or(u32::MAX),
+            timeout_millis: millis(self.timeout),
         }
     }
+}
+
+/// How much runs at once and how long a request waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capacity {
+    /// Extractions at once (at least 1).
+    pub concurrency: usize,
+    /// The longest wait for a slot before `RESOURCE_EXHAUSTED`. Separate
+    /// from the extraction timeout on purpose: queueing is not a timeout.
+    pub slot_wait: Duration,
+    /// The longest wait for a document's next chunk.
+    pub stream_idle: Duration,
+}
+
+impl Default for Capacity {
+    fn default() -> Self {
+        Self {
+            concurrency: 4,
+            slot_wait: Duration::from_mins(10),
+            stream_idle: Duration::from_secs(30),
+        }
+    }
+}
+
+fn millis(duration: Duration) -> u32 {
+    u32::try_from(duration.as_millis()).unwrap_or(u32::MAX)
 }
 
 /// What happens when every slot is held by an overrun.
@@ -126,36 +162,122 @@ impl Exhausted for ExitProcess {
     }
 }
 
+/// One extraction thread's standing against the overrun counter.
+///
+/// Two parties touch it from different threads: the request's timeout
+/// (which may fire while the thread still runs, or just as it ended) and
+/// the thread itself (which ends before or after that). The state cell
+/// orders them: the timeout counts the thread as an overrun only when it
+/// moved the state from `RUNNING` to `OVERRUN`, and the thread takes the
+/// overrun back only when it found `OVERRUN` there. The counter is raised
+/// BEFORE the state is claimed and lowered after it is read, so every
+/// decrement is preceded by its own increment and the count can neither
+/// underflow nor keep a finished thread.
+pub struct OverrunLedger {
+    state: AtomicU8,
+    overruns: Arc<AtomicUsize>,
+}
+
+const RUNNING: u8 = 0;
+const FINISHED: u8 = 1;
+const OVERRUN: u8 = 2;
+
+/// The thread had already ended when its timeout fired: its result is
+/// there to be used, and nothing was counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlreadyFinished;
+
+impl OverrunLedger {
+    /// A ledger for one thread, against the process's `overruns` counter.
+    #[must_use]
+    pub fn new(overruns: Arc<AtomicUsize>) -> Arc<Self> {
+        Arc::new(Self {
+            state: AtomicU8::new(RUNNING),
+            overruns,
+        })
+    }
+
+    /// The thread ended. When its timeout had counted it as an overrun,
+    /// the overrun is over and the counter goes down by one.
+    pub fn finished(&self) {
+        if self.state.swap(FINISHED, Ordering::SeqCst) == OVERRUN {
+            self.overruns.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The timeout fired. `Ok(total)` when the thread still runs and is now
+    /// counted, with the new number of overruns; `Err` when it had already
+    /// ended, in which case nothing is counted.
+    ///
+    /// # Errors
+    ///
+    /// [`AlreadyFinished`].
+    pub fn timed_out(&self) -> Result<usize, AlreadyFinished> {
+        // Raised first, so a thread that ends between this and the claim
+        // below and reads OVERRUN finds something to take back.
+        let raised = self.overruns.fetch_add(1, Ordering::SeqCst) + 1;
+        let claimed = self
+            .state
+            .compare_exchange(RUNNING, OVERRUN, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok();
+        if claimed {
+            return Ok(raised);
+        }
+        self.overruns.fetch_sub(1, Ordering::SeqCst);
+        Err(AlreadyFinished)
+    }
+}
+
+/// Test seams on the two sides of the timeout race. Compiled only for the
+/// crate's own tests.
+#[cfg(test)]
+#[derive(Default, Clone)]
+struct Hooks {
+    /// Runs on the extraction thread before the extraction starts.
+    before_extract: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Runs on the request's task after its timeout fired and before the
+    /// overrun is accounted.
+    before_timeout_accounting: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
 /// The service.
 pub struct Extractor {
     caps: Caps,
-    concurrency: usize,
-    stream_idle: Duration,
+    capacity: Capacity,
+    /// The peer uids served; every other peer is `PERMISSION_DENIED`.
+    peer_uids: BTreeSet<u32>,
     slots: Arc<Semaphore>,
     /// Extractions that outran their timeout and still run.
     overruns: Arc<AtomicUsize>,
     exhausted: Arc<dyn Exhausted>,
+    #[cfg(test)]
+    hooks: Hooks,
 }
 
 impl Extractor {
-    /// A service with `caps`, `concurrency` slots and `stream_idle` as the
-    /// longest wait for a chunk; `exhausted` is told when every slot is
-    /// held by an overrun.
+    /// A service with `caps`, `capacity` and `peer_uids` (the uids whose
+    /// connections are served); `exhausted` is told when every slot is held
+    /// by an overrun.
     #[must_use]
     pub fn new(
         caps: Caps,
-        concurrency: usize,
-        stream_idle: Duration,
+        capacity: Capacity,
+        peer_uids: BTreeSet<u32>,
         exhausted: Arc<dyn Exhausted>,
     ) -> Self {
-        let concurrency = concurrency.max(1);
+        let capacity = Capacity {
+            concurrency: capacity.concurrency.max(1),
+            ..capacity
+        };
         Self {
             caps,
-            concurrency,
-            stream_idle,
-            slots: Arc::new(Semaphore::new(concurrency)),
+            capacity,
+            peer_uids,
+            slots: Arc::new(Semaphore::new(capacity.concurrency)),
             overruns: Arc::new(AtomicUsize::new(0)),
             exhausted,
+            #[cfg(test)]
+            hooks: Hooks::default(),
         }
     }
 
@@ -163,6 +285,42 @@ impl Extractor {
     #[must_use]
     pub fn overruns(&self) -> usize {
         self.overruns.load(Ordering::SeqCst)
+    }
+
+    /// Takes one extraction slot and holds it until the permit is dropped,
+    /// exactly as an overrun thread would. A seam for the tests of the slot
+    /// wait; nothing in the binary calls it.
+    #[doc(hidden)]
+    pub async fn hold_slot(&self) -> OwnedSemaphorePermit {
+        Arc::clone(&self.slots)
+            .acquire_owned()
+            .await
+            .unwrap_or_else(|_| unreachable!("the slots are never closed"))
+    }
+
+    /// The peer check. A request from a uid outside `peer_uids`, or one
+    /// whose credentials the transport did not deliver, is refused.
+    fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
+        let uid = request
+            .extensions()
+            .get::<UdsConnectInfo>()
+            .and_then(|info| info.peer_cred.as_ref())
+            .map(tokio::net::unix::UCred::uid);
+        match uid {
+            Some(uid) if self.peer_uids.contains(&uid) => Ok(()),
+            Some(uid) => {
+                tracing::warn!(event = "extractor_peer_refused", peer_uid = uid);
+                Err(Status::permission_denied(format!(
+                    "peer uid {uid} is not a configured worker uid"
+                )))
+            }
+            None => {
+                tracing::warn!(event = "extractor_peer_refused", peer_uid = "unknown");
+                Err(Status::permission_denied(
+                    "the peer's credentials are unknown; only a Unix-socket peer is served",
+                ))
+            }
+        }
     }
 
     async fn read_document(
@@ -185,7 +343,7 @@ impl Extractor {
         let reserve = usize::try_from(declared.min(limits.max_input_bytes)).unwrap_or(0);
         let mut bytes: Vec<u8> = Vec::with_capacity(reserve);
         loop {
-            let next = tokio::time::timeout(self.stream_idle, stream.message())
+            let next = tokio::time::timeout(self.capacity.stream_idle, stream.message())
                 .await
                 .map_err(|_| Status::deadline_exceeded("no chunk arrived within the idle limit"))?
                 .map_err(|status| {
@@ -224,10 +382,18 @@ impl Extractor {
         limits: Caps,
         bytes: Vec<u8>,
     ) -> Result<Result<ExtractedText, ExtractSkip>, Status> {
-        let permit = tokio::time::timeout(limits.timeout, Arc::clone(&self.slots).acquire_owned())
-            .await
-            .map_err(|_| Status::resource_exhausted("no extraction slot came free in time"))?
-            .map_err(|_| Status::internal("the extraction slots are closed"))?;
+        let permit = tokio::time::timeout(
+            self.capacity.slot_wait,
+            Arc::clone(&self.slots).acquire_owned(),
+        )
+        .await
+        .map_err(|_| {
+            Status::resource_exhausted(format!(
+                "no extraction slot came free within {} ms",
+                self.capacity.slot_wait.as_millis()
+            ))
+        })?
+        .map_err(|_| Status::internal("the extraction slots are closed"))?;
         let mime = header.content_type.clone();
         let document_limits = DocumentLimits {
             max_pages: limits.max_pages,
@@ -235,21 +401,23 @@ impl Extractor {
                 .unwrap_or(usize::MAX),
             timeout: limits.timeout,
         };
-        let overruns = Arc::clone(&self.overruns);
-        let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let thread_flag = Arc::clone(&timed_out);
-        let thread_overruns = Arc::clone(&overruns);
-        let work = tokio::task::spawn_blocking(move || {
-            let result = extract_document(&mime, &bytes, &document_limits);
-            drop(bytes);
-            if thread_flag.load(Ordering::SeqCst) {
-                thread_overruns.fetch_sub(1, Ordering::SeqCst);
+        let ledger = OverrunLedger::new(Arc::clone(&self.overruns));
+        let thread_ledger = Arc::clone(&ledger);
+        #[cfg(test)]
+        let before_extract = self.hooks.before_extract.clone();
+        let mut work = tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            if let Some(hook) = before_extract {
+                hook();
             }
+            // The bytes move into the extractor: no copy is made here.
+            let result = extract_document(&mime, bytes, &document_limits);
+            thread_ledger.finished();
             // The slot is held until the extraction really ended.
             drop(permit);
             result
         });
-        let result = match tokio::time::timeout(limits.timeout, work).await {
+        let result = match tokio::time::timeout(limits.timeout, &mut work).await {
             Ok(Ok(result)) => result,
             Ok(Err(join)) => {
                 return Err(Status::internal(format!(
@@ -257,25 +425,36 @@ impl Extractor {
                 )));
             }
             Err(_) => {
-                timed_out.store(true, Ordering::SeqCst);
-                let running = overruns.fetch_add(1, Ordering::SeqCst) + 1;
-                tracing::warn!(
-                    event = "extractor_timeout",
-                    filename = %header.filename,
-                    content_type = %header.content_type,
-                    overruns = running,
-                    "an extraction outran its timeout; its thread keeps its slot until it ends"
-                );
-                if running >= self.concurrency {
-                    self.exhausted.slots_exhausted();
+                #[cfg(test)]
+                if let Some(hook) = &self.hooks.before_timeout_accounting {
+                    hook();
                 }
-                return Ok(Err(skip(
-                    SkipReason::Timeout,
-                    format!(
-                        "the extraction took longer than {} ms",
-                        limits.timeout.as_millis()
-                    ),
-                )));
+                match ledger.timed_out() {
+                    Ok(running) => {
+                        tracing::warn!(
+                            event = "extractor_timeout",
+                            filename = %header.filename,
+                            content_type = %header.content_type,
+                            overruns = running,
+                            "an extraction outran its timeout; its thread keeps its slot until it ends"
+                        );
+                        if running >= self.capacity.concurrency {
+                            self.exhausted.slots_exhausted();
+                        }
+                        return Ok(Err(skip(
+                            SkipReason::Timeout,
+                            format!(
+                                "the extraction took longer than {} ms",
+                                limits.timeout.as_millis()
+                            ),
+                        )));
+                    }
+                    // The thread ended just as the timeout fired: its answer
+                    // is a moment away and is the truth about the document.
+                    Err(AlreadyFinished) => work.await.map_err(|join| {
+                        Status::internal(format!("the extraction task ended: {join}"))
+                    })?,
+                }
             }
         };
         Ok(match result {
@@ -335,8 +514,9 @@ impl DocumentExtractService for Extractor {
         &self,
         request: Request<Streaming<ExtractRequest>>,
     ) -> Result<Response<ExtractResponse>, Status> {
+        self.authorize(&request)?;
         let mut stream = request.into_inner();
-        let first = tokio::time::timeout(self.stream_idle, stream.message())
+        let first = tokio::time::timeout(self.capacity.stream_idle, stream.message())
             .await
             .map_err(|_| Status::deadline_exceeded("no header arrived within the idle limit"))?
             .map_err(|status| Status::new(status.code(), format!("reading the stream: {status}")))?
@@ -389,8 +569,9 @@ impl DocumentExtractService for Extractor {
 
     async fn capabilities(
         &self,
-        _request: Request<CapabilitiesRequest>,
+        request: Request<CapabilitiesRequest>,
     ) -> Result<Response<CapabilitiesResponse>, Status> {
+        self.authorize(&request)?;
         Ok(Response::new(CapabilitiesResponse {
             content_types: document_types()
                 .iter()
@@ -398,6 +579,9 @@ impl DocumentExtractService for Extractor {
                 .collect(),
             limits: Some(self.caps.wire()),
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            concurrency: u32::try_from(self.capacity.concurrency).unwrap_or(u32::MAX),
+            slot_wait_millis: millis(self.capacity.slot_wait),
+            stream_idle_millis: millis(self.capacity.stream_idle),
         }))
     }
 }
@@ -462,5 +646,151 @@ mod tests {
         for (error, reason) in cases {
             assert_eq!(skip_for(&error).reason, reason as i32);
         }
+    }
+
+    // ── the overrun ledger, both orderings, exactly ─────────────────────────
+
+    #[test]
+    fn the_ledger_counts_a_thread_that_outran_its_timeout_until_it_ends() {
+        let overruns = Arc::new(AtomicUsize::new(0));
+        let ledger = OverrunLedger::new(Arc::clone(&overruns));
+        // The timeout fires while the thread runs: counted.
+        assert_eq!(ledger.timed_out(), Ok(1));
+        assert_eq!(overruns.load(Ordering::SeqCst), 1);
+        // The thread ends later: taken back, never below zero.
+        ledger.finished();
+        assert_eq!(overruns.load(Ordering::SeqCst), 0);
+        // A second ending (impossible in practice) changes nothing.
+        ledger.finished();
+        assert_eq!(overruns.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_ledger_counts_nothing_for_a_thread_that_ended_first() {
+        let overruns = Arc::new(AtomicUsize::new(0));
+        let ledger = OverrunLedger::new(Arc::clone(&overruns));
+        // The thread ends; then the timeout, which had fired at the same
+        // moment, does its accounting: nothing counted, nothing to undo.
+        ledger.finished();
+        assert_eq!(ledger.timed_out(), Err(AlreadyFinished));
+        assert_eq!(overruns.load(Ordering::SeqCst), 0);
+        // And a late timeout on a long-finished thread stays at zero too.
+        assert_eq!(ledger.timed_out(), Err(AlreadyFinished));
+        assert_eq!(overruns.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn two_ledgers_against_one_counter_interleave_exactly() {
+        let overruns = Arc::new(AtomicUsize::new(0));
+        let a = OverrunLedger::new(Arc::clone(&overruns));
+        let b = OverrunLedger::new(Arc::clone(&overruns));
+        assert_eq!(a.timed_out(), Ok(1));
+        b.finished();
+        assert_eq!(b.timed_out(), Err(AlreadyFinished));
+        assert_eq!(overruns.load(Ordering::SeqCst), 1);
+        a.finished();
+        assert_eq!(overruns.load(Ordering::SeqCst), 0);
+    }
+
+    // ── the race through the service, forced each way with the hooks ───────
+
+    /// Counts exhaustion notices.
+    #[derive(Default)]
+    struct Counting(AtomicUsize);
+
+    impl Exhausted for Counting {
+        fn slots_exhausted(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn pdf_header() -> ExtractHeader {
+        ExtractHeader {
+            filename: "race.pdf".to_owned(),
+            content_type: "application/pdf".to_owned(),
+            content_length: 0,
+            limits: None,
+        }
+    }
+
+    fn racing(timeout: Duration, hooks: Hooks) -> (Extractor, Arc<Counting>) {
+        let exhausted = Arc::new(Counting::default());
+        let mut extractor = Extractor::new(
+            Caps {
+                timeout,
+                ..Caps::default()
+            },
+            Capacity {
+                concurrency: 1,
+                ..Capacity::default()
+            },
+            BTreeSet::new(),
+            Arc::clone(&exhausted) as Arc<dyn Exhausted>,
+        );
+        extractor.hooks = hooks;
+        (extractor, exhausted)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_thread_that_ends_as_its_timeout_fires_is_not_an_overrun_and_its_answer_is_used() {
+        // The timeout fires (1 ms) and the accounting is held back long
+        // enough for the thread to finish first: the ledger reports
+        // AlreadyFinished, the count stays at zero, the exhaustion hook is
+        // not called, and the document's real answer (corrupt bytes) is
+        // what the request gets, not TIMEOUT.
+        let (extractor, exhausted) = racing(
+            Duration::from_millis(1),
+            Hooks {
+                before_extract: None,
+                before_timeout_accounting: Some(Arc::new(|| {
+                    std::thread::sleep(Duration::from_millis(400));
+                })),
+            },
+        );
+        let limits = extractor.caps.apply(None);
+        let result = extractor
+            .extract_bytes(&pdf_header(), limits, b"%PDF-1.4 not really a pdf".to_vec())
+            .await
+            .expect("no status");
+        let skip = result.expect_err("a skip");
+        assert_eq!(skip.reason, SkipReason::Corrupt as i32, "{skip:?}");
+        assert_eq!(extractor.overruns(), 0);
+        assert_eq!(exhausted.0.load(Ordering::SeqCst), 0);
+        // The slot came back with the thread.
+        assert_eq!(extractor.slots.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_thread_that_outruns_its_timeout_is_counted_until_it_ends() {
+        // The thread is held before it extracts (300 ms) and the timeout is
+        // 1 ms: TIMEOUT is answered, the overrun is counted and, with one
+        // slot, exhaustion is reported once; when the thread ends the count
+        // returns to zero and the slot is free again.
+        let (extractor, exhausted) = racing(
+            Duration::from_millis(1),
+            Hooks {
+                before_extract: Some(Arc::new(|| {
+                    std::thread::sleep(Duration::from_millis(300));
+                })),
+                before_timeout_accounting: None,
+            },
+        );
+        let limits = extractor.caps.apply(None);
+        let result = extractor
+            .extract_bytes(&pdf_header(), limits, b"%PDF-1.4 not really a pdf".to_vec())
+            .await
+            .expect("no status");
+        let skip = result.expect_err("a skip");
+        assert_eq!(skip.reason, SkipReason::Timeout as i32, "{skip:?}");
+        assert_eq!(extractor.overruns(), 1);
+        assert_eq!(exhausted.0.load(Ordering::SeqCst), 1);
+        assert_eq!(extractor.slots.available_permits(), 0);
+        // Wait for the thread; the count is exact afterwards.
+        let waited = std::time::Instant::now();
+        while extractor.overruns() != 0 && waited.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(extractor.overruns(), 0);
+        assert_eq!(extractor.slots.available_permits(), 1);
     }
 }

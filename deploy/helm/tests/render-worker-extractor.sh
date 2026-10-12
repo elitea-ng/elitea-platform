@@ -11,7 +11,10 @@
 #     `extractor_socket`: the worker keeps reporting PDF/Office documents
 #     `unsupported_type`, as before the sidecar existed;
 #   * extractor on renders the container with its image, its socket env, the
-#     caps from values, a read-only root filesystem and no capabilities; BOTH
+#     caps from values, the peer uid (the worker's runAsUser unless listed),
+#     a concurrency not below the worker's document concurrency, probes whose
+#     timeoutSeconds exceed the probe's own 2 s budget, a read-only root
+#     filesystem and no capabilities; BOTH
 #     containers mount the same memory-backed emptyDir; and runtime.json's
 #     `extractor_socket` names the socket inside that directory — a socket
 #     the worker dials in a directory only the sidecar writes to would fail
@@ -99,8 +102,20 @@ assert env["ELITEA_EXTRACTOR_SOCKET"] == "/run/elitea-extract/extractor.sock", e
 assert env["ELITEA_EXTRACTOR_MAX_INPUT_BYTES"] == "52428800", env
 assert env["ELITEA_EXTRACTOR_MAX_PAGES"] == "1000", env
 assert env["ELITEA_EXTRACTOR_TIMEOUT_MILLIS"] == "120000", env
-assert env["ELITEA_EXTRACTOR_CONCURRENCY"] == "2", env
+assert env["ELITEA_EXTRACTOR_CONCURRENCY"] == "4", env
+assert int(env["ELITEA_EXTRACTOR_CONCURRENCY"]) >= 4, "not below the worker's document_concurrency (IndexRunLimits)"
+assert env["ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS"] == "600000", env
+assert int(env["ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS"]) > int(env["ELITEA_EXTRACTOR_TIMEOUT_MILLIS"]), "the slot wait is a separate, generous bound"
 sc = x["securityContext"]
+# The peer check: the default is the worker container's own uid, so the
+# two containers of the pod agree without anyone listing a number.
+worker_sc = containers["worker"]["securityContext"]
+assert env["ELITEA_EXTRACTOR_PEER_UIDS"] == str(worker_sc["runAsUser"]) == "10001", (env["ELITEA_EXTRACTOR_PEER_UIDS"], worker_sc)
+for probe in ("livenessProbe", "readinessProbe"):
+    p = x[probe]
+    assert p["timeoutSeconds"] >= 2 + 2, f"{probe}: the healthcheck's own budget is 2 s; {p}"
+    assert p["timeoutSeconds"] == 5 and p["periodSeconds"] == 10 and p["failureThreshold"] == 3, p
+    assert p["timeoutSeconds"] < p["periodSeconds"], p
 assert sc["readOnlyRootFilesystem"] is True and sc["allowPrivilegeEscalation"] is False, sc
 assert sc["capabilities"] == {"drop": ["ALL"]}, sc
 assert sc["runAsUser"] == 10001 and sc["runAsNonRoot"] is True, sc
@@ -123,6 +138,18 @@ assert runtime["extractor_socket"].startswith(worker_mount["mountPath"] + "/"), 
 # No Service, NetworkPolicy or other object of its own.
 others = [d for d in docs if "doc-extractor" in d["metadata"]["name"] or "extractor" in d["metadata"]["name"]]
 assert others == [], [(d["kind"], d["metadata"]["name"]) for d in others]
+PY
+
+echo "== peer uids listed in values =="
+"$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" --set worker.extractor.enabled=true \
+  --set 'worker.extractor.peerUids={10001,20002}' >"$TMP/peers.yaml" 2>"$TMP/peers.err" \
+  && python3 - "$TMP/peers.yaml" <<'PY' && ok "listed peerUids render comma-separated" || bad "listed peerUids: $(tail -1 "$TMP/peers.err")"
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+dep = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-worker")
+x = next(c for c in dep["spec"]["template"]["spec"]["containers"] if c["name"] == "doc-extractor")
+env = {e["name"]: e["value"] for e in x["env"]}
+assert env["ELITEA_EXTRACTOR_PEER_UIDS"] == "10001,20002", env
 PY
 
 echo "== refusals =="

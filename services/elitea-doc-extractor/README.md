@@ -31,8 +31,10 @@ then the bytes in chunks; the answer is the text or a typed skip
 `TIMEOUT`, `OUTPUT_TOO_LARGE`, `EMPTY`). A skip is a statement about the
 document and travels as a response; a malformed stream, no capacity or an
 internal failure is a gRPC status, which the worker records as
-`extract_failed`. `Capabilities` lists the media types and the caps, and is
-the health probe.
+`extract_failed`. `Capabilities` lists the media types, the caps and the
+capacity (`concurrency`, `slot_wait_millis`, `stream_idle_millis`), and is
+the health probe; the worker's client reads it once before its first
+document (again after any failure) and shapes itself to it, below.
 
 The worker side is `services/elitea-worker-rust/src/transport/extractor_client.rs`;
 it is used by `src/indexing/pipeline.rs` for every media type
@@ -46,13 +48,26 @@ for the status case.
 ## Transport and isolation
 
 gRPC over a Unix domain socket in a directory the two containers share (a
-Kubernetes `emptyDir`, a compose volume). No TCP port, no TLS, no identity:
-the directory is the only way in, which is the engine sidecars' model
-(`libs/rust/engine-sidecar`). The binary links no HTTP client and no TLS
-stack at all — `elitea-engine-sidecar` is taken with `default-features =
-false` (socket binder and cgroup reader only), and the service has nowhere to
-send anything. Compose runs it with `network_mode: none`; in the chart it
-shares the worker pod's network namespace and listens on nothing.
+Kubernetes `emptyDir`, a compose volume). No TCP port and no TLS: the
+directory is the only way in, which is the engine sidecars' model
+(`libs/rust/engine-sidecar`), and this is the **pod-local Unix-socket
+sidecar exception** to the platform's gRPC-over-mTLS rule (AGENTS.md): gRPC
+still, with the contract in `libs/proto`, but no TLS on a same-pod socket.
+In its place the service checks the peer: every connection's credentials
+(`SO_PEERCRED`) are read and only the uids in `ELITEA_EXTRACTOR_PEER_UIDS`
+(the worker's; by default this process's own uid, which is the worker's in
+every shipped deployment) are served — any other peer gets
+`PERMISSION_DENIED` on both RPCs before a byte of a document is read. The
+image ships the socket directory `/run/elitea-extract` owned `10001:10001`
+mode `0770`, so a compose named volume mounted there is seeded writable for
+the extractor and reachable by the worker's group and nobody else's; in the
+chart the directory is an `emptyDir` and the peer check is what holds.
+
+The binary links no HTTP client and no TLS stack at all —
+`elitea-engine-sidecar` is taken with `default-features = false` (socket
+binder and cgroup reader only), and the service has nowhere to send
+anything. Compose runs it with `network_mode: none`; in the chart it shares
+the worker pod's network namespace and listens on nothing.
 
 ## Limits
 
@@ -62,27 +77,48 @@ them):
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `ELITEA_EXTRACTOR_SOCKET` | the socket to serve on | `/run/elitea-extract/extractor.sock` |
+| `ELITEA_EXTRACTOR_PEER_UIDS` | the peer uids served (comma-separated), read from `SO_PEERCRED`; others are `PERMISSION_DENIED` | this process's uid |
 | `ELITEA_EXTRACTOR_MAX_INPUT_BYTES` | bytes accepted for one document (enforced on the declared length and on the running count) | 50 MiB |
 | `ELITEA_EXTRACTOR_MAX_PAGES` | pages read from a paged format; more is `TOO_MANY_PAGES`, never truncated | 1000 |
 | `ELITEA_EXTRACTOR_MAX_OUTPUT_BYTES` | text returned for one document | 20 MiB |
 | `ELITEA_EXTRACTOR_TIMEOUT_MILLIS` | wall time for one extraction after its bytes arrived | 120000 |
 | `ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS` | the longest wait for a document's next chunk | 30000 |
-| `ELITEA_EXTRACTOR_CONCURRENCY` | extractions at once; a further request waits its own timeout for a slot, then `RESOURCE_EXHAUSTED` | 2 |
+| `ELITEA_EXTRACTOR_CONCURRENCY` | extractions at once; not below the worker's document concurrency (4) | 4 |
+| `ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS` | the longest a further request waits for a slot before `RESOURCE_EXHAUSTED`; separate from the extraction timeout | 600000 |
 | `RUST_LOG` | stderr log filter | `info` |
+
+**Capacity, and why queueing is never exhaustion.** The worker keeps no
+more calls in flight than the `concurrency` this process advertises
+(`Capabilities`), queueing further documents on its own side, so the slot
+wait here is reached only by a client that ignores the advertisement. The
+slot wait is bounded apart from the extraction timeout, generously, so a
+request that does wait is served when a slot frees rather than refused when
+an unrelated timer runs out. The worker also asks for an extraction timeout
+in the header (its run's, lowered to this process's cap) and derives its
+call deadline from that plus the advertised slot wait and idle limit plus a
+margin — never a fixed figure.
 
 **Memory.** Under a cgroup v2 memory limit the input cap is lowered so that
 `concurrency` documents at the cap, expanded six times over, fit in half the
 limit (`Config::fit_memory`): a document over that is skipped `too_large`
-instead of ending the process with an OOM kill. Set the container's memory
-limit (`worker.extractor.resources.limits.memory`, compose `mem_limit`) and
-the cap follows.
+instead of ending the process with an OOM kill. The fit is
+`min(configured, max(budget, 1 MiB))`: it only ever lowers the configured
+cap, never raises it. The six counts the one copy of the document the
+process holds (the bytes read off the stream move into the parser without a
+copy) plus the parser's expansion. Set the container's memory limit
+(`worker.extractor.resources.limits.memory`, compose `mem_limit`) and the
+cap follows.
 
 **Timeouts.** An extraction thread that outruns its timeout cannot be
 killed; the request is answered `TIMEOUT` and the thread keeps its slot
-until it ends. When every slot is held by such an overrun the process logs
-`extractor_slots_exhausted` and exits (code 75) after a short grace, so the
-container restarts it; the worker records `extract_failed` for what was in
-flight and reconnects.
+until it ends. The count of such overruns is kept exact by a per-thread
+ledger (`OverrunLedger`): the timeout counts a thread only when it claimed
+it first, the thread takes the overrun back only when it found that claim,
+and a thread that ended just as its timeout fired is not an overrun at all
+— its real answer is returned. When every slot is held by an overrun the
+process logs `extractor_slots_exhausted` and exits (code 75) after a short
+grace, so the container restarts it; the worker records `extract_failed`
+for what was in flight and reconnects.
 
 ## Deployment
 
@@ -94,8 +130,10 @@ flight and reconnects.
   `extractor_socket` in `deploy/runtime/worker-runtime.rust.json`.
 * Helm: `worker.extractor.enabled` (off by default) renders the container in
   the worker pod with a memory-backed `emptyDir` at `worker.extractor.socketDir`
-  and writes `extractor_socket` into the worker's `runtime.json`; the chart
-  refuses it outside `worker.implementation=rust` with
+  and writes `extractor_socket` into the worker's `runtime.json`;
+  `worker.extractor.peerUids` (empty = the worker's `runAsUser`) is the peer
+  check, `probes.timeoutSeconds` (5) covers the probe's own 2 s budget; the
+  chart refuses it outside `worker.implementation=rust` with
   `worker.indexingRuntime=rust` (`deploy/helm/tests/render-worker-extractor.sh`).
 
 ## Commands
@@ -116,6 +154,11 @@ an encrypted PDF is `ENCRYPTED`; a three-page PDF under a two-page cap is
 `TOO_MANY_PAGES` (process cap and request cap); the input cap on the declared
 length, on the counted bytes and against a request asking for more; an
 unsupported type without reading the bytes; the output cap; an empty
-document; a timeout that holds the only slot and reports exhaustion once;
-and the protocol refusals (no header, a second header, an empty stream, a
-stream that goes quiet).
+document; a timeout that holds the only slot and reports exhaustion once; a
+peer outside the configured uids refused `PERMISSION_DENIED` on both RPCs;
+a queued request served when a slot frees past the extraction timeout, and
+refused only when the separate slot wait runs out; and the protocol
+refusals (no header, a second header, an empty stream, a stream that goes
+quiet). The unit tests in `service.rs` force the timeout race both ways
+with hooks (the thread ends first: its answer is used and nothing is
+counted; the timeout wins: `TIMEOUT`, counted until the thread ends).

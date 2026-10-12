@@ -54,6 +54,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed={}", extract.display());
     let mut extract_config = tonic_prost_build::Config::new();
     extract_config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
+    // The document chunks as `bytes::Bytes`: the client streams slices of
+    // one buffer instead of a copy per chunk (transport/extractor_client.rs).
+    extract_config.bytes(["."]);
     tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)

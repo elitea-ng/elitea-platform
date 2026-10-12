@@ -70,9 +70,26 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 RUN --mount=type=bind,from=runtime-base,source=/,target=/runtime-root,readonly \
     sh /src/libs/rust/scripts/verify-runtime.sh /usr/local/bin/elitea-doc-extractor
 
+# The socket directory, baked into the image so a compose NAMED VOLUME
+# mounted there inherits it: podman/docker seed a fresh named volume from the
+# image's content at the mount point, ownership included. Without this the
+# volume is created root-owned 0755 and uid 10001 cannot bind the socket
+# (the engines' Containerfiles do the same for /run/deepwiki, /run/inventory).
+#
+# 0770, not the engines' 0777: the worker runs as the SAME uid:gid as this
+# process in every shipped deployment (the worker image's `USER 10001:10001`;
+# the chart's worker.runAsUser/runAsGroup, applied to both containers of the
+# pod), so group access is all the sharing needs, and a third container that
+# lands on the volume with another gid cannot reach the socket at all. The
+# peer-uid check in the service (SO_PEERCRED) is the gate for anything that
+# can; the mode is only the outer fence. In the chart the directory is an
+# emptyDir and not this one; the peer check is what holds there.
+RUN mkdir -p /socket-dir/run/elitea-extract && chmod 0770 /socket-dir/run/elitea-extract
+
 FROM runtime-base AS runtime
 
 COPY --from=builder /usr/local/bin/elitea-doc-extractor /usr/local/bin/elitea-doc-extractor
+COPY --from=builder --chown=10001:10001 /socket-dir/run/ /run/
 
 # The probe is the binary itself (`elitea-doc-extractor healthcheck`: a
 # Capabilities call over its own socket), because distroless has no shell.

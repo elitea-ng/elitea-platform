@@ -57,10 +57,10 @@ use prost::Message as _;
 use serde_json::{Map, Value};
 use tokio::task::JoinSet;
 
-use super::IndexIngestRuntime;
 use super::inputs::{self, IndexParameters};
 use super::slug::vector_space_slug;
 use super::source::{IndexSource, PathFilter, PlatformAccess};
+use super::{IndexIngestRuntime, IndexRunLimits};
 use crate::execution::agent_lease::ClaimLeaseStateProbe;
 use crate::execution::{ClaimLeaseError, ClaimLeaseErrorCode};
 use crate::protocol::elitea::runtime::v1::{
@@ -519,10 +519,10 @@ impl Runner<'_> {
                     };
                     let source = Arc::clone(&self.source);
                     let chunking = Arc::clone(&self.chunking);
-                    let max_bytes = self.runtime.limits.max_document_bytes;
+                    let limits = self.runtime.limits;
                     let extractor = self.runtime.extractor.clone();
                     tasks.spawn(prepare(
-                        source, chunking, reference, plan, max_bytes, extractor,
+                        source, chunking, reference, plan, limits, extractor,
                     ));
                 }
                 let Some(joined) = tasks.join_next().await else {
@@ -1010,9 +1010,10 @@ async fn prepare(
     chunking: Arc<ChunkingConfig>,
     reference: DocumentRef,
     plan: Plan,
-    max_bytes: u64,
+    limits: IndexRunLimits,
     extractor: Option<Arc<ExtractorClient>>,
 ) -> Preparation {
+    let max_bytes = limits.max_document_bytes;
     if reference.size > max_bytes {
         return Preparation::Skipped(SKIP_TOO_LARGE);
     }
@@ -1055,21 +1056,10 @@ async fn prepare(
     // A document format (PDF, Office, e-mail) is the sidecar's to read; this
     // process extracts text and HTML itself, on the blocking thread below.
     let sidecar_text = if elitea_doc_extract::is_document_type(&mime) {
-        let Some(extractor) = extractor else {
-            return Preparation::Skipped(SKIP_UNSUPPORTED);
-        };
         let sent = std::mem::take(&mut bytes);
-        match extractor.extract(&key, &mime, sent, max_bytes).await {
-            Ok(Extraction::Text(text)) => Some(text),
-            Ok(Extraction::Skipped(reason)) => return Preparation::Skipped(skip_label(reason)),
-            Err(error) => {
-                tracing::warn!(
-                    event = "index_document_extract_failed",
-                    socket = %extractor.socket().display(),
-                    error = %error
-                );
-                return Preparation::Skipped(SKIP_EXTRACT_FAILED);
-            }
+        match sidecar_text(extractor, &key, &mime, sent, limits).await {
+            Ok(text) => Some(text),
+            Err(label) => return Preparation::Skipped(label),
         }
     } else {
         None
@@ -1114,6 +1104,43 @@ async fn prepare(
     chunked.unwrap_or(Preparation::Configuration(
         "the document preparation task stopped unexpectedly".to_owned(),
     ))
+}
+
+/// One document's text from the extraction sidecar, or the summary label
+/// it is skipped under: `unsupported_type` without a sidecar, the sidecar's
+/// own reason, or `extract_failed` when it did not answer about the
+/// document. The bytes move into the client; nothing copies them here.
+async fn sidecar_text(
+    extractor: Option<Arc<ExtractorClient>>,
+    key: &str,
+    mime: &str,
+    bytes: Vec<u8>,
+    limits: IndexRunLimits,
+) -> Result<String, &'static str> {
+    let Some(extractor) = extractor else {
+        return Err(SKIP_UNSUPPORTED);
+    };
+    let extracted = extractor
+        .extract(
+            key,
+            mime,
+            bytes,
+            limits.max_document_bytes,
+            limits.extract_timeout,
+        )
+        .await;
+    match extracted {
+        Ok(Extraction::Text(text)) => Ok(text),
+        Ok(Extraction::Skipped(reason)) => Err(skip_label(reason)),
+        Err(error) => {
+            tracing::warn!(
+                event = "index_document_extract_failed",
+                socket = %extractor.socket().display(),
+                error = %error
+            );
+            Err(SKIP_EXTRACT_FAILED)
+        }
+    }
 }
 
 /// The summary's skip label of a sidecar skip reason. The older labels are

@@ -27,6 +27,12 @@ on:
       - "libs/rust/content-source/**"
       - "libs/rust/engine-sidecar/**"
       - "libs/rust/Cargo.toml"
+      # Read by the Containerfile's runtime verification; a change there is a
+      # change to what this crate ships.
+      - "libs/rust/scripts/**"
+      # The smallvec gate below reads the WORKER's lock: a bump there must
+      # re-run it.
+      - "services/elitea-worker-rust/Cargo.lock"
       - ".github/workflows/ci-doc-extractor.yml"
   push:
     branches:
@@ -38,6 +44,8 @@ on:
       - "libs/rust/content-source/**"
       - "libs/rust/engine-sidecar/**"
       - "libs/rust/Cargo.toml"
+      - "libs/rust/scripts/**"
+      - "services/elitea-worker-rust/Cargo.lock"
       - ".github/workflows/ci-doc-extractor.yml"
   workflow_dispatch:
 

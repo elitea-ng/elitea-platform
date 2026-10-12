@@ -116,7 +116,8 @@ async fn serve() -> ExitCode {
             event = "extractor_input_cap_lowered",
             memory_limit = limit,
             max_input_bytes = lowered,
-            "the input cap was lowered to fit the container's memory limit"
+            "the configured input cap does not fit the container's memory limit \
+             several times over; lowered (never raised) to what does"
         );
     }
     let listener = match elitea_engine_sidecar::bind(&config.socket) {
@@ -132,13 +133,15 @@ async fn serve() -> ExitCode {
         max_pages = config.caps.max_pages,
         max_output_bytes = config.caps.max_output_bytes,
         timeout_ms = u64::try_from(config.caps.timeout.as_millis()).unwrap_or(u64::MAX),
-        concurrency = config.concurrency,
+        concurrency = config.capacity.concurrency,
+        slot_wait_ms = u64::try_from(config.capacity.slot_wait.as_millis()).unwrap_or(u64::MAX),
+        peer_uids = ?config.peer_uids,
         "elitea-doc-extractor serving"
     );
     let service = Extractor::new(
         config.caps,
-        config.concurrency,
-        config.stream_idle,
+        config.capacity,
+        config.peer_uids,
         Arc::new(ExitProcess),
     );
     let served = Server::builder()

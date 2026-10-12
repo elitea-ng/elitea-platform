@@ -8,6 +8,7 @@
     reason = "the fixtures' XML is assembled from small formatted pieces"
 )]
 
+use std::collections::BTreeSet;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use elitea_doc_extractor::pb::{
     ExtractHeader, ExtractLimits, ExtractRequest, ExtractResponse, SkipReason, extract_request,
     extract_response,
 };
-use elitea_doc_extractor::service::{Caps, Exhausted, Extractor};
+use elitea_doc_extractor::service::{Capacity, Caps, Exhausted, Extractor};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Server};
@@ -46,6 +47,24 @@ struct Served {
     socket: PathBuf,
     stop: Option<oneshot::Sender<()>>,
     exhausted: Arc<Counting>,
+    service: Arc<Extractor>,
+}
+
+/// This process's uid: what the service is told to serve, as the worker's
+/// uid is in a deployment.
+fn own_uid() -> u32 {
+    rustix::process::getuid().as_raw()
+}
+
+/// The harness capacity: `concurrency` slots, a 500 ms idle limit, and a
+/// slot wait long enough never to fire in these tests unless a test lowers
+/// it.
+fn capacity(concurrency: usize) -> Capacity {
+    Capacity {
+        concurrency,
+        slot_wait: Duration::from_secs(30),
+        stream_idle: Duration::from_millis(500),
+    }
 }
 
 impl Drop for Served {
@@ -58,21 +77,25 @@ impl Drop for Served {
 }
 
 fn serve(caps: Caps, concurrency: usize) -> Served {
+    serve_with(caps, capacity(concurrency), BTreeSet::from([own_uid()]))
+}
+
+fn serve_with(caps: Caps, capacity: Capacity, peer_uids: BTreeSet<u32>) -> Served {
     let n = NEXT.fetch_add(1, Ordering::SeqCst);
     // A short path: macOS caps a socket path at 104 bytes.
     let socket = std::env::temp_dir().join(format!("dx-{}-{n}.sock", std::process::id()));
     let listener = elitea_engine_sidecar::bind(&socket).expect("bind");
     let exhausted = Arc::new(Counting::default());
-    let service = Extractor::new(
+    let service = Arc::new(Extractor::new(
         caps,
-        concurrency,
-        Duration::from_millis(500),
+        capacity,
+        peer_uids,
         Arc::clone(&exhausted) as Arc<dyn Exhausted>,
-    );
+    ));
     let (stop, stopped) = oneshot::channel::<()>();
     tokio::spawn(
         Server::builder()
-            .add_service(DocumentExtractServiceServer::new(service))
+            .add_service(DocumentExtractServiceServer::from_arc(Arc::clone(&service)))
             .serve_with_incoming_shutdown(UnixListenerStream::new(listener), async {
                 let _ = stopped.await;
             }),
@@ -83,6 +106,7 @@ fn serve(caps: Caps, concurrency: usize) -> Served {
         socket,
         stop: Some(stop),
         exhausted,
+        service,
     }
 }
 
@@ -438,6 +462,134 @@ async fn capabilities_names_the_formats_and_the_caps() {
         })
     );
     assert_eq!(answer.version, env!("CARGO_PKG_VERSION"));
+    // The capacity a client sizes its queue and deadline from.
+    assert_eq!(answer.concurrency, 1);
+    assert_eq!(answer.slot_wait_millis, 30_000);
+    assert_eq!(answer.stream_idle_millis, 500);
+}
+
+// ── the peer check ──────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_outside_the_configured_uids_is_refused_permission_denied() {
+    // Served uids: anything but this process. Both RPCs are refused before
+    // a byte of the document is read; nothing is extracted, nothing is
+    // counted.
+    let served = serve_with(
+        Caps::default(),
+        capacity(1),
+        BTreeSet::from([own_uid().wrapping_add(1)]),
+    );
+    let status = client::capabilities(served.channel.clone())
+        .await
+        .expect_err("refused");
+    assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status}");
+    assert!(status.message().contains("uid"), "{status}");
+    let bytes = pdf(&["Never read."]);
+    let status = client::extract(
+        served.channel.clone(),
+        header("peer.pdf", "application/pdf", bytes.len()),
+        bytes,
+    )
+    .await
+    .expect_err("refused");
+    assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status}");
+    assert_eq!(served.service.overruns(), 0);
+    // The same socket, this uid among the served: answered.
+    let allowed = serve_with(
+        Caps::default(),
+        capacity(1),
+        BTreeSet::from([own_uid().wrapping_add(1), own_uid()]),
+    );
+    client::capabilities(allowed.channel.clone())
+        .await
+        .expect("served");
+}
+
+// ── the slot wait is apart from the extraction timeout ──────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queued_request_is_served_when_a_slot_frees_not_refused_at_the_timeout() {
+    // One slot, held (as an overrun would) for longer than the EXTRACTION
+    // timeout (50 ms) but shorter than the SLOT wait (2 s): the queued
+    // request is served with its text once the slot frees. Under the old
+    // coupling it would have been RESOURCE_EXHAUSTED at 50 ms.
+    let served = serve_with(
+        Caps {
+            timeout: Duration::from_millis(50),
+            ..Caps::default()
+        },
+        Capacity {
+            concurrency: 1,
+            slot_wait: Duration::from_secs(2),
+            stream_idle: Duration::from_millis(500),
+        },
+        BTreeSet::from([own_uid()]),
+    );
+    let held = served.service.hold_slot().await;
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(held);
+    });
+    let bytes = pdf(&["Queued, not refused."]);
+    let started = std::time::Instant::now();
+    let text = text_of(
+        client::extract(
+            served.channel.clone(),
+            header("queued.pdf", "application/pdf", bytes.len()),
+            bytes,
+        )
+        .await
+        .expect("served after the slot freed"),
+    );
+    assert!(text.contains("Queued, not refused"), "{text:?}");
+    assert!(
+        started.elapsed() >= Duration::from_millis(250),
+        "the request waited for the slot: {:?}",
+        started.elapsed()
+    );
+    release.await.expect("released");
+    assert_eq!(served.exhausted.0.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_slot_wait_is_its_own_bound() {
+    // One slot held past the slot wait (150 ms) while the extraction
+    // timeout is long (10 s): RESOURCE_EXHAUSTED after the slot wait, and
+    // only then.
+    let served = serve_with(
+        Caps {
+            timeout: Duration::from_secs(10),
+            ..Caps::default()
+        },
+        Capacity {
+            concurrency: 1,
+            slot_wait: Duration::from_millis(150),
+            stream_idle: Duration::from_millis(500),
+        },
+        BTreeSet::from([own_uid()]),
+    );
+    let _held = served.service.hold_slot().await;
+    let bytes = pdf(&["No slot for this one."]);
+    let started = std::time::Instant::now();
+    let status = client::extract(
+        served.channel.clone(),
+        header("waiting.pdf", "application/pdf", bytes.len()),
+        bytes,
+    )
+    .await
+    .expect_err("refused");
+    assert_eq!(status.code(), tonic::Code::ResourceExhausted, "{status}");
+    assert!(status.message().contains("150 ms"), "{status}");
+    assert!(
+        started.elapsed() >= Duration::from_millis(140)
+            && started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    // Not an overrun: the slot was merely busy.
+    assert_eq!(served.exhausted.0.load(Ordering::SeqCst), 0);
+    assert_eq!(served.service.overruns(), 0);
 }
 
 // ── the skip reasons ────────────────────────────────────────────────────────
@@ -677,7 +829,9 @@ async fn a_stream_without_a_header_is_invalid() {
         );
     let status = client
         .extract(tokio_stream::iter(vec![ExtractRequest {
-            message: Some(extract_request::Message::Chunk(b"%PDF".to_vec())),
+            message: Some(extract_request::Message::Chunk(
+                prost::bytes::Bytes::from_static(b"%PDF"),
+            )),
         }]))
         .await
         .expect_err("refused");

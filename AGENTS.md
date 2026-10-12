@@ -49,6 +49,20 @@ prototype shortcuts into new code merely to preserve current behavior.
   client-facing APIs; existing internal HTTP/JSON endpoints (identity,
   credential redemption, provider catalogs, artifact grants) move to gRPC
   when they are next reworked, not as a separate rewrite.
+- Pod-local Unix-socket sidecars are the one exception to "over mTLS", not to
+  "gRPC": a sidecar that runs in the SAME pod (or compose project) as its one
+  caller and is reached only through a Unix domain socket in a directory the
+  two containers share — `elitea-doc-extractor` for the Rust worker, as the
+  Inventory and DeepWiki engine sidecars already are for the sub-application
+  host — speaks gRPC with its contract in `libs/proto`, has no TCP listener,
+  and carries no TLS: there is no network between the peers to protect and no
+  certificate that could name a same-host process better than the kernel
+  does. In its place the sidecar MUST check the peer: it reads the connecting
+  process's credentials (`SO_PEERCRED`) and serves only the configured caller
+  uid(s), refusing every other peer `PERMISSION_DENIED`, with the uid(s) set
+  from the chart/compose values next to the caller's `runAsUser`. A sidecar
+  that gains a TCP listener, a second caller outside the pod, or a caller
+  whose uid cannot be fixed, falls back under the mTLS rule.
 - Durable messages contain identifiers, immutable revisions, encrypted
   references and non-sensitive bounded metadata. Plaintext prompts, repository
   content, tool payloads, secret values, bearer credentials, arbitrary

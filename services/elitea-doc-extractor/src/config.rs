@@ -3,12 +3,14 @@
 //! | Variable | Meaning | Default |
 //! | --- | --- | --- |
 //! | `ELITEA_EXTRACTOR_SOCKET` | the Unix socket to serve on; its directory is shared with the worker | `/run/elitea-extract/extractor.sock` |
+//! | `ELITEA_EXTRACTOR_PEER_UIDS` | the uids whose connections are served (comma-separated; the worker's), read from the peer's `SO_PEERCRED`; any other peer is `PERMISSION_DENIED` | this process's own uid |
 //! | `ELITEA_EXTRACTOR_MAX_INPUT_BYTES` | the most bytes accepted for one document; a request's own limit is lowered to it | `52428800` (50 MiB) |
 //! | `ELITEA_EXTRACTOR_MAX_PAGES` | the most pages read from a paged format | `1000` |
 //! | `ELITEA_EXTRACTOR_MAX_OUTPUT_BYTES` | the most text returned for one document | `20971520` (20 MiB) |
 //! | `ELITEA_EXTRACTOR_TIMEOUT_MILLIS` | the longest one extraction may run after its bytes arrived | `120000` |
 //! | `ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS` | the longest wait for the next chunk of a document | `30000` |
-//! | `ELITEA_EXTRACTOR_CONCURRENCY` | documents extracted at once; a further request waits its own timeout for a slot, then is refused `RESOURCE_EXHAUSTED` | `2` |
+//! | `ELITEA_EXTRACTOR_CONCURRENCY` | documents extracted at once; not below the worker's own document concurrency (4), so a worker that keeps that many in flight never waits | `4` |
+//! | `ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS` | the longest a further request waits for a slot before `RESOURCE_EXHAUSTED`; separate from the extraction timeout, so queueing is never reported as exhaustion | `600000` (10 min) |
 //! | `RUST_LOG` | log filter (stderr) | `info` |
 //!
 //! There is no network setting: the process opens no connection, and it
@@ -19,16 +21,27 @@
 //! so that `concurrency` documents at the cap fit in a fraction of the
 //! limit ([`Config::fit_memory`]); a document over that is skipped
 //! `too_large` instead of ending the process with an OOM kill the worker
-//! would read as `extract_failed`.
+//! would read as `extract_failed`. The fit only ever LOWERS the cap.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::service::Caps;
+use crate::service::{Capacity, Caps};
 
 /// Bytes of memory the extractor is assumed to need per byte of input, at
-/// the worst: a PDF's decompressed streams, the page objects, the text.
+/// the worst. The document is held ONCE (the bytes read off the stream move
+/// into the extractor without a copy, `service.rs` / `extract_document`);
+/// on top of that come the parser's decompressed streams, its page objects
+/// and the text (xberg's PDF backend was measured at up to four times the
+/// input), and a transient chunk-sized receive buffer. One copy plus four
+/// of expansion, rounded up to six for the parser's own allocations.
 const MEMORY_PER_INPUT_BYTE: u64 = 6;
+
+/// The input cap the memory fit never goes below: a cap under 1 MiB would
+/// skip every real document, which says "the memory limit is a mistake"
+/// more clearly as skips than as a silently useless process.
+const INPUT_CAP_FLOOR: u64 = 1 << 20;
 
 /// A configuration that cannot be used.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,8 +60,9 @@ impl std::error::Error for ConfigError {}
 pub struct Config {
     pub socket: PathBuf,
     pub caps: Caps,
-    pub concurrency: usize,
-    pub stream_idle: Duration,
+    pub capacity: Capacity,
+    /// The uids served (`SO_PEERCRED`); the worker's.
+    pub peer_uids: BTreeSet<u32>,
 }
 
 impl Config {
@@ -88,14 +102,45 @@ impl Config {
             "ELITEA_EXTRACTOR_TIMEOUT_MILLIS",
             u64::try_from(defaults.timeout.as_millis()).unwrap_or(u64::MAX),
         )?;
-        let stream_idle = number("ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS", 30_000)?;
-        let concurrency = number("ELITEA_EXTRACTOR_CONCURRENCY", 2)?;
+        let capacity_defaults = Capacity::default();
+        let stream_idle = number(
+            "ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS",
+            u64::try_from(capacity_defaults.stream_idle.as_millis()).unwrap_or(u64::MAX),
+        )?;
+        let slot_wait = number(
+            "ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS",
+            u64::try_from(capacity_defaults.slot_wait.as_millis()).unwrap_or(u64::MAX),
+        )?;
+        let concurrency = number(
+            "ELITEA_EXTRACTOR_CONCURRENCY",
+            u64::try_from(capacity_defaults.concurrency).unwrap_or(4),
+        )?;
         let concurrency = usize::try_from(concurrency)
             .ok()
             .filter(|n| *n <= 64)
             .ok_or_else(|| {
                 ConfigError("ELITEA_EXTRACTOR_CONCURRENCY must be at most 64".to_owned())
             })?;
+        let peer_uids = match get("ELITEA_EXTRACTOR_PEER_UIDS") {
+            None => BTreeSet::from([own_uid()]),
+            Some(list) => list
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(|part| {
+                    part.parse::<u32>().map_err(|_| {
+                        ConfigError(
+                            "ELITEA_EXTRACTOR_PEER_UIDS must be comma-separated uids".to_owned(),
+                        )
+                    })
+                })
+                .collect::<Result<BTreeSet<u32>, ConfigError>>()?,
+        };
+        if peer_uids.is_empty() {
+            return Err(ConfigError(
+                "ELITEA_EXTRACTOR_PEER_UIDS must name at least one uid".to_owned(),
+            ));
+        }
         Ok(Self {
             socket,
             caps: Caps {
@@ -110,27 +155,38 @@ impl Config {
                 )?,
                 timeout: Duration::from_millis(timeout),
             },
-            concurrency,
-            stream_idle: Duration::from_millis(stream_idle),
+            capacity: Capacity {
+                concurrency,
+                slot_wait: Duration::from_millis(slot_wait),
+                stream_idle: Duration::from_millis(stream_idle),
+            },
+            peer_uids,
         })
     }
 
     /// Lowers the input cap so that `concurrency` documents at the cap,
     /// expanded `MEMORY_PER_INPUT_BYTE` (six) times, fit in half of
     /// `memory_limit` (the container's `memory.max`); the other half is the
-    /// process itself and the parser's own overhead. Returns the cap it
-    /// lowered to, when it did.
+    /// process itself and the parser's own overhead. The result is
+    /// `min(configured, max(budget, floor))`: the configured cap is NEVER
+    /// raised, not even to the 1 MiB floor. Returns the cap it lowered to,
+    /// when it did.
     pub fn fit_memory(&mut self, memory_limit: u64) -> Option<u64> {
-        let concurrency = u64::try_from(self.concurrency.max(1)).unwrap_or(1);
+        let concurrency = u64::try_from(self.capacity.concurrency.max(1)).unwrap_or(1);
         let budget = memory_limit / 2 / concurrency / MEMORY_PER_INPUT_BYTE;
-        if budget < self.caps.max_input_bytes {
-            // A cap under 1 MiB would skip every real document; such a limit
-            // is a deployment mistake and is reported as what it would do.
-            self.caps.max_input_bytes = budget.max(1 << 20);
-            return Some(self.caps.max_input_bytes);
+        let fitted = budget.max(INPUT_CAP_FLOOR).min(self.caps.max_input_bytes);
+        if fitted < self.caps.max_input_bytes {
+            self.caps.max_input_bytes = fitted;
+            return Some(fitted);
         }
         None
     }
+}
+
+/// This process's real uid: the default peer, since the worker and the
+/// extractor run as the same non-root user in every shipped deployment.
+fn own_uid() -> u32 {
+    rustix::process::getuid().as_raw()
 }
 
 #[cfg(test)]
@@ -154,8 +210,21 @@ mod tests {
             PathBuf::from("/run/elitea-extract/extractor.sock")
         );
         assert_eq!(config.caps, Caps::default());
-        assert_eq!(config.concurrency, 2);
-        assert_eq!(config.stream_idle, Duration::from_secs(30));
+        assert_eq!(config.capacity, Capacity::default());
+        assert_eq!(config.capacity.concurrency, 4);
+        assert_eq!(config.capacity.slot_wait, Duration::from_mins(10));
+        assert_eq!(config.capacity.stream_idle, Duration::from_secs(30));
+        assert_eq!(config.peer_uids, BTreeSet::from([own_uid()]));
+    }
+
+    #[test]
+    fn peer_uids_are_a_comma_separated_list_and_a_bad_one_is_named() {
+        let config = config(&[("ELITEA_EXTRACTOR_PEER_UIDS", " 10001, 10002 ,")]).expect("config");
+        assert_eq!(config.peer_uids, BTreeSet::from([10001, 10002]));
+        let error = config_error(&[("ELITEA_EXTRACTOR_PEER_UIDS", "worker")]);
+        assert!(error.0.contains("PEER_UIDS"), "{error}");
+        let error = config_error(&[("ELITEA_EXTRACTOR_PEER_UIDS", ",")]);
+        assert!(error.0.contains("at least one"), "{error}");
     }
 
     #[test]
@@ -167,6 +236,7 @@ mod tests {
             ("ELITEA_EXTRACTOR_MAX_OUTPUT_BYTES", "2048"),
             ("ELITEA_EXTRACTOR_TIMEOUT_MILLIS", "500"),
             ("ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS", "250"),
+            ("ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS", "4000"),
             ("ELITEA_EXTRACTOR_CONCURRENCY", "3"),
         ])
         .expect("config");
@@ -174,8 +244,9 @@ mod tests {
         assert_eq!(config.caps.max_pages, 7);
         assert_eq!(config.caps.max_output_bytes, 2048);
         assert_eq!(config.caps.timeout, Duration::from_millis(500));
-        assert_eq!(config.stream_idle, Duration::from_millis(250));
-        assert_eq!(config.concurrency, 3);
+        assert_eq!(config.capacity.stream_idle, Duration::from_millis(250));
+        assert_eq!(config.capacity.slot_wait, Duration::from_secs(4));
+        assert_eq!(config.capacity.concurrency, 3);
         let error = config_error(&[("ELITEA_EXTRACTOR_MAX_PAGES", "0")]);
         assert!(error.0.contains("ELITEA_EXTRACTOR_MAX_PAGES"), "{error}");
         let error = config_error(&[("ELITEA_EXTRACTOR_CONCURRENCY", "65")]);
@@ -200,5 +271,36 @@ mod tests {
         assert_eq!(roomy.fit_memory(8 << 30), None);
         // A tiny limit still leaves 1 MiB, so the mistake shows as skips.
         assert_eq!(config.fit_memory(1 << 20), Some(1 << 20));
+        // The floor itself does not fit again: the cap is already there.
+        assert_eq!(config.fit_memory(1 << 20), None);
+    }
+
+    #[test]
+    fn the_memory_fit_never_raises_a_configured_cap() {
+        // Configured under the floor: a tiny limit must leave it alone
+        // (min(configured, max(budget, floor)) = configured), not lift it
+        // to the floor.
+        let mut small = config(&[
+            ("ELITEA_EXTRACTOR_MAX_INPUT_BYTES", "4096"),
+            ("ELITEA_EXTRACTOR_CONCURRENCY", "2"),
+        ])
+        .expect("config");
+        assert_eq!(small.fit_memory(1 << 20), None);
+        assert_eq!(small.caps.max_input_bytes, 4096);
+        // Configured above the floor, budget under it: lowered TO the
+        // floor, never above the configured cap.
+        let mut mid = config(&[
+            ("ELITEA_EXTRACTOR_MAX_INPUT_BYTES", "2097152"),
+            ("ELITEA_EXTRACTOR_CONCURRENCY", "4"),
+        ])
+        .expect("config");
+        assert_eq!(mid.fit_memory(1 << 20), Some(1 << 20));
+        assert_eq!(mid.caps.max_input_bytes, 1 << 20);
+        // A budget between the floor and the cap is the budget itself.
+        let mut roomy =
+            config(&[("ELITEA_EXTRACTOR_MAX_INPUT_BYTES", "52428800")]).expect("config");
+        let budget = (512u64 << 20) / 2 / 4 / 6;
+        assert_eq!(roomy.fit_memory(512 << 20), Some(budget));
+        assert!(budget > INPUT_CAP_FLOOR && budget < 52_428_800);
     }
 }

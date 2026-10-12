@@ -16,9 +16,13 @@
 // document to the worker, never a dead worker.
 //
 // TRANSPORT. Local only: gRPC over a Unix domain socket in a directory the
-// two containers share (an emptyDir, a compose volume). No TLS, no identity,
-// no network listener — the socket directory is the only way in, and the
-// extractor opens no connection of its own.
+// two containers share (an emptyDir, a compose volume). No TLS and no
+// network listener — the socket directory is the only way in, and the
+// extractor opens no connection of its own. The peer IS checked: the
+// extractor reads the connecting process's credentials (SO_PEERCRED) and
+// serves only the configured worker uid(s); any other peer is refused
+// PERMISSION_DENIED. This is the pod-local Unix-socket sidecar exception to
+// the platform's gRPC-over-mTLS rule (AGENTS.md).
 //
 // FLOW. The worker streams one document per call: a header (name, media
 // type, declared length, the limits for this document), then the bytes in
@@ -585,9 +589,18 @@ type CapabilitiesResponse struct {
 	// The caps a request's limits are lowered to.
 	Limits *ExtractLimits `protobuf:"bytes,2,opt,name=limits,proto3" json:"limits,omitempty"`
 	// The extractor's crate version.
-	Version       string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Version string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	// Documents extracted at once. A client that keeps no more than this many
+	// calls in flight is never refused for capacity; more wait for a slot.
+	Concurrency uint32 `protobuf:"varint,4,opt,name=concurrency,proto3" json:"concurrency,omitempty"`
+	// The longest a request waits for a slot before RESOURCE_EXHAUSTED. Apart
+	// from the extraction timeout: queueing is not a timeout.
+	SlotWaitMillis uint32 `protobuf:"varint,5,opt,name=slot_wait_millis,json=slotWaitMillis,proto3" json:"slot_wait_millis,omitempty"`
+	// The longest the extractor waits for a document's next chunk before
+	// DEADLINE_EXCEEDED.
+	StreamIdleMillis uint32 `protobuf:"varint,6,opt,name=stream_idle_millis,json=streamIdleMillis,proto3" json:"stream_idle_millis,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CapabilitiesResponse) Reset() {
@@ -641,6 +654,27 @@ func (x *CapabilitiesResponse) GetVersion() string {
 	return ""
 }
 
+func (x *CapabilitiesResponse) GetConcurrency() uint32 {
+	if x != nil {
+		return x.Concurrency
+	}
+	return 0
+}
+
+func (x *CapabilitiesResponse) GetSlotWaitMillis() uint32 {
+	if x != nil {
+		return x.SlotWaitMillis
+	}
+	return 0
+}
+
+func (x *CapabilitiesResponse) GetStreamIdleMillis() uint32 {
+	if x != nil {
+		return x.StreamIdleMillis
+	}
+	return 0
+}
+
 var File_elitea_extract_v1_extract_proto protoreflect.FileDescriptor
 
 const file_elitea_extract_v1_extract_proto_rawDesc = "" +
@@ -670,11 +704,14 @@ const file_elitea_extract_v1_extract_proto_rawDesc = "" +
 	"\vExtractSkip\x125\n" +
 	"\x06reason\x18\x01 \x01(\x0e2\x1d.elitea.extract.v1.SkipReasonR\x06reason\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\"\x15\n" +
-	"\x13CapabilitiesRequest\"\x8f\x01\n" +
+	"\x13CapabilitiesRequest\"\x89\x02\n" +
 	"\x14CapabilitiesResponse\x12#\n" +
 	"\rcontent_types\x18\x01 \x03(\tR\fcontentTypes\x128\n" +
 	"\x06limits\x18\x02 \x01(\v2 .elitea.extract.v1.ExtractLimitsR\x06limits\x12\x18\n" +
-	"\aversion\x18\x03 \x01(\tR\aversion*\x87\x02\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12 \n" +
+	"\vconcurrency\x18\x04 \x01(\rR\vconcurrency\x12(\n" +
+	"\x10slot_wait_millis\x18\x05 \x01(\rR\x0eslotWaitMillis\x12,\n" +
+	"\x12stream_idle_millis\x18\x06 \x01(\rR\x10streamIdleMillis*\x87\x02\n" +
 	"\n" +
 	"SkipReason\x12\x1b\n" +
 	"\x17SKIP_REASON_UNSPECIFIED\x10\x00\x12\x19\n" +

@@ -16,6 +16,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut prost_config = tonic_prost_build::Config::new();
     prost_config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
+    // `bytes` fields (the document chunks) as `bytes::Bytes`: a client
+    // streams slices of one buffer and the server reads them without a
+    // copy per chunk.
+    prost_config.bytes(["."]);
 
     println!("cargo:rerun-if-changed=build.rs");
     for proto in &protos {

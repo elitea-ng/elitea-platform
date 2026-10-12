@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hyper_util::rt::TokioIo;
+use prost::bytes::Bytes;
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
@@ -47,7 +48,9 @@ pub async fn capabilities(channel: Channel) -> Result<CapabilitiesResponse, toni
 }
 
 /// `Extract` over `channel`: `header`, then `bytes` in [`CHUNK_BYTES`]
-/// chunks.
+/// chunks. The chunks are slices of one reference-counted buffer (the
+/// protocol's `chunk` field is `bytes::Bytes`), so the document is never
+/// copied here.
 ///
 /// # Errors
 ///
@@ -58,14 +61,20 @@ pub async fn extract(
     bytes: Vec<u8>,
 ) -> Result<ExtractResponse, tonic::Status> {
     let mut client = DocumentExtractServiceClient::new(channel);
-    let mut messages = vec![ExtractRequest {
+    let bytes = Bytes::from(bytes);
+    let chunks = (0..bytes.len()).step_by(CHUNK_BYTES).map(move |start| {
+        let end = (start + CHUNK_BYTES).min(bytes.len());
+        ExtractRequest {
+            message: Some(crate::pb::extract_request::Message::Chunk(
+                bytes.slice(start..end),
+            )),
+        }
+    });
+    let header = std::iter::once(ExtractRequest {
         message: Some(crate::pb::extract_request::Message::Header(header)),
-    }];
-    messages.extend(bytes.chunks(CHUNK_BYTES).map(|chunk| ExtractRequest {
-        message: Some(crate::pb::extract_request::Message::Chunk(chunk.to_vec())),
-    }));
+    });
     client
-        .extract(tokio_stream::iter(messages))
+        .extract(tokio_stream::iter(header.chain(chunks)))
         .await
         .map(tonic::Response::into_inner)
 }

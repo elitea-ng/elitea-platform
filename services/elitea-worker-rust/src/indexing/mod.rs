@@ -82,6 +82,11 @@ pub(crate) struct IndexRunLimits {
     pub(crate) max_documents: usize,
     /// One document's bytes.
     pub(crate) max_document_bytes: u64,
+    /// The extraction time asked of the document extraction sidecar for one
+    /// PDF or Office document (sent in the request header; the sidecar
+    /// lowers it to its own cap). The client's call deadline is derived
+    /// from this and what the sidecar advertises, never fixed.
+    pub(crate) extract_timeout: Duration,
     /// The wait before the second embeddings attempt of a batch after a
     /// retryable refusal; the third waits twice that.
     pub(crate) embedding_retry_backoff: Duration,
@@ -94,6 +99,7 @@ impl Default for IndexRunLimits {
             embedding_batch: 64,
             max_documents: 50_000,
             max_document_bytes: 50 * 1024 * 1024,
+            extract_timeout: Duration::from_mins(2),
             embedding_retry_backoff: Duration::from_millis(500),
         }
     }

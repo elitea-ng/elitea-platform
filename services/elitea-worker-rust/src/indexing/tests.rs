@@ -1432,11 +1432,15 @@ fn a_failure_summary_names_the_index_and_is_bounded() {
 /// A scripted `elitea.extract.v1` server over a REAL Unix socket, standing
 /// in for elitea-doc-extractor. The document's key decides the answer:
 /// `skip-<reason>.<ext>` is that skip, `crash.<ext>` stops the server with
-/// the call in flight, anything else is text. Every header it read is
-/// recorded with the bytes that followed.
+/// the call in flight, `hang.<ext>` never answers (the server stays up),
+/// `slow.<ext>` answers text after a short while, anything else is text at
+/// once. Every header it read is recorded with the bytes that followed;
+/// the most calls it ever had in flight at once is counted.
 mod fake_extractor {
     use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use tokio::sync::Notify;
     use tonic::{Request, Response, Status, Streaming};
@@ -1445,19 +1449,49 @@ mod fake_extractor {
         DocumentExtractService, DocumentExtractServiceServer,
     };
     use crate::protocol::extract::{
-        CapabilitiesRequest, CapabilitiesResponse, ExtractRequest, ExtractResponse, ExtractSkip,
-        ExtractedText, SkipReason, extract_request, extract_response,
+        CapabilitiesRequest, CapabilitiesResponse, ExtractLimits, ExtractRequest, ExtractResponse,
+        ExtractSkip, ExtractedText, SkipReason, extract_request, extract_response,
     };
 
     pub(super) const TEXT: &str = "Refunds within thirty days.\n\nExchanges within sixty days.\n";
 
-    /// (filename, content type, declared length, bytes received, input cap).
-    pub(super) type Seen = (String, String, u64, usize, u64);
+    /// (filename, content type, declared length, bytes received, input cap,
+    /// asked timeout in ms).
+    pub(super) type Seen = (String, String, u64, usize, u64, u32);
 
-    #[derive(Default)]
+    /// What the real sidecar advertises by default.
+    pub(super) fn capabilities(concurrency: u32) -> CapabilitiesResponse {
+        CapabilitiesResponse {
+            content_types: vec!["application/pdf".to_owned()],
+            limits: Some(ExtractLimits {
+                max_input_bytes: 50 << 20,
+                max_pages: 1000,
+                max_output_bytes: 20 << 20,
+                timeout_millis: 120_000,
+            }),
+            version: "fake".to_owned(),
+            concurrency,
+            slot_wait_millis: 600_000,
+            stream_idle_millis: 30_000,
+        }
+    }
+
     pub(super) struct Fake {
         pub(super) seen: Mutex<Vec<Seen>>,
+        pub(super) capabilities: CapabilitiesResponse,
+        pub(super) capabilities_calls: AtomicUsize,
+        in_flight: AtomicUsize,
+        pub(super) max_in_flight: AtomicUsize,
         crash: Notify,
+    }
+
+    /// Lowers `in_flight` when a call ends, however it ends.
+    struct InFlight<'a>(&'a Fake);
+
+    impl Drop for InFlight<'_> {
+        fn drop(&mut self) {
+            self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     #[tonic::async_trait]
@@ -1466,6 +1500,9 @@ mod fake_extractor {
             &self,
             request: Request<Streaming<ExtractRequest>>,
         ) -> Result<Response<ExtractResponse>, Status> {
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(now, Ordering::SeqCst);
+            let _in_flight = InFlight(self);
             let mut stream = request.into_inner();
             let Some(ExtractRequest {
                 message: Some(extract_request::Message::Header(header)),
@@ -1486,6 +1523,7 @@ mod fake_extractor {
                 header.content_length,
                 received,
                 header.limits.map_or(0, |limits| limits.max_input_bytes),
+                header.limits.map_or(0, |limits| limits.timeout_millis),
             ));
             let stem = header
                 .filename
@@ -1497,6 +1535,12 @@ mod fake_extractor {
             if stem == "crash" {
                 self.crash.notify_one();
                 std::future::pending::<()>().await;
+            }
+            if stem == "hang" {
+                std::future::pending::<()>().await;
+            }
+            if stem == "slow" {
+                tokio::time::sleep(Duration::from_millis(150)).await;
             }
             let outcome = match stem.strip_prefix("skip-") {
                 Some(reason) => {
@@ -1530,7 +1574,8 @@ mod fake_extractor {
             &self,
             _request: Request<CapabilitiesRequest>,
         ) -> Result<Response<CapabilitiesResponse>, Status> {
-            Ok(Response::new(CapabilitiesResponse::default()))
+            self.capabilities_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Response::new(self.capabilities.clone()))
         }
     }
 
@@ -1541,7 +1586,19 @@ mod fake_extractor {
     /// the client's call fails with the connection, as a crashed sidecar's
     /// would.
     pub(super) fn serve(socket: &Path) -> Arc<Fake> {
-        let fake = Arc::new(Fake::default());
+        serve_with(socket, capabilities(4))
+    }
+
+    /// [`serve`] advertising `capabilities`.
+    pub(super) fn serve_with(socket: &Path, capabilities: CapabilitiesResponse) -> Arc<Fake> {
+        let fake = Arc::new(Fake {
+            seen: Mutex::new(Vec::new()),
+            capabilities,
+            capabilities_calls: AtomicUsize::new(0),
+            in_flight: AtomicUsize::new(0),
+            max_in_flight: AtomicUsize::new(0),
+            crash: Notify::new(),
+        });
         let listener = bind(socket);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
@@ -1585,7 +1642,7 @@ fn socket_path(name: &str) -> std::path::PathBuf {
 fn with_extractor(mut harness: Harness, socket: &std::path::Path) -> Harness {
     let client = crate::transport::extractor_client::ExtractorClient::connect_lazy(socket)
         .expect("client")
-        .with_call_timeout(Duration::from_secs(5));
+        .with_deadline_margin(Duration::from_millis(200));
     harness.runtime.extractor = Some(Arc::new(client));
     harness
 }
@@ -1641,6 +1698,7 @@ async fn documents_go_to_the_extractor_and_are_indexed() {
                 pptx.len() as u64,
                 pptx.len(),
                 IndexRunLimits::default().max_document_bytes,
+                120_000,
             ),
             (
                 "docs/policy.pdf".to_owned(),
@@ -1648,10 +1706,13 @@ async fn documents_go_to_the_extractor_and_are_indexed() {
                 pdf.len() as u64,
                 pdf.len(),
                 IndexRunLimits::default().max_document_bytes,
+                120_000,
             ),
         ],
-        "the two documents, whole, with the run's document cap; README.md stays local"
+        "the two documents, whole, with the run's document cap and extraction timeout; README.md stays local"
     );
+    // Capabilities were asked once, before the first document, not per call.
+    assert_eq!(fake.capabilities_calls.load(Ordering::SeqCst), 1);
     // The sidecar's text is what was chunked and written.
     let points = stored(&harness).await;
     assert!(points.iter().any(|p| p.document_key == "docs/policy.pdf"));
@@ -1809,4 +1870,142 @@ async fn without_an_extractor_a_document_is_unsupported_and_without_a_socket_ext
         Some(&1),
         "{summary:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn in_flight_extractor_calls_are_capped_at_the_advertised_concurrency() {
+    // The sidecar advertises ONE slot; the run prepares four documents at
+    // once (document_concurrency 4 in `harness`). The client queues them
+    // locally: the fake never sees two calls in flight, every document is
+    // indexed, and nothing is `extract_failed`.
+    let socket = socket_path("cap1");
+    let fake = fake_extractor::serve_with(&socket, fake_extractor::capabilities(1));
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let documents: Vec<Document> = (0..4)
+        .map(|i| binary_document(&format!("slow-{i}/slow.pdf"), b"x"))
+        .collect();
+    let summary = run(
+        &harness,
+        documents,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 4, "{summary:?}");
+    assert!(summary.skipped.is_empty(), "{:?}", summary.skipped);
+    assert_eq!(fake.max_in_flight.load(Ordering::SeqCst), 1);
+    let sidecar = harness
+        .runtime
+        .extractor
+        .as_ref()
+        .expect("client")
+        .sidecar_for_tests()
+        .await
+        .expect("learned");
+    assert_eq!(sidecar.concurrency, 1);
+    let _ = std::fs::remove_file(&socket);
+
+    // Four slots advertised: the same four documents overlap at the fake.
+    let socket = socket_path("cap4");
+    let fake = fake_extractor::serve_with(&socket, fake_extractor::capabilities(4));
+    let wide = with_extractor(self::harness(4, None).await, &socket);
+    let documents: Vec<Document> = (0..4)
+        .map(|i| binary_document(&format!("slow-{i}/slow.pdf"), b"x"))
+        .collect();
+    let summary = run(
+        &wide,
+        documents,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 4, "{summary:?}");
+    assert!(fake.max_in_flight.load(Ordering::SeqCst) > 1);
+    assert!(fake.max_in_flight.load(Ordering::SeqCst) <= 4);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_call_deadline_and_the_asked_timeout_follow_the_sidecars_capabilities() {
+    // A sidecar advertising a 200 ms extraction cap, a 100 ms slot wait and
+    // a 100 ms idle limit; the client's test margin is 200 ms. A document
+    // the fake never answers must be given up at 200+100+100+200 = 600 ms
+    // (not the old fixed five minutes) and recorded `extract_failed`; the
+    // header must have asked for 200 ms (the run's default 120 s lowered to
+    // the cap).
+    let socket = socket_path("deadline");
+    let mut caps = fake_extractor::capabilities(4);
+    caps.limits.as_mut().expect("limits").timeout_millis = 200;
+    caps.slot_wait_millis = 100;
+    caps.stream_idle_millis = 100;
+    let fake = fake_extractor::serve_with(&socket, caps);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let started = std::time::Instant::now();
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("hang.pdf", b"x"),
+            document("kept.md", "v1", "# Kept\n\nIndexed as usual.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    let elapsed = started.elapsed();
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&1),
+        "{summary:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(550) && elapsed < Duration::from_secs(10),
+        "gave up after {elapsed:?}, the derived deadline is 600 ms"
+    );
+    let seen = fake.seen.lock().expect("lock").clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(
+        seen[0].5, 200,
+        "the asked timeout is the sidecar's cap: {seen:?}"
+    );
+    // After a failure the capabilities are asked again on the next document.
+    let summary = run(
+        &harness,
+        vec![binary_document("policy.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(fake.capabilities_calls.load(Ordering::SeqCst), 2);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_asking_less_extraction_time_than_the_cap_sends_its_own_figure() {
+    let socket = socket_path("asked");
+    let fake = fake_extractor::serve(&socket);
+    let mut harness = with_extractor(harness(4, None).await, &socket);
+    harness.runtime.limits.extract_timeout = Duration::from_secs(5);
+    let summary = run(
+        &harness,
+        vec![binary_document("policy.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    let seen = fake.seen.lock().expect("lock").clone();
+    assert_eq!(seen[0].5, 5_000, "{seen:?}");
+    let _ = std::fs::remove_file(&socket);
 }
