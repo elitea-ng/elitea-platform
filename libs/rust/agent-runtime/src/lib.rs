@@ -9,6 +9,8 @@
 //!   recovery, activation and turn checkpointers, parallel branch control);
 //! * [`canonical`] — order-explicit JSON for digests and rendered values, so
 //!   no digest depends on `serde_json`'s `preserve_order`;
+//! * [`exact_number`] — exact integer reading of JSON number text, never
+//!   through `f64`, shared by typed state reducers and data shaping;
 //! * [`tool_namespacing`] — the provider-alias notice for renamed tools;
 //! * [`toolkits`] — native toolkit families, the Streamable HTTP MCP client,
 //!   tool admission policy and the flat tool namespace;
@@ -46,6 +48,7 @@ pub mod context_budget;
 pub mod context_management;
 pub mod context_status;
 pub mod context_summary;
+pub mod exact_number;
 pub mod graph;
 pub mod host;
 pub mod instruction_authority;
