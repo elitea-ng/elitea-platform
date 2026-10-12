@@ -33,8 +33,14 @@ trailing data and terminal failure/stop reasons fail.
 Eligible typed transient repeatable failures use `operator_approval_required`
 and `["retry"]`. Unknown/unclassified effects use `effect_reconciliation_required`
 and `["reconcile"]`; completed effects use that reason and `["resume_result"]`.
-Authentication/authorization denial, sensitive rejection, cancellation, lease
-loss and unknown failures remain terminal. Worker preserves and rechecks the
+Authentication/authorization denial, sensitive rejection, cancellation and lease
+loss remain terminal. An `unknown` failure class is a receipt class only with
+`effect_reconciliation_required` and `["reconcile"]` (an unclassified failure
+after an unknown or unclassified external effect): the effect is never repeated,
+and the owning effect proof decides the outcome. An `unknown` failure without an
+effect uncertainty stays terminal. The shared vectors
+`libs/jsonschema/runtime/v1/fixtures/node-recovery-required-v1*.json` are read by
+the Go contract tests and the Worker tests alike. Worker preserves and rechecks the
 immutable policy, original backoff, attempt/elapsed budget and complete history.
 
 `receipt_sha256` hashes canonical receipt JSON: lexicographically sorted object

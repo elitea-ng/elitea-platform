@@ -20,13 +20,15 @@ const NodeRecoveryReceipt = z.strictObject({
   schema: z.literal('elitea.pipeline.node-recovery-required.v1'), activation_id: NodeRecoveryID,
   journal_revision: safeInteger(1), node_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:-]+$/u).refine((value) => value.trim() === value), graph_thread: thread,
   step: safeInteger(0), attempt: safeInteger(1).refine((value) => value <= 16),
-  failure_class: z.enum([...transientClasses, 'invalid_configuration', 'invalid_input', 'invalid_result', 'model_output_incomplete']),
+  failure_class: z.enum([...transientClasses, 'invalid_configuration', 'invalid_input', 'invalid_result', 'model_output_incomplete', 'unknown']),
   stop_reason: z.enum(['operator_approval_required', 'effect_reconciliation_required']),
   replay_safety: replaySafety, allowed_actions: z.tuple([NodeRecoveryAction]),
 }).refine((receipt) => {
   const kind = receipt.replay_safety.kind;
   const action = kind === 'no_external_effect' || kind === 'idempotent_effect_not_committed' ? 'retry'
     : kind === 'completed_external_effect' ? 'resume_result' : 'reconcile';
+  // An unclassified failure is valid only with effect reconciliation (Main contract.go).
+  if (receipt.failure_class === 'unknown' && action !== 'reconcile') return false;
   return receipt.allowed_actions[0] === action && (action === 'retry'
     ? (transientClasses as readonly string[]).includes(receipt.failure_class) && receipt.stop_reason === 'operator_approval_required'
     : receipt.stop_reason === 'effect_reconciliation_required');

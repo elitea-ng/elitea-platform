@@ -503,3 +503,43 @@ func TestHTTPActionRenderVectorsAreSelfConsistent(t *testing.T) {
 		t.Fatal("no successful render vectors")
 	}
 }
+
+// The node-recovery receipt has its own domain tests; this keeps the JSON
+// schema and the shared golden vectors from drifting apart.
+func TestNodeRecoveryRequiredSchemaMatchesSharedVectors(t *testing.T) {
+	document := readJSON(t, filepath.Join(schemaDir, "node-recovery-required.schema.json"))
+	// The thread pattern uses the ECMA \u escape, which this Go engine cannot
+	// compile. The domain test covers the thread rule, so only the pattern is
+	// dropped here; every other keyword is validated against the vectors.
+	properties := document.(map[string]any)["properties"].(map[string]any)
+	delete(properties["graph_thread"].(map[string]any), "pattern")
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(resourceURL+"node-recovery-required.schema.json", document); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(resourceURL + "node-recovery-required.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(schemaDir, "fixtures", "node-recovery-required-v1*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if canonical := canonicalJSON(t, raw); !bytes.Equal(canonical, raw) {
+			t.Errorf("%s: vector is not canonical JSON", filepath.Base(path))
+		}
+		err = schema.Validate(readJSON(t, path))
+		invalid := strings.Contains(filepath.Base(path), ".invalid.")
+		if invalid && err == nil {
+			t.Errorf("%s: invalid vector accepted by the schema", filepath.Base(path))
+		}
+		if !invalid && err != nil {
+			t.Errorf("%s: valid vector rejected by the schema: %v", filepath.Base(path), err)
+		}
+	}
+}

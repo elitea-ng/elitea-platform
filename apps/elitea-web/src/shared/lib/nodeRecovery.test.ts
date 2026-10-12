@@ -21,6 +21,14 @@ describe('authoritative node recovery receipt', () => {
   ])('rejects malformed or unknown contracts', (raw) => {
     expect(nodeRecoveryBinding(response, '1', raw)).toBeUndefined();
   });
+  it('accepts an unclassified failure only for effect reconciliation', () => {
+    const reconcile = { ...receipt, failure_class: 'unknown', stop_reason: 'effect_reconciliation_required',
+      replay_safety: { kind: 'unknown_external_effect', effect_id: 'b'.repeat(64) }, allowed_actions: ['reconcile'] };
+    expect(nodeRecoveryBinding(response, '1', reconcile)?.receipt.failure_class).toBe('unknown');
+    expect(nodeRecoveryBinding(response, '1', { ...receipt, failure_class: 'unknown' })).toBeUndefined();
+    expect(nodeRecoveryBinding(response, '1', { ...reconcile, replay_safety: { kind: 'completed_external_effect', receipt_id: 'c'.repeat(64) },
+      allowed_actions: ['resume_result'] })).toBeUndefined();
+  });
   it.each(['', 'a'.repeat(513), '1\n'])('rejects invalid generation %s', (generation) => {
     expect(nodeRecoveryBinding(response, generation, receipt)).toBeUndefined();
   });
