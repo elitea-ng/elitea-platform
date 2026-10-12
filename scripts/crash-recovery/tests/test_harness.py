@@ -60,7 +60,8 @@ class CatalogTest(unittest.TestCase):
         self.assertTrue(ids)
         for sid in ids:
             scenario = catalog.load(sid)
-            self.assertEqual(scenario['id'], sid)
+            # An LM alias loads the scenario that proves it and carries its own id as lm_id.
+            self.assertEqual(scenario.get('lm_id', scenario['id']), sid)
         tiers = json.loads((SUITE / 'catalog/tiers.json').read_text())
         for name, members in tiers.items():
             for sid in members:

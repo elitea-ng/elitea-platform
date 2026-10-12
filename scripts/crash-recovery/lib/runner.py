@@ -8,6 +8,7 @@ import subprocess
 import time
 import uuid
 
+from . import catalog
 from . import faults_compose as faults
 from . import triggers
 from .collectors import Collector, EventStream
@@ -151,9 +152,24 @@ class Browser:
         return {'exit': rc, 'result': read_json(self.dir / 'browser' / 'result.json')}
 
 
+def _not_supported(scenario, reason, out_dir):
+    """A row this stack cannot run (a missing stack feature, or an unsupported entry in the catalog) is recorded,
+    never skipped: the verdict is NOT-SUPPORTED with the reason, and nothing touches the stack."""
+    rec = {'scenario': scenario['id'], 't_start': iso(), 'not_supported': reason, 'lm_ids': scenario.get('lm_ids', [])}
+    print(f"{iso()} {scenario['id']} NOT-SUPPORTED: {reason}", flush=True)
+    rec['t_end'] = iso()
+    result = evaluate(scenario, rec)
+    write_json(out_dir / 'evidence.json', rec)
+    write_json(out_dir / 'verdict.json', result)
+    return rec, result
+
+
 def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False):
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    reason = catalog.not_supported_reason(scenario, stack)
+    if reason:
+        return _not_supported(scenario, reason, out_dir)
     col = Collector(stack)
     rec = {'scenario': scenario['id'], 't_start': iso(), 'pre_faults': [], 'faults': []}
     events = EventStream(out_dir / 'docker-events.jsonl')

@@ -35,11 +35,13 @@ The harness is local and opt-in. CI never runs it. The design is
 | `crashctl.py` | CLI: `init`, `material`, `up`, `seed`, `preflight`, `run`, `verify`, `report`, `binary-check`, `down` |
 | `catalog/scenarios/*.json` | One scenario per file. The schema is DESIGN §3.2 in JSON, because the standard library has no YAML parser. |
 | `catalog/tiers.json` | Tier membership (`T0`, `T0-base`, `T0-code`, `T0-model`) |
+| `catalog/language-matrix.json` | The language matrix: fault templates x languages, expanded in `lib/catalog.py` into `LM-<FAULT>-<lang>` scenarios, plus the tiers `LM`, `LM-<lang>` and `LM-PREP` |
 | `invariants/{product,agentstate}/*.sql` | Invariant queries. Values are bound as psql variables, never interpolated. |
-| `fixtures/` | Pipeline and agent fixtures, and `seed.py` (public API only) |
+| `fixtures/` | Pipeline and agent fixtures, and `seed.py` (public API only). `pipelines/code-lang.yaml` is the one template of the language matrix; `seed.py` `LANGUAGES` holds each language's node sources. |
 | `lib/` | Stack bring-up, faults, triggers, collectors, verdict engine, report, redaction |
 | `tests/test_harness.py` | Self-tests: `python3 -m unittest discover -s scripts/crash-recovery/tests` |
 | `../../deploy/docker-compose.crash-rehearsal.yml` | The compose crash overlay (WP-4) |
+| `../../deploy/docker-compose.crash-npm.yml` | Overlay of the opt-in `npm` stack feature (native Deno) |
 | `../../deploy/runtime/worker-runtime.crash.json` | The Worker config with both recovery flags |
 | `../../apps/elitea-web/playwright.crash.config.ts` | The opt-in browser check (I9), `e2e/crash/` |
 
@@ -73,6 +75,38 @@ What the overlay adds to the standard standalone, Rust-agent and sandbox overlay
   - Services no scenario uses are disabled.
 - **Worker diagnostics.** `ELITEA_RUST_FAILURE_DIAGNOSTICS=on`.
 
+## Stack features
+
+`stack.json` `features` switches opt-in overlays (all off by default; `crashctl material`, `up` and `seed` read them):
+
+| Feature | Adds | Needed by |
+|---|---|---|
+| `preparation` | Python dependency preparation (`docker-compose.crash-preparation.yml`, the resolver network) | `BASE-python-prepared`, `CR-*-P09`, `LM-PREP-python` |
+| `compiled` | Compiled Rust snapshots (`docker-compose.crash-compiled.yml`) | `BASE-rust-compiled`, `CR-MK-P11`, `LM-PREP-rust` |
+| `npm` | Native Deno for JavaScript and TypeScript (`docker-compose.crash-npm.yml`); needs `preparation` | `LM-PREP-javascript`, `LM-PREP-typescript` and their Worker-kill rows |
+
+How `npm` is configured (`crashctl material` writes it; `up` adds the overlay):
+- **Worker config.** The `javascript` and `typescript` entries of `sandbox_runtimes` execute on a native listener
+  (`dns:elitea-sandbox-deno-native`, port 9449) and each gets a native `preparation` object: its own listener
+  (`dns:elitea-sandbox-<lang>-preparation`, ports 9450 and 9451), the existing Deno runner image digest, and
+  `native_platform` {linux, `arm64` or `amd64`, gnu}. The architecture comes from
+  `docker info --format {{.Architecture}}` (`aarch64` becomes `arm64`, `x86_64` becomes `amd64`). The Python entry keeps
+  its preparation without `native_platform`. The Worker allows four runtimes, one per language, and this keeps four.
+- **Supervisor.** The `deno` execution listener narrows to `python`. Three listeners are added, with material under
+  `sandbox-npm/`: native execution (`purpose: execution`, languages `javascript` and `typescript`, `native_platform`,
+  `native_workspace_bytes` 512 MiB and `memory_bytes` at least workspace + 128 MiB), and one preparation listener per
+  language (`purpose: preparation`, one language, Docker backend, `preparation_network`, `dependency_content`,
+  `native_platform`). Their certificates are the `--native` leaves of `deploy/scripts/gen-sandbox-certs.sh`
+  (`elitea-sandbox-deno-native`, `elitea-sandbox-javascript-preparation`, `elitea-sandbox-typescript-preparation`).
+  Main's sandbox audiences and its original-Code owner config gain the native audiences.
+- **Network and egress.** Preparers join the existing `elitea-python-preparation-resolver` bridge, the one the Python
+  preparer uses. Compose cannot restrict a bridge to hostnames: a preparer can reach `registry.npmjs.org` and `jsr.io`
+  (and, since the bridge is shared, the Python registries) only because Deno's `--allow-net` names them. Execution
+  stays offline. The harness checks that only this stack's preparers are attached to the bridge (`NET`).
+- **Fixtures.** `seed` adds `code-javascript-npm-50` and `code-typescript-npm-50`, whose sleep node starts with
+  `import slugify from "npm:slugify@1.6.6";`. npm has no dependencies field: the literal specifier is the declaration.
+- **Status.** The generated configs are unit-tested only. Nothing has run against a live native Deno stack yet.
+
 ## Running
 
 ```bash
@@ -93,6 +127,39 @@ Each repeat runs these steps:
 - the verdict.
 
 The stack is restored after every repeat.
+
+### Language matrix
+
+`crashctl run LM` runs the same faults over every Code language (`python`, `javascript`, `typescript`, `rust`), without
+a JSON file per row. `catalog/language-matrix.json` holds the fault templates and `lib/catalog.py` expands them:
+
+| Template | Row id | Fault | Target |
+|---|---|---|---|
+| `BASE` | `LM-BASE-<lang>` | none; sleep fixture; sets the I2 oracle (run first) | R |
+| `WK`, `SK`, `MK` | `LM-WK-<lang>` ... | kill -9 and start of Worker, Supervisor or Main at `code_runtime_running` (as `CR-WK-P10`, `CR-SK-P10`, `CR-MK-P10`) | R |
+| `STOP` | `LM-STOP-<lang>` | the user's Stop while the Code runtime runs; no pod replacement | R, settles CANCELLED |
+| `THROW` | `LM-THROW-<lang>` | none; the throw fixture | F, `PIPELINE_CODE_FAILED`, no reconcile card |
+
+Package preparation rows, `LM-PREP*`:
+- `LM-PREP-python` and `LM-PREP-WK-python` reference `BASE-python-prepared` and `CR-WK-P09`. `LM-PREP-rust` and
+  `LM-PREP-MK-rust` reference `BASE-rust-compiled` and `CR-MK-P11`. A reference is an `alias`: the run, its evidence
+  directory and its oracle belong to the referenced scenario, which runs once even when a tier also names it.
+- `LM-PREP-javascript`, `LM-PREP-typescript` and `LM-PREP-WK-<lang>` are new: a baseline and a Worker kill during
+  preparation (`preparation_resolving`) on the npm fixture. They need the stack feature `npm`.
+
+Tiers: `LM` (all languages), `LM-<lang>` (for each language: `BASE`, the faults, then its package rows) and `LM-PREP`.
+The fixtures `code-<lang>-sleep-50` and `code-<lang>-throw` are seeded for every language; `seed` adds the missing ones
+to an existing `fixtures.json`. All of them come from `fixtures/pipelines/code-lang.yaml`. The P10 triggers use the 50 s
+sleep. Rust gets a longer trigger timeout and budget, because the first (`BASE`) run compiles and later runs reuse the
+Ready snapshot when the `compiled` feature is on.
+
+`NOT-SUPPORTED`: a row the stack cannot run is recorded, not skipped. `run` writes `verdict.json` with verdict
+`NOT-SUPPORTED` and a `reason`, logs `NOT-SUPPORTED: <reason>`, runs the row once, and touches nothing on the stack.
+Two sources: a scenario's `requires` (`{"feature", "reason"}`; the npm rows say "JS/TS npm preparation needs the native
+Deno profile (stack feature `npm`)", the Python and Rust package rows name `preparation` or `compiled`), and the
+`unsupported` map of `language-matrix.json` (`{id: reason}`). `report` lists these rows with their reason and shows the
+LM id of a referenced row with the scenario that proved it: `LM-PREP-python (proved by BASE-python-prepared)`.
+A `NOT-SUPPORTED` repeat is never counted: it cannot become a pass, and it never moves a matrix cell.
 
 `T0b-gap` holds scenarios that reproduce known gaps: `CR-WSP-P09-lease` and its Stop variant. Before the fix lands
 they leave an unsettled execution, which blocks every later preflight. Run them alone and last. Then snapshot the
@@ -149,6 +216,8 @@ Verdicts:
 - `EXPECTED-GAP`: the observed class equals the documented class of a gap cell.
 - `REGRESSION`: anything worse.
 - `INCONCLUSIVE`: the trigger missed its window or preflight failed. It is never credited.
+- `NOT-SUPPORTED`: the stack cannot run the row (a missing stack feature, or an `unsupported` entry). Recorded with its
+  reason, never credited and never counted as a pass or a fail.
 
 ## Pinned facts (WP-0)
 

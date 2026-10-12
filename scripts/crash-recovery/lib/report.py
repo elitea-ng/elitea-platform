@@ -9,7 +9,8 @@ import tempfile
 from . import catalog
 from .common import read_json, run
 
-FINAL = ('REGRESSION', 'PASS', 'EXPECTED-GAP', 'INCONCLUSIVE')
+FINAL = ('REGRESSION', 'PASS', 'EXPECTED-GAP', 'INCONCLUSIVE', 'NOT-SUPPORTED')
+UNCOUNTED = ('INCONCLUSIVE', 'NOT-SUPPORTED')
 
 
 def build(run_dirs):
@@ -32,9 +33,9 @@ def build(run_dirs):
     for sid, row in sorted(rows.items()):
         s = catalog.load(sid)
         verdicts = [r['verdict'] for r in row['repeats']]
-        counted = [v for v in verdicts if v != 'INCONCLUSIVE']
+        counted = [v for v in verdicts if v not in UNCOUNTED]
         if not counted:
-            final = 'INCONCLUSIVE'
+            final = 'NOT-SUPPORTED' if all(v == 'NOT-SUPPORTED' for v in verdicts) else 'INCONCLUSIVE'
         elif 'REGRESSION' in counted:
             final = 'REGRESSION'
         elif all(v == 'PASS' for v in counted):
@@ -48,6 +49,11 @@ def build(run_dirs):
                     'observed': sorted({r['observed'] for r in row['repeats'] if r['observed']}),
                     'timings': _timings(row['repeats']), 'matrix_proposal': _proposal(s, final, counted)})
         out.append(row)
+    # A language-matrix row that references an existing scenario shows the proving scenario's result under its own id.
+    by_id = {row['scenario']: row for row in out}
+    for lm_id, proof in sorted(catalog.aliases().items()):
+        if proof in by_id:
+            out.append(dict(by_id[proof], scenario=lm_id, proved_by=proof, matrix_proposal=None))
     return {'scenarios': out}
 
 
@@ -75,8 +81,13 @@ def markdown(report):
              '|---|---|---|---|---|---|---|---|']
     for row in report['scenarios']:
         t = row['timings'].get('t_fault_to_settled_s', {}).get('median')
-        lines.append(f"| {row['scenario']} | {row['cell']} | {row['now']} | {row['target']} | {row['final']} | "
+        name = row['scenario'] + (f" (proved by {row['proved_by']})" if row.get('proved_by') else '')
+        lines.append(f"| {name} | {row['cell']} | {row['now']} | {row['target']} | {row['final']} | "
                      f"{row['counted_repeats']}/{len(row['repeats'])} | {','.join(row['observed'])} | {t} |")
+    # Not-supported rows are listed with their reason, so an unrun row is never mistaken for a pass.
+    for row in report['scenarios']:
+        if row['final'] == 'NOT-SUPPORTED':
+            lines.append(f"\nNOT-SUPPORTED {row['scenario']}: {row['repeats'][-1]['why']}")
     return '\n'.join(lines)
 
 

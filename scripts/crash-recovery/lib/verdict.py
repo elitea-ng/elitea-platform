@@ -1,10 +1,11 @@
 """Invariant evaluation and the verdict engine (DESIGN §2). Each invariant yields hold | violated | n/a with
 its evidence; the observed class follows the R/I/C/F/L rules and is compared with the scenario target."""
-from .common import parse_iso, seconds_between
+from .common import is_preparation_audience, parse_iso, seconds_between
 
+PREPARATION_AUDIENCE = 'dns:elitea-sandbox-preparation'  # Python; native preparers match is_preparation_audience
 RANK = {'L': 0, 'F': 1, 'C': 2, 'I': 3, 'R': 4}
-PREPARATION_AUDIENCE = 'dns:elitea-sandbox-preparation'
 HOLD, VIOLATED, NA = 'hold', 'violated', 'n/a'
+NOT_SUPPORTED = 'NOT-SUPPORTED'
 
 
 def _inv(status, **evidence):
@@ -70,12 +71,12 @@ def i2_no_code_rerun(run, scenario):
 def i2p_preparation(run, scenario):
     """One dependency preparation per job, and no re-download once the prepared artifact is committed: a
     preparation job that was completed (or had its bundle recorded) before the fault starts no preparer again."""
-    final = [j for j in run['final']['agentstate']['sandbox'] or [] if j.get('audience') == PREPARATION_AUDIENCE]
+    final = [j for j in run['final']['agentstate']['sandbox'] or [] if is_preparation_audience(j.get('audience'))]
     oracle = scenario.get('_oracle', {}).get('preparations')
     if not final and not oracle:
         return _inv(NA)
     pre = [j for j in run.get('pre_fault', {}).get('agentstate', {}).get('sandbox') or []
-           if j.get('audience') == PREPARATION_AUDIENCE]
+           if is_preparation_audience(j.get('audience'))]
     committed = {j['job_key'] for j in pre if j.get('phase') == 'completed' or j.get('has_preparation_bundle')}
     events = run.get('events') or {}
     t_fault_ms = run.get('t_fault_ms')
@@ -271,6 +272,9 @@ def observed_class(run, scenario, inv):
 
 
 def evaluate(scenario, run):
+    if run.get('not_supported'):
+        # Recorded by the runner before any stack step: the row cannot run here, which is not a pass or a fail.
+        return {'verdict': NOT_SUPPORTED, 'reason': run['not_supported'], 'observed': None, 'invariants': {}}
     if run.get('inconclusive'):
         return {'verdict': 'INCONCLUSIVE', 'reason': run['inconclusive'], 'observed': None, 'invariants': {}}
     inv = {

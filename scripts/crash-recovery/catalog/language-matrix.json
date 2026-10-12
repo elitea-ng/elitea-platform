@@ -1,0 +1,134 @@
+{
+  "doc": "Language matrix: fault templates x languages, expanded by lib/catalog.py into LM-<FAULT>-<lang> scenarios. Strings of the form {name} are filled from the language entry; a whole-string {name} keeps the value's type.",
+  "languages": {
+    "python": {"trigger_timeout_s": 150, "base_budget_s": 300, "fault_budget_s": 420},
+    "javascript": {"trigger_timeout_s": 120, "base_budget_s": 240, "fault_budget_s": 360},
+    "typescript": {"trigger_timeout_s": 120, "base_budget_s": 240, "fault_budget_s": 360},
+    "rust": {"trigger_timeout_s": 360, "base_budget_s": 600, "fault_budget_s": 600}
+  },
+  "order": ["BASE", "WK", "SK", "MK", "STOP", "THROW"],
+  "common": {
+    "tier": "LM",
+    "matrix_cell": null,
+    "gap": null,
+    "target": "R",
+    "fixture": "code-{lang}-sleep-50",
+    "pre_faults": [],
+    "expect": {
+      "takeovers": [0],
+      "settlement": "SUCCEEDED",
+      "error_codes": [],
+      "effects": {"tool_items": 0, "mcp_tools_call": 0}
+    }
+  },
+  "faults": {
+    "BASE": {
+      "cell": "baseline (no fault): {lang} Code, 50 s node",
+      "now": "-",
+      "baseline": true,
+      "trigger": {"kind": "obs", "until": "admitted", "timeout_s": 30},
+      "faults": [],
+      "expect": {"budget_s": "{base_budget_s}"},
+      "repeat": 1,
+      "browser": false,
+      "notes": "Control run. Its job count becomes the I2 oracle for this language's sleep fixture; run it first (a Rust run also compiles here, so later runs reuse the Ready snapshot)."
+    },
+    "WK": {
+      "cell": "Worker (container restart) x P10, {lang} Code",
+      "now": "not yet proven for {lang}",
+      "trigger": {"kind": "obs", "until": "code_runtime_running", "timeout_s": "{trigger_timeout_s}",
+                  "params": {"sleep_s": 50, "min_age_s": 3, "remaining_s": 30}},
+      "faults": [{"action": "kill9", "target": "worker"},
+                 {"action": "start", "target": "worker", "after_s": 2, "healthy": false}],
+      "expect": {"takeovers": [1], "budget_s": "{fault_budget_s}"},
+      "repeat": 3,
+      "browser": true,
+      "notes": "Same cut as CR-WK-P10 on the {lang} fixture."
+    },
+    "SK": {
+      "cell": "Supervisor x P10 (process loss, runtime alive), {lang} Code",
+      "now": "not yet proven for {lang}",
+      "trigger": {"kind": "obs", "until": "code_runtime_running", "timeout_s": "{trigger_timeout_s}",
+                  "params": {"sleep_s": 50, "min_age_s": 3, "remaining_s": 30}},
+      "faults": [{"action": "kill9", "target": "supervisor"},
+                 {"action": "start", "target": "supervisor", "after_s": 2, "healthy": false}],
+      "expect": {"takeovers": [0], "budget_s": "{fault_budget_s}"},
+      "repeat": 3,
+      "browser": false,
+      "notes": "Same cut as CR-SK-P10 on the {lang} fixture."
+    },
+    "MK": {
+      "cell": "Main x P10, {lang} Code",
+      "now": "not yet proven for {lang}",
+      "trigger": {"kind": "obs", "until": "code_runtime_running", "timeout_s": "{trigger_timeout_s}",
+                  "params": {"sleep_s": 50, "min_age_s": 3, "remaining_s": 30}},
+      "faults": [{"action": "kill9", "target": "main"},
+                 {"action": "start", "target": "main", "after_s": 2, "healthy": true}],
+      "expect": {"takeovers": [0, 1], "budget_s": "{fault_budget_s}"},
+      "repeat": 3,
+      "browser": true,
+      "notes": "Same cut as CR-MK-P10 on the {lang} fixture."
+    },
+    "STOP": {
+      "cell": "user Stop while the {lang} Code runtime runs",
+      "now": "not yet proven for {lang}",
+      "trigger": {"kind": "obs", "until": "code_runtime_running", "timeout_s": "{trigger_timeout_s}",
+                  "params": {"sleep_s": 50, "min_age_s": 3, "remaining_s": 30}},
+      "faults": [{"action": "user_stop"}],
+      "expect": {"takeovers": [0], "settlement": "CANCELLED", "budget_s": "{fault_budget_s}"},
+      "repeat": 3,
+      "browser": false,
+      "notes": "A plain user Stop through the public API, no component loss: one CANCELLED settlement, the runtime removed."
+    },
+    "THROW": {
+      "cell": "no fault: the {lang} Code throws",
+      "now": "-",
+      "target": "F",
+      "fixture": "code-{lang}-throw",
+      "trigger": {"kind": "obs", "until": "admitted", "timeout_s": 30},
+      "faults": [],
+      "expect": {"takeovers": [0], "settlement": "FAILED", "replay_codes": ["PIPELINE_CODE_FAILED"],
+                 "no_reconcile_card": true, "budget_s": "{base_budget_s}"},
+      "repeat": 1,
+      "browser": false,
+      "notes": "A thrown user error is a typed Code failure with a support reference and no operator reconcile card."
+    },
+    "NPM-BASE": {
+      "cell": "baseline (no fault): {lang} node with an npm: import",
+      "now": "-",
+      "baseline": true,
+      "fixture": "code-{lang}-npm-50",
+      "requires": {"feature": "npm", "reason": "JS/TS npm preparation needs the native Deno profile (stack feature `npm`)"},
+      "trigger": {"kind": "obs", "until": "admitted", "timeout_s": 30},
+      "faults": [],
+      "expect": {"budget_s": 480},
+      "repeat": 1,
+      "browser": false,
+      "notes": "Control run: native preparation downloads slugify from the npm registry, then offline native execution. Sets the job and preparation-count oracle."
+    },
+    "NPM-WK": {
+      "cell": "Worker (container restart) x P09, {lang} npm preparation",
+      "now": "not yet proven for {lang}",
+      "fixture": "code-{lang}-npm-50",
+      "requires": {"feature": "npm", "reason": "JS/TS npm preparation needs the native Deno profile (stack feature `npm`)"},
+      "trigger": {"kind": "obs", "until": "preparation_resolving", "timeout_s": 240, "params": {"min_age_s": 1}},
+      "faults": [{"action": "kill9", "target": "worker"},
+                 {"action": "start", "target": "worker", "after_s": 2, "healthy": false}],
+      "expect": {"takeovers": [1], "budget_s": 600},
+      "repeat": 3,
+      "browser": false,
+      "notes": "Kill the Worker while the native preparer resolves and downloads the npm package; same cut as CR-WK-P09."
+    }
+  },
+  "prep": {
+    "LM-PREP-python": {"alias": "BASE-python-prepared", "requires": {"feature": "preparation", "reason": "Python package preparation needs the stack feature `preparation`"}},
+    "LM-PREP-WK-python": {"alias": "CR-WK-P09", "requires": {"feature": "preparation", "reason": "Python package preparation needs the stack feature `preparation`"}},
+    "LM-PREP-rust": {"alias": "BASE-rust-compiled", "requires": {"feature": "compiled", "reason": "the compiled Rust snapshot path needs the stack feature `compiled`"}},
+    "LM-PREP-MK-rust": {"alias": "CR-MK-P11", "requires": {"feature": "compiled", "reason": "the compiled Rust snapshot path needs the stack feature `compiled`"}},
+    "LM-PREP-javascript": {"fault": "NPM-BASE", "lang": "javascript"},
+    "LM-PREP-WK-javascript": {"fault": "NPM-WK", "lang": "javascript"},
+    "LM-PREP-typescript": {"fault": "NPM-BASE", "lang": "typescript"},
+    "LM-PREP-WK-typescript": {"fault": "NPM-WK", "lang": "typescript"}
+  },
+  "unsupported": {}
+}

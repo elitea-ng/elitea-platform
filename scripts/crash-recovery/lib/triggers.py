@@ -3,7 +3,7 @@ after one immediate re-check (the 1084 controller's "repeated cut"). A predicate
 check and the fault makes the scenario INCONCLUSIVE. Crashpoints (cp:) are WP-2/WP-3 and wait for #1084."""
 import time
 
-from .common import now, parse_iso
+from .common import is_preparation_audience, now, parse_iso
 
 TERMINAL_STATES = {'SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED'}
 LIVE_STATES = {'CLAIMED', 'RUNNING'}
@@ -42,7 +42,7 @@ def code_runtime_running(ctx, params):
     sleep_s = params.get('sleep_s', 50)
     min_age, remaining = params.get('min_age_s', 3), params.get('remaining_s', 20)
     for job in _jobs(ctx):
-        if job.get('audience') == 'dns:elitea-sandbox-preparation':
+        if is_preparation_audience(job.get('audience')):
             continue
         if job.get('phase') != 'dispatched' or job.get('has_result') or not job.get('runtime_id'):
             continue
@@ -56,12 +56,9 @@ def code_runtime_running(ctx, params):
     return False, {'reason': 'no running Code job inside the window'}
 
 
-PREPARATION_AUDIENCE = 'dns:elitea-sandbox-preparation'
-
-
 def _split(jobs):
-    prep = [j for j in jobs if j.get('audience') == PREPARATION_AUDIENCE]
-    return prep, [j for j in jobs if j.get('audience') != PREPARATION_AUDIENCE]
+    prep = [j for j in jobs if is_preparation_audience(j.get('audience'))]
+    return prep, [j for j in jobs if not is_preparation_audience(j.get('audience'))]
 
 
 def preparation_resolving(ctx, params):
