@@ -11,6 +11,10 @@ use crate::agents::graph::ParallelBranchExecution;
 
 const MAX_BRANCH_THREADS: usize = 129;
 const MAX_FIXED_BRANCHES: usize = 16;
+const _: () = assert!(
+    MAX_BRANCH_THREADS == crate::agents::graph::fanout_budget::MAX_CHILD_THREADS
+        && MAX_FIXED_BRANCHES == crate::agents::graph::fanout_budget::MAX_PARALLEL_BRANCHES
+);
 
 pub(super) struct ParallelEventScope {
     branch_root_thread: String,

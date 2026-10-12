@@ -52,6 +52,7 @@ mod direct_tool_tests;
 mod fan_in_tests;
 pub(crate) mod fanout_control;
 use elitea_agent_runtime::graph::hitl;
+pub(crate) use elitea_agent_runtime::graph::{fanout_budget, fanout_trace};
 #[cfg(test)]
 mod hitl_tests;
 mod llm;
@@ -96,6 +97,8 @@ use elitea_agent_runtime::graph::router;
 #[cfg(test)]
 mod node_admission_parity_tests;
 #[cfg(test)]
+mod pipeline_pg_test_support;
+#[cfg(test)]
 mod routing_tests;
 #[cfg(feature = "graph-shaping-bench")]
 #[doc(hidden)]
@@ -110,6 +113,15 @@ mod split_out;
 #[cfg(test)]
 mod split_out_tests;
 use elitea_agent_runtime::graph::state_modifier;
+#[cfg(test)]
+mod state_reducer_compiler_tests;
+#[cfg(test)]
+mod state_reducer_digest_tests;
+#[cfg(test)]
+mod state_reducer_parity_tests;
+#[cfg(test)]
+mod state_reducer_pg_tests;
+pub(crate) use elitea_agent_runtime::graph::state_reducers;
 pub(crate) mod static_pause;
 #[cfg(test)]
 mod static_pause_tests;
@@ -150,15 +162,17 @@ pub use yaml::{
 
 #[cfg(test)]
 pub(crate) use parallel::{
-    AdkParallelBranchRuntime, DurableParallelNode, PARALLEL_INTERRUPT_SCHEMA,
-    PARALLEL_RESUME_STATE_KEY, ParallelBranchGraphFactory, ParallelBranchPause,
-    ParallelBranchRuntime, ParallelBranchTerminal, ParallelDecision,
-    ParallelOccurrenceCheckpointer, ParallelPauseCard, PreparedParallelActivation,
+    AdkParallelBranchRuntime, DurableParallelNode, MAX_PARENT_ROWS_PER_VISIT,
+    PARALLEL_INTERRUPT_SCHEMA, PARALLEL_RESUME_STATE_KEY, ParallelBlocked,
+    ParallelBranchGraphFactory, ParallelBranchOutcome, ParallelBranchPause, ParallelBranchRuntime,
+    ParallelBranchTerminal, ParallelDecision, ParallelOccurrenceCheckpointer, ParallelPauseCard,
+    PreparedParallelActivation, PreparedParallelBranch,
 };
 pub(crate) use parallel::{
     ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
-    ParallelChildOrigin,
+    ParallelChildOrigin, ParallelChildRequest, ParentHead, ParentSaveProbe,
+    PreparedChildCheckpoint,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 

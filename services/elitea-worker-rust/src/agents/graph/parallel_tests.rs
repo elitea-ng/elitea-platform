@@ -163,6 +163,35 @@ struct MemoryChildCheckpoints {
     parent: Arc<AtomicParentCheckpoints>,
     /// Branch ID whose child writer reports `checkpoint.writer_not_current` on save.
     lease_lost_branch: Option<&'static str>,
+    /// Loads issued against every child store.
+    child_loads: Arc<AtomicUsize>,
+}
+
+/// Counts reads of a child store; writes and other calls pass through.
+struct CountingLoads {
+    store: Arc<MemoryCheckpointer>,
+    loads: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Checkpointer for CountingLoads {
+    async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
+        self.store.save(checkpoint).await
+    }
+    async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        self.store.load(thread).await
+    }
+    async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        self.store.load_by_id(id).await
+    }
+    async fn list(&self, thread: &str) -> Result<Vec<Checkpoint>, GraphError> {
+        self.store.list(thread).await
+    }
+    async fn delete(&self, thread: &str) -> Result<(), GraphError> {
+        self.store.delete(thread).await
+    }
 }
 
 const LEASE_LOST: &str =
@@ -237,7 +266,10 @@ impl ParallelChildCheckpointerFactory for MemoryChildCheckpoints {
         let checkpointer: Arc<dyn Checkpointer> = if self.lease_lost_branch == Some(branch.id()) {
             Arc::new(LeaseLostStore(store))
         } else {
-            store
+            Arc::new(CountingLoads {
+                store,
+                loads: Arc::clone(&self.child_loads),
+            })
         };
         Ok(ParallelChildCheckpoint {
             admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
@@ -1375,9 +1407,30 @@ async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
         vec!["after".to_owned()],
     );
     checkpoints.parent.rows.lock().await.before_append = Some(competing.clone());
+    // The pause is computed and its cards are staged: no parent row yet.
+    let paused = DurableParallelNode::new(definition, runtime.clone())
+        .execute(&context)
+        .await
+        .expect("pause computed");
+    assert!(paused.interrupt.is_some());
+    // The cards meet the parent only at the ADK pause save, which a competing
+    // committed writer refuses.
+    let frozen = checkpoints
+        .parent
+        .load(&context.config.thread_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let pause_row = Checkpoint::new(
+        &context.config.thread_id,
+        frozen.state.clone(),
+        frozen.step,
+        frozen.pending_nodes.clone(),
+    );
     assert!(
-        DurableParallelNode::new(definition, runtime)
-            .execute(&context)
+        runtime
+            .parent_checkpointer()
+            .save(&pause_row)
             .await
             .is_err()
     );
@@ -2093,4 +2146,189 @@ async fn a_branch_failing_after_cancellation_writes_no_failed_receipt() {
         "{error}"
     );
     assert_eq!(failed_receipt_count(&checkpoints).await, 0);
+}
+
+fn pausing_parent_graph(
+    definition: ParallelNodeDefinition,
+    runtime: Arc<AdkParallelBranchRuntime>,
+) -> CompiledGraph {
+    let parent = runtime.parent_checkpointer();
+    StateGraph::with_channels(&["input", "gathered", PARALLEL_RESUME_STATE_KEY])
+        .add_node(DurableParallelNode::new(definition, runtime))
+        .add_edge(START, "gather")
+        .add_edge("gather", adk_rust::graph::END)
+        .compile()
+        .expect("compile parent graph")
+        .with_checkpointer_arc(parent)
+}
+
+#[tokio::test]
+async fn each_activation_visit_appends_at_most_two_parent_rows() {
+    use super::parallel::MAX_PARENT_ROWS_PER_VISIT;
+    // Completion visit: freeze + join.
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let graph = parent_graph(
+        definition(&[("a", "first"), ("b", "second")], 2),
+        runtime(
+            Arc::clone(&checkpoints),
+            HashMap::from([
+                ("first".to_owned(), constant(json!({"value": 1}))),
+                ("second".to_owned(), constant(json!({"value": 2}))),
+            ]),
+        ),
+    );
+    graph
+        .invoke(
+            HashMap::from([("input".to_owned(), json!("x"))]),
+            ExecutionConfig::new("root-budget-join"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        checkpoints
+            .parent
+            .list("root-budget-join")
+            .await
+            .unwrap()
+            .len(),
+        MAX_PARENT_ROWS_PER_VISIT
+    );
+
+    // Pause visit: freeze + the pause row, which carries every card.
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(HashMap::from([
+        ("a".to_owned(), AtomicUsize::new(0)),
+        ("b".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let graph = pausing_parent_graph(
+        definition.clone(),
+        pausing_runtime(&checkpoints, &runs, &[]),
+    );
+    let thread = "root-budget-pause";
+    let GraphError::Interrupted(interrupted) = graph
+        .invoke(
+            HashMap::from([("input".to_owned(), json!("original"))]),
+            ExecutionConfig::new(thread),
+        )
+        .await
+        .unwrap_err()
+    else {
+        panic!("expected the aggregate pause");
+    };
+    let rows = checkpoints.parent.list(thread).await.unwrap();
+    assert_eq!(rows.len(), MAX_PARENT_ROWS_PER_VISIT);
+    assert_eq!(
+        rows[1].metadata["elitea.graph.parallel.occurrence.v2"]["cards"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+
+    // Resume visit: accepted decision set + join.
+    let adk_rust::graph::interrupt::Interrupt::Dynamic {
+        data: Some(pause), ..
+    } = interrupted.interrupt
+    else {
+        panic!("expected aggregate pause data");
+    };
+    let result = graph
+        .invoke(
+            resume_state(&pause, "original"),
+            ExecutionConfig::new(thread).with_resume_from(&interrupted.checkpoint_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["gathered"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        checkpoints.parent.list(thread).await.unwrap().len(),
+        2 * MAX_PARENT_ROWS_PER_VISIT
+    );
+}
+
+#[tokio::test]
+async fn a_third_parent_row_in_one_visit_is_refused_with_a_typed_error() {
+    use super::parallel::ParallelBranchRuntime;
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(HashMap::from([
+        ("a".to_owned(), AtomicUsize::new(0)),
+        ("b".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let runtime = pausing_runtime(&checkpoints, &runs, &[]);
+    let thread = "root-budget-refusal";
+    let context = NodeContext::new(
+        HashMap::from([("input".to_owned(), json!("original"))]),
+        ExecutionConfig::new(thread),
+        0,
+    );
+    let mut activation = ParallelActivation {
+        root_thread_id: thread.to_owned(),
+        node_id: "gather".to_owned(),
+        step: 0,
+        config_digest: definition.config_digest(),
+    };
+    // Row 1: the frozen occurrence. Row 2: the typed denial.
+    ready_branches(
+        runtime
+            .prepare(&mut activation, &definition, &context)
+            .await
+            .unwrap(),
+    );
+    runtime
+        .record_blocked(
+            &activation,
+            ParallelBlocked {
+                branch_id: "a".to_owned(),
+                node: "a".to_owned(),
+                ordinal: 0,
+            },
+        )
+        .await
+        .unwrap();
+    let latest = checkpoints.parent.load(thread).await.unwrap().unwrap();
+    let third = Checkpoint::new(
+        thread,
+        latest.state.clone(),
+        latest.step,
+        latest.pending_nodes.clone(),
+    );
+    let error = runtime
+        .parent_checkpointer()
+        .save(&third)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("graph.parallel.parent_write_budget_exhausted"),
+        "{error}"
+    );
+    assert_eq!(checkpoints.parent.list(thread).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_completed_child_is_proven_by_its_fenced_save_without_a_reload() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let graph = parent_graph(
+        definition(&[("a", "first"), ("b", "second")], 2),
+        runtime(
+            Arc::clone(&checkpoints),
+            HashMap::from([
+                ("first".to_owned(), constant(json!({"value": 1}))),
+                ("second".to_owned(), constant(json!({"value": 2}))),
+            ]),
+        ),
+    );
+    graph
+        .invoke(
+            HashMap::from([("input".to_owned(), json!("x"))]),
+            ExecutionConfig::new("root-child-reads"),
+        )
+        .await
+        .unwrap();
+    // Per fresh child: the preparation read (batched by a durable store) and
+    // one fenced ADK start probe. ADK's second empty probe and the former
+    // post-completion verify reload cost nothing.
+    assert_eq!(checkpoints.child_loads.load(Ordering::SeqCst), 2 * 2);
 }
