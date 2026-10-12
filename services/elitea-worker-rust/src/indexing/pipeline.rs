@@ -1291,6 +1291,7 @@ pub(super) fn failure_for_test(index_name: &str, reason: &str) -> IndexIngestSum
             branch: None,
             whitelist: Vec::new(),
             blacklist: Vec::new(),
+            arguments: Map::new(),
         },
         reason,
     )

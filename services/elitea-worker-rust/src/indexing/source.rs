@@ -2,9 +2,11 @@
 //! path filters.
 //!
 //! I1 serves the five families whose connectors exist (ADR-0030 decision 7):
-//! `github`, `gitlab`, `bitbucket`, `ado_repos` and `artifact`. Every other
-//! indexing toolkit type is refused with its name, so a run on a deployment
-//! that switched too early fails with a reason instead of indexing nothing.
+//! `github`, `gitlab`, `bitbucket`, `ado_repos` and `artifact`; I2 adds the
+//! Atlassian pair, `confluence` and `jira` (pages or issues with their
+//! attachments and comments as dependent documents). Every other indexing
+//! toolkit type is refused with its name, so a run on a deployment that
+//! switched too early fails with a reason instead of indexing nothing.
 //!
 //! The whitelist and blacklist keep the SDK's rule (`CodeIndexerToolkit`):
 //! a path is kept when it matches any whitelist pattern (or the whitelist is
@@ -19,11 +21,15 @@ use elitea_connectors::artifact::client::ArtifactPlatform;
 use elitea_connectors::artifact::source::ArtifactSource;
 use elitea_connectors::bitbucket::config::BitbucketToolkitConfig;
 use elitea_connectors::bitbucket::source::BitbucketSource;
+use elitea_connectors::confluence::config::{ConfluenceConnectorConfig, ConfluenceIndexArguments};
+use elitea_connectors::confluence::source::ConfluenceSource;
 use elitea_connectors::egress::HostAllowlist;
 use elitea_connectors::github::config::GitHubToolkitConfig;
 use elitea_connectors::github::source::GitHubSource;
 use elitea_connectors::gitlab::config::GitLabToolkitConfig;
 use elitea_connectors::gitlab::source::GitLabSource;
+use elitea_connectors::jira::config::{JiraConnectorConfig, JiraIndexArguments};
+use elitea_connectors::jira::source::JiraSource;
 use elitea_connectors::source::SourceLimits;
 use elitea_connectors::transport::Transport;
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
@@ -35,6 +41,9 @@ use super::inputs::{IndexParameters, ToolkitConfiguration};
 /// The families I1 indexes.
 pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 5] =
     ["github", "gitlab", "bitbucket", "ado_repos", "artifact"];
+/// The I2 families this worker indexes so far (ADR-0030 decision 7; the
+/// Microsoft four land apart).
+pub(crate) const I2_SERVED_TOOLKIT_TYPES: [&str; 2] = ["confluence", "jira"];
 
 /// A connector could not be built. The text names the toolkit type and the
 /// connector's own data-free reason.
@@ -56,6 +65,8 @@ pub(crate) enum IndexSource {
     Bitbucket(BitbucketSource),
     AdoRepos(AdoReposSource),
     Artifact(ArtifactSource),
+    Confluence(ConfluenceSource),
+    Jira(JiraSource),
     #[cfg(test)]
     Fixture(Vec<Document>),
 }
@@ -144,6 +155,22 @@ impl IndexSource {
                     .map_err(|e| refused(&e))?;
                 Self::Artifact(source.with_limits(source_limits))
             }
+            "confluence" => {
+                let config = ConfluenceConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments = ConfluenceIndexArguments::parse(&parameters.arguments)
+                    .map_err(|e| refused(&e))?;
+                let source = ConfluenceSource::new(config, arguments, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::Confluence(source.with_limits(source_limits))
+            }
+            "jira" => {
+                let config = JiraConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments =
+                    JiraIndexArguments::parse(&parameters.arguments).map_err(|e| refused(&e))?;
+                let source = JiraSource::new(config, arguments, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::Jira(source.with_limits(source_limits))
+            }
             // The tests' in-memory toolkit: the documents the test staged.
             #[cfg(test)]
             "fixture" => match super::tests::take_fixture_source() {
@@ -152,8 +179,9 @@ impl IndexSource {
             },
             other => {
                 return Err(SourceBuildError(format!(
-                    "the {other} toolkit is not indexed by this worker yet (ADR-0030 I1 serves {})",
-                    SERVED_TOOLKIT_TYPES.join(", ")
+                    "the {other} toolkit is not indexed by this worker yet (ADR-0030 I1 serves {}; I2 so far {})",
+                    SERVED_TOOLKIT_TYPES.join(", "),
+                    I2_SERVED_TOOLKIT_TYPES.join(", ")
                 )));
             }
         };
@@ -172,6 +200,8 @@ impl IndexSource {
             Self::Bitbucket(source) => source.list().await,
             Self::AdoRepos(source) => source.list().await,
             Self::Artifact(source) => source.list().await,
+            Self::Confluence(source) => source.list().await,
+            Self::Jira(source) => source.list().await,
             #[cfg(test)]
             Self::Fixture(documents) => Ok(documents
                 .iter()
@@ -192,6 +222,8 @@ impl IndexSource {
             Self::Bitbucket(source) => source.fetch(key).await,
             Self::AdoRepos(source) => source.fetch(key).await,
             Self::Artifact(source) => source.fetch(key).await,
+            Self::Confluence(source) => source.fetch(key).await,
+            Self::Jira(source) => source.fetch(key).await,
             #[cfg(test)]
             Self::Fixture(documents) => documents
                 .iter()
@@ -373,8 +405,8 @@ mod tests {
     #[test]
     fn an_unserved_toolkit_type_is_refused_with_its_name() {
         let configuration = ToolkitConfiguration {
-            toolkit_type: "confluence".to_owned(),
-            toolkit_name: "wiki".to_owned(),
+            toolkit_type: "figma".to_owned(),
+            toolkit_name: "designs".to_owned(),
             settings: serde_json::Map::new(),
         };
         let parameters = IndexParameters {
@@ -385,6 +417,7 @@ mod tests {
             branch: None,
             whitelist: Vec::new(),
             blacklist: Vec::new(),
+            arguments: serde_json::Map::new(),
         };
         let platform = PlatformAccess {
             origin: "https://platform",
@@ -406,7 +439,107 @@ mod tests {
         )
         .err()
         .expect("refused");
-        assert!(error.0.contains("confluence"), "{error}");
+        assert!(error.0.contains("figma"), "{error}");
         assert!(error.0.contains("ADR-0030 I1"), "{error}");
+        assert!(error.0.contains("confluence, jira"), "{error}");
+    }
+
+    /// The Atlassian families are built from the toolkit settings and the
+    /// `index_data` arguments; a refused configuration or argument names the
+    /// toolkit type and the connector's data-free reason.
+    #[test]
+    fn the_atlassian_families_are_built_or_refused_with_a_reason() {
+        let platform = PlatformAccess {
+            origin: "https://platform",
+            bearer: "pat",
+            project_id: "1",
+        };
+        let transport: Arc<dyn Transport> = Arc::new(
+            elitea_connectors::reqwest012::ReqwestTransport::hardened(
+                &elitea_connectors::github::client::CLIENT_POLICY,
+            )
+            .expect("client"),
+        );
+        let build = |kind: &str, settings: Value, arguments: Value| {
+            let configuration = ToolkitConfiguration {
+                toolkit_type: kind.to_owned(),
+                toolkit_name: "kit".to_owned(),
+                settings: settings.as_object().cloned().unwrap_or_default(),
+            };
+            let parameters = IndexParameters {
+                index_name: "x".to_owned(),
+                clean_index: false,
+                chunking_tool: None,
+                chunking_config: Value::Null,
+                branch: None,
+                whitelist: Vec::new(),
+                blacklist: Vec::new(),
+                arguments: arguments.as_object().cloned().unwrap_or_default(),
+            };
+            IndexSource::build(
+                &configuration,
+                &parameters,
+                &platform,
+                &HostAllowlist::parse(Some("*")),
+                Arc::clone(&transport),
+                IndexRunLimits::default(),
+            )
+        };
+        let confluence = serde_json::json!({
+            "space": "DOCS",
+            "confluence_configuration": {"base_url": "https://acme.atlassian.net/wiki", "token": "t"},
+        });
+        assert!(matches!(
+            build(
+                "confluence",
+                confluence.clone(),
+                serde_json::json!({"include_attachments": true})
+            ),
+            Ok(IndexSource::Confluence(_))
+        ));
+        // No space and nothing selecting pages: refused before any request.
+        let error = build(
+            "confluence",
+            serde_json::json!({"confluence_configuration": {"base_url": "https://acme.atlassian.net", "token": "t"}}),
+            serde_json::json!({}),
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            error
+                .0
+                .starts_with("the confluence toolkit cannot be indexed:"),
+            "{error}"
+        );
+        assert!(error.0.contains("`space`"), "{error}");
+        // A bad argument is refused with the connector's reason.
+        let error = build(
+            "confluence",
+            confluence,
+            serde_json::json!({"content_format": "pdf"}),
+        )
+        .err()
+        .expect("refused");
+        assert!(error.0.contains("configuration is invalid"), "{error}");
+
+        let jira = serde_json::json!({
+            "jira_configuration": {"base_url": "https://jira.corp.example", "username": "u", "api_key": "k"},
+        });
+        assert!(matches!(
+            build(
+                "jira",
+                jira,
+                serde_json::json!({"jql": "project = X", "include_comments": true})
+            ),
+            Ok(IndexSource::Jira(_))
+        ));
+        let error = build(
+            "jira",
+            serde_json::json!({"jira_configuration": {"base_url": "http://jira.corp.example", "token": "t"}}),
+            serde_json::json!({}),
+        )
+        .err()
+        .expect("plain http refused");
+        assert!(error.0.contains("plain HTTP"), "{error}");
     }
 }

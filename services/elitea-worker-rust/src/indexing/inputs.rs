@@ -37,6 +37,10 @@ pub(crate) struct IndexParameters {
     pub(crate) branch: Option<String>,
     pub(crate) whitelist: Vec<String>,
     pub(crate) blacklist: Vec<String>,
+    /// Every `index_data` argument as given, for a family whose connector
+    /// reads its own (Confluence's `cql`, Jira's `jql`, …): each connector's
+    /// argument parser reads and validates what it honours.
+    pub(crate) arguments: Map<String, Value>,
 }
 
 /// Why an entry was refused. The text names a key, never a value.
@@ -117,6 +121,7 @@ pub(crate) fn index_parameters(raw: &[u8]) -> Result<IndexParameters, InputError
         branch: optional_text(&map, "branch")?,
         whitelist: text_list(&map, "whitelist")?,
         blacklist: text_list(&map, "blacklist")?,
+        arguments: map,
     })
 }
 
@@ -185,6 +190,9 @@ mod tests {
         assert_eq!(parameters.chunking_config["max_tokens"], 256);
         assert_eq!(parameters.branch.as_deref(), Some("dev"));
         assert_eq!(parameters.whitelist, vec!["*.md"]);
+        // Every argument stays readable for a family's own connector.
+        assert_eq!(parameters.arguments["progress_step"], 5);
+        assert_eq!(parameters.arguments["branch"], "dev");
         let minimal = index_parameters(br#"{"index_name":"n"}"#).expect("ok");
         assert_eq!(minimal.chunking_config, Value::Null);
         assert!(!minimal.clean_index);

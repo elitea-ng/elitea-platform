@@ -1,0 +1,914 @@
+//! What the Confluence and Jira connectors share (ADR-0030 I2): the SDK's
+//! credential model (a bearer token, a `JSESSIONID` cookie string, or a
+//! username and API key sent as Basic), the Cloud-versus-Server decision, the
+//! bounded custom headers, and the text helpers both configurations read
+//! settings with.
+//!
+//! The agent-runtime families keep their own copies of this logic for now
+//! (`toolkits/families/{confluence,jira}/config.rs`); they are to be pointed
+//! here as a follow-up, the way the git families were in #1249.
+
+use std::fmt;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use serde_json::{Map, Value};
+use zeroize::Zeroizing;
+
+use crate::base_url::{self, BasePath, BaseUrlError, host_matches_domain};
+use crate::transport::Request;
+use crate::transport::header::{ACCEPT, AUTHORIZATION, COOKIE, HeaderName, HeaderValue};
+
+/// The longest secret a configuration carries.
+pub const MAX_SECRET_BYTES: usize = 16 * 1_024;
+/// The longest identity (username, hosting) a configuration carries.
+pub const MAX_IDENTITY_BYTES: usize = 1_024;
+const MAX_CUSTOM_HEADERS: usize = 32;
+const MAX_HEADER_VALUE_BYTES: usize = 8 * 1_024;
+/// The platform's own header namespace; a toolkit may not set it.
+const RESERVED_PLATFORM_HEADER_PREFIX: &str = "x-elitea-";
+
+/// Why an Atlassian configuration was refused. Data-free.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AtlassianConfigErrorCode {
+    /// A required setting is missing or of the wrong shape.
+    InvalidConfiguration,
+    /// A setting is longer than its bound.
+    ResourceExhausted,
+    /// A plain `http://` base URL.
+    PlainHttp,
+    /// `verify_ssl: false`: this runtime always verifies TLS.
+    VerifySslDisabled,
+    /// A custom header that would replace the credential or the transport's
+    /// own headers.
+    ReservedHeader,
+}
+
+/// A refused configuration, naming the provider and the reason, never a
+/// value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AtlassianConfigError {
+    provider: &'static str,
+    code: AtlassianConfigErrorCode,
+}
+
+impl AtlassianConfigError {
+    #[must_use]
+    pub const fn new(provider: &'static str, code: AtlassianConfigErrorCode) -> Self {
+        Self { provider, code }
+    }
+
+    #[must_use]
+    pub const fn code(&self) -> AtlassianConfigErrorCode {
+        self.code
+    }
+}
+
+impl fmt::Display for AtlassianConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let provider = self.provider;
+        match self.code {
+            AtlassianConfigErrorCode::InvalidConfiguration => {
+                write!(formatter, "the {provider} toolkit configuration is invalid")
+            }
+            AtlassianConfigErrorCode::ResourceExhausted => write!(
+                formatter,
+                "the {provider} toolkit configuration exceeds its approved limit"
+            ),
+            AtlassianConfigErrorCode::PlainHttp => write!(
+                formatter,
+                "the {provider} base URL is plain HTTP, which this runtime does not support"
+            ),
+            AtlassianConfigErrorCode::VerifySslDisabled => write!(
+                formatter,
+                "the {provider} toolkit disables TLS verification, which this runtime does not support"
+            ),
+            AtlassianConfigErrorCode::ReservedHeader => write!(
+                formatter,
+                "the {provider} toolkit sets a custom header this runtime reserves"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AtlassianConfigError {}
+
+/// How the SDK authenticates: `token` (a bearer, or session cookies when it
+/// carries `JSESSIONID`), else `username` with `api_key` as Basic.
+pub enum Credential {
+    Bearer(Zeroizing<String>),
+    /// A token carrying `JSESSIONID`: sent as `Cookie`, `name=value` pairs
+    /// separated by `; `.
+    Cookie(Zeroizing<String>),
+    Basic {
+        username: Box<str>,
+        password: Zeroizing<String>,
+    },
+}
+
+impl Credential {
+    /// `_credential` of both SDK wrappers: either `token`, or both `api_key`
+    /// and `username`, must be provided for authentication.
+    ///
+    /// # Errors
+    ///
+    /// Neither form is present, a value is of the wrong shape, or a secret
+    /// is over its bound.
+    pub fn parse(
+        configuration: &Map<String, Value>,
+        provider: &'static str,
+    ) -> Result<Self, AtlassianConfigError> {
+        let refused = |code| AtlassianConfigError::new(provider, code);
+        if let Some(token) = optional_secret(configuration, "token", provider)? {
+            let token = token.trim();
+            if token.is_empty() {
+                return Err(refused(AtlassianConfigErrorCode::InvalidConfiguration));
+            }
+            return Ok(if token.contains("JSESSIONID") {
+                Self::Cookie(Zeroizing::new(token.to_owned()))
+            } else {
+                Self::Bearer(Zeroizing::new(token.to_owned()))
+            });
+        }
+        let username = optional_text(configuration, "username", MAX_IDENTITY_BYTES, provider)?
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let api_key = optional_secret(configuration, "api_key", provider)?;
+        match (username, api_key) {
+            (Some(username), Some(api_key)) if !username.contains(':') => Ok(Self::Basic {
+                username: username.into(),
+                password: Zeroizing::new(api_key.to_owned()),
+            }),
+            _ => Err(refused(AtlassianConfigErrorCode::InvalidConfiguration)),
+        }
+    }
+
+    /// The header this credential goes out as, marked sensitive; `None` when
+    /// the value is not a header value (control bytes in a token).
+    #[must_use]
+    pub fn header(&self) -> Option<(HeaderName, HeaderValue)> {
+        let (name, value) = match self {
+            Self::Bearer(token) => (
+                AUTHORIZATION,
+                Zeroizing::new(format!("Bearer {}", token.as_str())),
+            ),
+            Self::Cookie(token) => (
+                COOKIE,
+                Zeroizing::new(
+                    token
+                        .split("; ")
+                        .filter(|pair| pair.contains('='))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                ),
+            ),
+            Self::Basic { username, password } => {
+                let mut source = Zeroizing::new(String::with_capacity(
+                    username
+                        .len()
+                        .saturating_add(password.len())
+                        .saturating_add(1),
+                ));
+                source.push_str(username);
+                source.push(':');
+                source.push_str(password);
+                (
+                    AUTHORIZATION,
+                    Zeroizing::new(format!("Basic {}", STANDARD.encode(source.as_bytes()))),
+                )
+            }
+        };
+        let mut value = HeaderValue::from_str(&value).ok()?;
+        value.set_sensitive(true);
+        Some((name, value))
+    }
+}
+
+/// What both configurations read from the toolkit settings beyond their
+/// own keys: the credential, the Cloud decision, the custom headers.
+pub struct Common {
+    pub credential: Credential,
+    /// Atlassian Cloud (`*.atlassian.net`, or `hosting: cloud`, or the
+    /// toolkit's `cloud: true`).
+    pub cloud: bool,
+    /// Whether the base URL's host is `atlassian.net` (the SDK's
+    /// auto-detection, read apart from the final `cloud` decision).
+    pub host_is_cloud: bool,
+    pub custom_headers: Vec<(HeaderName, HeaderValue)>,
+}
+
+impl Common {
+    /// The base URL (`<provider>_configuration.base_url`) under the shared
+    /// rule, and the shared settings.
+    ///
+    /// # Errors
+    ///
+    /// See [`AtlassianConfigErrorCode`].
+    pub fn parse(
+        settings: &Map<String, Value>,
+        configuration: &Map<String, Value>,
+        provider: &'static str,
+    ) -> Result<(url::Url, Self), AtlassianConfigError> {
+        let refused = |code| AtlassianConfigError::new(provider, code);
+        let raw_url = optional_text(
+            configuration,
+            "base_url",
+            base_url::MAX_BASE_URL_BYTES,
+            provider,
+        )?
+        .ok_or_else(|| refused(AtlassianConfigErrorCode::InvalidConfiguration))?;
+        let base = base_url::parse(raw_url, BasePath::Prefix).map_err(|error| match error {
+            BaseUrlError::PlainHttp => refused(AtlassianConfigErrorCode::PlainHttp),
+            BaseUrlError::TooLong => refused(AtlassianConfigErrorCode::ResourceExhausted),
+            BaseUrlError::Invalid => refused(AtlassianConfigErrorCode::InvalidConfiguration),
+        })?;
+        let host_is_cloud = host_matches_domain(&base, "atlassian.net");
+        // The toolkit-level `cloud` wins; otherwise the credential's hosting,
+        // auto-detected from the host (`_hosting_to_cloud`).
+        let cloud = match settings.get("cloud") {
+            None | Some(Value::Null) => {
+                match optional_text(configuration, "hosting", MAX_IDENTITY_BYTES, provider)?
+                    .map(|value| value.trim().to_ascii_lowercase())
+                    .as_deref()
+                {
+                    Some("cloud") => true,
+                    Some("server") => false,
+                    _ => host_is_cloud,
+                }
+            }
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return Err(refused(AtlassianConfigErrorCode::InvalidConfiguration)),
+        };
+        match settings.get("verify_ssl") {
+            None | Some(Value::Null | Value::Bool(true)) => {}
+            Some(Value::Bool(false)) => {
+                return Err(refused(AtlassianConfigErrorCode::VerifySslDisabled));
+            }
+            Some(_) => return Err(refused(AtlassianConfigErrorCode::InvalidConfiguration)),
+        }
+        Ok((
+            base,
+            Self {
+                credential: Credential::parse(configuration, provider)?,
+                cloud,
+                host_is_cloud,
+                custom_headers: custom_headers(settings, provider)?,
+            },
+        ))
+    }
+
+    /// Put the custom headers, `Accept: application/json` and the credential
+    /// on `request`.
+    ///
+    /// # Errors
+    ///
+    /// The credential is not a header value.
+    pub fn authorize(&self, request: &mut Request) -> Result<(), AtlassianConfigError> {
+        let headers = request.headers_mut();
+        for (name, value) in &self.custom_headers {
+            headers.insert(name.clone(), value.clone());
+        }
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        let (name, value) = self.credential.header().ok_or_else(|| {
+            AtlassianConfigError::new("Atlassian", AtlassianConfigErrorCode::InvalidConfiguration)
+        })?;
+        headers.insert(name, value);
+        Ok(())
+    }
+}
+
+fn custom_headers(
+    settings: &Map<String, Value>,
+    provider: &'static str,
+) -> Result<Vec<(HeaderName, HeaderValue)>, AtlassianConfigError> {
+    let refused = |code| AtlassianConfigError::new(provider, code);
+    let headers = match settings.get("custom_headers") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Object(headers)) => headers,
+        Some(_) => return Err(refused(AtlassianConfigErrorCode::InvalidConfiguration)),
+    };
+    if headers.len() > MAX_CUSTOM_HEADERS {
+        return Err(refused(AtlassianConfigErrorCode::ResourceExhausted));
+    }
+    let mut out = Vec::with_capacity(headers.len());
+    for (name, value) in headers {
+        let value = value
+            .as_str()
+            .ok_or_else(|| refused(AtlassianConfigErrorCode::InvalidConfiguration))?;
+        if value.len() > MAX_HEADER_VALUE_BYTES {
+            return Err(refused(AtlassianConfigErrorCode::ResourceExhausted));
+        }
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| refused(AtlassianConfigErrorCode::InvalidConfiguration))?;
+        if name.as_str().starts_with(RESERVED_PLATFORM_HEADER_PREFIX)
+            || matches!(
+                name.as_str(),
+                "authorization"
+                    | "proxy-authorization"
+                    | "cookie"
+                    | "host"
+                    | "content-length"
+                    | "transfer-encoding"
+                    | "connection"
+                    | "content-type"
+                    | "accept"
+            )
+        {
+            return Err(refused(AtlassianConfigErrorCode::ReservedHeader));
+        }
+        let mut value = HeaderValue::from_str(value)
+            .map_err(|_| refused(AtlassianConfigErrorCode::InvalidConfiguration))?;
+        value.set_sensitive(true);
+        out.push((name, value));
+    }
+    Ok(out)
+}
+
+/// A string setting of at most `limit` bytes without control characters;
+/// `None` when absent or null.
+///
+/// # Errors
+///
+/// Another type, a control character, or over the bound.
+pub fn optional_text<'a>(
+    object: &'a Map<String, Value>,
+    name: &str,
+    limit: usize,
+    provider: &'static str,
+) -> Result<Option<&'a str>, AtlassianConfigError> {
+    match object.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            if value.len() > limit {
+                return Err(AtlassianConfigError::new(
+                    provider,
+                    AtlassianConfigErrorCode::ResourceExhausted,
+                ));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(AtlassianConfigError::new(
+                    provider,
+                    AtlassianConfigErrorCode::InvalidConfiguration,
+                ));
+            }
+            Ok(Some(value))
+        }
+        Some(_) => Err(AtlassianConfigError::new(
+            provider,
+            AtlassianConfigErrorCode::InvalidConfiguration,
+        )),
+    }
+}
+
+fn optional_secret<'a>(
+    object: &'a Map<String, Value>,
+    name: &str,
+    provider: &'static str,
+) -> Result<Option<&'a str>, AtlassianConfigError> {
+    optional_text(object, name, MAX_SECRET_BYTES, provider)
+        .map(|value| value.filter(|value| !value.is_empty()))
+}
+
+/// The SDK's `parse_list`: a comma/semicolon string or a string array;
+/// blank items are dropped.
+///
+/// # Errors
+///
+/// Another type, or a non-string item.
+pub fn text_list(
+    object: &Map<String, Value>,
+    name: &str,
+    provider: &'static str,
+) -> Result<Vec<String>, AtlassianConfigError> {
+    let items: Vec<&str> = match object.get(name) {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::String(value)) => value.split([',', ';']).collect(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    AtlassianConfigError::new(
+                        provider,
+                        AtlassianConfigErrorCode::InvalidConfiguration,
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => {
+            return Err(AtlassianConfigError::new(
+                provider,
+                AtlassianConfigErrorCode::InvalidConfiguration,
+            ));
+        }
+    };
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() || item.chars().any(char::is_control) {
+            continue;
+        }
+        if !out.iter().any(|existing| existing == item) {
+            out.push(item.to_owned());
+        }
+    }
+    Ok(out)
+}
+
+/// An optional boolean `index_data` argument.
+///
+/// # Errors
+///
+/// Another type.
+pub fn optional_flag(
+    object: &Map<String, Value>,
+    name: &str,
+    provider: &'static str,
+) -> Result<Option<bool>, AtlassianConfigError> {
+    match object.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(flag)) => Ok(Some(*flag)),
+        Some(_) => Err(AtlassianConfigError::new(
+            provider,
+            AtlassianConfigErrorCode::InvalidConfiguration,
+        )),
+    }
+}
+
+/// The SDK's attachment-name filter: a pattern matches the whole name,
+/// ASCII case-insensitively, with `*` standing for any run and every other
+/// character literal (`re.escape(pattern).replace(r'\*', '.*') + '$'`).
+#[must_use]
+pub fn name_matches(pattern: &str, name: &str) -> bool {
+    fn matches(pattern: &[char], name: &[char]) -> bool {
+        match pattern.split_first() {
+            None => name.is_empty(),
+            Some(('*', rest)) => (0..=name.len()).any(|skip| matches(rest, &name[skip..])),
+            Some((head, rest)) => name
+                .split_first()
+                .is_some_and(|(first, tail)| first == head && matches(rest, tail)),
+        }
+    }
+    let pattern: Vec<char> = pattern.chars().flat_map(char::to_lowercase).collect();
+    let name: Vec<char> = name.chars().flat_map(char::to_lowercase).collect();
+    matches(&pattern, &name)
+}
+
+/// Whether an attachment named `name` passes the SDK's include/skip lists:
+/// skipped when any skip pattern matches, else kept when the include list is
+/// empty or any include pattern matches.
+#[must_use]
+pub fn attachment_passes(name: &str, include: &[String], skip: &[String]) -> bool {
+    if skip.iter().any(|pattern| name_matches(pattern, name)) {
+        return false;
+    }
+    include.is_empty() || include.iter().any(|pattern| name_matches(pattern, name))
+}
+
+/// The Atlassian Document Format (Jira Cloud descriptions and comments) as
+/// readable text, the way the SDK's `_extract_image_data` renders it:
+/// paragraphs and headings on their own lines (`#` per heading level), list
+/// items as `- ` lines, table cells separated by ` | `, text marks dropped,
+/// and a media node as the wiki-style `!id!` reference the SDK emits.
+/// A string is returned as it is (Server and Data Center wiki markup).
+#[must_use]
+pub fn adf_text(value: &Value) -> String {
+    let mut out = String::new();
+    adf_into(value, &mut out);
+    out
+}
+
+fn adf_into(value: &Value, out: &mut String) {
+    match value {
+        Value::String(text) => out.push_str(text),
+        Value::Array(nodes) => nodes.iter().for_each(|node| adf_into(node, out)),
+        Value::Object(node) => adf_node(node, out),
+        _ => {}
+    }
+}
+
+fn adf_children(node: &Map<String, Value>, out: &mut String) {
+    if let Some(content) = node.get("content") {
+        adf_into(content, out);
+    }
+}
+
+/// `attrs.{name}` of an ADF node.
+fn attr<'a>(node: &'a Map<String, Value>, name: &str) -> Option<&'a Value> {
+    node.get("attrs").and_then(|attrs| attrs.get(name))
+}
+
+fn adf_node(node: &Map<String, Value>, out: &mut String) {
+    let kind = node.get("type").and_then(Value::as_str).unwrap_or("");
+    match kind {
+        "text" => {
+            let text = node.get("text").and_then(Value::as_str).unwrap_or("");
+            out.push_str(text);
+            if let Some(href) = node
+                .get("marks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|mark| mark.get("type").and_then(Value::as_str) == Some("link"))
+                .and_then(|mark| mark.pointer("/attrs/href"))
+                .and_then(Value::as_str)
+                && let Some(id) = attachment_id_in(href)
+            {
+                let _ = std::fmt::Write::write_fmt(out, format_args!(" !{id}!"));
+            }
+        }
+        "hardBreak" => out.push('\n'),
+        "paragraph" => {
+            adf_children(node, out);
+            out.push('\n');
+        }
+        "heading" => {
+            let level = attr(node, "level")
+                .and_then(Value::as_u64)
+                .unwrap_or(1)
+                .clamp(1, 6);
+            for _ in 0..level {
+                out.push('#');
+            }
+            out.push(' ');
+            adf_children(node, out);
+            out.push('\n');
+        }
+        "listItem" => {
+            out.push_str("- ");
+            adf_children(node, out);
+        }
+        "tableRow" => {
+            let mut cells = Vec::new();
+            for cell in node
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let mut text = String::new();
+                adf_into(cell, &mut text);
+                cells.push(text.trim().to_owned());
+            }
+            out.push_str(&cells.join(" | "));
+            out.push('\n');
+        }
+        "media" | "mediaInline" => {
+            let alt = attr(node, "alt").and_then(Value::as_str);
+            let id = attr(node, "id").and_then(Value::as_str);
+            match (alt.filter(|alt| !alt.is_empty()), id) {
+                (Some(alt), _) => {
+                    let _ = std::fmt::Write::write_fmt(out, format_args!("!{alt}|alt=\"{alt}\"!"));
+                }
+                (None, Some(id)) => {
+                    let _ = std::fmt::Write::write_fmt(out, format_args!("!{id}!"));
+                }
+                (None, None) => {}
+            }
+        }
+        "mention" => {
+            let text = attr(node, "text").and_then(Value::as_str).unwrap_or("");
+            out.push_str(text);
+        }
+        "emoji" => {
+            let text = attr(node, "text")
+                .or_else(|| attr(node, "shortName"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            out.push_str(text);
+        }
+        "inlineCard" | "blockCard" | "embedCard" => {
+            let url = attr(node, "url").and_then(Value::as_str).unwrap_or("");
+            out.push_str(url);
+            if kind != "inlineCard" {
+                out.push('\n');
+            }
+        }
+        "codeBlock" => {
+            out.push_str("```\n");
+            adf_children(node, out);
+            out.push_str("\n```\n");
+        }
+        "rule" => out.push_str("---\n"),
+        // Containers whose text is their children's: doc, bulletList,
+        // orderedList, blockquote, panel, table, tableCell, tableHeader,
+        // mediaSingle, mediaGroup, expand, nestedExpand, layoutSection, ….
+        _ => adf_children(node, out),
+    }
+}
+
+/// The attachment id an ADF link points at: `/rest/api/3/attachment/content/{id}`
+/// (Cloud) or `/secure/attachment/{id}/...` (Server and Data Center).
+fn attachment_id_in(href: &str) -> Option<&str> {
+    let after = href
+        .split_once("/attachment/content/")
+        .or_else(|| href.split_once("/secure/attachment/"))
+        .map(|(_, rest)| rest)?;
+    let id: &str = after.split(['/', '?', '#']).next().unwrap_or("");
+    (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())).then_some(id)
+}
+
+/// `_strip_base64_images`: an inline `data:image/{png,jpeg,gif};base64,…`
+/// becomes `[Image Removed]`, so a pasted screenshot does not fill a chunk
+/// with base64.
+#[must_use]
+pub fn strip_base64_images(content: &str) -> String {
+    const MARKER: &str = "data:image/";
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(position) = rest.find(MARKER) {
+        out.push_str(&rest[..position]);
+        let candidate = &rest[position + MARKER.len()..];
+        let matched = ["png", "jpeg", "gif"].iter().find_map(|kind| {
+            candidate
+                .strip_prefix(kind)
+                .and_then(|tail| tail.strip_prefix(";base64,"))
+        });
+        if let Some(tail) = matched {
+            let data = tail
+                .bytes()
+                .take_while(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
+                })
+                .count();
+            if data == 0 {
+                out.push_str(MARKER);
+                rest = candidate;
+            } else {
+                out.push_str("[Image Removed]");
+                rest = &tail[data..];
+            }
+        } else {
+            out.push_str(MARKER);
+            rest = candidate;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A JSON object's string field, trimmed, when present and not empty.
+#[must_use]
+pub fn text_of<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+/// An id field that Atlassian spells as a string or a number.
+#[must_use]
+pub fn id_of(value: &Value, pointer: &str) -> Option<String> {
+    match value.pointer(pointer)? {
+        Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_owned()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+/// A size field spelled as a number or a numeric string; `0` otherwise.
+#[must_use]
+pub fn size_of(value: &Value, pointer: &str) -> u64 {
+    match value.pointer(pointer) {
+        Some(Value::Number(number)) => number.as_u64().unwrap_or(0),
+        Some(Value::String(text)) => text.trim().parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Whether an identifier is safe to place in a URL path: digits, letters,
+/// `-`, `_` and `.`, bounded.
+#[must_use]
+pub fn safe_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn credentials_follow_the_sdk() {
+        let bearer = Credential::parse(json!({"token": "abc"}).as_object().unwrap(), "Confluence")
+            .expect("bearer");
+        let (name, value) = bearer.header().unwrap();
+        assert_eq!(name, AUTHORIZATION);
+        assert_eq!(value, "Bearer abc");
+        assert!(value.is_sensitive());
+
+        let cookie = Credential::parse(
+            json!({"token": "JSESSIONID=1; other=2; junk"})
+                .as_object()
+                .unwrap(),
+            "Jira",
+        )
+        .expect("cookie");
+        let (name, value) = cookie.header().unwrap();
+        assert_eq!(name, COOKIE);
+        assert_eq!(value, "JSESSIONID=1; other=2");
+
+        let basic = Credential::parse(
+            json!({"username": "me@x", "api_key": "k"})
+                .as_object()
+                .unwrap(),
+            "Jira",
+        )
+        .expect("basic");
+        let (_, value) = basic.header().unwrap();
+        assert_eq!(value, "Basic bWVAeDpr");
+
+        for bad in [
+            json!({}),
+            json!({"username": "me"}),
+            json!({"api_key": "k"}),
+            json!({"username": "a:b", "api_key": "k"}),
+            json!({"token": "   "}),
+        ] {
+            assert!(
+                Credential::parse(bad.as_object().unwrap(), "Jira").is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cloud_decision_and_the_refusals() {
+        let settings = |extra: Value, configuration: Value| {
+            let mut settings = extra.as_object().cloned().unwrap_or_default();
+            settings.insert("jira_configuration".into(), configuration);
+            settings
+        };
+        let (base, common) = Common::parse(
+            &settings(
+                json!({}),
+                json!({"base_url": "https://acme.atlassian.net/", "token": "t"}),
+            ),
+            settings(
+                json!({}),
+                json!({"base_url": "https://acme.atlassian.net/", "token": "t"}),
+            )["jira_configuration"]
+                .as_object()
+                .unwrap(),
+            "Jira",
+        )
+        .expect("cloud");
+        assert_eq!(base.as_str(), "https://acme.atlassian.net/");
+        assert!(common.cloud && common.host_is_cloud);
+
+        let server = json!({"base_url": "https://jira.corp.example/jira", "token": "t", "hosting": "server"});
+        let (base, common) = Common::parse(
+            &settings(json!({}), server.clone()),
+            server.as_object().unwrap(),
+            "Jira",
+        )
+        .expect("server");
+        assert_eq!(base.as_str(), "https://jira.corp.example/jira");
+        assert!(!common.cloud);
+        let forced = json!({"base_url": "https://jira.corp.example", "token": "t"});
+        let (_, common) = Common::parse(
+            &settings(json!({"cloud": true}), forced.clone()),
+            forced.as_object().unwrap(),
+            "Jira",
+        )
+        .expect("forced");
+        assert!(common.cloud && !common.host_is_cloud);
+
+        let plain = json!({"base_url": "http://jira.corp.example", "token": "t"});
+        assert_eq!(
+            Common::parse(
+                &settings(json!({}), plain.clone()),
+                plain.as_object().unwrap(),
+                "Jira"
+            )
+            .err()
+            .map(|e| e.code()),
+            Some(AtlassianConfigErrorCode::PlainHttp)
+        );
+        let ok = json!({"base_url": "https://jira.corp.example", "token": "t"});
+        assert_eq!(
+            Common::parse(
+                &settings(json!({"verify_ssl": false}), ok.clone()),
+                ok.as_object().unwrap(),
+                "Jira"
+            )
+            .err()
+            .map(|e| e.code()),
+            Some(AtlassianConfigErrorCode::VerifySslDisabled)
+        );
+        assert_eq!(
+            Common::parse(
+                &settings(
+                    json!({"custom_headers": {"Authorization": "x"}}),
+                    ok.clone()
+                ),
+                ok.as_object().unwrap(),
+                "Jira"
+            )
+            .err()
+            .map(|e| e.code()),
+            Some(AtlassianConfigErrorCode::ReservedHeader)
+        );
+        assert_eq!(
+            Common::parse(
+                &settings(
+                    json!({"custom_headers": {"X-Elitea-Project": "x"}}),
+                    ok.clone()
+                ),
+                ok.as_object().unwrap(),
+                "Jira"
+            )
+            .err()
+            .map(|e| e.code()),
+            Some(AtlassianConfigErrorCode::ReservedHeader)
+        );
+        let (_, common) = Common::parse(
+            &settings(
+                json!({"custom_headers": {"X-Proxy-Tenant": "acme"}}),
+                ok.clone(),
+            ),
+            ok.as_object().unwrap(),
+            "Jira",
+        )
+        .expect("custom header");
+        assert_eq!(common.custom_headers.len(), 1);
+        assert!(common.custom_headers[0].1.is_sensitive());
+    }
+
+    #[test]
+    fn attachment_name_filters_follow_the_sdk() {
+        assert!(name_matches("*.PDF", "Spec.pdf"));
+        assert!(!name_matches("*.pdf", "Spec.pdf.bak"));
+        assert!(name_matches("*", "anything"));
+        assert!(name_matches("a*b*c", "aXXbYYc"));
+        assert!(!name_matches("a?c", "abc"), "`?` is literal");
+        let include = vec!["*.md".to_owned(), "*.pdf".to_owned()];
+        let skip = vec!["draft*".to_owned()];
+        assert!(attachment_passes("Guide.pdf", &include, &skip));
+        assert!(!attachment_passes("draft-guide.pdf", &include, &skip));
+        assert!(!attachment_passes("photo.png", &include, &skip));
+        assert!(attachment_passes("photo.png", &[], &skip));
+    }
+
+    #[test]
+    fn adf_becomes_readable_text() {
+        let adf = json!({
+            "type": "doc", "version": 1, "content": [
+                {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Goal"}]},
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "Ship ", "marks": [{"type": "strong"}]},
+                    {"type": "text", "text": "it"},
+                    {"type": "hardBreak"},
+                    {"type": "text", "text": "spec", "marks": [{"type": "link", "attrs": {"href": "https://x.atlassian.net/rest/api/3/attachment/content/10042"}}]},
+                ]},
+                {"type": "bulletList", "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "one"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "two"}]}]},
+                ]},
+                {"type": "table", "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]},
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "b"}]}]},
+                    ]},
+                ]},
+                {"type": "mediaSingle", "content": [{"type": "media", "attrs": {"id": "m-1", "alt": "diagram.png"}}]},
+                {"type": "mediaSingle", "content": [{"type": "media", "attrs": {"id": "m-2"}}]},
+            ]
+        });
+        assert_eq!(
+            adf_text(&adf),
+            "## Goal\nShip it\nspec !10042!\n- one\n- two\na | b\n!diagram.png|alt=\"diagram.png\"!!m-2!"
+        );
+        assert_eq!(adf_text(&json!("h1. Wiki *markup*")), "h1. Wiki *markup*");
+        assert_eq!(adf_text(&Value::Null), "");
+    }
+
+    #[test]
+    fn base64_images_are_removed() {
+        assert_eq!(
+            strip_base64_images("a <img src=\"data:image/png;base64,iVBORw0KGgo=\"> b"),
+            "a <img src=\"[Image Removed]\"> b"
+        );
+        assert_eq!(
+            strip_base64_images("data:image/svg+xml,x"),
+            "data:image/svg+xml,x"
+        );
+    }
+
+    #[test]
+    fn identifiers_and_fields() {
+        assert!(safe_identifier("12345"));
+        assert!(safe_identifier("PROJ-1"));
+        assert!(!safe_identifier("a/b"));
+        assert!(!safe_identifier(""));
+        let value = json!({"id": 7, "size": "12", "t": " x "});
+        assert_eq!(id_of(&value, "/id").as_deref(), Some("7"));
+        assert_eq!(size_of(&value, "/size"), 12);
+        assert_eq!(text_of(&value, "/t"), Some("x"));
+        assert_eq!(text_of(&value, "/missing"), None);
+    }
+}
