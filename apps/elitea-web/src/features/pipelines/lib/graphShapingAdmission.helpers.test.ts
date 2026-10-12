@@ -15,8 +15,8 @@ describe('explicit data shaping contracts', () => {
     expect(graphShapingIssues(documentFor(aggregate))).toEqual([]);
     expect(graphShapingIssues({ ...documentFor(split), state: { ...state, records: { type: 'list', value: [null, 1, { arbitrary: true }] } } })).toEqual([]);
   });
-  it('retains production type refusal while reporting valid private shaping contracts', () => {
-    expect(collectGraphAdmissionIssues(documentFor(split)).filter((issue) => issue.rule === 'node.type')).toHaveLength(1);
+  it('admits the shaping node types and reports no configuration issue for a valid contract', () => {
+    expect(collectGraphAdmissionIssues(documentFor(split)).filter((issue) => issue.rule === 'node.type')).toEqual([]);
     expect(collectGraphAdmissionIssues(documentFor(split)).filter((issue) => issue.rule === 'node.extension-configuration')).toEqual([]);
   });
   it.each([

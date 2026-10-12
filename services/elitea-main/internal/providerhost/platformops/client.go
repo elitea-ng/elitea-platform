@@ -36,21 +36,18 @@ package platformops
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
 	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -118,12 +115,21 @@ func (c Config) Validate() error {
 	if err != nil || host == "" || port == "" {
 		return fmt.Errorf("%w: the %s platform gRPC target %q must be host:port", ErrConfig, c.App, c.Target)
 	}
-	for name, value := range map[string]string{"client certificate": c.ClientCertFile, "client key": c.ClientKeyFile, "CA bundle": c.CAFile} {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("%w: the %s platform gRPC client needs a %s file", ErrConfig, c.App, name)
-		}
+	// The material's own rules (the three files, a derivable server name) are
+	// mtlsclient's: one definition for every mTLS hop this process makes.
+	if err := c.material().Validate(); err != nil {
+		return fmt.Errorf("%w: the %s platform gRPC client: %w", ErrConfig, c.App, err)
 	}
 	return nil
+}
+
+// material is the mutual-TLS hop the configuration names, in mtlsclient's
+// terms.
+func (c Config) material() mtlsclient.Material {
+	return mtlsclient.Material{
+		CertFile: c.ClientCertFile, KeyFile: c.ClientKeyFile, CAFile: c.CAFile,
+		ServerName: c.ServerName, Target: c.Target,
+	}
 }
 
 // Client calls one application's platform service.
@@ -137,8 +143,12 @@ type Client struct {
 }
 
 // New builds a client. The material is loaded now (a missing file is a
-// construction error, not a per-call one); the connection is dialled lazily on
-// the first call, which is grpc.NewClient's behaviour.
+// construction error, not a per-call one) and re-read when its files change
+// (infra/mtlsclient: the facade hop's shape — the same client certificate, the
+// same CA, the same server-name rule, h2 — shared with the elitea-vector
+// client, so a renewed Secret is used by the next connection without a
+// restart); the connection is dialled lazily on the first call, which is
+// grpc.NewClient's behaviour.
 func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -146,12 +156,15 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	tlsConfig, err := mtlsConfig(cfg)
+	hopLogger := logger.With("app", cfg.App, "target", cfg.Target)
+	creds, err := mtlsclient.NewCredentials(cfg.material(), func(err error) {
+		hopLogger.Error("platform gRPC client material could not be reloaded", "err", err)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s platform gRPC client: %w", ErrConfig, cfg.App, err)
 	}
 	conn, err := grpc.NewClient(cfg.Target,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		grpc.WithTransportCredentials(creds),
 		// A response is counts and ids; nothing legitimate is larger.
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1<<20)),
 	)
@@ -165,35 +178,7 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	return &Client{
 		app: cfg.App, target: cfg.Target, conn: conn,
 		ops: subappv1.NewPlatformOperationsClient(conn), timeout: timeout,
-		logger: logger.With("app", cfg.App, "target", cfg.Target),
-	}, nil
-}
-
-// mtlsConfig is the facade hop's TLS configuration (llmproxy.NewMTLSTransport)
-// for gRPC: the same client certificate, the same CA, the same server name
-// rule, and h2 instead of http/1.1.
-func mtlsConfig(cfg Config) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(cfg.ClientCertFile, cfg.ClientKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load client cert: %w", err)
-	}
-	caPEM, err := os.ReadFile(cfg.CAFile)
-	if err != nil {
-		return nil, fmt.Errorf("read ca bundle: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("no certificates parsed from ca bundle %q", cfg.CAFile)
-	}
-	serverName := cfg.ServerName
-	if serverName == "" {
-		serverName, _, _ = net.SplitHostPort(cfg.Target)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      pool,
-		ServerName:   serverName,
-		MinVersion:   tls.VersionTLS12,
+		logger: hopLogger,
 	}, nil
 }
 

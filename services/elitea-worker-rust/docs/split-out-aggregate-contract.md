@@ -1,8 +1,9 @@
 # SplitOut and Aggregate pipeline nodes — contract (Gate 5c, first tier)
 
-Status: implemented in the Rust Worker and **not admitted in production**. The compiler accepts `split_out` and
-`aggregate` only in builds with the off-by-default Cargo feature `graph-extensions-rehearsal`. Web shows them only
-when `VITE_GRAPH_EXTENSIONS_REHEARSAL=true`. Both gates flip together after deployed acceptance (Point 5, Wave 2e).
+Status: implemented in the Rust Worker and **admitted by default** in the Worker compiler, Main's save-time check and the
+Web editor. There is no Cargo feature, build tag or build argument for it. The three layers assert one shared list of
+admitted node types, `libs/proto/contracts/pipeline-node-admission-v1.json`
+([source mapping](source-mapping/graph-shaping-admitted-20261012.md)).
 
 The Worker is the authority. Web admission (`apps/elitea-web/src/features/pipelines/lib/graphShapingAdmission.helpers.ts`)
 mirrors these rules so that authors see readable errors before saving.

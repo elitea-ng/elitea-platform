@@ -121,9 +121,39 @@ elitea-main's control listener (`elitea-main:9443`), which admits it as
 
 `standalone-stack.sh certs` runs `deploy/scripts/gen-vector-certs.sh` after the
 runtime script. It writes `deploy/certs/vector/`: `vector.{crt,key}` (one DNS
-SAN, `elitea-vector`, server and client use, signed by the runtime CA), a copy
-of `runtime-ca.crt`, and `qdrant-api-key`. It re-issues the certificate when the
-runtime CA rotates, and never rotates the runtime tree itself.
+SAN, `elitea-vector`, server and client use, signed by the runtime CA),
+`main-client.{crt,key}` (one DNS SAN, `elitea-main`, client use, runtime CA),
+a copy of `runtime-ca.crt`, and `qdrant-api-key`. It re-issues the certificates
+when the runtime CA rotates, and never rotates the runtime tree itself.
+
+`elitea-main` is also a CLIENT of `elitea-vector` (ADR-0031 decision 4): it
+deletes a toolkit index's namespace when the index is deleted (and again from
+its tombstone sweeper until the delete succeeds), and every namespace of a
+project when the project is deprovisioned (the cleanup journal's `vector_data`
+step, recorded on the journal row beside `deepwiki_data` / `inventory_data`).
+That hop presents `main-client.crt` with no token; `elitea-vector` admits it as
+the administrator `dns:elitea-main` (`ELITEA_VECTOR_ADMIN_IDENTITIES`), which
+may call `Delete`, `DropProject`, `Count` and `ListIndexes` only. On
+`elitea-main` the hop is `ELITEA_VECTOR_GRPC_TARGET` plus
+`ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE` / `_CLIENT_KEY_FILE` / `_CA_FILE`
+(optionally `_SERVER_NAME`); without the target, deleted indexes keep their
+vectors (tombstones stay pending) and deleted projects keep theirs. The client
+material (and the DeepWiki / Inventory platform hops') is re-read when its
+files change, so a renewed certificate or CA is used by the next connection
+without a restart. Deleting a TOOLKIT tombstones every index_registry row of
+the toolkit in the delete's own transaction; the sweeper deletes their
+namespaces afterwards. The `vector_data` step is recorded by every replica that
+indexes into the store (`ELITEA_INDEXING_RUNTIME=rust`), with or without the
+client; a Python-indexing replica with a client only drains steps others
+recorded. No replica closes a recorded step on its own configuration: without
+a client the step stays pending, logged at Error on every run naming
+`ELITEA_VECTOR_GRPC_TARGET`. The one way to close such steps without the store
+is the operator's `ELITEA_VECTOR_CLEANUP_ABANDON=true` (note "vector cleanup
+abandoned by operator", Warn per row), for a deployment that has genuinely
+abandoned its vector store; beside a target it is refused at boot. A store that
+refuses the certificate never closes the step either: it waits at the journal's
+longest backoff, logged at Error, without delaying the retry of the row's other
+steps.
 
 ### DeepWiki and Inventory — canned data, or the real engines
 

@@ -24,6 +24,20 @@ package toolkits
 // exact allow-list), on every replica whether or not it has the Inventory
 // client — a replica that has one drains the row; DeepWiki types never
 // (DeepWiki keeps nothing per toolkit); every other type never.
+//
+// THE TOOLKIT'S INDEXES GO THE SAME WAY (ADR-0031 decision 4). Under the Rust
+// indexing runtime an indexing toolkit's indexes are rows of
+// elitea_runtime.index_registry (shared schema, keyed by project and toolkit
+// id, no foreign key to the tenant row) and their vectors are namespaces in
+// elitea-vector. Deleting the toolkit row alone would orphan both for ever.
+// So the same transaction TOMBSTONES every live registry row of the toolkit
+// (deleted_at, exactly what deleting one index does), and the registry's
+// tombstone sweeper deletes each namespace and purges the row afterwards,
+// with its backoff; a row whose run is still active waits until the run ends
+// (the sweeper's claim skips it). Under the Python runtime the toolkit has no
+// registry rows and the statement touches nothing; on a database that has not
+// applied the shared migrations the table does not exist and the statement is
+// skipped (tombstoneToolkitIndexes).
 
 import (
 	"context"
@@ -83,18 +97,53 @@ func (r *pgRepo) DeleteToolkitRowFirst(ctx context.Context, projectID, toolkitID
 	case err != nil:
 		return err
 	}
+	project, projectErr := strconv.ParseInt(projectID, 10, 64)
+	toolkit, toolkitErr := strconv.ParseInt(toolkitID, 10, 64)
+	if projectErr != nil || toolkitErr != nil {
+		// The tenant schema name and the DELETE already accepted both as
+		// integers; this cannot happen, and a journal or a registry keyed by
+		// them must not be guessed.
+		return fmt.Errorf("toolkit %q of project %q: ids are not integers", toolkitID, projectID)
+	}
+	if err := tombstoneToolkitIndexes(ctx, tx, project, toolkit); err != nil {
+		return err
+	}
 	if journal != nil {
-		project, projectErr := strconv.ParseInt(projectID, 10, 64)
-		toolkit, toolkitErr := strconv.ParseInt(toolkitID, 10, 64)
-		if projectErr != nil || toolkitErr != nil {
-			// The tenant schema name and the DELETE already accepted both as
-			// integers; this cannot happen, and a journal keyed by them must
-			// not be guessed.
-			return fmt.Errorf("toolkit %q of project %q: ids are not integers", toolkitID, projectID)
-		}
 		if _, err := journal.Enqueue(ctx, tx, project, toolkit, toolkitType); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// tombstoneToolkitIndexes marks every live index_registry row of the toolkit
+// deleted, inside the delete's own transaction (see the file comment). The
+// sweeper owns them from here.
+//
+// The table is OPTIONAL to this statement: it arrives with the platform's
+// shared migration 0162, and a deployment on the baseline alone (the Python
+// indexing runtime with no shared migrations applied) must still delete
+// toolkits. So the transaction first asks the catalogue whether the table
+// exists (to_regclass, NULL when it or its schema does not) and skips the
+// update when it is absent — the way #1255's toolkit journal guards the
+// tables it only sometimes has (toolkitcleanup.Journal.toolkitRowExists).
+// Both reads are in the delete's transaction, so a table that appears between
+// them is impossible.
+func tombstoneToolkitIndexes(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64) error {
+	var present bool
+	if err := tx.QueryRow(ctx,
+		`SELECT to_regclass('elitea_runtime.index_registry') IS NOT NULL`,
+	).Scan(&present); err != nil {
+		return fmt.Errorf("look for the index registry table: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.index_registry
+SET deleted_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE project_id = $1 AND toolkit_id = $2 AND deleted_at IS NULL`, projectID, toolkitID); err != nil {
+		return fmt.Errorf("tombstone the toolkit's index registry rows: %w", err)
+	}
+	return nil
 }

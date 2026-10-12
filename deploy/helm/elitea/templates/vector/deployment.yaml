@@ -73,8 +73,11 @@ spec:
               value: {{ .Values.vector.mtls.clientMountPath }}/tls.crt
             - name: ELITEA_VECTOR_CLIENT_KEY_FILE
               value: {{ .Values.vector.mtls.clientMountPath }}/tls.key
+            # Admitted without a token (Delete, DropProject, Count,
+            # ListIndexes): this chart's elitea-main (vector.mainClient) and
+            # vector.adminIdentities.
             - name: ELITEA_VECTOR_ADMIN_IDENTITIES
-              value: {{ join "," (.Values.vector.adminIdentities | default list) | quote }}
+              value: {{ include "elitea-vector.adminIdentities" . | quote }}
             - name: ELITEA_VECTOR_INTROSPECTION_URL
               value: {{ include "elitea-vector.introspectionUrl" . | quote }}
             - name: ELITEA_VECTOR_INTROSPECTION_CA_FILE

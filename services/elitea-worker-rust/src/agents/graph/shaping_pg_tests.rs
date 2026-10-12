@@ -6,8 +6,6 @@
 //! 2) that resumes through the production text continuation and finishes the pipeline. Sessions
 //! are PostgreSQL-backed because the static pause event that authorizes the resume lives there.
 
-#![cfg(feature = "graph-extensions-rehearsal")]
-
 use std::sync::Arc;
 
 use adk_rust::graph::interrupt::GraphInterruptPayload;

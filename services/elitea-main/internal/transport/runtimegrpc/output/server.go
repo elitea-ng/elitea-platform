@@ -1111,11 +1111,11 @@ type runtimeFailurePolicy struct {
 	Retryable   bool
 }
 
-// A stored pipeline holds a node type the Worker build does not admit (SplitOut
-// or Aggregate outside a graph-extensions rehearsal build). The Worker sends it
-// under UNSUPPORTED_CAPABILITY instead of the generic "Configuration type is
-// not supported."; Main's start check (pipelinelimits.CheckStart) names the
-// node itself, so this text stays data-free.
+// A stored pipeline holds a direct node on a toolkit its position cannot serve.
+// The Worker sends it under UNSUPPORTED_CAPABILITY instead of the generic
+// "Configuration type is not supported."; Main's start check
+// (pipelinelimits.CheckStart) names the node itself, so this text stays
+// data-free.
 const nodeTypeNotAvailableSafeMessage = "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it."
 
 const childInputTypeSafeMessage = "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting."

@@ -20,8 +20,9 @@ import (
 // shared and python mode does not change.
 
 // newIndexRegistryComposition builds the registry dependencies of the index
-// runtime. vectors is the elitea-vector deletion hook; until elitea-main has a
-// client for it the composition root passes indexingapp.DeferredIndexVectorDeleter.
+// runtime. vectors is the elitea-vector deletion hook: infra/vectorclient.Client
+// when the deployment names an elitea-vector target, otherwise
+// indexingapp.DeferredIndexVectorDeleter.
 func newIndexRegistryComposition(
 	pool *pgxpool.Pool,
 	vectors indexingapp.IndexVectorDeleter,

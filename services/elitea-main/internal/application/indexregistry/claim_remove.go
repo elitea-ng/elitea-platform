@@ -151,7 +151,7 @@ func (r *ClaimRemover) RemoveIndex(
 	}
 	if request.ToolkitID <= 0 || request.ToolkitID > math.MaxInt32 ||
 		!validText(request.IndexName, indexmetaapp.MaxCurrentIndexMetaCollectionBytes) ||
-		!indexIDPattern.MatchString(request.IndexID) {
+		!indexingapp.ValidCanonicalUUID(request.IndexID) {
 		return "", ErrInvalidClaimRemovalRequest
 	}
 	if claim.ExecutionID == "" || claim.Generation == 0 || claim.ClaimID == "" ||

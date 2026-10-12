@@ -12,6 +12,15 @@
   cannot disagree about which project is public. See elitea.aiProjectId.
 */ -}}
 {{- $env := .Values.main.env | default dict }}
+{{- /*
+  The five elitea-vector client entries ship empty in values.yaml; empty is
+  "unset" to elitea-main (vector_client_config.go) and is not rendered, as in
+  the ConfigMap, so a deployment without a vector store carries no
+  ELITEA_VECTOR_* at all.
+*/ -}}
+{{- range $key := list "ELITEA_VECTOR_GRPC_TARGET" "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" "ELITEA_VECTOR_GRPC_CA_FILE" "ELITEA_VECTOR_GRPC_SERVER_NAME" "ELITEA_VECTOR_CLEANUP_ABANDON" }}
+{{- if and (hasKey $env $key) (eq (get $env $key | toString) "") }}{{- $env = omit $env $key }}{{- end }}
+{{- end }}
 {{- $aiProjectId := include "elitea.aiProjectId" . }}
 {{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
 {{- $pg := .Values.postgresql | default dict }}

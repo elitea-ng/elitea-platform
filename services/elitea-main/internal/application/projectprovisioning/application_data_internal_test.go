@@ -107,6 +107,11 @@ func TestTheStepNamesAreTheApplicationNamePlusData(t *testing.T) {
 		t.Fatalf("ApplicationDataStep disagrees with the constants: %q %q",
 			ApplicationDataStep("deepwiki"), ApplicationDataStep("inventory"))
 	}
+	// elitea-vector is wired as the application "vector" (infra/vectorclient.App;
+	// spelled here so this package does not import the client).
+	if ApplicationDataStep("vector") != StepVectorData {
+		t.Fatalf("ApplicationDataStep(vector) = %q, want %q", ApplicationDataStep("vector"), StepVectorData)
+	}
 }
 
 func lastStep(p *Provisioner, cleanup *deletionCleanup) cleanupStep {
@@ -327,5 +332,119 @@ func TestPendingResultListsTheRowsApplicationSteps(t *testing.T) {
 	}
 	if slices.Contains(result.Pending, StepArtifactBuckets) {
 		t.Fatalf("a done step is pending: %v", result.Pending)
+	}
+}
+
+// A Rust-indexing replica without a client records the vector step
+// (WithApplicationDataRecorded): it is on ApplicationsWired, and its run on
+// this replica is notWiredError — pending, never closed.
+func TestARustReplicaWithoutAClientRecordsTheVectorStepAndLeavesItPending(t *testing.T) {
+	p := New(nil, nil, nil, WithApplicationDataRecorded(AppVector))
+	if wired := p.ApplicationsWired(); !slices.Equal(wired, []string{AppVector}) {
+		t.Fatalf("ApplicationsWired = %v, want [vector]", wired)
+	}
+	row := rowWithApps(AppVector)
+	_, err := lastStep(p, row).run(context.Background(), p, 7, row)
+	var notWired notWiredError
+	if !errors.As(err, &notWired) || notWired.app != AppVector {
+		t.Fatalf("run = %v, want notWiredError for vector", err)
+	}
+	// WithApplicationData for the same name adds the remover to the recorded
+	// entry; the recorded-only option after a remover keeps the remover.
+	remover := &fakeRemover{summary: "dropped"}
+	for _, options := range [][]Option{
+		{WithApplicationDataRecorded(AppVector), WithApplicationData(AppVector, remover)},
+		{WithApplicationData(AppVector, remover), WithApplicationDataRecorded(AppVector)},
+	} {
+		p := New(nil, nil, nil, options...)
+		if p.applicationRemover(AppVector) != remover || !slices.Equal(p.ApplicationsWired(), []string{AppVector}) {
+			t.Fatalf("options %d: remover=%v wired=%v", len(options), p.applicationRemover(AppVector), p.ApplicationsWired())
+		}
+	}
+	// A blank name records nothing.
+	if wired := New(nil, nil, nil, WithApplicationDataRecorded(" ")).ApplicationsWired(); len(wired) != 0 {
+		t.Fatalf("ApplicationsWired = %v, want none", wired)
+	}
+}
+
+// No replica closes a recorded vector step on its own configuration: a replica
+// without a client (Python indexing, or Rust mid-rollout) leaves it pending on
+// every run, logged at Error naming the variable that wires the client.
+func TestAReplicaWithoutAVectorClientNeverClosesTheVectorStep(t *testing.T) {
+	var logs strings.Builder
+	p := New(nil, nil, nil)
+	p.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	row := rowWithApps(AppVector)
+	for run := 0; run < 2; run++ {
+		note, err := lastStep(p, row).run(context.Background(), p, 7, row)
+		var notWired notWiredError
+		var closed closedWithNote
+		if !errors.As(err, &notWired) || errors.As(err, &closed) || note != "" {
+			t.Fatalf("run %d = (%q, %v), want notWiredError and no note", run, note, err)
+		}
+	}
+	if logged := logs.String(); strings.Count(logged, "level=ERROR") != 2 ||
+		!strings.Contains(logged, VectorClientEnv) || !strings.Contains(logged, VectorCleanupAbandonEnv) {
+		t.Fatalf("logs = %q, want an Error per run naming %s and %s", logged, VectorClientEnv, VectorCleanupAbandonEnv)
+	}
+}
+
+// The operator's abandon switch closes a pending vector step on a replica
+// without a client, with the note, at Warn; beside a remover it is ignored and
+// the remover runs. It never touches an engine's step.
+func TestTheAbandonSwitchClosesAnUnwiredVectorStepOnly(t *testing.T) {
+	var logs strings.Builder
+	p := New(nil, nil, nil, WithVectorCleanupAbandoned())
+	p.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	row := rowWithApps("deepwiki", AppVector)
+	steps := p.cleanupSteps(row)
+	_, err := steps[len(steps)-1].run(context.Background(), p, 7, row)
+	var closed closedWithNote
+	if !errors.As(err, &closed) || closed.note != NoteVectorCleanupAbandoned {
+		t.Fatalf("vector step = %v, want closed with %q", err, NoteVectorCleanupAbandoned)
+	}
+	if logged := logs.String(); !strings.Contains(logged, "level=WARN") || !strings.Contains(logged, VectorCleanupAbandonEnv) {
+		t.Fatalf("logs = %q, want a Warn naming the switch", logged)
+	}
+	// The engine's step is still merely unwired.
+	var notWired notWiredError
+	if _, err := steps[len(steps)-2].run(context.Background(), p, 7, row); !errors.As(err, &notWired) || notWired.app != "deepwiki" {
+		t.Fatalf("deepwiki step = %v, want notWiredError", err)
+	}
+	// With a remover the switch is ignored.
+	remover := &fakeRemover{summary: "dropped the project's vectors in 1 collection(s)"}
+	wired := New(nil, nil, nil, WithVectorCleanupAbandoned(), WithApplicationData(AppVector, remover))
+	note, err := lastStep(wired, rowWithApps(AppVector)).run(context.Background(), wired, 7, rowWithApps(AppVector))
+	if err != nil || note != remover.summary || len(remover.calls) != 1 {
+		t.Fatalf("wired run = (%q, %v) calls=%v, want the remover to run", note, err, remover.calls)
+	}
+}
+
+// The row's next attempt is the EARLIEST schedule any undone step asks for:
+// one refused step (the longest pause) never delays a step on its ordinary
+// retry; a planned wait is neither a failure nor an attempt.
+func TestARunsCloseTakesTheEarliestScheduleAcrossSteps(t *testing.T) {
+	var closing runClose
+	if !closing.complete() {
+		t.Fatal("an empty close is not complete")
+	}
+	closing.fail(StepVectorData, deletionRetryMax)
+	if closing.attemptBased || closing.fixed != deletionRetryMax || closing.complete() {
+		t.Fatalf("after a refused step: %+v", closing)
+	}
+	closing.fail(StepInventoryData, 0)
+	if !closing.attemptBased || closing.fixed != deletionRetryMax || !slices.Equal(closing.failed, []string{StepVectorData, StepInventoryData}) {
+		t.Fatalf("after an ordinary failure beside it: %+v (the attempt-based schedule must apply too)", closing)
+	}
+	var waiting runClose
+	waiting.wait(StepVectorData, 9*time.Second)
+	if waiting.attemptBased || waiting.fixed != 9*time.Second || len(waiting.failed) != 0 || !slices.Equal(waiting.waiting, []string{StepVectorData}) || waiting.complete() {
+		t.Fatalf("after a planned wait: %+v", waiting)
+	}
+	// A wait that has (just) run out still asks for a pause of at least a
+	// second, never the attempt-based schedule.
+	waiting.wait(StepVectorData, -time.Millisecond)
+	if waiting.attemptBased || waiting.fixed != time.Second {
+		t.Fatalf("after an expired wait: %+v", waiting)
 	}
 }

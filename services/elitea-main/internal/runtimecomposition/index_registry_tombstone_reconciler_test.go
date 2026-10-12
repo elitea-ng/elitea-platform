@@ -8,7 +8,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
 )
+
+// The sweeper presumes a non-terminal job dead once it has outlived
+// TombstoneActiveRunBound from its admission; that bound must exceed the
+// longest an index run can be admitted for (indexDeadlineTTL), or a healthy
+// run near its deadline could have its vectors deleted under it.
+func TestTheTombstoneActiveRunBoundOutlastsTheIndexAdmissionDeadline(t *testing.T) {
+	if indexregistryapp.TombstoneActiveRunBound <= indexDeadlineTTL {
+		t.Fatalf("TombstoneActiveRunBound %v must exceed indexDeadlineTTL %v", indexregistryapp.TombstoneActiveRunBound, indexDeadlineTTL)
+	}
+}
 
 type tombstoneSweeperStub struct {
 	deferred bool

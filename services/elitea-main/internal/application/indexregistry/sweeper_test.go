@@ -3,6 +3,7 @@ package indexregistry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ type sweepStore struct {
 	purged      []string
 	rescheduled []sweepReschedule
 	purgeErr    error
+	// skew is how far the store's clock is from the sweeper's (t0).
+	skew time.Duration
 }
 
 type sweepReschedule struct {
@@ -23,33 +26,54 @@ type sweepReschedule struct {
 	failed  bool
 }
 
-func (s *sweepStore) ClaimTombstones(context.Context, int, time.Duration) ([]Tombstone, error) {
+func (s *sweepStore) ClaimTombstones(_ context.Context, _ int, lease time.Duration) ([]Tombstone, error) {
 	s.claims++
 	out := s.tombstones
 	s.tombstones = nil
+	// The claim stamps the lease and reports its own clock, as the repository
+	// does — on the STORE's clock, which is t0 shifted by skew.
+	for i := range out {
+		if out[i].LeaseUntil.IsZero() {
+			out[i].ClaimedAt = t0.Add(s.skew)
+			out[i].LeaseUntil = out[i].ClaimedAt.Add(lease)
+		}
+	}
 	return out, nil
 }
 
-func (s *sweepStore) PurgeDeleted(_ context.Context, indexID string) error {
+func (s *sweepStore) PurgeClaimed(_ context.Context, tombstone Tombstone) error {
+	if tombstone.LeaseUntil.IsZero() {
+		return errors.New("purge without a claim")
+	}
 	if s.purgeErr != nil {
 		return s.purgeErr
 	}
-	s.purged = append(s.purged, indexID)
+	s.purged = append(s.purged, tombstone.IndexID)
 	return nil
 }
 
-func (s *sweepStore) RescheduleTombstone(_ context.Context, indexID string, at time.Time, failed bool) error {
-	s.rescheduled = append(s.rescheduled, sweepReschedule{indexID, at, failed})
+func (s *sweepStore) RescheduleClaimed(_ context.Context, tombstone Tombstone, at time.Time, failed bool) error {
+	if tombstone.LeaseUntil.IsZero() {
+		return errors.New("reschedule without a claim")
+	}
+	s.rescheduled = append(s.rescheduled, sweepReschedule{tombstone.IndexID, at, failed})
 	return nil
 }
 
 type sweepVectors struct {
 	errs  map[string]error
 	calls []indexingapp.IndexVectorNamespace
+	// deadlines records the bound each call was given.
+	deadlines []time.Duration
 }
 
-func (v *sweepVectors) DeleteIndexVectors(_ context.Context, ns indexingapp.IndexVectorNamespace) error {
+func (v *sweepVectors) DeleteIndexVectors(ctx context.Context, ns indexingapp.IndexVectorNamespace) error {
 	v.calls = append(v.calls, ns)
+	if deadline, ok := ctx.Deadline(); ok {
+		v.deadlines = append(v.deadlines, time.Until(deadline))
+	} else {
+		v.deadlines = append(v.deadlines, 0)
+	}
 	return v.errs[ns.IndexID]
 }
 
@@ -201,3 +225,135 @@ func TestSweeperDoesNotCountADeferralAsAnAttempt(t *testing.T) {
 		t.Fatalf("rescheduled=%+v reported=%v purged=%v", store.rescheduled, reported, store.purged)
 	}
 }
+
+// Every deletion of a run is bounded to its share of the lease, so a batch
+// whose deletions all run to their bound still ends inside the lease of its
+// first claim: no tombstone is ever worked by two runs at once.
+func TestSweeperBoundsEachDeletionToItsShareOfTheLease(t *testing.T) {
+	store := &sweepStore{tombstones: []Tombstone{{IndexID: "a"}, {IndexID: "b"}}}
+	vectors := &sweepVectors{}
+	var reported []error
+	sweeper := newSweeper(t, store, vectors, &reported) // batch 10
+	if _, err := sweeper.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := TombstoneLease / 11
+	for i, got := range vectors.deadlines {
+		// time.Until of a deadline set a moment ago: within a second of the share.
+		if got <= 0 || got > want || want-got > time.Second {
+			t.Fatalf("deletion %d was bounded to %v, want %v (lease %v / (batch 10 + 1))", i, got, want, TombstoneLease)
+		}
+	}
+	if deleteBudget(10)*11 > TombstoneLease || deleteBudget(1)*2 > TombstoneLease {
+		t.Fatal("a full batch of bounded deletions outlasts the lease")
+	}
+}
+
+// A claimed tombstone whose lease has already ended when the run reaches it is
+// not touched: another replica may hold it. It is reported, nothing else.
+func TestSweeperLeavesATombstoneWhoseLeaseExpired(t *testing.T) {
+	store := &sweepStore{tombstones: []Tombstone{
+		{IndexID: "expired", LeaseUntil: t0.Add(-time.Second)},
+		{IndexID: "held", LeaseUntil: t0.Add(time.Minute)},
+	}}
+	vectors := &sweepVectors{}
+	var reported []error
+	worked, err := newSweeper(t, store, vectors, &reported).RunOnce(context.Background())
+	if err != nil || worked != 2 {
+		t.Fatalf("worked=%d err=%v", worked, err)
+	}
+	if len(vectors.calls) != 1 || vectors.calls[0].IndexID != "held" {
+		t.Fatalf("deletions = %+v, want only the held tombstone", vectors.calls)
+	}
+	if len(store.purged) != 1 || store.purged[0] != "held" || len(store.rescheduled) != 0 {
+		t.Fatalf("purged=%v rescheduled=%+v", store.purged, store.rescheduled)
+	}
+	if len(reported) != 1 || !errors.Is(reported[0], ErrTombstoneLeaseExpired) {
+		t.Fatalf("reported = %v, want the expired lease", reported)
+	}
+	// With little lease left the deletion's bound shrinks to what is left.
+	store = &sweepStore{tombstones: []Tombstone{{IndexID: "late", LeaseUntil: t0.Add(2 * time.Second)}}}
+	vectors = &sweepVectors{}
+	if _, err := newSweeper(t, store, vectors, &reported).RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors.deadlines) != 1 || vectors.deadlines[0] > 2*time.Second {
+		t.Fatalf("deadline = %v, want at most the 2s of lease left", vectors.deadlines)
+	}
+}
+
+// A refused identity is not an outage: the tombstone is counted and waits the
+// longest pause at once, so the store is not polled every 30s with a request
+// it will refuse until an operator acts.
+func TestSweeperBacksARefusedIdentityOffToTheLongestPauseAtOnce(t *testing.T) {
+	store := &sweepStore{tombstones: []Tombstone{{IndexID: "a", ProjectID: 7}}}
+	vectors := &sweepVectors{errs: map[string]error{"a": fmt.Errorf("%w: as told", indexingapp.ErrIndexVectorDeletionRefused)}}
+	var reported []error
+	if _, err := newSweeper(t, store, vectors, &reported).RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.purged) != 0 || len(store.rescheduled) != 1 || !store.rescheduled[0].failed ||
+		!store.rescheduled[0].at.Equal(t0.Add(TombstoneBackoffMax)) {
+		t.Fatalf("purged=%v rescheduled=%+v", store.purged, store.rescheduled)
+	}
+	if len(reported) != 1 || !errors.Is(reported[0], indexingapp.ErrIndexVectorDeletionRefused) {
+		t.Fatalf("reported = %v", reported)
+	}
+}
+
+// The lease is measured as a DURATION from the sweeper's own claim moment,
+// never by comparing the sweeper's clock with the store's: a store clock hours
+// behind does not make every fresh lease look expired, a store clock hours
+// ahead does not make an expired lease look held, and the deletion budget is
+// the lease's share either way.
+func TestSweeperMeasuresTheLeaseAsADurationNotAgainstTheStoresClock(t *testing.T) {
+	for _, skew := range []time.Duration{-5 * time.Hour, 5 * time.Hour} {
+		store := &sweepStore{skew: skew, tombstones: []Tombstone{{IndexID: "a", ProjectID: 7}}}
+		vectors := &sweepVectors{}
+		var reported []error
+		worked, err := newSweeper(t, store, vectors, &reported).RunOnce(context.Background())
+		if err != nil || worked != 1 {
+			t.Fatalf("skew %v: worked=%d err=%v", skew, worked, err)
+		}
+		if len(vectors.calls) != 1 || len(store.purged) != 1 || len(reported) != 0 {
+			t.Fatalf("skew %v: calls=%d purged=%v reported=%v, want the tombstone swept", skew, len(vectors.calls), store.purged, reported)
+		}
+		if want := deleteBudget(10); len(vectors.deadlines) != 1 || vectors.deadlines[0] > want || vectors.deadlines[0] < want-time.Second {
+			t.Fatalf("skew %v: deadline = %v, want the lease's share %v", skew, vectors.deadlines, want)
+		}
+	}
+	// With the store's clock far ahead, a lease that HAS run out on the
+	// sweeper's clock is still seen as expired: the sweeper's clock moves past
+	// the lease's length before the second tombstone is reached.
+	store := &sweepStore{skew: 5 * time.Hour, tombstones: []Tombstone{{IndexID: "first"}, {IndexID: "second"}}}
+	vectors := &sweepVectors{}
+	var reported []error
+	sweeper := newSweeper(t, store, vectors, &reported)
+	now := t0
+	sweeper.now = func() time.Time { return now }
+	// Each call to the store's deleter advances the clock past the lease.
+	wrapped := wrappedVectors{inner: advancingVectors{inner: vectors, advance: func() { now = now.Add(TombstoneLease + time.Second) }}}
+	sweeper.vectors = wrapped
+	if _, err := sweeper.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors.calls) != 1 || vectors.calls[0].IndexID != "first" {
+		t.Fatalf("deletions = %+v, want only the first (the second's lease ran out)", vectors.calls)
+	}
+	if len(reported) != 1 || !errors.Is(reported[0], ErrTombstoneLeaseExpired) {
+		t.Fatalf("reported = %v, want the expired lease of the second tombstone", reported)
+	}
+}
+
+// advancingVectors moves the test clock after each deletion.
+type advancingVectors struct {
+	inner   indexingapp.IndexVectorDeleter
+	advance func()
+}
+
+func (a advancingVectors) DeleteIndexVectors(ctx context.Context, ns indexingapp.IndexVectorNamespace) error {
+	defer a.advance()
+	return a.inner.DeleteIndexVectors(ctx, ns)
+}
+
+func (a advancingVectors) Deferred() bool { return a.inner.Deferred() }

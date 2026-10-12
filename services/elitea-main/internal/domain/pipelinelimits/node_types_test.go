@@ -26,7 +26,7 @@ func refusal(t *testing.T, doc string) *apierr.APIError {
 func TestCheckAdmitsEveryNodeTypeTheCompilerAdmits(t *testing.T) {
 	for _, nodeType := range []string{
 		"code", "decision", "map", "parallel", "agent", "toolkit", "mcp",
-		"hitl", "llm", "printer", "router", "state_modifier",
+		"hitl", "llm", "printer", "router", "state_modifier", "split_out", "aggregate",
 	} {
 		if err := pipelinelimits.Check(pipelineWithNode("n1", nodeType)); err != nil {
 			t.Errorf("type %s: got %v, want admitted (the compiler has an arm for it)", nodeType, err)
