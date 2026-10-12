@@ -296,7 +296,8 @@ impl EncryptedOutputSpool {
         };
         spool.clean_incomplete_temps()?;
         // Best effort: a record that cannot be swept never blocks the spool.
-        if let Err(error) = spool.sweep_expired_retired(RETIRED_RETENTION, std::time::SystemTime::now())
+        if let Err(error) =
+            spool.sweep_expired_retired(RETIRED_RETENTION, std::time::SystemTime::now())
         {
             tracing::warn!(
                 event = "output_spool_retired_sweep_failed",
@@ -596,9 +597,10 @@ impl EncryptedOutputSpool {
             let Some((sequence, attempt, epoch)) = parse_retired_name(name.to_bytes()) else {
                 continue;
             };
-            let stat = statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(
-                |error| unavailable_errno("the output spool entry is unavailable", error),
-            )?;
+            let stat =
+                statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+                    unavailable_errno("the output spool entry is unavailable", error)
+                })?;
             validate_private_file_stat(&stat, false)?;
             // `link` updates the inode's change time: it is the retirement time.
             let seconds = u64::try_from(stat.st_ctime).unwrap_or(0);
@@ -749,7 +751,10 @@ impl EncryptedOutputSpool {
         Ok((entries.len(), bytes))
     }
 
-    #[allow(clippy::too_many_lines, reason = "One bounded pass validates every directory entry.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One bounded pass validates every directory entry."
+    )]
     fn entries(&mut self, allow_temporary: bool) -> Result<Vec<DirectoryEntry>, SpoolError> {
         let mut directory = Dir::read_from(&self.directory)
             .map_err(|error| unavailable_errno("the output spool cannot be enumerated", error))?;
@@ -779,9 +784,10 @@ impl EncryptedOutputSpool {
             let kind = classify_entry(name)?;
             if kind.retired {
                 // Set aside, never replayed: the record of a retired frame.
-                let stat = statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(
-                    |error| unavailable_errno("the output spool entry is unavailable", error),
-                )?;
+                let stat =
+                    statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+                        unavailable_errno("the output spool entry is unavailable", error)
+                    })?;
                 validate_private_file_stat(&stat, false)?;
                 // The number of records never fails enumeration: the retirement
                 // path keeps it at the cap, and a sweep removes the old ones.
@@ -1227,7 +1233,11 @@ fn parse_retired_name(name: &[u8]) -> Option<(u64, u64, u64)> {
         RETIRED_NAME_BYTES
             if name[20] == b'-' && name[41] == b'-' && &name[62..] == b".retired" =>
         {
-            Some((digits(&name[..20])?, digits(&name[21..41])?, digits(&name[42..62])?))
+            Some((
+                digits(&name[..20])?,
+                digits(&name[21..41])?,
+                digits(&name[42..62])?,
+            ))
         }
         _ => None,
     }

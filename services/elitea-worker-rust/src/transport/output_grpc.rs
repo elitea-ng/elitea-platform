@@ -1891,10 +1891,7 @@ fn validate_recovery_rebind(
                 && error.retryable
                 && settlement.requested_outcome == ExecutionOutcomeV1::Failed as i32
         }
-        (
-            RecoveryKind::Rejected,
-            Some(execution_output_frame_v1::Payload::RuntimeError(error)),
-        ) => {
+        (RecoveryKind::Rejected, Some(execution_output_frame_v1::Payload::RuntimeError(error))) => {
             let outcome = settlement.requested_outcome;
             (error.code == RuntimeErrorCodeV1::Cancelled as i32
                 && outcome == ExecutionOutcomeV1::Cancelled as i32)
@@ -2611,21 +2608,33 @@ mod tests {
                 progress_winner(&progress, ProgressRejectionWinner::FrameRefused),
                 true,
             ),
-            ("retryable", {
-                let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
-                ack.rejection.as_mut().unwrap().retryable = true;
-                ack
-            }, false),
-            ("foreign stream", {
-                let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
-                ack.stream_id = "another-stream".into();
-                ack
-            }, false),
-            ("with credit", {
-                let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
-                ack.credit_frames = 1;
-                ack
-            }, false),
+            (
+                "retryable",
+                {
+                    let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
+                    ack.rejection.as_mut().unwrap().retryable = true;
+                    ack
+                },
+                false,
+            ),
+            (
+                "foreign stream",
+                {
+                    let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
+                    ack.stream_id = "another-stream".into();
+                    ack
+                },
+                false,
+            ),
+            (
+                "with credit",
+                {
+                    let mut ack = progress_winner(&progress, ProgressRejectionWinner::FrameRefused);
+                    ack.credit_frames = 1;
+                    ack
+                },
+                false,
+            ),
         ] {
             let restored =
                 PreparedOutputSpool::prepare(spool(&root), config()).expect("restored progress");
@@ -3342,7 +3351,10 @@ mod tests {
         let root = temp.path().join("root");
         let progress = frame(1, false);
         let io = FakeStream {
-            acknowledgements: VecDeque::from([Ok(Some(bootstrap())), Ok(Some(bound_ack(&progress)))]),
+            acknowledgements: VecDeque::from([
+                Ok(Some(bootstrap())),
+                Ok(Some(bound_ack(&progress))),
+            ]),
             writes: Vec::new(),
             closed: false,
         };
@@ -3357,7 +3369,10 @@ mod tests {
         let verified = verified_agent_command("signed_command_output_session");
         let terminal = terminal_frame();
         let io = FakeStream {
-            acknowledgements: VecDeque::from([Ok(Some(bootstrap())), Ok(Some(bound_ack(&terminal)))]),
+            acknowledgements: VecDeque::from([
+                Ok(Some(bootstrap())),
+                Ok(Some(bound_ack(&terminal))),
+            ]),
             writes: Vec::new(),
             closed: false,
         };

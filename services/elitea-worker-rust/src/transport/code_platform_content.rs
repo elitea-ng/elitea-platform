@@ -278,7 +278,12 @@ mod tests {
         assert!(parse_effects(&body("idle")).is_err());
         assert!(parse_effects(&body("")).is_err());
         assert!(parse_effects(&body("None")).is_err());
-        assert!(parse_effects(br#"{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1}"#).is_err());
+        assert!(
+            parse_effects(
+                br#"{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1}"#
+            )
+            .is_err()
+        );
         assert!(parse_effects(br#"{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":2,"disposition":"none"}"#).is_err());
         assert!(parse_effects(br#"{"schema":"elitea.runtime.code-platform-step-response.v1","revision":1,"disposition":"none"}"#).is_err());
         assert!(parse_effects(br#"{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"none","effect_id":null}"#).is_err());

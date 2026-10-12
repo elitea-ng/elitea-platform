@@ -624,9 +624,19 @@ fn a_retired_frame_leaves_replay_but_stays_as_an_encrypted_record() {
     let mut spool = open(&root, &key, &binding, limits());
     spool.put(sequence(8), b"superseded-progress").unwrap();
     // Only the exact bytes can be retired.
-    assert!(spool.retire_pending(sequence(8), b"other", tag(1, 1)).is_err());
-    assert!(spool.retire_pending(sequence(9), b"superseded-progress", tag(1, 1)).is_err());
-    spool.retire_pending(sequence(8), b"superseded-progress", tag(1, 1)).unwrap();
+    assert!(
+        spool
+            .retire_pending(sequence(8), b"other", tag(1, 1))
+            .is_err()
+    );
+    assert!(
+        spool
+            .retire_pending(sequence(9), b"superseded-progress", tag(1, 1))
+            .is_err()
+    );
+    spool
+        .retire_pending(sequence(8), b"superseded-progress", tag(1, 1))
+        .unwrap();
     assert!(spool.pending().unwrap().is_empty());
     assert!(spool.has_retired_frames().unwrap());
     // The record is encrypted and the sequence is free for the new claim.
@@ -657,17 +667,24 @@ fn retired_records_at_the_cap_and_beyond_never_wedge_the_spool() {
     let cap = u64::try_from(MAX_RETIRED_FRAMES).unwrap();
     for attempt in 1..=cap {
         spool.put(sequence(5), b"progress").unwrap();
-        spool.retire_pending(sequence(5), b"progress", tag(attempt, 1)).unwrap();
+        spool
+            .retire_pending(sequence(5), b"progress", tag(attempt, 1))
+            .unwrap();
         // Every operation that enumerates the directory still works.
         assert!(spool.pending().unwrap().is_empty());
     }
     assert_eq!(retired_files(&root, &binding).len(), MAX_RETIRED_FRAMES);
     // Cap + 1: the oldest record is pruned, the new one is kept, nothing fails.
     spool.put(sequence(5), b"progress").unwrap();
-    spool.retire_pending(sequence(5), b"progress", tag(cap + 1, 1)).unwrap();
+    spool
+        .retire_pending(sequence(5), b"progress", tag(cap + 1, 1))
+        .unwrap();
     let names = retired_files(&root, &binding);
     assert_eq!(names.len(), MAX_RETIRED_FRAMES);
-    assert!(!retired_path(&root, &binding, 5, tag(1, 1)).exists(), "oldest pruned");
+    assert!(
+        !retired_path(&root, &binding, 5, tag(1, 1)).exists(),
+        "oldest pruned"
+    );
     assert!(retired_path(&root, &binding, 5, tag(2, 1)).exists());
     assert!(retired_path(&root, &binding, 5, tag(cap + 1, 1)).exists());
     // The live path is unaffected: put, replay, acknowledge, reopen.
@@ -690,7 +707,9 @@ fn many_more_retirements_than_the_cap_keep_only_the_newest_records() {
     let total = u64::try_from(MAX_RETIRED_FRAMES).unwrap() * 3;
     for attempt in 1..=total {
         spool.put(sequence(1), b"p").unwrap();
-        spool.retire_pending(sequence(1), b"p", tag(attempt, attempt)).unwrap();
+        spool
+            .retire_pending(sequence(1), b"p", tag(attempt, attempt))
+            .unwrap();
     }
     let names = retired_files(&root, &binding);
     assert_eq!(names.len(), MAX_RETIRED_FRAMES);
@@ -707,15 +726,26 @@ fn a_sequence_reused_by_a_later_claim_keeps_every_earlier_record() {
     let binding = spool_binding("execution-retired-reuse");
     let mut spool = open(&root, &master(b'k'), &binding, limits());
     spool.put(sequence(3), b"claim-one-progress").unwrap();
-    spool.retire_pending(sequence(3), b"claim-one-progress", tag(1, 1)).unwrap();
+    spool
+        .retire_pending(sequence(3), b"claim-one-progress", tag(1, 1))
+        .unwrap();
     let first = fs::read(retired_path(&root, &binding, 3, tag(1, 1))).unwrap();
     spool.put(sequence(3), b"claim-two-progress").unwrap();
-    spool.retire_pending(sequence(3), b"claim-two-progress", tag(2, 1)).unwrap();
+    spool
+        .retire_pending(sequence(3), b"claim-two-progress", tag(2, 1))
+        .unwrap();
     assert_eq!(retired_files(&root, &binding).len(), 2);
-    assert_eq!(fs::read(retired_path(&root, &binding, 3, tag(1, 1))).unwrap(), first);
+    assert_eq!(
+        fs::read(retired_path(&root, &binding, 3, tag(1, 1))).unwrap(),
+        first
+    );
     // The same claim cannot overwrite its own record with different bytes.
     spool.put(sequence(3), b"claim-two-other").unwrap();
-    assert!(spool.retire_pending(sequence(3), b"claim-two-other", tag(2, 1)).is_err());
+    assert!(
+        spool
+            .retire_pending(sequence(3), b"claim-two-other", tag(2, 1))
+            .is_err()
+    );
     assert_eq!(retired_files(&root, &binding).len(), 2);
     // The refused frame stays live; nothing was lost or replaced.
     assert_eq!(spool.pending().unwrap().len(), 1);
@@ -734,7 +764,9 @@ fn a_retirement_interrupted_between_link_and_unlink_completes_on_retry() {
         retired_path(&root, &binding, 4, tag(7, 2)),
     )
     .unwrap();
-    spool.retire_pending(sequence(4), b"progress", tag(7, 2)).unwrap();
+    spool
+        .retire_pending(sequence(4), b"progress", tag(7, 2))
+        .unwrap();
     assert!(!frame(&root, &binding, 4).exists());
     assert_eq!(retired_files(&root, &binding).len(), 1);
     assert!(spool.pending().unwrap().is_empty());
@@ -751,7 +783,9 @@ fn settlement_and_the_retention_sweep_delete_retired_records() {
     let mut spool = open(&root, &key, &binding, limits());
     for attempt in 1..=3 {
         spool.put(sequence(2), b"progress").unwrap();
-        spool.retire_pending(sequence(2), b"progress", tag(attempt, 1)).unwrap();
+        spool
+            .retire_pending(sequence(2), b"progress", tag(attempt, 1))
+            .unwrap();
     }
     // Inside the retention window nothing is swept.
     assert_eq!(
@@ -762,12 +796,20 @@ fn settlement_and_the_retention_sweep_delete_retired_records() {
     );
     assert_eq!(retired_files(&root, &binding).len(), 3);
     // Past the window every record goes; a fresh one stays inside its own window.
-    let later = std::time::SystemTime::now() + RETIRED_RETENTION + std::time::Duration::from_mins(1);
-    assert_eq!(spool.sweep_expired_retired(RETIRED_RETENTION, later).unwrap(), 3);
+    let later =
+        std::time::SystemTime::now() + RETIRED_RETENTION + std::time::Duration::from_mins(1);
+    assert_eq!(
+        spool
+            .sweep_expired_retired(RETIRED_RETENTION, later)
+            .unwrap(),
+        3
+    );
     assert!(retired_files(&root, &binding).is_empty());
     for attempt in 1..=2 {
         spool.put(sequence(2), b"progress").unwrap();
-        spool.retire_pending(sequence(2), b"progress", tag(attempt, 1)).unwrap();
+        spool
+            .retire_pending(sequence(2), b"progress", tag(attempt, 1))
+            .unwrap();
     }
     // Settlement discards what remains and the directory is then removable.
     assert_eq!(spool.discard_retired_records().unwrap(), 2);
@@ -794,8 +836,14 @@ fn a_legacy_retired_record_still_enumerates_and_is_pruned_first() {
     assert!(spool.has_retired_frames().unwrap());
     for attempt in 1..=u64::try_from(MAX_RETIRED_FRAMES).unwrap() {
         spool.put(sequence(1), b"p").unwrap();
-        spool.retire_pending(sequence(1), b"p", tag(attempt, 1)).unwrap();
+        spool
+            .retire_pending(sequence(1), b"p", tag(attempt, 1))
+            .unwrap();
     }
-    assert!(!child(&root, &binding).join(format!("{:020}.retired", 9)).exists());
+    assert!(
+        !child(&root, &binding)
+            .join(format!("{:020}.retired", 9))
+            .exists()
+    );
     assert_eq!(retired_files(&root, &binding).len(), MAX_RETIRED_FRAMES);
 }

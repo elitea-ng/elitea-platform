@@ -215,13 +215,14 @@ mod shared_vector_tests {
                 continue;
             }
             let bytes = std::fs::read(&path).unwrap();
-            let accepted = serde_json::from_slice::<NodeRecoveryRequiredReceipt>(&bytes)
-                .is_ok_and(|receipt| {
+            let accepted = serde_json::from_slice::<NodeRecoveryRequiredReceipt>(&bytes).is_ok_and(
+                |receipt| {
                     receipt.validate()
                         // Canonical, so the Go side hashes the same bytes.
                         && serde_json::to_vec(&serde_json::to_value(&receipt).unwrap()).unwrap()
                             == bytes
-                });
+                },
+            );
             if name.contains(".invalid.") {
                 invalid += 1;
                 assert!(!accepted, "{name}: invalid vector accepted by the Worker");
@@ -230,6 +231,9 @@ mod shared_vector_tests {
                 assert!(accepted, "{name}: valid vector rejected by the Worker");
             }
         }
-        assert!(valid >= 6 && invalid >= 8, "{valid} valid, {invalid} invalid");
+        assert!(
+            valid >= 6 && invalid >= 8,
+            "{valid} valid, {invalid} invalid"
+        );
     }
 }

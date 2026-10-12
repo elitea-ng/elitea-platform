@@ -4911,8 +4911,7 @@ async fn run_checkpoint_delivery_with_pending_progress(
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, output_root) = root();
     let output = preflight(output_root.clone(), "worker-1");
-    let AgentOutputPreflightOutcome::Empty(empty) =
-        output.prepare(fresh()).await.expect("spool")
+    let AgentOutputPreflightOutcome::Empty(empty) = output.prepare(fresh()).await.expect("spool")
     else {
         panic!("empty")
     };
@@ -4992,8 +4991,9 @@ async fn run_checkpoint_delivery_with_pending_progress(
     )
     .with_checkpoint_recovery(true);
     let raw = bytes("signed_command");
-    let verified = parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
-        .expect("verified");
+    let verified =
+        parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+            .expect("verified");
     processor
         .process_verified_delivery(bus_delivery(raw), verified)
         .await;
@@ -5013,7 +5013,10 @@ fn retired_records(root: &std::path::Path) -> usize {
             let path = entry.expect("entry").path();
             if path.is_dir() {
                 walk(&path, count);
-            } else if path.extension().is_some_and(|extension| extension == "retired") {
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "retired")
+            {
                 *count += 1;
             }
         }
@@ -5051,11 +5054,9 @@ async fn a_takeover_never_replays_a_superseded_claims_pending_progress() {
 /// the canonical internal failure once, replaces the frame, and retires.
 #[tokio::test]
 async fn a_frame_main_refuses_settles_an_internal_failure_once_and_is_not_resent() {
-    let case = run_checkpoint_delivery_with_pending_progress(
-        false,
-        ReplayProgressAction::RejectFrame,
-    )
-    .await;
+    let case =
+        run_checkpoint_delivery_with_pending_progress(false, ReplayProgressAction::RejectFrame)
+            .await;
     assert_eq!(case.state.replays.load(Ordering::SeqCst), 1);
     let events = case.trace.lock().expect("trace");
     assert_eq!(events.iter().filter(|x| **x == "settlement").count(), 1);
@@ -5075,11 +5076,9 @@ async fn a_frame_main_refuses_settles_an_internal_failure_once_and_is_not_resent
 /// it and settles once.
 #[tokio::test]
 async fn a_stop_wins_over_a_pending_progress_frame_and_settles_once() {
-    let case = run_checkpoint_delivery_with_pending_progress(
-        false,
-        ReplayProgressAction::RejectCancelled,
-    )
-    .await;
+    let case =
+        run_checkpoint_delivery_with_pending_progress(false, ReplayProgressAction::RejectCancelled)
+            .await;
     let events = case.trace.lock().expect("trace");
     assert_eq!(events.iter().filter(|x| **x == "settlement").count(), 1);
     assert_eq!(events.iter().filter(|x| **x == "retire").count(), 1);
@@ -5104,8 +5103,7 @@ async fn output_recovery_over_pending_progress(
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, output_root) = root();
     let seeding = preflight(output_root.clone(), "worker-1");
-    let AgentOutputPreflightOutcome::Empty(empty) =
-        seeding.prepare(fresh()).await.expect("spool")
+    let AgentOutputPreflightOutcome::Empty(empty) = seeding.prepare(fresh()).await.expect("spool")
     else {
         panic!("empty")
     };
@@ -5184,12 +5182,18 @@ fn failure_code(frame: &ExecutionOutputFrameV1) -> i32 {
 async fn output_recovery_replaces_a_pending_superseded_frame_and_settles_once() {
     let (events, frames, replays, _temporary) =
         output_recovery_over_pending_progress("claim_recover_ambiguous_invocation_noack").await;
-    assert_eq!(events, ["claim", "renew", "observe", "settlement", "retire"]);
+    assert_eq!(
+        events,
+        ["claim", "renew", "observe", "settlement", "retire"]
+    );
     assert_eq!(replays, 0);
     assert_eq!(frames.len(), 1);
     assert!(frames[0].terminal);
     assert_eq!(frames[0].sequence, 5);
-    assert_eq!(failure_code(&frames[0]), RuntimeErrorCodeV1::Internal as i32);
+    assert_eq!(
+        failure_code(&frames[0]),
+        RuntimeErrorCodeV1::Internal as i32
+    );
 }
 
 /// Part D: Stop wins while output recovery is pending. The cancelled terminal
@@ -5198,12 +5202,18 @@ async fn output_recovery_replaces_a_pending_superseded_frame_and_settles_once() 
 async fn a_stop_settles_cancelled_once_while_output_recovery_is_pending() {
     let (events, frames, replays, _temporary) =
         output_recovery_over_pending_progress("claim_recover_running_noack+cancelled").await;
-    assert_eq!(events, ["claim", "renew", "observe", "settlement", "retire"]);
+    assert_eq!(
+        events,
+        ["claim", "renew", "observe", "settlement", "retire"]
+    );
     assert_eq!(replays, 0);
     assert_eq!(frames.len(), 1);
     assert!(frames[0].terminal);
     assert_eq!(frames[0].sequence, 5);
-    assert_eq!(failure_code(&frames[0]), RuntimeErrorCodeV1::Cancelled as i32);
+    assert_eq!(
+        failure_code(&frames[0]),
+        RuntimeErrorCodeV1::Cancelled as i32
+    );
 }
 
 /// Parks before its first event while holding a marker, like an agent

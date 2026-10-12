@@ -690,7 +690,10 @@ mod preparation_recovery {
                 "../../../../elitea-main/migrations/agentstate/0014_sandbox_dispatch_submission_marker.sql"
             ),
         ] {
-            sqlx::raw_sql(migration).execute(&database.pool).await.unwrap();
+            sqlx::raw_sql(migration)
+                .execute(&database.pool)
+                .await
+                .unwrap();
         }
         let scope = DispatchScope::from_identity(&ExecutionIdentityV1 {
             tenant_id: "dispatch-test".into(),
@@ -755,8 +758,7 @@ mod preparation_recovery {
     #[ignore = "requires disposable PostgreSQL"]
     async fn preparation_failure_in_recovery_without_a_dispatch_row_settles_typed_once() {
         let fixture = fixture(false).await;
-        let (sender, receiver) =
-            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
         let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
         let node = node(&fixture, sender);
         let error = node.execute(&fixture.context).await.err().unwrap();
@@ -794,8 +796,7 @@ mod preparation_recovery {
     async fn preparation_failure_in_recovery_with_a_dispatch_row_stays_reconcile_with_an_accepted_receipt()
      {
         let fixture = fixture(true).await;
-        let (sender, receiver) =
-            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
         let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
         let node = node(&fixture, sender);
         let output = node.execute(&fixture.context).await.unwrap();
@@ -928,8 +929,7 @@ mod terminal_runtime_failure {
 
     #[tokio::test]
     async fn failed_runtime_without_a_possible_effect_settles_typed_and_needs_no_operator() {
-        let (sender, receiver) =
-            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
         let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
         let (node, context, runtime) = run(false, sender);
         let error = node.execute(&context).await.err().unwrap();
@@ -943,8 +943,7 @@ mod terminal_runtime_failure {
 
     #[tokio::test]
     async fn failed_runtime_with_an_unreceipted_platform_effect_still_reconciles() {
-        let (sender, receiver) =
-            crate::agents::graph::node_events::pipeline_node_event_channel();
+        let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
         let mut drain = receiver.drain("inv", "agent", "root").await.unwrap();
         let (node, context, runtime) = run(true, sender);
         let output = node.execute(&context).await.unwrap();

@@ -116,13 +116,13 @@ impl RemoteCodeRuntime {
         })
         .await
         .map_err(|error| {
-                intent_failure(
-                    &error,
-                    CodeAttemptPhase::Admission,
-                    invocation.activation,
-                    prior_dispatch,
-                )
-            })?;
+            intent_failure(
+                &error,
+                CodeAttemptPhase::Admission,
+                invocation.activation,
+                prior_dispatch,
+            )
+        })?;
         let trace = invocation
             .trace
             .as_ref()
@@ -261,13 +261,13 @@ impl RemoteCodeRuntime {
         })
         .await
         .map_err(|error| {
-                intent_failure(
-                    &error,
-                    CodeAttemptPhase::Admission,
-                    invocation.activation,
-                    prior_dispatch,
-                )
-            })?;
+            intent_failure(
+                &error,
+                CodeAttemptPhase::Admission,
+                invocation.activation,
+                prior_dispatch,
+            )
+        })?;
         if let Some(workspace) = workspace.as_ref() {
             let hydrated = observe_typed(
                 trace.as_ref(),
@@ -295,8 +295,13 @@ impl RemoteCodeRuntime {
             )
             .await;
             if let Err(failure) = &hydrated {
-                self.release_undispatched(profile, &invocation.activation, &request_digest, failure)
-                    .await;
+                self.release_undispatched(
+                    profile,
+                    &invocation.activation,
+                    &request_digest,
+                    failure,
+                )
+                .await;
             }
             hydrated?;
         }
@@ -324,8 +329,13 @@ impl RemoteCodeRuntime {
             )
             .await;
             if let Err(failure) = &hydrated {
-                self.release_undispatched(profile, &invocation.activation, &request_digest, failure)
-                    .await;
+                self.release_undispatched(
+                    profile,
+                    &invocation.activation,
+                    &request_digest,
+                    failure,
+                )
+                .await;
             }
             hydrated?;
         }
@@ -913,7 +923,10 @@ mod tests {
             async { Err::<(), _>(InputContentError::AuthorizationFailed("refused")) }
         })
         .await;
-        assert!(matches!(refused, Err(InputContentError::AuthorizationFailed(_))));
+        assert!(matches!(
+            refused,
+            Err(InputContentError::AuthorizationFailed(_))
+        ));
         assert_eq!(calls, 1);
         // A Main that never returns ends at the deadline with the last error.
         let near = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
