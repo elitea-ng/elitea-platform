@@ -703,7 +703,7 @@ pub struct IndexToolsetError {
 impl IndexToolsetError {
     /// The code.
     #[must_use]
-    pub const fn code(&self) -> IndexToolsetErrorCode {
+    pub const fn code(self) -> IndexToolsetErrorCode {
         self.code
     }
 }
