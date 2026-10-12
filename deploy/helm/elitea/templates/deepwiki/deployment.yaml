@@ -60,6 +60,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            {{- if include "elitea-deepwiki.platformGrpc" . }}
+            - name: platform-grpc
+              containerPort: {{ .Values.deepwiki.platformGrpc.port }}
+              protocol: TCP
+            {{- end }}
           env:
             {{- range $key, $value := $env }}
             {{- if not (hasKey $secrets $key) }}
@@ -80,6 +85,16 @@ spec:
               value: {{ .Values.deepwiki.mtls.mountPath }}/tls.key
             - name: ELITEA_DEEPWIKI_TLS_CA_FILE
               value: {{ .Values.deepwiki.mtls.mountPath }}/ca.crt
+            {{- end }}
+            {{- if include "elitea-deepwiki.platformGrpc" . }}
+            # The platform gRPC service: a second listener behind the TLS
+            # configuration above. Only the identities listed may call it, by
+            # their verified client certificate. Absent when the allowlist is
+            # empty, which keeps the service off.
+            - name: ELITEA_DEEPWIKI_PLATFORM_CLIENTS
+              value: {{ join "," .Values.deepwiki.platformGrpc.clients | quote }}
+            - name: ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR
+              value: {{ printf ":%d" (.Values.deepwiki.platformGrpc.port | int) | quote }}
             {{- end }}
             {{- if .Values.deepwiki.callbackViaPlatformEdge }}
             # The callback hop (artifact uploads) is TLS through platform-edge:

@@ -8,8 +8,8 @@ use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use elitea_connectors::transport::{Body, Method, Request, StatusCode};
 use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
-use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
 use super::families::gitlab_org::client::{
@@ -312,7 +312,7 @@ impl GitLabOrgTransport for FixtureTransport {
     ) -> Result<GitLabOrgHttpResponse, GitLabOrgClientError> {
         let body = request
             .body()
-            .and_then(reqwest::Body::as_bytes)
+            .and_then(Body::as_bytes)
             .and_then(|bytes| serde_json::from_slice(bytes).ok());
         let token = request
             .headers()

@@ -72,7 +72,7 @@ import (
 // exactly that state by deleting and recreating.
 type Provisioner interface {
 	Provision(ctx context.Context, request projectprovisioning.Request) (projectprovisioning.Result, error)
-	Deprovision(ctx context.Context, projectID int64) (projectprovisioning.Result, error)
+	Deprovision(ctx context.Context, projectID int64, options ...projectprovisioning.DeprovisionOption) (projectprovisioning.Result, error)
 }
 
 // AsyncEnsurer is the half of *Ensurer a request path holds: ask for the
@@ -630,8 +630,29 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 		if candidate.owned && !candidate.created {
 			e.logger.WarnContext(ctx, "removing an unfinished personal project before recreating it",
 				"user_id", userID, "project_id", candidate.id)
-			if _, err := e.provisioner.Deprovision(ctx, candidate.id); err != nil {
-				return 0, fmt.Errorf("personalproject: remove unfinished project %d: %w", candidate.id, err)
+			// An owned personal project is removed here only because it is
+			// unfinished (create_success=false); nothing can be running in it,
+			// so the delete skips its active-work count. Counting would refuse
+			// the repair on a stray job row and strand the user without a
+			// personal project. An explicit DELETE keeps the count.
+			//
+			// It also does not wait for the cleanup: the decision (the row and
+			// every credential) is committed when Deprovision returns, and the
+			// artifact bytes, the schema and the PgVector database are the
+			// journal's, which the reconciler finishes. A login must not wait on
+			// an object store or a vector server.
+			if _, err := e.provisioner.Deprovision(ctx, candidate.id,
+				projectprovisioning.SkipActiveWorkCheck(), projectprovisioning.HandOffCleanup()); err != nil {
+				switch {
+				case errors.Is(err, projectprovisioning.ErrProjectNotFound):
+					// Another delete of this project (a concurrent login, an
+					// operator) won the row lock and removed it first. The row
+					// is gone, which is all the repair needs.
+					e.logger.InfoContext(ctx, "unfinished personal project was already removed by another delete",
+						"user_id", userID, "project_id", candidate.id)
+				default:
+					return 0, fmt.Errorf("personalproject: remove unfinished project %d: %w", candidate.id, err)
+				}
 			}
 			continue
 		}

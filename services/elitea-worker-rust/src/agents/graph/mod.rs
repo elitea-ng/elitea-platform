@@ -94,6 +94,8 @@ mod printer_tests;
 pub(crate) mod resume;
 use elitea_agent_runtime::graph::router;
 #[cfg(test)]
+mod pipeline_pg_test_support;
+#[cfg(test)]
 mod routing_tests;
 #[cfg(feature = "graph-shaping-bench")]
 #[doc(hidden)]

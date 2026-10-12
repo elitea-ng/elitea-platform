@@ -1,4 +1,6 @@
-//! The IPC surface: seven commands, nothing else.
+//! The connection and sign-in IPC surface: eight commands (the webview's fetch is in `net.rs`). The local-work
+//! commands (workspaces, the agent turn) are in `local_commands.rs`; the
+//! whole surface is listed in `IPC.md`.
 //!
 //! Each one is named in `build.rs` (so Tauri generates an `allow-*` permission
 //! for it) and in `capabilities/default.json` (so only the bundled window may
@@ -8,10 +10,11 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{State, WebviewWindow};
 
 use crate::auth::{AccessToken, AuthService, DeploymentInfo, HostState, RefreshResult};
 use crate::error::HostError;
+use crate::local_commands::LocalState;
 
 pub struct AppState {
     pub auth: Arc<AuthService>,
@@ -25,20 +28,41 @@ pub fn host_state(state: State<'_, AppState>) -> Result<HostState, HostError> {
 /// Step one of connecting: validate the address and show whose deployment it is.
 #[tauri::command]
 pub async fn host_connect(
-    app: AppHandle,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+    fetches: State<'_, crate::net::WebFetch>,
     url: String,
 ) -> Result<DeploymentInfo, HostError> {
+    let before = state.auth.state().ok().and_then(|current| current.origin);
     let info = state.auth.connect(&url).await?;
-    // From here the webview may reach this deployment through the HTTP plugin, and no other.
-    crate::http_scope::grant(&app, &info.origin).map_err(HostError::Internal)?;
+    // Another deployment ended the session (connect signed out of the old one).
+    if before.as_deref() != Some(info.origin.as_str()) {
+        local.agents.forget_identity();
+    }
+    // From here the webview's fetch (src/net.rs) may reach this deployment.
+    fetches
+        .scope
+        .grant(&info.origin)
+        .map_err(HostError::Internal)?;
     Ok(info)
 }
 
 /// Step two: sign in through the system browser. Resolves when the flow ends.
 #[tauri::command]
-pub async fn host_sign_in(state: State<'_, AppState>) -> Result<HostState, HostError> {
-    state.auth.sign_in().await
+pub async fn host_sign_in(
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+) -> Result<HostState, HostError> {
+    let signed_in = state.auth.sign_in().await?;
+    // A new session (perhaps another account): nothing of the last one goes on.
+    local.agents.forget_identity();
+    Ok(signed_in)
+}
+
+/// Abandon the sign-in waiting for the browser; `host_sign_in` then rejects.
+#[tauri::command]
+pub fn host_sign_in_cancel(state: State<'_, AppState>) {
+    state.auth.cancel_sign_in();
 }
 
 /// A usable access token, or `null` when there is no session.
@@ -55,13 +79,19 @@ pub async fn host_refresh(state: State<'_, AppState>) -> Result<RefreshResult, H
     state.auth.refresh().await
 }
 
-/// Revoke the device session on the server, then forget it.
+/// Forget the session at once; the server revoke is queued and sent in the
+/// background (retried at the next launch until it gets through). Resolves
+/// without waiting for the network.
 #[tauri::command]
 pub async fn host_sign_out(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
 ) -> Result<(), HostError> {
-    let result = state.auth.sign_out().await;
+    // First: no running turn sends another request with this session.
+    local.agents.forget_identity();
+    // The background delivery is detached.
+    let result = state.auth.sign_out().await.map(drop);
     clear_webview_data(&window);
     result
 }
@@ -69,7 +99,12 @@ pub async fn host_sign_out(
 /// Forget the session and local data without contacting the server
 /// (`device_revoked`, or a refresh token the server no longer honours).
 #[tauri::command]
-pub async fn host_wipe(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), HostError> {
+pub async fn host_wipe(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+) -> Result<(), HostError> {
+    local.agents.forget_identity();
     let result = state.auth.wipe().await;
     clear_webview_data(&window);
     result
@@ -81,6 +116,6 @@ pub async fn host_wipe(window: WebviewWindow, state: State<'_, AppState>) -> Res
 /// The page runs its own logout sweep first as well; this is the backstop.
 fn clear_webview_data(window: &WebviewWindow) {
     if let Err(error) = window.clear_all_browsing_data() {
-        eprintln!("elitea-desktop: could not clear the webview's data: {error}");
+        log::warn!("could not clear the webview's data: {error}");
     }
 }

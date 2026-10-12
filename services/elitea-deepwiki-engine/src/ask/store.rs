@@ -30,6 +30,7 @@
 //! PostgreSQL: the heap, which a publish fills in graph order).
 
 use crate::errors::{EngineError, ErrorType};
+use crate::storage::StorageError;
 use crate::storage::adapter::{self, Scope, UnifiedDb};
 pub use crate::storage::adapter::{EdgeRecord, HybridRow, NodeRecord};
 use crate::storage::search::{self, Hybrid, READ_SNAPSHOT, Scores};
@@ -582,7 +583,15 @@ impl IndexStore for PgIndex {
         self.db
             .search_hybrid(query, embedding, &Scope::default(), &params)
             .await
-            .map_err(database)
+            .map_err(|error| match error {
+                // The wiki changed model under the question: the caller can
+                // ask again, so it is a value error with the way out, not a
+                // database failure.
+                StorageError::EmbeddingModelChanged { .. } => {
+                    EngineError::new(ErrorType::Value, error.to_string())
+                }
+                other => database(other),
+            })
     }
 }
 

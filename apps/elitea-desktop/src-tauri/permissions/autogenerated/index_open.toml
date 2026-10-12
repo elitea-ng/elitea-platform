@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-index-open"
+description = "Enables the index_open command without any pre-configured scope."
+commands.allow = ["index_open"]
+
+[[permission]]
+identifier = "deny-index-open"
+description = "Denies the index_open command without any pre-configured scope."
+commands.deny = ["index_open"]

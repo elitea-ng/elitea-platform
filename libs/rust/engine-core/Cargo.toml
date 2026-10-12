@@ -7,13 +7,21 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-# `preserve_order`: the engines answer with Python dicts, whose key order is
-# insertion order; `pyjson` writes them back in that order.
-serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+# Default features only, so the desktop host can link this crate (through
+# elitea-code-parsers and elitea-inventory-core) without `preserve_order`
+# (ADR-0029 decision 2). The engines answer with Python dicts, whose key
+# order is insertion order, and `pyjson` writes a map back in the order it
+# holds: every engine binary turns `preserve_order` and `float_roundtrip` on
+# in its own manifest, so its build is unchanged. This crate's own tests run
+# with both (the dev-dependency below).
+serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
 zeroize = "1.9.0"
 
 [dev-dependencies]
+# The engines' serde_json, for this crate's own tests (dev-dependency features
+# never reach a normal build).
+serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
 tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
 
 [lints]

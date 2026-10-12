@@ -8,13 +8,11 @@
 //! text continuation until the loop finishes. Every visit must append exactly
 //! one element and add exactly one to the counter, whichever process ran it.
 
-#![cfg(feature = "graph-extensions-rehearsal")]
-
 use adk_rust::graph::Checkpoint;
 use serde_json::{Value, json};
 
 use super::compiler::PipelineDefinition;
-use super::shaping_pg_tests::{
+use super::pipeline_pg_test_support::{
     CHECKPOINT_MIGRATION, activate, continuation, create_session, history, run,
 };
 use crate::state::postgres_session_tests::{IsolatedPostgres, install_schema};

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"mime"
 	"strconv"
 	"strings"
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -55,6 +57,155 @@ type IndexIngestResultsRepository struct {
 	projects projectStore
 	policy   IndexIngestOutputPolicy
 	activity currentIndexActivityProjector
+	// registry applies each result to elitea_runtime.index_registry in the
+	// projecting transaction (ELITEA_INDEXING_RUNTIME=rust). Off, the Python
+	// SDK writes its own index_meta row and nothing here changes.
+	registry bool
+	log      *slog.Logger
+}
+
+// WithLogger sets the logger the registry application warns with (a truncated
+// document list). The default is slog.Default().
+func (r *IndexIngestResultsRepository) WithLogger(logger *slog.Logger) *IndexIngestResultsRepository {
+	if r != nil && logger != nil {
+		r.log = logger
+	}
+	return r
+}
+
+func (r *IndexIngestResultsRepository) logger() *slog.Logger {
+	if r == nil || r.log == nil {
+		return slog.Default()
+	}
+	return r.log
+}
+
+// WithIndexRegistry makes the repository apply every terminal index result to
+// the index registry, in the transaction that projects and settles it
+// (ADR-0030 decision 2: the worker reports, Main records). It returns the
+// repository so the composition root can chain it.
+func (r *IndexIngestResultsRepository) WithIndexRegistry() *IndexIngestResultsRepository {
+	if r != nil {
+		r.registry = true
+	}
+	return r
+}
+
+// applyIndexRegistry records a run's terminal result on its registry row, in
+// the projecting transaction, and returns the summary the user-facing surfaces
+// (the notification and the chat activity) describe. Off (python mode) it
+// returns the worker's summary and touches nothing.
+//
+// One locked read (LockIndexResultRow) decides whether the result can be
+// recorded (indexregistry.RecordedSummary) and the same row is applied. A
+// result without a typed summary, or one naming another embedding space than
+// the index was stamped with, is REFUSED: outputapp.ErrIndexResultRefused is
+// returned before anything is written, the projecting transaction rolls back,
+// and the output server rejects the frame with
+// RUNTIME_ERROR_CODE_V1_RESULT_REFUSED (ADR-0030 I1). The worker answers with a
+// FAILED RuntimeError terminal carrying that code; that terminal takes the
+// runtime-failure path, whose index terminal intent the registry terminalizer
+// (indexing.RegistryIndexMetaTerminalizer) records as `failed`. So the
+// settlement, the stored projection, the replay event and the registry agree,
+// and no summary the worker did not report is ever shown as the run's.
+//
+// A worker that was told the expected embedding space in its command
+// (IndexIngestCommandV1.expected_embedding_model/_dimension) fails before
+// writing any vector and never reaches the refusal; it is the backstop for one
+// that did not.
+//
+// After the row is applied, the run's per-document rows go into
+// index_registry_documents in the same transaction (ADR-0030 decision 3): the
+// documents written are upserted, the keys removed are deleted, and a run that
+// stated its list is the WHOLE index (ReportsWholeIndex, the worker's
+// whole_index_record) makes the rows exactly its list. The frame is bounded,
+// so a truncated list is applied as far as it goes and logged; the row's totals
+// are the store's whenever the summary carries them. An ERROR summary is
+// applied the same way: a run that failed after writing reports the rows it
+// wrote, the keys it deleted and the store's totals, so the registry follows
+// the store, not the outcome.
+func (r *IndexIngestResultsRepository) applyIndexRegistry(
+	ctx context.Context,
+	tx sqlExecutor,
+	record outputRecord,
+	result outputapp.IndexIngestResult,
+) (outputapp.IndexIngestSummary, error) {
+	summary := result.ResultSummary
+	if !r.registry {
+		return summary, nil
+	}
+	if record.ResourceProjectID <= 0 || record.ResourceProjectID > math.MaxInt32 {
+		return summary, outputapp.ErrInvalidIndexIngestOutput
+	}
+	row, found, err := LockIndexResultRow(ctx, tx, int32(record.ResourceProjectID), record.ExecutionID, record.Generation)
+	if err != nil {
+		return summary, err
+	}
+	if !found || row.State != indexregistryapp.StateInProgress {
+		// No row (a deleted index, or a run admitted under the python runtime)
+		// or a row already at rest (a cancel won): nothing is recorded.
+		return summary, nil
+	}
+	if refusal, overridden := indexregistryapp.RecordedSummary(row, summary); overridden {
+		return summary, fmt.Errorf("%w: %s", outputapp.ErrIndexResultRefused, refusal.Message)
+	}
+	applied, err := ApplyIndexResult(ctx, tx, row, indexregistryapp.Result{
+		ExecutionID: record.ExecutionID,
+		Generation:  record.Generation,
+		OccurredAt:  record.OccurredAt,
+		Summary:     summary,
+	})
+	if err != nil {
+		return summary, err
+	}
+	if applied {
+		if err := applyIndexRegistryDocuments(ctx, tx, r.logger(), row.IndexID, record, result); err != nil {
+			return summary, err
+		}
+	}
+	return summary, nil
+}
+
+// applyIndexRegistryDocuments writes a run's per-document rows: see
+// applyIndexRegistry. The result passed Validate, so the lists are bounded,
+// the keys are distinct and none is in both lists.
+func applyIndexRegistryDocuments(
+	ctx context.Context,
+	tx sqlExecutor,
+	logger *slog.Logger,
+	indexID string,
+	record outputRecord,
+	result outputapp.IndexIngestResult,
+) error {
+	if result.DocumentsTruncated {
+		logger.WarnContext(ctx, "index result document list was truncated to the frame bound; the registry's per-document rows are a subset of the index",
+			"index_id", indexID, "execution_id", record.ExecutionID, "generation", record.Generation,
+			"documents", len(result.Documents), "removed", len(result.RemovedDocumentKeys),
+			"total_documents", result.ResultSummary.TotalDocuments)
+	}
+	documents := make([]indexregistryapp.DocumentVersion, 0, len(result.Documents))
+	keep := make([]string, 0, len(result.Documents))
+	for _, document := range result.Documents {
+		if document.ChunkCount > math.MaxInt32 {
+			return outputapp.ErrInvalidIndexIngestOutput
+		}
+		documents = append(documents, indexregistryapp.DocumentVersion{
+			Key: document.Key, Version: document.Version, ChunkCount: int32(document.ChunkCount),
+		})
+		keep = append(keep, document.Key)
+	}
+	if err := upsertIndexRegistryDocuments(ctx, tx, indexID, documents); err != nil {
+		return err
+	}
+	if result.ReportsWholeIndex() {
+		// The worker stated the list is the whole index: a row it does not
+		// name is a document that is gone (a clean re-index, or a sync that
+		// removed more than the removed list could carry). This covers
+		// RemovedDocumentKeys too.
+		_, err := deleteIndexRegistryDocumentsNotIn(ctx, tx, indexID, keep)
+		return err
+	}
+	return deleteIndexRegistryDocuments(ctx, tx, indexID, result.RemovedDocumentKeys)
 }
 
 func NewIndexIngestResultsRepository(pool *pgxpool.Pool, policy IndexIngestOutputPolicy) (*IndexIngestResultsRepository, error) {
@@ -298,7 +449,7 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 		if err == nil {
 			switch {
 			case sameDurableOutput(existing, record):
-				if record.SettlementOutcome == executionapp.SettlementFailed {
+				if record.SettlementOutcome != executionapp.SettlementSucceeded {
 					if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, existing); err != nil {
 						return indexProjectionError(err)
 					}
@@ -343,7 +494,7 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 			if loadErr == nil {
 				switch {
 				case sameDurableOutput(existing, record):
-					if record.SettlementOutcome == executionapp.SettlementFailed {
+					if record.SettlementOutcome != executionapp.SettlementSucceeded {
 						if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, existing); err != nil {
 							return indexProjectionError(err)
 						}
@@ -397,10 +548,23 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 		if err := insertIndexIngestProjection(ctx, tx, projection, record); err != nil {
 			return err
 		}
-		if record.SettlementOutcome == executionapp.SettlementFailed {
+		// A FAILED or CANCELLED result (an error summary, or a run stopped after
+		// it touched the store) also records the index terminal intent, as a
+		// runtime-failure terminal would: in python mode that is what ends the
+		// index_meta row; in registry mode the row is applied below and the
+		// terminalizer finds it at rest.
+		if record.SettlementOutcome != executionapp.SettlementSucceeded {
 			if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, record); err != nil {
 				return indexProjectionError(err)
 			}
+		}
+		// The registry (rust mode) is applied here, after the duplicate checks
+		// above, so a redelivered frame never applies twice. resultSummary is
+		// what the user is told: the worker's summary, or the failure the
+		// registry recorded instead (see applyIndexRegistry).
+		resultSummary, err := r.applyIndexRegistry(ctx, tx, record, projection.Frame.Result)
+		if err != nil {
+			return indexProjectionError(err)
 		}
 		cursor, err := appendReplayEvent(ctx, tx, record, replayEventIndexIngest, browserData)
 		if err != nil {
@@ -408,9 +572,9 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 		}
 		message := "Indexing completed successfully."
 		isError := false
-		if projection.Frame.Result.ResultSummary != (outputapp.IndexIngestSummary{}) {
-			message = projection.Frame.Result.ResultSummary.Message
-			isError = projection.Frame.Result.ResultSummary.Status == outputapp.IndexIngestStatusError
+		if resultSummary != (outputapp.IndexIngestSummary{}) {
+			message = resultSummary.Message
+			isError = resultSummary.Status == outputapp.IndexIngestStatusError
 		}
 		if err := r.activity.projectTerminal(ctx, tx, projectID, currentIndexActivityTerminal{
 			ExecutionID: record.ExecutionID,
@@ -421,12 +585,7 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 		}); err != nil {
 			return err
 		}
-		if err := persistCurrentIndexTerminalNotification(
-			ctx,
-			tx,
-			record,
-			projection.Frame.Result.ResultSummary,
-		); err != nil {
+		if err := persistCurrentIndexTerminalNotification(ctx, tx, record, resultSummary); err != nil {
 			return indexProjectionError(err)
 		}
 		if err := markOutputProjected(ctx, tx, record.EventID); err != nil {
@@ -574,6 +733,14 @@ func persistCurrentIndexTerminalNotification(
 	if summary.Status == outputapp.IndexIngestStatusError {
 		errorMessage = summary.Message
 	}
+	// The documents THIS run reports: the typed count when the run is a Rust
+	// run (the same number the registry stores as the run's
+	// indexed_documents), the SDK's sentence count otherwise. The index's
+	// totals are the registry list's, not the notification's.
+	indexed := summary.Indexed
+	if summary.HasTypedResult() {
+		indexed = summary.IndexedDocuments
+	}
 	notifications, ok := tx.(currentIndexTerminalNotificationQueries)
 	if !ok {
 		return errors.New("current index terminal notification database is unavailable")
@@ -585,7 +752,7 @@ func persistCurrentIndexTerminalNotification(
 				record.LogicalOutputID,
 			),
 			ErrorMessage:     errorMessage,
-			Indexed:          int64(summary.Indexed),
+			Indexed:          int64(indexed),
 			Updated:          int64(summary.Updated),
 			TerminalState:    string(summary.TerminalState),
 			CompletionStatus: string(summary.Status),

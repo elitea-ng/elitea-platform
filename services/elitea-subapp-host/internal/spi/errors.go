@@ -58,6 +58,10 @@ const (
 type Failure struct {
 	Kind Kind
 	Err  error
+	// Code is the engine's machine-readable code for the failure (its
+	// `code` field, e.g. CodeBusy), empty when it sent none. A caller that
+	// must act on a failure matches the code, never the message text.
+	Code string
 }
 
 func (f *Failure) Error() string { return f.Err.Error() }
@@ -65,6 +69,22 @@ func (f *Failure) Unwrap() error { return f.Err }
 
 // NewFailure wraps err as a failure of the given kind.
 func NewFailure(kind Kind, err error) error { return &Failure{Kind: kind, Err: err} }
+
+// NewCodedFailure wraps err as a failure of the given kind that carries the
+// engine's machine-readable code (CodeOf reads it back).
+func NewCodedFailure(kind Kind, code string, err error) error {
+	return &Failure{Kind: kind, Err: err, Code: code}
+}
+
+// CodeOf returns the engine code an error was wrapped with, or "" when it
+// carries none.
+func CodeOf(err error) string {
+	var failure *Failure
+	if errors.As(err, &failure) {
+		return failure.Code
+	}
+	return ""
+}
 
 // Failf is NewFailure over a formatted message.
 func Failf(kind Kind, format string, args ...any) error {

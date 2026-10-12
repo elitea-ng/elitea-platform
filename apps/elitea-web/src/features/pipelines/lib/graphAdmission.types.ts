@@ -43,7 +43,7 @@ export type GraphAdmissionRuleId =
   /** `compiler.rs:1391-1395` — `input` must be `str`, `messages` must be `list`. */
   | 'state.builtin-type'
   /**
-   * `compiler.rs:2774` (`typed_reducer`) — a declared `reducer` is a notice, never a refusal: the
+   * `compiler.rs:2769` (`typed_reducer`) — a declared `reducer` is a notice, never a refusal: the
    * visual editor cannot edit it yet, so the notice keeps it from being dropped unseen.
    */
   | 'state.reducer'

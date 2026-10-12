@@ -211,19 +211,27 @@ describe('state rules', () => {
     expect(pinned?.citation).toBe('compiler.rs:1391');
   });
 
-  it('state.reducer: a production build refuses any declared reducer as a deployment limit (compiler.rs:2784)', () => {
+  it('state.reducer: a valid reducer is a non-blocking notice, so the YAML-only key is not dropped unseen (compiler.rs:2769)', () => {
     const issues = collectGraphAdmissionIssues(
       baseDocument({ state: { input: 'str', messages: 'list', summary: 'str', findings: { type: 'list', value: [], reducer: 'append' } } }),
     );
 
     expect(issues).toHaveLength(1);
-    const [refusal] = issues;
-    expect(refusal?.rule).toBe('state.reducer');
-    expect(refusal?.severity).toBeUndefined();
-    expect(refusal?.field).toBe('state.findings');
-    expect(refusal?.message).toContain('not available on this deployment');
-    expect(refusal?.citation).toBe('compiler.rs:2784');
-    expect(blockingIssues(issues)).toEqual(issues);
+    const [notice] = issues;
+    expect(notice?.rule).toBe('state.reducer');
+    expect(notice?.severity).toBe('warning');
+    expect(notice?.field).toBe('state.findings');
+    expect(notice?.subject).toBe('append');
+    expect(notice?.message).toContain('YAML only');
+    expect(notice?.citation).toBe('compiler.rs:2769');
+    expect(blockingIssues(issues)).toEqual([]);
+  });
+
+  it('state.reducer: only the notice is non-blocking; every other rule still refuses the save', () => {
+    const issues = collectGraphAdmissionIssues(baseDocument({ state: { input: 'list', messages: 'list', summary: 'str', total: { type: 'int', reducer: 'sum_int' } } }));
+
+    expect(issues.map((issue) => issue.rule)).toEqual(['state.builtin-type', 'state.reducer']);
+    expect(blockingIssues(issues).map((issue) => issue.rule)).toEqual(['state.builtin-type']);
   });
 
   it('state.reducer: a bare type, a descriptor without the key, and `reducer: null` declare none', () => {

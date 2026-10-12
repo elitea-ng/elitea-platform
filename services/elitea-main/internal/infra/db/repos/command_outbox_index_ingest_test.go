@@ -67,7 +67,7 @@ func TestLoadPendingIndexIngestJoinsMetadataWithoutEntryContent(t *testing.T) {
 		"1", "indexing", "project", int32(1), deadline, "index-limits-v1", "", "",
 		"toolkit-configuration", "tool-parameters", "llm-model", "llm-configuration", "mcp-credential-references",
 		"embedding-binding", embeddingBindingDigest[:], int64(1),
-		"stream-1", "message-1", "chat_predict", "schedule",
+		"stream-1", "message-1", "chat_predict", "schedule", "", int32(0), "",
 	}}}}
 	repository, err := newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:index:commands")
 	if err != nil {
@@ -108,6 +108,67 @@ func TestLoadPendingIndexIngestJoinsMetadataWithoutEntryContent(t *testing.T) {
 			t.Fatalf("index dispatch query loads data-plane field %q", forbidden)
 		}
 	}
+	// Python mode: the registry is never read, and the command carries no
+	// expected embedding space.
+	if args := executor.rowCalls[0].args; len(args) != 3 || args[2] != false {
+		t.Fatalf("python-mode dispatch args = %#v, want the registry gate off", args)
+	}
+	if dispatch.ExpectedEmbeddingModel != "" || dispatch.ExpectedEmbeddingDimension != 0 || dispatch.IndexID != "" {
+		t.Fatalf("python-mode dispatch carries registry fields: %+v", dispatch)
+	}
+}
+
+// Rust mode: the dispatch reads the stamp of the run's registry row and the
+// command carries it as the expected embedding space.
+func TestLoadPendingIndexIngestCarriesTheRegistryStampInRustMode(t *testing.T) {
+	manifestDigest := runtimedomain.SHA256([]byte("index-manifest"))
+	deadline := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	row := func(model string, dimension int32, indexID string) []scriptedRow {
+		return []scriptedRow{{values: []any{
+			"index-outbox-1", "index-command-1", "index-execution-1", int64(1), int64(1),
+			"tenant-1", "1", "1", "actor-1",
+			"index-bundle-1", "admission:index-bundle-1", "application/x-protobuf", int64(256), manifestDigest[:],
+			"1", "indexing", "project", int32(1), deadline, "index-limits-v1", "", "",
+			"toolkit-configuration", "tool-parameters", "", "", "",
+			"", []byte{}, int64(0),
+			"", "", "", "user", model, dimension, indexID,
+		}}}
+	}
+	const indexID = "3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c"
+	executor := &scriptedExecutor{rowResults: row("Org/Model.A", 1536, indexID)}
+	repository, err := newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:index:commands")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.WithIndexRegistry()
+	dispatch, err := repository.LoadPendingIndexIngest(context.Background(), "index-outbox-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatch.ExpectedEmbeddingModel != "Org/Model.A" || dispatch.ExpectedEmbeddingDimension != 1536 {
+		t.Fatalf("expected embedding = %q/%d", dispatch.ExpectedEmbeddingModel, dispatch.ExpectedEmbeddingDimension)
+	}
+	// The registry row the run writes travels with the command (ADR-0030 I1).
+	if dispatch.IndexID != indexID {
+		t.Fatalf("index id = %q, want the registry row's %q", dispatch.IndexID, indexID)
+	}
+	call := executor.rowCalls[0]
+	if len(call.args) != 3 || call.args[2] != true ||
+		!strings.Contains(call.sql, "FROM elitea_runtime.index_registry AS r") ||
+		!strings.Contains(call.sql, "r.execution_id = j.execution_id") ||
+		!strings.Contains(call.sql, "COALESCE(registry.index_id::text, '')") {
+		t.Fatalf("rust-mode dispatch query/args = %#v", call.args)
+	}
+
+	// An unstamped index (its first run) carries no expected space but still
+	// names its registry row.
+	executor = &scriptedExecutor{rowResults: row("", 0, indexID)}
+	repository, _ = newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:index:commands")
+	repository.WithIndexRegistry()
+	if dispatch, err := repository.LoadPendingIndexIngest(context.Background(), "index-outbox-1"); err != nil ||
+		dispatch.ExpectedEmbeddingModel != "" || dispatch.ExpectedEmbeddingDimension != 0 || dispatch.IndexID != indexID {
+		t.Fatalf("unstamped dispatch = %+v err=%v", dispatch, err)
+	}
 }
 
 func TestLoadPendingIndexIngestRejectsAmbiguousEmbeddingBindings(t *testing.T) {
@@ -121,7 +182,7 @@ func TestLoadPendingIndexIngestRejectsAmbiguousEmbeddingBindings(t *testing.T) {
 		"1", "indexing", "project", int32(1), deadline, "index-limits-v1", "", "",
 		"toolkit-configuration", "tool-parameters", "llm-model", "llm-configuration", "mcp-credential-references",
 		"embedding-binding", embeddingBindingDigest[:], int64(2),
-		"stream-1", "message-1", "chat_predict", "user",
+		"stream-1", "message-1", "chat_predict", "user", "", int32(0), "",
 	}}}}
 	repository, err := newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:index:commands")
 	if err != nil {

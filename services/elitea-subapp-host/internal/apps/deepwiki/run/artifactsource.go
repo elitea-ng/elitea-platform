@@ -188,6 +188,37 @@ func ArtifactWikiID(source ArtifactSource, branch string) string {
 	return strings.Join(parts, "--") + "--" + wikiIDPart(branch)
 }
 
+// GeneratedWikiID is the wiki id a generation of repoConfig on branch
+// publishes under: the engine's normalize_wiki_id of its repository
+// identifier. A folder is ArtifactWikiID; a git repository is its
+// `owner/repo` split on `/`, each part and the branch normalised, joined with
+// `--`. Empty when the configuration names no repository, so a caller can tell
+// "unknown" from a wiki.
+func GeneratedWikiID(repoConfig map[string]any, branch string) string {
+	repository := str(repoConfig["repository"])
+	if repository == "" {
+		repository = str(object(repoConfig["provider_config"])["repository"])
+	}
+	if source, ok := ParseArtifactRepository(repository); ok {
+		return ArtifactWikiID(source, branch)
+	}
+	repository = DisplayRepositoryFor(repoConfig)
+	if repository == "" {
+		return ""
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		branch = "main"
+	}
+	parts := make([]string, 0, 3)
+	for _, segment := range strings.Split(strings.ToLower(repository), "/") {
+		if part := wikiIDPart(segment); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, "--") + "--" + wikiIDPart(branch)
+}
+
 // wikiIDPart is normalize_wiki_id's rule for one part: lower case, every
 // character outside [a-z0-9-] a `-`, runs of `-` collapsed, the ends trimmed.
 func wikiIDPart(text string) string {

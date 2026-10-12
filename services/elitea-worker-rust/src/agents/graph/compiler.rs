@@ -890,7 +890,7 @@ impl PipelineDefinition {
         }
         let raw_recovery = recovery_definition::RawRecoveryCatalog::extract(&mut raw.nodes)?;
         let (state, state_defaults, state_declaration_order, state_reducers) =
-            validate_state(raw.state, TYPED_REDUCERS_READY)?;
+            validate_state(raw.state)?;
         let (nodes, node_ids) = parse_pipeline_nodes(raw.nodes, &state)?;
         if !node_ids.contains(&raw.entry_point) {
             return Err(PipelineConfigurationError::Invalid(
@@ -2441,10 +2441,6 @@ pub(crate) const NODE_TYPE_NOT_AVAILABLE_CODE: &str = "graph.pipeline.node_type_
 /// Only rehearsal builds (`graph-extensions-rehearsal`) admit them.
 const SHAPING_INTEGRATION_READY: bool = cfg!(feature = "graph-extensions-rehearsal");
 
-/// Production admission of typed state reducers waits for the Web reducer
-/// editor (Wave 2). Only rehearsal builds admit the `reducer` key.
-const TYPED_REDUCERS_READY: bool = cfg!(feature = "graph-extensions-rehearsal");
-
 #[cfg(test)]
 pub(super) fn shaping_node_admission(
     raw_node: &serde_yaml_ng::Value,
@@ -2710,7 +2706,6 @@ fn validate_shaping_channels(
 
 fn validate_state(
     raw: serde_yaml_ng::Mapping,
-    reducers_admitted: bool,
 ) -> Result<ValidatedState, PipelineConfigurationError> {
     if raw.len() > MAX_PIPELINE_STATE_KEYS {
         return Err(PipelineConfigurationError::ResourceExhausted);
@@ -2760,7 +2755,7 @@ fn validate_state(
                 "a pipeline state default has the wrong type",
             ));
         }
-        if let Some(reducer) = typed_reducer(&key, &kind, normalized, &value, reducers_admitted)? {
+        if let Some(reducer) = typed_reducer(&key, &kind, normalized, &value)? {
             reducers.insert(key.clone(), reducer);
         }
         defaults.insert(key.clone(), value);
@@ -2776,16 +2771,10 @@ fn typed_reducer(
     kind: &RawStateType,
     normalized: &str,
     default: &serde_json::Value,
-    admitted: bool,
 ) -> Result<Option<StateReducer>, PipelineConfigurationError> {
     let Some(name) = kind.reducer() else {
         return Ok(None);
     };
-    if !admitted {
-        return Err(PipelineConfigurationError::Unsupported(
-            "typed state reducers are not available in this deployment",
-        ));
-    }
     if matches!(key, "input" | "messages") {
         return Err(PipelineConfigurationError::Invalid(
             "a built-in pipeline state key cannot declare a reducer",

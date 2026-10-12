@@ -21,11 +21,13 @@
 //! * **a model edge records where it was found** (`discovered_in_file`,
 //!   `confidence`), so an incremental run removes it with its file.
 
-pub mod assets;
 pub mod chunk;
 pub mod json;
 pub mod skip;
-pub mod types;
+// The prompts and type tables, the type normalisers and the stage's
+// per-file result live in the shared core (ADR-0029 decision 7); re-exported
+// so every path in this crate stays the same.
+pub use elitea_inventory_core::extract::{ModelExtraction, assets, types};
 
 use crate::graph::Citation;
 use crate::ingest::ids::entity_id;
@@ -65,6 +67,32 @@ impl Model {
 
     pub(crate) async fn ask(&self, prompt: String) -> Result<String, EngineError> {
         (self.0)(prompt).await
+    }
+
+    /// This model with at most `limit`'s permits of calls in flight: the
+    /// ingestion fans out files × chunks (10 × 5 by default), which a
+    /// model server with a few slots only queues, and a queued request
+    /// keeps the server busy after a stop. A call waits for a permit (a
+    /// stop ends the wait) and holds it until its answer, or until its
+    /// future is dropped.
+    #[must_use]
+    pub fn limited(self, limit: Arc<tokio::sync::Semaphore>, stop: StopSignal) -> Self {
+        let inner = self.0;
+        Self::new(move |prompt| {
+            let (inner, limit, stop) = (Arc::clone(&inner), Arc::clone(&limit), stop.clone());
+            Box::pin(async move {
+                let _permit = tokio::select! {
+                    permit = limit.acquire_owned() => permit.map_err(|_| {
+                        EngineError::new(ErrorType::Runtime, "the model call limiter was closed")
+                    })?,
+                    () = stop.stopped() => return Err(EngineError::cancelled()),
+                };
+                if stop.is_requested() {
+                    return Err(EngineError::cancelled());
+                }
+                (inner)(prompt).await
+            })
+        })
     }
 }
 
@@ -400,18 +428,13 @@ fn dedupe_facts(facts: Vec<Map<String, Value>>) -> Vec<Map<String, Value>> {
     kept
 }
 
-/// What the model stage gave one file.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ModelExtraction {
-    /// File-level deduplicated entities, then facts.
-    pub entities: Vec<ParsedEntity>,
-    /// Chunks whose entity extraction failed after every retry.
-    pub failed_chunks: usize,
-}
-
 /// The code-like extensions that get the code fact prompt
-/// (`_is_code_file or _is_code_like_file`).
-fn is_code_like(path: &str) -> bool {
+/// (`_is_code_file or _is_code_like_file`). A code-like file without a
+/// parser (`crate::ingest::parse::language_of` is `None`: `.sh`, `.rb`,
+/// `.lua`, C, …) is what Python's `run()` gave its file node and the model
+/// stage, and nothing else (`tests/code_like.rs`).
+#[must_use]
+pub fn is_code_like(path: &str) -> bool {
     let extension = elitea_engine_core::pystr::suffix(path).to_lowercase();
     let name = elitea_engine_core::pystr::file_name(path).to_lowercase();
     matches!(name.as_str(), "makefile" | "gnumakefile")

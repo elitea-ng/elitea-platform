@@ -1,8 +1,8 @@
 //! The graph against the Python engine's own, and through PostgreSQL.
 //!
-//! `fixtures/graph_store/ops.json` is replayed here and by `generate.py`
-//! against the Python `KnowledgeGraph`; `graph.golden.json` is what Python
-//! wrote. The PostgreSQL tests need `INVENTORY_TEST_DSN` (skipped without
+//! `fixtures/graph_store/ops.json` is replayed here, as its deleted
+//! generator replayed it against the Python `KnowledgeGraph`;
+//! `graph.golden.json` is what Python wrote (`fixtures/PROVENANCE.md`). The PostgreSQL tests need `INVENTORY_TEST_DSN` (skipped without
 //! it, FAILED with `INVENTORY_REQUIRE_POSTGRES=1`, as in CI):
 //!
 //! ```text
@@ -187,7 +187,9 @@ async fn database(name: &str) -> Option<PgPool> {
     let applied = store::migrate(&pool).await.expect("migrate");
     assert_eq!(
         applied,
-        ["0001", "0002", "0003", "0004"].map(str::to_owned).to_vec()
+        ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
+            .map(str::to_owned)
+            .to_vec()
     );
     Some(pool)
 }
@@ -341,5 +343,172 @@ async fn migrating_twice_applies_nothing_the_second_time() {
     .fetch_all(&pool)
     .await
     .expect("ledger");
-    assert_eq!(ledger, ["0001", "0002", "0003", "0004"]);
+    assert_eq!(
+        ledger,
+        ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
+    );
+}
+
+/// The shared `GraphStore` contract (libs/rust/inventory-core
+/// `store_conformance`), which the desktop's SQLite store runs too: two
+/// stores that pass it answer the retrieval tools alike.
+#[tokio::test]
+async fn the_postgresql_store_passes_the_graph_store_conformance_suite() {
+    let Some(pool) = database("conformance").await else {
+        return;
+    };
+    elitea_inventory_core::store_conformance::run(&store::PgGraphStore::new(pool)).await;
+}
+
+/// The view cache over the PostgreSQL store: no graph, no view; a view is
+/// reused while the revision stands and reloaded once it moves.
+#[tokio::test]
+async fn the_view_cache_reloads_when_the_revision_moves() {
+    let Some(pool) = database("view_cache").await else {
+        return;
+    };
+    let key = key(1, 1);
+    let views =
+        elitea_inventory_engine::retrieval::ViewCache::new(store::PgGraphStore::new(pool.clone()));
+    assert!(views.view(key).await.expect("view").is_none());
+    let graph = replay();
+    let first = store::save(&pool, key, &graph).await.expect("save");
+    let view = views.view(key).await.expect("view").expect("a graph");
+    assert_eq!(view.revision, first);
+    let again = views.view(key).await.expect("view").expect("a graph");
+    assert!(
+        std::sync::Arc::ptr_eq(&view, &again),
+        "reused while current"
+    );
+    let second = store::save(&pool, key, &graph).await.expect("save");
+    let fresh = views.view(key).await.expect("view").expect("a graph");
+    assert_eq!(fresh.revision, second);
+    assert!(store::delete(&pool, key).await.expect("delete"));
+    assert!(views.view(key).await.expect("view").is_none());
+}
+
+/// A graph deleted and created again starts at revision 1 again. A cache
+/// that holds the DELETED graph's revision 1 (another replica's, which the
+/// deleting replica's `forget` never reached) must not serve it for the new
+/// graph: the stamp's incarnation (migration 0006) tells the two apart.
+#[tokio::test]
+async fn the_view_cache_tells_a_recreated_graph_from_the_deleted_one() {
+    use elitea_inventory_core::store::GraphStore as _;
+    let Some(pool) = database("view_incarnation").await else {
+        return;
+    };
+    let key = key(1, 1);
+    let graphs = store::PgGraphStore::new(pool.clone());
+    let views = elitea_inventory_engine::retrieval::ViewCache::new(graphs.clone());
+    let mut graph = replay();
+    assert_eq!(store::save(&pool, key, &graph).await.expect("save"), 1);
+    let stale = views.view(key).await.expect("view").expect("a graph");
+    assert_eq!(stale.revision, 1);
+    let first = graphs.stamp(key).await.expect("stamp").expect("a graph");
+    assert_eq!(stale.incarnation, first.incarnation);
+    assert!(!first.incarnation.is_empty(), "the PostgreSQL store stamps");
+
+    // Deleted and created again, with other content, behind the cache's
+    // back: revision 1 again, another incarnation.
+    assert!(store::delete(&pool, key).await.expect("delete"));
+    graph.add_entity("recreated", "Recreated", "class", None, None);
+    assert_eq!(store::save(&pool, key, &graph).await.expect("save"), 1);
+    let second = graphs.stamp(key).await.expect("stamp").expect("a graph");
+    assert_eq!(second.revision, first.revision, "the revision repeats");
+    assert_ne!(second.incarnation, first.incarnation);
+
+    let fresh = views.view(key).await.expect("view").expect("a graph");
+    assert!(
+        !std::sync::Arc::ptr_eq(&stale, &fresh),
+        "the deleted graph's view is not served for the new graph"
+    );
+    assert_eq!(fresh.incarnation, second.incarnation);
+    assert!(fresh.graph.node("recreated").is_some());
+    assert!(stale.graph.node("recreated").is_none());
+    // And a write within the new incarnation moves the revision as before.
+    assert_eq!(store::save(&pool, key, &graph).await.expect("save"), 2);
+    let moved = views.view(key).await.expect("view").expect("a graph");
+    assert_eq!(
+        (moved.revision, &moved.incarnation),
+        (2, &second.incarnation)
+    );
+}
+
+/// The cached view holds no vectors (they are most of a graph's bytes),
+/// and nothing a reader sees changes: `get_stats` answers what the view of
+/// the full graph answers, and `rank` still ranks over the stored vectors.
+#[tokio::test]
+async fn the_cached_view_holds_no_vectors_and_the_answers_do_not_change() {
+    use elitea_inventory_core::store::GraphStore as _;
+    use elitea_inventory_engine::retrieval::{Call, ViewCache, dispatch, view::GraphView};
+    let Some(pool) = database("view_vectors").await else {
+        return;
+    };
+    let key = key(1, 1);
+    let mut graph = replay();
+    let ids: Vec<String> = graph.nodes().map(|(id, _)| id.to_owned()).collect();
+    assert!(ids.len() > 3, "the replayed graph has entities");
+    for (index, id) in ids.iter().take(3).enumerate() {
+        let hot = f64::from(u8::try_from(index).expect("small"));
+        assert!(graph.set_embedding(id, &[1.0, hot, 0.5, 0.25]));
+    }
+    // An empty vector is not an embedding, as `get_stats` always counted it.
+    assert!(graph.set_embedding(&ids[3], &[]));
+    graph
+        .metadata
+        .insert("embeddings_model".to_owned(), json!("text-embed-x"));
+    graph
+        .metadata
+        .insert("embeddings_dimension".to_owned(), json!(4));
+    store::save(&pool, key, &graph).await.expect("save");
+
+    let views = ViewCache::new(store::PgGraphStore::new(pool.clone()));
+    let cached = views.view(key).await.expect("view").expect("a graph");
+    assert!(
+        cached
+            .graph
+            .nodes()
+            .all(|(_, node)| !node.contains_key("embedding")),
+        "no vector in the view"
+    );
+    assert_eq!(cached.embedded_count(), 3);
+    assert!(cached.has_embeddings());
+    assert!(cached.is_embedded(&ids[0]) && !cached.is_embedded(&ids[3]));
+
+    // The stats are those of the view that holds every vector.
+    let (stored, revision) = store::load(&pool, key).await.expect("load").expect("graph");
+    let full = GraphView::new(stored, revision);
+    let mut params = Map::new();
+    params.insert("output_format".to_owned(), json!("json"));
+    let stats = |view: &GraphView| {
+        dispatch(&Call {
+            tool: "get_stats",
+            family: "inventory",
+            params: &params,
+            view,
+        })
+        .expect("served")
+        .expect("answers")
+    };
+    assert_eq!(stats(&cached), stats(&full));
+    assert_eq!(
+        stats(&cached)["result"]
+            .as_str()
+            .map(|text| text.contains("\"embeddings_count\": 3")
+                && text.contains("\"has_embeddings\": true")),
+        Some(true),
+        "{}",
+        stats(&cached)
+    );
+
+    // The vectors are stored: rank compares them there.
+    let ranked = store::PgGraphStore::new(pool.clone())
+        .rank(key, &[1.0, 0.0, 0.5, 0.25], 0.99)
+        .await
+        .expect("rank")
+        .expect("same width");
+    assert_eq!(
+        ranked.first().map(|(id, _)| id.as_str()),
+        Some(ids[0].as_str())
+    );
 }

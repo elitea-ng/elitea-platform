@@ -108,3 +108,22 @@ func TestRefusalsAreReadableTypedAPIErrorsWithoutUserContent(t *testing.T) {
 		}
 	}
 }
+
+// Typed state reducers are admitted in every build (no build tag): Main stores
+// and starts a pipeline whose state declares them. Their rules belong to the
+// Worker compiler, which refuses a bad declaration at start.
+func TestCheckAdmitsTypedStateReducersInEveryBuild(t *testing.T) {
+	doc := "state:\n" +
+		"  count: {type: int, value: 0, reducer: sum_int}\n" +
+		"  findings: {type: list, value: [], reducer: append}\n" +
+		"  seen: {type: dict, value: {}, reducer: merge}\n" +
+		"entry_point: tick\n" +
+		"nodes:\n" +
+		"  - id: tick\n    type: state_modifier\n    template: '1'\n    output: [count]\n    transition: END\n"
+	if err := pipelinelimits.Check(doc); err != nil {
+		t.Fatalf("save of a pipeline with typed reducers: %v", err)
+	}
+	if err := pipelinelimits.CheckStart(doc, nil); err != nil {
+		t.Fatalf("start of a pipeline with typed reducers: %v", err)
+	}
+}

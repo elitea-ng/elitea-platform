@@ -906,3 +906,36 @@ func TestCurrentStaticContinuationCarriesAnExplicitParallelLeafSelection(t *test
 		t.Fatalf("status=%d request=%+v", response.Code, got)
 	}
 }
+
+// A desktop Local work thread cannot be continued from the web: send and
+// regenerate both answer 409 with the stable code `local_work_thread`, not
+// retryable, so the client can say "continue it in the desktop app".
+func TestCurrentAgentRoutesRefuseALocalWorkThread(t *testing.T) {
+	useCase := &currentStartUseCaseStub{err: agentexecutionapp.ErrLocalWorkThread}
+	route := newCurrentStartRoute(t, useCase, currentStartPermissionResolverFunc(func(
+		context.Context, auth.User, string, string,
+	) (auth.PermissionResolution, error) {
+		return auth.PermissionResolution{
+			UserID: 11, Permissions: []string{CurrentApplicationStartPermission, CurrentRegenerationPermission},
+		}, nil
+	}))
+
+	for name, request := range map[string]*http.Request{
+		"send":       currentStartRequest(validCurrentStartBody()),
+		"regenerate": currentRegenerationRequest(validCurrentRegenerationBody()),
+	} {
+		response := httptest.NewRecorder()
+		route.ServeHTTP(response, request)
+		var body struct {
+			Error     string `json:"error"`
+			Retryable bool   `json:"retryable"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil ||
+			response.Code != http.StatusConflict || body.Error != "local_work_thread" || body.Retryable {
+			t.Fatalf("%s: status=%d body=%s", name, response.Code, response.Body.String())
+		}
+	}
+	if useCase.calls != 1 || useCase.regenerationCalls != 1 {
+		t.Fatalf("calls=%d regenerationCalls=%d", useCase.calls, useCase.regenerationCalls)
+	}
+}

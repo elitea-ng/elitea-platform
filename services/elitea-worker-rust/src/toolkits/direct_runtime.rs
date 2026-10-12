@@ -10,9 +10,9 @@ use super::direct_execution::{
     execute_test_toolsets,
 };
 use super::{
-    AdkHttpMcpConnector, DirectToolkitRequest, FrozenToolKind, McpConnector,
-    McpMaterializationErrorCode, ToolsetMaterializationErrorCode,
-    materialize_configured_toolsets_with_tokens_and_authorization,
+    AdkHttpMcpConnector, DirectToolkitRequest, FrozenToolKind, IndexToolSupport,
+    IndexToolsWithheld, McpConnector, McpMaterializationErrorCode, ToolsetMaterializationErrorCode,
+    materialize_configured_toolsets_with_authorities,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 
@@ -122,13 +122,22 @@ impl DirectToolkitRuntime {
     /// No retry occurs here. command redelivery may repeat the provider read only
     /// because the final tool object is independently required to declare
     /// `is_read_only()` immediately before invocation.
+    ///
+    /// The index tools are not served here, by design (ADR-0030 I1, review
+    /// round 1): a `toolkit.execute.read.v1` claim carries no vector token,
+    /// and Main freezes no catalog on this path, so the two sides agree.
     pub(crate) async fn execute(
         &self,
         request: &DirectToolkitRequest,
         execution_id: &str,
         call_id: &str,
     ) -> Result<Value, DirectToolkitRuntimeError> {
-        let toolsets = self.materialize(request).await?;
+        let toolsets = self
+            .materialize(
+                request,
+                IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+            )
+            .await?;
         let invocation = DirectToolkitInvocation::new(
             request.toolkit_type().to_owned(),
             request.toolkit_name().to_owned(),
@@ -142,13 +151,19 @@ impl DirectToolkitRuntime {
             .await
             .map_err(|error| map_execution_error(&error))
     }
+    /// Run one tool of one configured toolkit (`toolkit.call_tool.v1`).
+    /// `index_tools` is the claim's index-tool authority, lent when the call
+    /// names an index tool of a toolkit that carries an index catalog and
+    /// this worker has a vector store (ADR-0030 I1); withheld, an index tool
+    /// is an unknown tool here.
     pub(crate) async fn execute_test(
         &self,
         request: &DirectToolkitRequest,
         execution_id: &str,
         call_id: &str,
+        index_tools: IndexToolSupport<'_>,
     ) -> Result<Value, DirectToolkitRuntimeError> {
-        let toolsets = self.materialize(request).await?;
+        let toolsets = self.materialize(request, index_tools).await?;
         let invocation = DirectToolkitInvocation::new(
             request.toolkit_type().to_owned(),
             request.toolkit_name().to_owned(),
@@ -163,11 +178,18 @@ impl DirectToolkitRuntime {
             .map_err(|error| map_execution_error(&error))
     }
 
+    /// List one configured toolkit's tools. The index tools are not listed
+    /// (see [`Self::execute`]): Main freezes no catalog on this path.
     pub(crate) async fn discover(
         &self,
         request: &DirectToolkitRequest,
     ) -> Result<Value, DirectToolkitRuntimeError> {
-        let toolsets = self.materialize(request).await?;
+        let toolsets = self
+            .materialize(
+                request,
+                IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+            )
+            .await?;
         let frozen = super::tool_binding::freeze_toolsets(toolsets, "elitea-toolkit-discovery")
             .await
             .map_err(|_| failure(DirectToolkitRuntimeErrorCode::DependencyUnavailable, true))?;
@@ -207,6 +229,7 @@ impl DirectToolkitRuntime {
     async fn materialize(
         &self,
         request: &DirectToolkitRequest,
+        index_tools: IndexToolSupport<'_>,
     ) -> Result<Vec<Arc<dyn adk_rust::Toolset>>, DirectToolkitRuntimeError> {
         let snapshot = request.snapshot().map_err(|error| match error.code() {
             super::DirectToolkitRequestErrorCode::InvalidInput
@@ -229,27 +252,28 @@ impl DirectToolkitRuntime {
         let tokens = request.tokens();
         let toolsets = match kind {
             FrozenToolKind::Configured => {
-                let (toolsets, authorization) =
-                    materialize_configured_toolsets_with_tokens_and_authorization(
-                        &admitted,
-                        request.policy(),
-                        tokens,
-                    )
-                    .await
-                    .map_err(|error| match error.code() {
-                        ToolsetMaterializationErrorCode::InvalidConfiguration => {
-                            failure(DirectToolkitRuntimeErrorCode::InvalidConfiguration, false)
-                        }
-                        ToolsetMaterializationErrorCode::UnsupportedToolkit => {
-                            failure(DirectToolkitRuntimeErrorCode::UnsupportedToolkit, false)
-                        }
-                        ToolsetMaterializationErrorCode::DependencyUnavailable => {
-                            failure(DirectToolkitRuntimeErrorCode::DependencyUnavailable, true)
-                        }
-                        ToolsetMaterializationErrorCode::ResourceExhausted => {
-                            failure(DirectToolkitRuntimeErrorCode::ResourceExhausted, false)
-                        }
-                    })?;
+                let (toolsets, authorization) = materialize_configured_toolsets_with_authorities(
+                    &admitted,
+                    request.policy(),
+                    tokens,
+                    None,
+                    index_tools,
+                )
+                .await
+                .map_err(|error| match error.code() {
+                    ToolsetMaterializationErrorCode::InvalidConfiguration => {
+                        failure(DirectToolkitRuntimeErrorCode::InvalidConfiguration, false)
+                    }
+                    ToolsetMaterializationErrorCode::UnsupportedToolkit => {
+                        failure(DirectToolkitRuntimeErrorCode::UnsupportedToolkit, false)
+                    }
+                    ToolsetMaterializationErrorCode::DependencyUnavailable => {
+                        failure(DirectToolkitRuntimeErrorCode::DependencyUnavailable, true)
+                    }
+                    ToolsetMaterializationErrorCode::ResourceExhausted => {
+                        failure(DirectToolkitRuntimeErrorCode::ResourceExhausted, false)
+                    }
+                })?;
                 if let Some(requirement) = authorization
                     .requirement_for_direct(request.toolkit_name(), request.tool_name())
                 {
@@ -418,7 +442,12 @@ mod shared_tests {
         let request = DirectToolkitRequest::parse_call("openapi", "7", "read", &config, b"{}",
             br#"{"toolkit_security":{},"llm_model":"selected-model","llm_configuration":{"temperature":0.2}}"#).expect("request");
         let error = DirectToolkitRuntime::default()
-            .execute_test(&request, "execution", "call")
+            .execute_test(
+                &request,
+                "execution",
+                "call",
+                IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+            )
             .await
             .expect_err("pre-invocation auth");
         let requirement = error.authorization().expect("safe challenge");
@@ -436,7 +465,10 @@ mod shared_tests {
                 .expect("request");
         assert!(
             DirectToolkitRuntime::default()
-                .materialize(&wrong_request)
+                .materialize(
+                    &wrong_request,
+                    IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath)
+                )
                 .await
                 .err()
                 .expect("wrong authority")
@@ -449,7 +481,10 @@ mod shared_tests {
                 .expect("request");
         assert_eq!(
             DirectToolkitRuntime::default()
-                .materialize(&authorized)
+                .materialize(
+                    &authorized,
+                    IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath)
+                )
                 .await
                 .expect("authorized toolset")
                 .len(),

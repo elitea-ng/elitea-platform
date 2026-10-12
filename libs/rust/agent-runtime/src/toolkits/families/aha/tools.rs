@@ -95,22 +95,46 @@ impl From<MaterializedToolsetError> for AhaToolsetError {
     }
 }
 
-/// Build the complete capability-disabled 33-tool Aha family.
+/// Build the Aha family.
+///
+/// `artifacts` is the sealed artifact-read resolver `attach_file` uploads
+/// from. No runtime host has an artifact-read grant plane yet (the platform
+/// reader returns capped text, not verified bytes), so production passes
+/// `None` and the family serves the other 32 tools: `attach_file` is omitted
+/// rather than bound to a tool that refuses every call, and an explicit
+/// selection of it is logged and dropped like any other unserved tool.
+/// Empty selection means every tool this runtime serves.
 #[allow(clippy::needless_pass_by_value)] // Consumes the invocation's credential authority.
 pub(crate) fn build_aha_toolset(
     toolkit_name: &str,
     config: AhaToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
-    artifacts: Arc<AhaArtifactResolver>,
+    artifacts: Option<Arc<AhaArtifactResolver>>,
 ) -> Result<BasicToolset, AhaToolsetError> {
     validate_selection(config.selected_tools())?;
-    let selected = config
-        .selected_tools()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
+    let attachments = artifacts.is_some();
+    let kinds = served_kinds(config.selected_tools(), attachments);
+    let omitted = config.selected_tools().len().saturating_sub(kinds.len());
+    if !config.selected_tools().is_empty() && omitted > 0 {
+        tracing::warn!(
+            event = "agent_toolkit_tools_skipped",
+            reason_code = "unsupported_tool_selection",
+            toolkit_type = "aha",
+            toolkit_name,
+            selected_count = config.selected_tools().len(),
+            materialized_count = kinds.len(),
+            omitted_count = omitted,
+            "Aha attach_file needs an artifact-read grant plane and was omitted from the native toolset"
+        );
+    }
+    if kinds.is_empty() {
+        return Err(AhaToolsetError {
+            code: AhaToolsetErrorCode::UnsupportedSelection,
+        });
+    }
+    let artifacts = artifacts.unwrap_or_else(|| Arc::new(AhaArtifactResolver::unavailable()));
     let client: Arc<dyn AhaApi> = Arc::new(AhaClient::new(&config, artifacts)?);
-    build_with_api(toolkit_name, &selected, policy, &client)
+    admit_kinds(toolkit_name, &kinds, policy, &client)
 }
 
 fn validate_selection(selected: &[Box<str>]) -> Result<(), AhaToolsetError> {
@@ -126,19 +150,44 @@ fn validate_selection(selected: &[Box<str>]) -> Result<(), AhaToolsetError> {
     Ok(())
 }
 
+/// The selected kinds this runtime serves, in source order.
+fn served_kinds(selected: &[Box<str>], attachments: bool) -> Vec<AhaToolKind> {
+    AhaToolKind::ALL
+        .into_iter()
+        .filter(|kind| attachments || !matches!(kind, AhaToolKind::AttachFile))
+        .filter(|kind| {
+            selected.is_empty() || selected.iter().any(|name| name.as_ref() == kind.name())
+        })
+        .collect()
+}
+
+fn admit_kinds(
+    toolkit_name: &str,
+    kinds: &[AhaToolKind],
+    policy: &Arc<ToolAdmissionPolicy>,
+    client: &Arc<dyn AhaApi>,
+) -> Result<BasicToolset, AhaToolsetError> {
+    let tools = kinds
+        .iter()
+        .map(|kind| {
+            Arc::new(AhaTool::new(*kind, toolkit_name, Arc::clone(client))) as Arc<dyn Tool>
+        })
+        .collect();
+    admit_materialized_toolset(toolkit_name, "aha", policy, tools).map_err(Into::into)
+}
+
+#[cfg(test)]
 fn build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
     client: &Arc<dyn AhaApi>,
 ) -> Result<BasicToolset, AhaToolsetError> {
-    let include_all = selected.is_empty();
-    let tools = AhaToolKind::ALL
-        .into_iter()
-        .filter(|kind| include_all || selected.iter().any(|name| name == kind.name()))
-        .map(|kind| Arc::new(AhaTool::new(kind, toolkit_name, Arc::clone(client))) as Arc<dyn Tool>)
-        .collect();
-    admit_materialized_toolset(toolkit_name, "aha", policy, tools).map_err(Into::into)
+    let selected = selected
+        .iter()
+        .map(|name| name.as_str().into())
+        .collect::<Vec<Box<str>>>();
+    admit_kinds(toolkit_name, &served_kinds(&selected, true), policy, client)
 }
 
 #[cfg(test)]
@@ -149,6 +198,16 @@ pub(in crate::toolkits) fn test_build_with_api(
     client: &Arc<dyn AhaApi>,
 ) -> Result<BasicToolset, AhaToolsetError> {
     build_with_api(toolkit_name, selected, policy, client)
+}
+
+/// The production profile (no artifact-read grant plane) over a fixture API.
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_production_with_api(
+    toolkit_name: &str,
+    policy: &Arc<ToolAdmissionPolicy>,
+    client: &Arc<dyn AhaApi>,
+) -> Result<BasicToolset, AhaToolsetError> {
+    admit_kinds(toolkit_name, &served_kinds(&[], false), policy, client)
 }
 
 #[cfg(test)]

@@ -453,7 +453,13 @@ async fn health_names_the_runner_and_the_probe_reads_it() {
         (status, body),
         (
             200,
-            json!({"status": "UP", "runner": "fixture", "active": 0})
+            json!({
+                "status": "UP",
+                "runner": "fixture",
+                "active": 0,
+                // The served tools, so the host can detect capabilities.
+                "tools": elitea_deepwiki_engine::runner::ENGINE_TOOLS,
+            })
         )
     );
     assert_eq!(

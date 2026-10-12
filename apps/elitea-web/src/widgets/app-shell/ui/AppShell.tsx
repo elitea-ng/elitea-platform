@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 
 import Box from '@mui/material/Box';
 import { useRouterState } from '@tanstack/react-router';
@@ -17,6 +17,9 @@ import {
   COLLAPSED_SIDE_BAR_WIDTH_PX,
 } from '@/widgets/sidebar';
 
+import type { Project } from '@/entities/project';
+
+import type { SelectedProject } from '../model/selectedProject.store';
 import { usePersonalProjectId } from '../model/usePersonalProjectId';
 import { useSelectedProject } from '../model/useSelectedProject.hooks';
 import { useSettleShellAfterProvisioning } from '../model/useSettleShellAfterProvisioning';
@@ -25,6 +28,44 @@ import { MaintenanceSplash } from './MaintenanceSplash';
 import { NavBlockerDialog } from './NavBlockerDialog';
 import { PlatformBanner } from './PlatformBanner';
 import { PageTitleSetter } from './PageTitleSetter';
+
+/**
+ * The desktop build's workspace-first frame (ADR-0029) replaces the web
+ * sidebar layout. `import.meta.env.MODE` is a build-time literal: in every
+ * other build the branch below is dead, this pure-annotated `lazy()` is
+ * unused and dropped, and the frame's chunk is never emitted (same pattern as
+ * `pages/workspace/desktopEntry.tsx`).
+ */
+const DesktopFrame = /* @__PURE__ */ lazy(() => import('@/widgets/desktop-shell').then((m) => ({ default: m.DesktopFrame })));
+
+/** The desktop build's shell: the same banners and dialogs, inside the workspace-first frame. */
+function DesktopShellBody({
+  children,
+  permissions,
+  projects,
+  project,
+  selectProject,
+  banner,
+}: {
+  children: ReactNode;
+  permissions: ReadonlySet<string>;
+  projects: readonly Project[];
+  project: SelectedProject | null;
+  selectProject: (projectId: string, projectName: string) => void;
+  banner: ReturnType<typeof usePlatformAnnouncements>['banner'];
+}): ReactNode {
+  return (
+    <Suspense fallback={null}>
+      <DesktopFrame permissions={permissions} projects={projects} selectedProjectId={project?.id} onSelectProject={selectProject}>
+        <PageTitleSetter projectName={project?.name} />
+        <PlatformBanner banner={banner} />
+        <BudgetWarningBanner projectId={project?.id} projectName={project?.name} />
+        {children}
+        <NavBlockerDialog />
+      </DesktopFrame>
+    </Suspense>
+  );
+}
 
 export interface AppShellProps {
   children: ReactNode;
@@ -222,6 +263,20 @@ export function AppShell({ children }: AppShellProps): ReactNode {
   // person who has to end the window. See `usePlatformAnnouncements`.
   if (maintenance.enabled && !maintenance.bypass) {
     return <MaintenanceSplash maintenance={maintenance} />;
+  }
+
+  if (import.meta.env.MODE === 'desktop') {
+    return (
+      <DesktopShellBody
+        permissions={permissions}
+        projects={projects}
+        project={project}
+        selectProject={selectProject}
+        banner={banner}
+      >
+        {children}
+      </DesktopShellBody>
+    );
   }
 
   return (

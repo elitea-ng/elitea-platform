@@ -87,7 +87,6 @@ fn overwrite_only_definitions_keep_their_pre_reducer_digests() {
 }
 
 /// An explicit `reducer: overwrite` is the default, not a new definition.
-#[cfg(feature = "graph-extensions-rehearsal")]
 #[test]
 fn explicit_overwrite_keeps_the_golden_digest_and_typed_reducers_change_it() {
     let explicit = LOOP

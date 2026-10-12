@@ -45,7 +45,21 @@ const ProjectArgument = "_elitea_project_id"
 
 // IndexTools are the engine tools that read or write the index. Each is
 // refused without an authenticated project.
-var IndexTools = map[string]bool{"generate_wiki": true, "ask": true, "deep_research": true}
+var IndexTools = map[string]bool{
+	"generate_wiki": true, "ask": true, "deep_research": true,
+	// The index deletions (issue #1243): they delete rows, so they are
+	// refused without an authenticated project like the rest.
+	// DeleteProjectWikisTool is never a toolkit tool; the platform route
+	// calls it (Runner.DeleteProject).
+	DeleteWikiIndexTool: true, DeleteProjectWikisTool: true,
+}
+
+// The engine tools that delete an index (services/elitea-deepwiki-engine,
+// runner::maintenance).
+const (
+	DeleteWikiIndexTool    = "delete_wiki_index"
+	DeleteProjectWikisTool = "delete_project_wikis"
+)
 
 // projectResolution is what Runner.Invoke learned about the caller's
 // project: a validated id, or why there is none.

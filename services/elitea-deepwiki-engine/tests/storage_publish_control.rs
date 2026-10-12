@@ -275,7 +275,7 @@ async fn concurrent_publishes_of_one_wiki_serialise() {
     let whole_beta = live.len() == 500 && live.iter().all(|id| id.starts_with("beta::"));
     assert!(whole_alpha || whole_beta, "{} live nodes", live.len());
     let (docs, meta): (i64, i64) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM wiki_bm25_docs WHERE wiki_id = $1 AND branch = 'bm25'), \
+        "SELECT (SELECT count(*) FROM wiki_bm25_docs WHERE wiki_id = $1 AND branch = 'fts'), \
                 (SELECT count(*) FROM wiki_bm25_meta WHERE wiki_id = $1)",
     )
     .bind(wiki)
@@ -283,7 +283,7 @@ async fn concurrent_publishes_of_one_wiki_serialise() {
     .await
     .expect("statistics");
     assert_eq!(docs, i64::try_from(live.len()).expect("small"));
-    assert_eq!(meta, 2);
+    assert_eq!(meta, 1);
 }
 
 /// Two publishes of different wikis at once, with one slot: both land.

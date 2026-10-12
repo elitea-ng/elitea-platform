@@ -30,12 +30,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 )
 
 // TenantMigrator applies the embedded tenant history to one project's schema.
@@ -112,6 +115,14 @@ type Result struct {
 	ProjectID     int64
 	Steps         []StepStatus
 	RollbackSteps []StepStatus
+	// VectorDatabase names the PgVector database a delete could not drop. It is
+	// empty unless ErrVectorStoreNotDropped. The cleanup journal retries it.
+	VectorDatabase string
+	// Pending names the cleanup steps a delete left to the journal: those that
+	// ran and failed, and those its budget did not reach (every one after
+	// HandOffCleanup). Empty means the cleanup is complete. Journal retries
+	// finish them.
+	Pending []string
 }
 
 // ArtifactBootstrapper creates and removes a project's system buckets. It is
@@ -140,6 +151,10 @@ type ProjectVaultBootstrapper interface {
 	// write, because it alone knows how the key is wrapped.
 	EnsureProjectSecretsHeaderValue(ctx context.Context, projectID string) (bool, error)
 	RemoveProjectVault(ctx context.Context, projectID string) error
+	// RemoveProjectVaultTx is RemoveProjectVault through a transaction the
+	// caller owns (no commit, no rollback): the project delete revokes the vault
+	// in the transaction that removes the project row.
+	RemoveProjectVaultTx(ctx context.Context, tx pgx.Tx, projectID string) error
 }
 
 // ProjectVectorStore creates and removes a project's vector-store credentials
@@ -154,7 +169,46 @@ type ProjectVaultBootstrapper interface {
 // createProjectVectorStore.
 type ProjectVectorStore interface {
 	ProvisionProjectVectorStore(ctx context.Context, projectID int64) error
+	// RemoveProjectVectorStore undoes what provisioning wrote to this platform
+	// (the configuration row). It never drops the PgVector database or role, so
+	// it is safe for the create-failure rollback.
 	RemoveProjectVectorStore(ctx context.Context, projectID int64) error
+	// ProjectHasVectorStore reports whether the project has a PgVector
+	// configuration row on this platform. Deprovision asks it INSIDE the
+	// transaction that decides the delete, through that transaction (query), so
+	// the answer is read from the same snapshot that removes the project and no
+	// second pool connection is taken while the project row is locked. The answer
+	// is recorded in the cleanup journal and later handed to
+	// DropProjectVectorStore.
+	ProjectHasVectorStore(ctx context.Context, query Querier, projectID int64) (bool, error)
+	// DropProjectVectorStore irreversibly drops the project's PgVector database
+	// and login role (#1211). It is reached only from Deprovision's cleanup
+	// journal, after the project row is gone, never from the create-failure
+	// rollback. It is idempotent. It attempts the drop whenever a PgVector
+	// bootstrap is configured, whatever hadStore (the probe's answer, recorded in
+	// the journal) says, so a database with no configuration row is caught. Only
+	// the absence of a bootstrap depends on hadStore: false is a skip ("", nil),
+	// true means the database exists and cannot be reached, which is an error. It returns the name of the database it was
+	// asked to drop (also on failure, so the caller can name the leftover), or
+	// "" when there is nothing to drop.
+	DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (database string, err error)
+}
+
+// VectorDatabaseProbe is the optional half of a ProjectVectorStore that can ask
+// the PgVector server whether a project's database or role exists. Deprovision
+// uses it to find the leftovers of a project whose row is already gone (#1211).
+// checkable is false when the deployment has no PgVector bootstrap, so nothing
+// can be asked. A store without it is simply not asked.
+type VectorDatabaseProbe interface {
+	ProjectVectorDatabaseExists(ctx context.Context, projectID int64) (exists bool, checkable bool, err error)
+}
+
+// Querier is the read half of a pgx transaction, plus Begin, which on a
+// transaction opens a savepoint. A probe that has to install a tenant
+// search_path uses the savepoint to scope it. pgx.Tx satisfies it.
+type Querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // ProjectDefaultModelSeeder copies the platform default model into a new
@@ -172,13 +226,34 @@ type ProjectDefaultModelSeeder interface {
 
 // Provisioner runs the project-create pipeline.
 type Provisioner struct {
-	pool          *pgxpool.Pool
-	migrator      TenantMigrator
-	buckets       ArtifactBootstrapper
-	vault         ProjectVaultBootstrapper
-	vectorStore   ProjectVectorStore
+	pool        *pgxpool.Pool
+	migrator    TenantMigrator
+	buckets     ArtifactBootstrapper
+	vault       ProjectVaultBootstrapper
+	vectorStore ProjectVectorStore
+	// commit ends the deciding transaction of a delete. Nil is tx.Commit; a test
+	// replaces it to simulate a commit that reports an error.
+	commit        func(context.Context, pgx.Tx) error
 	defaultModels ProjectDefaultModelSeeder
 	logger        *slog.Logger
+	// applications are the engines a delete removes the project's data from
+	// (a DeepWiki wiki index, an Inventory graph), one journal step each. See
+	// application_data.go. Empty where none is wired.
+	applications []applicationCleanup
+
+	// lifecycle is the context whose end means the process is shutting down.
+	// The detached cleanup runs of a delete derive from it, so a shutdown
+	// reaches them and a client that hangs up does not. Never nil (New).
+	lifecycle context.Context
+	// inflight counts the detached cleanup runs (WaitForCleanups).
+	inflight sync.WaitGroup
+	// quietDropLimit is how many times a drop that fails for a store the
+	// project was never recorded as having is retried before the journal gives
+	// up on it. decisionLockTimeout and decisionStatementTimeout bound the
+	// deciding transaction of a delete.
+	quietDropLimit           int
+	decisionLockTimeout      time.Duration
+	decisionStatementTimeout time.Duration
 }
 
 // Option configures a Provisioner at construction time.
@@ -203,7 +278,7 @@ func WithProjectVault(vault ProjectVaultBootstrapper) Option {
 // WithVectorStore gives.
 func WithDefaultModelSeeder(seeder ProjectDefaultModelSeeder) Option {
 	return func(p *Provisioner) {
-		if seeder == nil || isNilPointer(seeder) {
+		if seeder == nil || cleanupjournal.IsNilPointer(seeder) {
 			return
 		}
 		p.defaultModels = seeder
@@ -230,30 +305,83 @@ func WithDefaultModelSeeder(seeder ProjectDefaultModelSeeder) Option {
 // wiring that caused it.
 func WithVectorStore(vectorStore ProjectVectorStore) Option {
 	return func(p *Provisioner) {
-		if isNilPointer(vectorStore) {
+		if cleanupjournal.IsNilPointer(vectorStore) {
 			return
 		}
 		p.vectorStore = vectorStore
 	}
 }
 
-// isNilPointer reports a nil pointer wrapped in a non-nil interface.
-//
-// The same helper internal/infra/authattempt uses, for the same reason.
-func isNilPointer(value any) bool {
-	reflected := reflect.ValueOf(value)
-	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
-}
-
 func New(pool *pgxpool.Pool, migrator TenantMigrator, logger *slog.Logger, options ...Option) *Provisioner {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	provisioner := &Provisioner{pool: pool, migrator: migrator, logger: logger}
+	provisioner := &Provisioner{
+		pool: pool, migrator: migrator, logger: logger,
+		lifecycle:                context.Background(),
+		quietDropLimit:           DefaultQuietDropLimit,
+		decisionLockTimeout:      DefaultDecisionLockTimeout,
+		decisionStatementTimeout: DefaultDecisionStatementTimeout,
+	}
 	for _, option := range options {
 		option(provisioner)
 	}
 	return provisioner
+}
+
+// WithLifecycleContext sets the context whose cancellation means the process is
+// shutting down. A delete's cleanup run continues after the request that started
+// it has answered, so it is bound to this context and not to the request's: on
+// shutdown the run stops, releases its journal lease without counting an attempt,
+// and the journal row stays open for the next process. Without it the runs are
+// never cancelled by shutdown.
+func WithLifecycleContext(ctx context.Context) Option {
+	return func(p *Provisioner) {
+		if ctx != nil {
+			p.lifecycle = ctx
+		}
+	}
+}
+
+// WithQuietDropLimit sets how many times a PgVector drop that fails for a store
+// the project was never recorded as having is attempted before the journal marks
+// the step done ("gave up"). Zero or negative keeps DefaultQuietDropLimit.
+func WithQuietDropLimit(limit int) Option {
+	return func(p *Provisioner) {
+		if limit > 0 {
+			p.quietDropLimit = limit
+		}
+	}
+}
+
+// WithDecisionTimeouts sets the lock_timeout and statement_timeout of a delete's
+// deciding transaction. Zero keeps the default for that value.
+func WithDecisionTimeouts(lock, statement time.Duration) Option {
+	return func(p *Provisioner) {
+		if lock > 0 {
+			p.decisionLockTimeout = lock
+		}
+		if statement > 0 {
+			p.decisionStatementTimeout = statement
+		}
+	}
+}
+
+// WaitForCleanups blocks until every detached cleanup run has ended, or ctx
+// does. A process that wants its in-flight deletes to record their state before
+// it exits cancels the lifecycle context and then waits here.
+func (p *Provisioner) WaitForCleanups(ctx context.Context) error {
+	finished := make(chan struct{})
+	go func() {
+		p.inflight.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Provision creates the project row, its tenant schema, its tenant migration

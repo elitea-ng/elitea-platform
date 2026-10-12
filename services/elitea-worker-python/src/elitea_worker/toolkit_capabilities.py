@@ -30,7 +30,7 @@ from typing import Any
 SCHEMA_VERSION = "elitea.worker-toolkit-capability.v1"
 
 # ``inventory`` is an elitea-sdk community toolkit that this repository ships as
-# a separate service (services/elitea-inventory). It is absent from the built-in
+# a separate service (services/elitea-inventory-engine). It is absent from the built-in
 # registry and from the toolkit catalogue, so its import failure is expected and
 # says nothing about the image. Every OTHER failure is a real capability gap.
 EXPECTED_ABSENT_IMPORT_KEYS = ("inventory",)

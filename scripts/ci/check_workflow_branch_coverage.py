@@ -76,15 +76,12 @@ EXEMPT_WORKFLOWS = {
         "dispatch. The per-change gate for the same surface is the "
         "`chat-stream-real` job in ci-web-e2e.yml."
     ),
-    "engine-closure-refresh.yml": (
-        "It has no push arm and no pull_request arm, deliberately: it WRITES. "
-        "It re-resolves the two frozen analysis-engine dependency closures as a "
-        "set and opens a draft pull request with the result, so a push arm "
-        "would mean a fresh proposal on every merge to main. Weekly cadence "
-        "plus manual dispatch, the same shape as deepwiki-real-engine.yml. The "
-        "per-change gate for the same subject is the `engine-closures` job in "
-        "dependency-scanning.yml, which refuses a closure that does not "
-        "resolve."
+    "cancel-merged-pr-runs.yml": (
+        "No push arm and no pull_request arm, deliberately: it runs on "
+        "pull_request_target `closed` only, and cancels the unfinished runs of "
+        "a pull request that merged. A push arm would give it nothing to "
+        "cancel, and it must never touch the runs a merge starts on a trunk "
+        "branch."
     ),
     "ci-web-mutation.yml": (
         "It has no push arm at all. It is a weekly cadence job plus manual "

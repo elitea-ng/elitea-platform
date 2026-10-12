@@ -21,8 +21,9 @@ use crate::protocol::elitea::runtime::v1::{
     AuthorizeSandboxJobRequestV1, AuthorizeSandboxJobResponseV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
     ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
-    RustCompiledSnapshotPurposeV1, runtime_control_service_client::RuntimeControlServiceClient,
+    PrepareSettlementResponseV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
+    RenewLeaseResponseV1, RustCompiledSnapshotPurposeV1,
+    runtime_control_service_client::RuntimeControlServiceClient,
 };
 
 const MAX_CONTROL_REQUEST_BYTES: usize = 64 * 1024;
@@ -117,6 +118,16 @@ pub trait ControlRpc: Send + Sync {
         ))
     }
 
+    /// `RemoveIndex` (ADR-0030 I1 `remove_index`): Main's index delete flow
+    /// under the live claim. A transport that does not serve it answers
+    /// `Unimplemented`, which the worker reports to the model as a sentence.
+    async fn remove_index(
+        &self,
+        _request: Request<RemoveIndexRequestV1>,
+    ) -> Result<Response<RemoveIndexResponseV1>, Status> {
+        Err(Status::unimplemented("index removal is unavailable"))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -197,6 +208,13 @@ impl ControlRpc for TonicControlRpc {
             .clone()
             .authorize_rust_compiled_snapshot(request)
             .await
+    }
+
+    async fn remove_index(
+        &self,
+        request: Request<RemoveIndexRequestV1>,
+    ) -> Result<Response<RemoveIndexResponseV1>, Status> {
+        self.client.clone().remove_index(request).await
     }
 
     async fn renew_lease(
@@ -457,6 +475,33 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
         .map_err(|_| unavailable())?
         .map_err(|_| unavailable())?
         .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Ask Main to delete one toolkit index under the live claim (ADR-0030
+    /// I1 `remove_index`), once, without retry: the delete is Main's
+    /// decision, and a repeat would only find the row gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error; a Main
+    /// that does not serve the RPC is an `InvalidConfiguration`.
+    pub async fn remove_index(
+        &self,
+        message: RemoveIndexRequestV1,
+    ) -> Result<RemoveIndexResponseV1, ControlGrpcError> {
+        let request = self.request(message)?;
+        let response = timeout(self.config.deadline, self.rpc.remove_index(request))
+            .await
+            .map_err(|_| unavailable())?
+            .map_err(|status| match status.code() {
+                tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
+                    "Main does not serve index removal on its control plane",
+                ),
+                _ => unavailable(),
+            })?
+            .into_inner();
         validate_response(&response)?;
         Ok(response)
     }

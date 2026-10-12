@@ -17,6 +17,7 @@ import { McpIcon } from '@/shared/ui/icons/mcp-icon';
 import { SkillIcon } from '@/shared/ui/icons/skill-icon';
 import { ToolIcon } from '@/shared/ui/icons/tool-icon';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutlined';
+import FolderOpenIcon from '@mui/icons-material/FolderOpenOutlined';
 
 import { computeIsSelectedProjectPublic, navSections, selectedNavItem, visibleNavSections, type NavItemValue } from '../lib/navSections';
 import { ProjectSwitcher } from './ProjectSwitcher';
@@ -40,6 +41,8 @@ const ICON_BY_VALUE: Record<NavItemValue, ReactNode> = {
   credentials: <KeyIcon />,
   applications: <ApplicationsIcon />,
   artifacts: <ArtifactsIcon />,
+  // Only ever looked up when the desktop build adds the nav row; in the web build the branch folds away.
+  workspaces: import.meta.env.MODE === 'desktop' ? <FolderOpenIcon sx={{ width: '1rem', height: '1rem' }} /> : null,
 };
 
 export interface SidebarBodyProps {

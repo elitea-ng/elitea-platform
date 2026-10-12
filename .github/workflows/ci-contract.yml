@@ -79,7 +79,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.work
           cache-dependency-path: services/elitea-main/go.sum
 
       - name: Vet contract tests
@@ -121,7 +121,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.work
           cache-dependency-path: services/elitea-main/go.sum
 
       # Preflight, before a single test runs. Both halves of this job's premise

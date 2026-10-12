@@ -123,22 +123,26 @@ async fn the_guard_ignores_updates_an_interrupt_discards() {
     assert!(output.interrupt.is_some());
 }
 
-#[cfg(not(feature = "graph-extensions-rehearsal"))]
+/// Typed reducers are admitted in every build (no cargo feature): explicit
+/// `overwrite` and each typed reducer compile.
 #[test]
-fn production_builds_refuse_any_reducer_key() {
-    for reducer in ["append", "overwrite"] {
+fn every_build_admits_typed_reducers() {
+    for (kind, reducer) in [
+        ("list", "append"),
+        ("int", "sum_int"),
+        ("dict", "merge"),
+        ("str", "overwrite"),
+    ] {
         let yaml = format!(
-            "state:\n  findings: {{type: list, value: [], reducer: {reducer}}}\nentry_point: tick\nnodes:\n  - {{id: tick, type: state_modifier, template: '[]', output: [findings], transition: END}}\n"
+            "state:\n  v: {{type: {kind}, reducer: {reducer}}}\nentry_point: tick\nnodes:\n  - {{id: tick, type: state_modifier, template: '1', transition: END}}\n"
         );
-        let Err(error) = super::compiler::PipelineDefinition::from_yaml(&yaml) else {
-            panic!("a production build must not admit reducer: {reducer}");
-        };
-        assert_eq!(error.code(), "graph.pipeline.unsupported_capability");
+        if let Err(error) = super::compiler::PipelineDefinition::from_yaml(&yaml) {
+            panic!("reducer {reducer} on {kind} must be admitted: {error}");
+        }
     }
 }
 
-#[cfg(feature = "graph-extensions-rehearsal")]
-mod rehearsal {
+mod graph {
     use std::sync::Arc;
 
     use adk_rust::graph::{Checkpointer, ExecutionConfig, MemoryCheckpointer, State};
@@ -266,6 +270,11 @@ nodes:
             ),
             (clean, "notes: list", "notes: {type: list, reducer: append}"),
         ] {
+            // SplitOut is admitted only where its own shaping gate allows it;
+            // a separate PR removes that gate. Reducers themselves are ungated.
+            if base == shaping && !cfg!(feature = "graph-extensions-rehearsal") {
+                continue;
+            }
             if let Err(error) = PipelineDefinition::from_yaml(base) {
                 panic!("the overwrite control for {from} must compile: {error}");
             }

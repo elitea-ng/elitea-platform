@@ -13,7 +13,8 @@
 //! `github.com,*.github.com`, which admits both.
 //!
 //! The rules are the Python `security/egress.py` and Go
-//! `spi.ParseEgressPolicy` ones, byte for byte:
+//! `spi.ParseEgressPolicy` ones, byte for byte (the matching itself is
+//! `elitea_connectors::egress::HostAllowlist`, shared with the connectors):
 //!
 //! * fail-closed: no entries refuses everything;
 //! * `*` disables the control, explicitly;
@@ -34,20 +35,23 @@
 
 use super::providers::CloneTarget;
 use crate::names::SettingNames;
+use elitea_connectors::egress::HostAllowlist;
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::pyvalue::py_repr;
 
-/// An allowlist of git hosts.
+/// An allowlist of git hosts: the shared rule
+/// ([`elitea_connectors::egress::HostAllowlist`], the one every connector
+/// applies too) with this engine's setting names and refusal messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgressPolicy {
-    entries: Vec<String>,
+    allowlist: HostAllowlist,
     names: &'static SettingNames,
 }
 
 impl Default for EgressPolicy {
     fn default() -> Self {
         Self {
-            entries: Vec::new(),
+            allowlist: HostAllowlist::default(),
             names: &SettingNames::NEUTRAL,
         }
     }
@@ -58,15 +62,8 @@ impl EgressPolicy {
     /// `EgressPolicy.parse`). `None` or blank gives the empty policy.
     #[must_use]
     pub fn parse(raw: Option<&str>) -> Self {
-        let entries = raw
-            .unwrap_or_default()
-            .replace(',', " ")
-            .split_whitespace()
-            .map(|part| part.trim().to_lowercase())
-            .filter(|part| !part.is_empty())
-            .collect();
         Self {
-            entries,
+            allowlist: HostAllowlist::parse(raw),
             names: &SettingNames::NEUTRAL,
         }
     }
@@ -80,52 +77,34 @@ impl EgressPolicy {
         self
     }
 
+    /// The shared rule this policy applies.
+    #[must_use]
+    pub fn allowlist(&self) -> &HostAllowlist {
+        &self.allowlist
+    }
+
     /// The entries, lower-cased, in order.
     #[must_use]
     pub fn entries(&self) -> &[String] {
-        &self.entries
+        self.allowlist.entries()
     }
 
     /// The explicit opt-out.
     #[must_use]
     pub fn allows_everything(&self) -> bool {
-        self.entries.iter().any(|entry| entry == "*")
+        self.allowlist.allows_everything()
     }
 
     /// No entries: every destination is refused.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.allowlist.is_empty()
     }
 
     /// Whether `host` (optionally with a port) is on the list.
     #[must_use]
     pub fn permits(&self, host: &str) -> bool {
-        if self.allows_everything() {
-            return true;
-        }
-        let lowered = host.trim().to_lowercase();
-        if lowered.is_empty() {
-            return false;
-        }
-        let candidate = if let Some(rest) = lowered.strip_prefix('[') {
-            rest.split(']').next().unwrap_or_default()
-        } else if lowered.matches(':').count() == 1 {
-            lowered.split(':').next().unwrap_or_default()
-        } else {
-            lowered.as_str()
-        };
-        self.entries.iter().any(|entry| {
-            if let Some(suffix) = entry.strip_prefix('*') {
-                // `suffix` keeps its leading dot: ".github.com".
-                suffix.starts_with('.')
-                    && candidate
-                        .strip_suffix(suffix)
-                        .is_some_and(|label| !label.contains('.'))
-            } else {
-                candidate == entry
-            }
-        })
+        self.allowlist.permits(host)
     }
 
     /// Refuse `host` unless it is allowed, with the Python messages.
@@ -150,7 +129,7 @@ impl EgressPolicy {
                 format!(
                     "The {what} {} is not on the git-host allowlist ({}), so this invocation is refused before any credential is used.",
                     py_repr(host),
-                    self.entries.join(", ")
+                    self.entries().join(", ")
                 ),
             ));
         }
