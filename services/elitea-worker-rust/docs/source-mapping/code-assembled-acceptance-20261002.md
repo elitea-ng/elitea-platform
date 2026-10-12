@@ -22,6 +22,7 @@ These results include startup and warm hydration, before the later outer static-
 
 The later outer static-scope assembly passes 1,539 library tests, with zero failures and the same 55 ignored integrations.
 The optional scoped continuation admission remains disabled.
+Superseded 2026-10-12: it is always on, see [scoped-application-continuation-admitted-20261012.md](scoped-application-continuation-admitted-20261012.md).
 
 The reviewed materialization amendment passes 1,548 library tests on 2026-10-04, with zero failures and the same 55 ignored integrations.
 Formatting, strict Clippy across all targets and features, and documentation with warnings denied also pass.

@@ -1481,9 +1481,14 @@ impl AgentEventProjector {
                 execution_finished: false,
                 context_info: Value::Null,
             };
+            // Only the root owns the sole result-bearing `full_message`: the
+            // publisher refuses a second one after the first durable ACK, and
+            // the root emits its own (with the static inventory or at EOS).
             for event in descendant
                 .projector
                 .finish_after_eos(completion, child_event.timestamp)?
+                .into_iter()
+                .filter(|event| event.r#type != "full_message")
             {
                 batch.push(event)?;
             }

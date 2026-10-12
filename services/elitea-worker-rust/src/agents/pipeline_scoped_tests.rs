@@ -613,28 +613,40 @@ fn chain_yaml(aliases: &[String]) -> String {
     yaml
 }
 
+/// The assembly result and how many saved versions the platform was asked for.
 async fn assemble_chain(
     nodes: usize,
-) -> Result<(), super::super::runtime::NativeAgentAssemblyError> {
+) -> (
+    Result<(), super::super::runtime::NativeAgentAssemblyError>,
+    usize,
+) {
     let (sessions, checkpointer) = state();
     let versions = BTreeMap::from([((5, 6), plain_agent(Vec::new()))]);
-    let (assembler, _, _) = process(&sessions, &checkpointer, &versions, Vec::new());
+    let (assembler, _, reads) = process(&sessions, &checkpointer, &versions, Vec::new());
     let aliases = vec!["worker".to_owned(); nodes];
     let request = root_request(
         &chain_yaml(&aliases),
         vec![reference((5, 6), "agent", "worker")],
     );
-    assembler.assemble(authorized(&request)).await.map(|_| ())
+    let result = assembler.assemble(authorized(&request)).await.map(|_| ());
+    let reads = reads.lock().expect("version reads").len();
+    (result, reads)
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn the_application_hop_budget_admits_the_limit_and_refuses_one_more() {
-    assemble_chain(MAX_APPLICATION_HOPS)
-        .await
-        .expect("exactly the hop budget assembles");
-    let Err(error) = assemble_chain(MAX_APPLICATION_HOPS + 1).await else {
+    let (result, reads) = assemble_chain(MAX_APPLICATION_HOPS).await;
+    result.expect("exactly the hop budget assembles");
+    // The performance budget of the scoped resolver: one version read per application node.
+    assert_eq!(reads, MAX_APPLICATION_HOPS);
+    let (result, reads) = assemble_chain(MAX_APPLICATION_HOPS + 1).await;
+    let Err(error) = result else {
         panic!("one hop past the budget must be refused before any model call");
     };
+    assert_eq!(
+        reads, MAX_APPLICATION_HOPS,
+        "the refused node reads nothing more"
+    );
     assert_eq!(
         error.code(),
         NativeAgentAssemblyErrorCode::ResourceExhausted
@@ -990,4 +1002,104 @@ async fn a_saved_child_pipeline_an_older_worker_paused_continues_unscoped() {
         .expect("checkpoint lookup")
         .expect("final checkpoint");
     assert!(!has_graph_call_receipts(&finished).expect("receipt metadata decodes"));
+}
+
+pub(super) struct BatchConnector;
+#[async_trait]
+impl McpConnector for BatchConnector {
+    async fn connect(
+        &self,
+        _: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        Ok(Arc::new(BasicToolset::new(
+            "batch_fixture",
+            vec![
+                Arc::new(NamedReadTool("get_issues")),
+                Arc::new(NamedReadTool("echo")),
+                Arc::new(NamedReadTool("reverse")),
+            ],
+        )))
+    }
+}
+
+pub(super) fn batch_agent() -> Value {
+    json!({
+        "agent_type": "agent", "instructions": "Run the three tools and report.",
+        "meta": {}, "variables": [],
+        "tools": [{"id": 92, "type": "mcp", "toolkit_name": "batch",
+            "settings": {"url": "https://mcp.example.invalid/v1/mcp", "headers": null,
+                "client_id": null, "client_secret": null, "scopes": null, "timeout": 30,
+                "selected_tools": ["get_issues", "echo", "reverse"], "enable_caching": true,
+                "cache_ttl": 300, "ssl_verify": true}}],
+        "llm_settings": {"model_name": "child-model", "model_project_id": 23,
+            "max_tokens": 2048, "reasoning_effort": null, "temperature": 0.2,
+            "openai_compatible": true}
+    })
+}
+
+pub(super) fn batch_policy() -> Arc<ToolAdmissionPolicy> {
+    Arc::new(runtime_tool_policy(&json!({
+        "toolkit_security": {
+            "sensitive_tools": {"mcp": ["reverse"]},
+            "sensitive_action_company_name": "Example Org"
+        }
+    })))
+}
+
+pub(super) fn three_call_response() -> Response<Body> {
+    let call = |index: usize, id: &str, name: &str| json!({"index":index,"id":id,"type":"function","function":{"name":name,"arguments":"{}"}});
+    let chunk = json!({"choices":[{"delta":{"tool_calls":[
+        call(0, "call_issues", "get_issues"), call(1, "call_echo", "echo"),
+        call(2, "call_mcp", "reverse")]},"finish_reason":null}]});
+    let raw = format!(
+        "data: {chunk}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
+    );
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_three_call_batch_with_one_sensitive_call_resumes_after_approval() {
+    let (sessions, checkpointer) = state();
+    let versions = BTreeMap::from([((3, 4), batch_agent())]);
+    let make_assembler = |outcomes| {
+        let (platform, model_facade, captured, _) = saved_runtime(&versions, outcomes);
+        (
+            PipelineNativeAgentAssembler::with_state(
+                Arc::clone(&sessions),
+                Arc::clone(&checkpointer) as Arc<dyn Checkpointer>,
+            )
+            .with_runtime_clients(platform, model_facade)
+            .with_mcp_connector(Arc::new(BatchConnector))
+            .with_tool_policy(batch_policy()),
+            captured,
+        )
+    };
+    let request = agent_pipeline_request("release-agent", "agent");
+    let (assembler, captured) = make_assembler(vec![TestModelGatewayOutcome::Response(
+        three_call_response(),
+    )]);
+    let invocation = assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("assemble");
+    let (cards, _) = collect_pipeline_pause(invocation).await;
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let id = cards[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+        .as_str()
+        .expect("card id")
+        .to_owned();
+    assert_eq!(model_calls(&captured), 1);
+    drop(assembler);
+    let (replacement, resumed_calls) = make_assembler(vec![text("batch done")]);
+    let resume = pipeline_application_resume_request(vec![id], "approve", "", [51; 32]);
+    let invocation = replacement
+        .assemble(authorized(&resume))
+        .await
+        .expect("resume assembles");
+    let browser = collect_pipeline_completion(invocation).await;
+    assert!(
+        browser.iter().any(|event| event["content"] == "batch done"),
+        "{browser:?}"
+    );
+    assert_eq!(model_calls(&resumed_calls), 1);
 }

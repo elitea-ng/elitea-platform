@@ -36,7 +36,35 @@ const PENDING_ENV: &str = "ELITEA_SCOPED_PG_PENDING";
 const PENDING_MARKER: &str = "SCOPED_PENDING=";
 const RECEIPTS_KEY: &str = "elitea.pipeline.graph-calls.v1";
 
+/// The sensitive-tool Agent of the existing in-memory fixture: one `lookup_release` MCP read the
+/// policy marks sensitive, so the call pauses on a confirmation card.
+fn sensitive_agent() -> Value {
+    json!({
+        "agent_type": "agent", "instructions": "Read the release evidence and summarize it.",
+        "meta": {}, "variables": [],
+        "tools": [{"id": 92, "type": "mcp", "toolkit_name": "release intelligence",
+            "settings": {"url": "https://mcp.example.invalid/v1/mcp", "headers": null,
+                "client_id": null, "client_secret": null, "scopes": null, "timeout": 30,
+                "selected_tools": ["lookup_release"], "enable_caching": true, "cache_ttl": 300,
+                "ssl_verify": true}}],
+        "llm_settings": {"model_name": "child-model", "model_project_id": 23,
+            "max_tokens": 2048, "reasoning_effort": null, "temperature": 0.2,
+            "openai_compatible": true}
+    })
+}
+
+/// Scenarios whose pause is a sensitive-tool confirmation card of an `agent` node's Agent.
+fn is_card(scenario: &str) -> bool {
+    matches!(scenario, "sensitive" | "batch")
+}
+
 fn versions(scenario: &str) -> BTreeMap<Saved, Value> {
+    if scenario == "sensitive" {
+        return BTreeMap::from([((3, 4), sensitive_agent())]);
+    }
+    if scenario == "batch" {
+        return BTreeMap::from([((3, 4), super::scoped_tests::batch_agent())]);
+    }
     let mut versions = BTreeMap::from([((5, 6), asking_agent())]);
     if scenario == "nested" {
         versions.insert(
@@ -53,7 +81,9 @@ fn versions(scenario: &str) -> BTreeMap<Saved, Value> {
 }
 
 fn request(scenario: &str) -> super::super::request::AgentExecutionRequest {
-    if scenario == "nested" {
+    if is_card(scenario) {
+        agent_pipeline_request("release-agent", "agent")
+    } else if scenario == "nested" {
         root_request(
             &root_yaml("child-flow"),
             vec![reference((3, 4), "pipeline", "child-flow")],
@@ -130,6 +160,36 @@ async fn postgres_nested_ordinary_agent_in_a_saved_child_resumes_once_after_proc
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn postgres_sensitive_tool_card_of_a_graph_agent_node_resumes_once_after_process_replacement()
+{
+    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    let db = run_scenario(&url, "sensitive", &["start", "answer", "repeat"]).await;
+    assert!(
+        receipt_rows(&db.pool).await > 0,
+        "the root checkpoint carries the original graph-call receipt"
+    );
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_three_call_batch_with_one_sensitive_call_resumes_once_after_process_replacement()
+{
+    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    let db = run_scenario(&url, "batch", &["start", "answer", "repeat"]).await;
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn postgres_conversation_an_older_worker_paused_continues_unscoped_without_receipts() {
     let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
@@ -157,13 +217,30 @@ fn assembler(
         pool.clone(),
         SessionLimits::default(),
         CheckpointLimits::default(),
-        Arc::new(
-            ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
-                .expect("empty tool policy"),
-        ),
+        if scenario == "batch" {
+            super::scoped_tests::batch_policy()
+        } else if scenario == "sensitive" {
+            sensitive_pipeline_mcp_policy()
+        } else {
+            Arc::new(
+                ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                    .expect("empty tool policy"),
+            )
+        },
         platform,
         model_facade,
     );
+    let assembler = if scenario == "batch" {
+        assembler.with_mcp_connector(Arc::new(super::scoped_tests::BatchConnector))
+    } else if scenario == "sensitive" {
+        assembler.with_mcp_connector(Arc::new(PipelineMcpConnector {
+            connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            tool_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            read_only: true,
+        }))
+    } else {
+        assembler
+    };
     // Only the first leg of the older scenario is the older worker.
     let assembler = if scenario == "older" && phase == "start" {
         assembler.with_fresh_start_continuation(ApplicationContinuation::LegacyUnscoped)
@@ -194,9 +271,13 @@ async fn postgres_scoped_child() {
                 &pool,
                 &scenario,
                 &phase,
-                vec![TestModelGatewayOutcome::Response(
-                    super::restart_pg_tests::ask_user_call_response("call_ask_user_1"),
-                )],
+                vec![TestModelGatewayOutcome::Response(if scenario == "batch" {
+                    super::scoped_tests::three_call_response()
+                } else if scenario == "sensitive" {
+                    pipeline_mcp_tool_call_response()
+                } else {
+                    super::restart_pg_tests::ask_user_call_response("call_ask_user_1")
+                })],
             );
             let request = request(&scenario);
             let invocation = assembler
@@ -215,19 +296,35 @@ async fn postgres_scoped_child() {
                 &scenario,
                 &phase,
                 vec![TestModelGatewayOutcome::Response(pipeline_text_response(
-                    "answered once",
+                    if is_card(&scenario) {
+                        "child resumed summary"
+                    } else {
+                        "answered once"
+                    },
                 ))],
             );
-            let request = answer(request(&scenario), &card, 41);
+            let request = if is_card(&scenario) {
+                pipeline_application_resume_request(
+                    vec![card["interrupt_id"].as_str().expect("card id").to_owned()],
+                    "approve",
+                    "",
+                    [41; 32],
+                )
+            } else {
+                answer(request(&scenario), &card, 41)
+            };
             let invocation = assembler
                 .assemble(authorized_turn(&request, "execution-answer", 2))
                 .await
                 .expect("answer: the replacement Worker assembles");
+            let expected = if is_card(&scenario) {
+                "child resumed summary"
+            } else {
+                "answered once"
+            };
             let browser = collect_pipeline_completion(invocation).await;
             assert!(
-                browser
-                    .iter()
-                    .any(|event| event["content"] == "answered once"),
+                browser.iter().any(|event| event["content"] == expected),
                 "answer: the final answer reaches the browser: {browser:?}"
             );
             assert_eq!(
@@ -247,7 +344,16 @@ async fn postgres_scoped_child() {
                     "unexpected second answer",
                 ))],
             );
-            let request = answer(request(&scenario), &card, 42);
+            let request = if is_card(&scenario) {
+                pipeline_application_resume_request(
+                    vec![card["interrupt_id"].as_str().expect("card id").to_owned()],
+                    "approve",
+                    "",
+                    [42; 32],
+                )
+            } else {
+                answer(request(&scenario), &card, 42)
+            };
             if let Ok(invocation) = assembler
                 .assemble(authorized_turn(&request, "execution-repeat", 3))
                 .await

@@ -1466,9 +1466,21 @@ async fn static_saved_pipeline_produces_authorized_inventory_and_resumes_after_o
     .unwrap();
     projector.start(chrono::Utc::now()).unwrap();
     projector.project(&original).unwrap();
-    let rendered = projector
+    let batch = projector
         .project(event)
         .unwrap()
+        .into_iter()
+        .collect::<Vec<_>>();
+    // The publisher admits exactly one result-bearing event per execution: the
+    // root's inventory message, never a second one from the paused child.
+    assert_eq!(
+        batch
+            .iter()
+            .filter(|event| event.r#type == "full_message")
+            .count(),
+        1
+    );
+    let rendered = batch
         .into_iter()
         .map(|event| {
             String::from_utf8(
