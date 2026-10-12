@@ -45,12 +45,13 @@ application 138). Its two nested application nodes each call agent 137, which pa
 
 | Mechanism | Owner | `path:line` |
 | --- | --- | --- |
-| `DrivenTask`: polls inline first and moves only pending work to an owned task (`tokio::spawn`). It aborts on drop, `cancel()` waits until the task has released what it owns, and a panic (inline or on the task) is a typed failure. | Worker | `services/elitea-worker-rust/src/agents/driven.rs:45`, `:58`, `:72`, `:79`, `:104` |
-| `DrivenEventStream`: each pull goes through one `DrivenTask`, in lockstep with the caller; cancellation-safe | Worker | `src/agents/driven.rs:114`, `:133` |
+| `DrivenTask`: polls inline first and moves only pending work to an owned task (`tokio::spawn`). It aborts on drop, `cancel()` waits until the task has released what it owns, and a panic (inline or on the task) is a typed failure. | Worker | `services/elitea-worker-rust/src/agents/driven.rs:45`, `:58`, `:72`, `:81`, `:106` |
+| `DrivenEventStream`: each pull goes through one `DrivenTask`, in lockstep with the caller; cancellation-safe. `cancel()` returns only after the inner stream, including an in-flight pull, is dropped. | Worker | `src/agents/driven.rs:116`, `:135`, `:160` |
 | Pipeline node-event wrapper drives the graph | Worker | `src/agents/graph/node_events.rs:428` |
 | Application-event wrapper drives the root agent; it also stops polling a closed child channel (that was a latent busy loop) | Worker | `src/agents/application_tools.rs:4372`, `:4391` |
-| Pipeline-tool `drain_child` drives the child | Worker | `src/agents/application_pipeline.rs:1561` |
-| Scoped application node drives the tool future, and cancels it before the queue drain on a drain failure | Worker | `src/agents/pipeline/scoped_runtime.rs:247`, `:259` |
+| Pipeline-tool `drain_child` drives the child, and stops it on every exit (each `?` and the pause return included) before the node-event drain guard is released | Worker | `src/agents/application_pipeline.rs:1561`, `:1627` |
+| Scoped application node: one method (`run_child_draining`) drives the tool future, forwards its events, stops it, then drains its queue | Worker | `src/agents/pipeline/scoped_runtime.rs:246`, `:293`, `:302`, `:313` |
+| Lease loss drops the agent run, and with it any session write it was parked in, before joining the lease actor | Worker | `src/execution/native_agent_lifecycle.rs:574` |
 | Session transactions begin with `SET LOCAL lock_timeout` and `SET LOCAL idle_in_transaction_session_timeout`, in one round trip (one shared builder) | Worker | `src/state/postgres_session.rs:105`, `:112`, `:121` |
 | Named bounds (`WRITER_LOCK_TIMEOUT` 10 s, max 60 s; `IDLE_TRANSACTION_TIMEOUT` 30 s, max 300 s; min 1 ms), validated in `SessionLimits` | Worker | `src/state/postgres_session.rs:44`, `:48`, `:96` |
 | Graph checkpoint transactions, which lock `agent_graph_checkpoint_writers` the same way (a child share-locks its root), carry the same bounds through the same builder and constants | Worker | `src/state/postgres_checkpointer.rs:1497` (all six `begin` sites) |
@@ -66,11 +67,11 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
 `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`.
 
 - **Results (final commit).**
-  - Full Worker suite: **1656 passed, 0 failed, 10 ignored**.
+  - Full Worker suite, run twice: **1662 passed, 0 failed, 10 ignored** both times.
   - The 9 ignored PostgreSQL checkpointer tests were run explicitly with `--ignored`: **9 passed**.
   - The one remaining ignored test is a manual release-profile timing probe.
 - **Checks.** `cargo fmt --check` clean; `cargo clippy --locked --all-targets --all-features -D warnings` clean.
-- **New tests: 15, all passing.**
+- **New tests: 21, all passing.**
   - **Real PostgreSQL, the incident reproduction.**
     `agents::graph::node_events::session_lock_tests::node_event_yield_never_strands_a_child_append_holding_the_root_writer`.
     - Setup: a real root writer and a child `model_scope` writer.
@@ -94,6 +95,33 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
     - `state::postgres_checkpointer::lock_bound_tests::checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bound`:
       a graph checkpoint save behind a stalled writer-row holder fails with `StorageUnavailable` after
       `WRITER_LOCK_TIMEOUT`, and succeeds once the holder releases.
+    - Both lock-bound tests run on their own pool with a 1-minute acquire bound and assert PostgreSQL's `55P03` in the
+      cause chain. Under full-suite load, the shared 2 s harness pool once timed out first; that pool timeout also maps
+      to `StorageUnavailable`, so it could otherwise stand in for the lock timeout.
+  - **End-to-end full-channel tests.** Each fails with the self-deadlock when its driven form is reverted, and passes
+    with it.
+    - `agents::application_pipeline_tests::a_full_parent_channel_never_strands_a_child_holding_the_root_writer`: the
+      pipeline-tool `drain_child`, through a test-only shim with an injected child.
+    - `agents::pipeline::scoped_runtime::tests::a_full_node_event_channel_never_strands_a_child_holding_the_root_writer`:
+      `run_child_draining`, with a real graph-call receipt.
+    - In both: the child takes the "root writer" (a mutex standing in for the row lock) for one append parked on I/O,
+      a sibling floods 70 events, and the consumer persists each event under that writer. That fills the 64-slot
+      channel and blocks the forward. When the child's I/O completes, everything must finish within 10 s.
+  - **Lease loss.** `execution::output_delivery_tests::lease_loss_releases_a_parked_agent_stream_and_retains_the_command`:
+    a parked agent stream plus a failing lease renewal ends recovery-required, with no settlement or retirement, and
+    the parked stream released.
+    - Limit: the exact drop-before-close order is not observable in-process. The lease close only signals and joins
+      the actor, with no RPC to trace, so the order is enforced by the code at `native_agent_lifecycle.rs:574` and
+      this test proves the path.
+  - **Budget.** `agents::driven::tests::nested_wrappers_spawn_no_task_for_ready_items_and_one_per_level_when_pending`:
+    with three nested levels, the measured task counts per item are `[0, 0, 3]`.
+  - **Teardown.** `agents::driven::tests::cancel_returns_only_after_an_in_flight_pull_dropped_the_inner_stream`.
+  - **Structural guard.** `agents::driven::tests::no_select_arm_polls_a_raw_agent_stream`.
+    - What it checks: every non-test `select!` arm in the Worker and `agent-runtime` that polls `x.next()` /
+      `x.next_event()` must bind `x` through `DrivenEventStream::new`, or be on a justified allowlist.
+    - Allowlist: `parallel.rs` `inflight`, and `native_agent_lifecycle.rs` `native`. A stale allowlist entry also
+      fails the test.
+    - Mutation check: reverting `node_events.rs` to a raw stream fails the test, naming the file and identifier.
   - **Unit tests, `agents::driven::tests` (7).**
     - A lost select arm keeps driving the item and never loses it.
     - Pulls stay in lockstep with the caller.
@@ -110,9 +138,7 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
     arrival order.
   - Fix: the inline first poll, now in `DrivenTask` for both the stream and the scoped tool future. Ready work takes no
     task, so work that never waits keeps its exact old scheduling. No test was weakened.
-- **Skipped.** None besides the ignored timing probe. Not run: the drain paths of `drain_child` and `scoped_runtime`
-  under a full 64-slot channel. They use the same helper, which the unit tests cover, but they have no dedicated
-  end-to-end test.
+- **Skipped.** None besides the ignored timing probe.
 
 ## Performance
 
@@ -120,6 +146,8 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
   - Zero extra database round trips per session transaction: the bounds ride in the `BEGIN` simple-query message.
   - Zero tasks for ready work; one Tokio task (and one small boxed future) per inner item that is still pending after
     one poll.
+  - Nested wrappers cost one task per level for a pending item, bounded by nesting depth. The budget test measures
+    exactly `[0, 0, 3]` for three levels.
   - No added locks or buffering.
 - **Measured.**
   - A per-transaction `format!` of a ~100-byte `BEGIN` statement.
@@ -179,6 +207,8 @@ It used `ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` an
 | PostgreSQL × takeover behind an idle holder | I | `postgres_session.rs:112` | `an_idle_session_transaction_releases_its_writer_locks` |
 | PostgreSQL × graph checkpoint write under a stalled writer holder | I | `postgres_checkpointer.rs:1497` | `checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bound` |
 | Worker × panic inside an inner agent stream | F | `driven.rs:72` | `a_panicking_pull_fails_closed_with_a_typed_error` |
+| Worker × lease loss while a session write is parked | I (command retained for recovery) | `native_agent_lifecycle.rs:574` | `lease_loss_releases_a_parked_agent_stream_and_retains_the_command` |
+| Worker × fan-out child forwarding under a full channel | R | `application_pipeline.rs:1561`, `:1627`; `scoped_runtime.rs:293` | both full-channel end-to-end tests |
 
 Pre-existing L closed: the hung execution, which was resolved only by a Worker restart and then marked FAILED.
 
@@ -248,6 +278,43 @@ Pre-existing L closed: the hung execution, which was resolved only by a Worker r
     - 12 Haiku 4.5 model log lines and 0 LLM-mock requests.
     - 0 `idle in transaction` agentstate backends.
     - 0 lock-timeout, driven-task or panic log lines.
+- **Follow-up pass: A/B against the unfixed Worker.**
+  - Setup:
+    - Image `session-deadlock-48e2832d0`, `sha256:b045d19144e788806cafd9462eb1d14212da6fa873081c1c3bde25fad0f262b4`.
+      The binary check found all three branch strings.
+    - Fresh restore of the real-model dump; Haiku 4.5 throughout (54 model log lines, 0 LLM-mock requests).
+    - Only the Worker image was swapped between runs. The control is unfixed merged `main`
+      (`main-c0f2e5f9b-verify`, `sha256:500d9904…`).
+  - **Baseline.** On the fixed image, with no injected contention, chat 880 ran the incident journey: three turns
+    `SUCCEEDED` in 3.4, 3.5 and 1.8 s, and the result persisted after reload.
+  - **Forced contention.** A test-only trigger on the throwaway agentstate DB (never committed) makes the race likely.
+    - It sleeps 300 ms inside every child model-scope event insert, while the child holds the root writer `FOR SHARE`.
+    - It sleeps 150 ms inside every root event insert, so forwarded node events back up.
+  - **Incident pipeline under contention.** On the sequential incident pipeline the unfixed Worker still completed
+    (chats 881 and 882, 5–10 s per turn). With sequential nodes, a forwarded event is rarely queued in the same poll
+    as a child append.
+  - **Parallel sub-agents under contention.** Agent "Full Name Resolver" (application 9) calls its two sub-agents in
+    parallel, which supplies concurrent senders. Same prompt shape every run.
+
+    | Worker | Attempts | Hung | Detail |
+    | --- | --- | --- | --- |
+    | Unfixed `main` | 3 | **2** | chats 884 and 889, executions `6da40a37…` and `3254ee4f…` |
+    | Fixed | 5 | **0** | chats 885–887 and 890–891: `b68a046b…` 14 s, `772db6f9…` 15 s, `3a1e844e…` 13 s, `6ee87556…` 16 s, `02c6d68e…` 14 s |
+
+    - Both unfixed hangs showed the incident signature, which held for over 45 s and 60 s respectively: a backend
+      `idle in transaction` after the child `INSERT INTO agent_session_events`, and a backend waiting on the root
+      `agent_session_writers` row lock, blocked by it (`pg_blocking_pids`). The Worker sat at 0% CPU with no log
+      lines for the execution.
+    - Each hang was ended only by restarting the Worker, as in the incident.
+    - The fixed runs' answers were complete and persisted after reload.
+  - **Lock bound in the browser.** Chat 892, same agent, no trigger:
+    - Turn 1 `SUCCEEDED` (`94b71aa3…`).
+    - Then a separate `psql` session held that conversation's root writer row `FOR UPDATE` for 90 s.
+    - Turn 2 (`8e7e38fe…`): the writer activation waited on the held row, then failed after the 10 s bound
+      (`native_agent.dependency_unavailable`). The chat showed "A required runtime dependency is unavailable." with
+      "Details for support", instead of spinning forever.
+    - After release, the retry (`c257ec8c…`) `SUCCEEDED` in 14 s with the conversation history intact. After reload all
+      three turns were shown as above.
 - **Teardown.** The stack was torn down with `down -v` after each pass's evidence was recorded.
 
 ## Fixtures
@@ -258,15 +325,11 @@ Pre-existing L closed: the hung execution, which was resolved only by a Worker r
 
 ## Follow-ups
 
-- **Fatal-lease path.** `execution/native_agent_lifecycle.rs:699`: on `FatalLease`, the native stream stays parked
-  (possibly mid-append) while `close_no_ack` joins the lease actor. This is not a self-deadlock, because the close
-  needs no session lock, and the new bounds release any held writer row within 30 s. Dropping or draining `native`
-  before the close would remove the window entirely.
-- **End-to-end drain tests.** Add tests for `drain_child` / `scoped_runtime` under a full 64-slot event channel.
-- **Asynchronous teardown on early return.** On an early `?` return in `drain_child` or the wrappers, a pending pull is
-  aborted rather than dropped in place. It can finish its current poll, and a late node event is then discarded by the
-  existing stale-event guard. An explicit `cancel().await` on those paths would make the teardown synchronous.
-- **One task per nesting level.** Nested wrappers can spawn one task per level for an item that stays pending. This is
-  bounded by nesting depth; it was measured as negligible in the browser runs.
-- **Structural guard.** Add a lint or a single forwarding combinator, so no new `select!` can race a raw `EventStream`
-  against a side channel.
+All five follow-ups from the first review are done in this PR: the fatal-lease path, synchronous teardown in
+`drain_child`, full-channel end-to-end tests, the task-per-level budget test, and the structural guard. What remains:
+
+- **Lease-ordering observability.** The fatal-lease drop-before-close order is enforced in code but not observable
+  in-process. A process-level crash/lease test in the crash-recovery suite could observe it with real lock waits.
+- **Root-cause trade-off.** The guard is a source scan. It is code-enforced and mutation-checked, but a structural
+  alternative would make agent `EventStream`s non-pollable outside `DrivenEventStream`, at the cost of a wide type
+  change.
