@@ -9,9 +9,10 @@ state:
   findings: {type: list, value: [], reducer: append}
 ```
 
-The `reducer` key is admitted only by rehearsal builds (`graph-extensions-rehearsal`). Production builds refuse it, and
-the Web editor mirrors that gate. Overwrite stays the default, and every overwrite-only definition keeps its digest
-byte for byte.
+The `reducer` key is admitted in every build of Worker, Main and Web, with no feature flag. This follows the
+2026-10-12 decision that Point 5 node families are on by default (`PLAN.md` §8.1). Until then the key was
+rehearsal-gated; §8a keeps that first browser pass as history. Overwrite stays the default, and every overwrite-only
+definition keeps its digest byte for byte.
 
 ## 1. Business behaviour and sources
 
@@ -75,15 +76,14 @@ Registration: `src/lib.rs` (`pub mod exact_number`) and `src/graph/mod.rs` (`pub
 | Line | Mechanism |
 |---|---|
 | `:155` | `RawStateTypeDescriptor.reducer`; the struct keeps `deny_unknown_fields` |
-| `:2446` | the gate `TYPED_REDUCERS_READY = cfg!(feature = "graph-extensions-rehearsal")` |
-| `:893` | `validate_state(raw.state, TYPED_REDUCERS_READY)` |
-| `:2774` (`typed_reducer`) | compile-time checks: the gate, builtins `input`/`messages`, known names, type compatibility, default within bounds |
-| `:2815` (`validate_overwrite_channels`), called at `:936` | channels that must overwrite: Map destination, Parallel output, SplitOut/Aggregate output, HITL `edit_state_key`, StateModifier `variables_to_clean`, and every output, clean or edit key of a Parallel-owned or Map-owned node (their updates never pass the top-level guard) |
+| `:893` | `validate_state(raw.state)`; no gate, so the key is admitted in every build |
+| `:2769` (`typed_reducer`) | compile-time checks: builtins `input`/`messages` (`:2780`), known names (`:2784`), type compatibility (`:2791`), default within bounds (`:2795`); a non-string `reducer` is refused by the descriptor parse (`:2724`) |
+| `:2804` (`validate_overwrite_channels`), called at `:936` | channels that must overwrite: Map destination, Parallel output, SplitOut/Aggregate output, HITL `edit_state_key`, StateModifier `variables_to_clean`, and every output, clean or edit key of a Parallel-owned or Map-owned node (their updates never pass the top-level guard) |
 | `:459-464` (`PipelineGraphBuilder::node`) | the guard at the single registration point; it wraps every node only when the definition has a typed reducer |
 | `:1744` | the typed ADK channel in `state_schema` |
 | `:2344` (`with_initial_checkpoint`) | the initialization fix: a typed channel's default is inserted, not reduced onto itself |
 | `:1407` (`compile_subgraph_with_runtime`) | nested child pipelines refuse typed reducers in v1 with `Unsupported` |
-| `:949`, `:3023-3027` (`reducers_digest`) | the digest fold, only when a typed reducer exists: `elitea.graph.pipeline.state-reducers.v1\0` plus sorted, length-prefixed `(key, tag)` |
+| `:949`, `:3012-3016` (`reducers_digest`) | the digest fold, only when a typed reducer exists: `elitea.graph.pipeline.state-reducers.v1\0` plus sorted, length-prefixed `(key, tag)` |
 
 Other Worker files:
 - `src/agents/graph/mod.rs`: re-exports `elitea_agent_runtime::graph::state_reducers`.
@@ -104,28 +104,45 @@ Other Worker files:
 
 | Path | Change |
 |---|---|
-| `src/features/pipelines/lib/graphAdmission.helpers.ts:259-313` | `state.reducer` rule and `blockingIssues`. A production build refuses (`compiler.rs:2784`). A rehearsal build mirrors each compiler refusal (`:2729` non-string, `:2789` builtin, `:2794` unknown name, `:2800` type) and turns a valid reducer into a non-blocking notice. |
+| `src/features/pipelines/lib/graphAdmission.helpers.ts:259-312` | `state.reducer` rule and `blockingIssues`, in every build. It mirrors each compiler refusal as save-blocking (`compiler.rs:2724` non-string, `:2780` builtin, `:2784` unknown name, `:2791` type) and turns a valid reducer into a non-blocking notice (`:2769`). `reducer: null` is no reducer, as in the Worker. |
 | `src/features/pipelines/lib/graphAdmission.types.ts` | rule id `state.reducer` and optional `severity: 'warning'` |
-| `src/features/pipelines/lib/flow-editor/constants/runtimeContract.constants.ts:100` | `TYPED_STATE_REDUCERS_ADMITTED`, the same rehearsal flag as SplitOut/Aggregate |
 | `src/features/pipelines/lib/livePipelineGraphAdmission.ts:108` | `isAdmissible` counts refusals only |
 | `src/features/pipelines/ui/settings/GraphAdmissionGate.tsx:140,170` | the Save veto counts refusals only; notices render in the same outlined `Alert` and list |
 | `src/pages/pipelines/ui/CreatePipelineAdmissionAlert.tsx` | lists refusals only |
 | `src/features/pipelines/lib/flow-editor/helpers/pipelineFlow.types.ts` | `YamlStateVariableSpec.reducer` |
 
-No new `t()` keys: `en.json` is touched by #1084, and the notice reuses the plain-string admission messages.
+No new `t()` keys: the notice reuses the plain-string admission messages.
+
+### `services/elitea-main`
+
+Main never parses `state`, so it admits `reducer` in every build. A regression test keeps it that way:
+`internal/domain/pipelinelimits/limits_test.go:115` (`TestCheckAdmitsTypedStateReducersInEveryBuild`, save and start,
+with and without the `graph_extensions_rehearsal` tag).
+
+### Worker test support
+
+`src/agents/graph/pipeline_pg_test_support.rs` holds the generic PostgreSQL pipeline helpers (writer activation,
+production runner, text continuation), moved without change out of the feature-gated `shaping_pg_tests.rs`. The
+reducer process-replacement proof therefore runs in every build. The shaping test and its own gate are unchanged.
 
 ## 3. Tests
 
+Final run on the branch merged with `origin/main` `84bdbb47e` (2026-10-12), with no feature flag:
+
 | Suite | Result |
 |---|---|
-| `libs/rust`: `cargo test --offline --locked --workspace --all-targets --all-features` | 1,028 passed, 0 failed, 1 ignored (the opt-in reducer budget, §4) |
-| `agent-runtime --features toolkit-sql` | 531 passed, 1 ignored |
-| `agent-runtime --features test-preserve-order,toolkit-sql` | 531 passed, 1 ignored |
-| Worker: `cargo test --offline --locked --all-targets --all-features --no-fail-fast` with the CI PostgreSQL env (`ELITEA_TEST_DATABASE_URL` → throwaway PG18, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`) | 1,858 passed, 0 failed, 71 ignored (pre-existing opt-in tests), 13 targets |
-| Worker without features (`cargo test --lib -- production_builds state_reducer shaping`) | 44 passed, including `production_builds_refuse_any_reducer_key` and `production_builds_refuse_shaping_yaml_naming_the_gated_type` (CI's `--all-features` run cannot reach these) |
+| `libs/rust`: `cargo test --offline --locked --workspace --all-targets --all-features` | 1,629 passed, 0 failed, 1 ignored (the opt-in reducer budget, §4), 42 targets |
+| `agent-runtime --features toolkit-sql` | 764 passed, 1 ignored |
+| `agent-runtime --features test-preserve-order,toolkit-sql` | 764 passed, 1 ignored |
+| Worker: `cargo test --offline --locked --all-targets --all-features --no-fail-fast` with the CI PostgreSQL env (`ELITEA_TEST_DATABASE_URL` → throwaway PG18, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`) | 1,956 passed, 0 failed, 71 ignored (pre-existing opt-in tests), 13 targets |
+| Worker with **default features** (`cargo test --lib -- state_reducer typed_reducers_restart production_builds`), CI PostgreSQL env | 21 passed, including `every_build_admits_typed_reducers`, the PostgreSQL process-replacement proof and the regeneration/new-turn proof |
+| Main: `go test -race` on `internal/domain/pipelinelimits` with and without `-tags graph_extensions_rehearsal`; `go vet` | ok / ok / clean |
 | `fmt --check` and `clippy --all-targets --all-features -D warnings` | clean in both workspaces, including `libs/rust` pedantic |
-| Web: vitest `src/features/pipelines` + `src/pages/pipelines` (`--maxWorkers=4`) | 263 files, 2,828 passed, 1 expected-fail (pre-existing) |
+| Web: vitest `src/features/pipelines` + `src/pages/pipelines` (`--maxWorkers=4`) | 264 files, 2,836 passed, 1 expected-fail (pre-existing) |
 | Web: `tsc --noEmit`, `oxlint` over `src`, `scripts/i18n-backfill.mjs --check` | clean / clean / OK |
+
+`clippy` without features fails only on pre-existing dead code in `src/sandbox/` (not in this diff; CI runs
+`--all-features`).
 
 New tests:
 - **`agent-runtime` `state_reducers_tests.rs` (18 + 1 ignored):**
@@ -139,7 +156,7 @@ New tests:
 - **Worker `state_reducer_compiler_tests.rs` (12):**
   - the guard: passes valid updates; fails with `code: channel` only, with a sentinel proving no value leaks; skips
     interrupted output;
-  - the production refusal;
+  - every build admits each reducer;
   - the type and default matrix, builtins, and every overwrite-only channel (including a Map-owned output);
   - the nested-child refusal;
   - a Router loop that appends once per visit from a single default (T-B2, T-B5);
@@ -162,8 +179,9 @@ New tests:
 - **Web:**
   - `graphAdmission.helpers.test.ts` (+2 and the catalogue);
   - `livePipelineGraphAdmission.test.ts` (+1);
-  - `GraphAdmissionGate.test.tsx` (+1, production);
-  - `GraphAdmissionReducerRehearsal.test.tsx` (4, rehearsal flag through `vi.stubEnv`).
+  - `GraphAdmissionGate.test.tsx` (+1: Save stays enabled and the notice shows);
+  - `graphAdmissionReducer.test.ts` (3: valid reducers are notices, refusals are mirrored, `null` is none).
+- **Main `limits_test.go` (1):** save and start admit typed reducers in every build.
 
 **TDD record.**
 - The unit and graph tests were written before the implementation compiled. The Web tests failed first for the right
@@ -209,7 +227,7 @@ list plus one element:
 
 | Component × phase | Class | Enforcing code | Proof |
 |---|---|---|---|
-| Worker × admission (compile) | **F**: typed refusal before any model or tool call (production: `unsupported_capability`; rehearsal: `invalid_configuration` for a bad declaration) | `compiler.rs:2774,2815,1407` | compiler tests |
+| Worker × admission (compile) | **F**: typed refusal (`invalid_configuration`) of a bad declaration before any model or tool call | `compiler.rs:2774,2815,1407` | compiler tests |
 | Worker × deterministic node update with a typed channel | **R**: completed visits are never re-applied; the next visit continues from the last checkpoint | `state_reducers.rs:233-269`; `compiler.rs:2344` | PG process replacement; pause test |
 | Worker × deterministic node update refused | **F**: typed node failure, last state preserved, generic chat text plus support reference until Wave 2 | `state_reducers.rs:269-290` | overflow graph test; browser case 3 |
 | Worker × static HITL pause and decision (P06) | **R**, unchanged; reduces once across the pause | — | pause test |
@@ -232,8 +250,8 @@ No cell of `docs/recovery-guarantees.md` changes, and no L is introduced.
   - the ADK closure keeps the current value and logs `error!` only on an invariant the guard already enforces.
 - **Cancellation and lease loss:** unchanged. The guard runs after the inner node returns and adds no await or
   resource.
-- **Gate:** production builds refuse any `reducer` key, and the Web refuses it too, so a production editor cannot store
-  a pipeline its runtime refuses.
+- **No flag:** Worker, Main and Web admit the key in every build. The Web mirrors exactly the compiler's refusals, so the
+  editor cannot store a declaration the runtime refuses, and it cannot drop an admitted one unseen.
 
 ## 7. Security (`.claude/rules/security.md`)
 
@@ -250,6 +268,41 @@ No cell of `docs/recovery-guarantees.md` changes, and no L is introduced.
 `security-review` on the branch found no high-confidence vulnerabilities (§9).
 
 ## 8. Real-browser evidence
+
+### 8.1 Acceptance with no feature flag, on current `main` (2026-10-12)
+
+**Stack.** My own standalone stack `elitea-p5-reducers`, built per `handoffs/real-model-stack/README.md`.
+- Browser host `http://reducers.localhost:18620` (`STANDALONE_HOST`), OIDC mock `oidc.localhost:19720`, signed in as
+  `admin@centry.user`.
+- Database: `product-real-models-main-c0f2e5f9b.dump` restored into an empty database. `elitea-migrate` brought it to
+  the branch head: shared 164, tenant 148.
+- No shared stack was touched.
+
+**Images.** Every service whose code changed since the dump was built from branch head `46949abfb` (`origin/main`
+`84bdbb47e` merged in, plus the ungate commit). No image carries a rehearsal feature, build tag or `VITE` flag.
+
+| Service | Image | Check |
+|---|---|---|
+| Worker | `elitea-worker-rust:p5r` `sha256:2e6f3455745b…4ee3` | Default features. Binary contains `graph.state.reducer_overflow`, `typed state value exceeds its byte bound` (from `agent-runtime`), `elitea.graph.pipeline.state-reducers.v1` and `a pipeline state reducer does not match its state type`. The removed gate text "typed state reducers are not available in this deployment" is absent. Branch contains #1160. |
+| Web | `elitea-web:p5r` `sha256:b305e743b430…95cf` | Default build. Bundle contains `graph-admission-notice` and the notice text; the removed refusal "reducer is not available on this deployment" is absent. |
+| Main (+ migrate) | `elitea-main:p5r` `sha256:1d33e7ea4163…f2ff6` | `e2e` target |
+| Gateway, subapp-host | `elitea-llm-gateway:p5r`, `elitea-subapp-host:p5r` | — |
+| Vector, inventory engine | `elitea-vector:p5r`, `elitea-inventory-engine:p5r` | Required by the current compose: the Worker waits on `elitea-vector`; the inventory engine is now Rust. |
+| Scheduler, DeepWiki engine, mocks | the `main-c0f2e5f9b-verify` / `main-0def77b22-verify` images | Unchanged scheduler; the other services are not used by pipelines |
+
+**Case.** No response was mocked, and no case calls a model.
+
+| Step | Ids | Result |
+|---|---|---|
+| Author in the editor | pipeline 166 "p5 reducers ungated acceptance", stored as `p_2` version 192 | The create page's YAML editor admits a document with `count` (`sum_int`), `findings` (`append`) and `seen` (`merge`) in a Router loop. Save is enabled with no admission alert. After Save the editor shows the outlined YAML-only notice for all three channels. |
+| Run from a persistent chat | chat 880, execution `c023cfdef74ebe0e6d56b5f35e30cbf2` (`SUCCEEDED`) | The answer reads `3 results: result 1, result 2, result 3; seen 3`. |
+| Reload | chat 880; pipeline 166 | The chat shows the same single answer. The reopened editor's Yaml tab still holds `reducer: sum_int`, `reducer: append` and `reducer: merge`, with the notice and no save veto. The stored instructions hold the 3 keys. |
+| Durable state | 14 checkpoints of the execution | Ordinal 1: the defaults once (`0`, `[]`, `{}`). Ordinal 14 (terminal): `count` 3, `findings` `["result 1","result 2","result 3"]`, `seen` `{"visit_1":"done","visit_2":"done","visit_3":"done"}`. |
+
+**Fixtures.** Pipeline 166 and its chat were created in the browser. The database reads are read-only `SELECT`s. My
+stack, its volumes and the throwaway PG18 test container were torn down afterwards.
+
+### 8a. First pass, rehearsal-gated (2026-10-09; history)
 
 **Stack.** My own standalone stack `elitea-p5-reducers`, built per `handoffs/real-model-stack/README.md`.
 - Browser host: `http://reducers.localhost:18620`, with `STANDALONE_HOST`. OIDC mock: `oidc.localhost:19720`,
@@ -289,14 +342,13 @@ parity test and the compile-time limit assertions. There is no runtime change.
 ## 9. Reviews
 
 - **`code-review` (high) on the full diff:** 6 findings. 5 were fixed:
-  - the Web mirrors the production refusal;
+  - the Web mirrors the compiler's refusals (at the time, also the then-existing production gate);
   - `null`/non-string reducers now behave as in the Worker;
   - an allocation-free guard check;
   - exact test assertions;
   - reuse of the digest field encoding.
 
-  1 was skipped: the create page lists refusals only, so it shows no notice for a reducer-only document on rehearsal
-  builds. The brief's notice scope is the YAML editor.
+  1 was skipped: the create page lists refusals only, so it shows no notice for a reducer-only document. The brief's notice scope is the YAML editor.
 - **`security-review` on the branch:** no high-confidence vulnerabilities.
 - **The ADR-0027 layout rule (2026-10-09)** moved the semantics and the exact-number reader into `agent-runtime`
   after the first review. The moved code was re-tested in both workspaces (§3).
