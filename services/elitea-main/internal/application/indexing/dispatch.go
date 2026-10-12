@@ -131,7 +131,7 @@ func (d IndexIngestDispatch) Validate() error {
 		d.ExpectedEmbeddingDimension > math.MaxUint16 {
 		return ErrInvalidIndexIngestDispatch
 	}
-	if d.IndexID != "" && !validCanonicalUUID(d.IndexID) {
+	if d.IndexID != "" && !ValidCanonicalUUID(d.IndexID) {
 		return ErrInvalidIndexIngestDispatch
 	}
 	return nil

@@ -572,6 +572,7 @@ async fn a_token_reads_only_its_own_project() {
                 // This test's collection: the namespace id is shared with
                 // other tests' collections on the same Qdrant.
                 space: Some(h.space()),
+                max_documents: 0,
             },
         ))
         .await
@@ -608,6 +609,7 @@ async fn a_token_reads_only_its_own_project() {
                 project_id: 0,
                 namespace: Some(Harness::namespace(NAMESPACE_B)),
                 space: Some(h.space()),
+                max_documents: 0,
             },
         ))
         .await
@@ -618,6 +620,52 @@ async fn a_token_reads_only_its_own_project() {
         count += page.documents.len();
     }
     assert_eq!(count, 2);
+}
+
+/// `ListDocuments.max_documents` bounds the server's work (ADR-0030 round 2):
+/// the listing is refused with `RESOURCE_EXHAUSTED` as soon as the distinct
+/// documents read exceed it, before any page goes out; at or under the bound,
+/// and without one, the listing is complete.
+#[tokio::test]
+async fn a_listing_over_its_document_bound_is_refused_before_the_first_page() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed().await;
+    // Project A holds two documents in namespace A (B's writes under the same
+    // namespace id are B's and never counted for A).
+    let list = |h: &mut Harness, max_documents: u64| {
+        let request = pb::ListDocumentsRequest {
+            project_id: 0,
+            namespace: Some(Harness::namespace(NAMESPACE_A)),
+            space: Some(h.space()),
+            max_documents,
+        };
+        let mut worker = h.worker.clone();
+        async move {
+            let mut pages = worker
+                .list_documents(with_token(TOKEN_A, request))
+                .await?
+                .into_inner();
+            let mut documents = Vec::new();
+            while let Some(page) = pages.message().await? {
+                documents.extend(page.documents);
+            }
+            Ok::<_, tonic::Status>(documents)
+        }
+    };
+    let refused = list(&mut h, 1)
+        .await
+        .expect_err("two documents exceed a bound of one");
+    assert_eq!(refused.code(), Code::ResourceExhausted, "{refused:?}");
+    assert!(
+        refused.message().contains("more than 1 documents"),
+        "{}",
+        refused.message()
+    );
+    for bound in [2, 1000, 0] {
+        let documents = list(&mut h, bound).await.expect("within the bound");
+        assert_eq!(documents.len(), 2, "bound {bound}: {documents:?}");
+    }
 }
 
 #[tokio::test]

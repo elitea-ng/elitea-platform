@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimegrpc "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"google.golang.org/protobuf/proto"
@@ -341,31 +342,10 @@ func validateIndexIngestCommand(command *runtimev1.WorkerCommandV1, config comma
 	}
 	// The index registry row the run writes: absent on the Python path, a
 	// canonical lower-case UUID under the Rust indexing runtime.
-	if indexID := indexing.GetIndexId(); indexID != "" && !validCanonicalUUIDText(indexID) {
+	if indexID := indexing.GetIndexId(); indexID != "" && !indexingapp.ValidCanonicalUUID(indexID) {
 		return ErrMalformedWorkerCommand
 	}
 	return nil
-}
-
-// validCanonicalUUIDText accepts exactly the 8-4-4-4-12 lower-case hex form.
-func validCanonicalUUIDText(value string) bool {
-	if len(value) != 36 {
-		return false
-	}
-	for index := 0; index < len(value); index++ {
-		character := value[index]
-		switch index {
-		case 8, 13, 18, 23:
-			if character != '-' {
-				return false
-			}
-		default:
-			if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func validDigestProto(digest *runtimev1.DigestV1, content []byte) bool {

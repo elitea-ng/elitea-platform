@@ -23,6 +23,7 @@ class IndexIngestTerminalStateV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapp
     INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX: _ClassVar[IndexIngestTerminalStateV1]
     INDEX_INGEST_TERMINAL_STATE_V1_FAILED: _ClassVar[IndexIngestTerminalStateV1]
     INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED: _ClassVar[IndexIngestTerminalStateV1]
+    INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED: _ClassVar[IndexIngestTerminalStateV1]
 INDEX_INGEST_STATUS_V1_UNSPECIFIED: IndexIngestStatusV1
 INDEX_INGEST_STATUS_V1_OK: IndexIngestStatusV1
 INDEX_INGEST_STATUS_V1_PARTLY_INDEXED: IndexIngestStatusV1
@@ -33,6 +34,7 @@ INDEX_INGEST_TERMINAL_STATE_V1_COMPLETED: IndexIngestTerminalStateV1
 INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX: IndexIngestTerminalStateV1
 INDEX_INGEST_TERMINAL_STATE_V1_FAILED: IndexIngestTerminalStateV1
 INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED: IndexIngestTerminalStateV1
+INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED: IndexIngestTerminalStateV1
 
 class IndexIngestCommandV1(_message.Message):
     __slots__ = ("toolkit_configuration_entry_id", "tool_parameters_entry_id", "llm_model_entry_id", "llm_configuration_entry_id", "mcp_tokens_entry_id", "client_stream_id", "client_message_id", "sio_event", "embedding_binding", "initiator", "expected_embedding_model", "expected_embedding_dimension", "index_id")

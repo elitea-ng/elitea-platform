@@ -93,6 +93,13 @@ enum IndexIngestTerminalStateV1 {
   INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX = 3;
   INDEX_INGEST_TERMINAL_STATE_V1_FAILED = 4;
   INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED = 5;
+  // CANCELLED is a Rust run (ADR-0030 I1) that was stopped at a document
+  // boundary after it had written to or deleted from the vector store. Its
+  // status is ERROR and its summary carries the store's totals and record, so
+  // elitea-main records what the store holds and the registry row ends
+  // `cancelled`; the settlement proposes CANCELLED. A run stopped before it
+  // touched the store ends as a plain CANCELLED runtime error instead.
+  INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED = 6;
 }
 
 // IndexIngestSummaryV1 is the bounded, typed inline form of the current

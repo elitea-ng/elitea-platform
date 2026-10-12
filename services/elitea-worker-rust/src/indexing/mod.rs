@@ -42,7 +42,7 @@ use elitea_vector_index::{ClientConfig, VectorClient};
 
 use crate::transport::embeddings_facade::EmbeddingsClient;
 
-pub(crate) use pipeline::{IndexRun, IndexRunFailure, run_index};
+pub(crate) use pipeline::{IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index};
 
 /// What every index run shares: the vector client, the gateway embeddings
 /// route, the platform origin for the artifact object API, the egress

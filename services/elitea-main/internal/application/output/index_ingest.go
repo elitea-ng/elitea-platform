@@ -138,6 +138,11 @@ const (
 	IndexIngestTerminalScheduledReindex IndexIngestTerminalState = "scheduled_reindex"
 	IndexIngestTerminalFailed           IndexIngestTerminalState = "failed"
 	IndexIngestTerminalPartlyIndexed    IndexIngestTerminalState = "partly_indexed"
+	// IndexIngestTerminalCancelled is a Rust run stopped at a document
+	// boundary after it touched the vector store (ADR-0030 I1). Its status is
+	// error and its summary describes the store; the run settles CANCELLED and
+	// the registry row ends `cancelled`.
+	IndexIngestTerminalCancelled IndexIngestTerminalState = "cancelled"
 )
 
 // IndexIngestSummary is the allowlisted terminal result plus the bounded
@@ -299,6 +304,22 @@ func (s IndexIngestSummary) validateTyped() error {
 	return nil
 }
 
+// SettlementOutcome is the terminal outcome a result carrying this summary
+// proposes and is settled with: SUCCEEDED for an ok or partly indexed run,
+// FAILED for an error, CANCELLED for a run stopped after it touched the store
+// (IndexIngestTerminalCancelled). The worker proposes exactly this; any other
+// proposal is malformed.
+func (s IndexIngestSummary) SettlementOutcome() executionapp.SettlementOutcome {
+	switch {
+	case s.TerminalState == IndexIngestTerminalCancelled:
+		return executionapp.SettlementCancelled
+	case s.Status == IndexIngestStatusError:
+		return executionapp.SettlementFailed
+	default:
+		return executionapp.SettlementSucceeded
+	}
+}
+
 // HasTypedResult reports whether the summary describes a Rust run: any typed
 // field set, the totals' presence included (so a run that wrote nothing and
 // reports an empty store is typed). The Python SDK path never sets one.
@@ -337,6 +358,12 @@ func (s IndexIngestSummary) Validate() error {
 		}
 	case IndexIngestTerminalFailed:
 		if s.Status != IndexIngestStatusError {
+			return ErrInvalidIndexIngestOutput
+		}
+	case IndexIngestTerminalCancelled:
+		// A stopped run describes the store it left: without the totals the
+		// summary says nothing a plain cancellation would not.
+		if s.Status != IndexIngestStatusError || !s.TotalsPresent {
 			return ErrInvalidIndexIngestOutput
 		}
 	case IndexIngestTerminalPartlyIndexed:
@@ -516,10 +543,7 @@ func (f IndexIngestFrame) Validate() error {
 	if err := f.Result.Validate(); err != nil {
 		return err
 	}
-	expectedOutcome := executionapp.SettlementSucceeded
-	if f.Result.ResultSummary.Status == IndexIngestStatusError {
-		expectedOutcome = executionapp.SettlementFailed
-	}
+	expectedOutcome := f.Result.ResultSummary.SettlementOutcome()
 	if err := f.Settlement.Validate(); err != nil || f.Settlement.Fence != f.Fence || f.Settlement.Outcome != expectedOutcome || f.Settlement.TerminalLogicalOutputID != f.LogicalOutputID || f.Settlement.TerminalEventID != f.EventID || f.Settlement.TerminalSequence != f.Sequence || f.Settlement.TerminalPayloadDigest != f.PayloadDigest || len(f.EncodedSettlement) == 0 || len(f.EncodedSettlement) > MaxIndexIngestResultBytes || runtimedomain.SHA256(f.EncodedSettlement) != f.Settlement.ProposalDigest {
 		return ErrInvalidIndexIngestOutput
 	}

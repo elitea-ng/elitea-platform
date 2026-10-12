@@ -10,7 +10,10 @@
 //! `clean_index` delete); then the points go in, changed documents' old
 //! chunks are deleted first, and documents the source no longer has are
 //! deleted last. Between documents the run checks the lease (Stop) and the
-//! command deadline.
+//! command deadline: a Stop or a passed deadline ends the run at that
+//! boundary, never inside an upsert or a delete. Nothing outside the run
+//! drops it (the processor awaits it directly, not under the lease's
+//! pre-invocation race), so every store call it starts completes.
 //!
 //! What the run reports is a typed [`IndexIngestSummaryV1`]. A run that
 //! cannot proceed for a reason the user can act on (an unserved toolkit, a
@@ -31,6 +34,14 @@
 //! the store. `whole_index_record` is the run's statement that the record
 //! names every document the store holds (nothing truncated, no unchanged or
 //! retained document outside it); it is never left for Main to infer.
+//!
+//! A run stopped (or out of time) AFTER it touched the store ends the same
+//! way: an `ERROR` summary with the store's totals and record, its terminal
+//! state `CANCELLED` for a Stop and `FAILED` for the deadline, so elitea-main
+//! records the store and settles the execution cancelled or failed. Stopped
+//! before the first write or delete it is a plain runtime failure, as is a
+//! lost lease at any point: another worker may own the claim, and this one
+//! publishes nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -56,6 +67,7 @@ use crate::protocol::elitea::runtime::v1::{
     IndexIngestCommandV1, IndexIngestDocumentV1, IndexIngestStatusV1, IndexIngestSummaryV1,
     IndexIngestTerminalStateV1,
 };
+use crate::protocol::output::MAX_INDEX_RESULT_DOCUMENTS;
 use crate::protocol::vector_token::{VectorClaimToken, VectorSource};
 use crate::transport::embeddings_facade::{EmbeddingsClient, EmbeddingsError, MAX_BATCH_INPUTS};
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
@@ -113,6 +125,9 @@ impl RunLiveness for ClaimLeaseStateProbe {
 }
 
 /// Why a run ended without a summary: the terminal is a runtime failure.
+/// `Cancelled` and `DeadlineExceeded` are returned only while the store is
+/// untouched; after the first write or delete they become an interrupted
+/// summary instead (see [`interrupt_summary`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IndexRunFailure {
     /// An input entry Main wrote is malformed.
@@ -121,6 +136,17 @@ pub(crate) enum IndexRunFailure {
     DeadlineExceeded,
     /// The lease was lost or the monitor closed.
     LeaseLost,
+}
+
+/// What ended a run early at a document boundary, after it touched the
+/// store: the summary it reports is still the store's record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Interruption {
+    /// The server requested Stop: the summary's terminal state is
+    /// `CANCELLED` and the execution settles cancelled.
+    Stopped,
+    /// The command deadline passed: `FAILED`, settled failed.
+    DeadlineExceeded,
 }
 
 /// Why a run stopped early: for a reason the user reads (an `ERROR`
@@ -345,6 +371,16 @@ impl Runner<'_> {
         match self.write(&plan).await {
             Ok(()) => Ok(self.summary(&plan)),
             Err(Halt::Reason(reason)) => Ok(self.failed(&reason, &plan)),
+            // Stopped or out of time after the store was touched: the
+            // summary carries what the run did to it. A lost lease never
+            // reports (another worker may hold the claim), and nothing was
+            // touched before the plan was made, so the rest stays a failure.
+            Err(Halt::Failure(IndexRunFailure::Cancelled)) if self.tally.store_touched => {
+                Ok(self.interrupted(Interruption::Stopped, &plan))
+            }
+            Err(Halt::Failure(IndexRunFailure::DeadlineExceeded)) if self.tally.store_touched => {
+                Ok(self.interrupted(Interruption::DeadlineExceeded, &plan))
+            }
             Err(Halt::Failure(failure)) => Err(failure),
         }
     }
@@ -377,9 +413,19 @@ impl Runner<'_> {
             // The listing is read where the index lives: the expected space's
             // collection when the index is stamped, every collection before
             // the first run stamps it. The pages are folded as they arrive
-            // and bounded: an index that outgrew what one run handles is
-            // refused, not silently diffed against part of itself.
+            // and bounded, on both sides: the facade is asked for at most
+            // twice the documents one run handles (every document may hold
+            // two versions after a failed rewrite) and stops scrolling at
+            // that bound, and the fold here breaks at the same count should
+            // an older facade not. An index that outgrew what one run
+            // handles is refused, not silently diffed against part of itself.
             let max_rows = self.runtime.limits.max_documents.saturating_mul(2);
+            let too_many = || {
+                halt(&format!(
+                    "the vector store holds more than {max_rows} document versions for this index; one run handles at most {}; re-index into a new index",
+                    self.runtime.limits.max_documents
+                ))
+            };
             let mut rows = 0_usize;
             let consumed = self
                 .runtime
@@ -388,6 +434,7 @@ impl Runner<'_> {
                     self.token,
                     namespace.clone(),
                     expected_space(self.run.command),
+                    Some(max_rows as u64),
                     |document| {
                         rows += 1;
                         if rows > max_rows {
@@ -401,12 +448,15 @@ impl Runner<'_> {
                     },
                 )
                 .await
-                .map_err(|error| halt(&vector_text(&error)))?;
+                .map_err(|error| match error {
+                    elitea_vector_index::Error::Rpc {
+                        code: tonic::Code::ResourceExhausted,
+                        ..
+                    } => too_many(),
+                    other => halt(&vector_text(&other)),
+                })?;
             if consumed.is_break() {
-                return Err(halt(&format!(
-                    "the vector store holds more than {max_rows} document versions for this index; one run handles at most {}; re-index into a new index",
-                    self.runtime.limits.max_documents
-                )));
+                return Err(too_many());
             }
         }
         self.check_liveness()?;
@@ -568,6 +618,7 @@ impl Runner<'_> {
         outcome?;
         if !cleaned && self.parameters.clean_index {
             // A clean run that had nothing to embed still starts empty.
+            self.check_liveness()?;
             self.delete(&plan.namespace, DeleteSelector::WholeNamespace)
                 .await?;
         }
@@ -581,21 +632,31 @@ impl Runner<'_> {
         Ok(())
     }
 
-    /// One delete. The store counts as touched before the call: a delete
-    /// that failed may or may not have happened, and the summary must then
-    /// describe the store rather than keep silent about it.
+    /// One delete. A document delete counts the store as touched before the
+    /// call: one that failed may or may not have happened, and the summary
+    /// then describes the store (the document retained, conservatively)
+    /// rather than keep silent about it. The whole-namespace delete of a
+    /// clean run counts only once it SUCCEEDED: before it the summary would
+    /// state an empty store (`whole_index_record`, zero totals) and Main
+    /// would forget every document, while the delete may never have
+    /// happened; a failed one leaves the summary saying nothing about the
+    /// store, and the registry keeps what it had.
     async fn delete(
         &mut self,
         namespace: &pb::Namespace,
         selector: DeleteSelector,
     ) -> Result<(), Halt> {
-        self.tally.store_touched = true;
+        let whole_namespace = matches!(selector, DeleteSelector::WholeNamespace);
+        if !whole_namespace {
+            self.tally.store_touched = true;
+        }
         self.runtime
             .vector
             .delete(self.token, None, namespace.clone(), selector)
             .await
-            .map(|_| ())
-            .map_err(|error| halt(&vector_text(&error)))
+            .map_err(|error| halt(&vector_text(&error)))?;
+        self.tally.store_touched = true;
+        Ok(())
     }
 
     /// Stop and the deadline, checked between documents.
@@ -753,6 +814,25 @@ impl Runner<'_> {
         )
     }
 
+    /// The summary of a run stopped, or out of time, at a document boundary
+    /// after it touched the store: an `ERROR` summary with the store's
+    /// totals and record, so the registry follows the store.
+    fn interrupted(self, cause: Interruption, plan: &RunPlan) -> IndexIngestSummaryV1 {
+        let tally = &self.tally;
+        let message = format!(
+            "Index '{}' of toolkit '{}' {}: {} documents indexed ({} chunks), {} unchanged, {} removed before it ended.",
+            self.parameters.index_name,
+            self.toolkit_name,
+            cause.phrase(),
+            tally.indexed_documents,
+            tally.indexed_chunks,
+            tally.unchanged_documents,
+            tally.vanished_deleted,
+        );
+        let (status, state) = cause.terminal();
+        self.with_record(status, state, message, plan)
+    }
+
     fn with_record(
         self,
         status: IndexIngestStatusV1,
@@ -796,6 +876,54 @@ impl Runner<'_> {
             total_chunks: Some(store.total_chunks),
         }
     }
+}
+
+impl Interruption {
+    const fn phrase(self) -> &'static str {
+        match self {
+            Self::Stopped => "was stopped",
+            Self::DeadlineExceeded => "ran out of time",
+        }
+    }
+
+    const fn terminal(self) -> (IndexIngestStatusV1, IndexIngestTerminalStateV1) {
+        match self {
+            Self::Stopped => (
+                IndexIngestStatusV1::Error,
+                IndexIngestTerminalStateV1::Cancelled,
+            ),
+            Self::DeadlineExceeded => (
+                IndexIngestStatusV1::Error,
+                IndexIngestTerminalStateV1::Failed,
+            ),
+        }
+    }
+}
+
+/// Turns a summary whose run touched the store (it carries the totals) into
+/// the interrupted form when a Stop or the deadline arrives after the run
+/// finished and before its terminal is published: the store's totals and
+/// record stay as they are, the status becomes `ERROR` with the cause's
+/// terminal state, and the message says so. Returns `false`, touching
+/// nothing, for a summary without totals: the run never touched the store,
+/// and the terminal is the plain runtime failure. Idempotent for a summary
+/// already in that form.
+pub(crate) fn interrupt_summary(summary: &mut IndexIngestSummaryV1, cause: Interruption) -> bool {
+    if summary.total_documents.is_none() {
+        return false;
+    }
+    let (status, state) = cause.terminal();
+    if summary.status == status as i32 && summary.terminal_state == state as i32 {
+        return true;
+    }
+    summary.status = status as i32;
+    summary.terminal_state = state as i32;
+    let _ = write!(
+        summary.message,
+        " The run {} as it finished; the index records what was written.",
+        cause.phrase()
+    );
+    true
 }
 
 enum EmbedOutcome {
@@ -995,8 +1123,11 @@ fn points_of(prepared: &Prepared, vectors: Vec<Vec<f32>>) -> Vec<pb::Point> {
         .collect()
 }
 
-/// The per-document record, bounded to the frame's budget: written
-/// documents first, then removed keys; `truncated` when some did not fit.
+/// The per-document record, bounded to the frame's budget in bytes and to
+/// [`MAX_INDEX_RESULT_DOCUMENTS`] entries per list (the protocol's bound,
+/// which Main enforces too): written documents first, then removed keys;
+/// `truncated` when some did not fit. The totals are not derived from the
+/// lists, so a capped record still carries the store's counts.
 fn bounded_record(
     written: Vec<IndexIngestDocumentV1>,
     removed: Vec<String>,
@@ -1007,7 +1138,7 @@ fn bounded_record(
     let mut truncated = false;
     for document in written {
         let cost = document.encoded_len() + 3;
-        if cost > budget {
+        if documents.len() >= MAX_INDEX_RESULT_DOCUMENTS || cost > budget {
             truncated = true;
             break;
         }
@@ -1016,7 +1147,7 @@ fn bounded_record(
     }
     for key in removed {
         let cost = key.len() + 3;
-        if truncated || cost > budget {
+        if truncated || removed_keys.len() >= MAX_INDEX_RESULT_DOCUMENTS || cost > budget {
             truncated = true;
             break;
         }

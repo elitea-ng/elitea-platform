@@ -686,6 +686,14 @@ impl VectorService for FakeVector {
                 .or_default() += 1;
         }
         drop(state);
+        // The real facade refuses before the first page once the distinct
+        // documents exceed the caller's bound.
+        if request.max_documents != 0 && counts.len() as u64 > request.max_documents {
+            return Err(Status::resource_exhausted(format!(
+                "the namespace holds more than {} documents",
+                request.max_documents
+            )));
+        }
         let documents: Vec<pb::IndexedDocument> = counts
             .into_iter()
             .map(

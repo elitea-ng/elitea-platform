@@ -374,6 +374,13 @@ message ListDocumentsRequest {
   Namespace namespace = 2;
   // space is optional. Without it every collection is read.
   EmbeddingSpace space = 3;
+  // max_documents bounds the server's work: the listing is refused with
+  // RESOURCE_EXHAUSTED as soon as the distinct (document_key,
+  // document_version) pairs read exceed it, before anything is paged out.
+  // 0 leaves only the service's own point bound. An incremental indexer sets
+  // it to what one run can handle, so an index that outgrew the indexer costs
+  // the store no more than that.
+  uint64 max_documents = 4;
 }
 
 // IndexedDocument is one (document_key, document_version) pair the store

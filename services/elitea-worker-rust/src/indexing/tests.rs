@@ -20,7 +20,10 @@ use tonic::body::Body;
 
 use super::pipeline::{RunLiveness, failure_for_test, record_for_test};
 use super::source::IndexSource;
-use super::{IndexIngestRuntime, IndexRun, IndexRunFailure, IndexRunLimits, run_index};
+use super::{
+    IndexIngestRuntime, IndexRun, IndexRunFailure, IndexRunLimits, Interruption, interrupt_summary,
+    run_index,
+};
 use crate::execution::ClaimLeaseError;
 use crate::protocol::elitea::runtime::v1::{
     IndexIngestCommandV1, IndexIngestDocumentV1, IndexIngestStatusV1, IndexIngestTerminalStateV1,
@@ -126,6 +129,43 @@ impl RunLiveness for StopAfter {
             Ok(())
         }
     }
+}
+
+/// A lease lost (another worker may own the claim) from the `after`-th
+/// check on.
+struct LoseAfter {
+    calls: AtomicUsize,
+    after: usize,
+}
+
+impl RunLiveness for LoseAfter {
+    fn ensure_running(&self) -> Result<(), ClaimLeaseError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) >= self.after {
+            Err(ClaimLeaseError::LeaseLost("lease expired"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The liveness checks a first, non-clean run makes before its first
+/// document: one after the source listing, one after the store listing.
+/// The third check is the first document's, so a liveness that fails from
+/// the fourth on stops the run after exactly one document was written.
+const CHECKS_BEFORE_FIRST_DOCUMENT: usize = 2;
+
+/// The clock of a run whose deadline passes after `calls` reads: every
+/// liveness check reads it once.
+fn deadline_after(calls: usize) -> (i64, impl Fn() -> i64) {
+    const DEADLINE: i64 = 1_700_000_100_000;
+    let reads = AtomicUsize::new(0);
+    (DEADLINE, move || {
+        if reads.fetch_add(1, Ordering::SeqCst) < calls {
+            DEADLINE - 1_000
+        } else {
+            DEADLINE + 1
+        }
+    })
 }
 
 struct Harness {
@@ -265,6 +305,29 @@ async fn run(
     liveness: &dyn RunLiveness,
 ) -> Result<crate::protocol::elitea::runtime::v1::IndexIngestSummaryV1, IndexRunFailure> {
     let now = || 1_700_000_000_000_i64;
+    run_timed(
+        harness,
+        documents,
+        command,
+        parameters,
+        liveness,
+        i64::MAX,
+        &now,
+    )
+    .await
+}
+
+/// [`run`] with the command deadline and the clock the run reads.
+#[allow(clippy::too_many_arguments)]
+async fn run_timed(
+    harness: &Harness,
+    documents: Vec<Document>,
+    command: &IndexIngestCommandV1,
+    parameters: &[u8],
+    liveness: &dyn RunLiveness,
+    deadline_unix_millis: i64,
+    now: &(dyn Fn() -> i64 + Send + Sync),
+) -> Result<crate::protocol::elitea::runtime::v1::IndexIngestSummaryV1, IndexRunFailure> {
     FIXTURE_SOURCE.with(|slot| *slot.lock().expect("lock") = Some(documents));
     run_index(
         &harness.runtime,
@@ -276,8 +339,8 @@ async fn run(
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: liveness,
-            deadline_unix_millis: i64::MAX,
-            now_unix_millis: &now,
+            deadline_unix_millis,
+            now_unix_millis: now,
         },
     )
     .await
@@ -942,6 +1005,235 @@ async fn stop_between_documents_is_a_cancellation() {
     assert_eq!(result, Err(IndexRunFailure::Cancelled));
 }
 
+/// Stop after the first document was written (round 2, finding 1): the run
+/// ends at the document boundary, the write it started completed, and the
+/// summary is the store's record in the CANCELLED state, so Main records
+/// the document and settles the execution cancelled.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_after_the_first_write_reports_the_store_and_ends_cancelled() {
+    let harness = harness(4, None).await;
+    let stopped = run(
+        &harness,
+        vec![
+            document("a.md", "v1", "alpha"),
+            document("b.md", "v1", "bravo"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &StopAfter {
+            calls: AtomicUsize::new(0),
+            after: CHECKS_BEFORE_FIRST_DOCUMENT + 1,
+        },
+    )
+    .await
+    .expect("a summary, not a runtime failure");
+    assert_eq!(
+        stopped.status,
+        IndexIngestStatusV1::Error as i32,
+        "{stopped:?}"
+    );
+    assert_eq!(
+        stopped.terminal_state,
+        IndexIngestTerminalStateV1::Cancelled as i32
+    );
+    assert!(
+        stopped.message.contains("was stopped"),
+        "{}",
+        stopped.message
+    );
+    assert_eq!(stopped.indexed_documents, 1);
+    assert_eq!(stopped.total_documents, Some(1));
+    assert_eq!(stopped.total_chunks, Some(stopped.indexed_chunks));
+    assert_eq!(stopped.documents.len(), 1);
+    assert!(stopped.removed_document_keys.is_empty());
+    assert!(
+        stopped.whole_index_record,
+        "the one document written is the whole store"
+    );
+    // Vectors were written, so the summary names the space they went into
+    // (Main stamps the index only from an ok result).
+    assert_eq!(stopped.embedding_model, MODEL);
+    assert_eq!(stopped.embedding_dimension, 4);
+    let points = stored(&harness).await;
+    assert_eq!(points.len(), 1, "the started upsert completed");
+    assert_eq!(points[0].document_key, stopped.documents[0].document_key);
+    assert_eq!(harness.fake.point_count() as u64, stopped.indexed_chunks);
+}
+
+/// The deadline passes after the first document was written: the same
+/// record, in the FAILED state (the execution settles failed).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deadline_after_the_first_write_reports_the_store_and_ends_failed() {
+    let harness = harness(4, None).await;
+    let (deadline, now) = deadline_after(CHECKS_BEFORE_FIRST_DOCUMENT + 1);
+    let late = run_timed(
+        &harness,
+        vec![
+            document("a.md", "v1", "alpha"),
+            document("b.md", "v1", "bravo"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+        deadline,
+        &now,
+    )
+    .await
+    .expect("a summary, not a runtime failure");
+    assert_eq!(late.status, IndexIngestStatusV1::Error as i32, "{late:?}");
+    assert_eq!(
+        late.terminal_state,
+        IndexIngestTerminalStateV1::Failed as i32
+    );
+    assert!(late.message.contains("ran out of time"), "{}", late.message);
+    assert_eq!(late.indexed_documents, 1);
+    assert_eq!(late.total_documents, Some(1));
+    assert_eq!(late.documents.len(), 1);
+    assert!(late.whole_index_record);
+    assert_eq!(stored(&harness).await.len(), 1);
+}
+
+/// A Stop or a deadline before anything was written stays a runtime failure
+/// (the store is untouched, there is nothing to record), and a lost lease is
+/// one at any point: another worker may own the claim, so nothing is
+/// reported, but the write in flight still completed.
+#[tokio::test(flavor = "multi_thread")]
+async fn before_a_write_or_on_a_lost_lease_the_run_is_a_runtime_failure() {
+    let harness = harness(4, None).await;
+    let documents = || {
+        vec![
+            document("a.md", "v1", "alpha"),
+            document("b.md", "v1", "bravo"),
+        ]
+    };
+    let (deadline, now) = deadline_after(CHECKS_BEFORE_FIRST_DOCUMENT);
+    let early = run_timed(
+        &harness,
+        documents(),
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+        deadline,
+        &now,
+    )
+    .await;
+    assert_eq!(early, Err(IndexRunFailure::DeadlineExceeded));
+    assert_eq!(harness.fake.point_count(), 0);
+    let lost = run(
+        &harness,
+        documents(),
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &LoseAfter {
+            calls: AtomicUsize::new(0),
+            after: CHECKS_BEFORE_FIRST_DOCUMENT + 1,
+        },
+    )
+    .await;
+    assert_eq!(lost, Err(IndexRunFailure::LeaseLost));
+    assert_eq!(
+        stored(&harness).await.len(),
+        1,
+        "the started upsert completed"
+    );
+}
+
+/// A late Stop or deadline (after the run returned, before its terminal was
+/// published) turns a summary that describes the store into the interrupted
+/// form and leaves one that does not alone (finding 1, the processor's
+/// post-run check).
+#[test]
+fn a_late_interruption_keeps_the_stores_record() {
+    let mut touched = failure_for_test("docs", "x");
+    touched.status = IndexIngestStatusV1::Ok as i32;
+    touched.terminal_state = IndexIngestTerminalStateV1::Completed as i32;
+    touched.message = "Index 'docs': 2 documents indexed.".to_owned();
+    touched.total_documents = Some(2);
+    touched.total_chunks = Some(5);
+    touched.whole_index_record = true;
+    assert!(interrupt_summary(&mut touched, Interruption::Stopped));
+    assert_eq!(touched.status, IndexIngestStatusV1::Error as i32);
+    assert_eq!(
+        touched.terminal_state,
+        IndexIngestTerminalStateV1::Cancelled as i32
+    );
+    assert_eq!(touched.total_documents, Some(2));
+    assert!(touched.whole_index_record);
+    assert!(
+        touched.message.contains("was stopped"),
+        "{}",
+        touched.message
+    );
+    let message = touched.message.clone();
+    assert!(interrupt_summary(&mut touched, Interruption::Stopped));
+    assert_eq!(touched.message, message, "idempotent");
+    let mut deadline = touched.clone();
+    assert!(interrupt_summary(
+        &mut deadline,
+        Interruption::DeadlineExceeded
+    ));
+    assert_eq!(
+        deadline.terminal_state,
+        IndexIngestTerminalStateV1::Failed as i32
+    );
+    let mut untouched = failure_for_test("docs", "nothing written");
+    assert!(!interrupt_summary(&mut untouched, Interruption::Stopped));
+    assert_eq!(untouched, failure_for_test("docs", "nothing written"));
+}
+
+/// A clean run whose whole-namespace delete fails (finding 3): the delete
+/// may or may not have happened, so the summary says nothing about the
+/// store (no totals, no whole-index statement) and the registry keeps what
+/// it had.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_clean_run_whose_namespace_delete_fails_says_nothing_about_the_store() {
+    let harness = harness(4, None).await;
+    run(
+        &harness,
+        vec![
+            document("a.md", "v1", "alpha"),
+            document("b.md", "v1", "bravo"),
+            document("c.md", "v1", "charlie"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("first");
+    harness.fake.fail_call(
+        "delete",
+        1,
+        elitea_vector_index::testing::status(tonic::Code::Unavailable),
+    );
+    let failed = run(
+        &harness,
+        vec![document("a.md", "v2", "alpha two")],
+        &command(NS, Some((MODEL, 4))),
+        &parameters(true, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        failed.status,
+        IndexIngestStatusV1::Error as i32,
+        "{failed:?}"
+    );
+    assert!(
+        failed.message.contains("the vector store refused the run"),
+        "{}",
+        failed.message
+    );
+    assert_eq!(failed.total_documents, None);
+    assert_eq!(failed.total_chunks, None);
+    assert!(!failed.whole_index_record);
+    assert!(failed.documents.is_empty());
+    assert!(failed.removed_document_keys.is_empty());
+    assert_eq!(failed.indexed_documents, 0);
+    assert_eq!(stored(&harness).await.len(), 3, "nothing was written");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn whitelist_blacklist_and_the_needs_model_chunker_are_honoured() {
     let harness = harness(4, None).await;
@@ -1086,6 +1378,39 @@ fn the_document_record_is_bounded_and_flags_truncation() {
     assert!(!truncated);
     assert_eq!(documents.len(), 3);
     assert_eq!(removed, vec!["gone"]);
+}
+
+/// The record is capped by count too (finding 2): 6000 tiny removed keys fit
+/// the byte budget but not the protocol's 4096 per list, so the list is cut
+/// there and flagged truncated; the same for tiny written documents.
+#[test]
+fn the_document_record_is_capped_at_the_protocol_bound() {
+    let removed: Vec<String> = (0..6000).map(|n| format!("k{n}")).collect();
+    let (documents, removed_keys, truncated) = record_for_test(Vec::new(), removed);
+    assert!(truncated);
+    assert!(documents.is_empty());
+    assert_eq!(removed_keys.len(), 4096);
+    assert_eq!(removed_keys[4095], "k4095");
+    // Written documents cost more than a bare key, so the byte budget cuts
+    // them first; either way the list never exceeds the protocol's bound.
+    let written: Vec<IndexIngestDocumentV1> = (0..5000)
+        .map(|n| IndexIngestDocumentV1 {
+            document_key: format!("d{n}"),
+            version: "v".to_owned(),
+            chunk_count: 1,
+        })
+        .collect();
+    let (documents, removed_keys, truncated) = record_for_test(written, vec!["gone".to_owned()]);
+    assert!(truncated);
+    assert!(
+        documents.len() <= 4096 && documents.len() > 1000,
+        "{}",
+        documents.len()
+    );
+    assert!(
+        removed_keys.is_empty(),
+        "removed keys follow a truncated list"
+    );
 }
 
 #[test]

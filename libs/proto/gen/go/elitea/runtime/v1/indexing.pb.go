@@ -90,6 +90,13 @@ const (
 	IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX IndexIngestTerminalStateV1 = 3
 	IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_FAILED            IndexIngestTerminalStateV1 = 4
 	IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED    IndexIngestTerminalStateV1 = 5
+	// CANCELLED is a Rust run (ADR-0030 I1) that was stopped at a document
+	// boundary after it had written to or deleted from the vector store. Its
+	// status is ERROR and its summary carries the store's totals and record, so
+	// elitea-main records what the store holds and the registry row ends
+	// `cancelled`; the settlement proposes CANCELLED. A run stopped before it
+	// touched the store ends as a plain CANCELLED runtime error instead.
+	IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED IndexIngestTerminalStateV1 = 6
 )
 
 // Enum value maps for IndexIngestTerminalStateV1.
@@ -101,6 +108,7 @@ var (
 		3: "INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX",
 		4: "INDEX_INGEST_TERMINAL_STATE_V1_FAILED",
 		5: "INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED",
+		6: "INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED",
 	}
 	IndexIngestTerminalStateV1_value = map[string]int32{
 		"INDEX_INGEST_TERMINAL_STATE_V1_UNSPECIFIED":       0,
@@ -109,6 +117,7 @@ var (
 		"INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX": 3,
 		"INDEX_INGEST_TERMINAL_STATE_V1_FAILED":            4,
 		"INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED":    5,
+		"INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED":         6,
 	}
 )
 
@@ -941,14 +950,15 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\"INDEX_INGEST_STATUS_V1_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INDEX_INGEST_STATUS_V1_OK\x10\x01\x12)\n" +
 	"%INDEX_INGEST_STATUS_V1_PARTLY_INDEXED\x10\x02\x12 \n" +
-	"\x1cINDEX_INGEST_STATUS_V1_ERROR\x10\x03*\xba\x02\n" +
+	"\x1cINDEX_INGEST_STATUS_V1_ERROR\x10\x03*\xe8\x02\n" +
 	"\x1aIndexIngestTerminalStateV1\x12.\n" +
 	"*INDEX_INGEST_TERMINAL_STATE_V1_UNSPECIFIED\x10\x00\x12*\n" +
 	"&INDEX_INGEST_TERMINAL_STATE_V1_CREATED\x10\x01\x12,\n" +
 	"(INDEX_INGEST_TERMINAL_STATE_V1_COMPLETED\x10\x02\x124\n" +
 	"0INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX\x10\x03\x12)\n" +
 	"%INDEX_INGEST_TERMINAL_STATE_V1_FAILED\x10\x04\x121\n" +
-	"-INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED\x10\x05BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"-INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED\x10\x05\x12,\n" +
+	"(INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED\x10\x06BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_indexing_proto_rawDescOnce sync.Once

@@ -2373,7 +2373,14 @@ type ListDocumentsRequest struct {
 	// namespace.
 	Namespace *Namespace `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	// space is optional. Without it every collection is read.
-	Space         *EmbeddingSpace `protobuf:"bytes,3,opt,name=space,proto3" json:"space,omitempty"`
+	Space *EmbeddingSpace `protobuf:"bytes,3,opt,name=space,proto3" json:"space,omitempty"`
+	// max_documents bounds the server's work: the listing is refused with
+	// RESOURCE_EXHAUSTED as soon as the distinct (document_key,
+	// document_version) pairs read exceed it, before anything is paged out.
+	// 0 leaves only the service's own point bound. An incremental indexer sets
+	// it to what one run can handle, so an index that outgrew the indexer costs
+	// the store no more than that.
+	MaxDocuments  uint64 `protobuf:"varint,4,opt,name=max_documents,json=maxDocuments,proto3" json:"max_documents,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2427,6 +2434,13 @@ func (x *ListDocumentsRequest) GetSpace() *EmbeddingSpace {
 		return x.Space
 	}
 	return nil
+}
+
+func (x *ListDocumentsRequest) GetMaxDocuments() uint64 {
+	if x != nil {
+		return x.MaxDocuments
+	}
+	return 0
 }
 
 // IndexedDocument is one (document_key, document_version) pair the store
@@ -2716,12 +2730,13 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\vpoint_count\x18\x05 \x01(\x04R\n" +
 	"pointCount\"L\n" +
 	"\x13ListIndexesResponse\x125\n" +
-	"\aindexes\x18\x01 \x03(\v2\x1b.elitea.vector.v1.IndexInfoR\aindexes\"\xa8\x01\n" +
+	"\aindexes\x18\x01 \x03(\v2\x1b.elitea.vector.v1.IndexInfoR\aindexes\"\xcd\x01\n" +
 	"\x14ListDocumentsRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\x03R\tprojectId\x129\n" +
 	"\tnamespace\x18\x02 \x01(\v2\x1b.elitea.vector.v1.NamespaceR\tnamespace\x126\n" +
-	"\x05space\x18\x03 \x01(\v2 .elitea.vector.v1.EmbeddingSpaceR\x05space\"\x80\x01\n" +
+	"\x05space\x18\x03 \x01(\v2 .elitea.vector.v1.EmbeddingSpaceR\x05space\x12#\n" +
+	"\rmax_documents\x18\x04 \x01(\x04R\fmaxDocuments\"\x80\x01\n" +
 	"\x0fIndexedDocument\x12!\n" +
 	"\fdocument_key\x18\x01 \x01(\tR\vdocumentKey\x12)\n" +
 	"\x10document_version\x18\x02 \x01(\tR\x0fdocumentVersion\x12\x1f\n" +

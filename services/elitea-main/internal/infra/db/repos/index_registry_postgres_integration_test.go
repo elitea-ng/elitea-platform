@@ -738,6 +738,35 @@ func TestIndexRegistryDocumentsSupportIncrementalSync(t *testing.T) {
 	if err := repo.UpsertDocuments(ctx, id, []indexregistryapp.DocumentVersion{{Key: "", Version: "v"}}); err == nil {
 		t.Fatal("an empty document key was accepted")
 	}
+	// One statement upserts the whole list: new rows and rewritten rows
+	// side by side, read back as the list says.
+	batch := make([]indexregistryapp.DocumentVersion, 0, 50)
+	for i := range 50 {
+		batch = append(batch, indexregistryapp.DocumentVersion{Key: fmt.Sprintf("batch/%02d.md", i), Version: "v1", ChunkCount: int32(i + 1)})
+	}
+	batch[0] = indexregistryapp.DocumentVersion{Key: "a.md", Version: "v3", ChunkCount: 7}
+	if err := repo.UpsertDocuments(ctx, id, batch); err != nil {
+		t.Fatal(err)
+	}
+	documents, err = repo.ListDocuments(ctx, id)
+	if err != nil || len(documents) != 50 {
+		t.Fatalf("documents after the batch = %d err=%v", len(documents), err)
+	}
+	byKey := make(map[string]indexregistryapp.DocumentVersion, len(documents))
+	for _, document := range documents {
+		byKey[document.Key] = document
+	}
+	if byKey["a.md"] != (indexregistryapp.DocumentVersion{Key: "a.md", Version: "v3", ChunkCount: 7}) ||
+		byKey["batch/49.md"] != (indexregistryapp.DocumentVersion{Key: "batch/49.md", Version: "v1", ChunkCount: 50}) {
+		t.Fatalf("batch rows were not applied: a=%+v last=%+v", byKey["a.md"], byKey["batch/49.md"])
+	}
+	// A key twice in one list would make ON CONFLICT touch a row twice; it is
+	// refused before Postgres sees it.
+	if err := repo.UpsertDocuments(ctx, id, []indexregistryapp.DocumentVersion{
+		{Key: "dup.md", Version: "v1", ChunkCount: 1}, {Key: "dup.md", Version: "v2", ChunkCount: 2},
+	}); err == nil {
+		t.Fatal("a repeated key in one list was accepted")
+	}
 }
 
 func TestIndexRegistryTableRefusesIncoherentRows(t *testing.T) {

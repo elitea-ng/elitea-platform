@@ -1194,6 +1194,11 @@ fn validate_index_summary(
         | IndexIngestTerminalStateV1::Completed
         | IndexIngestTerminalStateV1::ScheduledReindex => status == IndexIngestStatusV1::Ok,
         IndexIngestTerminalStateV1::Failed => status == IndexIngestStatusV1::Error,
+        // A run stopped after it touched the store: an error summary that
+        // describes the store, so it must carry the totals.
+        IndexIngestTerminalStateV1::Cancelled => {
+            status == IndexIngestStatusV1::Error && summary.total_documents.is_some()
+        }
         IndexIngestTerminalStateV1::PartlyIndexed => status == IndexIngestStatusV1::PartlyIndexed,
     };
     if !state_matches || status == IndexIngestStatusV1::Unspecified {
@@ -1269,10 +1274,10 @@ fn validate_index_summary(
     {
         return Err(malformed_restored_output());
     }
-    Ok(if status == IndexIngestStatusV1::Error {
-        ExecutionOutcomeV1::Failed
-    } else {
-        ExecutionOutcomeV1::Succeeded
+    Ok(match (terminal, status) {
+        (IndexIngestTerminalStateV1::Cancelled, _) => ExecutionOutcomeV1::Cancelled,
+        (_, IndexIngestStatusV1::Error) => ExecutionOutcomeV1::Failed,
+        _ => ExecutionOutcomeV1::Succeeded,
     })
 }
 

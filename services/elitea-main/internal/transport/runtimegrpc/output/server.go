@@ -410,10 +410,7 @@ func (s *Server) indexIngestFrame(message *runtimev1.ExecutionOutputFrameV1, wor
 	if err != nil {
 		return outputapp.IndexIngestFrame{}, err
 	}
-	expectedOutcome := executionapp.SettlementSucceeded
-	if result.ResultSummary.Status == outputapp.IndexIngestStatusError {
-		expectedOutcome = executionapp.SettlementFailed
-	}
+	expectedOutcome := result.ResultSummary.SettlementOutcome()
 	settlement, encodedSettlement, err := s.settlementProposalDomain(message, fence, encodedResult, expectedOutcome)
 	if err != nil {
 		return outputapp.IndexIngestFrame{}, err
@@ -961,6 +958,8 @@ func indexIngestSummaryDomain(summary *runtimev1.IndexIngestSummaryV1) (outputap
 		terminalState = outputapp.IndexIngestTerminalFailed
 	case runtimev1.IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED:
 		terminalState = outputapp.IndexIngestTerminalPartlyIndexed
+	case runtimev1.IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED:
+		terminalState = outputapp.IndexIngestTerminalCancelled
 	default:
 		return outputapp.IndexIngestSummary{}, outputapp.ErrInvalidIndexIngestOutput
 	}

@@ -27,6 +27,10 @@ use zeroize::Zeroizing;
 use super::openai_compatible_facade::{ModelGatewayClient, ModelGatewayTransport};
 use super::runtime_context::ClaimScopedEliteaContext;
 
+/// The error a bounded body (`Limited`) yields: the bound's own, or the
+/// inner body's, boxed.
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 const EMBEDDINGS_ROUTE: &str = elitea_llm_wire::route::EMBEDDINGS_ROUTE;
 const PROJECT_SELECTOR: HeaderName = HeaderName::from_static(PROJECT_HEADER);
 const EXECUTION_ID_HEADER: HeaderName = HeaderName::from_static(EXECUTION_HEADER);
@@ -202,10 +206,23 @@ impl EmbeddingsClient {
         let body = http_body_util::Limited::new(response.into_body(), MAX_RESPONSE_BYTES);
         let collected = match timeout(self.response_timeout, body.collect()).await {
             Ok(Ok(collected)) => collected.to_bytes(),
-            Ok(Err(_)) => return Err(EmbeddingsError::TooLarge),
+            Ok(Err(error)) => return Err(classify_body_error(&error)),
             Err(_) => return Err(EmbeddingsError::Transport),
         };
         parse_response(&collected, inputs.len())
+    }
+}
+
+/// Why collecting the response body failed. Only the bound's own refusal
+/// (`Limited` stopped at `MAX_RESPONSE_BYTES`) is `TooLarge`: the request
+/// cannot be answered within the bound and the document is skipped. Every
+/// other body error (the stream reset, the connection dropped mid-body) is
+/// the transport's, and another attempt may succeed.
+fn classify_body_error(error: &BoxError) -> EmbeddingsError {
+    if error.is::<http_body_util::LengthLimitError>() {
+        EmbeddingsError::TooLarge
+    } else {
+        EmbeddingsError::Transport
     }
 }
 
@@ -322,6 +339,25 @@ mod tests {
             br#"{"data":[{"index":0,"embedding":[1.0]},{"index":0,"embedding":[2.0]}]}"#;
         assert!(parse_response(duplicate, 2).is_err());
         assert!(parse_response(b"not json", 1).is_err());
+    }
+
+    /// Only the bound's own refusal is `TooLarge` (the document is skipped);
+    /// a body that fails for any other reason is the transport's, retryable.
+    #[tokio::test]
+    async fn only_the_length_bound_makes_a_body_error_too_large() {
+        let over = http_body_util::Limited::new(Full::new(Bytes::from(vec![0_u8; 64])), 16)
+            .collect()
+            .await
+            .expect_err("over the bound");
+        assert!(over.is::<http_body_util::LengthLimitError>());
+        assert_eq!(classify_body_error(&over), EmbeddingsError::TooLarge);
+        assert!(!EmbeddingsError::TooLarge.retryable());
+        let reset: BoxError = Box::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "stream reset",
+        ));
+        assert_eq!(classify_body_error(&reset), EmbeddingsError::Transport);
+        assert!(EmbeddingsError::Transport.retryable());
     }
 
     #[test]

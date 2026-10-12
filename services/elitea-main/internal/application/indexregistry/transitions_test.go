@@ -280,6 +280,14 @@ func TestApplyResultMapsStatusesToStates(t *testing.T) {
 			s.TerminalState = outputapp.IndexIngestTerminalFailed
 			s.Message = "The source refused the credential."
 		}, StateFailed, "The source refused the credential."},
+		// Stopped after touching the store: the row ends cancelled, as a
+		// cancelled runtime terminal ends it, with the store's totals.
+		{"cancelled", func(s *outputapp.IndexIngestSummary) {
+			s.Status = outputapp.IndexIngestStatusError
+			s.TerminalState = outputapp.IndexIngestTerminalCancelled
+			s.Message = "Index 'docs' was stopped after 3 documents."
+			s.TotalsPresent, s.TotalDocuments, s.TotalChunks = true, 3, 9
+		}, StateCancelled, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -293,6 +301,9 @@ func TestApplyResultMapsStatusesToStates(t *testing.T) {
 			}
 			if tc.errMsg != "" && (next.Error == nil || *next.Error != tc.errMsg) {
 				t.Fatalf("error = %v, want %q", next.Error, tc.errMsg)
+			}
+			if tc.state == StateCancelled && (next.TaskID != nil || next.TotalDocuments != 3 || next.TotalChunks != 9 || next.Indexed != 3) {
+				t.Fatalf("a cancelled result did not end the run with the store's totals: %+v", next)
 			}
 		})
 	}

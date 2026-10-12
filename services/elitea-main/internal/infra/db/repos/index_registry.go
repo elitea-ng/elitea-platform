@@ -88,10 +88,6 @@ const indexRegistrySelect = `
 SELECT ` + indexRegistryBaseColumns + indexRegistryRunJob + `
 FROM elitea_runtime.index_registry` + indexRegistryRunJobJoin
 
-// indexRegistryReadSelect is the list and exact read: the same select, kept
-// under its own name at the read sites.
-const indexRegistryReadSelect = indexRegistrySelect
-
 func scanIndexRegistryRow(row sqlRow) (indexregistryapp.Row, error) {
 	var (
 		out                                              indexregistryapp.Row
@@ -599,7 +595,7 @@ func (r *IndexRegistryRepository) RecordScheduledFailure(
 
 // List implements indexregistry.Store.
 func (r *IndexRegistryRepository) List(ctx context.Context, projectID, toolkitID int32) ([]indexregistryapp.Row, error) {
-	rows, err := r.pool.Query(ctx, indexRegistryReadSelect+`
+	rows, err := r.pool.Query(ctx, indexRegistrySelect+`
 WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
   AND index_registry.deleted_at IS NULL
 ORDER BY index_registry.created_at, index_registry.index_id
@@ -628,7 +624,7 @@ func (r *IndexRegistryRepository) FindByName(
 	projectID, toolkitID int32,
 	name string,
 ) (indexregistryapp.Row, bool, error) {
-	row, err := scanIndexRegistryRow(r.pool.QueryRow(ctx, indexRegistryReadSelect+`
+	row, err := scanIndexRegistryRow(r.pool.QueryRow(ctx, indexRegistrySelect+`
 WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
   AND index_registry.name = $3 AND index_registry.deleted_at IS NULL`,
 		projectID, toolkitID, name))
@@ -830,18 +826,37 @@ func upsertIndexRegistryDocuments(
 	indexID string,
 	documents []indexregistryapp.DocumentVersion,
 ) error {
+	if len(documents) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(documents))
+	versions := make([]string, 0, len(documents))
+	chunks := make([]int32, 0, len(documents))
+	seen := make(map[string]struct{}, len(documents))
 	for _, document := range documents {
 		if err := document.Validate(); err != nil {
 			return err
 		}
-		if _, err := q.Exec(ctx, `
+		// One statement cannot update the same row twice (ON CONFLICT
+		// refuses it), so a repeated key is refused here, not by Postgres.
+		if _, duplicate := seen[document.Key]; duplicate {
+			return indexingapp.ErrCurrentIndexMetaInitializationInvalid
+		}
+		seen[document.Key] = struct{}{}
+		keys = append(keys, document.Key)
+		versions = append(versions, document.Version)
+		chunks = append(chunks, document.ChunkCount)
+	}
+	// One round trip for the whole list (up to the frame's 4096 documents):
+	// the arrays are unnested side by side, one row per document.
+	if _, err := q.Exec(ctx, `
 INSERT INTO elitea_runtime.index_registry_documents (index_id, document_key, version, chunk_count)
-VALUES ($1::uuid, $2, $3, $4)
+SELECT $1::uuid, document.key, document.version, document.chunk_count
+FROM unnest($2::text[], $3::text[], $4::int4[]) AS document(key, version, chunk_count)
 ON CONFLICT (index_id, document_key) DO UPDATE
 SET version = EXCLUDED.version, chunk_count = EXCLUDED.chunk_count, updated_at = clock_timestamp()`,
-			indexID, document.Key, document.Version, document.ChunkCount); err != nil {
-			return fmt.Errorf("upsert index registry document: %w", err)
-		}
+		indexID, keys, versions, chunks); err != nil {
+		return fmt.Errorf("upsert index registry documents: %w", err)
 	}
 	return nil
 }

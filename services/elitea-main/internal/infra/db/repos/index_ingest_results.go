@@ -449,7 +449,7 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 		if err == nil {
 			switch {
 			case sameDurableOutput(existing, record):
-				if record.SettlementOutcome == executionapp.SettlementFailed {
+				if record.SettlementOutcome != executionapp.SettlementSucceeded {
 					if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, existing); err != nil {
 						return indexProjectionError(err)
 					}
@@ -494,7 +494,7 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 			if loadErr == nil {
 				switch {
 				case sameDurableOutput(existing, record):
-					if record.SettlementOutcome == executionapp.SettlementFailed {
+					if record.SettlementOutcome != executionapp.SettlementSucceeded {
 						if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, existing); err != nil {
 							return indexProjectionError(err)
 						}
@@ -548,7 +548,12 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 		if err := insertIndexIngestProjection(ctx, tx, projection, record); err != nil {
 			return err
 		}
-		if record.SettlementOutcome == executionapp.SettlementFailed {
+		// A FAILED or CANCELLED result (an error summary, or a run stopped after
+		// it touched the store) also records the index terminal intent, as a
+		// runtime-failure terminal would: in python mode that is what ends the
+		// index_meta row; in registry mode the row is applied below and the
+		// terminalizer finds it at rest.
+		if record.SettlementOutcome != executionapp.SettlementSucceeded {
 			if err := persistCurrentIndexMetaTerminalIntent(ctx, tx, record); err != nil {
 				return indexProjectionError(err)
 			}

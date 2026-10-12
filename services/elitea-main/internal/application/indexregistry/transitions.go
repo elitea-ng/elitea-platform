@@ -571,11 +571,17 @@ func ApplyResult(row Row, result Result) (next Row, changed bool, err error) {
 	next.Failed = int64(summary.FailedChunks)
 	next.Skipped = summary.Skipped()
 
-	switch summary.Status {
-	case outputapp.IndexIngestStatusError:
+	switch {
+	case summary.TerminalState == outputapp.IndexIngestTerminalCancelled:
+		// Stopped after touching the store: the counts and totals above are
+		// the store's; the row ends as ApplyTerminal ends a cancelled run.
+		next.State = StateCancelled
+		next.TaskID = nil
+		next.Error = nil
+	case summary.Status == outputapp.IndexIngestStatusError:
 		next.State = StateFailed
 		next.Error = ptr(summary.Message)
-	case outputapp.IndexIngestStatusPartlyIndexed:
+	case summary.Status == outputapp.IndexIngestStatusPartlyIndexed:
 		next.State = StatePartlyIndexed
 		next.Error = nil
 	default:

@@ -3084,27 +3084,16 @@ fn parse_prepare_settlement_response(
     }
     let settled =
         ExecutionOutcomeV1::try_from(response.outcome).unwrap_or(ExecutionOutcomeV1::Unspecified);
-    // Main may settle a SUCCEEDED proposal as FAILED: an index result whose
-    // typed summary the registry refused is one case (ADR-0030 I1). Any
-    // other difference is a malformed receipt.
-    let accepted = settled == expected_outcome
-        || (expected_outcome == ExecutionOutcomeV1::Succeeded
-            && settled == ExecutionOutcomeV1::Failed);
+    // Main settles exactly the proposed outcome or rejects the frame (an index
+    // result the registry refuses is RESULT_REFUSED, never a FAILED receipt
+    // for a SUCCEEDED proposal); any other outcome is a malformed receipt.
     if !bounded_text(&response.settlement_receipt_id, MAX_CONTROL_IDENTITY_BYTES)
-        || !accepted
+        || settled != expected_outcome
         || !terminal_outcome(expected_outcome)
     {
         return Err(ControlSemanticError::InvalidInput(
             "the settlement receipt is malformed",
         ));
-    }
-    if settled != expected_outcome {
-        tracing::warn!(
-            event = "settlement_outcome_overridden",
-            proposed = ?expected_outcome,
-            settled = ?settled,
-            "Main settled the proposal with another terminal outcome"
-        );
     }
     Ok(SettlementReceipt {
         receipt_id: response.settlement_receipt_id,

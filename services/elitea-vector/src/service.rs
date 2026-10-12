@@ -591,15 +591,23 @@ impl pb::vector_service_server::VectorService for VectorService {
         // `order_by` scroll needs a numeric payload index, and the key is
         // text), so a page cannot be final before the fold is. What is
         // bounded instead: the points read, across every collection of this
-        // one call (MAX_SCROLLED_POINTS), the fold (one entry per document
-        // version, each a few hundred bytes at most, far below the points),
-        // and the answer, which is paged lazily out of the fold rather than
-        // copied into every page first.
+        // one call (MAX_SCROLLED_POINTS), the distinct documents folded
+        // (the caller's `max_documents`, summed over the collections, so an
+        // index the caller cannot handle anyway stops costing the store at
+        // that bound), the fold itself (one entry per document version, each
+        // a few hundred bytes at most, far below the points), and the
+        // answer, which is paged lazily out of the fold rather than copied
+        // into every page first.
         let scrolled = AtomicU64::new(0);
+        let folded = AtomicU64::new(0);
+        let bounds = ScrollBounds {
+            scrolled: &scrolled,
+            folded: &folded,
+            max_documents: (request.max_documents != 0).then_some(request.max_documents),
+        };
         let counted = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
             let filter = filter.clone();
-            let scrolled = &scrolled;
-            async move { self.scroll_documents(&collection, filter, scrolled).await }
+            async move { self.scroll_documents(&collection, filter, bounds).await }
         })
         .await?;
         let mut documents: BTreeMap<(String, String), u64> = BTreeMap::new();
@@ -651,16 +659,32 @@ const SCROLL_PAGE: u32 = 2048;
 /// an incremental indexer delete documents it did not see.
 const MAX_SCROLLED_POINTS: u64 = 4_000_000;
 
+/// The running counts one `ListDocuments` call shares between the
+/// collections it scrolls concurrently, and the caller's document bound.
+#[derive(Clone, Copy)]
+struct ScrollBounds<'a> {
+    /// Points read so far, bounded by [`MAX_SCROLLED_POINTS`].
+    scrolled: &'a AtomicU64,
+    /// Distinct `(document_key, document_version)` pairs folded so far, over
+    /// every collection (a pair in two collections counts twice: the bound
+    /// is on the server's work, and it is never exceeded by that).
+    folded: &'a AtomicU64,
+    /// The request's `max_documents`, when set.
+    max_documents: Option<u64>,
+}
+
 impl VectorService {
     /// Folds every point `filter` selects in `collection` into
-    /// `(document_key, document_version) -> chunk count`. `scrolled` is the
-    /// call's running point count, shared by the collections it scrolls
-    /// concurrently, and the bound is on that sum.
+    /// `(document_key, document_version) -> chunk count`, within `bounds`:
+    /// the points read and the documents folded are summed over the
+    /// collections the call scrolls concurrently, and each bound is on that
+    /// sum. Crossing one refuses the call with `RESOURCE_EXHAUSTED` at once,
+    /// so the store does no more work for a listing the caller cannot take.
     async fn scroll_documents(
         &self,
         collection: &str,
         filter: Filter,
-        scrolled: &AtomicU64,
+        bounds: ScrollBounds<'_>,
     ) -> Result<HashMap<(String, String), u64>, Status> {
         let mut counts: HashMap<(String, String), u64> = HashMap::new();
         let mut offset: Option<PointId> = None;
@@ -701,12 +725,24 @@ impl VectorService {
                     // a document the caller can act on.
                     continue;
                 }
-                *counts
-                    .entry((document_key, text(key::DOCUMENT_VERSION)))
-                    .or_default() += 1;
+                match counts.entry((document_key, text(key::DOCUMENT_VERSION))) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        *entry.get_mut() += 1;
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(1);
+                        if let Some(max_documents) = bounds.max_documents
+                            && bounds.folded.fetch_add(1, Ordering::Relaxed) + 1 > max_documents
+                        {
+                            return Err(Status::resource_exhausted(format!(
+                                "the namespace holds more than {max_documents} documents, the most this listing takes"
+                            )));
+                        }
+                    }
+                }
             }
             let read = response.result.len() as u64;
-            if scrolled.fetch_add(read, Ordering::Relaxed) + read > MAX_SCROLLED_POINTS {
+            if bounds.scrolled.fetch_add(read, Ordering::Relaxed) + read > MAX_SCROLLED_POINTS {
                 return Err(Status::resource_exhausted(
                     "the namespace holds more points than one listing reads",
                 ));

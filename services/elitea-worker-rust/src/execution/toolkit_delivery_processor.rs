@@ -24,7 +24,9 @@ use super::toolkit_output::{
     ToolkitTerminalRecovery, prepare_empty_toolkit_recovery, prepare_toolkit_output,
     replay_toolkit_terminal_with_replacement,
 };
-use crate::indexing::{IndexIngestRuntime, IndexRun, IndexRunFailure, run_index};
+use crate::indexing::{
+    IndexIngestRuntime, IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index,
+};
 use crate::protocol::ProtocolError;
 use crate::protocol::command::{ToolkitCommandKind, VerifiedToolkitExecuteReadCommand};
 use crate::protocol::control::{
@@ -426,9 +428,15 @@ where
     /// `index.ingest.v1` (ADR-0030 I1). The bundle's entries are fetched,
     /// the invocation is authorized (a run has effects: vectors are written
     /// and deleted), the claim's PAT is redeemed for the gateway and the
-    /// platform object API, and the run executes under the lease. Its typed
-    /// summary is the terminal; only Stop, the deadline, a lost lease or a
-    /// malformed input is a runtime failure.
+    /// platform object API, and the run executes as the effect-owning
+    /// phase: awaited directly, never under the lease's pre-invocation race,
+    /// which would drop it inside a store call. The run watches the lease
+    /// itself and stops at a document boundary. Its typed summary is the
+    /// terminal, Stop and the deadline included once the store was touched
+    /// (the summary then describes the store and settles cancelled or
+    /// failed); before that they are runtime failures, as is a malformed
+    /// input. A lost lease publishes nothing: another worker may own the
+    /// claim.
     async fn execute_index_ingest(
         &self,
         delivery: CommandDelivery,
@@ -508,15 +516,11 @@ where
             .run_index_ingest(&verified, &authorized, &mut lease, runtime, &inputs)
             .await;
         let output_authority = authorized.into_output_authority();
-        let terminal = match outcome {
-            Ok(result) => ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(result)),
-            Err(failure) => {
-                record_toolkit_execution_failure(
-                    "index_ingest",
-                    runtime_failure_code(failure),
-                    false,
-                );
-                ToolkitExecuteReadTerminalOutput::Failure(failure)
+        let terminal = match index_terminal(outcome) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                close_lease_logged(lease).await;
+                return Err(ToolkitProcessError::Lease(error));
             }
         };
         Box::pin(self.publish_fresh_terminal(
@@ -586,25 +590,30 @@ where
         lease: &mut ClaimLeaseMonitor,
         runtime: &IndexIngestRuntime,
         inputs: &IndexInputs,
-    ) -> Result<IndexIngestResultV1, RuntimeFailureKind> {
+    ) -> IndexRunEnd {
         let command = verified.command();
         let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
             command.capability_command.as_ref()
         else {
-            return Err(RuntimeFailureKind::InvalidInput);
+            return IndexRunEnd::Failure(RuntimeFailureKind::InvalidInput);
         };
         if deadline_exceeded(verified, self.clock.as_ref()) {
             record_toolkit_deadline("pre_index_deadline");
-            return Err(RuntimeFailureKind::DeadlineExceeded);
+            return IndexRunEnd::Failure(RuntimeFailureKind::DeadlineExceeded);
         }
-        let context = lease
+        // Redeeming the context has no effect on the store: it may still be
+        // dropped by a Stop.
+        let context = match lease
             .run_pre_invocation(
                 self.platform
                     .redeem_elitea_context(authorized.runtime_context()),
             )
             .await
-            .map_err(|error| lease_failure(&error))?
-            .map_err(|error| runtime_context_failure(&error))?;
+        {
+            Ok(Ok(context)) => context,
+            Ok(Err(error)) => return IndexRunEnd::Failure(runtime_context_failure(&error)),
+            Err(error) => return IndexRunEnd::Failure(lease_failure(&error)),
+        };
         let execution = authorized.execution();
         let probe = lease.state_probe();
         let clock = Arc::clone(&self.clock);
@@ -623,31 +632,37 @@ where
             deadline_unix_millis: command.deadline_unix_millis,
             now_unix_millis: &now,
         };
-        let summary = match lease.run_pre_invocation(run_index(runtime, run)).await {
-            Ok(Ok(summary)) => summary,
-            Ok(Err(IndexRunFailure::Cancelled)) => return Err(RuntimeFailureKind::Cancelled),
-            Ok(Err(IndexRunFailure::DeadlineExceeded)) => {
+        // The run owns the store effects: it is awaited to its end and
+        // observes Stop, the deadline and lease loss itself, between
+        // documents. A Stop or deadline that arrives after it returns is
+        // folded into the terminal by `publish_fresh_terminal`.
+        let summary = match run_index(runtime, run).await {
+            Ok(summary) => summary,
+            Err(IndexRunFailure::Cancelled) => {
+                return IndexRunEnd::Failure(RuntimeFailureKind::Cancelled);
+            }
+            Err(IndexRunFailure::DeadlineExceeded) => {
                 record_toolkit_deadline("index_deadline");
-                return Err(RuntimeFailureKind::DeadlineExceeded);
+                return IndexRunEnd::Failure(RuntimeFailureKind::DeadlineExceeded);
             }
-            Ok(Err(IndexRunFailure::LeaseLost)) => {
-                return Err(RuntimeFailureKind::DependencyUnavailable);
+            Err(IndexRunFailure::LeaseLost) => {
+                return IndexRunEnd::LeaseLost(lease.ensure_running().err().unwrap_or(
+                    ClaimLeaseError::LeaseLost("the claim lease was lost during the index run"),
+                ));
             }
-            Ok(Err(IndexRunFailure::InvalidInput(reason))) => {
+            Err(IndexRunFailure::InvalidInput(reason)) => {
                 tracing::warn!(
                     event = "index_ingest_input_invalid",
                     reason,
                     "an index input entry is malformed"
                 );
-                return Err(RuntimeFailureKind::InvalidInput);
+                return IndexRunEnd::Failure(RuntimeFailureKind::InvalidInput);
             }
-            Err(error) => return Err(lease_failure(&error)),
         };
-        lease
-            .check_now()
-            .await
-            .map_err(|error| lease_failure(&error))?;
-        bind_index_result(execution, index, summary)
+        match bind_index_result(execution, index, summary) {
+            Ok(result) => IndexRunEnd::Result(Box::new(result)),
+            Err(failure) => IndexRunEnd::Failure(failure),
+        }
     }
 
     async fn materialize_request(
@@ -977,11 +992,11 @@ where
         let result = async {
             let terminal = match lease.check_now().await {
                 Ok(()) if deadline_exceeded(&verified, self.clock.as_ref()) => {
-                    ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::DeadlineExceeded)
+                    interrupted_terminal(proposed, Interruption::DeadlineExceeded)
                 }
                 Ok(()) => proposed,
                 Err(ClaimLeaseError::Cancelled(_)) => {
-                    ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::Cancelled)
+                    interrupted_terminal(proposed, Interruption::Stopped)
                 }
                 Err(error) => return Err(ToolkitProcessError::Lease(error)),
             };
@@ -1014,13 +1029,7 @@ where
                 .map_err(ToolkitProcessError::CommandBus)
         }
         .await;
-        if let Err(error) = lease.close().await {
-            tracing::warn!(
-                event = "toolkit_delivery_lease_close_failed",
-                error_code = error.code().as_str(),
-                retryable = error.retryable(),
-            );
-        }
+        close_lease_logged(lease).await;
         result
     }
 
@@ -1333,6 +1342,78 @@ fn valid_now(clock: &impl UnixMillisClock) -> Result<i64, ToolkitProcessError> {
         return Err(ToolkitProcessError::Clock);
     }
     Ok(now)
+}
+
+/// How an index run ended, for the processor: a bound result (its summary,
+/// the store's record included when the run touched it), a runtime failure
+/// to publish, or a lost lease, which publishes nothing.
+enum IndexRunEnd {
+    Result(Box<IndexIngestResultV1>),
+    Failure(RuntimeFailureKind),
+    LeaseLost(ClaimLeaseError),
+}
+
+/// The terminal an index run's end proposes, or the lease error when there
+/// is none to publish: another worker may own the claim, so this one records
+/// the loss and leaves the command to the lease's no-ACK path.
+fn index_terminal(end: IndexRunEnd) -> Result<ToolkitExecuteReadTerminalOutput, ClaimLeaseError> {
+    match end {
+        IndexRunEnd::Result(result) => Ok(ToolkitExecuteReadTerminalOutput::IndexIngest(result)),
+        IndexRunEnd::Failure(failure) => {
+            record_toolkit_execution_failure("index_ingest", runtime_failure_code(failure), false);
+            Ok(ToolkitExecuteReadTerminalOutput::Failure(failure))
+        }
+        IndexRunEnd::LeaseLost(error) => {
+            record_toolkit_execution_failure(
+                "index_ingest_lease",
+                error.code().as_str(),
+                error.retryable(),
+            );
+            Err(error)
+        }
+    }
+}
+
+/// Closes the lease; a failure to close is logged, never surfaced, as the
+/// terminal (or its absence) is already decided.
+async fn close_lease_logged(lease: ClaimLeaseMonitor) {
+    if let Err(error) = lease.close().await {
+        tracing::warn!(
+            event = "toolkit_delivery_lease_close_failed",
+            error_code = error.code().as_str(),
+            retryable = error.retryable(),
+        );
+    }
+}
+
+/// The terminal to publish when a Stop or the deadline is observed after
+/// the proposed terminal was made. An index result whose run touched the
+/// store keeps its summary, turned into the interrupted form (the store's
+/// totals and record stay; the status says stopped or out of time), so Main
+/// still records what the store holds; every other terminal becomes the
+/// plain runtime failure, as before.
+fn interrupted_terminal(
+    proposed: ToolkitExecuteReadTerminalOutput,
+    cause: Interruption,
+) -> ToolkitExecuteReadTerminalOutput {
+    let failure = match cause {
+        Interruption::Stopped => RuntimeFailureKind::Cancelled,
+        Interruption::DeadlineExceeded => RuntimeFailureKind::DeadlineExceeded,
+    };
+    match proposed {
+        ToolkitExecuteReadTerminalOutput::IndexIngest(mut result) => {
+            let touched = result
+                .result_summary
+                .as_mut()
+                .is_some_and(|summary| interrupt_summary(summary, cause));
+            if touched {
+                ToolkitExecuteReadTerminalOutput::IndexIngest(result)
+            } else {
+                ToolkitExecuteReadTerminalOutput::Failure(failure)
+            }
+        }
+        _ => ToolkitExecuteReadTerminalOutput::Failure(failure),
+    }
 }
 
 fn deadline_exceeded(

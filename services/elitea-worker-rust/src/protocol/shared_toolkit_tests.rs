@@ -1759,8 +1759,11 @@ fn index_ingest_output_rejects_unbound_entries_and_summaries_outside_mains_bound
     }
 }
 
+/// Main settles exactly what was proposed or rejects the frame; a receipt
+/// with another outcome (FAILED for a SUCCEEDED index proposal included) is
+/// malformed.
 #[test]
-fn a_failed_settlement_receipt_is_accepted_for_a_succeeded_proposal() {
+fn a_settlement_receipt_must_carry_the_proposed_outcome() {
     use crate::protocol::elitea::runtime::v1::{ExecutionOutcomeV1, PrepareSettlementResponseV1};
     let (command, response) = fixture(ToolkitCommandKind::IndexIngest);
     let claim = claim(&command, response);
@@ -1777,34 +1780,100 @@ fn a_failed_settlement_receipt_is_accepted_for_a_succeeded_proposal() {
         NOW,
     )
     .unwrap();
-    let proposal = frame.settlement_proposal.clone().unwrap();
-    let retirement = command_retirement_binding(&verified);
+    let proposed =
+        ExecutionOutcomeV1::try_from(frame.settlement_proposal.clone().unwrap().requested_outcome)
+            .unwrap();
+    assert_eq!(proposed, ExecutionOutcomeV1::Succeeded);
     let receipt = parse_prepare_settlement_response(
         PrepareSettlementResponseV1 {
             settlement_receipt_id: "receipt-1".into(),
-            outcome: ExecutionOutcomeV1::Failed as i32,
+            outcome: ExecutionOutcomeV1::Succeeded as i32,
             ..Default::default()
         },
-        ExecutionOutcomeV1::try_from(proposal.requested_outcome).unwrap(),
-        retirement,
+        proposed,
+        command_retirement_binding(&verified),
     )
-    .expect("a refused result settles failed");
-    assert_eq!(receipt.outcome(), ExecutionOutcomeV1::Failed);
-    let retirement = command_retirement_binding(&verified);
+    .expect("the proposed outcome settles");
+    assert_eq!(receipt.outcome(), ExecutionOutcomeV1::Succeeded);
+    for other in [
+        ExecutionOutcomeV1::Failed,
+        ExecutionOutcomeV1::Cancelled,
+        ExecutionOutcomeV1::OutcomeUnknown,
+    ] {
+        assert!(
+            parse_prepare_settlement_response(
+                PrepareSettlementResponseV1 {
+                    settlement_receipt_id: "receipt-1".into(),
+                    outcome: other as i32,
+                    ..Default::default()
+                },
+                proposed,
+                command_retirement_binding(&verified),
+            )
+            .is_err(),
+            "{other:?} must not replace the proposed {proposed:?}"
+        );
+    }
+}
+
+/// A run stopped after it touched the store reports an error summary with
+/// the store's record in the CANCELLED terminal state, and the frame
+/// proposes CANCELLED; without the totals the state is malformed.
+#[test]
+fn a_stopped_index_run_with_the_stores_record_proposes_cancelled() {
+    use crate::protocol::elitea::runtime::v1::ExecutionOutcomeV1;
+    let (command, response) = fixture(ToolkitCommandKind::IndexIngest);
+    let claim = claim(&command, response);
+    let verified = verified(&command);
+    let mut stopped = index_summary();
+    stopped.status = IndexIngestStatusV1::Error as i32;
+    stopped.terminal_state = IndexIngestTerminalStateV1::Cancelled as i32;
+    stopped.embedding_model.clear();
+    stopped.embedding_dimension = 0;
     assert!(
-        parse_prepare_settlement_response(
-            PrepareSettlementResponseV1 {
-                settlement_receipt_id: "receipt-1".into(),
-                outcome: ExecutionOutcomeV1::Cancelled as i32,
-                ..Default::default()
-            },
-            ExecutionOutcomeV1::Succeeded,
-            command_retirement_binding(&verified),
-        )
-        .is_err(),
-        "only FAILED may replace SUCCEEDED"
+        stopped.total_documents.is_some(),
+        "the fixture carries totals"
     );
-    drop(retirement);
+    let frame = AgentExecutionOutputAuthority {
+        claim: claim_again_for(&command),
+    }
+    .bind_toolkit_execute_read_terminal(
+        &verified,
+        ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(index_result(
+            &claim,
+            stopped.clone(),
+        ))),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(
+        frame.settlement_proposal.unwrap().requested_outcome,
+        ExecutionOutcomeV1::Cancelled as i32
+    );
+    for mutate in [
+        (|s: &mut IndexIngestSummaryV1| {
+            s.total_documents = None;
+            s.total_chunks = None;
+            s.whole_index_record = false;
+        }) as fn(&mut IndexIngestSummaryV1),
+        |s| s.status = IndexIngestStatusV1::Ok as i32,
+    ] {
+        let mut malformed = stopped.clone();
+        mutate(&mut malformed);
+        assert!(
+            AgentExecutionOutputAuthority {
+                claim: claim_again_for(&command),
+            }
+            .bind_toolkit_execute_read_terminal(
+                &verified,
+                ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(index_result(
+                    &claim, malformed
+                ))),
+                NOW,
+            )
+            .is_err()
+        );
+    }
 }
 
 fn claim_again_for(command: &WorkerCommandV1) -> AcceptedAgentClaim {
