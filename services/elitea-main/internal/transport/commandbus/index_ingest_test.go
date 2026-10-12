@@ -109,6 +109,7 @@ func TestIndexIngestProducerBuildsTypedReferenceOnlyCommand(t *testing.T) {
 		// Rust mode: the stamp of the index, which the worker must match.
 		ExpectedEmbeddingModel:     "Org/Model.A",
 		ExpectedEmbeddingDimension: 1536,
+		IndexID:                    "3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c",
 	}
 	prepared, err := producer.PrepareIndexIngest(context.Background(), dispatch)
 	if err != nil {
@@ -131,6 +132,21 @@ func TestIndexIngestProducerBuildsTypedReferenceOnlyCommand(t *testing.T) {
 	if wire.GetIndexIngest().GetExpectedEmbeddingModel() != "Org/Model.A" ||
 		wire.GetIndexIngest().GetExpectedEmbeddingDimension() != 1536 {
 		t.Fatalf("the expected embedding space was not carried: %+v", wire.GetIndexIngest())
+	}
+	if wire.GetIndexIngest().GetIndexId() != "3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c" {
+		t.Fatalf("the index id was not carried: %+v", wire.GetIndexIngest())
+	}
+}
+
+func TestIndexIngestDispatchRefusesAMalformedIndexID(t *testing.T) {
+	dispatch := validIndexIngestDispatchForExpectedEmbedding()
+	dispatch.IndexID = "INDEX-1"
+	if err := dispatch.Validate(); !errors.Is(err, indexingapp.ErrInvalidIndexIngestDispatch) {
+		t.Fatalf("validate = %v, want ErrInvalidIndexIngestDispatch", err)
+	}
+	dispatch.IndexID = "3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c"
+	if err := dispatch.Validate(); err != nil {
+		t.Fatalf("a canonical index id = %v", err)
 	}
 }
 

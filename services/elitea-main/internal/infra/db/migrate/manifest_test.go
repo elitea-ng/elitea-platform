@@ -685,7 +685,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// engine that keeps data per toolkit (Inventory's graph), and that a
 	// reconciler drains over the engine's platform gRPC service (#1244). No
 	// tenant table, no permission, no data migrated.
-	require.EqualValues(t, 163, Head(shared))
+	//
+	// 164: shared/0164_index_registry_totals.sql, the index's totals on the
+	// registry row (index_registry.total_documents, total_chunks; ADR-0030
+	// I1). The worker's result frame is bounded, so index_registry_documents
+	// is a bounded subset and cannot be summed for the list; the worker
+	// reports the whole index's totals and Main stores them. Two columns with
+	// DEFAULT 0, nothing migrated, no permission.
+	require.EqualValues(t, 164, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

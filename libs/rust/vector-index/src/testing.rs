@@ -45,6 +45,11 @@ struct State {
     calls: Vec<&'static str>,
     /// Errors to return for the next calls, oldest first.
     failures: Vec<Status>,
+    /// Errors to return for a later call of one method: `(method, calls of
+    /// that method still to pass, status)`.
+    scheduled: Vec<(&'static str, usize, Status)>,
+    /// The `space` of every `list_documents` call, in order.
+    listings: Vec<Option<(String, u32)>>,
 }
 
 /// The fake service. Clone it to keep a handle on its state.
@@ -76,6 +81,32 @@ impl FakeVector {
     /// If the state lock is poisoned.
     pub fn fail_next(&self, status: Status) {
         self.state.lock().expect("lock").failures.push(status);
+    }
+
+    /// The `after`-th call of `method` counted from now (1 is its next call)
+    /// fails with this status, before anything else; earlier calls of the
+    /// method, and every other method, proceed. Several may be scheduled.
+    ///
+    /// # Panics
+    ///
+    /// If `after` is 0 or the state lock is poisoned.
+    pub fn fail_call(&self, method: &'static str, after: usize, status: Status) {
+        assert!(after > 0, "the next call is 1");
+        self.state
+            .lock()
+            .expect("lock")
+            .scheduled
+            .push((method, after, status));
+    }
+
+    /// The `space` each `list_documents` call so far named, in order.
+    ///
+    /// # Panics
+    ///
+    /// If the state lock is poisoned.
+    #[must_use]
+    pub fn listed_spaces(&self) -> Vec<Option<(String, u32)>> {
+        self.state.lock().expect("lock").listings.clone()
     }
 
     /// The bearers of all calls so far.
@@ -137,6 +168,20 @@ impl FakeVector {
         state.calls.push(method);
         if !state.failures.is_empty() {
             return Err(state.failures.remove(0));
+        }
+        let mut due = None;
+        for (position, (scheduled_method, remaining, _)) in state.scheduled.iter_mut().enumerate() {
+            if *scheduled_method == method {
+                *remaining -= 1;
+                if *remaining == 0 && due.is_none() {
+                    due = Some(position);
+                }
+            }
+        }
+        if let Some(position) = due {
+            let (_, _, status) = state.scheduled.remove(position);
+            state.scheduled.retain(|(_, remaining, _)| *remaining > 0);
+            return Err(status);
         }
         drop(state);
         let token = header
@@ -602,6 +647,77 @@ impl VectorService for FakeVector {
                 )
                 .collect(),
         }))
+    }
+
+    type ListDocumentsStream = std::pin::Pin<
+        Box<
+            dyn tokio_stream::Stream<Item = Result<pb::ListDocumentsResponse, Status>>
+                + Send
+                + 'static,
+        >,
+    >;
+
+    async fn list_documents(
+        &self,
+        request: Request<pb::ListDocumentsRequest>,
+    ) -> Result<Response<Self::ListDocumentsStream>, Status> {
+        let project = self.authenticate("list_documents", &request)?;
+        let request = request.into_inner();
+        let namespace = request
+            .namespace
+            .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
+        let space = request.space.map(|s| (s.model_slug, s.dimension));
+        let mut state = self.state.lock().expect("lock");
+        state.listings.push(space.clone());
+        let mut counts: std::collections::BTreeMap<(String, String), u64> =
+            std::collections::BTreeMap::new();
+        for stored in state.points.iter().filter(|stored| {
+            stored.project_id == project
+                && stored.source == namespace.source
+                && stored.namespace_id == namespace.namespace_id
+                && (namespace.generation.is_empty() || stored.generation == namespace.generation)
+                && space.as_ref().is_none_or(|space| *space == stored.space)
+        }) {
+            *counts
+                .entry((
+                    stored.point.document_key.clone(),
+                    stored.point.document_version.clone(),
+                ))
+                .or_default() += 1;
+        }
+        drop(state);
+        // The real facade refuses before the first page once the distinct
+        // documents exceed the caller's bound.
+        if request.max_documents != 0 && counts.len() as u64 > request.max_documents {
+            return Err(Status::resource_exhausted(format!(
+                "the namespace holds more than {} documents",
+                request.max_documents
+            )));
+        }
+        let documents: Vec<pb::IndexedDocument> = counts
+            .into_iter()
+            .map(
+                |((document_key, document_version), chunk_count)| pb::IndexedDocument {
+                    document_key,
+                    document_version,
+                    chunk_count,
+                },
+            )
+            .collect();
+        // Two pages whenever there is more than one document, so a client
+        // that stopped after the first page would be caught.
+        let split = documents.len() / 2;
+        let pages: Vec<Result<pb::ListDocumentsResponse, Status>> =
+            [&documents[..split], &documents[split..]]
+                .into_iter()
+                .filter(|page| !page.is_empty())
+                .map(|page| {
+                    Ok(pb::ListDocumentsResponse {
+                        documents: page.to_vec(),
+                    })
+                })
+                .collect();
+        Ok(Response::new(Box::pin(tokio_stream::iter(pages))))
     }
 }
 

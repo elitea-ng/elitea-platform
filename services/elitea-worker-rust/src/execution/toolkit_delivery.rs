@@ -137,6 +137,9 @@ impl FreshToolkitDelivery {
             Some(execution_output_frame_v1::Payload::ConfigurationValidation(result)) => self
                 .claim
                 .matches_configuration_validation_result_binding(result),
+            Some(execution_output_frame_v1::Payload::IndexIngest(result)) => {
+                self.claim.matches_index_ingest_result_binding(result)
+            }
             _ => true,
         };
         if !matches {

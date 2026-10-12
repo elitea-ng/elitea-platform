@@ -264,3 +264,30 @@ func validIndexIngestDispatch() IndexIngestDispatch {
 		Initiator:                   executiondomain.IndexIngestInitiatorUser,
 	}
 }
+
+// IndexID (rust indexing runtime) is the registry row the run writes: absent
+// on the Python path, a canonical lower-case UUID otherwise.
+func TestIndexIngestDispatchValidatesTheIndexID(t *testing.T) {
+	for _, indexID := range []string{"", "3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c"} {
+		dispatch := validIndexIngestDispatch()
+		dispatch.IndexID = indexID
+		if err := dispatch.Validate(); err != nil {
+			t.Fatalf("index id %q rejected: %v", indexID, err)
+		}
+	}
+	for name, indexID := range map[string]string{
+		"upper case":   "3F2A9C1E-7B4D-4E8A-9C21-5D6E7F8A9B0C",
+		"no hyphens":   "3f2a9c1e7b4d4e8a9c215d6e7f8a9b0c",
+		"too short":    "3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0",
+		"not hex":      "3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0g",
+		"opaque label": "index-1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dispatch := validIndexIngestDispatch()
+			dispatch.IndexID = indexID
+			if !errors.Is(dispatch.Validate(), ErrInvalidIndexIngestDispatch) {
+				t.Fatalf("index id %q was accepted", indexID)
+			}
+		})
+	}
+}

@@ -406,7 +406,8 @@ SELECT o.outbox_id,
        COALESCE(i.sio_event, ''),
        i.initiator,
        COALESCE(registry.embedding_model, ''),
-       COALESCE(registry.embedding_dimension, 0)
+       COALESCE(registry.embedding_dimension, 0),
+       COALESCE(registry.index_id::text, '')
 FROM elitea_runtime.command_outbox AS o
 JOIN elitea_runtime.execution_jobs AS j
   ON j.execution_id = o.execution_id AND j.generation = o.generation
@@ -431,7 +432,7 @@ LEFT JOIN LATERAL (
 -- the registry row the admission initializer wrote for this exact run, before
 -- the outbox became dispatchable (index_meta_initialized_at).
 LEFT JOIN LATERAL (
-    SELECT r.embedding_model, r.embedding_dimension
+    SELECT r.embedding_model, r.embedding_dimension, r.index_id
     FROM elitea_runtime.index_registry AS r
     WHERE $3::boolean
       AND r.execution_id = j.execution_id
@@ -485,6 +486,7 @@ WHERE o.outbox_id = $1
 		&dispatch.Initiator,
 		&dispatch.ExpectedEmbeddingModel,
 		&expectedDimension,
+		&dispatch.IndexID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return indexingapp.IndexIngestDispatch{}, ErrPendingIndexIngestDispatchNotFound

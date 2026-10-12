@@ -10,16 +10,18 @@
 //! 4. send Qdrant a filter whose first `must` condition is that project
 //!    ([`Scope`]).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use qdrant_client::Payload;
 use qdrant_client::qdrant::point_id::PointIdOptions;
 use qdrant_client::qdrant::value::Kind;
 use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, DeletePointsBuilder, Document, FacetCountsBuilder, Filter,
-    NamedVectors, PointId, PointStruct, PrefetchQueryBuilder, Query, QueryPointsBuilder, Rrf,
-    UpsertPointsBuilder, Value, Vector, VectorsSelector, vector_output, with_vectors_selector,
+    NamedVectors, PayloadIncludeSelector, PointId, PointStruct, PrefetchQueryBuilder, Query,
+    QueryPointsBuilder, Rrf, ScrollPointsBuilder, UpsertPointsBuilder, Value, Vector,
+    VectorsSelector, vector_output, with_vectors_selector,
 };
 use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
@@ -553,6 +555,204 @@ impl pb::vector_service_server::VectorService for VectorService {
             ))
         });
         Ok(Response::new(pb::ListIndexesResponse { indexes }))
+    }
+
+    type ListDocumentsStream = ListDocumentsStream;
+
+    async fn list_documents(
+        &self,
+        request: Request<pb::ListDocumentsRequest>,
+    ) -> Result<Response<Self::ListDocumentsStream>, Status> {
+        let caller = self.auth.authenticate(&request).await?;
+        let request = request.into_inner();
+        let project_id = caller.project(request.project_id)?;
+        let namespace = request
+            .namespace
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
+        caller.require_source(namespace.source)?;
+        let source = layout::source_keyword(namespace.source)?;
+        layout::namespace_uuid(&namespace.namespace_id)?;
+        let generation = layout::generation(&namespace.generation)?;
+        let space = request
+            .space
+            .as_ref()
+            .map(|space| Space::from_proto(Some(space)))
+            .transpose()?;
+        let scope = Scope::project(project_id)
+            .source(source)
+            .namespaces(vec![namespace.namespace_id.clone()])
+            .generation(generation);
+        let filter = scope.filter(None);
+        // Every point of the namespace is read (payload only, two keys) and
+        // folded per (document_key, document_version) before the first page
+        // goes out: a document's chunk count is not known until its last
+        // point was seen, and Qdrant scrolls by point id, not by key (an
+        // `order_by` scroll needs a numeric payload index, and the key is
+        // text), so a page cannot be final before the fold is. What is
+        // bounded instead: the points read, across every collection of this
+        // one call (MAX_SCROLLED_POINTS), the distinct documents folded
+        // (the caller's `max_documents`, summed over the collections, so an
+        // index the caller cannot handle anyway stops costing the store at
+        // that bound), the fold itself (one entry per document version, each
+        // a few hundred bytes at most, far below the points), and the
+        // answer, which is paged lazily out of the fold rather than copied
+        // into every page first.
+        let scrolled = AtomicU64::new(0);
+        let folded = AtomicU64::new(0);
+        let bounds = ScrollBounds {
+            scrolled: &scrolled,
+            folded: &folded,
+            max_documents: (request.max_documents != 0).then_some(request.max_documents),
+        };
+        let counted = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
+            let filter = filter.clone();
+            async move { self.scroll_documents(&collection, filter, bounds).await }
+        })
+        .await?;
+        let mut documents: BTreeMap<(String, String), u64> = BTreeMap::new();
+        for partial in counted {
+            for (key, count) in partial {
+                *documents.entry(key).or_default() += count;
+            }
+        }
+        tracing::debug!(
+            project_id,
+            source,
+            caller = caller_label(&caller),
+            documents = documents.len(),
+            points = scrolled.load(Ordering::Relaxed),
+            pages = documents.len().div_ceil(MAX_DOCUMENTS_PAGE),
+            "documents listed"
+        );
+        let mut documents =
+            documents
+                .into_iter()
+                .map(
+                    |((document_key, document_version), chunk_count)| pb::IndexedDocument {
+                        document_key,
+                        document_version,
+                        chunk_count,
+                    },
+                );
+        let pages = std::iter::from_fn(move || {
+            let page: Vec<pb::IndexedDocument> =
+                documents.by_ref().take(MAX_DOCUMENTS_PAGE).collect();
+            (!page.is_empty()).then(|| Ok(pb::ListDocumentsResponse { documents: page }))
+        });
+        Ok(Response::new(Box::pin(tokio_stream::iter(pages))))
+    }
+}
+
+/// The pages of one `ListDocuments` answer.
+pub type ListDocumentsStream = std::pin::Pin<
+    Box<dyn tokio_stream::Stream<Item = Result<pb::ListDocumentsResponse, Status>> + Send>,
+>;
+
+/// The most documents in one `ListDocuments` page.
+pub const MAX_DOCUMENTS_PAGE: usize = 1024;
+/// Points read per Qdrant scroll call by `ListDocuments`.
+const SCROLL_PAGE: u32 = 2048;
+/// The most points one `ListDocuments` reads, summed over every collection
+/// the call scrolls. A toolkit index beyond this is refused
+/// (`RESOURCE_EXHAUSTED`), not listed in part: a partial listing would make
+/// an incremental indexer delete documents it did not see.
+const MAX_SCROLLED_POINTS: u64 = 4_000_000;
+
+/// The running counts one `ListDocuments` call shares between the
+/// collections it scrolls concurrently, and the caller's document bound.
+#[derive(Clone, Copy)]
+struct ScrollBounds<'a> {
+    /// Points read so far, bounded by [`MAX_SCROLLED_POINTS`].
+    scrolled: &'a AtomicU64,
+    /// Distinct `(document_key, document_version)` pairs folded so far, over
+    /// every collection (a pair in two collections counts twice: the bound
+    /// is on the server's work, and it is never exceeded by that).
+    folded: &'a AtomicU64,
+    /// The request's `max_documents`, when set.
+    max_documents: Option<u64>,
+}
+
+impl VectorService {
+    /// Folds every point `filter` selects in `collection` into
+    /// `(document_key, document_version) -> chunk count`, within `bounds`:
+    /// the points read and the documents folded are summed over the
+    /// collections the call scrolls concurrently, and each bound is on that
+    /// sum. Crossing one refuses the call with `RESOURCE_EXHAUSTED` at once,
+    /// so the store does no more work for a listing the caller cannot take.
+    async fn scroll_documents(
+        &self,
+        collection: &str,
+        filter: Filter,
+        bounds: ScrollBounds<'_>,
+    ) -> Result<HashMap<(String, String), u64>, Status> {
+        let mut counts: HashMap<(String, String), u64> = HashMap::new();
+        let mut offset: Option<PointId> = None;
+        loop {
+            let mut scroll = ScrollPointsBuilder::new(collection)
+                .filter(filter.clone())
+                .limit(SCROLL_PAGE)
+                .with_payload(PayloadIncludeSelector {
+                    fields: vec![
+                        key::DOCUMENT_KEY.to_owned(),
+                        key::DOCUMENT_VERSION.to_owned(),
+                    ],
+                })
+                .with_vectors(false);
+            if let Some(offset) = offset.take() {
+                scroll = scroll.offset(offset);
+            }
+            let response = self
+                .store
+                .client()
+                .scroll(scroll)
+                .await
+                .map_err(|error| unavailable("scroll", &error))?;
+            for point in &response.result {
+                let text = |name: &str| -> String {
+                    match point
+                        .payload
+                        .get(name)
+                        .and_then(|value| value.kind.as_ref())
+                    {
+                        Some(Kind::StringValue(text)) => text.clone(),
+                        _ => String::new(),
+                    }
+                };
+                let document_key = text(key::DOCUMENT_KEY);
+                if document_key.is_empty() {
+                    // Every point is written with a key; a damaged one is not
+                    // a document the caller can act on.
+                    continue;
+                }
+                match counts.entry((document_key, text(key::DOCUMENT_VERSION))) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        *entry.get_mut() += 1;
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(1);
+                        if let Some(max_documents) = bounds.max_documents
+                            && bounds.folded.fetch_add(1, Ordering::Relaxed) + 1 > max_documents
+                        {
+                            return Err(Status::resource_exhausted(format!(
+                                "the namespace holds more than {max_documents} documents, the most this listing takes"
+                            )));
+                        }
+                    }
+                }
+            }
+            let read = response.result.len() as u64;
+            if bounds.scrolled.fetch_add(read, Ordering::Relaxed) + read > MAX_SCROLLED_POINTS {
+                return Err(Status::resource_exhausted(
+                    "the namespace holds more points than one listing reads",
+                ));
+            }
+            match response.next_page_offset {
+                Some(next) => offset = Some(next),
+                None => break,
+            }
+        }
+        Ok(counts)
     }
 }
 

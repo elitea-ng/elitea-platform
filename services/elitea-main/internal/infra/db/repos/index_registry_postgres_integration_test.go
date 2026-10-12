@@ -507,8 +507,9 @@ func TestIndexRegistryRunLivenessComesFromTheExecutionJob(t *testing.T) {
 	}
 }
 
-// The list and the exact read carry the index's totals from
-// index_registry_documents; the row's own counts are the last run's.
+// The list and the exact read carry the index's totals as the last applied
+// result reported them (the store's, with explicit presence); the row's own
+// counts are the last run's.
 func TestIndexRegistryReadsCarryDocumentTotals(t *testing.T) {
 	repo, _ := newRegistryTestRepo(t)
 	ctx := context.Background()
@@ -527,6 +528,7 @@ func TestIndexRegistryReadsCarryDocumentTotals(t *testing.T) {
 	// An incremental run that changed nothing reports zero for itself.
 	summary := registrySummary(8, "m")
 	summary.IndexedDocuments, summary.FailedChunks, summary.SkippedJSON = 0, 0, `{"unchanged":2}`
+	summary.TotalsPresent, summary.TotalDocuments, summary.TotalChunks = true, 2, 7
 	if _, err := repo.ApplyResult(ctx, 1, registryResult(1, "docs", summary)); err != nil {
 		t.Fatal(err)
 	}
@@ -735,6 +737,35 @@ func TestIndexRegistryDocumentsSupportIncrementalSync(t *testing.T) {
 	}
 	if err := repo.UpsertDocuments(ctx, id, []indexregistryapp.DocumentVersion{{Key: "", Version: "v"}}); err == nil {
 		t.Fatal("an empty document key was accepted")
+	}
+	// One statement upserts the whole list: new rows and rewritten rows
+	// side by side, read back as the list says.
+	batch := make([]indexregistryapp.DocumentVersion, 0, 50)
+	for i := range 50 {
+		batch = append(batch, indexregistryapp.DocumentVersion{Key: fmt.Sprintf("batch/%02d.md", i), Version: "v1", ChunkCount: int32(i + 1)})
+	}
+	batch[0] = indexregistryapp.DocumentVersion{Key: "a.md", Version: "v3", ChunkCount: 7}
+	if err := repo.UpsertDocuments(ctx, id, batch); err != nil {
+		t.Fatal(err)
+	}
+	documents, err = repo.ListDocuments(ctx, id)
+	if err != nil || len(documents) != 50 {
+		t.Fatalf("documents after the batch = %d err=%v", len(documents), err)
+	}
+	byKey := make(map[string]indexregistryapp.DocumentVersion, len(documents))
+	for _, document := range documents {
+		byKey[document.Key] = document
+	}
+	if byKey["a.md"] != (indexregistryapp.DocumentVersion{Key: "a.md", Version: "v3", ChunkCount: 7}) ||
+		byKey["batch/49.md"] != (indexregistryapp.DocumentVersion{Key: "batch/49.md", Version: "v1", ChunkCount: 50}) {
+		t.Fatalf("batch rows were not applied: a=%+v last=%+v", byKey["a.md"], byKey["batch/49.md"])
+	}
+	// A key twice in one list would make ON CONFLICT touch a row twice; it is
+	// refused before Postgres sees it.
+	if err := repo.UpsertDocuments(ctx, id, []indexregistryapp.DocumentVersion{
+		{Key: "dup.md", Version: "v1", ChunkCount: 1}, {Key: "dup.md", Version: "v2", ChunkCount: 2},
+	}); err == nil {
+		t.Fatal("a repeated key in one list was accepted")
 	}
 }
 

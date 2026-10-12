@@ -13,11 +13,12 @@ use super::{
     elitea::runtime::v1::{
         AgentExecutionResultV1, ConfigurationValidationResultV1, DigestAlgorithmV1, DigestV1,
         ExecutionFenceV1, ExecutionIdentityV1, ExecutionOutcomeV1, ExecutionOutputEventTypeV1,
-        ExecutionOutputFrameV1, NodeEventV1, RuntimeErrorCodeV1, RuntimeErrorV1,
-        SettlementProposalV1, ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsResultV1,
-        ToolkitCallToolCommandV1, ToolkitCallToolResultV1, ToolkitCallToolStatusV1,
-        ToolkitCallToolSummaryV1, ToolkitExecuteReadResultV1, execution_output_frame_v1,
-        worker_command_v1,
+        ExecutionOutputFrameV1, IndexIngestCommandV1, IndexIngestInputBindingV1,
+        IndexIngestResultV1, IndexIngestStatusV1, IndexIngestSummaryV1, IndexIngestTerminalStateV1,
+        NodeEventV1, RuntimeErrorCodeV1, RuntimeErrorV1, SettlementProposalV1,
+        ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsResultV1, ToolkitCallToolCommandV1,
+        ToolkitCallToolResultV1, ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1,
+        ToolkitExecuteReadResultV1, execution_output_frame_v1, worker_command_v1,
     },
 };
 
@@ -80,6 +81,10 @@ pub enum RuntimeFailureKind {
 
     AuthorizationFailed,
     Cancelled,
+    /// The output plane refused a typed terminal result on its content
+    /// (`RESULT_REFUSED`, ADR-0030 I1): the worker answers with this FAILED
+    /// terminal instead of its result.
+    ResultRefused,
     Internal,
 }
 
@@ -93,6 +98,7 @@ pub(crate) enum ToolkitExecuteReadTerminalOutput {
     CallTool(Box<ToolkitCallToolResultV1>),
     AvailableTools(Box<ToolkitAvailableToolsResultV1>),
     ConfigurationValidation(Box<ConfigurationValidationResultV1>),
+    IndexIngest(Box<IndexIngestResultV1>),
     Failure(RuntimeFailureKind),
 }
 
@@ -167,6 +173,15 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
                 ExecutionOutputEventTypeV1::ConfigurationValidationResult,
             )?;
             (result.encode_to_vec(), ExecutionOutcomeV1::Succeeded)
+        }
+        Some(execution_output_frame_v1::Payload::IndexIngest(result)) => {
+            let outcome = validate_index_ingest_result(verified, result)?;
+            validate_toolkit_terminal_shape(
+                verified,
+                frame,
+                ExecutionOutputEventTypeV1::IndexIngestResult,
+            )?;
+            (result.encode_to_vec(), outcome)
         }
         Some(execution_output_frame_v1::Payload::RuntimeError(error)) => {
             let failure = canonical_runtime_failure(error).ok_or(malformed_restored_output())?;
@@ -567,6 +582,16 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
                 ExecutionOutcomeV1::Succeeded,
             )
         }
+        ToolkitExecuteReadTerminalOutput::IndexIngest(result) => {
+            let outcome = validate_index_ingest_result(verified, &result)?;
+            let bytes = result.encode_to_vec();
+            (
+                ExecutionOutputEventTypeV1::IndexIngestResult,
+                execution_output_frame_v1::Payload::IndexIngest(*result),
+                bytes,
+                outcome,
+            )
+        }
         ToolkitExecuteReadTerminalOutput::Failure(kind) => failure_terminal_parts(kind),
     };
     let payload_digest = sha256(&payload_bytes);
@@ -842,6 +867,11 @@ pub(crate) fn runtime_error_policy(
             "Execution was cancelled.",
             false,
         ),
+        RuntimeFailureKind::ResultRefused => (
+            RuntimeErrorCodeV1::ResultRefused,
+            "The index result was refused by the platform.",
+            false,
+        ),
         RuntimeFailureKind::OutputContinuationExhausted => (
             RuntimeErrorCodeV1::OutputContinuationExhausted,
             "Automatic continuation could not finish. The model response is incomplete.",
@@ -954,6 +984,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::DeadlineExceeded,
         RuntimeFailureKind::AuthorizationFailed,
         RuntimeFailureKind::Cancelled,
+        RuntimeFailureKind::ResultRefused,
         RuntimeFailureKind::OutputContinuationExhausted,
         RuntimeFailureKind::ModelTimeout,
         RuntimeFailureKind::ModelRateLimited,
@@ -1058,6 +1089,196 @@ fn validate_toolkit_terminal_shape(
         return Err(malformed_restored_output());
     }
     Ok(())
+}
+
+/// Main's bounds on the typed index summary
+/// (`internal/application/output/index_ingest.go`).
+const MAX_INDEX_SUMMARY_MESSAGE_BYTES: usize = 48 * 1024;
+const MAX_INDEX_SKIP_REASONS: usize = 32;
+const MAX_INDEX_SKIP_REASON_BYTES: usize = 64;
+const MAX_INDEX_DOCUMENT_KEY_BYTES: usize = 4096;
+const MAX_INDEX_DOCUMENT_VERSION_BYTES: usize = 1024;
+/// The most documents (and the most removed keys) one result lists.
+pub(crate) const MAX_INDEX_RESULT_DOCUMENTS: usize = 4096;
+
+/// The result must restate the signed command's input references and carry
+/// the typed summary the Rust runtime always produces, within Main's bounds
+/// (`IndexIngestResult.Validate`); the frame's proposed outcome follows the
+/// summary's status, as Main's `indexIngestFrame` derives it.
+fn validate_index_ingest_result(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    result: &IndexIngestResultV1,
+) -> Result<ExecutionOutcomeV1, ProtocolError> {
+    let command = verified.command();
+    let input = command
+        .input_bundle_ref
+        .as_ref()
+        .ok_or_else(malformed_restored_output)?;
+    let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+        command.capability_command.as_ref()
+    else {
+        return Err(malformed_restored_output());
+    };
+    if result.input_bundle_id != input.input_bundle_id
+        || result.input_bundle_digest != input.digest
+        || result.result_artifact.is_some()
+    {
+        return Err(malformed_restored_output());
+    }
+    validate_index_binding(
+        result.toolkit_configuration.as_ref(),
+        &index.toolkit_configuration_entry_id,
+    )?;
+    validate_index_binding(
+        result.tool_parameters.as_ref(),
+        &index.tool_parameters_entry_id,
+    )?;
+    validate_index_binding(result.llm_model.as_ref(), &index.llm_model_entry_id)?;
+    validate_index_binding(
+        result.llm_configuration.as_ref(),
+        &index.llm_configuration_entry_id,
+    )?;
+    validate_index_binding(result.mcp_tokens.as_ref(), &index.mcp_tokens_entry_id)?;
+    match (
+        result.embedding_binding.as_ref(),
+        index.embedding_binding.as_ref(),
+    ) {
+        (None, None) => {}
+        (Some(reported), Some(pinned)) if reported == pinned => {}
+        _ => return Err(malformed_restored_output()),
+    }
+    let summary = result
+        .result_summary
+        .as_ref()
+        .ok_or_else(malformed_restored_output)?;
+    validate_index_summary(summary, index)
+}
+
+fn validate_index_binding(
+    binding: Option<&IndexIngestInputBindingV1>,
+    entry_id: &str,
+) -> Result<(), ProtocolError> {
+    match binding {
+        None if entry_id.is_empty() => Ok(()),
+        Some(binding)
+            if !entry_id.is_empty()
+                && binding.entry_id == entry_id
+                && valid_toolkit_identity(&binding.immutable_version)
+                && valid_sha256(binding.content_digest.as_ref()) =>
+        {
+            Ok(())
+        }
+        _ => Err(malformed_restored_output()),
+    }
+}
+
+fn validate_index_summary(
+    summary: &IndexIngestSummaryV1,
+    index: &IndexIngestCommandV1,
+) -> Result<ExecutionOutcomeV1, ProtocolError> {
+    let status =
+        IndexIngestStatusV1::try_from(summary.status).map_err(|_| malformed_restored_output())?;
+    let terminal = IndexIngestTerminalStateV1::try_from(summary.terminal_state)
+        .map_err(|_| malformed_restored_output())?;
+    if summary.message.is_empty()
+        || summary.message.len() > MAX_INDEX_SUMMARY_MESSAGE_BYTES
+        || summary.message.contains('\0')
+    {
+        return Err(malformed_restored_output());
+    }
+    let state_matches = match terminal {
+        IndexIngestTerminalStateV1::Unspecified => {
+            summary.indexed == 0 && summary.updated == 0 && summary.reindex.is_none()
+        }
+        IndexIngestTerminalStateV1::Created
+        | IndexIngestTerminalStateV1::Completed
+        | IndexIngestTerminalStateV1::ScheduledReindex => status == IndexIngestStatusV1::Ok,
+        IndexIngestTerminalStateV1::Failed => status == IndexIngestStatusV1::Error,
+        // A run stopped after it touched the store: an error summary that
+        // describes the store, so it must carry the totals.
+        IndexIngestTerminalStateV1::Cancelled => {
+            status == IndexIngestStatusV1::Error && summary.total_documents.is_some()
+        }
+        IndexIngestTerminalStateV1::PartlyIndexed => status == IndexIngestStatusV1::PartlyIndexed,
+    };
+    if !state_matches || status == IndexIngestStatusV1::Unspecified {
+        return Err(malformed_restored_output());
+    }
+    if summary.skipped.len() > MAX_INDEX_SKIP_REASONS
+        || summary.skipped.keys().any(|reason| {
+            reason.is_empty()
+                || reason.len() > MAX_INDEX_SKIP_REASON_BYTES
+                || !reason
+                    .bytes()
+                    .next()
+                    .is_some_and(|b| b.is_ascii_lowercase())
+                || !reason
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+    {
+        return Err(malformed_restored_output());
+    }
+    if (summary.embedding_model.is_empty()) != (summary.embedding_dimension == 0)
+        || summary.embedding_dimension > 65_535
+        || summary.embedding_model.len() > MAX_SAFE_STRING_BYTES
+        || summary.embedding_model.contains('\0')
+    {
+        return Err(malformed_restored_output());
+    }
+    // A result that names another space than the command expects is the
+    // mismatch the worker must have refused before writing; it never leaves
+    // this worker as a success.
+    if !index.expected_embedding_model.is_empty()
+        && !summary.embedding_model.is_empty()
+        && status != IndexIngestStatusV1::Error
+        && (summary.embedding_model != index.expected_embedding_model
+            || summary.embedding_dimension != index.expected_embedding_dimension)
+    {
+        return Err(malformed_restored_output());
+    }
+    if summary.documents.len() > MAX_INDEX_RESULT_DOCUMENTS
+        || summary.removed_document_keys.len() > MAX_INDEX_RESULT_DOCUMENTS
+    {
+        return Err(malformed_restored_output());
+    }
+    // The totals are a pair with one presence; a whole-index statement is
+    // about an untruncated list whose length its totals count
+    // (`IndexIngestResult.validateDocuments`).
+    if summary.total_documents.is_some() != summary.total_chunks.is_some()
+        || (summary.whole_index_record
+            && (summary.documents_truncated
+                || summary.total_documents != Some(summary.documents.len() as u64)))
+    {
+        return Err(malformed_restored_output());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for key in summary
+        .documents
+        .iter()
+        .map(|document| document.document_key.as_str())
+        .chain(summary.removed_document_keys.iter().map(String::as_str))
+    {
+        if key.is_empty()
+            || key.len() > MAX_INDEX_DOCUMENT_KEY_BYTES
+            || key.contains('\0')
+            || !seen.insert(key)
+        {
+            return Err(malformed_restored_output());
+        }
+    }
+    if summary
+        .documents
+        .iter()
+        .any(|document| document.version.len() > MAX_INDEX_DOCUMENT_VERSION_BYTES)
+    {
+        return Err(malformed_restored_output());
+    }
+    Ok(match (terminal, status) {
+        (IndexIngestTerminalStateV1::Cancelled, _) => ExecutionOutcomeV1::Cancelled,
+        (_, IndexIngestStatusV1::Error) => ExecutionOutcomeV1::Failed,
+        _ => ExecutionOutcomeV1::Succeeded,
+    })
 }
 
 fn valid_toolkit_identity(value: &str) -> bool {

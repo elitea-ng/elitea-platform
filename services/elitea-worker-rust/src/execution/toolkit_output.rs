@@ -297,6 +297,9 @@ fn output_winner(error: &OutputGrpcError) -> Option<RuntimeFailureKind> {
         OutputGrpcError::Protocol(OutputProtocolError::DeadlineWon) => {
             Some(RuntimeFailureKind::DeadlineExceeded)
         }
+        OutputGrpcError::Protocol(OutputProtocolError::ResultRefused) => {
+            Some(RuntimeFailureKind::ResultRefused)
+        }
         _ => None,
     }
 }

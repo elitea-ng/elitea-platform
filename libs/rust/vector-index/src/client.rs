@@ -7,6 +7,7 @@
 //! `project_id` itself (zero means "the token's project").
 
 use std::fmt;
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 use tonic::Request;
@@ -465,6 +466,85 @@ impl VectorClient {
             .await?
             .into_inner()
             .indexes)
+    }
+}
+
+impl VectorClient {
+    /// Lists the documents of one toolkit-index namespace as the store holds
+    /// them: each (`document_key`, `document_version`) with its chunk count,
+    /// in `document_key` order. `space` narrows the read to one collection;
+    /// without it every collection is read. An incremental indexer compares
+    /// this with the source's listing (ADR-0030 decision 3).
+    ///
+    /// The whole listing is collected, with no bound but the facade's own; a
+    /// caller that wants to fold the pages as they arrive, bound the
+    /// listing, or stop early, uses [`Self::list_documents_with`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidToken`] or the facade's refusal.
+    pub async fn list_documents(
+        &self,
+        token: &dyn ClaimToken,
+        namespace: pb::Namespace,
+        space: Option<pb::EmbeddingSpace>,
+    ) -> Result<Vec<pb::IndexedDocument>> {
+        let mut documents = Vec::new();
+        // The sink never breaks, so the listing is always consumed whole.
+        let _consumed = self
+            .list_documents_with(token, namespace, space, None, |document| {
+                documents.push(document);
+                ControlFlow::Continue(())
+            })
+            .await?;
+        Ok(documents)
+    }
+
+    /// [`Self::list_documents`], handing each document to `sink` as its page
+    /// arrives, so the caller folds the listing into what it needs without
+    /// holding every page: the facade streams pages of at most 1024
+    /// documents and this reads one at a time. `max_documents` bounds the
+    /// facade's work: it stops reading and refuses the call
+    /// (`RESOURCE_EXHAUSTED`, [`Error::Rpc`]) as soon as the distinct
+    /// documents exceed it, before any page goes out; `None` leaves only its
+    /// own point bound. `sink` returns [`ControlFlow::Break`] to stop the
+    /// listing (the stream is dropped, which cancels the call); the result
+    /// says which of the two happened.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidToken`] or the facade's refusal.
+    pub async fn list_documents_with(
+        &self,
+        token: &dyn ClaimToken,
+        namespace: pb::Namespace,
+        space: Option<pb::EmbeddingSpace>,
+        max_documents: Option<u64>,
+        mut sink: impl FnMut(pb::IndexedDocument) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>> {
+        let request = authorize(
+            token,
+            pb::ListDocumentsRequest {
+                project_id: 0,
+                namespace: Some(namespace),
+                space,
+                max_documents: max_documents.unwrap_or(0),
+            },
+        )?;
+        let mut pages = self
+            .inner
+            .clone()
+            .list_documents(request)
+            .await?
+            .into_inner();
+        while let Some(page) = pages.message().await? {
+            for document in page.documents {
+                if sink(document).is_break() {
+                    return Ok(ControlFlow::Break(()));
+                }
+            }
+        }
+        Ok(ControlFlow::Continue(()))
     }
 }
 

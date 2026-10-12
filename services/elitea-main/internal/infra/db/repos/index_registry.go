@@ -14,6 +14,7 @@ import (
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -75,27 +76,17 @@ const indexRegistryBaseColumns = `
     index_registry.embedding_model, index_registry.embedding_dimension, index_registry.collection,
     index_registry.execution_id, index_registry.execution_generation, index_registry.index_generation,
     index_registry.meta_id, index_registry.correlation_id,
-    index_registry.created_at, index_registry.updated_at,`
+    index_registry.created_at, index_registry.updated_at,
+    index_registry.total_documents, index_registry.total_chunks,`
 
-// indexRegistrySelect selects one row with its run job for an update.
-// FOR UPDATE OF locks the registry row only, never the job.
+// indexRegistrySelect selects one row with its run job, for a read or for an
+// update (FOR UPDATE OF locks the registry row only, never the job). The
+// index's totals are the row's own columns (shared/0164): the worker reports
+// the whole index's totals in its typed result, because the per-document rows
+// of index_registry_documents are a bounded subset and cannot be summed.
 const indexRegistrySelect = `
-SELECT ` + indexRegistryBaseColumns + indexRegistryRunJob + `,
-    0::bigint, 0::bigint
+SELECT ` + indexRegistryBaseColumns + indexRegistryRunJob + `
 FROM elitea_runtime.index_registry` + indexRegistryRunJobJoin
-
-// indexRegistryReadSelect is the list and exact read: it adds the index's
-// totals from index_registry_documents (indexregistry.Metadata).
-const indexRegistryReadSelect = `
-SELECT ` + indexRegistryBaseColumns + indexRegistryRunJob + `,
-    documents.total_documents, documents.total_chunks
-FROM elitea_runtime.index_registry` + indexRegistryRunJobJoin + `
-CROSS JOIN LATERAL (
-    SELECT count(*)::bigint AS total_documents,
-           COALESCE(sum(document.chunk_count), 0)::bigint AS total_chunks
-    FROM elitea_runtime.index_registry_documents AS document
-    WHERE document.index_id = index_registry.index_id
-) AS documents`
 
 func scanIndexRegistryRow(row sqlRow) (indexregistryapp.Row, error) {
 	var (
@@ -115,8 +106,8 @@ func scanIndexRegistryRow(row sqlRow) (indexregistryapp.Row, error) {
 		&model, &dimension, &collection,
 		&executionID, &executionGeneration, &out.IndexGeneration, &metaID, &correlID,
 		&out.CreatedAt, &out.UpdatedAt,
-		&jobState, &jobDesired, &jobSettledAt, &out.ObservedAt,
 		&out.TotalDocuments, &out.TotalChunks,
+		&jobState, &jobDesired, &jobSettledAt, &out.ObservedAt,
 	); err != nil {
 		return indexregistryapp.Row{}, err
 	}
@@ -248,7 +239,8 @@ UPDATE elitea_runtime.index_registry SET
     skipped = $12::jsonb,
     embedding_model = $13, embedding_dimension = $14, collection = $15,
     execution_id = $16, execution_generation = $17, index_generation = $18,
-    meta_id = $19, correlation_id = $20, updated_at = $21
+    meta_id = $19, correlation_id = $20, updated_at = $21,
+    total_documents = $22, total_chunks = $23
 WHERE index_id = $1::uuid`,
 		row.IndexID,
 		string(row.State), row.TaskID, row.Error, row.ConvID,
@@ -258,6 +250,7 @@ WHERE index_id = $1::uuid`,
 		encoded.model, encoded.dimension, encoded.collection,
 		encoded.executionID, encoded.executionGeneration, row.IndexGeneration,
 		encoded.metaID, encoded.correlationID, row.UpdatedAt,
+		row.TotalDocuments, row.TotalChunks,
 	)
 	if err != nil {
 		return fmt.Errorf("update index registry row: %w", err)
@@ -281,14 +274,14 @@ INSERT INTO elitea_runtime.index_registry (
     indexed_documents, updated_documents, indexed_chunks, failed_chunks, skipped,
     embedding_model, embedding_dimension, collection,
     execution_id, execution_generation, index_generation, meta_id, correlation_id,
-    created_at, updated_at
+    created_at, updated_at, total_documents, total_chunks
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
     $8::jsonb, $9::jsonb,
     $10, $11, $12, $13, $14::jsonb,
     $15, $16, $17,
     $18, $19, $20, $21, $22,
-    $23, $23
+    $23, $23, $24, $25
 ) RETURNING index_id::text`,
 		row.ProjectID, row.ToolkitID, row.Name, string(row.State), row.TaskID, row.Error, row.ConvID,
 		encoded.history, encoded.configuration,
@@ -296,7 +289,7 @@ INSERT INTO elitea_runtime.index_registry (
 		encoded.model, encoded.dimension, encoded.collection,
 		encoded.executionID, encoded.executionGeneration, row.IndexGeneration,
 		encoded.metaID, encoded.correlationID,
-		row.CreatedAt,
+		row.CreatedAt, row.TotalDocuments, row.TotalChunks,
 	).Scan(&indexID)
 	if err != nil {
 		return "", fmt.Errorf("insert index registry row: %w", err)
@@ -602,7 +595,7 @@ func (r *IndexRegistryRepository) RecordScheduledFailure(
 
 // List implements indexregistry.Store.
 func (r *IndexRegistryRepository) List(ctx context.Context, projectID, toolkitID int32) ([]indexregistryapp.Row, error) {
-	rows, err := r.pool.Query(ctx, indexRegistryReadSelect+`
+	rows, err := r.pool.Query(ctx, indexRegistrySelect+`
 WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
   AND index_registry.deleted_at IS NULL
 ORDER BY index_registry.created_at, index_registry.index_id
@@ -631,7 +624,7 @@ func (r *IndexRegistryRepository) FindByName(
 	projectID, toolkitID int32,
 	name string,
 ) (indexregistryapp.Row, bool, error) {
-	row, err := scanIndexRegistryRow(r.pool.QueryRow(ctx, indexRegistryReadSelect+`
+	row, err := scanIndexRegistryRow(r.pool.QueryRow(ctx, indexRegistrySelect+`
 WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
   AND index_registry.name = $3 AND index_registry.deleted_at IS NULL`,
 		projectID, toolkitID, name))
@@ -809,8 +802,8 @@ WHERE index_id = $1::uuid AND deleted_at IS NOT NULL`, indexID, nextAttemptAt, i
 }
 
 // UpsertDocuments records the (document_key, version) of documents a run has
-// indexed (ADR-0030 decision 3). The caller is the future result path of the
-// Rust worker; nothing in elitea-main calls it yet.
+// indexed (ADR-0030 decision 3), in its own transaction. The output projection
+// uses the transaction-scoped upsertIndexRegistryDocuments instead.
 func (r *IndexRegistryRepository) UpsertDocuments(
 	ctx context.Context,
 	indexID string,
@@ -820,34 +813,87 @@ func (r *IndexRegistryRepository) UpsertDocuments(
 		return nil
 	}
 	return r.withinTx(ctx, func(q sqlExecutor) error {
-		for _, document := range documents {
-			if err := document.Validate(); err != nil {
-				return err
-			}
-			if _, err := q.Exec(ctx, `
+		return upsertIndexRegistryDocuments(ctx, q, indexID, documents)
+	})
+}
+
+// upsertIndexRegistryDocuments is UpsertDocuments inside the caller's
+// transaction: the result projection applies a run's documents in the
+// transaction that applies its result, so the two cannot disagree.
+func upsertIndexRegistryDocuments(
+	ctx context.Context,
+	q sqlExecutor,
+	indexID string,
+	documents []indexregistryapp.DocumentVersion,
+) error {
+	if len(documents) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(documents))
+	versions := make([]string, 0, len(documents))
+	chunks := make([]int32, 0, len(documents))
+	seen := make(map[string]struct{}, len(documents))
+	for _, document := range documents {
+		if err := document.Validate(); err != nil {
+			return err
+		}
+		// One statement cannot update the same row twice (ON CONFLICT
+		// refuses it), so a repeated key is refused here, not by Postgres.
+		if _, duplicate := seen[document.Key]; duplicate {
+			return indexingapp.ErrCurrentIndexMetaInitializationInvalid
+		}
+		seen[document.Key] = struct{}{}
+		keys = append(keys, document.Key)
+		versions = append(versions, document.Version)
+		chunks = append(chunks, document.ChunkCount)
+	}
+	// One round trip for the whole list (up to the frame's 4096 documents):
+	// the arrays are unnested side by side, one row per document.
+	if _, err := q.Exec(ctx, `
 INSERT INTO elitea_runtime.index_registry_documents (index_id, document_key, version, chunk_count)
-VALUES ($1::uuid, $2, $3, $4)
+SELECT $1::uuid, document.key, document.version, document.chunk_count
+FROM unnest($2::text[], $3::text[], $4::int4[]) AS document(key, version, chunk_count)
 ON CONFLICT (index_id, document_key) DO UPDATE
 SET version = EXCLUDED.version, chunk_count = EXCLUDED.chunk_count, updated_at = clock_timestamp()`,
-				indexID, document.Key, document.Version, document.ChunkCount); err != nil {
-				return fmt.Errorf("upsert index registry document: %w", err)
-			}
-		}
-		return nil
-	})
+		indexID, keys, versions, chunks); err != nil {
+		return fmt.Errorf("upsert index registry documents: %w", err)
+	}
+	return nil
 }
 
 // DeleteDocuments forgets documents that disappeared from the source.
 func (r *IndexRegistryRepository) DeleteDocuments(ctx context.Context, indexID string, keys []string) error {
+	return deleteIndexRegistryDocuments(ctx, r.pool, indexID, keys)
+}
+
+// deleteIndexRegistryDocuments is DeleteDocuments on the caller's executor.
+func deleteIndexRegistryDocuments(ctx context.Context, q indexRegistryExecer, indexID string, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	if _, err := r.pool.Exec(ctx, `
+	if _, err := q.Exec(ctx, `
 DELETE FROM elitea_runtime.index_registry_documents
 WHERE index_id = $1::uuid AND document_key = ANY($2::text[])`, indexID, keys); err != nil {
 		return fmt.Errorf("delete index registry documents: %w", err)
 	}
 	return nil
+}
+
+// deleteIndexRegistryDocumentsNotIn forgets every document of the index that
+// the list does not name: a run that reported the WHOLE index
+// (outputapp.IndexIngestResult.ReportsWholeIndex) makes the rows exactly its
+// list. It returns how many rows went.
+func deleteIndexRegistryDocumentsNotIn(ctx context.Context, q indexRegistryExecer, indexID string, keep []string) (int64, error) {
+	if keep == nil {
+		keep = []string{}
+	}
+	tag, err := q.Exec(ctx, `
+DELETE FROM elitea_runtime.index_registry_documents
+WHERE index_id = $1::uuid AND NOT (document_key = ANY($2::text[]))`, indexID, keep)
+	if err != nil {
+		return 0, fmt.Errorf("delete index registry documents not in the result: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // ListDocuments returns every recorded document of an index, by key.
@@ -870,6 +916,12 @@ ORDER BY document_key`, indexID)
 		out = append(out, document)
 	}
 	return out, rows.Err()
+}
+
+// indexRegistryExecer is the one method the document deletes need, so they run
+// on the pool (DeleteDocuments) and inside a result's transaction alike.
+type indexRegistryExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
 var (

@@ -385,6 +385,25 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	return config, nil
 }
 
+// RustIndexing reports that the deployment indexes natively
+// (ELITEA_INDEXING_RUNTIME=rust with the index dispatch on): the index registry
+// holds the metadata, elitea-vector holds the vectors, and the project pgvector
+// database is never provisioned or read.
+func (c Config) RustIndexing() bool {
+	return c.IndexIngestDispatchEnabled && c.IndexingRuntime == IndexingRuntimeRust
+}
+
+// ProjectVectorStoreProvisioned reports whether a created project gets a
+// pgvector role, database and `pgvector_configuration` (the provisioner's
+// project_pgvector step). Under the Rust indexing runtime it does not
+// (ADR-0031 decision 5): there is nothing to provision for, and requiring a
+// pgvector bootstrap would keep the per-project database the runtime retires.
+// The composition root then hands the provisioner no vector store, and the step
+// is skipped.
+func (c Config) ProjectVectorStoreProvisioned() bool {
+	return !c.RustIndexing()
+}
+
 func (c Config) Validate() error {
 	if err := validateCodeOwnerConfig(c.CodeOwnerRecovery, c.Enabled, c.AgentExecutionDispatchEnabled, c.SandboxAudiences); err != nil {
 		return err

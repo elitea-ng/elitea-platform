@@ -19,10 +19,10 @@ import (
 // The response shape has no separate "total" and "last run" keys, so the
 // existing keys are mapped as follows:
 //
-//   - `indexed` and `indexed_chunks` are the INDEX's totals: the number of
-//     documents recorded in index_registry_documents and the sum of their
-//     chunks (row.TotalDocuments, row.TotalChunks). An incremental run that
-//     changed nothing leaves them as they were.
+//   - `indexed` and `indexed_chunks` are the INDEX's totals as the last
+//     applied result reported them (row.TotalDocuments, row.TotalChunks, from
+//     IndexIngestSummaryV1.total_documents/total_chunks). An incremental run
+//     that changed nothing reports the same totals again.
 //   - `updated`, `failed_chunks` and `skipped` are the LAST run's counts.
 //   - every `history` entry carries its own run's counts (`indexed` is the
 //     documents that run wrote, `indexed_chunks` its chunks), and so does the
@@ -491,12 +491,14 @@ func (e *DimensionMismatchError) FailedSummary() outputapp.IndexIngestSummary {
 // This is a BACKSTOP. The worker is told the expected embedding space in the
 // index command (IndexIngestCommandV1.expected_embedding_model/_dimension) and
 // must fail before writing a vector when it differs; a worker that ignores
-// that reaches this check. The output plane has no typed refusal that makes a
-// worker settle FAILED (only a cancellation or deadline winner can replace a
-// terminal frame), so the settlement, the stored projection and the replay
-// event keep the worker's own outcome while the registry and the notification
-// say failed. That inconsistency is deliberate and bounded to a misbehaving
-// worker.
+// that reaches this check. The output projection does not record what this
+// returns when overridden is true: it REFUSES the frame before writing
+// anything (outputapp.ErrIndexResultRefused, RUNTIME_ERROR_CODE_V1_RESULT_REFUSED),
+// and the worker answers with a FAILED RuntimeError terminal carrying that
+// code, which the registry terminalizer records as `failed`. So the
+// settlement, the projection and the registry agree. The failure summary this
+// returns is what a caller that does record (IndexRegistryRepository.ApplyResult,
+// tests, a result replay) stores, and what the refusal's reason is taken from.
 func RecordedSummary(row Row, summary outputapp.IndexIngestSummary) (recorded outputapp.IndexIngestSummary, overridden bool) {
 	if summary == (outputapp.IndexIngestSummary{}) {
 		return failureSummary(NoTypedSummaryReason), true
@@ -517,7 +519,13 @@ func RecordedSummary(row Row, summary outputapp.IndexIngestSummary) (recorded ou
 // the model and dimension (ADR-0030 decision 2); a later one with another
 // dimension, or another model, touches neither the counts nor the stamp and
 // fails the run with a message that says so, and so does a result without a
-// typed summary.
+// typed summary (the output projection refuses such a result before reaching
+// here; see RecordedSummary). A result that carries the totals
+// (Summary.TotalsPresent) sets the index's totals (TotalDocuments,
+// TotalChunks) from them, zero included and whatever its status: they are the
+// store as it is after the run, not a sum over the bounded document list, and
+// a run that failed after writing reports the store it left behind. A result
+// without them leaves the totals as they were.
 func ApplyResult(row Row, result Result) (next Row, changed bool, err error) {
 	if result.ExecutionID == "" || result.Generation == 0 ||
 		result.Generation > math.MaxInt64 || result.OccurredAt.IsZero() {
@@ -554,16 +562,26 @@ func ApplyResult(row Row, result Result) (next Row, changed bool, err error) {
 	} else {
 		next.Indexed = int64(summary.Indexed)
 	}
+	if summary.TotalsPresent {
+		next.TotalDocuments = int64(summary.TotalDocuments)
+		next.TotalChunks = int64(summary.TotalChunks)
+	}
 	next.Updated = int64(summary.Updated)
 	next.Chunks = int64(summary.IndexedChunks)
 	next.Failed = int64(summary.FailedChunks)
 	next.Skipped = summary.Skipped()
 
-	switch summary.Status {
-	case outputapp.IndexIngestStatusError:
+	switch {
+	case summary.TerminalState == outputapp.IndexIngestTerminalCancelled:
+		// Stopped after touching the store: the counts and totals above are
+		// the store's; the row ends as ApplyTerminal ends a cancelled run.
+		next.State = StateCancelled
+		next.TaskID = nil
+		next.Error = nil
+	case summary.Status == outputapp.IndexIngestStatusError:
 		next.State = StateFailed
 		next.Error = ptr(summary.Message)
-	case outputapp.IndexIngestStatusPartlyIndexed:
+	case summary.Status == outputapp.IndexIngestStatusPartlyIndexed:
 		next.State = StatePartlyIndexed
 		next.Error = nil
 	default:
