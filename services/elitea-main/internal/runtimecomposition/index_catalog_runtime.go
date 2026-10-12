@@ -7,7 +7,8 @@ import (
 )
 
 // This file hands the Rust indexing runtime's index catalog (ADR-0030 I1) to
-// the three freeze paths. Each takes an optional resolver; a nil *CatalogResolver
+// the two freeze paths that serve index tools (agent execution and
+// toolkit.call_tool.v1). Each takes an optional resolver; a nil *CatalogResolver
 // must reach them as a nil INTERFACE (or no option at all), not as a typed nil
 // that reads as "configured" and then fails every freeze.
 

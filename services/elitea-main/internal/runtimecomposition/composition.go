@@ -870,9 +870,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if toolkitErr != nil {
 			return nil, fmt.Errorf("construct current direct toolkit freezer: %w", toolkitErr)
 		}
-		if indexCatalog != nil {
-			toolkitFreezer = toolkitFreezer.WithIndexCatalog(indexCatalog)
-		}
+		// No index catalog here (review round 1, finding 3): a
+		// toolkit.execute.read.v1 claim carries no vector token and the worker
+		// serves no index tools on the direct read and discovery paths, so
+		// Main freezes none — the two sides agree by construction.
 		toolkitInputs, toolkitErr := toolkitexecutionapp.NewInputBundleFactory(
 			toolkitexecutionapp.InputProfile{
 				Classification:        inputClassification,
@@ -1213,8 +1214,26 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	// The `remove_index` tool's Main half (ADR-0030 I1): only the Rust indexing
+	// runtime has a registry to delete from. As an interface it must stay a
+	// nil INTERFACE on the Python path, not a typed nil the server would call.
+	var indexRemovals control.IndexRemover
+	if rustIndexing && indexRegistry != nil {
+		remover, removerErr := newClaimIndexRemover(
+			dependencies.AdmissionPool,
+			dependencies.ContentPool,
+			indexRegistry,
+			dependencies.PermissionResolver,
+			dependencies.Logger,
+		)
+		if removerErr != nil {
+			return nil, fmt.Errorf("construct index removal: %w", removerErr)
+		}
+		indexRemovals = remover
+	}
 	controlServer, err := control.NewServer(control.ServerConfig{
 		VectorTokens:           vectorTokens,
+		IndexRemovals:          indexRemovals,
 		SandboxGrants:          sandboxGrants,
 		CompiledSnapshots:      compiledAuthority,
 		CompiledProfiles:       compiledProfiles,

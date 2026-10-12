@@ -43,9 +43,9 @@ use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind,
-    IndexToolAuthority, McpConnector, McpMaterializationError, McpMaterializationErrorCode,
-    RefusedToolkit, ToolAdmissionPolicy, ToolBindingError, ToolsetMaterializationError,
-    ToolsetMaterializationErrorCode, bind_toolsets,
+    IndexToolAuthority, IndexToolSupport, IndexToolsWithheld, McpConnector,
+    McpMaterializationError, McpMaterializationErrorCode, RefusedToolkit, ToolAdmissionPolicy,
+    ToolBindingError, ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
     materialize_configured_toolsets_reporting_refusals,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -324,8 +324,19 @@ impl OrdinaryNativeAgentAssembler {
         let artifact_authority = ArtifactToolAuthority::new(Arc::clone(&platform_writer));
         // The index tools (ADR-0030 I1) act under the same claim: its vector
         // token, its redeemed context for the query embedding, and a chat
-        // model bound on the agent's own model for the step-back tools.
-        let index_authority = self.index_tool_authority(runtime_context, &context, profile);
+        // model bound on the agent's own model for the step-back tools. The
+        // host (and the second model binding it carries) is built only when
+        // the snapshot has an I1 toolkit carrying a catalog — the only case
+        // anything would call it (review round 1).
+        let index_authority = if snapshot_carries_index_catalog(tool_snapshot) {
+            self.index_tool_authority(runtime_context, &context, profile)
+        } else {
+            Err(IndexToolsWithheld::NotRequested)
+        };
+        let index_support = match index_authority.as_ref() {
+            Ok(authority) => IndexToolSupport::Lent(authority),
+            Err(reason) => IndexToolSupport::Withheld(*reason),
+        };
         let DirectToolsets {
             mut toolsets,
             sensitive: sensitive_tools,
@@ -337,7 +348,7 @@ impl OrdinaryNativeAgentAssembler {
             tool_policy,
             mcp_tokens,
             &artifact_authority,
-            index_authority.as_ref(),
+            index_support,
         )
         .await?;
         let internal_tools = profile.internal_tools();
@@ -462,19 +473,24 @@ impl OrdinaryNativeAgentAssembler {
         ))
     }
 
-    /// The index tools' authority for this claim, or `None` where this
-    /// worker has no vector store or the claim carries no vector token (the
-    /// families then serve no index tools). The step-back model is bound on
-    /// the agent's model; a binding failure leaves the two step-back tools
-    /// refusing with a sentence and the other three working.
+    /// The index tools' authority for this claim, or the reason there is
+    /// none: this worker has no vector store, or the claim carries no vector
+    /// token (the families then serve no index tools). The step-back model
+    /// is bound on the agent's model; a binding failure leaves the two
+    /// step-back tools refusing with a sentence and the other three working.
     fn index_tool_authority(
         &self,
         runtime_context: &ClaimBoundRuntimeContextAuthority,
         context: &Arc<ClaimScopedEliteaContext>,
         profile: &super::assembly::OrdinaryNoToolProfile,
-    ) -> Option<IndexToolAuthority> {
-        let runtime = self.index_runtime.as_ref()?;
-        let token = runtime_context.vector_token()?;
+    ) -> Result<IndexToolAuthority, IndexToolsWithheld> {
+        let runtime = self
+            .index_runtime
+            .as_ref()
+            .ok_or(IndexToolsWithheld::NoVectorStore)?;
+        let token = runtime_context
+            .vector_token()
+            .ok_or(IndexToolsWithheld::NoVectorToken)?;
         let model = match self.bind_stepback_model(profile, context) {
             Ok(binding) => Some(binding),
             Err(error) => {
@@ -486,11 +502,12 @@ impl OrdinaryNativeAgentAssembler {
                 None
             }
         };
-        Some(IndexToolAuthority::new(Arc::new(ClaimIndexToolHost::new(
+        Ok(IndexToolAuthority::new(Arc::new(ClaimIndexToolHost::new(
             Arc::clone(runtime),
             token,
             Arc::clone(context),
             model,
+            runtime_context.index_removal_binding(),
         ))))
     }
 
@@ -753,13 +770,24 @@ struct DirectToolsets {
 /// and building the sensitive-tool and delegated-authorization catalogs from
 /// THOSE names keeps the three in agreement; building either catalog from the
 /// published name would leave a renamed tool silently unguarded.
+/// Whether any configured I1 indexing toolkit in the snapshot carries Main's
+/// frozen index catalog — the only case the index tools' host is worth
+/// building (ADR-0030 I1).
+pub(super) fn snapshot_carries_index_catalog(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
+    snapshot.iter().any(|reference| {
+        reference.kind() == FrozenToolKind::Configured
+            && crate::toolkits::is_index_family(reference.tool_type())
+            && reference.indexes().is_some()
+    })
+}
+
 async fn materialize_direct_toolsets(
     snapshot: &AdmittedToolSnapshot<'_>,
     connector: &dyn McpConnector,
     policy: &Arc<ToolAdmissionPolicy>,
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: &ArtifactToolAuthority,
-    index_tools: Option<&IndexToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
 ) -> Result<DirectToolsets, NativeAgentAssemblyError> {
     let crate::toolkits::ConfiguredToolsets {
         mut toolsets,

@@ -77,6 +77,23 @@ const toolkitCallToolInteractiveJob = `
           AND j.actor_id ~ '^[1-9][0-9]{0,18}$'
           AND j.principal_ref = j.actor_id`
 
+// AuthorizeRuntimeContextForWorkload is AuthorizeRuntimeContext for a caller
+// that already holds the authenticated peer's workload identity — the runtime
+// control gRPC service, whose WorkloadAuthorizer derives it from the mTLS peer
+// before any request is read. The identity is matched against the claim row
+// exactly as the certificate-derived one is; an empty identity authorizes
+// nothing.
+func (r *PostgresContentRepository) AuthorizeRuntimeContextForWorkload(
+	ctx context.Context,
+	claim ContentClaim,
+	workloadIdentity string,
+) (RuntimeContextAuthorization, error) {
+	if workloadIdentity == "" {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	return r.authorizeRuntimeContextForWorkload(ctx, claim, workloadIdentity, "")
+}
+
 func (r *PostgresContentRepository) authorizeRuntimeContext(
 	ctx context.Context,
 	claim ContentClaim,
@@ -86,9 +103,17 @@ func (r *PostgresContentRepository) authorizeRuntimeContext(
 	if err != nil {
 		return RuntimeContextAuthorization{}, ErrContentUnauthorized
 	}
+	return r.authorizeRuntimeContextForWorkload(ctx, claim, workloadID, capabilityFilter)
+}
 
+func (r *PostgresContentRepository) authorizeRuntimeContextForWorkload(
+	ctx context.Context,
+	claim ContentClaim,
+	workloadID string,
+	capabilityFilter string,
+) (RuntimeContextAuthorization, error) {
 	var authorization RuntimeContextAuthorization
-	err = r.store.QueryRow(ctx, `
+	err := r.store.QueryRow(ctx, `
 SELECT j.resource_project_id,
        j.actor_id,
        CASE

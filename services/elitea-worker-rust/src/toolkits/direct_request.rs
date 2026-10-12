@@ -251,6 +251,16 @@ impl DirectToolkitRequest {
             .is_some_and(Value::is_array)
     }
 
+    /// Whether this call names one of the five index tools of a toolkit that
+    /// carries a catalog — the only case the index tools' authority (and the
+    /// claim-context redemption it needs) is worth building for a
+    /// `toolkit.call_tool.v1` run. A `github` `read_file` on a toolkit with
+    /// a catalog is not one.
+    pub(crate) fn calls_index_tool(&self) -> bool {
+        self.carries_index_catalog()
+            && elitea_agent_runtime::toolkits::IndexToolName::parse(self.tool_name()).is_some()
+    }
+
     pub(crate) fn tokens(&self) -> &Map<String, Value> {
         &self.tokens
     }

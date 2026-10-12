@@ -57,9 +57,9 @@ use crate::state::{CheckpointLimits, SessionLimits};
 use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority,
     DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot, FrozenToolset,
-    IndexToolAuthority, McpConnector, SensitiveToolPolicy, ToolAdmissionDecision,
-    ToolAdmissionPolicy, ToolBindingError, ToolBindingPlan, bind_frozen_toolsets, freeze_toolsets,
-    materialize_configured_toolsets_with_authorities,
+    IndexToolAuthority, IndexToolSupport, IndexToolsWithheld, McpConnector, SensitiveToolPolicy,
+    ToolAdmissionDecision, ToolAdmissionPolicy, ToolBindingError, ToolBindingPlan,
+    bind_frozen_toolsets, freeze_toolsets, materialize_configured_toolsets_with_authorities,
     materialize_configured_toolsets_with_tokens_and_authorization,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -486,23 +486,33 @@ impl PipelineNativeAgentAssembler {
                 node_events: Some(node_events),
             });
         }
-        let (context, model_facade) = if has_llm_nodes || has_application_nodes {
+        // The claim context is redeemed for the nodes that need it: the
+        // LLM and application nodes (their model calls), and a toolkit node
+        // that calls an index tool on a toolkit carrying a catalog (the query
+        // embedding, ADR-0030 I1 — review round 1).
+        let calls_index_tool = pipeline_calls_index_tool(profile.definition(), &toolsets);
+        let context = if has_llm_nodes || has_application_nodes || calls_index_tool {
             let platform = self
                 .platform
                 .as_ref()
-                .ok_or_else(unsupported_pipeline_runtime)?;
-            let model_facade = self
-                .model_facade
-                .clone()
                 .ok_or_else(unsupported_pipeline_runtime)?;
             tracing::Span::current().record("stage", "runtime_context");
             let context = platform
                 .redeem_elitea_context(runtime_context)
                 .await
                 .map_err(NativeAgentAssemblyError::from)?;
-            (Some(Arc::new(context)), Some(model_facade))
+            Some(Arc::new(context))
         } else {
-            (None, None)
+            None
+        };
+        let model_facade = if has_llm_nodes || has_application_nodes {
+            Some(
+                self.model_facade
+                    .clone()
+                    .ok_or_else(unsupported_pipeline_runtime)?,
+            )
+        } else {
+            None
         };
         tracing::Span::current().record("stage", "toolsets");
         let aliases = profile.definition().runtime_toolkit_aliases();
@@ -518,18 +528,31 @@ impl PipelineNativeAgentAssembler {
             )))
         });
         // The index tools (ADR-0030 I1) need the redeemed context for the
-        // query embedding, which this path holds only when the pipeline has
-        // LLM or application nodes. No pipeline node binds a chat model to a
-        // tool, so the two step-back tools refuse here; the other three work.
-        let index_tools = match (
+        // query embedding; the reason it is missing travels with the
+        // materializer, so its warning names the real cause. No pipeline
+        // node binds a chat model to a tool, so the two step-back tools
+        // refuse here; the other three work.
+        let index_tools: Result<IndexToolAuthority, IndexToolsWithheld> = match (
             self.index_runtime.as_ref(),
             runtime_context.vector_token(),
             context.as_ref(),
         ) {
-            (Some(runtime), Some(token), Some(context)) => Some(IndexToolAuthority::new(Arc::new(
-                ClaimIndexToolHost::new(Arc::clone(runtime), token, Arc::clone(context), None),
-            ))),
-            _ => None,
+            (None, _, _) => Err(IndexToolsWithheld::NoVectorStore),
+            (Some(_), None, _) => Err(IndexToolsWithheld::NoVectorToken),
+            (Some(_), Some(_), None) => Err(IndexToolsWithheld::NoRuntimeContext),
+            (Some(runtime), Some(token), Some(context)) => {
+                Ok(IndexToolAuthority::new(Arc::new(ClaimIndexToolHost::new(
+                    Arc::clone(runtime),
+                    token,
+                    Arc::clone(context),
+                    None,
+                    runtime_context.index_removal_binding(),
+                ))))
+            }
+        };
+        let index_support = match index_tools.as_ref() {
+            Ok(authority) => IndexToolSupport::Lent(authority),
+            Err(reason) => IndexToolSupport::Withheld(*reason),
         };
         let (mut materialized, mut delegated_authorization) =
             materialize_configured_toolsets_with_authorities(
@@ -537,7 +560,7 @@ impl PipelineNativeAgentAssembler {
                 tool_policy,
                 mcp_tokens,
                 artifacts.as_ref(),
-                index_tools.as_ref(),
+                index_support,
             )
             .await
             .map_err(tool_materialization_error)?;
@@ -2090,6 +2113,26 @@ fn legacy_toolkit_key(value: &str) -> String {
         .filter(|value| !value.is_whitespace() && *value != '_')
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+/// Whether a toolkit node of the pipeline calls one of the index tools on a
+/// configured I1 indexing toolkit whose frozen reference carries Main's
+/// catalog (ADR-0030 I1). An LLM node's tools need the claim context anyway,
+/// so only the direct toolkit nodes decide here.
+pub(super) fn pipeline_calls_index_tool(
+    definition: &PipelineDefinition,
+    toolsets: &AdmittedToolSnapshot<'_>,
+) -> bool {
+    definition.direct_tool_selections().any(|selection| {
+        selection.kind() == DirectToolNodeKind::Toolkit
+            && crate::toolkits::is_sdk_index_tool_name(selection.tool())
+            && toolsets.iter().any(|reference| {
+                reference.kind() == FrozenToolKind::Configured
+                    && reference.toolkit_name() == selection.alias()
+                    && crate::toolkits::is_index_family(reference.tool_type())
+                    && reference.indexes().is_some()
+            })
+    })
 }
 
 fn toolsets_by_alias(

@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use super::families::index_tools::{
     I1_INDEX_FAMILIES, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
-    IndexToolFailure, IndexToolHost, IndexToolName, all_index_tools, build_index_toolset,
-    doctype_for, is_index_family,
+    IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,
+    all_index_tools, build_index_toolset, doctype_for, is_index_family,
 };
 use super::materialize::{
     materialize_configured_toolsets_reporting_refusals,
@@ -23,9 +23,9 @@ use super::policy::ToolAdmissionPolicy;
 use super::sdk_conformance;
 use super::snapshot::FrozenToolSnapshot;
 
-/// One recorded call: the tool, the doctype, the catalog's names, the
-/// arguments.
-type RecordedCall = (IndexToolName, String, Vec<String>, Value);
+/// One recorded call: the tool, the toolkit id, the doctype, the catalog's
+/// names, the arguments.
+type RecordedCall = (IndexToolName, u64, String, Vec<String>, Value);
 
 /// Records every call and answers with a canned value per tool.
 struct RecordingHost {
@@ -44,6 +44,7 @@ impl IndexToolHost for RecordingHost {
             .collect();
         self.calls.lock().expect("calls").push((
             call.tool,
+            call.toolkit_id,
             call.doctype.to_owned(),
             names,
             call.arguments.clone(),
@@ -268,6 +269,7 @@ async fn selected_tools_keep_only_the_named_index_tools() {
             .clone();
     let toolset = build_index_toolset(
         "repo",
+        41,
         "github",
         &settings,
         IndexCatalog::default(),
@@ -284,6 +286,7 @@ async fn selected_tools_keep_only_the_named_index_tools() {
         .clone();
     let toolset = build_index_toolset(
         "repo",
+        41,
         "github",
         &everything,
         IndexCatalog::default(),
@@ -303,6 +306,7 @@ async fn selected_tools_keep_only_the_named_index_tools() {
     assert!(
         build_index_toolset(
             "repo",
+            41,
             "github",
             &malformed,
             IndexCatalog::default(),
@@ -318,6 +322,7 @@ async fn a_tool_call_reaches_the_host_with_the_catalog_and_a_failure_is_the_resu
     let (authority, host) = lend(false);
     let toolset = build_index_toolset(
         "repo",
+        41,
         "github",
         &Map::new(),
         IndexCatalog::parse(&catalog_value()).expect("catalog"),
@@ -345,13 +350,18 @@ async fn a_tool_call_reaches_the_host_with_the_catalog_and_a_failure_is_the_resu
     let recorded = host.calls.lock().expect("calls").clone();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, IndexToolName::SearchIndex);
-    assert_eq!(recorded[0].1, "code");
-    assert_eq!(recorded[0].2, ["docs", "code"]);
-    assert_eq!(recorded[0].3["index_name"], "docs");
+    assert_eq!(
+        recorded[0].1, 41,
+        "the frozen toolkit's id travels with the call"
+    );
+    assert_eq!(recorded[0].2, "code");
+    assert_eq!(recorded[0].3, ["docs", "code"]);
+    assert_eq!(recorded[0].4["index_name"], "docs");
 
     let (failing, _) = lend(true);
     let toolset = build_index_toolset(
         "repo",
+        41,
         "github",
         &Map::new(),
         IndexCatalog::default(),
@@ -392,7 +402,7 @@ async fn without_a_catalog_the_family_has_no_index_tools() {
         &policy(),
         &Map::new(),
         None,
-        Some(&authority),
+        IndexToolSupport::Lent(&authority),
     )
     .await
     .expect("materialized");
@@ -422,7 +432,7 @@ async fn with_a_catalog_and_an_authority_the_family_carries_the_index_tools() {
         &policy(),
         &Map::new(),
         None,
-        Some(&authority),
+        IndexToolSupport::Lent(&authority),
     )
     .await
     .expect("materialized");
@@ -445,7 +455,7 @@ async fn with_a_catalog_and_an_authority_the_family_carries_the_index_tools() {
         &policy(),
         &Map::new(),
         None,
-        Some(&authority),
+        IndexToolSupport::Lent(&authority),
     )
     .await
     .expect("materialized");
@@ -464,7 +474,7 @@ async fn with_a_catalog_and_an_authority_the_family_carries_the_index_tools() {
         &policy(),
         &Map::new(),
         None,
-        Some(&authority),
+        IndexToolSupport::Lent(&authority),
     )
     .await
     .expect("materialized");
@@ -485,7 +495,7 @@ async fn a_catalog_without_an_authority_leaves_the_index_tools_out() {
         &policy(),
         &Map::new(),
         None,
-        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
     )
     .await
     .expect("materialized");
@@ -513,7 +523,7 @@ async fn a_malformed_catalog_fails_the_toolkit_and_a_non_array_is_refused_at_par
             &policy(),
             &Map::new(),
             None,
-            Some(&authority),
+            IndexToolSupport::Lent(&authority),
         )
         .await
         .is_err()
@@ -521,5 +531,204 @@ async fn a_malformed_catalog_fails_the_toolkit_and_a_non_array_is_refused_at_par
     let version = json!({"tools": [github_tool(Some(json!({"docs": 1})), &["get_me"])]});
     assert!(
         FrozenToolSnapshot::from_version_details(version.as_object().expect("version")).is_err()
+    );
+}
+
+/// Review round 1, finding 5: an index-only `selected_tools` is admissible
+/// ONLY where the index toolset is actually composed beside the family.
+/// Without a catalog (Python indexing) or with the authority withheld, the
+/// family keeps refusing it as an unsupported selection and the toolkit is
+/// skipped, as before this stage.
+#[tokio::test]
+async fn an_index_only_selection_is_accepted_only_when_the_index_toolset_is_composed() {
+    let (authority, _) = lend(false);
+    for (indexes, support, served) in [
+        (
+            Some(catalog_value()),
+            IndexToolSupport::Lent(&authority),
+            true,
+        ),
+        (
+            Some(catalog_value()),
+            IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
+            false,
+        ),
+        (None, IndexToolSupport::Lent(&authority), false),
+    ] {
+        let version = json!({"tools": [github_tool(indexes, &["search_index", "list_indexes"])]});
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                .expect("snapshot")
+                .apply_policy(policy().as_ref());
+        let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+            &snapshot,
+            &policy(),
+            &Map::new(),
+            None,
+            support,
+        )
+        .await
+        .expect("materialized");
+        if served {
+            assert_eq!(toolsets.len(), 1);
+            let mut names = tool_names(&toolsets).await;
+            names.sort_unstable();
+            assert_eq!(names, ["list_indexes", "search_index"]);
+        } else {
+            assert!(
+                toolsets.is_empty(),
+                "an index-only selection without the index toolset is the unsupported selection it always was"
+            );
+        }
+    }
+    // The ADO families that are not indexing families keep refusing it
+    // whatever the toolkit carries: a catalog on `ado_boards` is not a
+    // catalog this stage reads.
+    let version = json!({"tools": [{
+        "id": 7,
+        "type": "ado_boards",
+        "toolkit_name": "boards",
+        "indexes": catalog_value(),
+        "settings": {
+            "ado_configuration": {
+                "organization_url": "https://dev.azure.com/contoso/",
+                "token": "fixture-token"
+            },
+            "project": "Fabrikam Fiber",
+            "limit": 5,
+            "selected_tools": ["search_index"]
+        }
+    }]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    assert!(toolsets.is_empty(), "ado_boards never composes index tools");
+}
+
+/// Review round 1, finding 4: on a path that lends no artifact authority
+/// (`toolkit.call_tool.v1`), an `artifact` toolkit with a catalog still
+/// serves its index tools; the family's own tools are the ones left out.
+#[tokio::test]
+async fn an_artifact_toolkit_without_an_artifact_authority_still_serves_its_index_tools() {
+    let (authority, host) = lend(false);
+    let version = json!({"tools": [{
+        "id": 9,
+        "type": "artifact",
+        "toolkit_name": "files",
+        "indexes": catalog_value(),
+        "settings": {"bucket": "docs", "selected_tools": []}
+    }]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    assert_eq!(toolsets.len(), 1);
+    assert_eq!(toolsets[0].name(), "files");
+    let mut names = tool_names(&toolsets).await;
+    names.sort_unstable();
+    let mut expected: Vec<&str> = INDEX_TOOL_NAMES.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        names, expected,
+        "index tools only, no artifact family tools"
+    );
+    // The call carries the artifact toolkit's id and doctype.
+    let context = Arc::new(SimpleToolContext::new("index-tools-test"));
+    let tools = toolsets[0]
+        .tools(Arc::clone(&context) as Arc<dyn ReadonlyContext>)
+        .await
+        .expect("tools");
+    let list = tools
+        .iter()
+        .find(|tool| tool.name() == "list_indexes")
+        .expect("list_indexes");
+    list.execute(
+        Arc::clone(&context) as Arc<dyn adk_core::ToolContext>,
+        json!({}),
+    )
+    .await
+    .expect("result");
+    let recorded = host.calls.lock().expect("calls").clone();
+    assert_eq!(recorded[0].1, 9);
+    assert_eq!(recorded[0].2, "document");
+    // Without a catalog the artifact family on such a path is skipped as
+    // before (#906): no authority, no family, nothing to serve.
+    let version = json!({"tools": [{
+        "id": 9,
+        "type": "artifact",
+        "toolkit_name": "files",
+        "settings": {"bucket": "docs", "selected_tools": []}
+    }]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let (toolsets, _) = materialize_configured_toolsets_with_authorities(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    assert!(toolsets.is_empty());
+}
+
+/// The withheld reasons name their cause; only a missing dependency is a
+/// warning.
+#[test]
+fn withheld_reasons_name_the_cause() {
+    assert_eq!(
+        IndexToolsWithheld::NoVectorStore.reason_code(),
+        "no_vector_target"
+    );
+    assert_eq!(
+        IndexToolsWithheld::NoVectorToken.reason_code(),
+        "no_vector_token"
+    );
+    assert_eq!(
+        IndexToolsWithheld::NoRuntimeContext.reason_code(),
+        "no_runtime_context"
+    );
+    assert_eq!(
+        IndexToolsWithheld::NotServedOnThisPath.reason_code(),
+        "not_served_on_this_path"
+    );
+    assert!(IndexToolsWithheld::NoVectorStore.is_warning());
+    assert!(IndexToolsWithheld::NoVectorToken.is_warning());
+    assert!(!IndexToolsWithheld::NoRuntimeContext.is_warning());
+    assert!(!IndexToolsWithheld::NotServedOnThisPath.is_warning());
+    assert_eq!(
+        IndexToolsWithheld::NotRequested.reason_code(),
+        "not_requested"
+    );
+    assert!(!IndexToolsWithheld::NotRequested.is_warning());
+    let (authority, _) = lend(false);
+    assert!(
+        IndexToolSupport::lent_or(Some(&authority), IndexToolsWithheld::NoVectorStore)
+            .authority()
+            .is_some()
+    );
+    assert!(
+        IndexToolSupport::lent_or(None, IndexToolsWithheld::NoVectorStore)
+            .authority()
+            .is_none()
     );
 }

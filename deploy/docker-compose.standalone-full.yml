@@ -1889,8 +1889,9 @@ services:
       SSL_CERT_FILE: /run/elitea-worker-trust/worker-ca-bundle.pem
       # The one environment variable the worker itself reads. Mirrors the
       # hybrid's fail-safe snapshot: broader than the current
-      # `artifact.delete_file` rule so metadata drift cannot bypass approval.
-      ELITEA_SENSITIVE_TOOLS: '{"*":["delete_file"]}'
+      # `artifact.delete_file` rule so metadata drift cannot bypass approval;
+      # `remove_index` (the indexing families' index delete) is destructive too.
+      ELITEA_SENSITIVE_TOOLS: '{"*":["delete_file","remove_index"]}'
     volumes:
       - ./runtime/worker-runtime.json:/run/elitea/runtime.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro

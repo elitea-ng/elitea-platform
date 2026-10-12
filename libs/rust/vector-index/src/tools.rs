@@ -97,7 +97,9 @@ impl IndexCatalog {
         }
     }
 
-    fn entry(&self, name: &str) -> Option<&IndexEntry> {
+    /// The entry named `name`, if any.
+    #[must_use]
+    pub fn entry(&self, name: &str) -> Option<&IndexEntry> {
         self.entries.iter().find(|entry| entry.name == name)
     }
 }

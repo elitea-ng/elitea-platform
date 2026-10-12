@@ -14,8 +14,8 @@ import (
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 

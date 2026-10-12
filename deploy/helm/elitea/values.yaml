@@ -4119,8 +4119,11 @@ worker:
     # self-hosted GitLab, Bitbucket or Azure DevOps hosts.
     indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com"
     # Broader than the current `artifact.delete_file` rule, so metadata drift
-    # cannot bypass approval.
-    sensitiveTools: '{"*":["delete_file"]}'
+    # cannot bypass approval. `remove_index` is the indexing families' index
+    # delete (ADR-0030 I1): the Rust worker runs it through elitea-main's
+    # delete flow, and like `delete_file` it is destructive, so a human
+    # approves it by default.
+    sensitiveTools: '{"*":["delete_file","remove_index"]}'
     # The delivery cap and the synchronous SDK pool cap the same executions in
     # series. Raise delivery_max_concurrency together with sync_max_workers and
     # sync_max_in_flight, or the pool bounds the delivery cap. A worker pulls

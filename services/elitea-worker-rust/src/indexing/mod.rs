@@ -43,6 +43,7 @@ use elitea_connectors::egress::HostAllowlist;
 use elitea_connectors::transport::Transport;
 use elitea_vector_index::{ClientConfig, VectorClient};
 
+use crate::protocol::control::IndexRemovalControl;
 use crate::transport::embeddings_facade::EmbeddingsClient;
 
 pub(crate) use pipeline::{IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index};
@@ -53,6 +54,9 @@ pub(crate) use pipeline::{IndexRun, IndexRunFailure, Interruption, interrupt_sum
 pub(crate) struct IndexIngestRuntime {
     pub(crate) vector: VectorClient,
     pub(crate) embeddings: EmbeddingsClient,
+    /// The control plane the `remove_index` tool asks Main through
+    /// (ADR-0030 I1); `None` leaves the tool refusing with a sentence.
+    pub(crate) removal: Option<Arc<dyn IndexRemovalControl>>,
     /// `https://host[:port]`: where the artifact connector finds the
     /// platform's object API (the worker's `platform_origin`).
     pub(crate) platform_origin: String,
@@ -122,11 +126,20 @@ impl IndexIngestRuntime {
         Ok(Self {
             vector,
             embeddings,
+            removal: None,
             platform_origin,
             allowlist,
             transport: Arc::new(transport),
             limits,
         })
+    }
+
+    /// Lend the control plane the `remove_index` tool runs Main's index
+    /// delete flow through.
+    #[must_use]
+    pub(crate) fn with_removal_control(mut self, control: Arc<dyn IndexRemovalControl>) -> Self {
+        self.removal = Some(control);
+        self
     }
 }
 

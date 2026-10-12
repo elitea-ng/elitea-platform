@@ -1660,15 +1660,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Under the Rust indexing runtime the Rust worker serves the index tools
 	// inside the I1 indexing families (ADR-0030 I1), which the pinned
 	// snapshot cannot express: the same image serves them under one setting
-	// and not the other. The runtime below re-reads and validates the same
-	// variable; here only its value decides the catalogue.
-	indexingRuntime, err := runtimecomposition.IndexingRuntimeFromEnv(os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("read indexing runtime: %w", err)
-	}
-	if indexingRuntime == runtimecomposition.IndexingRuntimeRust {
-		workerToolkitCapability = workerToolkitCapability.WithRustIndexTools()
-	}
+	// and not the other. The decision is the runtime configuration's
+	// RustIndexing() — the same one the composition root keys the registry,
+	// the catalog freeze and the vector store on — so the catalogue can never
+	// offer a tool the runtime does not serve.
+	workerToolkitCapability = workerToolkitCapability.ForIndexingRuntime(runtimeConfig)
 	logger.Info(
 		"toolkit type catalogue composed",
 		"worker_implementation", workerImplementation,

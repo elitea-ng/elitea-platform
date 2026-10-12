@@ -203,6 +203,7 @@ async fn harness_failing(
             Arc::clone(&embeddings) as Arc<dyn ModelGatewayTransport>,
             Duration::from_secs(5),
         ),
+        removal: None,
         platform_origin: "https://platform.internal".to_owned(),
         allowlist: elitea_connectors::egress::HostAllowlist::parse(Some("*")),
         transport: Arc::new(

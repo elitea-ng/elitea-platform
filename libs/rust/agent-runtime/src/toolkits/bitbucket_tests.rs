@@ -225,14 +225,9 @@ async fn schemas_selection_and_arguments_follow_the_sdk() {
         .await
         .expect("index tool dropped");
     assert_eq!(subset.len(), 1);
-    // An index-only selection selects none of THIS family's tools; the index
-    // toolset composed next to it serves them (ADR-0030 I1), so it is not an
-    // unsupported selection.
-    assert!(
-        tools_for(&api, &["index_data"])
-            .await
-            .expect("index-only selection")
-            .is_empty()
+    assert_eq!(
+        tools_for(&api, &["index_data"]).await.err(),
+        Some(BitbucketToolsetErrorCode::UnsupportedSelection)
     );
     let api_trait: Arc<dyn BitbucketApi> = api.clone();
     let blocked = test_build_with_api(

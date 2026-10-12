@@ -34,9 +34,11 @@ func ToolkitIndexCatalog(rows []Row) []map[string]any {
 }
 
 // CatalogResolver answers the frozen catalog of one toolkit from the registry.
-// The three freeze paths (agent execution, toolkit.call_tool.v1 and the
-// direct read) take it as their index-catalog dependency under the Rust
-// indexing runtime.
+// The two freeze paths that serve index tools (agent execution and
+// toolkit.call_tool.v1) take it as their index-catalog dependency under the
+// Rust indexing runtime; the direct read (toolkit.execute.read.v1) freezes no
+// catalog, since its claim carries no vector token and the worker serves no
+// index tools there.
 type CatalogResolver struct {
 	store CatalogSource
 }

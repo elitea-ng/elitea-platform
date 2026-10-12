@@ -18,10 +18,14 @@
 //! The index tools (ADR-0030 I1) are the second lent authority: for an
 //! indexing family whose frozen toolkit carries Main's `indexes` catalog, the
 //! toolset is composed of the family's tools and the five index tools, acting
-//! under an [`IndexToolAuthority`] the host lends
+//! under an `IndexToolAuthority` the host lends
 //! (`materialize_configured_toolsets_with_authorities`). No catalog (the
-//! Python indexing path) means no index tools; a catalog without an
-//! authority means they are left out with a warning.
+//! Python indexing path) means no index tools; a catalog with the authority
+//! withheld ([`IndexToolSupport::Withheld`]) means they are left out, logged
+//! with the reason the host states. Only where the index toolset IS composed
+//! is an index-only `selected_tools` admissible — it then selects none of the
+//! family's own tools and the family is not built at all; elsewhere every
+//! family refuses it as the unsupported selection it always was.
 
 use std::fmt;
 use std::sync::Arc;
@@ -34,8 +38,8 @@ use super::families::artifact::ArtifactToolAuthority;
 use super::families::bigquery;
 use super::families::confluence;
 use super::families::index_tools::{
-    CompositeToolset, IndexCatalog, IndexToolAuthority, IndexToolsetErrorCode, build_index_toolset,
-    is_index_family,
+    CompositeToolset, IndexCatalog, IndexToolSupport, IndexToolsWithheld, IndexToolsetErrorCode,
+    build_index_toolset, is_index_family, selection_is_index_only,
 };
 use super::families::jira;
 use super::families::qtest;
@@ -265,21 +269,22 @@ pub async fn materialize_configured_toolsets_with_artifact_authority(
         policy,
         delegated_tokens,
         artifacts,
-        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
     )
     .await
 }
 
 /// The same materialization, with both lent authorities: the claim for the
 /// `artifact` family and the index tools' host for the indexing families
-/// (ADR-0030 I1). Either may be `None`, with the consequences each family
-/// documents: no artifact family, or no index tools.
+/// (ADR-0030 I1). Either may be withheld, with the consequences each family
+/// documents: no artifact family (unless its index tools are composed, which
+/// then stand alone), or no index tools.
 pub async fn materialize_configured_toolsets_with_authorities(
     snapshot: &AdmittedToolSnapshot<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
-    index_tools: Option<&IndexToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
 ) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
     let mut refusal = None;
     let materialized = materialize_all(
@@ -308,7 +313,7 @@ pub async fn materialize_configured_toolsets_reporting_refusals(
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
-    index_tools: Option<&IndexToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     let mut refused = Vec::new();
     let mut materialized = materialize_all(
@@ -329,7 +334,7 @@ async fn materialize_all(
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
-    index_tools: Option<&IndexToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
     on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, UnsupportedSetting) + Send),
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
@@ -341,46 +346,66 @@ async fn materialize_all(
         .iter()
         .filter(|reference| reference.kind() == FrozenToolKind::Configured)
     {
-        let (toolset, authorization) = match materialize(
-            reference,
-            policy,
-            delegated_tokens,
-            artifacts,
-        )
-        .await
-        {
-            Ok(materialized) => materialized,
-            Err(ToolsetMaterializationError {
-                refusal: Some(setting),
-                ..
-            }) => {
-                tracing::warn!(
-                    event = "agent_toolkit_refused",
-                    reason_code = "unsupported_setting",
-                    toolkit_type = reference.tool_type(),
-                    toolkit_id = reference.tool_id(),
-                    reason = setting.reason(),
-                    "agent toolkit configuration asks for a setting this runtime refuses; the toolkit was left out"
-                );
-                on_refused(reference, setting);
-                continue;
+        let index_toolset = index_toolset_for(reference, policy, index_tools)?;
+        // With the index toolset composed, two toolkits have no family half
+        // to build: one whose stored selection names index tools only (none
+        // of the family's own tools are selected, so the family would refuse
+        // the selection), and an `artifact` toolkit on a path that lends no
+        // artifact authority (the family is skipped there; its index tools
+        // are not). Without the index toolset both keep their old answer.
+        let family = if index_toolset.is_some() && index_tools_stand_alone(reference, artifacts)? {
+            None
+        } else {
+            match materialize(reference, policy, delegated_tokens, artifacts).await {
+                Ok((toolset, authorization)) => {
+                    delegated_authorization
+                        .merge(authorization)
+                        .map_err(|()| invalid_configuration())?;
+                    Some(toolset)
+                }
+                Err(ToolsetMaterializationError {
+                    refusal: Some(setting),
+                    ..
+                }) => {
+                    tracing::warn!(
+                        event = "agent_toolkit_refused",
+                        reason_code = "unsupported_setting",
+                        toolkit_type = reference.tool_type(),
+                        toolkit_id = reference.tool_id(),
+                        reason = setting.reason(),
+                        "agent toolkit configuration asks for a setting this runtime refuses; the toolkit was left out"
+                    );
+                    on_refused(reference, setting);
+                    continue;
+                }
+                Err(error)
+                    if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit =>
+                {
+                    tracing::warn!(
+                        event = "agent_toolkit_skipped",
+                        reason_code = "unsupported_toolkit_family",
+                        toolkit_type = reference.tool_type(),
+                        toolkit_id = reference.tool_id(),
+                        "agent toolkit is unavailable in this runtime and was omitted from the native toolsets"
+                    );
+                    continue;
+                }
+                Err(error) => return Err(error),
             }
-            Err(error) if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit => {
-                tracing::warn!(
-                    event = "agent_toolkit_skipped",
-                    reason_code = "unsupported_toolkit_family",
-                    toolkit_type = reference.tool_type(),
-                    toolkit_id = reference.tool_id(),
-                    "agent toolkit is unavailable in this runtime and was omitted from the native toolsets"
-                );
-                continue;
-            }
-            Err(error) => return Err(error),
         };
-        delegated_authorization
-            .merge(authorization)
-            .map_err(|()| invalid_configuration())?;
-        toolsets.push(with_index_tools(reference, toolset, policy, index_tools)?);
+        let toolset: Arc<dyn Toolset> = match (family, index_toolset) {
+            (Some(family), Some(index)) => Arc::new(CompositeToolset::new(
+                reference.toolkit_name(),
+                vec![family, Arc::new(index)],
+            )),
+            (Some(family), None) => family,
+            (None, Some(index)) => Arc::new(CompositeToolset::new(
+                reference.toolkit_name(),
+                vec![Arc::new(index)],
+            )),
+            (None, None) => continue,
+        };
+        toolsets.push(toolset);
     }
     Ok(ConfiguredToolsets {
         toolsets,
@@ -389,49 +414,91 @@ async fn materialize_all(
     })
 }
 
-/// The family toolset of an indexing family, composed with its index tools
-/// when Main froze a catalog into the toolkit and the host lent an authority
-/// (ADR-0030 I1). Any other toolset is returned as it is.
-fn with_index_tools(
+/// Whether, with the index toolset composed, this toolkit has no family
+/// half: its stored selection is index-only, or it is an `artifact` toolkit
+/// on a path lending no artifact authority (logged, since the family's own
+/// tools are then left out while its index tools are served).
+fn index_tools_stand_alone(
     reference: &FrozenToolReference<'_>,
-    toolset: Arc<dyn Toolset>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<bool, ToolsetMaterializationError> {
+    let settings = reference.settings().ok_or_else(invalid_configuration)?;
+    if selection_is_index_only(settings).map_err(|_| invalid_configuration())? {
+        return Ok(true);
+    }
+    if reference.tool_type() == "artifact" && artifacts.is_none() {
+        tracing::warn!(
+            event = "agent_toolkit_tools_skipped",
+            reason_code = "no_artifact_authority",
+            toolkit_type = reference.tool_type(),
+            toolkit_id = reference.tool_id(),
+            "this path lends no artifact authority, so the artifact toolkit serves only its index tools"
+        );
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// The index toolset of an indexing family whose frozen toolkit carries
+/// Main's catalog, when the host lends an authority (ADR-0030 I1); `None`
+/// otherwise — logged with the host's reason when a catalog is present and
+/// the authority is withheld.
+fn index_toolset_for(
+    reference: &FrozenToolReference<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
-    index_tools: Option<&IndexToolAuthority>,
-) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    index_tools: IndexToolSupport<'_>,
+) -> Result<Option<adk_tool::BasicToolset>, ToolsetMaterializationError> {
     let Some(catalog) = reference
         .indexes()
         .filter(|_| is_index_family(reference.tool_type()))
     else {
-        return Ok(toolset);
+        return Ok(None);
     };
-    let Some(authority) = index_tools else {
-        tracing::warn!(
-            event = "agent_index_tools_unavailable",
-            reason_code = "no_vector_target",
-            toolkit_type = reference.tool_type(),
-            toolkit_id = reference.tool_id(),
-            "the toolkit carries an index catalog, but this worker has no vector store; its index tools were left out"
-        );
-        return Ok(toolset);
+    let authority = match index_tools {
+        IndexToolSupport::Lent(authority) => authority,
+        IndexToolSupport::Withheld(reason) => {
+            if reason.is_warning() {
+                tracing::warn!(
+                    event = "agent_index_tools_unavailable",
+                    reason_code = reason.reason_code(),
+                    toolkit_type = reference.tool_type(),
+                    toolkit_id = reference.tool_id(),
+                    "{}",
+                    reason.message()
+                );
+            } else {
+                tracing::info!(
+                    event = "agent_index_tools_unavailable",
+                    reason_code = reason.reason_code(),
+                    toolkit_type = reference.tool_type(),
+                    toolkit_id = reference.tool_id(),
+                    "{}",
+                    reason.message()
+                );
+            }
+            return Ok(None);
+        }
     };
     let catalog = IndexCatalog::parse(catalog).map_err(|_| invalid_configuration())?;
     let settings = reference.settings().ok_or_else(invalid_configuration)?;
-    let index_toolset = build_index_toolset(
+    // A toolkit without an id cannot be addressed by Main's index delete
+    // flow, which `remove_index` runs through; Main freezes every configured
+    // toolkit with one.
+    let toolkit_id = reference.tool_id().ok_or_else(invalid_configuration)?;
+    build_index_toolset(
         reference.toolkit_name(),
+        toolkit_id,
         reference.tool_type(),
         settings,
         catalog,
         policy,
         authority,
     )
+    .map(Some)
     .map_err(|error| match error.code() {
         IndexToolsetErrorCode::InvalidConfiguration => invalid_configuration(),
         IndexToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-    })?;
-    Ok(Arc::new(CompositeToolset::new(
-        reference.toolkit_name(),
-        vec![toolset, Arc::new(index_toolset)],
-    )))
+    })
 }
 
 async fn materialize(

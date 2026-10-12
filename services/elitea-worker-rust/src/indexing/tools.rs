@@ -12,6 +12,14 @@
 //! which binds no agent model) refuses the two step-back tools with a
 //! sentence; the other three work there as in a turn.
 //!
+//! `remove_index` never touches the vector store from here: elitea-main is
+//! the only writer of the index registry (ADR-0031), so the tool asks Main
+//! over the claim's control plane (`RuntimeControlService.RemoveIndex`), and
+//! Main checks the run's principal, tombstones the row and deletes the
+//! vectors through its own path or its sweeper. The worker's part is to name
+//! the index from the frozen catalog and to turn Main's answer into the
+//! SDK's sentence.
+//!
 //! Every failure is a sentence the model reads, never a turn-aborting error.
 
 use std::collections::BTreeMap;
@@ -23,7 +31,7 @@ use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     IndexCatalog as FrozenCatalog, IndexToolCall, IndexToolFailure, IndexToolHost, IndexToolName,
 };
-use elitea_vector_index::format::Doctype;
+use elitea_vector_index::format::{Doctype, index_not_found_message};
 use elitea_vector_index::{
     Error as VectorError, IndexCatalog, IndexEntry, IndexTools, QueryEmbedder, SearchArgs,
     StepbackModel, VectorSession, pb,
@@ -32,6 +40,7 @@ use serde_json::Value;
 
 use super::IndexIngestRuntime;
 use super::slug::vector_space_slug;
+use crate::protocol::control::{IndexRemovalBinding, IndexRemovalOutcome};
 use crate::protocol::vector_token::{VectorClaimToken, VectorSource};
 use crate::transport::embeddings_facade::{EmbeddingsClient, EmbeddingsError};
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
@@ -53,24 +62,87 @@ pub(crate) struct ClaimIndexToolHost {
     token: VectorClaimToken,
     context: Arc<ClaimScopedEliteaContext>,
     model: Option<StepbackBinding>,
+    /// The claim material `remove_index` addresses Main with.
+    removal: IndexRemovalBinding,
 }
 
 impl ClaimIndexToolHost {
     /// A host over `runtime`'s vector client and embeddings route, acting
     /// with the claim's `token` and redeemed `context`; `model` is the
-    /// step-back tools' chat model, or `None` where the run binds no model.
+    /// step-back tools' chat model, or `None` where the run binds no model;
+    /// `removal` is the claim binding `remove_index` asks Main under.
     #[must_use]
     pub(crate) fn new(
         runtime: Arc<IndexIngestRuntime>,
         token: &VectorClaimToken,
         context: Arc<ClaimScopedEliteaContext>,
         model: Option<StepbackBinding>,
+        removal: IndexRemovalBinding,
     ) -> Self {
         Self {
             runtime,
             token: token.duplicate(),
             context,
             model,
+            removal,
+        }
+    }
+
+    /// `remove_index` through Main (ADR-0030 I1, ADR-0031): the name is
+    /// checked against the frozen catalog here, so the model's typo is
+    /// answered with the available indexes without a round trip, then Main
+    /// runs its delete flow as the run's principal. The vector store is not
+    /// touched from the worker.
+    async fn remove_index(
+        &self,
+        toolkit_id: u64,
+        catalog: &IndexCatalog,
+        index_name: &str,
+    ) -> Result<Value, IndexToolFailure> {
+        if index_name.trim().is_empty() {
+            return Err(IndexToolFailure::new(
+                "remove_index needs an index name: removing every index at once is not supported",
+            ));
+        }
+        let Some(entry) = catalog.entry(index_name) else {
+            return Err(IndexToolFailure::new(index_not_found_message(
+                index_name,
+                &catalog.list_indexes(),
+            )));
+        };
+        let Some(control) = self.runtime.removal.as_ref() else {
+            return Err(IndexToolFailure::new(
+                "remove_index is not available on this worker: it has no control plane to ask elitea-main through",
+            ));
+        };
+        let request = self
+            .removal
+            .request(toolkit_id, index_name, &entry.namespace_id);
+        match control.remove_index(request).await {
+            Ok(IndexRemovalOutcome::Removed) => Ok(Value::String(format!(
+                "Index '{index_name}' has been removed from the vector store.\nAvailable indexes: {}",
+                catalog.without(index_name).list_indexes()
+            ))),
+            Ok(IndexRemovalOutcome::NotFound) => Err(IndexToolFailure::new(format!(
+                "Index '{index_name}' no longer exists: it was removed or recreated since this conversation started.\nAvailable indexes: {}",
+                catalog.without(index_name).list_indexes()
+            ))),
+            Ok(IndexRemovalOutcome::Forbidden) => Err(IndexToolFailure::new(format!(
+                "you are not allowed to remove index '{index_name}': the run's user lacks the index delete permission in this project"
+            ))),
+            Ok(IndexRemovalOutcome::ActiveRun) => Err(IndexToolFailure::new(format!(
+                "Index '{index_name}' is still being indexed and cannot be removed until that run ends"
+            ))),
+            Err(error) => {
+                tracing::warn!(
+                    event = "index_tool_remove_index_failed",
+                    error = %error,
+                    "elitea-main did not complete the index removal"
+                );
+                Err(IndexToolFailure::new(
+                    "elitea-main could not remove the index right now; nothing was deleted",
+                ))
+            }
         }
     }
 
@@ -152,11 +224,8 @@ impl IndexToolHost for ClaimIndexToolHost {
                         return Err(IndexToolFailure::new("index_name must be a string"));
                     }
                 };
-                tools
-                    .remove_index(index_name)
+                self.remove_index(call.toolkit_id, &catalog, index_name)
                     .await
-                    .map(Value::String)
-                    .map_err(|error| failure(&error))
             }
         }
     }
@@ -213,7 +282,10 @@ fn embedding_reason(error: &EmbeddingsError) -> String {
 }
 
 /// The step-back model over the bound ADK model: one user message holding
-/// the prompt, the reply's text collected.
+/// the prompt, the reply's text taken from the one non-streaming response
+/// (`generate_content(request, false)`, as the repo's other non-streaming
+/// callers do). A streaming call would hand back partial deltas AND a final
+/// response carrying the whole text, which a collector would then double.
 struct AdkStepbackModel<'a> {
     binding: &'a StepbackBinding,
 }
@@ -230,44 +302,47 @@ impl StepbackModel for AdkStepbackModel<'_> {
         let mut responses = self
             .binding
             .model
-            .generate_content(request, true)
+            .generate_content(request, false)
             .await
             .map_err(|error| VectorError::Model(error.to_string()))?;
-        let mut text = String::new();
-        let mut finished = false;
+        let mut text: Option<String> = None;
         while let Some(response) = responses.next().await {
             let response = response.map_err(|error| VectorError::Model(error.to_string()))?;
+            if response.partial {
+                // Not expected of a non-streaming call; a partial frame is
+                // never the reply.
+                continue;
+            }
+            if response.error_code.is_some() {
+                return Err(VectorError::Model(
+                    "the model ended the reply with an error".to_owned(),
+                ));
+            }
+            if let Some(reason) = response.finish_reason
+                && reason != FinishReason::Stop
+            {
+                return Err(VectorError::Model(format!(
+                    "the model stopped for {reason:?}"
+                )));
+            }
+            let mut reply = String::new();
             if let Some(content) = &response.content {
                 for part in &content.parts {
-                    if let Part::Text { text: delta } = part {
-                        if text.len().saturating_add(delta.len()) > MAX_MODEL_TEXT_BYTES {
+                    if let Part::Text { text: piece } = part {
+                        if reply.len().saturating_add(piece.len()) > MAX_MODEL_TEXT_BYTES {
                             return Err(VectorError::Model(
                                 "the reply exceeds the step-back size bound".to_owned(),
                             ));
                         }
-                        text.push_str(delta);
+                        reply.push_str(piece);
                     }
                 }
             }
-            if !response.partial {
-                if response.error_code.is_some() {
-                    return Err(VectorError::Model(
-                        "the model ended the reply with an error".to_owned(),
-                    ));
-                }
-                if let Some(reason) = response.finish_reason
-                    && reason != FinishReason::Stop
-                {
-                    return Err(VectorError::Model(format!(
-                        "the model stopped for {reason:?}"
-                    )));
-                }
-                finished = true;
-            }
+            // The last complete response is the reply; a non-streaming call
+            // yields exactly one.
+            text = Some(reply);
         }
-        if !finished && text.is_empty() {
-            return Err(VectorError::Model("the model returned no reply".to_owned()));
-        }
-        Ok(Value::String(text))
+        text.map(Value::String)
+            .ok_or_else(|| VectorError::Model("the model returned no reply".to_owned()))
     }
 }

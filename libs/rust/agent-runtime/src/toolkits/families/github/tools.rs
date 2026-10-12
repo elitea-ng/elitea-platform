@@ -155,13 +155,7 @@ fn supported_selection(selected: &[Box<str>]) -> Result<(Vec<String>, usize), Gi
         .filter(|name| is_supported_read(name))
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    // A selection of index tools alone selects none of THIS family's tools
-    // and is served by the index toolset composed next to it (ADR-0030 I1);
-    // it is not an unsupported selection.
-    let index_only = selected
-        .iter()
-        .all(|name| crate::toolkits::families::index_tools::is_sdk_index_tool_name(name));
-    if supported.is_empty() && !index_only {
+    if supported.is_empty() {
         return Err(GitHubToolsetError {
             code: GitHubToolsetErrorCode::UnsupportedSelection,
         });

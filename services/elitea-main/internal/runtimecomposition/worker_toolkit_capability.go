@@ -354,6 +354,20 @@ func (c *WorkerToolkitCapability) WithRustIndexTools() *WorkerToolkitCapability 
 	}
 }
 
+// ForIndexingRuntime is the capability under the deployment's indexing
+// decision: widened by the index tools when config.RustIndexing() — the ONE
+// predicate the composition root also keys the registry, the catalog freeze
+// and the vector store on — and unchanged otherwise. ELITEA_INDEXING_RUNTIME
+// alone is not that decision: `rust` without index dispatch is refused at
+// configuration load, and a Config that nonetheless says so indexes with
+// nothing, so the catalogue must not offer the tools either.
+func (c *WorkerToolkitCapability) ForIndexingRuntime(config Config) *WorkerToolkitCapability {
+	if config.RustIndexing() {
+		return c.WithRustIndexTools()
+	}
+	return c
+}
+
 // SupportsTool reports whether the configured worker serves one TOOL of a
 // type it supports (SupportsToolkitType answers for the type). Only a Rust
 // family that serves a subset of the SDK's tools refuses one; every other

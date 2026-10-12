@@ -205,6 +205,51 @@ message PrepareSettlementResponseV1 {
   reserved 4 to 15;
 }
 
+// RemoveIndex runs elitea-main's index delete flow for one index of a toolkit
+// the claimed execution carries (the `remove_index` tool of the indexing
+// families, ADR-0030 I1). Main is the only writer of the index registry
+// (ADR-0031), so the worker never deletes an index's vectors itself: it asks,
+// under its live claim, and Main checks the run's principal may delete the
+// toolkit's indexes, tombstones the registry row and deletes the vectors
+// through its usual path (or its sweeper). The project is the claimed
+// execution's, never the request's; the toolkit and the index are named by the
+// request and must belong to that project.
+message RemoveIndexRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  // The accepted claim's id, which the context authorizer requires beside
+  // the fence.
+  string claim_id = 3;
+  // The frozen toolkit's id.
+  int64 toolkit_id = 4;
+  // The index name the model asked for, from the frozen catalog.
+  string index_name = 5;
+  // The frozen catalog's registry id of that index: Main refuses a name that
+  // no longer resolves to it (NOT_FOUND), so a recreated index is not
+  // deleted under a stale name.
+  string index_id = 6;
+  reserved 7 to 15;
+}
+
+enum RemoveIndexDispositionV1 {
+  REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED = 0;
+  // The registry row is tombstoned; the vectors are deleted or left to the
+  // sweeper.
+  REMOVE_INDEX_DISPOSITION_V1_REMOVED = 1;
+  // No live index of that name and id in the claimed project's toolkit.
+  REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND = 2;
+  // The run's principal may not delete this toolkit's indexes.
+  REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN = 3;
+  // The index's run is still active; it cannot be deleted yet.
+  REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN = 4;
+}
+
+message RemoveIndexResponseV1 {
+  RemoveIndexDispositionV1 disposition = 1;
+  RuntimeErrorV1 rejection = 2;
+  reserved 3 to 15;
+}
+
 service RuntimeControlService {
   rpc AuthorizeSandboxJob(AuthorizeSandboxJobRequestV1) returns (AuthorizeSandboxJobResponseV1);
   rpc AuthorizeRustCompiledSnapshot(AuthorizeRustCompiledSnapshotRequestV1) returns (AuthorizeRustCompiledSnapshotResponseV1);
@@ -215,4 +260,5 @@ service RuntimeControlService {
   rpc RenewLease(RenewLeaseRequestV1) returns (RenewLeaseResponseV1);
   rpc ObserveDesiredState(ObserveDesiredStateRequestV1) returns (ObserveDesiredStateResponseV1);
   rpc PrepareSettlement(PrepareSettlementRequestV1) returns (PrepareSettlementResponseV1);
+  rpc RemoveIndex(RemoveIndexRequestV1) returns (RemoveIndexResponseV1);
 }

@@ -455,6 +455,9 @@ fn bounded_text(
 pub struct IndexToolCall<'a> {
     /// Which tool.
     pub tool: IndexToolName,
+    /// The frozen toolkit's `id`, which Main's index delete flow is
+    /// addressed by for `remove_index`.
+    pub toolkit_id: u64,
     /// The toolkit's indexes.
     pub catalog: &'a IndexCatalog,
     /// `code` or `document` (the family's SDK `doctype`).
@@ -529,6 +532,106 @@ impl IndexToolAuthority {
     }
 }
 
+/// Why a run lends no index-tool authority. The materializer names it when
+/// a toolkit carries a catalog and its index tools are left out, so the
+/// warning states the real cause rather than guessing one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IndexToolsWithheld {
+    /// This worker has no vector store (`vector_target` unset).
+    NoVectorStore,
+    /// Main minted no `elitea-vector` token into the claim.
+    NoVectorToken,
+    /// The run redeems no claim context, which the query embedding needs
+    /// (a pipeline whose nodes never call an index tool).
+    NoRuntimeContext,
+    /// The path never serves the index tools (a direct read or a tool
+    /// listing), by design rather than by a missing dependency.
+    NotServedOnThisPath,
+    /// Nothing in this run names an index tool (no toolkit in the snapshot
+    /// carries a catalog, or the one tool called is not an index tool), so
+    /// no authority was built.
+    NotRequested,
+}
+
+impl IndexToolsWithheld {
+    /// The `reason_code` the materializer logs.
+    #[must_use]
+    pub const fn reason_code(self) -> &'static str {
+        match self {
+            Self::NoVectorStore => "no_vector_target",
+            Self::NoVectorToken => "no_vector_token",
+            Self::NoRuntimeContext => "no_runtime_context",
+            Self::NotServedOnThisPath => "not_served_on_this_path",
+            Self::NotRequested => "not_requested",
+        }
+    }
+
+    /// The sentence the materializer logs with the reason.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::NoVectorStore => {
+                "the toolkit carries an index catalog, but this worker has no vector store; its index tools were left out"
+            }
+            Self::NoVectorToken => {
+                "the toolkit carries an index catalog, but the claim carries no vector token; its index tools were left out"
+            }
+            Self::NoRuntimeContext => {
+                "the toolkit carries an index catalog, but this run redeems no claim context (no node calls an index tool); its index tools were left out"
+            }
+            Self::NotServedOnThisPath => {
+                "the toolkit carries an index catalog, but this path does not serve the index tools; they were left out"
+            }
+            Self::NotRequested => {
+                "the toolkit carries an index catalog, but nothing in this run calls an index tool; none was composed"
+            }
+        }
+    }
+
+    /// Whether leaving the tools out is worth a warning: a missing
+    /// dependency is, a path that never serves them by design is not.
+    #[must_use]
+    pub const fn is_warning(self) -> bool {
+        !matches!(
+            self,
+            Self::NotServedOnThisPath | Self::NoRuntimeContext | Self::NotRequested
+        )
+    }
+}
+
+/// What a run lends the indexing families for their index tools
+/// (ADR-0030 I1): an authority, or the stated reason there is none.
+#[derive(Clone, Copy)]
+pub enum IndexToolSupport<'a> {
+    /// The index tools are composed under this authority.
+    Lent(&'a IndexToolAuthority),
+    /// The index tools are left out, for this reason.
+    Withheld(IndexToolsWithheld),
+}
+
+impl<'a> IndexToolSupport<'a> {
+    /// The lent authority, if any.
+    #[must_use]
+    pub const fn authority(self) -> Option<&'a IndexToolAuthority> {
+        match self {
+            Self::Lent(authority) => Some(authority),
+            Self::Withheld(_) => None,
+        }
+    }
+
+    /// `Lent` for `Some`, else `Withheld(reason)`.
+    #[must_use]
+    pub const fn lent_or(
+        authority: Option<&'a IndexToolAuthority>,
+        reason: IndexToolsWithheld,
+    ) -> Self {
+        match authority {
+            Some(authority) => Self::Lent(authority),
+            None => Self::Withheld(reason),
+        }
+    }
+}
+
 /// Why the index toolset could not be built.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IndexToolsetErrorCode {
@@ -592,6 +695,7 @@ impl From<MaterializedToolsetError> for IndexToolsetError {
 /// A malformed `selected_tools`, or the policy's refusal of an identity.
 pub fn build_index_toolset(
     toolkit_name: &str,
+    toolkit_id: u64,
     toolkit_type: &str,
     settings: &Map<String, Value>,
     catalog: IndexCatalog,
@@ -608,6 +712,7 @@ pub fn build_index_toolset(
         .map(|tool| {
             Arc::new(IndexTool {
                 tool,
+                toolkit_id,
                 authority: authority.clone(),
                 catalog: Arc::clone(&catalog),
                 doctype: Arc::clone(&doctype),
@@ -634,6 +739,7 @@ pub fn all_index_tools(
         .map(|tool| {
             Arc::new(IndexTool {
                 tool,
+                toolkit_id: 0,
                 authority: authority.clone(),
                 catalog: Arc::clone(&catalog),
                 doctype: Arc::clone(&doctype),
@@ -679,8 +785,23 @@ fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<String>, IndexToo
         .collect()
 }
 
+/// Whether the toolkit's stored `selected_tools` names index tools ONLY: a
+/// non-empty list of SDK index tool names and nothing else. Such a
+/// selection selects none of the family's own tools, and is admissible only
+/// where the index toolset is composed beside the family (ADR-0030 I1);
+/// elsewhere the family refuses it as an unsupported selection, as before.
+///
+/// # Errors
+///
+/// A malformed `selected_tools`.
+pub fn selection_is_index_only(settings: &Map<String, Value>) -> Result<bool, IndexToolsetError> {
+    let selected = selected_tools(settings)?;
+    Ok(!selected.is_empty() && selected.iter().all(|name| is_sdk_index_tool_name(name)))
+}
+
 struct IndexTool {
     tool: IndexToolName,
+    toolkit_id: u64,
     authority: IndexToolAuthority,
     catalog: Arc<IndexCatalog>,
     doctype: Arc<str>,
@@ -727,6 +848,7 @@ impl Tool for IndexTool {
         };
         let call = IndexToolCall {
             tool: self.tool,
+            toolkit_id: self.toolkit_id,
             catalog: self.catalog.as_ref(),
             doctype: self.doctype.as_ref(),
             arguments: &arguments,

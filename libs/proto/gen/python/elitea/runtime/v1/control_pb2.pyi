@@ -41,6 +41,14 @@ class AuthorizeInvocationDispositionV1(int, metaclass=_enum_type_wrapper.EnumTyp
     AUTHORIZE_INVOCATION_DISPOSITION_V1_UNSPECIFIED: _ClassVar[AuthorizeInvocationDispositionV1]
     AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW: _ClassVar[AuthorizeInvocationDispositionV1]
     AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED: _ClassVar[AuthorizeInvocationDispositionV1]
+
+class RemoveIndexDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_REMOVED: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN: _ClassVar[RemoveIndexDispositionV1]
 CLAIM_DISPOSITION_V1_UNSPECIFIED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_ACCEPTED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_TERMINAL_ACK: ClaimDispositionV1
@@ -60,6 +68,11 @@ BEGIN_EXECUTION_DISPOSITION_V1_ALREADY_STARTED: BeginExecutionDispositionV1
 AUTHORIZE_INVOCATION_DISPOSITION_V1_UNSPECIFIED: AuthorizeInvocationDispositionV1
 AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW: AuthorizeInvocationDispositionV1
 AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED: AuthorizeInvocationDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_REMOVED: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN: RemoveIndexDispositionV1
 
 class ClaimCommandRequestV1(_message.Message):
     __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery")
@@ -248,3 +261,27 @@ class PrepareSettlementResponseV1(_message.Message):
     outcome: _common_pb2.ExecutionOutcomeV1
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, settlement_receipt_id: _Optional[str] = ..., outcome: _Optional[_Union[_common_pb2.ExecutionOutcomeV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class RemoveIndexRequestV1(_message.Message):
+    __slots__ = ("identity", "fence", "claim_id", "toolkit_id", "index_name", "index_id")
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    FENCE_FIELD_NUMBER: _ClassVar[int]
+    CLAIM_ID_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_ID_FIELD_NUMBER: _ClassVar[int]
+    INDEX_NAME_FIELD_NUMBER: _ClassVar[int]
+    INDEX_ID_FIELD_NUMBER: _ClassVar[int]
+    identity: _common_pb2.ExecutionIdentityV1
+    fence: _common_pb2.ExecutionFenceV1
+    claim_id: str
+    toolkit_id: int
+    index_name: str
+    index_id: str
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., claim_id: _Optional[str] = ..., toolkit_id: _Optional[int] = ..., index_name: _Optional[str] = ..., index_id: _Optional[str] = ...) -> None: ...
+
+class RemoveIndexResponseV1(_message.Message):
+    __slots__ = ("disposition", "rejection")
+    DISPOSITION_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    disposition: RemoveIndexDispositionV1
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, disposition: _Optional[_Union[RemoveIndexDispositionV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

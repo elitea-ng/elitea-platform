@@ -7,14 +7,15 @@
 // elitea-main is the only reader of index_registry, and the worker holds no
 // database connection, so the catalog travels with the toolkit: next to
 // `settings`, under the key Key, in the agent execution request, the
-// toolkit.call_tool.v1 settings entry and the toolkit.execute_read request.
+// toolkit.call_tool.v1 settings entry (not the toolkit.execute_read request:
+// that path serves no index tools and freezes no catalog).
 // It is written only under ELITEA_INDEXING_RUNTIME=rust; on the Python path
 // the key is absent, and that absence is what tells the Rust worker the SDK
 // serves the index tools there. A present key with no entries ([]) is a
 // toolkit with no indexes yet: list_indexes answers "No indexed collections".
 //
-// This is a leaf package (no application imports) so that the three freeze
-// paths and the registry can all name the same key and shape.
+// This is a leaf package (no application imports) so that the freeze paths
+// and the registry can all name the same key and shape.
 package indexcatalog
 
 // Key is the frozen toolkit key that carries the catalog, beside `settings`.

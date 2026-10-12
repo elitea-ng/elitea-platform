@@ -29,6 +29,7 @@ pub(crate) use sandbox_authority::{ClaimBoundSandboxAuthority, SandboxStopAuthor
 
 use std::fmt;
 
+use async_trait::async_trait;
 use prost::Message;
 use ring::digest;
 use subtle::ConstantTimeEq;
@@ -48,7 +49,8 @@ use super::elitea::runtime::v1::{
     ExecutionIdentityV1, ExecutionInputBundleReferenceV1, ExecutionInputBundleV1,
     ExecutionInputEntryV1, ExecutionOutcomeV1, ExecutionOutputFrameV1, NodeEventV1,
     ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorCodeV1,
+    PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
+    RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorCodeV1,
     RuntimeErrorV1, ScopedContentReferenceV1, SettlementProposalV1, SettlementRecoveryV1,
     worker_command_v1,
 };
@@ -982,6 +984,80 @@ pub(crate) struct ClaimBoundRuntimeContextAuthority {
     fence_token: Zeroizing<Vec<u8>>,
     resource_project_id: String,
     vector_token: Option<VectorClaimToken>,
+    /// The identity and fence the `remove_index` tool addresses Main's
+    /// `RemoveIndex` RPC with (ADR-0030 I1), lent as [`IndexRemovalBinding`]
+    /// copies; the raw material stays here.
+    index_removal: Box<IndexRemovalBinding>,
+}
+
+/// The claim material one `RemoveIndex` call carries: the execution identity,
+/// the fence and the claim id, as Main's context authorizer requires them.
+/// Neither cloneable by graph code nor formattable; the fence bytes are
+/// zeroized on drop. Main verifies the live claim on every request, so this
+/// is not a signed grant.
+pub(crate) struct IndexRemovalBinding {
+    identity: ExecutionIdentityV1,
+    fence: ExecutionFenceV1,
+    claim_id: String,
+}
+
+impl Drop for IndexRemovalBinding {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.fence.fence_token.zeroize();
+    }
+}
+
+impl IndexRemovalBinding {
+    fn duplicate(&self) -> Self {
+        Self {
+            identity: self.identity.clone(),
+            fence: self.fence.clone(),
+            claim_id: self.claim_id.clone(),
+        }
+    }
+
+    /// The `RemoveIndex` request for one index of the frozen toolkit
+    /// `toolkit_id`: `index_name` as the model asked for it, `index_id` as the
+    /// frozen catalog names it.
+    #[must_use]
+    pub(crate) fn request(
+        &self,
+        toolkit_id: u64,
+        index_name: &str,
+        index_id: &str,
+    ) -> RemoveIndexRequestV1 {
+        RemoveIndexRequestV1 {
+            identity: Some(self.identity.clone()),
+            fence: Some(self.fence.clone()),
+            claim_id: self.claim_id.clone(),
+            toolkit_id: i64::try_from(toolkit_id).unwrap_or(i64::MAX),
+            index_name: index_name.to_owned(),
+            index_id: index_id.to_owned(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        Self {
+            identity: ExecutionIdentityV1 {
+                tenant_id: "tenant-1".to_owned(),
+                resource_project_id: "17".to_owned(),
+                projection_project_id: "17".to_owned(),
+                command_id: "command-1".to_owned(),
+                execution_id: "execution-one".to_owned(),
+                generation: 2,
+            },
+            fence: ExecutionFenceV1 {
+                workload_session_id: "workload-1".to_owned(),
+                claim_attempt: 1,
+                lease_epoch: 1,
+                producer_id: "worker-1".to_owned(),
+                fence_token: vec![b'f'; 32],
+            },
+            claim_id: "claim-1".to_owned(),
+        }
+    }
 }
 
 /// Opaque authority for one claim-fenced ADK session writer.
@@ -1050,7 +1126,19 @@ impl ClaimBoundRuntimeContextAuthority {
             fence_token: Zeroizing::new(claim.fence.fence_token.clone()),
             resource_project_id: claim.identity.resource_project_id.clone(),
             vector_token: claim.vector_token.as_ref().map(VectorClaimToken::duplicate),
+            index_removal: Box::new(IndexRemovalBinding {
+                identity: claim.identity.clone(),
+                fence: claim.fence.clone(),
+                claim_id: claim.claim_id.clone(),
+            }),
         }
+    }
+
+    /// A copy of the claim material the `remove_index` tool addresses Main
+    /// with (ADR-0030 I1).
+    #[must_use]
+    pub(crate) fn index_removal_binding(&self) -> IndexRemovalBinding {
+        self.index_removal.duplicate()
     }
 
     /// The elitea-vector token of the claim this authority was derived
@@ -1636,6 +1724,7 @@ pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthor
         fence_token: Zeroizing::new(vec![b'f'; 32]),
         resource_project_id: "17".to_owned(),
         vector_token: None,
+        index_removal: Box::new(IndexRemovalBinding::fixture()),
     }
 }
 
@@ -2981,6 +3070,69 @@ enum AuthorizeInvocationDecision {
 ///
 /// Returns a typed runtime rejection or rejects ambiguous/malformed responses.
 #[allow(dead_code)] // Parsed by the next owned invocation coordinator.
+/// What Main decided about one `RemoveIndex` request (ADR-0030 I1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IndexRemovalOutcome {
+    /// The registry row is tombstoned; the vectors are deleted or left to
+    /// Main's sweeper.
+    Removed,
+    /// No live index of that name and id in the claimed project's toolkit.
+    NotFound,
+    /// The run's principal may not delete this toolkit's indexes.
+    Forbidden,
+    /// The index's run is still active.
+    ActiveRun,
+}
+
+/// The control-plane half of the `remove_index` tool: one `RemoveIndex`
+/// call under the live claim. The indexing runtime holds it as a trait
+/// object so the assemblers need not name the transport.
+#[async_trait]
+pub(crate) trait IndexRemovalControl: Send + Sync {
+    /// Ask Main to delete the index the request names.
+    ///
+    /// # Errors
+    ///
+    /// A transport failure, or Main's rejection of the claim or the request.
+    async fn remove_index(
+        &self,
+        request: RemoveIndexRequestV1,
+    ) -> Result<IndexRemovalOutcome, AgentControlError>;
+}
+
+#[async_trait]
+impl<R: ControlRpc> IndexRemovalControl for AgentControlClient<R> {
+    async fn remove_index(
+        &self,
+        request: RemoveIndexRequestV1,
+    ) -> Result<IndexRemovalOutcome, AgentControlError> {
+        let response = self.control.remove_index(request).await?;
+        parse_remove_index_response(&response).map_err(Into::into)
+    }
+}
+
+fn parse_remove_index_response(
+    response: &RemoveIndexResponseV1,
+) -> Result<IndexRemovalOutcome, ControlSemanticError> {
+    if let Some(rejection) = response.rejection.as_ref() {
+        if response.disposition != RemoveIndexDispositionV1::Unspecified as i32 {
+            return Err(ControlSemanticError::InvalidInput(
+                "the index removal response is ambiguous",
+            ));
+        }
+        return Err(runtime_rejection(rejection));
+    }
+    match RemoveIndexDispositionV1::try_from(response.disposition).ok() {
+        Some(RemoveIndexDispositionV1::Removed) => Ok(IndexRemovalOutcome::Removed),
+        Some(RemoveIndexDispositionV1::NotFound) => Ok(IndexRemovalOutcome::NotFound),
+        Some(RemoveIndexDispositionV1::Forbidden) => Ok(IndexRemovalOutcome::Forbidden),
+        Some(RemoveIndexDispositionV1::ActiveRun) => Ok(IndexRemovalOutcome::ActiveRun),
+        _ => Err(ControlSemanticError::InvalidInput(
+            "the index removal disposition is malformed",
+        )),
+    }
+}
+
 fn parse_authorize_invocation_response(
     response: &AuthorizeInvocationResponseV1,
 ) -> Result<AuthorizeInvocationDecision, ControlSemanticError> {
