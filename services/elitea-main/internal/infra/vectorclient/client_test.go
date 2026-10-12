@@ -27,6 +27,7 @@ import (
 
 	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 	"google.golang.org/grpc"
@@ -257,15 +258,131 @@ func TestDeleteIndexVectorsReportsAFailureAndNamesARefusal(t *testing.T) {
 		t.Fatalf("an outage must be an error naming the code, got %v", err)
 	}
 
+	// A refused certificate carries both the sweeper's class (it backs off to
+	// its longest pause) and platformops's.
 	code = codes.PermissionDenied
 	err = client.DeleteIndexVectors(context.Background(), namespace)
-	if !errors.Is(err, platformops.ErrNotAllowed) {
-		t.Fatalf("a refused certificate must be named as ErrNotAllowed, got %v", err)
+	if !errors.Is(err, platformops.ErrNotAllowed) || !errors.Is(err, indexingapp.ErrIndexVectorDeletionRefused) {
+		t.Fatalf("a refused certificate must be named as refused, got %v", err)
 	}
 
 	code = codes.Unauthenticated
-	if err := client.DeleteIndexVectors(context.Background(), namespace); !errors.Is(err, platformops.ErrNotAllowed) {
-		t.Fatalf("UNAUTHENTICATED must be ErrNotAllowed, got %v", err)
+	if err := client.DeleteIndexVectors(context.Background(), namespace); !errors.Is(err, indexingapp.ErrIndexVectorDeletionRefused) {
+		t.Fatalf("UNAUTHENTICATED must be a refusal, got %v", err)
+	}
+}
+
+// Nobody listens at the target: a call fails fast (UNAVAILABLE, retry-later),
+// well inside the index delete route's budget, instead of waiting out the
+// call's own deadline for a listener to appear.
+func TestAnUnreachableTargetFailsFastWithinTheRouteBudget(t *testing.T) {
+	t.Parallel()
+	p := newPKI(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := listener.Addr().String()
+	_ = listener.Close()
+	client := newClient(t, p, target) // 5s call timeouts
+
+	started := time.Now()
+	err = client.DeleteIndexVectors(context.Background(), indexingapp.IndexVectorNamespace{ProjectID: 7, IndexID: indexID})
+	if err == nil || errors.Is(err, platformops.ErrNotAllowed) || !strings.Contains(err.Error(), "Unavailable") {
+		t.Fatalf("err = %v, want an UNAVAILABLE failure", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("the call took %v against a closed port; it must fail fast", elapsed)
+	}
+	started = time.Now()
+	if _, err := client.DeleteProjectData(context.Background(), 7); !errors.Is(err, platformops.ErrRetryLater) {
+		t.Fatalf("drop err = %v, want retry-later", err)
+	} else if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("the drop took %v against a closed port; it must fail fast", elapsed)
+	}
+	// The caller's own, shorter bound is what the route passes: honoured too.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	started = time.Now()
+	_ = client.DeleteIndexVectors(ctx, indexingapp.IndexVectorNamespace{ProjectID: 7, IndexID: indexID})
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("a 200ms caller bound took %v", elapsed)
+	}
+}
+
+// The client material is swapped on disk while the client lives (the chart
+// renews the Secret and elitea-vector restarts with its new certificate): the
+// server comes back under a new CA, the files follow, and the SAME client
+// reaches it again with no restart of its own.
+func TestRotatedMaterialIsPickedUpWithoutANewClient(t *testing.T) {
+	t.Parallel()
+	old, fresh := newPKI(t), newPKI(t)
+	// Both PKIs issue the client leaf to the same file names (a mount).
+	fresh.dir = old.dir
+	vector := &fakeVector{}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	start := func(p *pki, listener net.Listener) *grpc.Server {
+		serverCert, _, _ := p.leaf(t, "vector", x509.ExtKeyUsageServerAuth, 2)
+		server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{serverCert},
+			ClientCAs: p.pool, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12})))
+		vectorv1.RegisterVectorServiceServer(server, vector)
+		go func() { _ = server.Serve(listener) }()
+		t.Cleanup(server.Stop)
+		return server
+	}
+	server := start(old, listener)
+
+	client := newClient(t, old, addr)
+	if err := client.DeleteIndexVectors(context.Background(), indexingapp.IndexVectorNamespace{ProjectID: 7, IndexID: indexID}); err != nil {
+		t.Fatalf("before the rotation: %v", err)
+	}
+
+	// elitea-vector restarts under the new CA on the same address. The client's
+	// files are still the old ones, so its next connection is refused (a
+	// handshake failure surfaces as UNAVAILABLE), and no deletion reaches the
+	// store.
+	server.Stop()
+	deletesBefore := len(vector.deletes)
+	relistened, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start(fresh, relistened)
+	err = client.DeleteIndexVectors(context.Background(), indexingapp.IndexVectorNamespace{ProjectID: 7, IndexID: indexID})
+	if err == nil || len(vector.deletes) != deletesBefore {
+		t.Fatalf("the old material was accepted by a rotated server: err=%v deletes=%d", err, len(vector.deletes)-deletesBefore)
+	}
+
+	// The Secret is rewritten with the new CA's material: the client reloads on
+	// its next connection. gRPC reconnects with a backoff of about a second, so
+	// the success is polled for a few seconds.
+	cert, key, ca := fresh.clientFiles(t, "elitea-main")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: fresh.ca.Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	for _, path := range []string{cert, key, ca} {
+		if err := os.Chtimes(path, future, future); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		err := client.DeleteIndexVectors(context.Background(), indexingapp.IndexVectorNamespace{ProjectID: 7, IndexID: indexID})
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the rotated material was never picked up: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if len(vector.deletes) != deletesBefore+1 {
+		t.Fatalf("the store saw %d deletes after the rotation, want 1", len(vector.deletes)-deletesBefore)
 	}
 }
 
@@ -290,8 +407,8 @@ func TestDeleteProjectDataIsDropProjectOverMutualTLS(t *testing.T) {
 	p := newPKI(t)
 	vector := &fakeVector{}
 	client := newClient(t, p, serve(t, p, vector))
-	if client.App() != vectorclient.App || vectorclient.App != "vector" {
-		t.Fatalf("App() = %q", client.App())
+	if vectorclient.App != "vector" {
+		t.Fatalf("App = %q, want the provisioner's %q", vectorclient.App, projectprovisioning.AppVector)
 	}
 
 	summary, err := client.DeleteProjectData(context.Background(), 7)

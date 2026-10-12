@@ -1656,6 +1656,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		indexVectorDeleter = vectorClient
 		projectVectorData = vectorClient
 	}
+	// The vector step is recorded on a project delete only by a replica that
+	// indexes into the store (Rust indexing with a client); a Python-indexing
+	// replica with a client only drains, and one without a client has the
+	// store explicitly off (RouterConfig.ProjectVectorStoreOff).
+	vectorStepRecorded := runtimeConfig.RustIndexing()
+	vectorStoreOff := !runtimeConfig.RustIndexing() && vectorClient == nil
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -2458,6 +2464,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ProjectDeleteBudget:          projectDeleteBudget,
 		ApplicationData:              applicationData,
 		ProjectVectorData:            projectVectorData,
+		ProjectVectorDataRecorded:    vectorStepRecorded,
+		ProjectVectorStoreOff:        vectorStoreOff,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,

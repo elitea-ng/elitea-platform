@@ -956,3 +956,96 @@ func TestIndexRegistryResultIsAppliedByTheOutputProjectionOnlyInRustMode(t *test
 		})
 	}
 }
+
+// A toolkit delete tombstones an index whatever its run is doing (v2/toolkits).
+// The claim leaves such a tombstone alone until its job ends, and every write
+// of a run is fenced on the lease its claim stamped: a stale lease touches
+// nothing.
+func TestIndexRegistryClaimSkipsAnActiveRunAndFencesWritesOnTheLease(t *testing.T) {
+	repo, pool := newRegistryTestRepo(t)
+	ctx := context.Background()
+	executionID, err := admitRegistryRun(t, pool, repo, "busy", "key-busy", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := mustFind(t, repo, "busy")
+	// The toolkit delete's statement: the row is tombstoned under a PENDING job.
+	if _, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.index_registry SET deleted_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE index_id = $1::uuid`, row.IndexID); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := repo.ClaimTombstones(ctx, 10, time.Minute); err != nil || len(claimed) != 0 {
+		t.Fatalf("a tombstone whose run is active was claimed: %+v err=%v", claimed, err)
+	}
+	for _, state := range []string{"CLAIMED", "RUNNING"} {
+		setJobState(t, pool, executionID, state)
+		if claimed, err := repo.ClaimTombstones(ctx, 10, time.Minute); err != nil || len(claimed) != 0 {
+			t.Fatalf("%s: claimed %+v err=%v", state, claimed, err)
+		}
+	}
+	setJobState(t, pool, executionID, "SUCCEEDED")
+	claimed, err := repo.ClaimTombstones(ctx, 10, time.Minute)
+	if err != nil || len(claimed) != 1 || claimed[0].IndexID != row.IndexID {
+		t.Fatalf("after the job ended: claimed %+v err=%v", claimed, err)
+	}
+	tombstone := claimed[0]
+	if tombstone.LeaseUntil.IsZero() || !tombstone.LeaseUntil.After(time.Now().Add(50*time.Second)) {
+		t.Fatalf("LeaseUntil = %v, want the claim's lease", tombstone.LeaseUntil)
+	}
+	listed, err := repo.ListTombstones(ctx, 10)
+	if err != nil || len(listed) != 1 || !listed[0].LeaseUntil.Equal(tombstone.LeaseUntil) {
+		t.Fatalf("ListTombstones = %+v err=%v, want the same lease", listed, err)
+	}
+
+	// A stale lease (another run's claim superseded this one) writes nothing.
+	stale := tombstone
+	stale.LeaseUntil = tombstone.LeaseUntil.Add(-time.Second)
+	if err := repo.RescheduleClaimed(ctx, stale, time.Now().Add(time.Hour), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.PurgeClaimed(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	var next time.Time
+	if err := pool.QueryRow(ctx, `SELECT attempts, next_attempt_at FROM elitea_runtime.index_registry WHERE index_id = $1::uuid`, row.IndexID).Scan(&attempts, &next); err != nil {
+		t.Fatalf("the tombstone was purged under a stale lease: %v", err)
+	}
+	if attempts != 0 || !next.Equal(tombstone.LeaseUntil) {
+		t.Fatalf("a stale lease rescheduled the row: attempts=%d next=%v lease=%v", attempts, next, tombstone.LeaseUntil)
+	}
+	// The claim's own lease writes.
+	retryAt := time.Now().Add(time.Hour).Truncate(time.Microsecond)
+	if err := repo.RescheduleClaimed(ctx, tombstone, retryAt, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT attempts, next_attempt_at FROM elitea_runtime.index_registry WHERE index_id = $1::uuid`, row.IndexID).Scan(&attempts, &next); err != nil || attempts != 1 || !next.Equal(retryAt) {
+		t.Fatalf("attempts=%d next=%v err=%v, want 1 and %v", attempts, next, err, retryAt)
+	}
+	// The row is re-claimed later; the new lease purges, the old one could not.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET next_attempt_at = clock_timestamp() - interval '1 second' WHERE index_id = $1::uuid`, row.IndexID); err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, err := repo.ClaimTombstones(ctx, 10, time.Minute)
+	if err != nil || len(reclaimed) != 1 {
+		t.Fatalf("reclaim: %+v err=%v", reclaimed, err)
+	}
+	if err := repo.PurgeClaimed(ctx, tombstone); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.index_registry WHERE index_id = $1::uuid`, row.IndexID).Scan(&left); err != nil || left != 1 {
+		t.Fatalf("the first run's lease purged a re-claimed row: left=%d err=%v", left, err)
+	}
+	if err := repo.PurgeClaimed(ctx, reclaimed[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.index_registry WHERE index_id = $1::uuid`, row.IndexID).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("the holder's lease did not purge: left=%d err=%v", left, err)
+	}
+	// Writes without a claim are refused outright.
+	if err := repo.PurgeClaimed(ctx, indexregistryapp.Tombstone{IndexID: row.IndexID}); err == nil {
+		t.Fatal("PurgeClaimed without a lease succeeded")
+	}
+}

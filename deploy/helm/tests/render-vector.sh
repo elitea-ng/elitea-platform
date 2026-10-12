@@ -169,7 +169,7 @@ esac
 # mainClient off: no certificate, no mount, no env, no admin identity.
 noclient="$(render $COMPLETE --set vector.mainClient.enabled=false)"
 if [ -n "$(select_one "$noclient" Certificate elitea-main-vector-client '.metadata.name')" ] \
-  || [ -n "$(select_one "$noclient" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_TARGET')" ] \
+  || [ -n "$(select_one "$noclient" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_TARGET // ""')" ] \
   || [ -n "$(select_one "$noclient" Deployment elitea-main '.spec.template.spec.volumes[] | select(.name == "vector-client-material") | .name')" ] \
   || [ "$(select_one "$noclient" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_VECTOR_ADMIN_IDENTITIES") | .value')" != "" ]; then
   fail "vector.mainClient.enabled=false still renders part of elitea-main's client"
@@ -313,6 +313,28 @@ expect_refusal "vector material beside no target" "env.ELITEA_VECTOR_GRPC_TARGET
   --set vector.mainClient.enabled=false --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/x/ca.crt
 expect_refusal "both the chart's client and fileConfig.vectorClientMaterial" "One Deployment volume cannot have two sources" \
   --set main.fileConfig.vectorClientMaterial.enabled=true --set main.fileConfig.vectorClientMaterial.secretName=x
+expect_refusal "explicit vector material path outside the chart's mount while mainClient is on" "nothing else is mounted for it" \
+  --set main.env.ELITEA_VECTOR_GRPC_TARGET=elitea-vector:9470 \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/etc/other/tls.crt \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/elitea-vector-client/tls.key \
+  --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client/ca.crt
+# A sibling directory that merely starts with the mount path's text is outside it.
+expect_refusal "a sibling directory of the chart's mount" "nothing else is mounted for it" \
+  --set main.env.ELITEA_VECTOR_GRPC_TARGET=elitea-vector:9470 \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/run/elitea-vector-client-other/tls.crt \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/elitea-vector-client/tls.key \
+  --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client/ca.crt
+expect_refusal "a sibling directory of fileConfig.vectorClientMaterial's mount" "does not serve" \
+  $EXTERNAL_CLIENT --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client-other/ca.crt
+# Explicit paths INSIDE the chart's mount are accepted beside mainClient.
+inside="$(render $COMPLETE \
+  --set main.env.ELITEA_VECTOR_GRPC_TARGET=elitea-vector:9470 \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/run/elitea-vector-client/tls.crt \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/elitea-vector-client/tls.key \
+  --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client/ca.crt)"
+[ "$(select_one "$inside" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE')" = "/run/elitea-vector-client/tls.crt" ] \
+  && note "explicit material paths inside the chart's mount render beside mainClient" \
+  || fail "explicit in-mount material paths were not rendered"
 expect_refusal "rust indexing without elitea-main's vector client" "needs elitea-main's elitea-vector client" \
   --set worker.enabled=true --set worker.implementation=rust --set worker.indexingRuntime=rust --set vector.mainClient.enabled=false
 

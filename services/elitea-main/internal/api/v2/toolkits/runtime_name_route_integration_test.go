@@ -24,18 +24,12 @@ package toolkits
 import (
 	"context"
 	"testing"
-	"time"
-
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 )
 
 func TestToolkitDetailsReportsTheRuntimeIdentifierAgainstPostgres(t *testing.T) {
-	pool := newToolkitsIntegrationPool(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	t.Cleanup(cancel)
-	if err := db.RunMigrations(ctx, pool); err != nil {
-		t.Fatalf("run baseline migrations: %v", err)
-	}
+	// The shared migrations too: DeleteToolkit tombstones the toolkit's
+	// index_registry rows (shared/0162).
+	pool, ctx := migratedToolkitsPool(t)
 	repo := &pgRepo{pool: pool}
 
 	for _, testCase := range []struct {

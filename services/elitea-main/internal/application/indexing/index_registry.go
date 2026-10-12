@@ -236,6 +236,13 @@ type IndexVectorNamespace struct {
 // tombstone instead of forgetting vectors it never deleted.
 var ErrIndexVectorDeletionDeferred = errors.New("index vector deletion is deferred until elitea-vector is wired")
 
+// ErrIndexVectorDeletionRefused reports that the vector store refused this
+// process's identity (its administrator allowlist or the certificate is
+// wrong). No retry fixes it until an operator does; the tombstone sweeper
+// backs such a tombstone off to its longest pause at once rather than
+// counting up to it, and the implementation logs what to fix.
+var ErrIndexVectorDeletionRefused = errors.New("index vector deletion refused: the vector store does not admit this process's identity")
+
 // IndexVectorDeleter is the hook to elitea-vector's Delete (ADR-0031 decision
 // 4: "a toolkit index: deleting it calls Delete on its namespace").
 //

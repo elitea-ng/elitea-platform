@@ -667,8 +667,12 @@ another's paths, so it is refused.
 {{- if not (hasPrefix "/" $value) -}}
 {{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q — it is passed to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
 {{- end -}}
-{{- if and $clientMaterial.enabled (not (hasPrefix $mountPath $value)) -}}
+{{- /* The ONE directory that is mounted: the chart's own client material or the operator's. The prefix carries the trailing slash, so /run/elitea-vector-client-other/tls.crt is outside /run/elitea-vector-client. */ -}}
+{{- if and $clientMaterial.enabled (not (hasPrefix (printf "%s/" (trimSuffix "/" $mountPath)) $value)) -}}
 {{- fail (printf "env.%s is %q, which fileConfig.vectorClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container." $name $value $mountPath) -}}
+{{- end -}}
+{{- if and $chartClient (not (hasPrefix (printf "%s/" (trimSuffix "/" ($.Values.vector.mainClient.mountPath | toString))) $value)) -}}
+{{- fail (printf "env.%s is %q, but vector.mainClient mounts elitea-main's elitea-vector client material at %q and nothing else is mounted for it. Leave the three ELITEA_VECTOR_GRPC_*_FILE entries empty (the chart derives them), or point them inside that directory." $name $value $.Values.vector.mainClient.mountPath) -}}
 {{- end -}}
 {{- end -}}
 {{- if not (or $clientMaterial.enabled $chartClient) -}}

@@ -213,6 +213,12 @@ type Tombstone struct {
 	DeletedAt time.Time
 	// Attempts is how many deletions the sweeper has tried and failed.
 	Attempts int32
+	// LeaseUntil is the next_attempt_at the claim stamped: the moment the lease
+	// ends and another replica may claim the row. It fences the claimer's own
+	// writes (TombstoneSweeperStore.PurgeClaimed, RescheduleClaimed): a write
+	// that finds a different value belongs to a run whose lease expired, and
+	// touches nothing.
+	LeaseUntil time.Time
 }
 
 // Stamped reports whether the first terminal result has stamped the embedding

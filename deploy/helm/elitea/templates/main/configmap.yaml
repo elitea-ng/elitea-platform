@@ -105,6 +105,14 @@
       "ELITEA_VECTOR_GRPC_CA_FILE" (printf "%s/ca.crt" $mount)) }}
 {{- end }}
 {{- /*
+  values.yaml ships the five entries empty so an operator sees them; an empty
+  one is "unset" to elitea-main (vector_client_config.go) and is not rendered,
+  so a deployment without a vector store carries no ELITEA_VECTOR_* at all.
+*/ -}}
+{{- range $key := list "ELITEA_VECTOR_GRPC_TARGET" "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" "ELITEA_VECTOR_GRPC_CA_FILE" "ELITEA_VECTOR_GRPC_SERVER_NAME" }}
+{{- if and (hasKey $env $key) (eq (get $env $key | toString) "") }}{{- $env = omit $env $key }}{{- end }}
+{{- end }}
+{{- /*
   ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are DERIVED
   the same way (issues #394 and #395). Each route is now the ONLY handler for
   its path — the prototype fallbacks in internal/api/router.go are deleted — so

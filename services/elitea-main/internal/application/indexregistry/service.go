@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
@@ -32,6 +32,13 @@ type Store interface {
 	// once the vector store has deleted the index's points.
 	PurgeDeleted(ctx context.Context, indexID string) error
 }
+
+// RouteVectorDeleteBudget bounds the index delete route's own, best-effort
+// attempt to delete the index's vectors inside the user's request. Any failure
+// or timeout leaves the tombstone to the sweeper, so the request answers in
+// at most this plus its database work; the vector client's call timeout (tens
+// of seconds, for the sweeper) never reaches a user.
+const RouteVectorDeleteBudget = 3 * time.Second
 
 // Service is the rust-mode counterpart of indexmeta.Service,
 // indexmeta.ExactService, indexmeta.DeleteService and
@@ -175,8 +182,6 @@ func (s *Service) find(ctx context.Context, projectID, toolkitID int32, collecti
 	return indexmetaapp.Item{ID: row.IndexID, Metadata: Metadata(row.Effective())}, true, nil
 }
 
-var indexIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-
 // Delete removes an index: the registry row is tombstoned (and its name freed),
 // the index's vectors are deleted through the vector store hook, and the
 // schedule entry in the toolkit row is removed, in that order and as separate
@@ -190,11 +195,14 @@ var indexIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 // a dead run is cleared.
 //
 // The tombstone is purged only when the hook reports the vectors deleted. When
-// that first attempt does not delete them (the hook defers because
-// elitea-main has no elitea-vector client yet, or the call fails), the row
-// stays as a tombstone and the user-visible delete still succeeds; the
-// tombstone sweeper (TombstoneSweeper) repeats the idempotent deletion with a
-// backoff until it succeeds.
+// that first attempt does not delete them (the hook defers because the
+// deployment has no elitea-vector client, the store is unreachable, or the
+// call does not finish inside RouteVectorDeleteBudget), the row stays as a
+// tombstone and the user-visible delete still succeeds; the tombstone sweeper
+// (TombstoneSweeper) repeats the idempotent deletion with a backoff until it
+// succeeds. THE REQUEST NEVER WAITS FOR THE STORE: the attempt here is
+// best-effort and bounded to RouteVectorDeleteBudget, so an unreachable or
+// slow store costs the user at most that, not the client's call timeout.
 func (s *Service) Delete(ctx context.Context, request indexmetaapp.DeleteRequest) error {
 	if s == nil || ctx == nil || !validText(request.IndexMetaID, indexmetaapp.MaxCurrentIndexMetaIDBytes) ||
 		request.ProjectID <= 0 || request.ProjectID > math.MaxInt32 ||
@@ -211,7 +219,7 @@ func (s *Service) Delete(ctx context.Context, request indexmetaapp.DeleteRequest
 	}
 	// An id that is not a registry uuid names no row, exactly as an unknown id
 	// does.
-	if !indexIDPattern.MatchString(request.IndexMetaID) {
+	if !indexingapp.ValidCanonicalUUID(request.IndexMetaID) {
 		return indexmetaapp.ErrCurrentIndexMetaNotFound
 	}
 	row, err := s.store.MarkDeleted(ctx, projectID, toolkitID, request.IndexMetaID)
@@ -224,9 +232,12 @@ func (s *Service) Delete(ctx context.Context, request indexmetaapp.DeleteRequest
 		return dependencyError(ctx, indexmetaapp.ErrCurrentIndexMetaUnavailable, err)
 	}
 
-	switch vectorErr := s.vectors.DeleteIndexVectors(ctx, indexingapp.IndexVectorNamespace{
+	attemptCtx, cancelAttempt := context.WithTimeout(ctx, RouteVectorDeleteBudget)
+	vectorErr := s.vectors.DeleteIndexVectors(attemptCtx, indexingapp.IndexVectorNamespace{
 		ProjectID: projectID, IndexID: row.IndexID,
-	}); {
+	})
+	cancelAttempt()
+	switch {
 	case vectorErr == nil:
 		if err := s.store.PurgeDeleted(ctx, row.IndexID); err != nil {
 			// The tombstone stays; the sweeper repeats the (idempotent) deletion
@@ -236,7 +247,10 @@ func (s *Service) Delete(ctx context.Context, request indexmetaapp.DeleteRequest
 	case errors.Is(vectorErr, indexingapp.ErrIndexVectorDeletionDeferred):
 		// Pending, by design, until the vector store client exists; the
 		// sweeper skips tombstones while the hook is deferred.
+	case ctx.Err() != nil:
+		// The request itself ended; the tombstone stays for the sweeper.
 	default:
+		// The budget ran out or the store failed: the sweeper finishes it.
 		s.report(vectorErr)
 	}
 

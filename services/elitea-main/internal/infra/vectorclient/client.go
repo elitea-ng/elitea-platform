@@ -35,48 +35,59 @@
 //     slow (UNAVAILABLE, DEADLINE_EXCEEDED), or a precondition failed
 //     (FAILED_PRECONDITION, ABORTED, RESOURCE_EXHAUSTED). The journal retries.
 //   - platformops.ErrNotAllowed: elitea-vector refused this certificate
-//     (UNAUTHENTICATED, PERMISSION_DENIED). A retry cannot fix it: the
-//     allowlist or the material is wrong, and the message says so. The
-//     journal closes the step with NoteRefused and an Error log.
+//     (UNAUTHENTICATED, PERMISSION_DENIED): the allowlist or the material is
+//     wrong, and the message says so. For THIS store the journal does NOT
+//     close the step (that would leave the project's vectors in Qdrant for
+//     ever behind a "done"): the vector step keeps it pending at the journal's
+//     longest backoff with an Error log naming the identity problem, and the
+//     deletion runs once an operator fixes the allowlist or the material.
 //   - platformops.ErrConfig: the request is invalid (INVALID_ARGUMENT), which
 //     for a fixed request shape means the client is wrong. Closed with
 //     NoteInvalidRequest.
 //   - anything else: elitea-vector failed (INTERNAL and the rest); the journal
 //     retries it.
+//
+// The index deleter's refusal is indexingapp.ErrIndexVectorDeletionRefused
+// (wrapped beside platformops.ErrNotAllowed), which the tombstone sweeper
+// backs off to its longest pause at once rather than counting up to it.
+//
+// THE MATERIAL ROTATES: the certificate, key and CA are re-read when their
+// files change (infra/mtlsclient, shared with the platform-operations hops),
+// so a renewed Secret is used by the next connection without a restart.
 package vectorclient
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
 // App is the name the project delete's cleanup journal records the vector
 // store under: its step is `vector_data`
 // (projectprovisioning.StepVectorData), beside `deepwiki_data` and
-// `inventory_data`.
-const App = "vector"
+// `inventory_data`. The provisioner treats this application specially
+// (projectprovisioning.AppVector), so the constant is its.
+const App = projectprovisioning.AppVector
 
 const (
-	// DefaultIndexDeleteTimeout bounds one Delete. The index delete route
-	// calls it inside a user's request, so it is short; a timeout leaves the
-	// tombstone, which the sweeper finishes.
+	// DefaultIndexDeleteTimeout bounds one Delete as the SWEEPER calls it. The
+	// index delete route bounds its own best-effort attempt far shorter
+	// (indexregistry.RouteVectorDeleteBudget, through the context it passes),
+	// and the smaller bound wins; a timeout leaves the tombstone, which the
+	// sweeper finishes.
 	DefaultIndexDeleteTimeout = 30 * time.Second
 	// DefaultProjectDropTimeout bounds one DropProject, which touches every
 	// collection. Well below the cleanup journal's run bound (5 minutes), and
@@ -139,7 +150,6 @@ func (c Config) Validate() error {
 
 // Client calls elitea-vector as the platform's administrator identity.
 type Client struct {
-	target       string
 	conn         *grpc.ClientConn
 	vectors      vectorv1.VectorServiceClient
 	indexTimeout time.Duration
@@ -148,10 +158,11 @@ type Client struct {
 }
 
 // New builds a client. The material is loaded now (a missing file is a
-// construction error, not a per-call one); the connection is dialled lazily on
-// the first call, which is grpc.NewClient's behaviour, so elitea-main does not
-// wait for elitea-vector at boot (elitea-vector itself waits for elitea-main's
-// control listener to verify tokens).
+// construction error, not a per-call one) and re-read when its files change
+// (mtlsclient); the connection is dialled lazily on the first call, which is
+// grpc.NewClient's behaviour, so elitea-main does not wait for elitea-vector
+// at boot (elitea-vector itself waits for elitea-main's control listener to
+// verify tokens).
 func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -159,14 +170,24 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	tlsConfig, err := mtlsConfig(cfg)
+	logger = logger.With("target", cfg.Target)
+	creds, err := mtlsclient.NewCredentials(mtlsclient.Material{
+		CertFile: cfg.ClientCertFile, KeyFile: cfg.ClientKeyFile, CAFile: cfg.CAFile,
+		ServerName: cfg.ServerName, Target: cfg.Target,
+	}, func(err error) {
+		logger.Error("elitea-vector client material could not be reloaded", "err", err)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: elitea-vector gRPC client: %w", ErrConfig, err)
 	}
 	conn, err := grpc.NewClient(cfg.Target,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
-		// A response is a collection count; nothing legitimate is larger.
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1<<20)),
+		grpc.WithTransportCredentials(creds),
+		// A response is a collection count; nothing legitimate is larger. The
+		// calls FAIL FAST: a call made while the connection is down (the
+		// route's best-effort attempt, a sweep during an outage) returns
+		// UNAVAILABLE at once instead of waiting out its deadline for the
+		// store to come back.
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1<<20), grpc.WaitForReady(false)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: elitea-vector gRPC client: %w", ErrConfig, err)
@@ -180,45 +201,11 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 		dropTimeout = DefaultProjectDropTimeout
 	}
 	return &Client{
-		target: cfg.Target, conn: conn, vectors: vectorv1.NewVectorServiceClient(conn),
+		conn: conn, vectors: vectorv1.NewVectorServiceClient(conn),
 		indexTimeout: indexTimeout, dropTimeout: dropTimeout,
-		logger: logger.With("target", cfg.Target),
+		logger: logger,
 	}, nil
 }
-
-// mtlsConfig is platformops's TLS configuration shape: the client
-// certificate, the CA, the server-name rule, TLS 1.2 at least.
-func mtlsConfig(cfg Config) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(cfg.ClientCertFile, cfg.ClientKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load client cert: %w", err)
-	}
-	caPEM, err := os.ReadFile(cfg.CAFile)
-	if err != nil {
-		return nil, fmt.Errorf("read ca bundle: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("no certificates parsed from ca bundle %q", cfg.CAFile)
-	}
-	serverName := cfg.ServerName
-	if serverName == "" {
-		serverName, _, _ = net.SplitHostPort(cfg.Target)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      pool,
-		ServerName:   serverName,
-		MinVersion:   tls.VersionTLS12,
-	}, nil
-}
-
-// Target is the listener this client dials.
-func (c *Client) Target() string { return c.target }
-
-// App is the journal name of the vector store (App). It lets a *Client stand
-// where the composition lists application-data clients.
-func (c *Client) App() string { return App }
 
 // Close releases the connection.
 func (c *Client) Close() error {
@@ -227,11 +214,6 @@ func (c *Client) Close() error {
 	}
 	return c.conn.Close()
 }
-
-// indexIDPattern is the canonical lower-case UUID form elitea-vector requires
-// of a namespace_id. The registry writes its index ids in that form; anything
-// else never names a namespace and is refused here, before the wire.
-var indexIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // DeleteIndexVectors implements indexingapp.IndexVectorDeleter: Delete of the
 // whole namespace of one toolkit index (source TOOLKIT_INDEX, namespace_id the
@@ -245,7 +227,10 @@ func (c *Client) DeleteIndexVectors(ctx context.Context, namespace indexingapp.I
 	if namespace.ProjectID <= 0 {
 		return fmt.Errorf("%w: project id %d is not positive", ErrConfig, namespace.ProjectID)
 	}
-	if !indexIDPattern.MatchString(namespace.IndexID) {
+	// The canonical lower-case UUID form elitea-vector requires of a
+	// namespace_id; the registry writes its ids in that form, so anything
+	// else never names a namespace and is refused before the wire.
+	if !indexingapp.ValidCanonicalUUID(namespace.IndexID) {
 		return fmt.Errorf("%w: index id %q is not a canonical uuid", ErrConfig, namespace.IndexID)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.indexTimeout)
@@ -275,15 +260,21 @@ func (c *Client) DeleteIndexVectors(ctx context.Context, namespace indexingapp.I
 func (c *Client) Deferred() bool { return false }
 
 // classifyIndexDelete wraps a failed Delete. A refused certificate is named
-// as such, because no retry fixes it and the sweeper would otherwise back the
-// tombstone off for ever with a message that reads like an outage.
+// as such (indexingapp.ErrIndexVectorDeletionRefused and
+// platformops.ErrNotAllowed), because only an operator fixes it: the sweeper
+// then waits its longest pause between attempts instead of polling a store
+// that refuses it, and the message says what to fix rather than reading like
+// an outage.
 func (c *Client) classifyIndexDelete(namespace indexingapp.IndexVectorNamespace, err error) error {
 	code := status.Code(err)
 	message := status.Convert(err).Message()
 	switch code {
 	case codes.Unauthenticated, codes.PermissionDenied:
-		return fmt.Errorf("%w: elitea-vector delete of index %s (project %d): %s (%s)",
-			platformops.ErrNotAllowed, namespace.IndexID, namespace.ProjectID, message, code)
+		c.logger.Error("elitea-vector refused this process's client certificate; its ELITEA_VECTOR_ADMIN_IDENTITIES must name this process's identity, and the deletion waits until it does",
+			"project_id", namespace.ProjectID, "index_id", namespace.IndexID, "code", code.String(), "message", message)
+		return fmt.Errorf("%w: %w: elitea-vector delete of index %s (project %d): %s (%s)",
+			indexingapp.ErrIndexVectorDeletionRefused, platformops.ErrNotAllowed,
+			namespace.IndexID, namespace.ProjectID, message, code)
 	}
 	return fmt.Errorf("elitea-vector delete of index %s (project %d) failed: %s (%s)",
 		namespace.IndexID, namespace.ProjectID, message, code)
@@ -305,6 +296,11 @@ func (c *Client) DeleteProjectData(ctx context.Context, projectID int64) (string
 	defer cancel()
 	response, err := c.vectors.DropProject(callCtx, &vectorv1.DropProjectRequest{ProjectId: projectID})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// The caller's context ended (a shutdown, the run's bound): the
+			// journal tells that apart from a failure of the store.
+			return "", ctxErr
+		}
 		return "", c.classifyProjectDrop(projectID, err)
 	}
 	summary := fmt.Sprintf("dropped the project's vectors in %d collection(s)", response.GetCollections())
@@ -314,7 +310,8 @@ func (c *Client) DeleteProjectData(ctx context.Context, projectID int64) (string
 
 // classifyProjectDrop turns a failed DropProject into one of platformops's
 // errors (see the package comment). The status message is kept: elitea-vector
-// writes it without statements or credentials.
+// writes it without statements or credentials. The caller's own cancellation
+// never reaches here (DeleteProjectData returns ctx.Err() first).
 func (c *Client) classifyProjectDrop(projectID int64, err error) error {
 	code := status.Code(err)
 	message := status.Convert(err).Message()
@@ -322,15 +319,12 @@ func (c *Client) classifyProjectDrop(projectID int64, err error) error {
 	case codes.FailedPrecondition, codes.Aborted, codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
 		return fmt.Errorf("%w: elitea-vector drop_project %d: %s (%s)", platformops.ErrRetryLater, projectID, message, code)
 	case codes.Unauthenticated, codes.PermissionDenied:
+		c.logger.Error("elitea-vector refused this process's client certificate; its ELITEA_VECTOR_ADMIN_IDENTITIES must name this process's identity, and the project's vectors wait in Qdrant until it does",
+			"project_id", projectID, "code", code.String(), "message", message)
 		return fmt.Errorf("%w: elitea-vector drop_project %d: %s (%s). Its ELITEA_VECTOR_ADMIN_IDENTITIES must name this process's client certificate identity",
 			platformops.ErrNotAllowed, projectID, message, code)
 	case codes.InvalidArgument:
 		return fmt.Errorf("%w: elitea-vector drop_project %d: %s (%s)", platformops.ErrConfig, projectID, message, code)
-	case codes.Canceled:
-		if errors.Is(err, context.Canceled) {
-			return err
-		}
-		return fmt.Errorf("elitea-vector drop_project %d: %s (%s)", projectID, message, code)
 	}
 	return fmt.Errorf("elitea-vector drop_project %d failed: %s (%s)", projectID, message, code)
 }

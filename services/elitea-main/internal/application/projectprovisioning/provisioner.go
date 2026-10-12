@@ -240,6 +240,10 @@ type Provisioner struct {
 	// (a DeepWiki wiki index, an Inventory graph), one journal step each. See
 	// application_data.go. Empty where none is wired.
 	applications []applicationCleanup
+	// vectorStoreOff: this replica's configuration has the vector store
+	// explicitly off (WithVectorStoreOff); a recorded vector step is closed
+	// as not configured rather than left pending (application_data.go).
+	vectorStoreOff bool
 
 	// lifecycle is the context whose end means the process is shutting down.
 	// The detached cleanup runs of a delete derive from it, so a shutdown

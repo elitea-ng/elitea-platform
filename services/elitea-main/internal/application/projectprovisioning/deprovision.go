@@ -277,6 +277,14 @@ type deletionCleanup struct {
 	// application steps from here, not from the running process
 	// (application_data.go).
 	Apps []string `json:"apps,omitempty"`
+	// ActiveRuns is how many non-terminal execution jobs the project had when
+	// the delete was decided: zero unless the active-work check was skipped
+	// (SkipActiveWorkCheck). DecidedAt is when. The vector step waits
+	// VectorDropSettle after DecidedAt while ActiveRuns > 0: a worker that was
+	// writing vectors keeps a verified claim token in elitea-vector's cache
+	// for a few seconds after its job rows are gone (application_data.go).
+	ActiveRuns int64     `json:"active_runs,omitempty"`
+	DecidedAt  time.Time `json:"decided_at,omitempty"`
 }
 
 // cleanupStep is one idempotent journal step. note is an optional message for a
@@ -669,22 +677,24 @@ func (p *Provisioner) decideDeletion(ctx context.Context, projectID int64, skipA
 		return nil, notRemoved("bound lock waits", err)
 	}
 
-	if !skipActiveWork {
-		var active int64
-		if err := transaction.QueryRow(ctx, activeWorkSQL, projectID, nonTerminalStates()).Scan(&active); err != nil {
-			return nil, notRemoved("count active work", err)
-		}
-		if active > 0 {
-			p.logger.WarnContext(ctx, "project delete refused: work is active",
-				"project_id", projectID, "active_runs", active)
-			return nil, ErrProjectWorkActive
-		}
+	// Counted whether or not it is enforced: a skipped check records how many
+	// runs the delete cut off, which the vector step reads.
+	var active int64
+	if err := transaction.QueryRow(ctx, activeWorkSQL, projectID, nonTerminalStates()).Scan(&active); err != nil {
+		return nil, notRemoved("count active work", err)
+	}
+	if active > 0 && !skipActiveWork {
+		p.logger.WarnContext(ctx, "project delete refused: work is active",
+			"project_id", projectID, "active_runs", active)
+		return nil, ErrProjectWorkActive
 	}
 
 	cleanup, err := p.recordCleanup(ctx, transaction, projectID)
 	if err != nil {
 		return nil, notRemoved("record cleanup", err)
 	}
+	cleanup.ActiveRuns = active
+	cleanup.DecidedAt = time.Now().UTC()
 	encoded, err := json.Marshal(cleanup)
 	if err != nil {
 		return nil, notRemoved("encode cleanup", err)
@@ -942,6 +952,10 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 		failures    []error
 		failedSteps []string
 		interrupted bool
+		// slowRetry: a failed step wants the journal's longest backoff rather
+		// than the attempt-based one (the vector store refused this process's
+		// identity; only an operator changes that).
+		slowRetry bool
 	)
 	for _, step := range p.cleanupSteps(cleanup) {
 		status := StepStatus{Step: step.name, Initialized: true}
@@ -984,6 +998,8 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			quiet    quietRetry
 			closed   closedWithNote
 			notWired notWiredError
+			waiting  waitingForRuns
+			refused  identityRefused
 		)
 		switch {
 		case err == nil:
@@ -1003,12 +1019,13 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			result.RollbackSteps = append(result.RollbackSteps, StepStatus{Step: step.name})
 			result.Pending = append(result.Pending, step.name)
 			continue
-		case errors.As(err, &notWired):
+		case errors.As(err, &notWired), errors.As(err, &waiting):
 			// This replica cannot run the step the row recorded (application_
-			// data.go): pending, not failed on the engine's account. The run
-			// counts it as not finished, so the row stays open with a backoff
-			// for a replica that can, and the run's error names the step and
-			// the missing client for the reconciler's log.
+			// data.go), or the vector step waits for the project's runs to
+			// end: pending, not failed on the engine's account. The run counts
+			// it as not finished, so the row stays open with a backoff, and
+			// the run's error names the step and the reason for the
+			// reconciler's log. Both are logged by the step.
 			status = StepStatus{Step: step.name}
 			result.Pending = append(result.Pending, step.name)
 			failedSteps = append(failedSteps, step.name)
@@ -1040,9 +1057,17 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			p.recordQuietFailures(ctx, projectID, cleanup.QuietDropFailures)
 			status.Msg = "skipped: no vector store recorded"
 			failedSteps = append(failedSteps, step.name)
+		case errors.As(err, &refused):
+			// The vector store refused this process's identity (logged by the
+			// step, at Error): a failed step like any other, except that the
+			// row backs off to the journal's longest pause at once.
+			slowRetry = true
+			fallthrough
 		default:
-			p.logger.ErrorContext(ctx, "project delete cleanup step failed; the cleanup journal retries it",
-				"step", step.name, "project_id", projectID, "err", err)
+			if !errors.As(err, &refused) {
+				p.logger.ErrorContext(ctx, "project delete cleanup step failed; the cleanup journal retries it",
+					"step", step.name, "project_id", projectID, "err", err)
+			}
 			status.setFailed(safeStepMessage(step.name))
 			failures = append(failures, step.failure(cleanup, err))
 			failedSteps = append(failedSteps, step.name)
@@ -1068,7 +1093,7 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 		p.releaseInterrupted(ctx, projectID)
 		return result, false, errors.Join(failures...)
 	}
-	completed := p.finishCleanupRun(ctx, projectID, failedSteps)
+	completed := p.finishCleanupRun(ctx, projectID, failedSteps, slowRetry)
 	return result, completed, errors.Join(failures...)
 }
 
@@ -1189,14 +1214,20 @@ WHERE project_id = $1 AND completed_at IS NULL`, projectID); err != nil {
 // finishCleanupRun closes one run in the journal row. With no failed step the
 // row is complete. Otherwise last_error names the failed steps (names only: a
 // raw error can carry SQL or addresses) and next_attempt_at backs off by the
-// number of runs so far. It reports whether the row is now complete.
-func (p *Provisioner) finishCleanupRun(runCtx context.Context, projectID int64, failedSteps []string) bool {
+// number of runs so far — or, with slowRetry, by the longest pause at once
+// (deletionRetryMax: a step that only an operator unblocks). It reports
+// whether the row is now complete.
+func (p *Provisioner) finishCleanupRun(runCtx context.Context, projectID int64, failedSteps []string, slowRetry bool) bool {
 	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	var lastError *string
 	if len(failedSteps) > 0 {
 		message := "steps did not complete: " + fmt.Sprint(failedSteps)
 		lastError = &message
+	}
+	base := deletionRetryBase
+	if slowRetry {
+		base = deletionRetryMax
 	}
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
@@ -1207,7 +1238,7 @@ SET attempts = attempts + 1,
         ELSE clock_timestamp() + make_interval(secs => LEAST($3::float8 * power(2, LEAST(attempts, 30)), $4::float8)) END,
     claimed_until = NULL
 WHERE project_id = $1`,
-		projectID, lastError, deletionRetryBase.Seconds(), deletionRetryMax.Seconds(),
+		projectID, lastError, base.Seconds(), deletionRetryMax.Seconds(),
 	); err != nil {
 		p.logger.WarnContext(ctx, "could not close the cleanup run in the journal; the reconciler retries the row",
 			"project_id", projectID, "err", err)

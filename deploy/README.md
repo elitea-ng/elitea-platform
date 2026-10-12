@@ -137,7 +137,16 @@ may call `Delete`, `DropProject`, `Count` and `ListIndexes` only. On
 `elitea-main` the hop is `ELITEA_VECTOR_GRPC_TARGET` plus
 `ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE` / `_CLIENT_KEY_FILE` / `_CA_FILE`
 (optionally `_SERVER_NAME`); without the target, deleted indexes keep their
-vectors (tombstones stay pending) and deleted projects keep theirs.
+vectors (tombstones stay pending) and deleted projects keep theirs. The client
+material (and the DeepWiki / Inventory platform hops') is re-read when its
+files change, so a renewed certificate or CA is used by the next connection
+without a restart. Deleting a TOOLKIT tombstones every index_registry row of
+the toolkit in the delete's own transaction; the sweeper deletes their
+namespaces afterwards. The `vector_data` step is recorded only by a replica
+that indexes into the store (`ELITEA_INDEXING_RUNTIME=rust` with the client);
+a Python-indexing replica without a target closes a recorded step as
+"vector store not configured". A store that refuses the certificate never
+closes the step: it waits at the journal's longest backoff, logged at Error.
 
 ### DeepWiki and Inventory — canned data, or the real engines
 

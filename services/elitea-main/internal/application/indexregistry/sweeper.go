@@ -3,6 +3,7 @@ package indexregistry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"time"
 
@@ -16,9 +17,19 @@ const (
 	TombstoneBackoffMax  = time.Hour
 	// TombstoneLease is how long a claimed tombstone is hidden from other
 	// replicas while its deletion runs. A replica that dies mid-deletion leaves
-	// the tombstone due again after the lease.
+	// the tombstone due again after the lease. One run's deletions all fit in
+	// it: each is bounded to TombstoneLease / (batch + 1) (deleteBudget), so
+	// even a batch of deletions that each run to their bound ends before the
+	// first claim's lease does, and a tombstone is never worked by two runs.
 	TombstoneLease = 5 * time.Minute
 )
+
+// deleteBudget bounds one tombstone's deletion inside a run of batch
+// tombstones: the lease shared by batch + 1, so the whole batch, worked in
+// sequence, ends inside the lease with a share to spare for the bookkeeping.
+func deleteBudget(batch int) time.Duration {
+	return TombstoneLease / time.Duration(batch+1)
+}
 
 // TombstoneBackoff is the pause after the attempts-th failed deletion
 // (attempts >= 1), before jitter.
@@ -41,12 +52,19 @@ type TombstoneSweeperStore interface {
 	// next_attempt_at out by lease so no other replica takes it meanwhile.
 	// Replicas never claim the same row (FOR UPDATE SKIP LOCKED); no lock is
 	// held after it returns.
+	// Each returned tombstone carries the lease's end (Tombstone.LeaseUntil).
+	// A tombstone whose run is still active (its execution job is not
+	// terminal) is not due: its worker may still be writing the vectors, and
+	// a deletion now would leave the ones written after it.
 	ClaimTombstones(ctx context.Context, limit int, lease time.Duration) ([]Tombstone, error)
-	// PurgeDeleted removes a tombstone and its documents.
-	PurgeDeleted(ctx context.Context, indexID string) error
-	// RescheduleTombstone stores the next attempt time of a tombstone. A
-	// failed deletion also counts as an attempt; a deferral does not.
-	RescheduleTombstone(ctx context.Context, indexID string, nextAttemptAt time.Time, failed bool) error
+	// PurgeClaimed removes a claimed tombstone and its documents, ONLY while
+	// the claim stands (the row's next_attempt_at is still the claim's
+	// LeaseUntil). A row another run has claimed since is left alone.
+	PurgeClaimed(ctx context.Context, tombstone Tombstone) error
+	// RescheduleClaimed stores the next attempt time of a claimed tombstone
+	// under the same fence. A failed deletion also counts as an attempt; a
+	// deferral does not.
+	RescheduleClaimed(ctx context.Context, tombstone Tombstone, nextAttemptAt time.Time, failed bool) error
 }
 
 // TombstoneSweeper finishes the deletion of indexes whose vectors could not be
@@ -108,39 +126,73 @@ func (s *TombstoneSweeper) RunOnce(ctx context.Context) (int, error) {
 	return len(tombstones), nil
 }
 
+// ErrTombstoneLeaseExpired reports a claimed tombstone this run did not touch
+// because its lease had run out before the run reached it: another replica may
+// hold it by now. The budget makes this unreachable in a healthy run; it is
+// reported, never acted on.
+var ErrTombstoneLeaseExpired = errors.New("index tombstone lease expired before this run reached it")
+
 func (s *TombstoneSweeper) sweep(ctx context.Context, tombstone Tombstone) {
-	vectorErr := s.vectors.DeleteIndexVectors(ctx, indexingapp.IndexVectorNamespace{
+	// A tombstone whose lease has ended is another run's now (or nobody's
+	// until the next claim); this run has no fence on it and leaves it.
+	if !tombstone.LeaseUntil.IsZero() && !s.now().Before(tombstone.LeaseUntil) {
+		s.report(fmt.Errorf("%w: index %s", ErrTombstoneLeaseExpired, tombstone.IndexID))
+		return
+	}
+	// One deletion's bound: its share of the lease, and never past the lease
+	// itself.
+	budget := deleteBudget(s.batch)
+	if !tombstone.LeaseUntil.IsZero() {
+		if left := tombstone.LeaseUntil.Sub(s.now()); left < budget {
+			budget = left
+		}
+	}
+	deleteCtx, cancel := context.WithTimeout(ctx, budget)
+	vectorErr := s.vectors.DeleteIndexVectors(deleteCtx, indexingapp.IndexVectorNamespace{
 		ProjectID: tombstone.ProjectID, IndexID: tombstone.IndexID,
 	})
+	cancel()
 	switch {
 	case vectorErr == nil:
-		if err := s.store.PurgeDeleted(ctx, tombstone.IndexID); err != nil {
+		if err := s.store.PurgeClaimed(ctx, tombstone); err != nil {
 			// The vectors are gone and the deletion is idempotent: the next pass
 			// repeats it and purges. Back off like any other failure.
 			s.report(err)
-			s.reschedule(ctx, tombstone, true)
+			s.reschedule(ctx, tombstone, true, false)
 		}
 	case errors.Is(vectorErr, indexingapp.ErrIndexVectorDeletionDeferred):
-		s.reschedule(ctx, tombstone, false)
+		s.reschedule(ctx, tombstone, false, false)
+	case errors.Is(vectorErr, indexingapp.ErrIndexVectorDeletionRefused):
+		// The store does not admit this process; only an operator changes
+		// that. Reported, counted, and waited out at the longest pause rather
+		// than polled up to it.
+		s.report(vectorErr)
+		s.reschedule(ctx, tombstone, true, true)
 	default:
 		if ctx.Err() == nil {
 			s.report(vectorErr)
 		}
-		s.reschedule(ctx, tombstone, true)
+		s.reschedule(ctx, tombstone, true, false)
 	}
 }
 
-func (s *TombstoneSweeper) reschedule(ctx context.Context, tombstone Tombstone, failed bool) {
+// reschedule stores the tombstone's next attempt: the backoff of its attempts
+// after a failure (or the longest pause at once, for a refusal), the base
+// pause after a deferral.
+func (s *TombstoneSweeper) reschedule(ctx context.Context, tombstone Tombstone, failed, longest bool) {
 	attempts := tombstone.Attempts
 	if failed {
 		attempts++
 	}
 	delay := TombstoneBackoff(attempts)
-	if !failed {
+	switch {
+	case longest:
+		delay = TombstoneBackoffMax
+	case !failed:
 		delay = TombstoneBackoffBase
 	}
 	delay = time.Duration(float64(delay) * s.jitter())
-	if err := s.store.RescheduleTombstone(ctx, tombstone.IndexID, s.now().Add(delay), failed); err != nil && ctx.Err() == nil {
+	if err := s.store.RescheduleClaimed(ctx, tombstone, s.now().Add(delay), failed); err != nil && ctx.Err() == nil {
 		s.report(err)
 	}
 }
