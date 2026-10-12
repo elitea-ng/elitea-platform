@@ -136,12 +136,13 @@ impl ContextManagementPlan {
         if settings.is_empty() || conversation_id.is_none() {
             return Ok(Self::Disabled);
         }
-        if let Some(key) = settings
+        if settings
             .keys()
-            .find(|key| !ADMITTED_KEYS.contains(&key.as_str()))
+            .any(|key| !ADMITTED_KEYS.contains(&key.as_str()))
         {
+            // Keys are profile-authored text; log only that a refusal happened.
             tracing::debug!(
-                setting = key.as_str(),
+                event = "context_management_setting_refused",
                 "refused an unrecognized context management setting"
             );
             return Err(invalid_input());

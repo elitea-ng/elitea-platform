@@ -51,6 +51,8 @@ use crate::transport::runtime_context::{
 mod artifact_tests;
 #[path = "pipeline_scope_tests.rs"]
 mod model_scope_tests;
+#[path = "pipeline_restart_pg_tests.rs"]
+mod restart_pg_tests;
 
 const PIPELINE: &str = r"
 state:

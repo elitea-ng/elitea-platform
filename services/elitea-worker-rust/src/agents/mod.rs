@@ -12,6 +12,7 @@ pub(crate) use elitea_agent_runtime::context_management;
 use elitea_agent_runtime::context_status;
 pub(crate) use elitea_agent_runtime::context_summary;
 pub(crate) mod direct_hitl;
+pub(crate) mod driven;
 pub(crate) mod events;
 pub mod graph;
 pub(crate) use elitea_agent_runtime::instruction_authority;

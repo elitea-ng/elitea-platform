@@ -163,8 +163,10 @@ Current observability checkpoint: the worker emits redacted structured logs and
 standard OTLP traces across command verification, NATS JetStream delivery, claim,
 preparation, native ADK execution, model requests, session/checkpoint writes,
 output, settlement and retirement. A valid W3C `traceparent` continues the
-upstream trace. `ELITEA_RUST_LOG` and `ELITEA_RUST_TRACE` remain crate-scoped,
-so dependency HTTP, SQL and provider payloads cannot be enabled accidentally.
+upstream trace. `ELITEA_RUST_LOG` and `ELITEA_RUST_TRACE` remain scoped to the
+Worker crate and the Elitea libraries it hosts that emit events (`OWNED_TARGETS`
+in `src/diagnostics.rs`), so dependency HTTP, SQL and provider payloads cannot be
+enabled accidentally.
 The panic hook omits panic payloads and full paths, but retains a sanitized
 source filename and line for diagnosis. OTLP batching uses the Tokio runtime;
 this prevents the exporter-thread reactor panic that previously aborted the
