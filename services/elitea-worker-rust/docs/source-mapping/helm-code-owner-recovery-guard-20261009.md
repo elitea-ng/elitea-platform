@@ -43,11 +43,11 @@ Why the chart did not catch it:
 | --- | --- |
 | `deploy/helm/elitea/templates/_code-nodes.tpl:111-134` | New `elitea.codeNodes.validateWorker`. It fails when `worker.enabled` and `worker.runtime.agentNodeRecovery` is boolean `true` and `worker.runtime.sandboxRuntimes` is non-empty and `main.runtime.codeOwnerRecovery.enabled` is not `true`. The message says that Code nodes would be refused without original-Code owner recovery, before any sandbox dispatch, and names the three ways out. With owner recovery on, it also fails for every `sandboxRuntimes[].audience` that has no `codeOwnerRecovery.supervisors` entry, because Main signs original-Code intents only for its owner supervisors' audiences (`services/elitea-main/internal/runtimecomposition/code_owner_config.go:100-110`, `services/elitea-main/internal/infra/db/repos/code_sandbox_intent.go:414`). That check was added after code review. |
 | `deploy/helm/elitea/templates/guards.yaml:13` | Includes it next to `elitea.compiledSnapshots.validate`, so every render runs it whichever templates are shown. |
-| `deploy/helm/elitea/values.yaml:3726-3728` | The `agentNodeRecovery` comment states the pairing with `main.runtime.codeOwnerRecovery`. Values unchanged. |
+| `deploy/helm/elitea/values.yaml:4092-4094` | The `agentNodeRecovery` comment states the pairing with `main.runtime.codeOwnerRecovery`. Values unchanged. |
 | `deploy/helm/tests/render-worker-node-recovery.sh:31-40,176-276` | Header rule and 8 new assertions (12 → 20; derived floor). |
 | `deploy/helm/tests/render-worker-sandbox.sh:7-19,67-73` | Its fixture is now a valid deployment: owner recovery for both supervisor audiences. A new check shows that the same fixture with owner recovery off is refused with the new message. CI runs this script (`.github/workflows/helm-lint.yml:248`); CI is not changed. |
 | `deploy/runtime/sandbox-deployment.md:199-200` | Operator note: the journal with sandbox runtimes needs `main.runtime.codeOwnerRecovery`. |
-| `services/elitea-worker-rust/docs/recovery-guarantees.md` D1 | Line references refreshed (`values.yaml:3712-3713`, `:3714-3730`). New bullet: the Code owner contract, the guard, the proofs, the compose caveat, and a link to G-ADV-01. The stale "the chart has no key for it" now reads: the key exists since `00b8a259b` and defaults to false, so G-WORKER-01 is "default off", not "no key". |
+| `services/elitea-worker-rust/docs/recovery-guarantees.md` D1 | Line references refreshed (`values.yaml:4078-4079`, `:4080-4096`). New bullet: the Code owner contract, the guard, the proofs, the compose caveat, and a link to G-ADV-01. The stale "the chart has no key for it" now reads: the key exists since `00b8a259b` and defaults to false, so G-WORKER-01 is "default off", not "no key". |
 
 The guard deliberately does not check `worker.implementation`. A Python worker with these options is already refused by
 `configmap-runtime.yaml:67-70` ("require the Rust worker"), and an `isRust` condition survived mutation (see Tests),
@@ -225,7 +225,7 @@ written into a temp directory, and `--set` overrides. Owner identity and origins
 - **Readable failure kind** for a Code admission refused because owner recovery is not composed, together with
   G-ADV-01 rank 5. It touches only #1084 files, so stack it on #1084 or do it after #1084 merges. Shape: see the
   decision above.
-- **Compose has no render guard.** `deploy/runtime/worker-runtime.rust.json:21` turns the journal on. Owner recovery
+- **Compose has no render guard.** `deploy/runtime/worker-runtime.rust.json:23` turns the journal on. Owner recovery
   comes only with `deploy/docker-compose.code-consumers.yml`, so a compose stack with the sandbox overlays but
   without that overlay is the failing combination. Options:
   - a check in `install-material.sh`;
