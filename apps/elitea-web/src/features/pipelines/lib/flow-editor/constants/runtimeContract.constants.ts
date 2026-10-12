@@ -65,17 +65,14 @@ export const NODE_ID_WORD_SEPARATOR = '_';
  * Deliberately NOT derived from `PipelineNodeTypes` minus a deny-list: this
  * is an allow-list on the runtime's side, so it is an allow-list here too.
  * A node type added to the editor is invisible to the Add-node menu until
- * somebody adds it here, having checked the runtime actually admits it.
+ * somebody adds it here, having checked the runtime actually admits it. There
+ * is no build flag: the set is asserted against the shared contract
+ * `libs/proto/contracts/pipeline-node-admission-v1.json` (Worker and Main
+ * assert the same file; `parallel` and `map` are its recorded Wave 2a drift).
  *
  * Code nodes require a configured sandbox runtime at execution time.
  * `custom` remains unsupported by the compiler.
  */
-/**
- * Rehearsal-only admission of SplitOut and Aggregate. The Worker accepts them only in builds with the
- * `graph-extensions-rehearsal` Cargo feature; both gates flip together (see split-out-aggregate-contract.md).
- */
-const GRAPH_EXTENSIONS_REHEARSAL = import.meta.env.VITE_GRAPH_EXTENSIONS_REHEARSAL === 'true';
-
 export const CompilerAdmittedNodeTypes: readonly PipelineNodeType[] = [
   PipelineNodeTypes.Parallel, // compiler.rs:2342 "parallel"; execution binding remains independently gated
   PipelineNodeTypes.Code, // compiler.rs:2328 "code"; admitted sandbox runtime required
@@ -88,21 +85,14 @@ export const CompilerAdmittedNodeTypes: readonly PipelineNodeType[] = [
   PipelineNodeTypes.Printer, // compiler.rs:2378 "printer"
   PipelineNodeTypes.Router, // compiler.rs:2386 "router"
   PipelineNodeTypes.StateModifier, // compiler.rs:2394 "state_modifier"
-  ...(GRAPH_EXTENSIONS_REHEARSAL ? [PipelineNodeTypes.SplitOut, PipelineNodeTypes.Aggregate] : []), // compiler.rs:2402/2405, rehearsal builds only
+  PipelineNodeTypes.SplitOut, // compiler.rs "split_out"
+  PipelineNodeTypes.Aggregate, // compiler.rs "aggregate"
 ];
 
 const admittedNodeTypeSet: ReadonlySet<string> = new Set<string>(CompilerAdmittedNodeTypes);
 
 /** Whether the pipeline compiler has a `parse_pipeline_node` arm for `type`. */
 export const isCompilerAdmittedNodeType = (type: string): boolean => admittedNodeTypeSet.has(type);
-
-/**
- * A type the runtime knows but this deployment's build does not admit — the
- * rehearsal-only shaping nodes. Main's save check names them the same way
- * (`services/elitea-main/internal/domain/pipelinelimits`, `PIPELINE_NODE_TYPE_NOT_AVAILABLE`).
- */
-export const isDeploymentGatedNodeType = (type: string): boolean =>
-  !admittedNodeTypeSet.has(type) && (type === PipelineNodeTypes.SplitOut || type === PipelineNodeTypes.Aggregate);
 
 // ─────────────────────────────────────────────────────────────────────────
 // Reserved state keys — `compiler.rs:2666` `reserved_user_state_key`

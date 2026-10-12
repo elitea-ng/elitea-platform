@@ -4,14 +4,16 @@
 // saved and when a run starts, and the Worker compiler enforces the same
 // numbers (services/elitea-worker-rust src/agents/graph/compiler.rs
 // MAX_PIPELINE_YAML_BYTES / MAX_PIPELINE_NODES). A node type the Worker
-// compiler has no arm for (parse_pipeline_node_admitting) is refused on every
-// save, so a graph the runtime would refuse is never stored.
+// compiler has no arm for (parse_pipeline_node) is refused on every save, so a
+// graph the runtime would refuse is never stored. The admitted types are the
+// shared contract libs/proto/contracts/pipeline-node-admission-v1.json.
 package pipelinelimits
 
 import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -47,10 +49,6 @@ var (
 // Node and toolkit refusal codes. The message is built per refusal because it
 // names the node; callers that branch on any admission refusal use Refusal.
 const (
-	// CodeNodeTypeNotAvailable is a node type the runtime knows but this
-	// deployment's build does not admit (SplitOut and Aggregate outside a
-	// graph-extensions rehearsal build).
-	CodeNodeTypeNotAvailable = "PIPELINE_NODE_TYPE_NOT_AVAILABLE"
 	// CodeNodeTypeUnsupported is a node type no runtime build can run.
 	CodeNodeTypeUnsupported = "PIPELINE_NODE_TYPE_UNSUPPORTED"
 	// CodeToolkitNotAttached is a direct tool node whose toolkit is not one of
@@ -68,7 +66,7 @@ func Refusal(err error) *apierr.APIError {
 		return nil
 	}
 	switch api.Code {
-	case CodeNodeTypeNotAvailable, CodeNodeTypeUnsupported, CodeToolkitNotAttached:
+	case CodeNodeTypeUnsupported, CodeToolkitNotAttached:
 		return api
 	}
 	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) || errors.Is(err, ErrExpansionTooLarge) {
@@ -178,23 +176,14 @@ func checkNodeType(fields map[string]*yaml.Node) error {
 	if !ok {
 		return nil
 	}
-	switch admission(nodeType) {
-	case nodeTypeAdmitted:
+	if _, admitted := admittedNodeTypes[nodeType]; admitted {
 		return nil
-	case nodeTypeGated:
-		return &apierr.APIError{
-			Status: http.StatusBadRequest,
-			Code:   CodeNodeTypeNotAvailable,
-			Message: fmt.Sprintf("%s uses the %s node type, which is not available on this deployment. Remove or replace that node before saving.",
-				nodeLabel(fields["id"]), quoted(nodeType)),
-		}
-	default:
-		return &apierr.APIError{
-			Status: http.StatusBadRequest,
-			Code:   CodeNodeTypeUnsupported,
-			Message: fmt.Sprintf("%s uses the %s node type, which the pipeline runtime does not support. Remove or replace that node before saving.",
-				nodeLabel(fields["id"]), quoted(nodeType)),
-		}
+	}
+	return &apierr.APIError{
+		Status: http.StatusBadRequest,
+		Code:   CodeNodeTypeUnsupported,
+		Message: fmt.Sprintf("%s uses the %s node type, which the pipeline runtime does not support. Remove or replace that node before saving.",
+			nodeLabel(fields["id"]), quoted(nodeType)),
 	}
 }
 
@@ -259,32 +248,27 @@ func ascii(value string) bool {
 	return true
 }
 
-type nodeTypeAdmission int
+// admittedNodeTypes mirrors the arms of the Worker compiler's
+// parse_pipeline_node (compiler.rs). There is no build tag or flag: every
+// deployment admits the same set, and the shared admission-parity contract
+// (libs/proto/contracts/pipeline-node-admission-v1.json) keeps it equal to the
+// Worker's and the Web editor's. `map` and `parallel` are listed there as
+// pending Wave 2a drift.
+var admittedNodeTypes = map[string]struct{}{
+	"aggregate": {}, "agent": {}, "code": {}, "decision": {}, "hitl": {}, "llm": {},
+	"map": {}, "mcp": {}, "parallel": {}, "printer": {}, "router": {},
+	"split_out": {}, "state_modifier": {}, "toolkit": {},
+}
 
-const (
-	nodeTypeUnsupported nodeTypeAdmission = iota
-	nodeTypeAdmitted
-	nodeTypeGated
-)
-
-// admission mirrors the arms of the Worker compiler's
-// parse_pipeline_node_admitting (compiler.rs). SplitOut and Aggregate are
-// admitted only when Main is built with the graph_extensions_rehearsal tag,
-// the counterpart of the Worker's graph-extensions-rehearsal Cargo feature and
-// the Web's VITE_GRAPH_EXTENSIONS_REHEARSAL; the three flip together.
-func admission(nodeType string) nodeTypeAdmission {
-	switch nodeType {
-	case "code", "decision", "map", "parallel", "agent", "toolkit", "mcp",
-		"hitl", "llm", "printer", "router", "state_modifier":
-		return nodeTypeAdmitted
-	case "split_out", "aggregate":
-		if shapingNodesAdmitted {
-			return nodeTypeAdmitted
-		}
-		return nodeTypeGated
-	default:
-		return nodeTypeUnsupported
+// AdmittedNodeTypes lists the admitted node types in sorted order, for the
+// admission-parity test.
+func AdmittedNodeTypes() []string {
+	types := make([]string, 0, len(admittedNodeTypes))
+	for nodeType := range admittedNodeTypes {
+		types = append(types, nodeType)
 	}
+	sort.Strings(types)
+	return types
 }
 
 // nodeLabel names the node by its id when the id is a short, printable scalar.

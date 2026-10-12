@@ -147,7 +147,6 @@ nodes:
     );
 }
 
-#[cfg(feature = "graph-extensions-rehearsal")]
 #[tokio::test]
 async fn a_pipeline_ending_in_aggregate_shows_the_regrouped_rows() {
     let text = run_pure(

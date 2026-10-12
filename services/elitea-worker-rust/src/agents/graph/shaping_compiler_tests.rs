@@ -5,63 +5,33 @@
 
 //! Compiler admission, state validation and graph execution of data shaping nodes.
 
-use super::compiler::shaping_node_admission;
-
 const SPLIT_NODE: &str = "id: split\ntype: split_out\nsource: orders\noutput: [lines]\nsplit: {mode: rows_field, path: /items}\ndestination: items\nretain: {mode: all}\ntransition: END\n";
 const JOIN_NODE: &str = "id: join\ntype: aggregate\nsource: lines\noutput: [orders_out]\nlayout: split_out\nregroup: parent\noperations: [{operation: collect, field: {path: /items}, output: items}]\ntransition: END\n";
 
-fn yaml(text: &str) -> serde_yaml_ng::Value {
-    serde_yaml_ng::from_str(text).expect("fixture node YAML")
+fn document(node: &str, entry: &str) -> String {
+    format!(
+        "state:\n  orders: list\n  lines: list\n  orders_out: list\nentry_point: {entry}\nnodes:\n  - {}",
+        node.trim_end().replace('\n', "\n    ")
+    )
 }
 
 #[test]
-fn shaping_nodes_are_refused_as_not_available_while_the_gate_is_off() {
-    assert_eq!(
-        shaping_node_admission(&yaml(SPLIT_NODE), false),
-        Err("graph.pipeline.node_type_not_available")
-    );
-    assert_eq!(shaping_node_admission(&yaml(SPLIT_NODE), true), Ok(()));
-    assert_eq!(
-        shaping_node_admission(&yaml(JOIN_NODE), false),
-        Err("graph.pipeline.node_type_not_available")
-    );
-    assert_eq!(shaping_node_admission(&yaml(JOIN_NODE), true), Ok(()));
+fn shaping_nodes_are_admitted_by_the_default_build() {
+    for (node, entry) in [(SPLIT_NODE, "split"), (JOIN_NODE, "join")] {
+        if let Err(error) = super::compiler::PipelineDefinition::from_yaml(&document(node, entry)) {
+            panic!("the default build refused a shaping node: {}", error.code());
+        }
+    }
     // A type no build admits stays the generic unsupported refusal.
-    for gate in [false, true] {
-        assert_eq!(
-            shaping_node_admission(&yaml("id: x\ntype: custom\n"), gate),
-            Err("graph.pipeline.unsupported_capability")
-        );
-    }
+    let Err(error) = super::compiler::PipelineDefinition::from_yaml(
+        "entry_point: x\nnodes:\n  - id: x\n    type: custom\n",
+    ) else {
+        panic!("custom was admitted");
+    };
+    assert_eq!(error.code(), "graph.pipeline.unsupported_capability");
 }
 
-#[cfg(not(feature = "graph-extensions-rehearsal"))]
-#[test]
-fn production_builds_refuse_shaping_yaml_naming_the_gated_type() {
-    use super::compiler::{PipelineConfigurationError, PipelineGatedNodeType};
-
-    for (node, gated) in [
-        (SPLIT_NODE, PipelineGatedNodeType::SplitOut),
-        (JOIN_NODE, PipelineGatedNodeType::Aggregate),
-    ] {
-        let document = format!(
-            "state:\n  orders: list\n  lines: list\n  orders_out: list\nentry_point: x\nnodes:\n  - {}",
-            node.trim_end().replace('\n', "\n    ")
-        );
-        let Err(error) = super::compiler::PipelineDefinition::from_yaml(&document) else {
-            panic!("a production build must not admit {gated}");
-        };
-        assert_eq!(error.code(), "graph.pipeline.node_type_not_available");
-        assert_eq!(error.cause_detail(), Some(gated.as_str()));
-        assert!(matches!(
-            error,
-            PipelineConfigurationError::NodeTypeNotAvailable(found) if found == gated
-        ));
-    }
-}
-
-#[cfg(feature = "graph-extensions-rehearsal")]
-mod rehearsal {
+mod pipeline_runs {
     use std::sync::Arc;
 
     use adk_rust::graph::{ExecutionConfig, GraphError, MemoryCheckpointer, State};
@@ -181,7 +151,7 @@ mod rehearsal {
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
                 "--exact",
-                "agents::graph::shaping_compiler_tests::rehearsal::shaping_failure_log_child",
+                "agents::graph::shaping_compiler_tests::pipeline_runs::shaping_failure_log_child",
                 "--nocapture",
                 "--test-threads=1",
             ])

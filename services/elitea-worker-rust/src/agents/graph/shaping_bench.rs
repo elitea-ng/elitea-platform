@@ -1,4 +1,4 @@
-//! Rehearsal-only entry points that let `benches/graph_shaping.rs` time the
+//! Benchmark-only entry points that let `benches/graph_shaping.rs` time the
 //! pure `split_out` and `aggregate` evaluators through the public API.
 //!
 //! The YAML is parsed once, outside the timed region. Errors are the
