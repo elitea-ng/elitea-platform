@@ -837,3 +837,63 @@ reason `Unknown`) as phase `failed` (`sandbox.code_failed`), the same as a throw
 network; no unresolved platform call in the Main journal) a lost runtime can be re-executed safely (class I). Distinguish
 "runtime lost" (node loss, eviction, `Unknown`/OOM-kill by the platform) from "user code failed" in the supervisor
 receipt, and retry the former within the deadline; keep the typed failure for the latter.
+
+### Language matrix (9bf82d60d)
+
+Same cluster and the `9bf82d60d` images. Every cell is a saved pipeline with one Code node that records its start time
+and sleeps 25 s (THROW: the node throws). Faults are injected 8 s after the job is dispatched (Rust MDEL16: 16 s).
+"Fault to settle" is the time from the fault to the committed settlement (baseline numbers for the lease and AckWait
+tuning, FU-215). Class: R = resumed from the last durable point (the original result, no Code re-run), T = typed
+failure. Invariants held in every row unless noted: one settlement, claims contiguous, outbox drained, one Pod UID per
+ledger job, Pods deleted, namespaces empty, NATS durable drained, stored start time before the fault.
+
+| Language | POS | Stop | Worker force-delete | Supervisor force-delete | Main force-delete | User code throws |
+|---|---|---|---|---|---|---|
+| Python | `ba2546b0…` SUCCEEDED, attempt 1 | `9a9dd329…` CANCELLED, 8.6 s | `b9b7ffbd…` R, attempt 2, 58.7 s | `e7446a1a…` R, attempt 1, 54.4 s | `87599333…` R, attempt 2, 70.3 s | `ffe29091…` T `PIPELINE_CODE_FAILED` |
+| JavaScript | `ce120393…` SUCCEEDED, attempt 1 | `3d925192…` CANCELLED, 6.1 s | `b8766248…` R, attempt 2, 57.0 s | `1fe12964…` R, attempt 1, 51.8 s | `b0e2c561…` R, attempt 2, 66.2 s | `8db63646…` T `PIPELINE_CODE_FAILED` |
+| TypeScript | `04f4c7f3…` SUCCEEDED, attempt 1 | `b0bc6119…` CANCELLED, 6.1 s | `91e02681…` R, attempt 2, 56.1 s | `c979aec6…` R, attempt 1, 51.9 s | `1306ec99…` R, attempt 2, 61.8 s | `91f5a957…` T `PIPELINE_CODE_FAILED` |
+| Rust | `b589bf97…` SUCCEEDED, attempt 1 | `6e9eb37d…` CANCELLED, 6.1 s | `ce7443f7…` R, attempt 2, 60.0 s | `f35105c3…` R, attempt 2, 54.2 s; `25beed9c…` (16 s variant) R, attempt 2, 169.3 s | `b8af6f77…` R, attempt 2, 64.8 s; `351267dc…` (16 s variant) R, attempt 2, 72.3 s | `1006757a…` T `PIPELINE_CODE_FAILED` |
+
+Notes on rows:
+- Python has one preparation job per run (the preparation profile is deployed), so its rows show three ledger jobs
+  rather than one; the harness check "execution jobs == 1" is relaxed for it.
+- Rust SDEL/MDEL at 8 s: the fault landed during compilation, so the user code had not started yet and the stored start
+  time is after the fault (flagged by the harness; the Pod was created once). The 16 s variants repeat both. MDEL16 holds
+  every invariant. SDEL16 took 169 s because the Supervisor replacement was in place about 40 s before the Code started
+  and the first claim's lease only expired at 16:56:39; its stored start time (16:54:32) is again after the fault
+  (16:53:52), so the fault landed before the user code started. User Code ran once. No cell re-ran Code that had started.
+- Stop takes about 6 s for the JavaScript, TypeScript and Rust fixtures and 8.6 s for Python.
+
+**Packages per language** (same cluster; probes after the matrix)
+
+| Language | Mechanism | Status on this deployment | Evidence |
+|---|---|---|---|
+| Python | micropip pins (PyPI through the preparation namespace) | supported; PREP-POS `9e8cf19dea6a020ce568217febdf6c0b`, PREP-WFORCE `f134eb435c7a0e77ae8461f8f137027b` (99 s), HYD-SDEL `076fad3966e3bec08df326e9e29fb9a2` (95 s), PREPX-WFORCE `14b776d12b84ad77f80d2d93b31b0887` (62 s) | section above |
+| JavaScript | `npm:` import | not supported: no JavaScript preparation profile is deployed. `process.rs:170-176` requires a native platform and workspace for any non-Python preparation profile (certificates from `gen-sandbox-certs.sh --native`, a native bundle); `code_preparation.rs:548-554` then runs the node offline. The `npm:is-number@7.0.0` import failed in the Deno sandbox (`sandbox.code_failed`), execution `5d8228b089ff584ca5f54b652e4bcf50` | probe |
+| TypeScript | `npm:` import | not supported, same reason; execution `0fe836590cb988cca96a5b963d254491` FAILED `PIPELINE_CODE_FAILED` | probe |
+| Rust | `dependencies:` (Cargo) | not supported: Cargo acquisition needs a native Rust preparation profile (`code_preparation.rs:549,566`) that is not deployed; execution `6a263a785c40ef99939a457d1c8f77f7` FAILED `PIPELINE_CODE_FAILED` "Code dependency preparation failed" before any sandbox job | probe |
+
+Enabling JavaScript, TypeScript or Rust package preparation needs the native profiles
+(`elitea-sandbox-{javascript,typescript,rust}-preparation` leaves and content clients, a native platform value and
+workspace size, and the resolver egress for npm and crates.io); that was not deployed here.
+
+### Findings from the matrix run
+
+- **Stale PostgreSQL sessions starve the database Pod.** A force-deleted client leaves its server backend idle until
+  TCP keepalive notices (default about 2 h). After the first MDEL/WFORCE/SDEL rounds the Postgres Pod held about 119
+  sessions; with the kubelet `podPidsLimit: 128` this lab applies to every Pod, `fork` failed ("could not fork new
+  process"), the Supervisor replacement exited at start and the harness's psql sessions died. Everything from the second
+  Python/Rust rounds onward in the first matrix pass was invalidated and re-run after restarting Postgres and setting
+  `tcp_keepalives_idle=20`, `tcp_keepalives_interval=5`, `tcp_keepalives_count=3`. Follow-ups: keepalive on the server
+  or the client DSN; the same limit would hit a product deployment with a pid-limited database Pod.
+- **The Supervisor binary logs nothing on startup failure.** `sandbox_supervisor_exit` (`sandbox_main.rs:46-52`) is
+  emitted under the binary's own target, which the log filter drops (`diagnostics.rs:42-46`, `OWNED_TARGETS` lists only
+  the library crates), so the crash loop above showed an empty log and exit code 1.
+- **Main exits when OIDC discovery fails at start.** After the last force-delete, Main crash-looped four times (about
+  four minutes) with "OIDC discovery failed … connection refused" while the mock was reachable, until the Pod's network
+  came up; a transient failure at start is fatal.
+- **Rust Supervisor force-delete took 169 s** in one variant (above), against 51 to 54 s for the other languages.
+- **One unexplained Python failure.** A no-fault Python run (`1487051ec5abd8ef61fa8632dc581fc3`, the first M-py-STOP,
+  16:35 UTC) settled FAILED `AUTHORIZATION_FAILED` ("Execution authorization failed") 21 s after its claim; the Stop was
+  never sent (its trigger was missed) and the Worker and Main logs of that period were lost to later restarts. It did
+  not reproduce in 5 repeats (4 no-fault Python runs and the Stop re-run `9a9dd329…`). Treat it as an open observation.
