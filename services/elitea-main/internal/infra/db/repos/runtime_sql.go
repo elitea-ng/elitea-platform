@@ -190,6 +190,19 @@ func (e pgxExecutor) CurrentConversationResponseSettling(
 	return sqlcgen.New(e.queryer).CurrentConversationResponseSettling(ctx, conversationUUID)
 }
 
+// ConversationIsLocalWork reports whether the conversation (in the project
+// schema the transaction runs in) is a desktop Local work thread. A
+// conversation that does not exist is not one; the resolve that follows
+// refuses it on its own terms.
+func (e pgxExecutor) ConversationIsLocalWork(ctx context.Context, conversationUUID pgtype.UUID) (bool, error) {
+	var localWork bool
+	err := e.queryer.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM chat_conversations WHERE uuid = $1 AND source = 'local_work')`,
+		conversationUUID,
+	).Scan(&localWork)
+	return localWork, err
+}
+
 func (e pgxExecutor) ResolveCurrentRegeneration(
 	ctx context.Context,
 	arg sqlcgen.ResolveCurrentRegenerationParams,

@@ -57,9 +57,13 @@ impl LanguageParser for KotlinParser {
         "kotlin"
     }
 
-    fn parse_files(&self, files: &[String]) -> BTreeMap<String, crate::model::ParseResult> {
+    fn parse_sources(
+        &self,
+        files: &[String],
+        sources: crate::Sources<'_>,
+    ) -> BTreeMap<String, crate::model::ParseResult> {
         let grammar = tree_sitter_kotlin_ng::LANGUAGE.into();
-        visit_support::parse_files(files, "kotlin", &grammar, visitor::visit)
+        visit_support::parse_files(files, sources, "kotlin", &grammar, visitor::visit)
     }
 }
 

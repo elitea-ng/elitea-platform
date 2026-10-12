@@ -96,6 +96,7 @@ func newCurrentToolkitCallToolRuntime(
 	deadline time.Duration,
 	records *repos.ToolCallRecordsRepository,
 	logger *slog.Logger,
+	resolverOptions ...toolkitcalltoolapp.ResolverOption,
 ) (*currentToolkitCallToolRuntime, error) {
 	if admissionPool == nil || results == nil || toolkits == nil || settings == nil || producer == nil {
 		return nil, errors.New("tool-run runtime dependencies are required")
@@ -108,7 +109,7 @@ func newCurrentToolkitCallToolRuntime(
 	if err != nil {
 		return nil, err
 	}
-	var resolverOptions []toolkitcalltoolapp.ResolverOption
+	resolverOptions = append([]toolkitcalltoolapp.ResolverOption(nil), resolverOptions...)
 	if tokens := currentToolkitMCPTokenStore(admissionPool); tokens != nil {
 		resolverOptions = append(resolverOptions, toolkitcalltoolapp.WithMCPAuthorization(tokens))
 	}

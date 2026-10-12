@@ -30,6 +30,7 @@ import type { MessageGroupWire } from '@/entities/message';
 import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapList } from '@/shared/api/unwrap';
+import { isLocalWorkConversation, localWorkFolderName } from '@/shared/lib/localWork';
 import { useSelectedProject } from '@/widgets/app-shell';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 
@@ -44,6 +45,8 @@ export interface UseChatPageDataResult {
   readonly user: { readonly id: string; readonly name: string; readonly avatar: string } | undefined;
   readonly activeConversation: NonNullable<ChatBoxProps['conversation']>['active'];
   readonly isLoadingConversation: boolean;
+  /** Set for a desktop Local work thread (read-only here); its folder's name when recorded. */
+  readonly localWork: { readonly folderName: string | undefined } | undefined;
 }
 
 /**
@@ -107,7 +110,7 @@ function adaptCurrentMessageRows(rows: readonly unknown[]): MessageGroupWire[] {
 }
 
 /** Maps the REST conversation-details + message-list queries into `ChatBox`'s `activeConversation` prop shape. */
-function useActiveConversation(projectId: string | undefined, conversationId: string | undefined): { readonly activeConversation: NonNullable<ChatBoxProps['conversation']>['active']; readonly isLoading: boolean } {
+function useActiveConversation(projectId: string | undefined, conversationId: string | undefined): { readonly activeConversation: NonNullable<ChatBoxProps['conversation']>['active']; readonly isLoading: boolean; readonly localWork: UseChatPageDataResult['localWork'] } {
   const enabled = projectId !== undefined && conversationId !== undefined;
   const detailsQuery = conversationApi.useDetails({ projectId: projectId ?? '', id: conversationId ?? '' }, { enabled });
   const messageListQuery = conversationApi.useMessageList(
@@ -143,7 +146,9 @@ function useActiveConversation(projectId: string | undefined, conversationId: st
     };
   }, [conversationId, detailsQuery.data, messageListQuery.data]);
 
-  return { activeConversation, isLoading: enabled && (detailsQuery.isLoading || messageListQuery.isLoading) };
+  const details = conversationId ? detailsQuery.data : undefined;
+  const localWork = useMemo(() => (isLocalWorkConversation(details) ? { folderName: localWorkFolderName(details?.meta) } : undefined), [details]);
+  return { activeConversation, isLoading: enabled && (detailsQuery.isLoading || messageListQuery.isLoading), localWork };
 }
 
 /** @public Composes real project/user/conversation data for the `/chat` page. */
@@ -153,9 +158,9 @@ export function useChatPageData({ conversationId }: UseChatPageDataParams): UseC
   const author = currentAuthorOf(authorQuery.data);
 
   const projectId = project?.id ?? author?.personal_project_id;
-  const { activeConversation, isLoading } = useActiveConversation(projectId, conversationId);
+  const { activeConversation, isLoading, localWork } = useActiveConversation(projectId, conversationId);
 
   const user = author ? { id: author.id, name: author.name, avatar: author.avatar } : undefined;
 
-  return { projectId, user, activeConversation, isLoadingConversation: isLoading };
+  return { projectId, user, activeConversation, isLoadingConversation: isLoading, localWork };
 }

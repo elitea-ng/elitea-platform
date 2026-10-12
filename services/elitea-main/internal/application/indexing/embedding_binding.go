@@ -109,7 +109,7 @@ func (b EmbeddingBinding) Validate() error {
 		!b.ConfigurationDigest.IsZero()
 	if hasConfigurationIdentity &&
 		(b.ConfigurationProjectID <= 0 ||
-			!validCanonicalUUID(b.ConfigurationUUID) ||
+			!ValidCanonicalUUID(b.ConfigurationUUID) ||
 			b.ConfigurationDigest.IsZero()) {
 		return ErrInvalidCurrentEmbeddingBinding
 	}
@@ -345,7 +345,7 @@ func currentEmbeddingConfigurationDigest(
 	if configuration.ProjectID <= 0 ||
 		configuration.Type != "embedding_model" ||
 		configuration.Section != "embedding" ||
-		!validCanonicalUUID(configuration.UUID) {
+		!ValidCanonicalUUID(configuration.UUID) {
 		return runtimedomain.Digest{}, ErrInvalidCurrentEmbeddingBinding
 	}
 	data, err := decodeCurrentEmbeddingConfigurationData(configuration.Data)
@@ -454,7 +454,10 @@ func validEmbeddingBindingIdentity(value string) bool {
 		utf8.ValidString(value) && !strings.ContainsAny(value, "\x00\r\n")
 }
 
-func validCanonicalUUID(value string) bool {
+// ValidCanonicalUUID accepts exactly the 8-4-4-4-12 lower-case hex form: the
+// index registry's id as the dispatch, the embedding binding and the worker
+// command carry it.
+func ValidCanonicalUUID(value string) bool {
 	if len(value) != 36 {
 		return false
 	}

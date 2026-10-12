@@ -346,6 +346,68 @@ else
   note "refused beside http://elitea-main:8080"
 fi
 
+# ── The platform gRPC service (elitea.subapp.v1.PlatformOperations) ─────────
+#
+# Off (every render above): no port, no env, nothing exposed. On: a second
+# listener, its allowlist and address in the host's environment, a Service
+# port, and a NetworkPolicy rule that admits elitea-main only. Refused: the
+# allowlist without mutual TLS, and a port that collides with the SPI's.
+
+echo "== the platform gRPC service is off unless clients are named =="
+expect "off: no gRPC container port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[0].ports[].name' - | tr '\n' ' ')" "http "
+expect "off: no gRPC env" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[0].env[].name' - | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
+expect "off: the Service exposes the SPI only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[].name' - | tr '\n' ' ')" "https "
+expect "off: the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress | length' -)" "1"
+
+echo "== the platform gRPC service is configured, exposed and admitted together =="
+grpc="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main,elitea-main.ns.svc}' --set deepwiki.platformGrpc.port=9555)" \
+  || fail "the platform gRPC service does not render: $grpc"
+gp() { printf '%s' "$grpc" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+expect "gRPC container port" "$(gp '.spec.template.spec.containers[0].ports[] | select(.name == "platform-grpc") | .containerPort')" "9555"
+expect "gRPC allowlist" "$(gp '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") | .value')" "elitea-main,elitea-main.ns.svc"
+expect "gRPC address" "$(gp '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") | .value')" ":9555"
+expect "the Service port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[] | select(.name == "platform-grpc") | .port' -)" "9555"
+expect "the Service targets the named port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[] | select(.name == "platform-grpc") | .targetPort' -)" "platform-grpc"
+expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "8080 9555 "
+expect "NetworkPolicy peers on the gRPC port: elitea-main only" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[] | select(.ports[0].port == 9555) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | tr '\n' ' ')" "elitea-main "
+refuses "platform clients without mutual TLS" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.mtls.enabled=false
+refuses "a platform port that is the SPI's" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.platformGrpc.port=8080
+refuses "the platform env set by hand beside the values" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.env.ELITEA_DEEPWIKI_PLATFORM_CLIENTS=elitea-main
+refuses "an allowlist that does not name elitea-main" --set 'deepwiki.platformGrpc.clients={someone-else}'
+# The expected name follows the client material. Chart-issued (the default):
+# elitea-main, and a stated main.platformClientName that differs is refused.
+# Operator-supplied (main mounts a Secret the chart did not issue): the
+# allowlist is checked against main.platformClientName instead.
+refuses "a custom main.platformClientName while the chart issues the certificate" --set 'deepwiki.platformGrpc.clients={platform-main}' --set main.platformClientName=platform-main
+refuses "operator material whose allowlist does not name main.platformClientName" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set main.platformClientName=platform-main --set main.fileConfig.deepwikiClientMaterial.secretName=my-own-material
+operator="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={platform-main}' --set main.platformClientName=platform-main --set main.fileConfig.deepwikiClientMaterial.secretName=my-own-material)" \
+  || fail "operator-supplied client material with its own name does not render: $operator"
+expect "operator material: the allowlist carries the operator's name" "$(printf '%s' "$operator" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") | .value' -)" "platform-main"
+
+# ── elitea-main's side of the platform service (#1243) ───────────────────────
+#
+# The caller is configured WITH the service: when the engine serves it and the
+# facade is on, elitea-main's ConfigMap carries the target (<service>:<port>)
+# without the operator stating it. Off, nothing is derived; an explicit value
+# wins; and a target beside a facade that is off is refused, as cmd/elitea-main
+# refuses it at boot.
+
+echo "== elitea-main is told where the platform service is =="
+main_env() { printf '%s' "$1" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$2" -; }
+expect "off: the shipped empty default, nothing derived" "$(main_env "$manifest" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
+expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-svc:9555"
+explicit="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=deepwiki.elsewhere:9443)" \
+  || fail "an explicit target does not render: $explicit"
+expect "an explicit target wins" "$(main_env "$explicit" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "deepwiki.elsewhere:9443"
+facade_off="$(render --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
+  || fail "the engine with its service on and the facade off does not render: $facade_off"
+expect "facade off: nothing derived for a caller that is not composed" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
+if render --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki-svc:9443 >/dev/null 2>&1; then
+  fail "a platform target beside a facade that is off renders"
+else
+  note "refused: a target with the facade off"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "render-deepwiki: $failures assertion(s) failed" >&2
   exit 1

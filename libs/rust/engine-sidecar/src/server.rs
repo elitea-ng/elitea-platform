@@ -5,7 +5,7 @@
 //!   → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,
 //!     then {"result": …} | {"error": …}
 //! POST /engine/invocations/{id}/stop   a cooperative stop → 202 {"stopped": bool}
-//! GET  /engine/health                  {"status": "UP", "runner": …, "active": n}
+//! GET  /engine/health                  {"status": "UP", "runner": …, "active": n[, "tools": […]]}
 //! ```
 //!
 //! The wire is the Python sidecars' (`elitea_deepwiki/sidecar.py`, the
@@ -20,7 +20,7 @@
 
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -54,6 +54,16 @@ pub trait Engine: Send + Sync + 'static {
     /// with `400 Unknown tool` before a run starts; the host serves every
     /// other tool of the application itself.
     fn serves(&self, tool: &str) -> bool;
+
+    /// The names of the tools this socket serves, listed in
+    /// `GET /engine/health` as `tools` so the host can tell what an engine
+    /// of any release can do before it asks (a rolling deploy runs a newer
+    /// host against an older engine). Empty by default, and an empty list is
+    /// left out of the document, so an engine that does not list its tools
+    /// answers byte for byte what it always did.
+    fn tools(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// Run one tool with the arguments the host derived, reporting progress
     /// and answer fragments through `context`.
@@ -95,8 +105,20 @@ impl<E> Shared<E> {
     }
 }
 
-/// The sidecar's routes over `engine`.
+/// The default largest invoke body the sidecar reads: axum's own 2 MB. An
+/// engine whose tools carry large documents (Inventory's `import_graph`
+/// takes a graph the host read from a bucket: up to 32 MiB, JSON-escaped once
+/// more) asks for more with [`router_with_limit`] / [`serve_with_limit`].
+pub const DEFAULT_INVOKE_BYTES: usize = 2 << 20;
+
+/// The sidecar's routes over `engine`, with the default body limit.
 pub fn router<E: Engine>(engine: E) -> Router {
+    router_with_limit(engine, DEFAULT_INVOKE_BYTES)
+}
+
+/// The sidecar's routes over `engine`; an invoke body above `max_invoke_bytes`
+/// is refused (413). The socket is the host's alone.
+pub fn router_with_limit<E: Engine>(engine: E, max_invoke_bytes: usize) -> Router {
     let shared = Arc::new(Shared {
         engine,
         running: Mutex::new(HashMap::new()),
@@ -106,6 +128,7 @@ pub fn router<E: Engine>(engine: E) -> Router {
         .route("/engine/invoke", post(invoke::<E>))
         .route("/engine/invocations/{invocation_id}/stop", post(stop::<E>))
         .fallback(|| async { detail(StatusCode::NOT_FOUND, "Not Found") })
+        .layer(DefaultBodyLimit::max(max_invoke_bytes))
         .with_state(shared)
 }
 
@@ -125,10 +148,12 @@ fn detail(status: StatusCode, message: &str) -> Response {
 
 async fn health<E: Engine>(State(shared): State<Arc<Shared<E>>>) -> Response {
     let active = shared.running().len();
-    json_response(
-        StatusCode::OK,
-        &json!({"status": "UP", "runner": shared.engine.runner_name(), "active": active}),
-    )
+    let mut body = json!({"status": "UP", "runner": shared.engine.runner_name(), "active": active});
+    let tools = shared.engine.tools();
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
+    json_response(StatusCode::OK, &body)
 }
 
 async fn stop<E: Engine>(
@@ -168,7 +193,7 @@ fn shown(value: Option<&Value>) -> String {
 }
 
 async fn invoke<E: Engine>(State(shared): State<Arc<Shared<E>>>, body: Bytes) -> Response {
-    let Ok(Value::Object(request)) = serde_json::from_slice::<Value>(&body) else {
+    let Ok(Value::Object(mut request)) = serde_json::from_slice::<Value>(&body) else {
         return detail(
             StatusCode::UNPROCESSABLE_ENTITY,
             "the request body must be a JSON object",
@@ -187,7 +212,7 @@ async fn invoke<E: Engine>(State(shared): State<Arc<Shared<E>>>, body: Bytes) ->
             );
         }
     };
-    let Some(Value::Object(arguments)) = request.get("arguments").cloned() else {
+    let Some(Value::Object(arguments)) = request.remove("arguments") else {
         return detail(StatusCode::BAD_REQUEST, "arguments must be an object");
     };
 
@@ -287,7 +312,21 @@ pub async fn serve<E: Engine>(
     engine: E,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    axum::serve(listener, router(engine))
+    serve_with_limit(listener, engine, DEFAULT_INVOKE_BYTES, shutdown).await
+}
+
+/// [`serve`] with an invoke body limit of `max_invoke_bytes`.
+///
+/// # Errors
+///
+/// The server's I/O failure.
+pub async fn serve_with_limit<E: Engine>(
+    listener: UnixListener,
+    engine: E,
+    max_invoke_bytes: usize,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    axum::serve(listener, router_with_limit(engine, max_invoke_bytes))
         .with_graceful_shutdown(shutdown)
         .await
 }

@@ -1,0 +1,109 @@
+name: CI — elitea-vector
+
+# ADR-0031: elitea-vector, the only Qdrant client.
+#
+# One job, on purpose: the repository's Actions plan runs 20 jobs at a time,
+# and every check here needs the same compiled dependency graph.
+#
+#   * fmt, Clippy (all + pedantic, deny), rustdoc with warnings denied;
+#   * the unit tests;
+#   * the isolation conformance suite (ADR-0031 Verification 1,
+#     tests/isolation.rs) over real mTLS against a REAL Qdrant (the `qdrant`
+#     service, the version the chart and compose run).
+#     ELITEA_VECTOR_REQUIRE_QDRANT=1 turns its "no Qdrant → skip" into a
+#     failure. The suite gates every elitea-vector change.
+#
+# elitea-main's side (the introspection service) is Go and runs in
+# ci-go.yml.
+
+on:
+  pull_request:
+    paths:
+      - "services/elitea-vector/**"
+      - "libs/proto/elitea/vector/**"
+      # The telemetry crate elitea-vector links, and the workspace it
+      # inherits package fields and lints from.
+      - "libs/rust/engine-sidecar/**"
+      - "libs/rust/engine-core/**"
+      - "libs/rust/Cargo.toml"
+      - ".github/workflows/ci-vector.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/elitea-vector/**"
+      - "libs/proto/elitea/vector/**"
+      - "libs/rust/engine-sidecar/**"
+      - "libs/rust/engine-core/**"
+      - "libs/rust/Cargo.toml"
+      - ".github/workflows/ci-vector.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  vector:
+    name: elitea-vector — lint, test, and the isolation suite on Qdrant
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: services/elitea-vector
+    services:
+      qdrant:
+        # Keep in step with deploy/docker-compose.standalone-full.yml and
+        # the chart's vector.qdrant.internal.image.
+        image: qdrant/qdrant:v1.19.2
+        ports:
+          - 6334:6334
+        # The image has no curl; bash's /dev/tcp checks that the HTTP port
+        # listens. The suite's first request also waits for gRPC.
+        options: >-
+          --health-cmd "bash -c ':> /dev/tcp/127.0.0.1/6333'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show pinned toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      # Read everywhere, write on main only: a pull request's target
+      # directory duplicated per branch would crowd the 10 GB Actions cache.
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: services/elitea-vector
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps --all-features
+
+      - name: Run the unit tests and the isolation suite
+        env:
+          ELITEA_VECTOR_TEST_QDRANT_URL: http://127.0.0.1:6334
+          ELITEA_VECTOR_REQUIRE_QDRANT: "1"
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Build the release binary
+        run: cargo build --locked --release

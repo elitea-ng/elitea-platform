@@ -253,6 +253,17 @@ impl FrozenToolReference<'_> {
         }
     }
 
+    /// The index catalog elitea-main froze into a configured toolkit under
+    /// the Rust indexing runtime (`indexes`, ADR-0030 I1), unparsed. Absent
+    /// on the Python indexing path, and for every other reference kind.
+    #[must_use]
+    pub const fn indexes(&self) -> Option<&Value> {
+        match self {
+            Self::Configured(reference) => reference.indexes,
+            Self::Mcp(_) | Self::Application(_) => None,
+        }
+    }
+
     #[must_use]
     pub const fn application_identity(&self) -> Option<(u64, u64)> {
         match self {
@@ -293,6 +304,8 @@ pub struct FrozenConfiguredToolReference<'a> {
     tool_type: &'a str,
     toolkit_name: &'a str,
     settings: &'a Map<String, Value>,
+    /// The frozen `indexes` value, when Main wrote one.
+    indexes: Option<&'a Value>,
 }
 
 pub struct FrozenApplicationReference<'a> {
@@ -360,11 +373,17 @@ fn parse_reference(value: &Value) -> Result<FrozenToolReference<'_>, FrozenToolS
     };
     validate_optional_tool_names(settings, "selected_tools")?;
     validate_optional_tool_names(settings, "excluded_tools")?;
+    let indexes = match tool.get(super::families::index_tools::INDEXES_KEY) {
+        None | Some(Value::Null) => None,
+        Some(value @ Value::Array(_)) => Some(value),
+        Some(_) => return Err(invalid_input()),
+    };
     let reference = FrozenConfiguredToolReference {
         tool_id,
         tool_type,
         toolkit_name,
         settings,
+        indexes,
     };
     if is_mcp_type(tool_type) {
         Ok(FrozenToolReference::Mcp(reference))

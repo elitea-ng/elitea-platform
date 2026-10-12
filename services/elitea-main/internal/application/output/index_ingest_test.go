@@ -174,6 +174,19 @@ func TestIndexIngestSummaryAcceptsOnlyCurrentBoundedTerminalShape(t *testing.T) 
 			Message:       "failed",
 			TerminalState: IndexIngestTerminalCreated,
 		},
+		// A stopped run is an error summary that describes the store: without
+		// the totals, or with another status, it is malformed.
+		{
+			Status:        IndexIngestStatusError,
+			Message:       "stopped",
+			TerminalState: IndexIngestTerminalCancelled,
+		},
+		{
+			Status:        IndexIngestStatusOK,
+			Message:       "stopped",
+			TerminalState: IndexIngestTerminalCancelled,
+			TotalsPresent: true,
+		},
 		{
 			Status:  IndexIngestStatusOK,
 			Message: valid.Message,
@@ -206,29 +219,40 @@ func TestIndexIngestSummaryAcceptsOnlyCurrentBoundedTerminalShape(t *testing.T) 
 func TestIndexIngestFrameCouplesSummaryStatusToSettlementOutcome(t *testing.T) {
 	for _, test := range []struct {
 		name    string
-		status  IndexIngestStatus
+		summary IndexIngestSummary
 		outcome executionapp.SettlementOutcome
 	}{
-		{name: "ok", status: IndexIngestStatusOK, outcome: executionapp.SettlementSucceeded},
-		{name: "partly indexed", status: IndexIngestStatusPartlyIndexed, outcome: executionapp.SettlementSucceeded},
-		{name: "error", status: IndexIngestStatusError, outcome: executionapp.SettlementFailed},
+		{name: "ok", summary: IndexIngestSummary{Status: IndexIngestStatusOK}, outcome: executionapp.SettlementSucceeded},
+		{name: "partly indexed", summary: IndexIngestSummary{Status: IndexIngestStatusPartlyIndexed}, outcome: executionapp.SettlementSucceeded},
+		{name: "error", summary: IndexIngestSummary{Status: IndexIngestStatusError}, outcome: executionapp.SettlementFailed},
+		// A run stopped after it touched the store (ADR-0030 I1): an error
+		// summary with the store's totals that settles CANCELLED, not FAILED.
+		{name: "cancelled", summary: IndexIngestSummary{
+			Status: IndexIngestStatusError, TerminalState: IndexIngestTerminalCancelled,
+			TotalsPresent: true, TotalDocuments: 2, TotalChunks: 5, IndexedDocuments: 2, IndexedChunks: 5,
+		}, outcome: executionapp.SettlementCancelled},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			frame, _, _ := validIndexIngestOutput()
 			frame.Result.ResultArtifact = IndexArtifactReference{}
-			frame.Result.ResultSummary = IndexIngestSummary{Status: test.status, Message: "bounded terminal message"}
+			frame.Result.ResultSummary = test.summary
+			frame.Result.ResultSummary.Message = "bounded terminal message"
+			if got := frame.Result.ResultSummary.SettlementOutcome(); got != test.outcome {
+				t.Fatalf("SettlementOutcome() = %q, want %q", got, test.outcome)
+			}
 			frame.Settlement.Outcome = test.outcome
 			rebindIndexApplicationFrame(&frame, test.name)
 			if err := frame.Validate(); err != nil {
 				t.Fatalf("matching terminal outcome was rejected: %v", err)
 			}
-			if test.outcome == executionapp.SettlementSucceeded {
-				frame.Settlement.Outcome = executionapp.SettlementFailed
-			} else {
-				frame.Settlement.Outcome = executionapp.SettlementSucceeded
-			}
-			if err := frame.Validate(); !errors.Is(err, ErrInvalidIndexIngestOutput) {
-				t.Fatalf("mismatched terminal outcome was accepted: %v", err)
+			for _, other := range []executionapp.SettlementOutcome{executionapp.SettlementSucceeded, executionapp.SettlementFailed, executionapp.SettlementCancelled} {
+				if other == test.outcome {
+					continue
+				}
+				frame.Settlement.Outcome = other
+				if err := frame.Validate(); !errors.Is(err, ErrInvalidIndexIngestOutput) {
+					t.Fatalf("mismatched terminal outcome %q was accepted: %v", other, err)
+				}
 			}
 		})
 	}

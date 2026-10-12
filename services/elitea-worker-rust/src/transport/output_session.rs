@@ -45,6 +45,9 @@ pub enum OutputSessionError {
     Cancelled,
     CancellationWon,
     DeadlineWon,
+    /// The output plane refused the terminal result on its content
+    /// (`RESULT_REFUSED`): the worker replaces it with a FAILED terminal.
+    ResultRefused,
     DependencyUnavailable,
     Draining,
 }
@@ -61,6 +64,9 @@ impl fmt::Display for OutputSessionError {
             }
             Self::DeadlineWon => {
                 formatter.write_str("the execution deadline won before durable output")
+            }
+            Self::ResultRefused => {
+                formatter.write_str("the output plane refused the terminal result")
             }
             Self::DependencyUnavailable => {
                 formatter.write_str("the output dependency is unavailable")
@@ -555,6 +561,19 @@ impl OutputSessionState {
                     ));
                 }
                 Err(OutputSessionError::DeadlineWon)
+            }
+            RuntimeErrorCodeV1::ResultRefused => {
+                self.validate_ack_binding(ack)?;
+                if ack
+                    .rejection
+                    .as_ref()
+                    .is_none_or(|rejection| rejection.retryable)
+                {
+                    return Err(OutputSessionError::AuthorizationFailed(
+                        "the output refusal is malformed",
+                    ));
+                }
+                Err(OutputSessionError::ResultRefused)
             }
             RuntimeErrorCodeV1::AuthenticationFailed
             | RuntimeErrorCodeV1::AuthorizationFailed

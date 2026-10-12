@@ -1,0 +1,62 @@
+{{- if .Values.vector.enabled }}
+# mTLS material for elitea-vector (ADR-0031 decision 1). Both certificates
+# come from vector.mtls.issuerRef, which must be backed by the RUNTIME CA (see
+# values.yaml, vector: TRUST). The issuer is a prerequisite, not created here.
+#
+# Two certificates, because one cannot do both jobs: elitea-main admits a
+# client certificate only with exactly one DNS SAN (workloadidentity), and the
+# server certificate names the Service three ways.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "elitea-vector.fullname" . }}-server
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.vector.mtls.serverSecretName }}
+  duration: {{ .Values.vector.mtls.duration }}
+  renewBefore: {{ .Values.vector.mtls.renewBefore }}
+  isCA: false
+  usages:
+    - server auth
+  dnsNames:
+    # The names the workers dial. MUST match the Service name.
+    - {{ .Values.vector.service.name }}
+    - {{ .Values.vector.service.name }}.{{ .Release.Namespace }}.svc
+    - {{ .Values.vector.service.name }}.{{ .Release.Namespace }}.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ .Values.vector.mtls.issuerRef.name }}
+    kind: {{ .Values.vector.mtls.issuerRef.kind }}
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "elitea-vector.fullname" . }}-client
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+spec:
+  # Presented to elitea-main's control listener for token introspection.
+  # elitea-main admits it as dns:{{ lower .Values.vector.mtls.clientDnsName }}
+  # (ELITEA_VECTOR_INTROSPECTION_CLIENTS).
+  secretName: {{ .Values.vector.mtls.clientSecretName }}
+  duration: {{ .Values.vector.mtls.duration }}
+  renewBefore: {{ .Values.vector.mtls.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  dnsNames:
+    - {{ .Values.vector.mtls.clientDnsName }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ .Values.vector.mtls.issuerRef.name }}
+    kind: {{ .Values.vector.mtls.issuerRef.kind }}
+    group: cert-manager.io
+{{- end }}

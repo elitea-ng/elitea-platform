@@ -36,6 +36,7 @@ import {
   buildCanvasProps, buildCreateHandlerProps, flattenChatBoxProps,
   resolveConversationStarters, shouldDisableClearChat,
 } from './ChatBox.helpers';
+import { buildMessageActions } from './ChatBox.messageActions';
 import { unwrapChatBoxConversation } from './ChatBox.props';
 import type { ChatBoxHandle, ChatBoxProps } from './ChatBox.types';
 export type { ChatBoxProps } from './ChatBox.types';
@@ -84,7 +85,7 @@ const ChatBoxInner = memo(function ChatBox({
   onDelete,
   extensions,
 }: ChatBoxProps) {
-  const { editorTest, editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator } = extensions ?? {};
+  const { editorTest, editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator, readOnlyNotice } = extensions ?? {};
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null); const voiceButtonRef = useRef<VoiceButtonHandle>(null);
   const { activeConversation, isLoadingConversation, onConversationCreated } = unwrapChatBoxConversation(conversation);
@@ -302,12 +303,12 @@ const ChatBoxInner = memo(function ChatBox({
         <ChatMessageList
           assistantName={assistantName} emptyState={<ChatEmptyGreeting userName={userName} />}
           chatHistory={queued.decorate(messages)} isStreaming={isStreaming} userId={userId ?? ''} projectId={projectIdString}
-          messageActions={{
+          messageActions={buildMessageActions(readOnlyNotice !== undefined, {
             onCopyToClipboard: handleCopy,
             onDeleteAnswer: handleDeleteAnswer,
             onRegenerateAnswer: handleRegenerate,
             onSubmitEditedMessage: handleSubmitEditedMessage,
-          }}
+          })}
           continuation={buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString)}
           tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)}
         />
@@ -320,6 +321,7 @@ const ChatBoxInner = memo(function ChatBox({
         )}
       </Box>
       <Box sx={{ p: 1 }}>
+        {readOnlyNotice ?? <>
         <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
         <ChatBoxQueuedMessages queue={queued} />
         <ChatBoxPopups
@@ -363,6 +365,7 @@ const ChatBoxInner = memo(function ChatBox({
           })}
           refs={{ attachmentButtonRef, voiceButtonRef }}
         />
+        </>}
       </Box>
       <ChatBoxWithdrawnNotice withdrawn={state.isActiveParticipantWithdrawn} /><ChatBoxDeleteModal alert={deleteAlert} />{llmSettingsDialog.dialog}{voiceFeedback.alert}
     </Box>

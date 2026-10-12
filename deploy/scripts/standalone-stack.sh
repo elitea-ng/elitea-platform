@@ -857,7 +857,11 @@ case "${1:-}" in
     # and not the other.
     INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
       "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
-    exec "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
+    "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
+    # After the runtime's: elitea-vector's certificate is signed by the
+    # runtime CA (elitea-main's control listener trusts only that root for
+    # token introspection), and is re-issued when that CA rotates.
+    exec "${REPO_ROOT}/deploy/scripts/gen-vector-certs.sh"
     ;;
 
   up)
@@ -879,6 +883,10 @@ case "${1:-}" in
     fi
     if [ ! -f "${REPO_ROOT}/deploy/certs/inventory-server.crt" ]; then
       echo "ERROR: Inventory provider material missing. Run: $0 certs" >&2
+      exit 1
+    fi
+    if [ ! -f "${REPO_ROOT}/deploy/certs/vector/vector.crt" ]; then
+      echo "ERROR: elitea-vector material missing. Run: $0 certs" >&2
       exit 1
     fi
     # oidc-mock's published port must equal its container port (the issuer is

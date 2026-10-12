@@ -10,11 +10,11 @@ import (
 )
 
 type currentIndexScheduleInspector struct {
-	exact *indexmetaapp.ExactService
+	exact currentIndexExactFinder
 }
 
 func newCurrentIndexScheduleInspector(
-	exact *indexmetaapp.ExactService,
+	exact currentIndexExactFinder,
 ) (*currentIndexScheduleInspector, error) {
 	if exact == nil {
 		return nil, errors.New("exact current index schedule inspector is required")

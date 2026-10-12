@@ -10,6 +10,7 @@ import (
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
@@ -51,11 +52,25 @@ func WithMCPAuthorization(validator MCPAuthorizationValidator) ResolverOption {
 	return func(resolver *CurrentAuthoritativeInputResolver) { resolver.tokens = validator }
 }
 
+// IndexCatalogResolver lists the searchable indexes of one toolkit from the
+// index registry (ADR-0030 I1, ELITEA_INDEXING_RUNTIME=rust).
+type IndexCatalogResolver interface {
+	ToolkitIndexCatalog(ctx context.Context, projectID, toolkitID int32) ([]map[string]any, error)
+}
+
+// WithIndexCatalog makes the resolver write an I1 indexing toolkit's index
+// catalog into the settings entry, next to `settings` (ADR-0030 I1). Without
+// it no `indexes` key is written: the Python indexing path.
+func WithIndexCatalog(resolver IndexCatalogResolver) ResolverOption {
+	return func(r *CurrentAuthoritativeInputResolver) { r.indexes = resolver }
+}
+
 type CurrentAuthoritativeInputResolver struct {
 	tokens     MCPAuthorizationValidator
 	guardrails CurrentGuardrailResolver
 	toolkits   CurrentToolkitReader
 	settings   CurrentToolkitSettingsValidator
+	indexes    IndexCatalogResolver
 }
 
 func NewCurrentAuthoritativeInputResolver(
@@ -127,12 +142,23 @@ func (r *CurrentAuthoritativeInputResolver) Resolve(
 	// capabilities reach `EliteAClient.test_toolkit_tool`, which reads `id`,
 	// `type`, `toolkit_name` and `settings`; a second shape here would be a
 	// second answer to what a toolkit configuration is.
-	settings, err := json.Marshal(map[string]any{
+	frozenToolkit := map[string]any{
 		"id":           toolkit.ID,
 		"type":         toolkit.Type,
 		"toolkit_name": toolkitName(toolkit.Name, toolkit.Type),
 		"settings":     cloneObject(expanded),
-	})
+	}
+	// The index catalog (ADR-0030 I1) rides next to the settings, so the
+	// Rust worker's index tools know the toolkit's indexes without a
+	// registry connection. Written only under the Rust indexing runtime.
+	if r.indexes != nil && indexcatalog.Family(toolkit.Type) {
+		catalog, err := r.indexes.ToolkitIndexCatalog(ctx, projectID, toolkitID)
+		if err != nil {
+			return AuthoritativeInputs{}, settingsResolutionError(ctx, err)
+		}
+		frozenToolkit[indexcatalog.Key] = catalog
+	}
+	settings, err := json.Marshal(frozenToolkit)
 	if err != nil || !validBoundedJSONObject(settings) {
 		return AuthoritativeInputs{}, ErrInvalidAuthoritativeToolRunInput
 	}

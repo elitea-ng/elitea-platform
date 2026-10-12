@@ -106,6 +106,10 @@ func (repo *fakeInternalToolkitRepo) DeleteToolkit(context.Context, string, stri
 	return nil
 }
 
+func (repo *fakeInternalToolkitRepo) DeleteToolkitRowFirst(context.Context, string, string, toolkitsapi.ToolkitCleanupJournal) error {
+	return nil
+}
+
 func TestInternalToolkitListUsesOnlyBoundedMainPagination(t *testing.T) {
 	repo := &fakeInternalToolkitRepo{
 		listRows:  []map[string]any{{"id": "7", "name": "github"}},

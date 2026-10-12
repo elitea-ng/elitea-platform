@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type recordingVault struct {
@@ -43,6 +45,10 @@ func (v *recordingVault) RemoveProjectVault(_ context.Context, projectID string)
 	v.removed = append(v.removed, projectID)
 	v.removeVaultOK = true
 	return nil
+}
+
+func (v *recordingVault) RemoveProjectVaultTx(ctx context.Context, _ pgx.Tx, projectID string) error {
+	return v.RemoveProjectVault(ctx, projectID)
 }
 
 func TestCreateProjectSecretsSealsTheHeaderValue(t *testing.T) {

@@ -28,6 +28,7 @@ const (
 	RuntimeControlService_RenewLease_FullMethodName                    = "/elitea.runtime.v1.RuntimeControlService/RenewLease"
 	RuntimeControlService_ObserveDesiredState_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/ObserveDesiredState"
 	RuntimeControlService_PrepareSettlement_FullMethodName             = "/elitea.runtime.v1.RuntimeControlService/PrepareSettlement"
+	RuntimeControlService_RemoveIndex_FullMethodName                   = "/elitea.runtime.v1.RuntimeControlService/RemoveIndex"
 )
 
 // RuntimeControlServiceClient is the client API for RuntimeControlService service.
@@ -43,6 +44,7 @@ type RuntimeControlServiceClient interface {
 	RenewLease(ctx context.Context, in *RenewLeaseRequestV1, opts ...grpc.CallOption) (*RenewLeaseResponseV1, error)
 	ObserveDesiredState(ctx context.Context, in *ObserveDesiredStateRequestV1, opts ...grpc.CallOption) (*ObserveDesiredStateResponseV1, error)
 	PrepareSettlement(ctx context.Context, in *PrepareSettlementRequestV1, opts ...grpc.CallOption) (*PrepareSettlementResponseV1, error)
+	RemoveIndex(ctx context.Context, in *RemoveIndexRequestV1, opts ...grpc.CallOption) (*RemoveIndexResponseV1, error)
 }
 
 type runtimeControlServiceClient struct {
@@ -143,6 +145,16 @@ func (c *runtimeControlServiceClient) PrepareSettlement(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *runtimeControlServiceClient) RemoveIndex(ctx context.Context, in *RemoveIndexRequestV1, opts ...grpc.CallOption) (*RemoveIndexResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveIndexResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeControlService_RemoveIndex_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeControlServiceServer is the server API for RuntimeControlService service.
 // All implementations must embed UnimplementedRuntimeControlServiceServer
 // for forward compatibility.
@@ -156,6 +168,7 @@ type RuntimeControlServiceServer interface {
 	RenewLease(context.Context, *RenewLeaseRequestV1) (*RenewLeaseResponseV1, error)
 	ObserveDesiredState(context.Context, *ObserveDesiredStateRequestV1) (*ObserveDesiredStateResponseV1, error)
 	PrepareSettlement(context.Context, *PrepareSettlementRequestV1) (*PrepareSettlementResponseV1, error)
+	RemoveIndex(context.Context, *RemoveIndexRequestV1) (*RemoveIndexResponseV1, error)
 	mustEmbedUnimplementedRuntimeControlServiceServer()
 }
 
@@ -192,6 +205,9 @@ func (UnimplementedRuntimeControlServiceServer) ObserveDesiredState(context.Cont
 }
 func (UnimplementedRuntimeControlServiceServer) PrepareSettlement(context.Context, *PrepareSettlementRequestV1) (*PrepareSettlementResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PrepareSettlement not implemented")
+}
+func (UnimplementedRuntimeControlServiceServer) RemoveIndex(context.Context, *RemoveIndexRequestV1) (*RemoveIndexResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveIndex not implemented")
 }
 func (UnimplementedRuntimeControlServiceServer) mustEmbedUnimplementedRuntimeControlServiceServer() {}
 func (UnimplementedRuntimeControlServiceServer) testEmbeddedByValue()                               {}
@@ -376,6 +392,24 @@ func _RuntimeControlService_PrepareSettlement_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeControlService_RemoveIndex_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveIndexRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeControlServiceServer).RemoveIndex(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeControlService_RemoveIndex_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeControlServiceServer).RemoveIndex(ctx, req.(*RemoveIndexRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeControlService_ServiceDesc is the grpc.ServiceDesc for RuntimeControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -418,6 +452,10 @@ var RuntimeControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PrepareSettlement",
 			Handler:    _RuntimeControlService_PrepareSettlement_Handler,
+		},
+		{
+			MethodName: "RemoveIndex",
+			Handler:    _RuntimeControlService_RemoveIndex_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

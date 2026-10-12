@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agent-turn-cancel"
+description = "Enables the agent_turn_cancel command without any pre-configured scope."
+commands.allow = ["agent_turn_cancel"]
+
+[[permission]]
+identifier = "deny-agent-turn-cancel"
+description = "Denies the agent_turn_cancel command without any pre-configured scope."
+commands.deny = ["agent_turn_cancel"]

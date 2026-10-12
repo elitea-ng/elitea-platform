@@ -6,8 +6,10 @@
 //! pretty printer in two ways that matter: `ensure_ascii=True` escapes every
 //! non-ASCII character as `\uXXXX` (surrogate pairs above the BMP), and a
 //! float is written as Python's `repr` writes it ([`float_repr`]: `1e-07`
-//! where `serde_json` writes `1e-7`). Keys keep insertion order (`serde_json`
-//! is built with `preserve_order`).
+//! where `serde_json` writes `1e-7`). Keys are written in the order the map
+//! holds them: insertion order in the engine binaries, which turn
+//! `serde_json/preserve_order` on themselves (this crate does not, so the
+//! desktop host can link it); sorted order in a build without it.
 
 use serde_json::Value;
 use std::fmt::Write as _;

@@ -36,6 +36,12 @@ type currentIndexSchedulePatchQueryFactory func(
 type CurrentIndexSchedulePatchRepository struct {
 	projects projectStore
 	queries  currentIndexSchedulePatchQueryFactory
+	// registry is set under ELITEA_INDEXING_RUNTIME=rust. A schedule still
+	// lives in the toolkit row's meta.indexes_meta (the schedule kernel reads
+	// it there), but the toolkit no longer needs a pgvector_configuration, and
+	// "private" was a property of that configuration. Without one the schedule
+	// is not private.
+	registry bool
 }
 
 func NewCurrentIndexSchedulePatchRepository(
@@ -49,6 +55,20 @@ func NewCurrentIndexSchedulePatchRepository(
 		projects,
 		newCurrentIndexSchedulePatchQueries,
 	)
+}
+
+// NewIndexRegistrySchedulePatchRepository is the schedule patch repository of
+// the rust indexing runtime. It writes the same toolkit-row entry; it only
+// stops requiring a pgvector_configuration to decide who a schedule runs as.
+func NewIndexRegistrySchedulePatchRepository(
+	pool *pgxpool.Pool,
+) (*CurrentIndexSchedulePatchRepository, error) {
+	repository, err := NewCurrentIndexSchedulePatchRepository(pool)
+	if err != nil {
+		return nil, err
+	}
+	repository.registry = true
+	return repository, nil
 }
 
 func newCurrentIndexSchedulePatchRepository(
@@ -129,6 +149,7 @@ func (repository *CurrentIndexSchedulePatchRepository) Patch(
 				settings,
 				mutation.RequestedUserID,
 				mutation.ActorUserID,
+				repository.registry,
 			)
 			if err != nil {
 				return err
@@ -211,9 +232,13 @@ func decodeCurrentScheduleObject(raw []byte) (map[string]any, error) {
 func currentScheduleEffectiveUser(
 	settings map[string]any,
 	requestedUserID, actorUserID int64,
+	registry bool,
 ) (int64, error) {
 	pgvector, ok := settings["pgvector_configuration"].(map[string]any)
 	if !ok || pgvector == nil {
+		if registry {
+			return requestedUserID, nil
+		}
 		return 0, indexscheduleapp.ErrInvalidToolkit
 	}
 	private, ok := pgvector["private"].(bool)

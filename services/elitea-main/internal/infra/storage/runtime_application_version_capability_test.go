@@ -179,6 +179,8 @@ func TestPostgresAgentRuntimeContextRefusesIndexClaimIntegration(t *testing.T) {
     generation BIGINT NOT NULL,
     resource_project_id INTEGER NOT NULL,
     actor_id TEXT NOT NULL,
+    -- Read by the toolkit.call_tool.v1 arm (toolkitCallToolInteractiveJob).
+    principal_ref TEXT NOT NULL DEFAULT '',
     desired_state TEXT NOT NULL,
     capability_id TEXT NOT NULL,
     PRIMARY KEY (execution_id, generation)

@@ -4586,3 +4586,65 @@ async fn nested_agent_variable_overrides_reach_provider_without_leaking_to_next_
     assert!(system(&first).contains("Audience=operators; tone=brief"));
     assert!(system(&second).contains("Audience=users; tone=formal"));
 }
+
+/// Review round 1, finding 8: the ordinary assembler builds the index tools'
+/// host (and the second model binding it carries) only when the snapshot has
+/// an I1 toolkit carrying Main's catalog. The predicate it gates on is
+/// exercised over frozen snapshots.
+#[test]
+fn the_index_tool_host_is_built_only_for_a_snapshot_carrying_a_catalog() {
+    let catalog = serde_json::json!([{
+        "name": "docs",
+        "index_id": "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b",
+        "embedding_model": "text-embedding-3-small",
+        "embedding_dimension": 4
+    }]);
+    let github = |indexes: Option<&serde_json::Value>, toolkit_type: &str| {
+        let mut toolkit = serde_json::json!({
+            "id": 41,
+            "type": toolkit_type,
+            "toolkit_name": "repo",
+            "settings": {
+                "github_configuration": {
+                    "configuration_type": "github",
+                    "base_url": "https://github.example.test/api/v3/",
+                    "access_token": "fixture-token"
+                },
+                "repository": "https://github.example.test/EliteaAI/elitea-platform.git",
+                "active_branch": "main",
+                "base_branch": "main",
+                "selected_tools": ["get_me"]
+            }
+        });
+        if let Some(indexes) = indexes {
+            toolkit["indexes"] = indexes.clone();
+        }
+        toolkit
+    };
+    let policy = crate::toolkits::ToolAdmissionPolicy::from_runtime_config(
+        serde_json::json!({"toolkit_security": {}})
+            .as_object()
+            .expect("policy"),
+    )
+    .expect("policy");
+    let carries = |tools: serde_json::Value| {
+        let version = serde_json::json!({"tools": tools});
+        let frozen = crate::toolkits::FrozenToolSnapshot::from_version_details(
+            version.as_object().expect("version"),
+        )
+        .expect("frozen snapshot");
+        super::ordinary::snapshot_carries_index_catalog(&frozen.apply_policy(&policy))
+    };
+    assert!(carries(serde_json::json!([github(
+        Some(&catalog),
+        "github"
+    )])));
+    // No catalog (Python indexing): nothing would call the host.
+    assert!(!carries(serde_json::json!([github(None, "github")])));
+    // An empty snapshot, or one with no I1 family, builds none either.
+    assert!(!carries(serde_json::json!([])));
+    assert!(!carries(serde_json::json!([github(
+        Some(&catalog),
+        "confluence"
+    )])));
+}

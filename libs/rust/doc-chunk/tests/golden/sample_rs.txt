@@ -1,0 +1,3 @@
+1 code count_words [rust] 266c 68t | /// Counts words.
+2 code new [rust] 63c 19t | pub fn new() -> Self {
+3 code add [rust] 210c 52t | /// Adds an item, evicting the oldest past the l

@@ -55,6 +55,12 @@ func TestCurrentReadToolFreezerUsesReferenceModeAndPreservesExactTarget(t *testi
 	if len(frozen.GuardrailsJSON) == 0 {
 		t.Fatal("guardrail snapshot was omitted")
 	}
+	// The direct read path serves no index tools (ADR-0030 I1, review round
+	// 1 finding 3): no `indexes` catalog is frozen for an I1 family here, so
+	// the worker, which lists none on this path, agrees with Main.
+	if _, present := toolkit["indexes"]; present {
+		t.Fatalf("the direct read freezer must not write an index catalog: %#v", toolkit)
+	}
 }
 
 func TestCurrentReadToolFreezerRechecksExposureSelectionAndPolicy(t *testing.T) {

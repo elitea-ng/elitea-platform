@@ -313,7 +313,7 @@ func TestUnlockBurstStaysWithinTheVerificationCap(t *testing.T) {
 			start := time.Now()
 			resp, err := client.Get(srv.URL + "/probe")
 			if err == nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				latencies = append(latencies, time.Since(start))
 			}
 			time.Sleep(2 * time.Millisecond)
@@ -338,7 +338,7 @@ func TestUnlockBurstStaysWithinTheVerificationCap(t *testing.T) {
 					t.Errorf("request %s: %v", id, err)
 					return
 				}
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				switch resp.StatusCode {
 				case http.StatusTooManyRequests:
 					refused.Add(1)

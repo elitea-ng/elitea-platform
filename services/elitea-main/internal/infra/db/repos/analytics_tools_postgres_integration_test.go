@@ -68,7 +68,7 @@ func TestGetToolAnalytics_AttributesBothProducers(t *testing.T) {
 	recordToolCallForTest(t, pool, ToolCallRecord{
 		ProjectID: 1, Source: ToolCallSourceAgentTurn, SourceRef: "41:run-a",
 		ToolkitName: "Jira", ToolName: "create_issue",
-		StartedAt:   started, FinishedAt: started.Add(time.Second),
+		StartedAt: started, FinishedAt: started.Add(time.Second),
 	})
 
 	breakdown, err := repo.GetToolAnalytics(context.Background(), toolAnalyticsWindow())

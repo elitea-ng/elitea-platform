@@ -82,8 +82,10 @@ export interface NativeAttempt {
  * 401 → a resource-authorization body is kept (2b, as everywhere); a
  * `device_revoked` ends the session and asks the host to wipe; any other 401
  * asks the host to refresh ONCE and replays the identical request with the new
- * token; a refusal after that signs out. 426 tells the host this build is too
- * old (the response is still returned).
+ * token. A refusal of that replay is returned as an auth failure WITHOUT
+ * signing out (the refresh just proved the session alive; only `ended` from
+ * the refresh, or `device_revoked`, ends it). 426 tells the host this build is
+ * too old (the response is still returned).
  */
 export async function judgeNativeResponse(attempt: NativeAttempt): Promise<NativeAnswer> {
   const { native, first } = attempt;
@@ -132,7 +134,7 @@ async function replayAfterRefresh(attempt: NativeAttempt): Promise<NativeAnswer>
     return { kind: 'failure', failure: { kind: 'network', url: attempt.url, message: `http: request to ${attempt.url} failed: ${message}`, cause } };
   }
   if (response.status !== 401) return { kind: 'response', response };
-  native.signOut((await isDeviceRevoked(response)) ? 'device_revoked' : 'refresh_failed');
+  if (await isDeviceRevoked(response)) native.signOut('device_revoked');
   const body = await resourceAuthorizationBody(response);
   return body !== undefined ? resourceAuth(response, body) : sessionEnded(response);
 }
