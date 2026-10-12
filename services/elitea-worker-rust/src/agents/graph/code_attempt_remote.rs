@@ -261,7 +261,7 @@ impl RemoteCodeRuntime {
                 )
             })?;
         if let Some(workspace) = workspace.as_ref() {
-            observe_typed(
+            let hydrated = observe_typed(
                 trace.as_ref(),
                 CodePhase::Hydration,
                 async {
@@ -285,12 +285,17 @@ impl RemoteCodeRuntime {
                 },
                 |_| before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown),
             )
-            .await?;
+            .await;
+            if let Err(failure) = &hydrated {
+                self.release_undispatched(profile, &invocation.activation, &request_digest, failure)
+                    .await;
+            }
+            hydrated?;
         }
         if selected.is_none()
             && let Some(bundle) = &bundle
         {
-            observe_typed(
+            let hydrated = observe_typed(
                 trace.as_ref(),
                 CodePhase::Hydration,
                 async {
@@ -309,7 +314,12 @@ impl RemoteCodeRuntime {
                 },
                 |_| before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown),
             )
-            .await?;
+            .await;
+            if let Err(failure) = &hydrated {
+                self.release_undispatched(profile, &invocation.activation, &request_digest, failure)
+                    .await;
+            }
+            hydrated?;
         }
         let mut platform_call_effect = None;
         let mut platform_unknown_effect = false;
@@ -613,6 +623,66 @@ impl RemoteCodeRuntime {
         )
         .await;
         result.map_err(|failure| failure.with_platform_call_effect(platform_call_effect))
+    }
+}
+
+impl RemoteCodeRuntime {
+    /// A job reserved and hydrated for this attempt that failed before any
+    /// dispatch holds a live runtime nothing else will delete soon. Release it
+    /// with the claim-bound stop while this attempt still owns the claim. The
+    /// release is best effort and idempotent: a repeat finds the terminal job,
+    /// and the supervisor's retention sweep remains the backstop. A failure
+    /// after a possible dispatch is never released here (reconcile owns it).
+    async fn release_undispatched(
+        &self,
+        profile: &super::CodeRuntimeProfile,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+        failure: &CodeAttemptFailure,
+    ) {
+        use crate::protocol::elitea::runtime::v1::SandboxJobStatusV1;
+        if failure.failure.replay != ReplaySafety::NoExternalEffect {
+            return;
+        }
+        let Ok(scope) = self.authority.dispatch_scope() else {
+            return;
+        };
+        match self
+            .control
+            .release_undispatched_sandbox_job(&profile.client, &self.authority, activation, digest)
+            .await
+        {
+            Ok(
+                SandboxJobStatusV1::Completed
+                | SandboxJobStatusV1::Failed
+                | SandboxJobStatusV1::Cancelled,
+            ) => {
+                if self
+                    .journal
+                    .resolve(&scope, activation, digest, profile.client.audience())
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        event = "code_job_release_unrecorded",
+                        "released sandbox job could not be marked resolved"
+                    );
+                }
+                tracing::info!(event = "code_job_released_after_failure");
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    event = "code_job_release_pending",
+                    "sandbox job release is pending; the supervisor retention sweep remains"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    event = "code_job_release_failed",
+                    "sandbox job release could not be requested; the supervisor retention sweep remains"
+                );
+            }
+        }
     }
 }
 

@@ -1090,3 +1090,52 @@ async fn hydration_unknown_termination_remains_reserved_and_retries_original_cle
     assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 2);
     assert_eq!(runtime.0.cleanups.load(Ordering::SeqCst), 1);
 }
+
+/// CR-SK-P09-hyd F: a job reserved during hydration and never dispatched, whose
+/// execution already settled failed, is reaped at once instead of after the
+/// hour-long hydration retention. The Worker's release is a claim-bound stop;
+/// the supervisor owns the termination, exactly once.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL through ELITEA_TEST_DATABASE_URL"]
+async fn hydrated_never_dispatched_job_is_reaped_once_after_a_settled_failure() {
+    let database = database().await;
+    let request = request();
+    let scope = scope(&request, 21);
+    let runtime = Runtime::new(true);
+    let supervisor = supervisor(database.pool.clone(), runtime.clone(), OWNER);
+    let lease = bound(&supervisor, &scope).await;
+    // The last hydration index released the lease; nothing was ever dispatched.
+    supervisor.ledger.release(&lease).await.unwrap();
+    let before = supervisor.ledger.read(&scope).await.unwrap();
+    assert_eq!(before.phase, Phase::Reserved);
+    assert_eq!(before.runtime_id.as_deref(), Some(RUNTIME_ID));
+    // Young, so the retention sweep must not be what reaps it.
+    supervisor.reconcile_expired_hydrations().await.unwrap();
+    assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 0);
+    // The execution settled failed; the Worker releases the job (a stop).
+    supervisor
+        .ledger
+        .request_cancellation(&scope, OWNER)
+        .await
+        .unwrap();
+    expire_leases(&database.pool).await;
+    tokio::time::timeout(WAIT, supervisor.reconcile_cancellations())
+        .await
+        .unwrap()
+        .unwrap();
+    let after = supervisor.ledger.read(&scope).await.unwrap();
+    assert_eq!(after.phase, Phase::Cancelled);
+    assert_eq!(after.failure_code.as_deref(), Some("sandbox.cancelled"));
+    assert_eq!(runtime.0.dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.0.cleanups.load(Ordering::SeqCst), 1);
+    // A second pass, or a repeated release, deletes nothing again.
+    supervisor
+        .ledger
+        .request_cancellation(&scope, OWNER)
+        .await
+        .unwrap();
+    supervisor.reconcile_cancellations().await.unwrap();
+    assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.0.cleanups.load(Ordering::SeqCst), 1);
+}

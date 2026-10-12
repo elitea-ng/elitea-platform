@@ -209,7 +209,9 @@ mod shared_vector_tests {
         for entry in std::fs::read_dir(VECTOR_DIR).unwrap() {
             let path = entry.unwrap().path();
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            if !name.starts_with("node-recovery-required-v1") || !name.ends_with(".json") {
+            if !name.starts_with("node-recovery-required-v1")
+                || path.extension().is_none_or(|extension| extension != "json")
+            {
                 continue;
             }
             let bytes = std::fs::read(&path).unwrap();
