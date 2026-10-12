@@ -96,6 +96,35 @@ type currentContinuationQuerier interface {
 	) (sqlcgen.ResolveCurrentAuthorizationContinuationRow, error)
 }
 
+// localWorkThreadQuerier answers whether a conversation is a desktop Local
+// work thread (conversations.LocalWorkSource). pgxExecutor implements it (see
+// the assertion at the end of this file); a test executor that does not is
+// treated as "not Local work", which keeps the resolver tests that predate
+// the guard unchanged.
+type localWorkThreadQuerier interface {
+	ConversationIsLocalWork(context.Context, pgtype.UUID) (bool, error)
+}
+
+// refuseLocalWorkThread is the server-side half of "the web cannot continue a
+// Local work thread": every resolve this repository serves — start (agent and
+// ad-hoc), regenerate and each continuation — runs it inside its own
+// transaction before reading the turn. The desktop's local turn route has its
+// own repository and never comes through here.
+func refuseLocalWorkThread(ctx context.Context, tx sqlExecutor, conversationUUID pgtype.UUID) error {
+	querier, ok := tx.(localWorkThreadQuerier)
+	if !ok {
+		return nil
+	}
+	localWork, err := querier.ConversationIsLocalWork(ctx, conversationUUID)
+	if err != nil {
+		return fmt.Errorf("read conversation source: %w", err)
+	}
+	if localWork {
+		return agentexecutionapp.ErrLocalWorkThread
+	}
+	return nil
+}
+
 type currentConversationSettlingQuerier interface {
 	CurrentConversationResponseSettling(context.Context, pgtype.UUID) (bool, error)
 }
@@ -266,6 +295,9 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
+				if err := refuseLocalWorkThread(ctx, tx, conversationUUID); err != nil {
+					return err
+				}
 				queries, ok := tx.(currentApplicationStartQuerier)
 				if !ok {
 					return errors.New("current agent start query is unavailable")
@@ -675,6 +707,9 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
+				if err := refuseLocalWorkThread(ctx, tx, conversationUUID); err != nil {
+					return err
+				}
 				queries, ok := tx.(currentAdhocStartQuerier)
 				if !ok {
 					return errors.New("current agent start query is unavailable")
@@ -771,6 +806,11 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentRegeneration(
 			if queryErr != nil {
 				return fmt.Errorf("resolve current agent regeneration: %w", queryErr)
 			}
+			// The conversation is known only from the response row: the
+			// regenerate route names a message, not a conversation.
+			if err := refuseLocalWorkThread(ctx, tx, row.ConversationUuid); err != nil {
+				return err
+			}
 			if row.ResponseIsStreaming {
 				return agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing
 			}
@@ -817,6 +857,9 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentContinuation(
 		request.ProjectID,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 		func(tx sqlExecutor) error {
+			if err := refuseLocalWorkThread(ctx, tx, conversationUUID); err != nil {
+				return err
+			}
 			if request.Kind == agentexecutionapp.CurrentContinuationStatic {
 				queries, ok := tx.(currentStaticContinuationQuerier)
 				if !ok {
@@ -1059,3 +1102,4 @@ var _ currentApplicationStartQuerier = pgxExecutor{}
 var _ currentAdhocStartQuerier = pgxExecutor{}
 var _ currentRegenerationQuerier = pgxExecutor{}
 var _ currentContinuationQuerier = pgxExecutor{}
+var _ localWorkThreadQuerier = pgxExecutor{}

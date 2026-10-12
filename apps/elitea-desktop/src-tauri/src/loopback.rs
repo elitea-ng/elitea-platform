@@ -88,9 +88,86 @@ impl LoopbackListener {
     }
 }
 
-const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Elitea</title>\
-<body style=\"font-family:system-ui,sans-serif;margin:3rem\"><h1>You can close this tab</h1>\
-<p>Return to the Elitea desktop app to continue.</p></body>";
+/// The pages the browser lands on, styled like the deployment's own sign-in
+/// pages (services/elitea-main/.../browserauth/templates/auth.css): the same
+/// tokens, glow backdrop and card, light and dark. Self-contained — the
+/// listener serves nothing else, and the CSP header allows inline style only.
+const PAGE_STYLE: &str = "<style>\
+:root{color-scheme:light dark;--accent:#c428dd;--page:#f3f7fc;--card:#fff;--text:#0e131d;\
+--muted:#545864;--card-border:rgb(61 68 86/12%);--glow-1:var(--accent);--glow-2:#29a3f5;\
+--glow-strength:14%;--shadow:0 1px 2px rgb(14 19 29/6%),0 24px 64px -12px rgb(14 19 29/18%);\
+--ok:#1b7f4b;--ok-bg:#e8f6ee;--warn:#9e0f0f;--warn-bg:#fdeced}\
+@media (prefers-color-scheme:dark){:root{--accent:#6ae8fa;--page:#0b111b;--card:#181f2a;\
+--text:#fff;--muted:#a9b7c1;--card-border:rgb(255 255 255/9%);--glow-2:#dd42bb;--glow-strength:18%;\
+--shadow:0 1px 2px rgb(0 0 0/30%),0 32px 80px -16px rgb(0 0 0/65%);--ok:#7ee2a8;\
+--ok-bg:rgb(46 160 98/16%);--warn:#ffb3ae;--warn-bg:rgb(215 22 22/14%)}}\
+html,body{min-height:100%}\
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:56px 16px;box-sizing:border-box;\
+background-color:var(--page);background-image:\
+radial-gradient(340px circle at calc(50% - 350px) calc(50% + 80px),color-mix(in srgb,var(--glow-2) var(--glow-strength),transparent),transparent),\
+radial-gradient(280px circle at calc(50% + 360px) calc(50% - 170px),color-mix(in srgb,var(--glow-1) var(--glow-strength),transparent),transparent),\
+radial-gradient(ellipse 60% 55% at 50% 45%,color-mix(in srgb,var(--glow-1) var(--glow-strength),transparent) 0%,transparent 70%);\
+background-attachment:fixed;color:var(--text);font-size:15px;line-height:1.5;\
+font-family:\"Montserrat\",\"Inter\",system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif}\
+main{width:min(100%,420px);box-sizing:border-box;padding:36px 32px 32px;text-align:center;\
+border:1px solid var(--card-border);border-radius:16px;background:color-mix(in srgb,var(--card) 84%,transparent);\
+-webkit-backdrop-filter:blur(20px) saturate(140%);backdrop-filter:blur(20px) saturate(140%);box-shadow:var(--shadow)}\
+.mark{display:grid;place-items:center;width:48px;height:48px;margin:0 auto 20px;border-radius:50%;\
+color:var(--ok);background:var(--ok-bg)}\
+.mark.warn{color:var(--warn);background:var(--warn-bg)}\
+.mark svg{width:24px;height:24px}\
+h1{margin:0 0 8px;font-size:1.5rem;font-weight:600;line-height:1.3}\
+p{margin:0;color:var(--muted);font-size:.9375rem}\
+</style>";
+
+const CHECK_ICON: &str = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" \
+stroke-width=\"2.25\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">\
+<path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg>";
+
+const ALERT_ICON: &str = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" \
+stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\">\
+<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7.5v5.5M12 16.5v.01\"/></svg>";
+
+/// Which page a browser request gets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Outcome {
+    /// The code (or the server's answer) reached the app.
+    Done,
+    /// The person declined or the server refused; the app shows why.
+    Declined,
+    /// Not this attempt's callback (an old tab, a reload after use).
+    Stale,
+}
+
+fn page(outcome: Outcome) -> String {
+    let (icon, warn, title, body) = match outcome {
+        Outcome::Done => (
+            CHECK_ICON,
+            false,
+            "You're signed in",
+            "Return to the Elitea desktop app to continue. You can close this tab.",
+        ),
+        Outcome::Declined => (
+            ALERT_ICON,
+            true,
+            "Sign-in did not finish",
+            "Return to the Elitea desktop app to see why and try again. You can close this tab.",
+        ),
+        Outcome::Stale => (
+            ALERT_ICON,
+            true,
+            "This sign-in link has expired",
+            "Start again from the Elitea desktop app. You can close this tab.",
+        ),
+    };
+    let class = if warn { "mark warn" } else { "mark" };
+    format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8>\
+<meta name=viewport content=\"width=device-width,initial-scale=1\">\
+<title>Elitea sign-in</title>{PAGE_STYLE}</head><body><main>\
+<div class=\"{class}\">{icon}</div><h1>{title}</h1><p>{body}</p></main></body></html>"
+    )
+}
 
 /// Read one request, answer it, and return the callback parameters when it
 /// was a valid `GET /callback` for this attempt's `state`.
@@ -104,11 +181,16 @@ async fn serve_connection(mut stream: TcpStream, expected_state: &str) -> Option
                 .get("state")
                 .is_some_and(|got| crate::pkce::constant_time_eq(got, expected_state)) =>
         {
-            respond(&mut stream, "200 OK", PAGE).await;
+            let outcome = if params.contains_key("error") {
+                Outcome::Declined
+            } else {
+                Outcome::Done
+            };
+            respond(&mut stream, "200 OK", &page(outcome)).await;
             Some(params)
         }
         Some(_) => {
-            respond(&mut stream, "400 Bad Request", "").await;
+            respond(&mut stream, "400 Bad Request", &page(Outcome::Stale)).await;
             None
         }
         None => {
@@ -138,7 +220,8 @@ async fn read_request_line(stream: &mut TcpStream) -> Option<String> {
 async fn respond(stream: &mut TcpStream, status: &str, body: &str) {
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\
-Cache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n{body}",
+Cache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n\
+Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     // The browser may have gone away; there is nothing useful to do about it.
@@ -263,11 +346,32 @@ mod tests {
         assert!(get(port, "/favicon.ico").await.starts_with("HTTP/1.1 404"));
         let ok = get(port, "/callback?code=the-code&state=the-state").await;
         assert!(ok.starts_with("HTTP/1.1 200"));
-        assert!(ok.contains("You can close this tab"));
+        assert!(ok.contains("You're signed in"));
+        assert!(
+            ok.contains("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'")
+        );
 
         let params = waiter.await.unwrap().unwrap();
         assert_eq!(params["code"], "the-code");
         assert_eq!(params["state"], "the-state");
+    }
+
+    #[test]
+    fn each_outcome_has_its_own_page_and_loads_nothing_remote() {
+        let done = page(Outcome::Done);
+        let declined = page(Outcome::Declined);
+        let stale = page(Outcome::Stale);
+        assert!(done.contains("You're signed in") && !done.contains("mark warn"));
+        assert!(declined.contains("Sign-in did not finish") && declined.contains("mark warn"));
+        assert!(stale.contains("This sign-in link has expired") && stale.contains("mark warn"));
+        for html in [&done, &declined, &stale] {
+            assert!(html.contains("prefers-color-scheme:dark"));
+            assert!(
+                !html.contains("http://")
+                    && !html.contains("https://")
+                    && !html.contains("<script")
+            );
+        }
     }
 
     fn port_of(listener: &LoopbackListener) -> u16 {

@@ -20,6 +20,7 @@ pub mod config;
 pub mod diagnostics;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod execution;
+mod indexing;
 pub mod protocol;
 pub mod sandbox;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -31,6 +32,7 @@ pub mod state;
 mod toolkits;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod transport;
+pub(crate) mod validation;
 
 use std::fmt;
 use std::io::{self, Write};

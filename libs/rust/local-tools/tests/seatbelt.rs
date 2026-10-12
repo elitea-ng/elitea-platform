@@ -10,12 +10,15 @@
 #![cfg(target_os = "macos")]
 
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use elitea_local_tools::policy::SandboxMode;
 use elitea_local_tools::sandbox::Enforcement;
 use elitea_local_tools::shell::{CommandOutput, CommandSpec, ShellConfig, run};
 use elitea_local_tools::workspace::{Workspace, WsPath};
+
+/// The desktop app's bundle identifier, as its host passes it.
+const APP_ID: &str = "ai.elitea.desktop";
 
 fn available() -> bool {
     if Path::new("/usr/bin/sandbox-exec").is_file() {
@@ -31,7 +34,10 @@ fn available() -> bool {
 
 struct Fixture {
     _dir: tempfile::TempDir,
-    outside: std::path::PathBuf,
+    /// The commands' `HOME` and the home credentials are denied under: a
+    /// fixture, so what the probes look for really exists.
+    home: PathBuf,
+    outside: PathBuf,
     workspace: Workspace,
     config: ShellConfig,
 }
@@ -42,20 +48,65 @@ fn fixture() -> Fixture {
 
 fn fixture_with(path_deny: &[&str]) -> Fixture {
     let dir = tempfile::tempdir().expect("dir");
-    let root = dir.path().join("workspace");
-    let outside = dir.path().join("outside");
+    let data = dir.path().join("data");
+    fixture_in(dir, path_deny, |_| data)
+}
+
+/// A fixture whose session data directory is `data(home)`.
+fn fixture_in(
+    dir: tempfile::TempDir,
+    path_deny: &[&str],
+    data: impl FnOnce(&Path) -> PathBuf,
+) -> Fixture {
+    let base = std::fs::canonicalize(dir.path()).expect("canonical");
+    let root = base.join("workspace");
+    let outside = base.join("outside");
+    let home = base.join("home");
     std::fs::create_dir_all(root.join(".git/hooks")).expect("workspace");
     std::fs::create_dir_all(&outside).expect("outside");
+    std::fs::create_dir_all(&home).expect("home");
     let deny: Vec<String> = path_deny.iter().map(|s| (*s).to_owned()).collect();
     let workspace = Workspace::open(&root, &deny).expect("open");
-    let mut config = ShellConfig::new(dir.path().join("data/tmp/session"));
-    config.deny_read.push(dir.path().join("data"));
+    let data = data(&home);
+    let mut config = ShellConfig::new(data.join("tmp/session"));
+    config.deny_read.push(data);
+    config.home = Some(home.clone());
+    // The host names its identifier; the library holds none.
+    config.app_id = Some(APP_ID.to_owned());
     Fixture {
-        outside: std::fs::canonicalize(outside).expect("canonical"),
+        outside,
+        home,
         _dir: dir,
         workspace,
         config,
     }
+}
+
+/// Write `content` at `path`, creating its parents.
+fn plant(path: &Path, content: &str) {
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("parents");
+    std::fs::write(path, content).expect("plant");
+}
+
+/// `probe` ran, was refused by the sandbox (not "no such file"), and
+/// printed nothing of `secret`.
+async fn assert_refused(fixture: &Fixture, probe: &str, secret: &str) {
+    let output = sh(fixture, probe, SandboxMode::WorkspaceWrite, false).await;
+    assert_ne!(
+        output.exit_code,
+        Some(0),
+        "`{probe}` read: {}",
+        output.stdout
+    );
+    assert!(
+        !output.stdout.contains(secret) && !output.stderr.contains(secret),
+        "`{probe}` leaked {secret}"
+    );
+    assert!(
+        output.stderr.contains("Operation not permitted"),
+        "`{probe}` failed for another reason: {}",
+        output.stderr
+    );
 }
 
 async fn sh(fixture: &Fixture, command: &str, mode: SandboxMode, network: bool) -> CommandOutput {
@@ -245,7 +296,6 @@ async fn path_deny_credentials_and_the_data_directory_are_unreadable() {
         "cp .env leaked".to_owned(),
         "echo x > .env".to_owned(),
         format!("cat {}", quoted(&data.join("checkpoints/manifest.json"))),
-        "ls \"$HOME/Library/Keychains\"".to_owned(),
     ] {
         let output = sh(&fixture, &probe, SandboxMode::WorkspaceWrite, false).await;
         assert_ne!(
@@ -279,6 +329,124 @@ async fn path_deny_credentials_and_the_data_directory_are_unreadable() {
     );
     let full = sh(&fixture, "cat .env", SandboxMode::FullAccess, false).await;
     assert_ne!(full.exit_code, Some(0), "full access still keeps path_deny");
+}
+
+/// The desktop app's own data under its bundle identifier (the stored
+/// sign-in, other workspaces' history), the keychains, and a directory the
+/// host resolved for itself (an `XDG_CONFIG_HOME` the defaults miss) all
+/// exist with content, and every read is refused by the sandbox: not
+/// "No such file", and nothing of the content comes out.
+#[tokio::test]
+async fn the_desktop_apps_data_and_host_resolved_dirs_are_unreadable() {
+    if !available() {
+        return;
+    }
+    let mut fixture = fixture();
+    let home = fixture.home.clone();
+    let app = home.join("Library/Application Support/ai.elitea.desktop");
+    plant(&app.join("credentials.json"), "REFRESH-SECRET-1");
+    plant(&app.join("threads.sqlite"), "THREADS-SECRET-2");
+    plant(
+        &home.join("Library/Preferences/ai.elitea.desktop.plist"),
+        "PLIST-SECRET-3",
+    );
+    plant(
+        &home.join("Library/HTTPStorages/ai.elitea.desktop/httpstorages.sqlite"),
+        "COOKIE-SECRET-4",
+    );
+    plant(
+        &home.join("Library/Keychains/login.keychain-db"),
+        "KEYCHAIN-SECRET-5",
+    );
+    // The host-resolved config directory, outside every default layout.
+    let resolved = fixture.outside.join("xdg-config/ai.elitea.desktop");
+    plant(&resolved.join("credentials.json"), "HOST-SECRET-6");
+    fixture.config.deny_read.push(resolved.clone());
+
+    for (probe, secret) in [
+        (
+            "cat \"$HOME/Library/Application Support/ai.elitea.desktop/credentials.json\""
+                .to_owned(),
+            "REFRESH-SECRET-1",
+        ),
+        (
+            format!("cat {}", quoted(&app.join("threads.sqlite"))),
+            "THREADS-SECRET-2",
+        ),
+        (
+            "cat \"$HOME/Library/Preferences/ai.elitea.desktop.plist\"".to_owned(),
+            "PLIST-SECRET-3",
+        ),
+        (
+            "cat \"$HOME/Library/HTTPStorages/ai.elitea.desktop/httpstorages.sqlite\"".to_owned(),
+            "COOKIE-SECRET-4",
+        ),
+        (
+            "cat \"$HOME/Library/Keychains/login.keychain-db\"".to_owned(),
+            "KEYCHAIN-SECRET-5",
+        ),
+        (
+            format!("cat {}", quoted(&resolved.join("credentials.json"))),
+            "HOST-SECRET-6",
+        ),
+        (
+            format!("cp {} leaked", quoted(&resolved.join("credentials.json"))),
+            "HOST-SECRET-6",
+        ),
+    ] {
+        assert_refused(&fixture, &probe, secret).await;
+    }
+    assert!(!fixture.workspace.root().join("leaked").exists());
+    // Metadata stays visible: the directory shows in its parent's listing.
+    let listed = sh(
+        &fixture,
+        "ls \"$HOME/Library/Application Support\"",
+        SandboxMode::ReadOnly,
+        false,
+    )
+    .await;
+    assert!(
+        listed.stdout.contains("ai.elitea.desktop"),
+        "{}",
+        listed.stderr
+    );
+}
+
+/// The session's data directory sits inside the desktop app's own data
+/// directory, which is denied: the temporary directory inside it stays
+/// writable and readable, and the stored sign-in next to it does not read.
+#[tokio::test]
+async fn the_temp_dir_inside_the_denied_app_data_stays_usable() {
+    if !available() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    let fixture = fixture_in(dir, &[], |home| {
+        home.join("Library/Application Support/ai.elitea.desktop/workspaces/w1")
+    });
+    let app = fixture
+        .home
+        .join("Library/Application Support/ai.elitea.desktop");
+    plant(&app.join("credentials.json"), "REFRESH-SECRET-7");
+    let tmp = sh(
+        &fixture,
+        "echo t > \"$TMPDIR/x\" && cat \"$TMPDIR/x\"",
+        SandboxMode::WorkspaceWrite,
+        false,
+    )
+    .await;
+    assert_eq!(tmp.exit_code, Some(0), "{}", tmp.stderr);
+    assert_eq!(tmp.stdout.trim(), "t");
+    assert!(
+        fixture.config.temp_dir.starts_with(&app),
+        "the temporary directory is under the app's data"
+    );
+    assert_refused(
+        &fixture,
+        &format!("cat {}", quoted(&app.join("credentials.json"))),
+        "REFRESH-SECRET-7",
+    )
+    .await;
 }
 
 /// L2: with the network on, connections go out but nothing listens.

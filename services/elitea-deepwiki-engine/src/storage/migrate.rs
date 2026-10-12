@@ -61,6 +61,14 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0005_project_scope.sql",
         include_str!("../../migrations/0005_project_scope.sql"),
     ),
+    (
+        "0006_wiki_embedding_model.sql",
+        include_str!("../../migrations/0006_wiki_embedding_model.sql"),
+    ),
+    (
+        "0007_drop_bm25_branch_rows.sql",
+        include_str!("../../migrations/0007_drop_bm25_branch_rows.sql"),
+    ),
 ];
 
 /// This engine's ledger: `schema_migrations`, locked on
@@ -135,7 +143,10 @@ mod tests {
     fn the_embedded_set_is_valid_and_ordered() {
         let migrations = embedded().unwrap_or_default();
         let versions: Vec<&str> = migrations.iter().map(|m| m.version.as_str()).collect();
-        assert_eq!(versions, ["0001", "0002", "0003", "0004", "0005"]);
+        assert_eq!(
+            versions,
+            ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
+        );
     }
 
     #[test]

@@ -131,6 +131,8 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { SNAPSHOT_TOLERANCE, settle, shellSettled, volatileRegions } from './lib/settle';
+import { keepThemeOffTheServer } from '../fixtures/serverTheme';
+
 
 /*
  * The `parity/screenshot-index.json` route this file claims, spelled verbatim.
@@ -385,6 +387,10 @@ test('@visual pipeline-editor-empty', async ({ page }) => {
  * spec — importing a `*.spec.ts` re-registers its tests.
  */
 test('@visual pipeline-editor-empty-light', async ({ page }) => {
+  // The click would otherwise store `light` for the persona every parallel
+  // worker shares (`fixtures/serverTheme.ts`). Only switching tests carry the
+  // stub: an intercepted page rasterises its text differently.
+  await keepThemeOffTheServer(page);
   await page.goto(BASE_URL + '/app/settings/personalization', { waitUntil: 'domcontentloaded' });
   const light = page.getByRole('button', { name: 'Light', exact: true });
   await expect(light).toBeVisible({ timeout: 20_000 });

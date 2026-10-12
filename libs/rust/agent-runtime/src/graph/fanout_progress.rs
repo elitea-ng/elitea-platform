@@ -8,8 +8,8 @@
 //! the buffer first so a member's frames stay in order.
 //!
 //! The type is a single-owner state machine: no locks, tasks or channels, and
-//! the clock is injected so the owner can drive it from `select!` with
-//! `sleep_until(next_flush_at())` and tests stay deterministic.
+//! the clock is injected: the owner waits on `sleep_until(next_flush_at())`
+//! next to its child futures, and tests stay deterministic.
 
 use std::fmt;
 use std::time::Duration;

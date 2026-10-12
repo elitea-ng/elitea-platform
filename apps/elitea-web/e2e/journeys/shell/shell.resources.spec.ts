@@ -26,6 +26,14 @@ import { test, expect, type Page } from '@playwright/test';
 import { BASE_URL } from '../../../playwright.config';
 import { PUBLISH_AUTHOR_PROJECT_NAME } from '../../fixtures/api';
 import { DEFAULT_PROJECT_NAME, ensureProjectSelected } from '../../fixtures/project';
+import { keepThemeOffTheServer } from '../../fixtures/serverTheme';
+
+// The theme is a per-user server preference and this file's tests share a
+// persona with parallel workers: keep every page's theme off the server
+// (`fixtures/serverTheme.ts`).
+test.beforeEach(async ({ page }) => {
+  await keepThemeOffTheServer(page);
+});
 
 const HELP_CENTER_PAGE = `${BASE_URL}/app/help-center`;
 const PERSONALIZATION_PAGE = `${BASE_URL}/app/settings/personalization`;

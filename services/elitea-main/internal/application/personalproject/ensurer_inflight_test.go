@@ -358,7 +358,7 @@ func (refusingProvisioner) Provision(
 }
 
 func (refusingProvisioner) Deprovision(
-	context.Context, int64,
+	context.Context, int64, ...projectprovisioning.DeprovisionOption,
 ) (projectprovisioning.Result, error) {
 	panic("the provisioning seam was bypassed")
 }

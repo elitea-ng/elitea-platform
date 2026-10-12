@@ -1,0 +1,31 @@
+{
+  "_comment": "One entry rule for the frozen index catalog (ADR-0030 I1, review round 2). elitea-main's indexcatalog.ValidEntry (Go) and elitea-agent-runtime's IndexCatalog::parse (Rust) must agree on every case here; both test suites read this file. name and embedding_model: non-empty after trimming white space, at most 256 bytes, no control character (Unicode Cc). index_id: non-empty, at most 64 bytes, lower-case hex digits and '-' only. embedding_dimension: 1..=65536.",
+  "max_entries": 1024,
+  "cases": [
+    {"note": "a registry row as Main freezes it", "name": "docs", "index_id": "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b", "embedding_model": "text-embedding-3-small", "embedding_dimension": 1536, "valid": true},
+    {"note": "inner white space is a name", "name": "my docs", "index_id": "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b", "embedding_model": "m", "embedding_dimension": 1, "valid": true},
+    {"note": "a name of exactly 256 bytes", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": true},
+    {"note": "a name of 257 bytes", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "an empty name", "name": "", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "a white-space name", "name": "   ", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "a name holding a newline", "name": "do\ncs", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "a name holding NUL", "name": "do\u0000cs", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "a name holding a tab", "name": "do\tcs", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "a name holding DEL", "name": "docs", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "a non-ASCII name", "name": "документы", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 8, "valid": true},
+    {"note": "an empty model", "name": "n", "index_id": "ab", "embedding_model": "", "embedding_dimension": 8, "valid": false},
+    {"note": "a white-space model", "name": "n", "index_id": "ab", "embedding_model": " ", "embedding_dimension": 8, "valid": false},
+    {"note": "a model holding a control character", "name": "n", "index_id": "ab", "embedding_model": "m\u0001", "embedding_dimension": 8, "valid": false},
+    {"note": "a model of exactly 256 bytes", "name": "n", "index_id": "ab", "embedding_model": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm", "embedding_dimension": 8, "valid": true},
+    {"note": "a model of 257 bytes", "name": "n", "index_id": "ab", "embedding_model": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm", "embedding_dimension": 8, "valid": false},
+    {"note": "an empty index id", "name": "n", "index_id": "", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "an upper-case index id", "name": "n", "index_id": "A-UPPER", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "an index id outside hex", "name": "n", "index_id": "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5g", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "an index id of exactly 64 bytes", "name": "n", "index_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "embedding_model": "m", "embedding_dimension": 8, "valid": true},
+    {"note": "an index id of 65 bytes", "name": "n", "index_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0", "embedding_model": "m", "embedding_dimension": 8, "valid": false},
+    {"note": "the smallest dimension", "name": "n", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 1, "valid": true},
+    {"note": "the largest dimension", "name": "n", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 65536, "valid": true},
+    {"note": "a zero dimension", "name": "n", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 0, "valid": false},
+    {"note": "a dimension past the bound", "name": "n", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 65537, "valid": false}
+  ]
+}

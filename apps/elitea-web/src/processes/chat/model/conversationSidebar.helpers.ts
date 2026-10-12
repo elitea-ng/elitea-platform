@@ -1,8 +1,9 @@
 /**
- * Two small pure helpers lifted out of `useConversationSidebar.ts`, which is
- * at the §3.5 400-line file budget. Neither has any React in it.
+ * Small helpers lifted out of `useConversationSidebar.ts`, which is at the
+ * §3.5 400-line file budget. None has any React in it.
  */
 import { getConfig } from '@/shared/config';
+import { isLocalWorkConversation } from '@/shared/lib/localWork';
 
 /**
  * The SPA's mount point, for the absolute share link `ConversationItem` copies
@@ -40,3 +41,16 @@ export function draftFolderId(): string {
   return `draft-${crypto.randomUUID()}`;
 }
 
+
+/**
+ * In the desktop build, the folder on this computer that ran a Local work
+ * thread, so a click on its Chats row opens it there (where it can be
+ * continued) instead of the read-only chat page. `null` everywhere else: in
+ * the web build (the `MODE` check is a build-time literal, so the dynamic
+ * import is dropped), for an ordinary chat, and when no folder here matches.
+ */
+export async function desktopLocalThreadFor(conversation: { readonly id: string; readonly source?: string }): Promise<string | null> {
+  if (import.meta.env.MODE !== 'desktop' || !isLocalWorkConversation(conversation)) return null;
+  const { findLocalWorkThread } = await import('@/pages/workspace/localThreadLookup');
+  return findLocalWorkThread(conversation.id).catch(() => null);
+}

@@ -24,13 +24,21 @@ package projectprovisioning
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 )
 
 type stubVectorStore struct {
 	provisioned  []int64
 	removed      []int64
+	dropped      []int64
+	dropErr      error
 	provisionErr error
+
+	hasStore        bool
+	hasStoreErr     error
+	droppedHadStore []bool
+	dropFn          func(ctx context.Context, projectID int64, hadStore bool) (string, error)
 }
 
 func (s *stubVectorStore) ProvisionProjectVectorStore(_ context.Context, projectID int64) error {
@@ -41,6 +49,19 @@ func (s *stubVectorStore) ProvisionProjectVectorStore(_ context.Context, project
 func (s *stubVectorStore) RemoveProjectVectorStore(_ context.Context, projectID int64) error {
 	s.removed = append(s.removed, projectID)
 	return nil
+}
+
+func (s *stubVectorStore) ProjectHasVectorStore(_ context.Context, _ Querier, _ int64) (bool, error) {
+	return s.hasStore, s.hasStoreErr
+}
+
+func (s *stubVectorStore) DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (string, error) {
+	s.dropped = append(s.dropped, projectID)
+	s.droppedHadStore = append(s.droppedHadStore, hadStore)
+	if s.dropFn != nil {
+		return s.dropFn(ctx, projectID, hadStore)
+	}
+	return "project_" + strconv.FormatInt(projectID, 10), s.dropErr
 }
 
 // TestWithVectorStoreIgnoresATypedNil: a nil pointer in a non-nil interface is

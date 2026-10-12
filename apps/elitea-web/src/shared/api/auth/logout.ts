@@ -111,7 +111,7 @@ export function performLogout(deps: LogoutDeps = {}): void {
   loggingOut = true;
   clearNamespace();
   // The desktop app has no server-side logout page to visit: its session is a
-  // refresh token in the OS keychain. The host revokes it, wipes, and the app
+  // refresh token in its credentials file. The host revokes it, wipes, and the app
   // reloads onto the connect screen.
   const native = getNativeTransport();
   if (native?.logout !== undefined) {

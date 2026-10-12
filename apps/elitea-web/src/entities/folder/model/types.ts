@@ -32,6 +32,8 @@ export interface FolderConversationRef {
   readonly authorId?: string | undefined;
   /** Needed to compute `genConversationId` parity — see `lib/normalise.ts`. */
   readonly isPlayback?: boolean;
+  /** `chat_conversations.source` — `local_work` marks a desktop Local work thread (see `shared/lib/localWork.ts`). */
+  readonly source?: string;
 }
 
 export interface Folder {

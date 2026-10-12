@@ -15,6 +15,7 @@ import (
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
@@ -81,6 +82,28 @@ type CurrentApplicationToolSnapshotService struct {
 	guardrails      CurrentAgentGuardrailResolver
 	projectContext  CurrentProjectContextResolver
 	publicProjectID int32
+	// indexes freezes a toolkit's index catalog into the frozen tool object
+	// (ADR-0030 I1). nil on the Python indexing path, where the key is not
+	// written and the SDK worker serves the index tools.
+	indexes CurrentAgentIndexCatalogResolver
+}
+
+// CurrentAgentIndexCatalogResolver lists the searchable indexes of the
+// freeze's indexing toolkits from the index registry, in one read
+// (ELITEA_INDEXING_RUNTIME=rust). Every toolkit asked for is a key of the
+// answer; a toolkit with no indexes maps to an empty catalog.
+type CurrentAgentIndexCatalogResolver interface {
+	ToolkitIndexCatalogs(ctx context.Context, projectID int32, toolkitIDs []int32) (map[int32][]map[string]any, error)
+}
+
+// WithIndexCatalog makes the freezer write each I1 indexing toolkit's index
+// catalog next to its settings (ADR-0030 I1). Without it no `indexes` key is
+// written, which is the Python indexing path.
+func (service *CurrentApplicationToolSnapshotService) WithIndexCatalog(
+	resolver CurrentAgentIndexCatalogResolver,
+) *CurrentApplicationToolSnapshotService {
+	service.indexes = resolver
+	return service
 }
 
 // CurrentAgentGuardrailResolver supplies the live toolkit guardrails policy.
@@ -176,6 +199,10 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 	// Rebuilt rather than index-assigned: a blocked toolkit is DROPPED, which
 	// changes the length.
 	frozenTools := make([]any, 0, len(tools))
+	// The I1 indexing toolkits whose catalog is frozen beside their settings
+	// (ADR-0030 I1), by their position in frozenTools: resolved after the
+	// loop in one registry read.
+	var catalogToolkits []catalogToolkit
 	for _, value := range tools {
 		tool, ok := value.(map[string]any)
 		if !ok {
@@ -283,7 +310,16 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		tool["id"] = toolID
 		tool["settings"] = withoutBlockedSelectedTools(ctx, policy, toolType, toolkitName, frozen)
 		tool["toolkit_name"] = toolkitName
+		if service.indexes != nil && indexcatalog.Family(toolType) {
+			if toolID > math.MaxInt32 {
+				return nil, unsupportedStart("a tool entry id exceeds the registry's range")
+			}
+			catalogToolkits = append(catalogToolkits, catalogToolkit{position: len(frozenTools), toolkitID: int32(toolID)})
+		}
 		frozenTools = append(frozenTools, tool)
+	}
+	if err := service.freezeIndexCatalogs(ctx, request.ProjectID, frozenTools, catalogToolkits); err != nil {
+		return nil, err
 	}
 	frozenTools, err = freezeCurrentInternalMCP(version, request.InternalTools, frozenTools, policy)
 	if err != nil {
@@ -299,6 +335,65 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		return nil, unsupportedStart("the frozen version is unencodable or exceeds the admission size bound")
 	}
 	return encoded, nil
+}
+
+// catalogToolkit names one frozen I1 indexing toolkit awaiting its catalog.
+type catalogToolkit struct {
+	position  int
+	toolkitID int32
+}
+
+// freezeIndexCatalogs writes each I1 indexing toolkit's index catalog beside
+// its settings (ADR-0030 I1), from ONE registry read for the whole freeze.
+//
+// A registry that cannot answer does not fail the agent start (review round
+// 2): every such toolkit is frozen with an EMPTY catalog, `[]`, and the
+// failure is logged. `[]` is the one value that keeps the worker and Main
+// in agreement — the key is present, so the worker knows this runtime
+// serves the index tools (an absent key would hand them to the SDK worker,
+// which serves nothing under the Rust indexing runtime), and it serves them
+// over no indexes: list_indexes answers "No indexed collections", searches
+// find nothing, remove_index finds no index. The agent runs with its other
+// tools; the registry's outage is an operator's concern, not the user's
+// failed turn.
+func (service *CurrentApplicationToolSnapshotService) freezeIndexCatalogs(
+	ctx context.Context,
+	projectID int32,
+	frozenTools []any,
+	toolkits []catalogToolkit,
+) error {
+	if len(toolkits) == 0 {
+		return nil
+	}
+	toolkitIDs := make([]int32, 0, len(toolkits))
+	for _, toolkit := range toolkits {
+		toolkitIDs = append(toolkitIDs, toolkit.toolkitID)
+	}
+	catalogs, err := service.indexes.ToolkitIndexCatalogs(ctx, projectID, toolkitIDs)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		slog.WarnContext(ctx, "index catalog resolution failed; the indexing toolkits were frozen with an empty catalog",
+			"event", "index_catalog_unavailable",
+			"reason_code", "registry_unavailable",
+			"project_id", projectID,
+			"toolkit_ids", toolkitIDs,
+			"err", err)
+		catalogs = nil
+	}
+	for _, toolkit := range toolkits {
+		tool, ok := frozenTools[toolkit.position].(map[string]any)
+		if !ok {
+			return unsupportedStart("a frozen indexing toolkit is not an object")
+		}
+		catalog, present := catalogs[toolkit.toolkitID]
+		if !present || catalog == nil {
+			catalog = []map[string]any{}
+		}
+		tool[indexcatalog.Key] = catalog
+	}
+	return nil
 }
 
 // freezeCurrentStoredApplicationReference preserves the current EliteATool

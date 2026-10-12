@@ -22,7 +22,7 @@ use crate::config::{
     RuntimeConfigError, RuntimeDeployConfig, read_regular_file, validate_private_directory,
 };
 use crate::protocol::command::SignedCommandAuthenticator;
-use crate::protocol::control::{AgentControlClient, AgentControlError};
+use crate::protocol::control::{AgentControlClient, AgentControlError, IndexRemovalControl};
 use crate::security::{RuntimeTrustError, RuntimeTrustMaterial};
 use crate::spool::SpoolMasterKey;
 use crate::transport::command_bus::CommandBusLimits;
@@ -117,6 +117,9 @@ pub(crate) struct ProductionTransportBundle {
     pub(crate) model_facade: Arc<ModelFacade>,
     pub(crate) agentstate: PgPool,
     pub(crate) sandbox: Option<Arc<crate::agents::graph::CodeRuntimeFactory>>,
+    /// The index.ingest.v1 runtime, when the deployment names a
+    /// `vector_target` (ADR-0030 I1).
+    pub(crate) index_runtime: Option<Arc<crate::indexing::IndexIngestRuntime>>,
 }
 
 impl ProductionTransportBundle {
@@ -300,6 +303,26 @@ impl ProductionTransportBundle {
             }))
         };
         let platform = Arc::new(PlatformClient::new(runtime_context));
+        let index_runtime = match deployment.vector_target.as_deref() {
+            Some(target) => Some(Arc::new(
+                crate::indexing::IndexIngestRuntime::new(
+                    target,
+                    trust.ca_pem(),
+                    trust.identity_pem(),
+                    model_facade.embeddings(),
+                    deployment.platform_origin.clone(),
+                    elitea_connectors::egress::HostAllowlist::parse(
+                        deployment.index_egress_allowlist.as_deref(),
+                    ),
+                    crate::indexing::IndexRunLimits::default(),
+                )
+                .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
+                // The `remove_index` tool asks Main over the same control
+                // plane the claim came from (ADR-0030 I1).
+                .with_removal_control(Arc::clone(&control) as Arc<dyn IndexRemovalControl>),
+            )),
+            None => None,
+        };
         Ok(Self {
             command_authenticator: trust.command_authenticator(),
             spool_master_key: trust.spool_master_key(),
@@ -313,6 +336,7 @@ impl ProductionTransportBundle {
             platform,
             model_facade: Arc::new(model_facade),
             agentstate,
+            index_runtime,
         })
     }
 }
@@ -607,6 +631,8 @@ mod tests {
             spool_root: PathBuf::from("/runtime/spool"),
             spool_key_path: PathBuf::from("/runtime/spool.key"),
             sandbox_runtimes: Vec::new(),
+            vector_target: None,
+            index_egress_allowlist: None,
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),

@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 
@@ -125,7 +126,11 @@ type conversationItem struct {
 	// (`entities/folder/api/foldersApi.ts`, `is_private` → `isPrivate`) and
 	// defaults an absent one to private, so the control never withdrew after
 	// a conversation was published.
-	IsPrivate bool       `json:"is_private"`
+	IsPrivate bool `json:"is_private"`
+	// `chat_conversations.source`. The rail reads it to tell a Local work
+	// thread (conversations.LocalWorkSource) from an ordinary chat: a search
+	// lists both, and the desktop opens a Local work row in its thread.
+	Source    string     `json:"source,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt *time.Time `json:"updated_at"`
 }
@@ -216,6 +221,7 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		return nil, err
 	}
 	visible, args := access.Predicate(schema, "c", 1, chatauthority.FolderListing)
+	sourceFilter := localWorkFilter(r)
 	// Query conversations (indexes on conversation_id ensure fast joins elsewhere)
 	//
 	// Project pins are shared. The row records the last pinner, not its reader.
@@ -226,11 +232,11 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		                       WHERE p.entity = 'conversation'
 		                         AND p.project_id = $2::text::integer
 		                         AND p.entity_id = c.id) AS is_pinned,
-		       c.is_private,
+		       c.is_private, COALESCE(c.source, ''),
 		       c.created_at, c.updated_at
 		FROM %s.chat_conversations c
-		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false') AND %s
-		ORDER BY %s %s, c.id %s`, schema, visible, orderCol, orderDir, orderDir)
+		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false') AND %s AND %s
+		ORDER BY %s %s, c.id %s`, schema, visible, sourceFilter, orderCol, orderDir, orderDir)
 	args = append(args, projectID)
 
 	rows, err := h.pool.Query(ctx, q, args...)
@@ -241,7 +247,7 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	for rows.Next() {
 		var c conversationItem
 		var updatedAt *time.Time
-		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.IsPrivate, &c.CreatedAt, &updatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.IsPrivate, &c.Source, &c.CreatedAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("folders: scan conversation: %w", err)
 		}
 		c.UpdatedAt = updatedAt
@@ -264,6 +270,29 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	}
 
 	return conversations, nil
+}
+
+// localWorkFilter is the listing's Local work clause, a constant SQL
+// fragment (never caller text):
+//
+//   - `source=local_work` lists only Local work threads (the rail's
+//     "Local work" filter);
+//   - a search (`query`) lists both, so a thread is found by its name
+//     wherever it lives;
+//   - anything else — the ordinary sidebar — leaves them out. In the SQL,
+//     so a bucket's `total` and its pages count the same rows.
+//
+// Other `source` values are ignored, as they were before this filter: the
+// sidebar has never filtered by source otherwise.
+func localWorkFilter(r *http.Request) string {
+	switch {
+	case r.URL.Query().Get("source") == conversations.LocalWorkSource:
+		return "c.source = '" + conversations.LocalWorkSource + "'"
+	case r.URL.Query().Get("query") != "":
+		return "TRUE"
+	default:
+		return "c.source IS DISTINCT FROM '" + conversations.LocalWorkSource + "'"
+	}
 }
 
 // partitionConversations splits a project's conversations the three ways the

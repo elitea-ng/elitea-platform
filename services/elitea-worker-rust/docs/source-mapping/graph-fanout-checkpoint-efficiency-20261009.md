@@ -2,9 +2,11 @@
 
 Track C2 of Point 5 Wave 1. Branch `perf/graph-fanout-checkpoint-efficiency`, base `origin/main` (`58abb650c`).
 It changes the existing Parallel (`graph.parallel`) runner and the shared PostgreSQL checkpointer, adds spans to
-Map, and adds two unwired mechanisms for Wave 2 (progress coalescer, LLM failure classifier). Both admission gates
-stay `false` (`FIXED_PARALLEL_INTEGRATION_READY`, `MAP_INTEGRATION_READY`). The batched application-family
-activation is live today: every pipeline with nested applications uses it (`agents/session.rs:1199`).
+Map, and adds two unwired mechanisms for Wave 2 (progress coalescer, LLM failure classifier). Parallel and Map are
+not yet composed in production; Wave 2a composes and admits them by default and deletes the integration gates
+(user decision 2026-10-12: Point 5 has no feature flags). This PR adds no gate or flag. The batched
+application-family activation is live today: every pipeline with nested applications uses it
+(`agents/session.rs:1199`).
 
 ## Business behaviour
 
@@ -13,7 +15,7 @@ activation is live today: every pipeline with nested applications uses it (`agen
 | Sub-agent fan-out bookkeeping | The legacy supervisor writes parent state per park/reconcile round; no bound on parent writes. | At most 2 parent rows per activation visit, enforced in code with a typed refusal. Pause cards ride on the pause row. |
 | Child start | One task per child, sequential state reads. | One batched writer activation and one batched receipt read for all children of an activation. |
 | Observability | Celery/pylon logs, no fan-out spans. | `graph.fanout.activation` / `graph.fanout.child` spans and short lifecycle logs with safe fields; `agent.checkpoint.persist` carries `payload_bytes`, `round_trips`, `pool_wait_ms`. |
-| Streamed child output | One socket frame per delta. | Unchanged in this PR. The per-activation coalescer (250 ms / 64 KiB) is built and tested, and is wired by the Wave 2 runner behind the V2 flag. |
+| Streamed child output | One socket frame per delta. | Unchanged in this PR. The per-activation coalescer (250 ms / 64 KiB) is built and tested, and is wired by the Wave 2a runner together with the aggregated browser frame (no flag). |
 | Model failure retry | Retries whole agent turns. | Unchanged in this PR. The pre-output classifier is built and tested, and is wired by Gate 5b. |
 
 Deliberately **not ported**: per-round parent writes, the park/reconcile/replay supervisor, and per-delta frames.
@@ -33,6 +35,28 @@ The Worker re-exports `fanout_budget` and `fanout_trace` (`agents/graph/mod.rs`)
 the shared ones at compile time: Map `MAX_ITEMS` (`map_reduce.rs:27`), Parallel `MAX_FIXED_BRANCHES` and
 `MAX_BRANCH_THREADS` (`node_events_parallel.rs:14`). The batched bounds derive from them (`child_batch.rs:23,25`).
 No new dependency; `Cargo.toml` and `Cargo.lock` are unchanged in both workspaces.
+
+**Layout check (ADR-0027).**
+- Nothing reusable stayed in the Worker. Everything this PR adds to the Worker is storage or Worker wiring:
+  - the PostgreSQL head probe, identity append, batched activation and read, and I/O accounting in `state/`;
+  - parent-row accounting and staged pause cards, which belong to the Worker's occurrence checkpointer;
+  - receipt-proven child outcomes;
+  - the checkpoint-appender trait types (`ParentHead`, `ParentSaveProbe`, `ParallelChildRequest`,
+    `PreparedChildCheckpoint`), which belong to the Worker-owned `ParallelCheckpointAppender` and
+    `ParallelChildCheckpointerFactory` traits;
+  - receipt-authority delegation.
+- Nothing storage-bound moved into the library. `agent-runtime` gained only pure code: named limits and budgets,
+  the clock-injected coalescer, safe-field span types, and the category-only classifier. None of it uses `sqlx` or
+  a store type, and none of it adds a dependency.
+- The Worker asserts its own limits (Map `MAX_ITEMS`, Parallel `MAX_FIXED_BRANCHES`/`MAX_BRANCH_THREADS`) against
+  the shared ones at compile time.
+
+**Merge with `main` 0f8fea2fe (#1258, bounded writer lock waits).** The one conflict was the six `begin` call sites
+in `postgres_checkpointer.rs`. Every checkpoint transaction now opens through #1258's `begin_bounded` (writer
+lock-wait and idle bounds): this PR's accounting wrapper `begin_transaction` calls it. The new batched activation
+and read and the head probe therefore carry the same bounds. #1258's `select!` guard
+(`no_select_arm_polls_a_raw_agent_stream`) passes with no allowlist change. This PR adds no `select!`, and the one
+doc comment that named it was reworded so the text scanner cannot misread a following block.
 
 ## Changed paths
 
@@ -168,9 +192,9 @@ transaction as the effect (yes); bounded input (yes); parameterized SQL only (ye
 
 ## Real-browser evidence
 
-Parallel and Map are not composed in production (`ParallelCompilerBinding::new` has no production caller; both
-gates stay `false`), so their positive browser proof remains the gate-flip criterion (`PLAN.md` §4). The browser
-run therefore covers the C1 regression set over the paths this change makes live: the shared PostgreSQL
+Parallel and Map are not composed in production yet (`ParallelCompilerBinding::new` has no production caller).
+Their positive browser proof comes with the Wave 2a composition, which admits them by default. The browser run
+therefore covers the C1 regression set over the paths this change makes live: the shared PostgreSQL
 checkpointer (identity append, I/O span fields) and the batched application-family activation that every pipeline
 with nested applications uses (`agents/session.rs:1199` → `with_application_paths`).
 
@@ -217,7 +241,7 @@ the same for the fan-out spans. Agent chats (B, C) persist through the session s
 1. **Map** keeps per-item activation and its wrapper's two full parent reads per save; the unified Wave 2 runner
    moves Map onto `prepare_children` and the head probe (`MapTurnAuthority` filters loads by execution, so it needs
    its own head equivalent).
-2. **Wire the coalescer** in the Wave 2 runner behind the V2 flag, with the aggregated browser frame.
+2. **Wire the coalescer** in the Wave 2a runner, with the aggregated browser frame (no flag).
 3. **Wire the classifier** in Gate 5b (`llm.rs` emits the model failure only from terminal reporting).
 4. **ADK's two empty start probes at a new root parent** (1 extra transaction on a first visit) are left as is.
 5. The wrapped save still sends the full candidate twice (exact-existing compare, then insert); a single

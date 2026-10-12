@@ -1,5 +1,5 @@
 {
-  "_comment": "Operations replayed by generate.py against the Python KnowledgeGraph (services/elitea-inventory) and by tests/graph_store.rs against the Rust graph; graph.golden.json is the Python dump_to_json output. Types are already canonical: type normalisation belongs to ingestion, not the store.",
+  "_comment": "Operations replayed against the Python KnowledgeGraph (since removed; see PROVENANCE.md) and by tests/graph_store.rs against the Rust graph; graph.golden.json is the frozen Python dump_to_json output. Types are already canonical: type normalisation belongs to ingestion, not the store.",
   "operations": [
     {"op": "entity", "id": "a1", "name": "UserService", "type": "class",
      "citation": {"file_path": "src/users.py", "line_start": 10, "line_end": 80, "source_toolkit": "repo", "doc_id": "repo://src/users.py", "content_hash": "c0ffee"},

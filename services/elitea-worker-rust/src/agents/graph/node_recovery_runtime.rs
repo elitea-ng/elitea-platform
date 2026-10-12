@@ -749,26 +749,9 @@ fn hex_id(value: &[u8; 32]) -> String {
     crate::sandbox::code_recovery::hex(value)
 }
 fn parse_hex_id(value: &str) -> Result<[u8; 32], GraphError> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err(recovery_error(
-            "pipeline.node_recovery.invalid_owner_identity",
-        ));
-    }
-    let mut result = [0; 32];
-    for (index, byte) in result.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-            .map_err(|_| recovery_error("pipeline.node_recovery.invalid_owner_identity"))?;
-    }
-    if result == [0; 32] {
-        return Err(recovery_error(
-            "pipeline.node_recovery.invalid_owner_identity",
-        ));
-    }
-    Ok(result)
+    crate::sandbox::code_recovery::decode_hex_32(value)
+        .filter(|id| *id != [0; 32])
+        .ok_or_else(|| recovery_error("pipeline.node_recovery.invalid_owner_identity"))
 }
 
 /// Issued only after an exact current-writer CAS, including its durable replay.

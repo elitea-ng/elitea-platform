@@ -81,6 +81,11 @@ class RuntimeControlServiceStub(object):
                 request_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.PrepareSettlementRequestV1.SerializeToString,
                 response_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.PrepareSettlementResponseV1.FromString,
                 _registered_method=True)
+        self.RemoveIndex = channel.unary_unary(
+                '/elitea.runtime.v1.RuntimeControlService/RemoveIndex',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.RemoveIndexRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.RemoveIndexResponseV1.FromString,
+                _registered_method=True)
 
 
 class RuntimeControlServiceServicer(object):
@@ -140,6 +145,12 @@ class RuntimeControlServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RemoveIndex(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_RuntimeControlServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -187,6 +198,11 @@ def add_RuntimeControlServiceServicer_to_server(servicer, server):
                     servicer.PrepareSettlement,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.PrepareSettlementRequestV1.FromString,
                     response_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.PrepareSettlementResponseV1.SerializeToString,
+            ),
+            'RemoveIndex': grpc.unary_unary_rpc_method_handler(
+                    servicer.RemoveIndex,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.RemoveIndexRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.RemoveIndexResponseV1.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -432,6 +448,33 @@ class RuntimeControlService(object):
             '/elitea.runtime.v1.RuntimeControlService/PrepareSettlement',
             elitea_dot_runtime_dot_v1_dot_control__pb2.PrepareSettlementRequestV1.SerializeToString,
             elitea_dot_runtime_dot_v1_dot_control__pb2.PrepareSettlementResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RemoveIndex(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.RuntimeControlService/RemoveIndex',
+            elitea_dot_runtime_dot_v1_dot_control__pb2.RemoveIndexRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_control__pb2.RemoveIndexResponseV1.FromString,
             options,
             channel_credentials,
             insecure,

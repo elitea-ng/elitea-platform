@@ -1,0 +1,651 @@
+//! Deleting graphs (issue #1244, ADR-0031 decision 7, phase C0).
+//!
+//! Before it nothing deleted a graph: `store::delete` had no caller but
+//! the tests, so an Inventory toolkit's entities, descriptions, citations,
+//! embeddings and document ACLs outlived the toolkit and its project.
+//!
+//! * [`delete_graph`] deletes one `(project, toolkit)` graph. It takes the
+//!   graph's **ingestion lease** first, the session advisory lock a run, an
+//!   import, a source removal and a type normalisation hold for their whole
+//!   work, and REFUSES ([`GraphDeletion::Busy`]) while another holder has
+//!   it. Then one transaction, serialised against every writer by the
+//!   graph's write lock, removes the graph's rows from every table. So a
+//!   delete never interleaves with a write, and a graph is whole or absent,
+//!   never half.
+//! * [`delete_project`] deletes every graph of a project, one at a time (a
+//!   project can hold many, and one transaction would hold all their
+//!   locks). A graph whose lease is held is skipped and reported; the call is
+//!   idempotent, so it is repeated after the run ends.
+//! * [`orphans`] lists the graphs whose project (or toolkit) is not in the
+//!   lists of existing ids the CALLER supplies: this database does not hold
+//!   the platform's projects. A project or toolkit created after the list
+//!   was taken is not in it and looks orphaned, so a deletion by a list is
+//!   guarded by the time the list was taken ([`delete_graph_guarded`],
+//!   [`check_listing_fresh`]): nothing written after that time is deleted.
+//! * Every deletion above leaves the toolkit's **tombstone**
+//!   (`inventory_graph.deleted_toolkits`, migration 0007) in the same
+//!   transaction as the rows it removes, and every write that takes the
+//!   ingestion lease refuses a tombstoned toolkit under that lease
+//!   ([`sources::lease`]): an ingestion that was registered as the deletion
+//!   began, or runs on another replica, can never create the graph again.
+//!   Toolkit ids are never reused by the platform (they are a serial), so a
+//!   tombstone never refuses a legitimately new toolkit; tombstones older
+//!   than [`TOMBSTONE_RETENTION`] are purged by [`purge_tombstones`], which
+//!   every deletion runs first (the engine has no maintenance loop of its
+//!   own; the host stops an ingest within seconds, not days).
+
+use super::{GraphKey, Result, lock, sources};
+use sqlx::postgres::PgPool;
+use std::collections::HashSet;
+use std::time::Duration;
+
+/// The rows a delete removed, per table. `graphs` is 1 when the graph's own
+/// row went (0 for state without a graph: a failed first ingestion's
+/// status), so [`Removed::is_empty`] says whether there was anything at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Removed {
+    pub graphs: i64,
+    pub entities: i64,
+    pub relations: i64,
+    pub sources: i64,
+    pub documents: i64,
+}
+
+impl Removed {
+    fn add(&mut self, other: Self) {
+        self.graphs += other.graphs;
+        self.entities += other.entities;
+        self.relations += other.relations;
+        self.sources += other.sources;
+        self.documents += other.documents;
+    }
+
+    /// Whether no row at all went: there was nothing to delete.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// What deleting one graph did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphDeletion {
+    /// Nothing is left of the graph. `removed` says what went, and
+    /// [`Removed::is_empty`] whether anything did (a toolkit with no graph
+    /// and no state).
+    Deleted { removed: Removed },
+    /// An ingestion, import or other write holds the graph; nothing was
+    /// deleted.
+    Busy,
+}
+
+/// What `remove` did.
+pub(super) enum Removal {
+    Done {
+        removed: Removed,
+    },
+    /// Written after the list the deletion went by; nothing was deleted.
+    Newer(String),
+}
+
+/// Whether `remove` leaves the toolkit's tombstone (migration 0007).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tombstone {
+    /// The toolkit is gone from the platform: fence every later write.
+    Write,
+    /// A plain store delete ([`super::delete`]): the graph may be created
+    /// again.
+    No,
+}
+
+/// How long a tombstone stays before [`purge_tombstones`] removes it: far
+/// longer than any write the host registered before the deletion can take,
+/// and short enough that the table never grows with the platform's history.
+pub const TOMBSTONE_RETENTION: Duration = Duration::from_hours(30 * 24);
+
+/// The delete in one transaction: the write lock, (with `listed_at`) the
+/// check that nothing was written after that time, then the rows, each
+/// table's count taken from its own `DELETE … RETURNING` (one pass per
+/// table, no count scan), then the tombstone. Callers that must not race a
+/// run hold the lease ([`delete_graph`]).
+///
+/// The check is made INSIDE the transaction, after the graph's write lock is
+/// held: a write that committed before it is seen, and one that comes after
+/// queues behind this deletion, so a graph the list did not know about is
+/// never deleted by it.
+pub(super) async fn remove(
+    pool: &PgPool,
+    key: GraphKey,
+    listed_at: Option<&str>,
+    tombstone: Tombstone,
+) -> Result<Removal> {
+    let mut transaction = pool.begin().await?;
+    lock(&mut transaction, key).await?;
+    if let Some(listed_at) = listed_at
+        && let Some(reason) = activity_since_conn(&mut transaction, key, listed_at).await?
+    {
+        // Dropped, so rolled back: nothing was changed.
+        return Ok(Removal::Newer(reason));
+    }
+    // Relations before entities before the graph row, each explicitly, so
+    // every table's count is its own DELETE's (the cascades from graphs to
+    // entities to relations then have nothing left to do); sources and
+    // documents reference no graph, as a first ingestion's status exists
+    // before its graph does.
+    let mut counts = [0i64; 5];
+    for (count, table) in counts.iter_mut().zip([
+        "inventory_graph.relations",
+        "inventory_graph.entities",
+        "inventory_graph.graphs",
+        "inventory_graph.sources",
+        "inventory_graph.documents",
+    ]) {
+        *count = sqlx::query_scalar(&format!(
+            "WITH d AS (DELETE FROM {table} WHERE project_id = $1 AND application_id = $2 RETURNING 1)
+             SELECT count(*) FROM d"
+        ))
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+    }
+    if tombstone == Tombstone::Write {
+        sqlx::query(
+            "INSERT INTO inventory_graph.deleted_toolkits (project_id, application_id)
+             VALUES ($1, $2)
+             ON CONFLICT (project_id, application_id) DO UPDATE SET deleted_at = clock_timestamp()",
+        )
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    let [relations, entities, graphs, sources, documents] = counts;
+    Ok(Removal::Done {
+        removed: Removed {
+            graphs,
+            entities,
+            relations,
+            sources,
+            documents,
+        },
+    })
+}
+
+/// Remove the tombstones older than [`TOMBSTONE_RETENTION`]; returns how
+/// many went. Run by every deletion before it starts, since the engine has
+/// no maintenance loop of its own.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn purge_tombstones(pool: &PgPool) -> Result<u64> {
+    Ok(sqlx::query(
+        "DELETE FROM inventory_graph.deleted_toolkits
+          WHERE deleted_at < clock_timestamp() - make_interval(secs => $1)",
+    )
+    .bind(TOMBSTONE_RETENTION.as_secs_f64())
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
+/// Whether the toolkit `key` has a tombstone (migration 0007).
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn is_tombstoned(pool: &PgPool, key: GraphKey) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM inventory_graph.deleted_toolkits
+                         WHERE project_id = $1 AND application_id = $2)",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Delete the graph `key` and every row that belongs to it, unless an
+/// ingestion (or an import, source removal or normalisation) holds it, and
+/// leave the toolkit's tombstone so that no later write creates it again.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn delete_graph(pool: &PgPool, key: GraphKey) -> Result<GraphDeletion> {
+    match delete_graph_guarded(pool, key, None).await? {
+        GuardedDeletion::Deleted { removed } => Ok(GraphDeletion::Deleted { removed }),
+        // Without `listed_at` nothing can be newer than it.
+        GuardedDeletion::Busy | GuardedDeletion::Newer(_) => Ok(GraphDeletion::Busy),
+    }
+}
+
+/// What [`delete_graph_guarded`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuardedDeletion {
+    /// Nothing is left of the graph ([`Removed::is_empty`] when there was
+    /// nothing to begin with).
+    Deleted { removed: Removed },
+    /// A write holds the graph; nothing was deleted.
+    Busy,
+    /// The graph was written after the list the deletion went by (the
+    /// reason says what and when); nothing was deleted.
+    Newer(String),
+}
+
+/// [`delete_graph`], optionally guarded by the time a list of existing
+/// projects or toolkits was taken. With `listed_at` the graph is checked for
+/// activity newer than it inside the deletion's own transaction, under the
+/// graph's lock (`remove`), immediately before the rows go.
+///
+/// The lease it takes is the unfenced one: deleting a toolkit that is
+/// already tombstoned is an idempotent success, not a refusal.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`]; a `listed_at` PostgreSQL cannot read is
+/// a database error too.
+pub async fn delete_graph_guarded(
+    pool: &PgPool,
+    key: GraphKey,
+    listed_at: Option<&str>,
+) -> Result<GuardedDeletion> {
+    purge_tombstones(pool).await?;
+    let Some(_lease) = sources::lease_unfenced(pool, key).await? else {
+        return Ok(GuardedDeletion::Busy);
+    };
+    Ok(
+        match remove(pool, key, listed_at, Tombstone::Write).await? {
+            Removal::Done { removed } => GuardedDeletion::Deleted { removed },
+            Removal::Newer(reason) => GuardedDeletion::Newer(reason),
+        },
+    )
+}
+
+/// The oldest list `orphans --delete` accepts, without `--allow-stale-list`.
+pub const MAX_LISTING_AGE: Duration = Duration::from_mins(10);
+
+/// How far in the future a listing time may be (clock skew between the host
+/// that took the list and the database).
+const MAX_LISTING_SKEW: Duration = Duration::from_mins(1);
+
+/// Check that a list taken at `listed_at` (RFC 3339, validated by the
+/// caller) is fresh enough to delete by.
+///
+/// A project or toolkit created after the list was taken is not in it, so
+/// its graph looks like an orphan; the older the list, the more there are.
+/// A list older than [`MAX_LISTING_AGE`] is refused unless `allow_stale`; one
+/// from the future is always refused (the time is wrong).
+///
+/// # Errors
+///
+/// [`super::StoreError::Listing`] for a stale or future list or a time
+/// PostgreSQL cannot read; [`super::StoreError::Database`].
+pub async fn check_listing_fresh(pool: &PgPool, listed_at: &str, allow_stale: bool) -> Result<()> {
+    let age: f64 = sqlx::query_scalar("SELECT extract(epoch FROM now() - $1::timestamptz)::float8")
+        .bind(listed_at)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| match error {
+            sqlx::Error::Database(_) => {
+                super::StoreError::Listing(format!("--listed-at {listed_at:?} is not a valid time"))
+            }
+            other => super::StoreError::Database(other),
+        })?;
+    if age < -MAX_LISTING_SKEW.as_secs_f64() {
+        return Err(super::StoreError::Listing(format!(
+            "--listed-at {listed_at} is in the future; the list cannot have been taken then"
+        )));
+    }
+    if age > MAX_LISTING_AGE.as_secs_f64() && !allow_stale {
+        return Err(super::StoreError::Listing(format!(
+            "the list was taken {:.0} minute(s) ago (--listed-at {listed_at}); a project or toolkit created since is not in it and would look orphaned. Take a fresh list, or pass --allow-stale-list to delete by this one",
+            age / 60.0
+        )));
+    }
+    Ok(())
+}
+
+/// Why a graph must not be treated as an orphan by a list taken at
+/// `listed_at`: it was written (created or ingested into), or a source of it
+/// started or changed status, after that time. `None` when it has no such
+/// activity.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn activity_since(
+    pool: &PgPool,
+    key: GraphKey,
+    listed_at: &str,
+) -> Result<Option<String>> {
+    let mut connection = pool.acquire().await?;
+    activity_since_conn(&mut connection, key, listed_at).await
+}
+
+/// [`activity_since`] on a given connection, so it can run inside the
+/// deletion's own transaction, under the graph's lock.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn activity_since_conn(
+    connection: &mut sqlx::PgConnection,
+    key: GraphKey,
+    listed_at: &str,
+) -> Result<Option<String>> {
+    let graph: Option<String> = sqlx::query_scalar(
+        "SELECT updated_at::text FROM inventory_graph.graphs
+          WHERE project_id = $1 AND application_id = $2 AND updated_at > $3::timestamptz",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(listed_at)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if graph.is_some() {
+        return Ok(activity_reason(graph, None, listed_at));
+    }
+    let source: Option<String> = sqlx::query_scalar(
+        "SELECT greatest(started_at, last_updated)::text FROM inventory_graph.sources
+          WHERE project_id = $1 AND application_id = $2
+            AND (started_at > $3::timestamptz OR last_updated > $3::timestamptz)
+          ORDER BY last_updated DESC LIMIT 1",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(listed_at)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(activity_reason(None, source, listed_at))
+}
+
+/// The reason [`activity_since`] gives, from the graph's write time after
+/// `listed_at` (first) or a source's (second); `None` without either.
+fn activity_reason(
+    graph_at: Option<String>,
+    source_at: Option<String>,
+    listed_at: &str,
+) -> Option<String> {
+    if let Some(at) = graph_at {
+        return Some(format!("the graph was written at {at}, after {listed_at}"));
+    }
+    source_at.map(|at| format!("a source was ingested at {at}, after {listed_at}"))
+}
+
+/// [`activity_since`] for many graphs in ONE query: the keys of `keys` that
+/// were written or ingested after `listed_at`, with the reason. A key with
+/// no such activity is absent. The orphans command partitions its candidates
+/// with it instead of a round trip per graph; the deletion still checks each
+/// graph again inside its own transaction, under its lock
+/// ([`delete_graph_guarded`]).
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn activity_since_many(
+    pool: &PgPool,
+    keys: &[GraphKey],
+    listed_at: &str,
+) -> Result<std::collections::HashMap<GraphKey, String>> {
+    if keys.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let projects: Vec<i64> = keys.iter().map(|key| key.project_id).collect();
+    let toolkits: Vec<i64> = keys.iter().map(|key| key.application_id).collect();
+    let rows: Vec<(i64, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT w.project_id, w.application_id,
+                (SELECT g.updated_at::text FROM inventory_graph.graphs g
+                  WHERE g.project_id = w.project_id AND g.application_id = w.application_id
+                    AND g.updated_at > $3::timestamptz),
+                (SELECT greatest(s.started_at, s.last_updated)::text FROM inventory_graph.sources s
+                  WHERE s.project_id = w.project_id AND s.application_id = w.application_id
+                    AND (s.started_at > $3::timestamptz OR s.last_updated > $3::timestamptz)
+                  ORDER BY s.last_updated DESC LIMIT 1)
+           FROM unnest($1::bigint[], $2::bigint[]) AS w(project_id, application_id)",
+    )
+    .bind(&projects)
+    .bind(&toolkits)
+    .bind(listed_at)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(project_id, application_id, graph_at, source_at)| {
+            let reason = activity_reason(graph_at, source_at, listed_at)?;
+            Some((
+                GraphKey {
+                    project_id,
+                    application_id,
+                },
+                reason,
+            ))
+        })
+        .collect())
+}
+
+/// What [`delete_project`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectDeletion {
+    /// The toolkits whose graph state was deleted, in the order they were.
+    pub deleted: Vec<i64>,
+    /// What each deleted toolkit held, in the same order as `deleted`.
+    pub by_toolkit: Vec<(i64, Removed)>,
+    /// The toolkits that still have state because a write holds them (or,
+    /// when the rounds ran out, because they kept appearing), in id order.
+    pub busy: Vec<i64>,
+    /// What the deleted graphs held, together.
+    pub removed: Removed,
+}
+
+impl ProjectDeletion {
+    /// Whether nothing of the project is left: no toolkit was skipped.
+    #[must_use]
+    pub fn complete(&self) -> bool {
+        self.busy.is_empty()
+    }
+}
+
+/// The most times [`delete_project`] lists the project's toolkits: a toolkit
+/// created while the project is being deleted shows up in a later listing.
+pub const MAX_PROJECT_ROUNDS: usize = 5;
+
+/// The toolkits that have any graph state in `project_id`.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn project_toolkits(pool: &PgPool, project_id: i64) -> Result<Vec<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT application_id FROM (
+             SELECT application_id FROM inventory_graph.graphs WHERE project_id = $1
+             UNION SELECT application_id FROM inventory_graph.sources WHERE project_id = $1
+             UNION SELECT application_id FROM inventory_graph.documents WHERE project_id = $1
+         ) toolkits ORDER BY application_id",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Delete every graph of `project_id` (and only that project's), one
+/// transaction per graph, each leaving its toolkit's tombstone with the rows
+/// it removes. A graph a write holds is skipped and named in
+/// [`ProjectDeletion::busy`]; call again once it ends.
+///
+/// The project's toolkits are listed again after each pass, up to
+/// [`MAX_PROJECT_ROUNDS`] times, until a listing holds nothing new: a
+/// toolkit created (or ingested into) while the project was being deleted
+/// would otherwise survive a call that reported success. A toolkit still
+/// there when the rounds run out is reported busy.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`]. Graphs deleted before the failure stay
+/// deleted; the call is idempotent.
+pub async fn delete_project(pool: &PgPool, project_id: i64) -> Result<ProjectDeletion> {
+    delete_project_observed(pool, project_id, |_| std::future::ready(())).await
+}
+
+/// [`delete_project`], calling `between_rounds(round)` after each pass and
+/// before the next listing: the seam a test uses to create a toolkit while
+/// the deletion is under way.
+///
+/// # Errors
+///
+/// See [`delete_project`].
+pub async fn delete_project_observed<F, Fut>(
+    pool: &PgPool,
+    project_id: i64,
+    mut between_rounds: F,
+) -> Result<ProjectDeletion>
+where
+    F: FnMut(usize) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let mut done = ProjectDeletion {
+        deleted: Vec::new(),
+        by_toolkit: Vec::new(),
+        busy: Vec::new(),
+        removed: Removed::default(),
+    };
+    let mut busy: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    let mut settled = false;
+    for round in 1..=MAX_PROJECT_ROUNDS {
+        let pending: Vec<i64> = project_toolkits(pool, project_id)
+            .await?
+            .into_iter()
+            .filter(|toolkit| !busy.contains(toolkit))
+            .collect();
+        if pending.is_empty() {
+            settled = true;
+            break;
+        }
+        for application_id in pending {
+            let key = GraphKey {
+                project_id,
+                application_id,
+            };
+            match delete_graph(pool, key).await? {
+                GraphDeletion::Deleted { removed } => {
+                    done.deleted.push(application_id);
+                    done.by_toolkit.push((application_id, removed));
+                    done.removed.add(removed);
+                }
+                GraphDeletion::Busy => {
+                    busy.insert(application_id);
+                }
+            }
+        }
+        between_rounds(round).await;
+    }
+    if !settled {
+        // The toolkits kept appearing: what is there now is not deleted.
+        busy.extend(project_toolkits(pool, project_id).await?);
+    }
+    done.busy = busy.into_iter().collect();
+    Ok(done)
+}
+
+/// A stored graph whose project or toolkit no longer exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanGraph {
+    pub key: GraphKey,
+    /// `project` (the project is not in the list) or `toolkit` (the project
+    /// is, the toolkit is not).
+    pub reason: &'static str,
+    pub entities: i64,
+    /// When the graph was last written, as text; empty for state without a
+    /// graph row (a failed first ingestion's status).
+    pub updated_at: String,
+}
+
+/// How many graph keys have any state in the database: what the orphans
+/// are a fraction of.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+pub async fn stored_count(pool: &PgPool) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) FROM (
+             SELECT project_id, application_id FROM inventory_graph.graphs
+             UNION SELECT project_id, application_id FROM inventory_graph.sources
+             UNION SELECT project_id, application_id FROM inventory_graph.documents
+         ) k",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Every graph key with any state in the database, with its entity count.
+async fn stored_keys(pool: &PgPool) -> Result<Vec<(GraphKey, i64, String)>> {
+    let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+        "SELECT k.project_id, k.application_id,
+                (SELECT count(*) FROM inventory_graph.entities e
+                  WHERE e.project_id = k.project_id AND e.application_id = k.application_id),
+                coalesce((SELECT g.updated_at::text FROM inventory_graph.graphs g
+                           WHERE g.project_id = k.project_id
+                             AND g.application_id = k.application_id), '')
+           FROM (
+               SELECT project_id, application_id FROM inventory_graph.graphs
+               UNION SELECT project_id, application_id FROM inventory_graph.sources
+               UNION SELECT project_id, application_id FROM inventory_graph.documents
+           ) k
+          ORDER BY k.project_id, k.application_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(project_id, application_id, entities, updated)| {
+            (
+                GraphKey {
+                    project_id,
+                    application_id,
+                },
+                entities,
+                updated,
+            )
+        })
+        .collect())
+}
+
+/// The stored graphs whose project is not in `projects`, or, when
+/// `toolkits` is given, whose `(project, toolkit)` pair is not in it. With
+/// no toolkit list a graph of a live project is never reported: the engine
+/// cannot tell that its toolkit is gone.
+///
+/// # Errors
+///
+/// [`super::StoreError::Database`].
+#[allow(clippy::implicit_hasher)] // the caller's plain sets; no other hasher is used
+pub async fn orphans(
+    pool: &PgPool,
+    projects: &HashSet<i64>,
+    toolkits: Option<&HashSet<(i64, i64)>>,
+) -> Result<Vec<OrphanGraph>> {
+    Ok(stored_keys(pool)
+        .await?
+        .into_iter()
+        .filter_map(|(key, entities, updated_at)| {
+            let reason = if !projects.contains(&key.project_id) {
+                "project"
+            } else if toolkits
+                .is_some_and(|known| !known.contains(&(key.project_id, key.application_id)))
+            {
+                "toolkit"
+            } else {
+                return None;
+            };
+            Some(OrphanGraph {
+                key,
+                reason,
+                entities,
+                updated_at,
+            })
+        })
+        .collect())
+}

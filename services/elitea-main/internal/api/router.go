@@ -33,6 +33,7 @@ import (
 	v2contextmgr "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
@@ -70,6 +71,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -84,6 +86,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
@@ -398,6 +401,34 @@ type RouterConfig struct {
 	// which imports this layer. Unassigned, a created project has no vector
 	// store and cannot index — see createProjectVectorStore.
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
+	// OnProjectProvisioner, when set, is called once with the one shared project
+	// provisioner, after it is built. The process uses it to start the
+	// project-deletion reconciler (#1211) over the same provisioner the routes
+	// delete with, instead of building a second one (see newProjectProvisioner). It is
+	// not called when the composition has no pool and so no provisioner.
+	OnProjectProvisioner func(*projectprovisioning.Provisioner)
+	// ProjectCleanupContext is the context whose end means the process is
+	// shutting down. A project delete's cleanup continues in the background after
+	// the request has answered, and stops with this context, releasing its
+	// journal lease without counting an attempt. Nil: never cancelled.
+	ProjectCleanupContext context.Context
+	// ApplicationData are the application engines (DeepWiki, Inventory) whose
+	// platform gRPC service this process calls to delete a project's data when
+	// the project is deprovisioned (one cleanup-journal step each) and a
+	// toolkit's data when the toolkit is deleted (#1243, #1244). Composed from
+	// ELITEA_<APP>_PLATFORM_GRPC_TARGET beside each facade; an application that
+	// is not listed keeps its data, and the composition root logs which are
+	// wired. See application_data.go.
+	ApplicationData []ApplicationDataClient
+	// OnToolkitCleanupJournal, when set, is called once with the toolkit
+	// cleanup journal the toolkit handler enqueues into (#1244), after it is
+	// built. The process uses it to start the toolkit-deletion reconciler over
+	// the same journal, as OnProjectProvisioner does for projects. It is not
+	// called when the composition has no pool and so no journal.
+	OnToolkitCleanupJournal func(*toolkitcleanup.Journal)
+	// ProjectDeleteBudget is how long DELETE of a project waits for the slow
+	// cleanup before it answers 202 (zero: v2projects.DefaultDeleteBudget).
+	ProjectDeleteBudget time.Duration
 	// PlatformModelDefaults is the platform default model service (#6826). It
 	// backs /api/v2/admin/gateway/default_model, the default_usage count a
 	// platform-model delete reads, the release of stored defaults after a
@@ -725,6 +756,9 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	options := []projectprovisioning.Option{
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(cfg.Pool)),
 	}
+	if cfg.ProjectCleanupContext != nil {
+		options = append(options, projectprovisioning.WithLifecycleContext(cfg.ProjectCleanupContext))
+	}
 	// The vector store (#371) IS conditional — see this function's doc comment.
 	if cfg.ProjectVectorStore != nil {
 		options = append(options, projectprovisioning.WithVectorStore(cfg.ProjectVectorStore))
@@ -734,6 +768,10 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	if cfg.PlatformModelDefaults != nil {
 		options = append(options, projectprovisioning.WithDefaultModelSeeder(cfg.PlatformModelDefaults))
 	}
+	// The application engines (#1243, #1244): one cleanup-journal step per
+	// wired engine. Optional in the same sense as the vector store — a
+	// deployment without an engine has no data there to delete.
+	options = append(options, applicationDataOptions(cfg.ApplicationData)...)
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)
 		objectsRepo, objectsErr := dbrepos.NewArtifactObjectsRepository(cfg.Pool)
@@ -1102,6 +1140,17 @@ func newToolkitHandler(
 	if guardrailPolicies, err := platformconfig.NewGuardrailPolicyAdapter(cfg.Pool); err == nil {
 		options = append(options, v2toolkits.WithGuardrails(guardrailPolicies))
 	}
+	// The toolkit cleanup journal (#1244): a toolkit delete is row-first, and
+	// the engine-side deletion an Inventory toolkit owes is recorded in the
+	// row's own transaction and performed by the reconciler the process starts
+	// over the same journal (OnToolkitCleanupJournal). See application_data.go.
+	if cfg.Pool != nil {
+		journal := newToolkitCleanupJournal(cfg)
+		options = append(options, v2toolkits.WithToolkitCleanupJournal(journal))
+		if cfg.OnToolkitCleanupJournal != nil {
+			cfg.OnToolkitCleanupJournal(journal)
+		}
+	}
 	return v2toolkits.NewHandler(cfg.Pool, options...)
 }
 
@@ -1179,6 +1228,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// switches project creation, the support assistant and personal-project
 	// provisioning off together and reports nothing.
 	projectProvisioner, projectProvisionerOK := newProjectProvisioner(cfg)
+	if projectProvisionerOK && cfg.OnProjectProvisioner != nil {
+		cfg.OnProjectProvisioner(projectProvisioner)
+	}
 	// The personal-project ensurer over that one provisioner. Nil when the
 	// composition has no pool, which every consumer tolerates.
 	var personalProjects *personalproject.Ensurer
@@ -1883,7 +1935,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				v2projects.WithPermissionResolver(permissionResolver),
 			}
 			if projectProvisionerOK {
-				projectOptions = append(projectOptions, v2projects.WithProvisioner(projectProvisioner))
+				projectOptions = append(projectOptions, v2projects.WithProvisioner(projectProvisioner),
+					v2projects.WithDeleteBudget(cfg.ProjectDeleteBudget))
 			}
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
 
@@ -3149,7 +3202,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// pylon has test_toolkit_tool.py and no test_tool.py; both
 				// verbs here run one toolkit tool, so both take the string that
 				// module declares.
-				r.With(requireToolPatch).
+				//
+				// ONE exception on the POST, chosen by the owner (ADR-0027
+				// P4): the native Inventory engine's `investigate` calls a
+				// source toolkit's READ-ONLY tool here with the callback
+				// bearer minted for that invocation. Such a call takes the
+				// chat-time `tool.execute` instead of patch — only when the
+				// authenticating token's recorded grant (shared/0159) names
+				// investigate, this project, this caller and this toolkit,
+				// is unexpired, and the tool passes the engine's read-only
+				// rule. Every other request takes requireToolPatch unchanged
+				// (material.SourceToolGate). The result GET is not opened:
+				// the engine waits on the POST and never polls.
+				requireTestTool := material.SourceToolGate(
+					dbrepos.NewCallbackTokenGrants(cfg.Pool),
+					"inventory", "investigate", material.ReadOnlySourceTool,
+					requireToolPatch, toolkitGate(desktopopsapi.RemoteToolkitPermission), nil)
+				r.With(requireTestTool).
 					Post("/test_tool/prompt_lib/{projectID}/{toolID}", toolkitHandler.TestTool)
 				r.With(requireToolPatch).
 					Get("/test_tool/prompt_lib/{projectID}/{toolID}/{executionID}", toolkitHandler.TestToolResult)

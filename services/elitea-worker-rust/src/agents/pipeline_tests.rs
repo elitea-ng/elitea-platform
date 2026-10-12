@@ -51,6 +51,8 @@ use crate::transport::runtime_context::{
 mod artifact_tests;
 #[path = "pipeline_scope_tests.rs"]
 mod model_scope_tests;
+#[path = "pipeline_restart_pg_tests.rs"]
+mod restart_pg_tests;
 
 const PIPELINE: &str = r"
 state:
@@ -5057,4 +5059,82 @@ fn pipeline_identifier_refusals_stay_invalid_input_with_a_field_cause() {
     assert_eq!(cause.code(), "graph.pipeline.invalid_identifier");
     assert_eq!(cause.detail(), Some("entry_point"));
     assert!(!format!("{error:?} {error} {cause:?}").contains("9007199254740993"));
+}
+
+/// Review round 1, finding 6: a pipeline redeems the claim context for its
+/// index tools when a toolkit node calls an index tool on a toolkit that
+/// carries Main's catalog — not only when it has LLM or application nodes.
+/// The predicate `bind_node_runtimes` gates the redemption on is exercised
+/// over the admitted snapshot: the catalog toolkit alone, the index tool
+/// name alone, or a family outside the I1 set does not ask for it.
+#[test]
+fn a_toolkit_node_calling_an_index_tool_on_a_catalog_toolkit_asks_for_the_claim_context() {
+    let catalog = json!([{
+        "name": "docs",
+        "index_id": "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b",
+        "embedding_model": "text-embedding-3-small",
+        "embedding_dimension": 4
+    }]);
+    let gitlab_toolkit = |indexes: Option<&Value>| {
+        let mut toolkit = json!({
+            "id": 91,
+            "type": "gitlab",
+            "toolkit_name": "release_repository",
+            "settings": {
+                "gitlab_configuration": {
+                    "url": "https://gitlab.example.invalid",
+                    "private_token": "claim-materialized-token"
+                },
+                "repository": "group/project",
+                "branch": "main",
+                "selected_tools": ["list_indexes", "read_file"]
+            }
+        });
+        if let Some(indexes) = indexes {
+            toolkit["indexes"] = indexes.clone();
+        }
+        toolkit
+    };
+    let request_for = |tool: &str, toolkit: Value| {
+        let mut request = toolkit_pipeline_request("release_repository", &[], tool);
+        let version = request
+            .payload
+            .application
+            .get_mut("version_details")
+            .and_then(Value::as_object_mut)
+            .expect("version details");
+        version.insert("tools".to_owned(), json!([toolkit]));
+        request
+    };
+    let policy = runtime_tool_policy(&json!({"toolkit_security": {}}));
+    let asks = |tool: &str, toolkit: Value| {
+        let request = request_for(tool, toolkit);
+        let profile = PipelineExecutionProfile::validate(&request, false).expect("profile");
+        let frozen = crate::toolkits::FrozenToolSnapshot::from_version_details(
+            request
+                .payload
+                .application
+                .get("version_details")
+                .and_then(Value::as_object)
+                .expect("version details"),
+        )
+        .expect("frozen snapshot");
+        let admitted = frozen.apply_policy(&policy);
+        super::pipeline::pipeline_calls_index_tool(profile.definition(), &admitted)
+    };
+    // A toolkit node calling list_indexes on a catalog-bearing gitlab toolkit.
+    assert!(asks("list_indexes", gitlab_toolkit(Some(&catalog))));
+    // The same node on a toolkit WITHOUT a catalog (Python indexing): the
+    // SDK worker would serve the tool; this worker has nothing to redeem for.
+    assert!(!asks("list_indexes", gitlab_toolkit(None)));
+    // A family tool on a catalog toolkit needs no claim context.
+    assert!(!asks("read_file", gitlab_toolkit(Some(&catalog))));
+    // index_data is an SDK index tool name this worker never serves inline
+    // (review round 2): a node naming it redeems nothing either.
+    assert!(!asks("index_data", gitlab_toolkit(Some(&catalog))));
+    // A family outside the I1 set never composes index tools, catalog or not.
+    let mut other = gitlab_toolkit(Some(&catalog));
+    other["type"] = json!("gitlab_org");
+    other["settings"]["repositories"] = json!("group/project");
+    assert!(!asks("list_indexes", other));
 }

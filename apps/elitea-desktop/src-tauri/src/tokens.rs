@@ -12,6 +12,10 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::discovery::Discovery;
+use crate::error::HostError;
+use crate::net::SharedHttp;
+
 /// `X-Client-Version` on every request: the deployment's 426 gate reads it.
 pub const CLIENT_VERSION_HEADER: &str = "X-Client-Version";
 
@@ -72,30 +76,41 @@ pub struct CodeExchange<'a> {
 
 #[derive(Clone)]
 pub struct TokenEndpoint {
-    client: reqwest::Client,
+    http: SharedHttp,
+    timeout: Duration,
     client_version: String,
 }
 
 impl TokenEndpoint {
+    /// An endpoint with its own client (tests; the app shares one, [`Self::shared`]).
+    #[cfg(test)]
     pub fn new(client_version: &str) -> Result<Self, reqwest::Error> {
         Self::with_timeout(client_version, REQUEST_TIMEOUT)
     }
 
+    #[cfg(test)]
     pub fn with_timeout(client_version: &str, timeout: Duration) -> Result<Self, reqwest::Error> {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout)
-            .user_agent(format!("elitea-desktop/{client_version}"))
-            .build()?;
         Ok(Self {
-            client,
+            http: SharedHttp::new(client_version),
+            timeout,
             client_version: client_version.to_owned(),
         })
     }
 
-    /// The HTTP client, for discovery (same no-redirect, same timeout, same User-Agent).
-    pub fn http(&self) -> &reqwest::Client {
-        &self.client
+    /// On the app's one client (src/net.rs): no redirects, its User-Agent,
+    /// and [`REQUEST_TIMEOUT`] per request.
+    #[must_use]
+    pub fn shared(http: SharedHttp, client_version: &str) -> Self {
+        Self {
+            http,
+            timeout: REQUEST_TIMEOUT,
+            client_version: client_version.to_owned(),
+        }
+    }
+
+    /// The deployment's discovery document, on the same client and deadline.
+    pub async fn discovery(&self, origin: &url::Url) -> Result<Discovery, HostError> {
+        crate::discovery::fetch_discovery(self.http.client().await, self.timeout, origin).await
     }
 
     pub fn client_version(&self) -> &str {
@@ -138,8 +153,11 @@ impl TokenEndpoint {
     /// RFC 7009 revoke of the whole device session. True on 200.
     pub async fn revoke(&self, endpoint: &str, refresh_token: &str, client_id: &str) -> bool {
         let sent = self
-            .client
+            .http
+            .client()
+            .await
             .post(endpoint)
+            .timeout(self.timeout)
             .header(CLIENT_VERSION_HEADER, &self.client_version)
             .form(&[
                 ("token", refresh_token),
@@ -153,8 +171,11 @@ impl TokenEndpoint {
 
     async fn post_token(&self, endpoint: &str, form: &[(&str, &str)]) -> TokenOutcome {
         let Ok(response) = self
-            .client
+            .http
+            .client()
+            .await
             .post(endpoint)
+            .timeout(self.timeout)
             .header(CLIENT_VERSION_HEADER, &self.client_version)
             .form(form)
             .send()

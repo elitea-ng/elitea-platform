@@ -1,7 +1,7 @@
 // Package inventory is the Inventory sub-application as the host sees it:
 // its descriptor, its toolkit admission table, and whichever runner a
-// deployment wires. The descriptor is the legacy-v1 document — a copy of
-// conformance/provider/fixtures/inventory/descriptor/legacy-v1/
+// deployment wires. The descriptor is the legacy-v2 document — a copy of
+// conformance/provider/fixtures/inventory/descriptor/legacy-v2/
 // provider_descriptor.json, pinned byte for byte by a test — with the service
 // location the host is configured with written into it.
 //
@@ -26,7 +26,20 @@
 // the provider and silently dropped three features of the product. legacy-v0 is
 // kept beside v1 as the record of what the legacy plugin actually declared.
 //
-// The ENGINE reaches this host as a sidecar (services/elitea-inventory) over a
+// REVISION legacy-v2 adds two tools to the `inventory` family, and corrects
+// smart_normalize_types' description (no engine runs it after an ingestion):
+//
+//	import_graph   the toolkit bucket's graph.json (the Python engine's
+//	               graph) into the native graph store
+//	export_graph   the stored graph back to the bucket as graph.json
+//
+// They were the native engine's operator commands (`import-graph`,
+// `export-graph`); declaring them lets a toolkit owner migrate a graph
+// without cluster access. The host, not the engine, reads the bucket for
+// import_graph (run.ResolveGraphDocument), because the host holds the
+// artifact transport.
+//
+// The ENGINE reaches this host as a sidecar (services/elitea-inventory-engine) over a
 // Unix socket; internal/apps/inventory/run is the runner in front of it. A host
 // with no socket configured runs the unavailable runner (the default), so
 // /descriptor and /health answer and every tool refuses in band with a reason
@@ -101,7 +114,7 @@ var Toolkits = spi.Toolkits{
 				"list_entities_by_layer", "list_entities_by_source", "list_presets", "get_preset_info",
 				"get_cache_stats", "cleanup_cache", "get_ingestion_status", "get_sources_status",
 				"get_entities_by_ids", "get_entity_neighbors", "normalize_types", "rebuild_indices",
-				"smart_normalize_types", "get_type_stats", "link_toolkits_to_tools",
+				"smart_normalize_types", "import_graph", "export_graph", "get_type_stats", "link_toolkits_to_tools",
 				"connect_orphan_nodes", "validate_relationships",
 			},
 			UnknownToolIsInvalidInput: true,

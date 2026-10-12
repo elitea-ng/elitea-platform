@@ -6,29 +6,58 @@
  *
  * The connect / sign-in screen is rendered before the app exists, with a bare
  * MUI theme: there is no brand pack to fetch until a deployment is chosen.
- * Its copy is English-only for that reason (no i18n catalogue is loaded yet).
+ * Its copy is English-only for that reason; strings added since go through
+ * `t()`, which resolves against the bundled `en` catalogue.
  */
 import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { tauriAppIpc } from '@/shared/desktop/appEvents';
+import { installContextMenuGuard } from '@/shared/desktop/contextMenu';
+import { createHostLogger, hostLog, installDiagnostics } from '@/shared/desktop/diagnostics';
+import { createDoctorIpc } from '@/shared/desktop/doctorIpc';
 import { createHostBridge, tauriInvoke } from '@/shared/desktop/hostBridge';
 
 import { DesktopShell } from './DesktopShell';
+import { registerDesktopCatalogue } from './i18n/registerDesktopCatalogue';
 
 const container = document.getElementById('root');
 if (!container) {
   throw new Error('elitea-web desktop: #root container missing from index.html');
 }
 
+// Before the first render: the shell and the workspace screens read desktop-only keys.
+registerDesktopCatalogue();
+
 const invoke = tauriInvoke();
 const bridge = invoke === undefined ? undefined : createHostBridge(invoke);
+const doctor = invoke === undefined ? undefined : createDoctorIpc(invoke);
+const appIpc = tauriAppIpc();
+// First, so an error anywhere after this reaches the host's log file (README, "Logs").
+if (invoke !== undefined) {
+  installDiagnostics(createHostLogger(invoke));
+  hostLog('info', `webview started (${import.meta.env.MODE})`, 'boot');
+  // Inside the host only: the dev harness in a browser keeps its devtools menu.
+  installContextMenuGuard();
+}
 
-createRoot(container).render(
-  <StrictMode>
-    <ThemeProvider theme={createTheme()}>
-      <CssBaseline />
-      <DesktopShell bridge={bridge} />
-    </ThemeProvider>
-  </StrictMode>,
-);
+function renderShell(root: HTMLElement): void {
+  createRoot(root).render(
+    <StrictMode>
+      <ThemeProvider theme={createTheme()}>
+        <CssBaseline />
+        <DesktopShell bridge={bridge} doctor={doctor} appIpc={appIpc} />
+      </ThemeProvider>
+    </StrictMode>,
+  );
+}
+
+// DEV ONLY: `/?harness` shows the signed-in shell with a fake host and canned
+// data (`devHarness.tsx`). `import.meta.env.DEV` is false in every build, so
+// the branch and the harness's chunk are dropped from it.
+if (import.meta.env.DEV && bridge === undefined && new URLSearchParams(window.location.search).has('harness')) {
+  void import('./devHarness').then(({ mountDesktopHarness }) => mountDesktopHarness(container));
+} else {
+  renderShell(container);
+}

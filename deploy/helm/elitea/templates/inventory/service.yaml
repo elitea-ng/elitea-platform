@@ -22,6 +22,15 @@ spec:
       port: {{ .Values.inventory.service.port }}
       targetPort: http
       protocol: TCP
+    {{- if include "elitea-inventory.platformGrpc" . }}
+    # The platform gRPC service (values: inventory.platformGrpc). Same Service,
+    # so the server certificate's SANs cover it; the NetworkPolicy admits
+    # elitea-main only.
+    - name: platform-grpc
+      port: {{ .Values.inventory.platformGrpc.port }}
+      targetPort: platform-grpc
+      protocol: TCP
+    {{- end }}
   selector:
     {{- include "elitea-inventory.selectorLabels" . | nindent 4 }}
 {{- end }}

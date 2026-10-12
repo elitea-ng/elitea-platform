@@ -9,8 +9,8 @@ import (
 )
 
 // Inventory over the engine sidecar (ADR-0023 H4c stage I3). The
-// knowledge-graph engine — the copied Python analysis layer with the ELITEA
-// SDK's closure — stays in Python and listens on a Unix socket next to this
+// knowledge-graph engine — the native Rust engine since ADR-0027
+// (services/elitea-inventory-engine) — listens on a Unix socket next to this
 // host. This host keeps the SPI, the parameter merge, the deferred refusals,
 // the source check, composition and upload.
 //
@@ -67,16 +67,25 @@ func EngineTools() []string {
 // would look like an egress control while being none.
 func NewEngineRunner(settings spi.Settings) *Runner {
 	client := NewEngineClient(settings.EngineSocket)
-	tools := map[string]Tool{}
-	for _, name := range EngineTools() {
-		tool := name
-		tools[tool] = func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
-			return client.Invoke(ctx, tool, arguments, tc)
+	call := func(name string) Tool {
+		return func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
+			return client.Invoke(ctx, name, arguments, tc)
 		}
 	}
+	tools := map[string]Tool{}
+	for _, name := range EngineTools() {
+		tools[name] = call(name)
+	}
 	return &Runner{
-		RunnerName: "legacy",
+		RunnerName: "sidecar",
 		Tools:      tools,
-		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
+		// The graph deletions are the platform service's alone (platform.go);
+		// they are not in Tools.
+		DeleteGraph:         call(DeleteGraphTool),
+		DeleteProjectGraphs: call(DeleteProjectGraphsTool),
+		Artifacts:           ArtifactClientFrom(settings.CallbackCA()),
+		// The native engine keys every graph by the project: only the
+		// verified identity may name it (see Runner.RequireVerifiedProject).
+		RequireVerifiedProject: true,
 	}
 }

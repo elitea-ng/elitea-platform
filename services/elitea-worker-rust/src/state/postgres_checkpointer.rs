@@ -1220,7 +1220,8 @@ async fn persist_scoped<T>(
 }
 
 /// Per-operation I/O. `pool_wait_micros` is the time to obtain a pooled
-/// connection and open its transaction (acquire plus `BEGIN`).
+/// connection and open its bounded transaction (acquire plus `BEGIN` with the
+/// writer lock-wait and idle bounds).
 #[derive(Clone, Copy, Default)]
 struct OperationIo {
     transactions: u64,
@@ -1257,7 +1258,7 @@ async fn begin_transaction(
     pool: &PgPool,
 ) -> Result<Transaction<'static, Postgres>, PostgresCheckpointError> {
     let started = Instant::now();
-    let transaction = pool.begin().await.map_err(storage_error)?;
+    let transaction = begin_bounded(pool).await?;
     let waited = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     note_io(|io| {
         io.transactions = io.transactions.saturating_add(1);
@@ -1644,6 +1645,21 @@ fn duration_micros_ceil(duration: std::time::Duration) -> Result<i64, PostgresCh
     })
 }
 
+/// Checkpoint transactions lock the same kind of writer rows as session
+/// transactions (a child scope share-locks its root), so they carry the same
+/// lock-wait and idle bounds: a stalled holder fails a writer readably and is
+/// ended by `PostgreSQL` instead of blocking writers and takeover forever.
+async fn begin_bounded(
+    pool: &PgPool,
+) -> Result<Transaction<'static, Postgres>, PostgresCheckpointError> {
+    pool.begin_with(super::postgres_session::bounded_begin_statement(
+        super::postgres_session::WRITER_LOCK_TIMEOUT,
+        super::postgres_session::IDLE_TRANSACTION_TIMEOUT,
+    ))
+    .await
+    .map_err(storage_error)
+}
+
 fn storage_error(source: sqlx::Error) -> PostgresCheckpointError {
     if retryable_storage_error(&source) {
         PostgresCheckpointError::StorageUnavailable { source }
@@ -1664,7 +1680,7 @@ fn retryable_storage_error(error: &sqlx::Error) -> bool {
             code.starts_with("08")
                 || matches!(
                     code.as_ref(),
-                    "40001" | "40P01" | "55P03" | "57014" | "57P01" | "57P02" | "57P03"
+                    "25P03" | "40001" | "40P01" | "55P03" | "57014" | "57P01" | "57P02" | "57P03"
                 )
         }),
         _ => false,
@@ -1680,6 +1696,10 @@ impl fmt::Debug for PostgresCheckpointer {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+#[path = "postgres_checkpointer_lock_bound_tests.rs"]
+mod lock_bound_tests;
 
 #[cfg(test)]
 mod tests {

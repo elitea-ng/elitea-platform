@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-checkpoint-preview"
+description = "Enables the checkpoint_preview command without any pre-configured scope."
+commands.allow = ["checkpoint_preview"]
+
+[[permission]]
+identifier = "deny-checkpoint-preview"
+description = "Denies the checkpoint_preview command without any pre-configured scope."
+commands.deny = ["checkpoint_preview"]

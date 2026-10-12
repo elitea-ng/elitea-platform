@@ -43,6 +43,25 @@ elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
 # `toolkit-sql`: the worker serves the `sql` toolkit family (sqlx postgres +
 # mysql), which the desktop host never links.
 elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql"] }
+# ADR-0030 I1: the index.ingest.v1 handler. The connectors over this crate's
+# reqwest 0.12 (rustls on ring), the shared extension table, extraction and
+# the SDK-default chunkers, and the elitea-vector client with the SDK search
+# semantics. vector-index is taken WITHOUT `sdk-key-order`: that feature is
+# serde_json `preserve_order`, which this crate's canonical digests forbid
+# (see elitea-agent-runtime above).
+#
+# doc-extract is taken WITHOUT `documents` (xberg: PDF, Office, e-mail). Its
+# `xberg-native-pdf` 1.3.6 requires `smallvec ^1.16`, while `kube-client`
+# 4.2.0 (the `sandbox-supervisor` feature) pins `serde-saphyr ^0.0.29`, which
+# caps smallvec `< 1.16`; one lock file cannot hold both and no kube release
+# lifts the cap yet. Until it does, an index run reports a PDF or Office
+# document as skipped `unsupported_type`; text, markdown, HTML, JSON and code
+# are extracted and chunked.
+elitea-connectors = { path = "../../libs/rust/connectors", default-features = false, features = ["providers", "content-source", "reqwest-012"] }
+elitea-content-source = { path = "../../libs/rust/content-source" }
+elitea-doc-chunk = { path = "../../libs/rust/doc-chunk" }
+elitea-doc-extract = { path = "../../libs/rust/doc-extract", features = ["html"] }
+elitea-vector-index = { path = "../../libs/rust/vector-index" }
 futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
@@ -78,6 +97,9 @@ tower = { version = "=0.5.3", features = ["util"] }
 tracing = "=0.1.44"
 tracing-opentelemetry = { version = "=0.34.0", default-features = false }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "registry", "smallvec", "std", "tracing-log"] }
+# Already locked through adk-runner, which names root invocations `inv-<uuid v4>`; nested
+# agent children use the same scheme so an invocation id never repeats across processes.
+uuid = { version = "=1.24.0", default-features = false, features = ["v4"] }
 x509-parser = { version = "=0.18.1", optional = true, default-features = false }
 zeroize = "=1.9.0"
 toml = { version = "=1.1.6", default-features = false, features = ["parse", "serde", "std"] }
@@ -93,6 +115,8 @@ required-features = ["graph-shaping-bench"]
 
 [dev-dependencies]
 elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql"] }
+# The in-process fake of elitea-vector the index handler's tests run against.
+elitea-vector-index = { path = "../../libs/rust/vector-index", features = ["test-server"] }
 http-body = "=1.1.0"
 tokio = { version = "=1.53.1", features = ["test-util"] }
 

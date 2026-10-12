@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-platform"
+description = "Enables the app_platform command without any pre-configured scope."
+commands.allow = ["app_platform"]
+
+[[permission]]
+identifier = "deny-app-platform"
+description = "Denies the app_platform command without any pre-configured scope."
+commands.deny = ["app_platform"]

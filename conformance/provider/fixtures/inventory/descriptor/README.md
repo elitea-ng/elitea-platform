@@ -1,6 +1,7 @@
 # Inventory provider descriptor revisions
 
-Two revisions live here. Both are kept, and they answer different questions.
+Three revisions live here. All are kept, and they answer different questions.
+The host serves `legacy-v2`.
 
 ## `legacy-v0` — what the legacy plugin declared
 
@@ -11,11 +12,10 @@ declared?" is only answerable against this file.
 
 It is not what the host serves. Nothing should be added to it.
 
-## `legacy-v1` — what the host serves (ADR-0023 H4c stage I3)
+## `legacy-v1` — four undeclared tools declared (ADR-0023 H4c stage I3)
 
-`legacy-v0` **plus four tools**, and nothing else. The Go host's embedded
-`internal/apps/inventory/descriptor.json` is a byte-for-byte copy of this file,
-pinned by `internal/spi/conformance_inventory_test.go`.
+`legacy-v0` **plus four tools**, and nothing else. The host served it until
+`legacy-v2`.
 
 | tool | who calls it |
 |---|---|
@@ -53,28 +53,51 @@ generator cannot be reviewed for what it did *not* change.
 The five tools `legacy-v0` declares and the legacy router **never** carried —
 `get_type_stats`, `link_toolkits_to_tools`, `connect_orphan_nodes`,
 `validate_relationships`, and `query_graph` on the `inventory` family — are
-still declared in `legacy-v1`, and the runner refuses them by name
+still declared in `legacy-v1` and `legacy-v2`, and the runner refuses them by name
 (`internal/apps/inventory/run`.`DeferredTools`). Removing them from the
 descriptor would tell a caller the tool does not exist; what is true is that it
 is declared and has never been implemented on any platform.
 
 ### Regenerating
 
+`legacy-v1` was generated from `legacy-v0` by
+`services/elitea-inventory/tools/build_descriptor_v1.py`, deleted with the
+Python service (`services/elitea-inventory-engine/tests/fixtures/PROVENANCE.md`
+names the commit). It is frozen now.
+
+`legacy-v2` is generated from `legacy-v1`, and the generator writes both the
+fixture and the host's embedded copy:
+
 ```
-cd services/elitea-inventory
-python tools/build_descriptor_v1.py          # rewrite legacy-v1 from legacy-v0
-python tools/build_descriptor_v1.py --check  # verify it is current
+python conformance/provider/tools/build_inventory_descriptor_v2.py          # rewrite both
+python conformance/provider/tools/build_inventory_descriptor_v2.py --check  # verify both
 ```
 
-Then copy it to the host's embedded descriptor — the byte pin is what enforces
-that they agree:
-
-```
-cp conformance/provider/fixtures/inventory/descriptor/legacy-v1/provider_descriptor.json \
-   services/elitea-subapp-host/internal/apps/inventory/descriptor.json
-```
+`conformance/provider/tests/test_inventory_descriptor_revision.py` runs the
+check.
 
 > **Note when checking a fixture change locally:** `go test` caches a package
 > result across edits to these JSON files, so a fixture-only change can re-run
 > against a cached PASS. Use `go test -count=1` when the only thing you changed
 > is a fixture.
+
+## `legacy-v2` — graph transfer tools (what the host serves)
+
+`legacy-v1` plus two tools on the `inventory` family, and one corrected
+description. The Go host's embedded `internal/apps/inventory/descriptor.json`
+is a byte-for-byte copy, pinned by `internal/spi/conformance_inventory_test.go`,
+which also diffs v1 against v2 and fails on any other change.
+
+| tool | what it does |
+|---|---|
+| `import_graph` | reads `artifact_name` (default `graph.json`) from the toolkit's bucket — the Python engine's graph — and imports it into the native graph store; `replace_ingestion_state` mirrors the CLI flag |
+| `export_graph` | writes the stored graph to the toolkit's bucket as `graph.json` |
+
+They are the native engine's `import-graph` / `export-graph` commands as tools,
+so a toolkit owner migrates a graph without cluster access. The host reads the
+import document (it holds the bucket transport) and writes it into the
+host-owned `graph_document` parameter; a caller's value is replaced. The
+document is bounded at 32 MiB; a larger graph uses the CLI.
+
+`smart_normalize_types` claimed it "runs automatically after a successful
+ingestion". No engine did. Its v2 description says so.

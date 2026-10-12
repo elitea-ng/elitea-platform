@@ -5,10 +5,11 @@ from elitea.runtime.v1 import errors_pb2 as _errors_pb2
 from elitea.runtime.v1 import input_pb2 as _input_pb2
 from elitea.runtime.v1 import output_pb2 as _output_pb2
 from elitea.runtime.v1 import sandbox_pb2 as _sandbox_pb2
+from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from collections.abc import Mapping as _Mapping
+from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
@@ -40,6 +41,14 @@ class AuthorizeInvocationDispositionV1(int, metaclass=_enum_type_wrapper.EnumTyp
     AUTHORIZE_INVOCATION_DISPOSITION_V1_UNSPECIFIED: _ClassVar[AuthorizeInvocationDispositionV1]
     AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW: _ClassVar[AuthorizeInvocationDispositionV1]
     AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED: _ClassVar[AuthorizeInvocationDispositionV1]
+
+class RemoveIndexDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_REMOVED: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN: _ClassVar[RemoveIndexDispositionV1]
 CLAIM_DISPOSITION_V1_UNSPECIFIED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_ACCEPTED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_TERMINAL_ACK: ClaimDispositionV1
@@ -59,6 +68,11 @@ BEGIN_EXECUTION_DISPOSITION_V1_ALREADY_STARTED: BeginExecutionDispositionV1
 AUTHORIZE_INVOCATION_DISPOSITION_V1_UNSPECIFIED: AuthorizeInvocationDispositionV1
 AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW: AuthorizeInvocationDispositionV1
 AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED: AuthorizeInvocationDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_REMOVED: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN: RemoveIndexDispositionV1
 
 class ClaimCommandRequestV1(_message.Message):
     __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery")
@@ -89,7 +103,7 @@ class SettlementRecoveryV1(_message.Message):
     def __init__(self, proposal: _Optional[_Union[_output_pb2.SettlementProposalV1, _Mapping]] = ..., proposal_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., idempotency_key: _Optional[str] = ..., settlement_receipt_id: _Optional[str] = ..., outcome: _Optional[_Union[_common_pb2.ExecutionOutcomeV1, str]] = ...) -> None: ...
 
 class ClaimReceiptV1(_message.Message):
-    __slots__ = ("disposition", "identity", "fence", "lease_expires_at_unix_millis", "input_bundle_ref", "input_bundle", "desired_state", "claim_handoff_watermark", "claim_id", "settlement_recovery", "retirement", "claim_started_at_unix_micros", "node_recovery_receipt_json")
+    __slots__ = ("disposition", "identity", "fence", "lease_expires_at_unix_millis", "input_bundle_ref", "input_bundle", "desired_state", "claim_handoff_watermark", "claim_id", "settlement_recovery", "retirement", "claim_started_at_unix_micros", "node_recovery_receipt_json", "vector_token")
     DISPOSITION_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     FENCE_FIELD_NUMBER: _ClassVar[int]
@@ -103,6 +117,7 @@ class ClaimReceiptV1(_message.Message):
     RETIREMENT_FIELD_NUMBER: _ClassVar[int]
     CLAIM_STARTED_AT_UNIX_MICROS_FIELD_NUMBER: _ClassVar[int]
     NODE_RECOVERY_RECEIPT_JSON_FIELD_NUMBER: _ClassVar[int]
+    VECTOR_TOKEN_FIELD_NUMBER: _ClassVar[int]
     disposition: ClaimDispositionV1
     identity: _common_pb2.ExecutionIdentityV1
     fence: _common_pb2.ExecutionFenceV1
@@ -116,7 +131,18 @@ class ClaimReceiptV1(_message.Message):
     retirement: _errors_pb2.RuntimeErrorV1
     claim_started_at_unix_micros: int
     node_recovery_receipt_json: bytes
-    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ...) -> None: ...
+    vector_token: VectorClaimTokenV1
+    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ..., vector_token: _Optional[_Union[VectorClaimTokenV1, _Mapping]] = ...) -> None: ...
+
+class VectorClaimTokenV1(_message.Message):
+    __slots__ = ("bearer", "expires_at_unix_millis", "allowed_sources")
+    BEARER_FIELD_NUMBER: _ClassVar[int]
+    EXPIRES_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
+    ALLOWED_SOURCES_FIELD_NUMBER: _ClassVar[int]
+    bearer: str
+    expires_at_unix_millis: int
+    allowed_sources: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, bearer: _Optional[str] = ..., expires_at_unix_millis: _Optional[int] = ..., allowed_sources: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ClaimCommandResponseV1(_message.Message):
     __slots__ = ("receipt", "rejection")
@@ -235,3 +261,27 @@ class PrepareSettlementResponseV1(_message.Message):
     outcome: _common_pb2.ExecutionOutcomeV1
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, settlement_receipt_id: _Optional[str] = ..., outcome: _Optional[_Union[_common_pb2.ExecutionOutcomeV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class RemoveIndexRequestV1(_message.Message):
+    __slots__ = ("identity", "fence", "claim_id", "toolkit_id", "index_name", "index_id")
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    FENCE_FIELD_NUMBER: _ClassVar[int]
+    CLAIM_ID_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_ID_FIELD_NUMBER: _ClassVar[int]
+    INDEX_NAME_FIELD_NUMBER: _ClassVar[int]
+    INDEX_ID_FIELD_NUMBER: _ClassVar[int]
+    identity: _common_pb2.ExecutionIdentityV1
+    fence: _common_pb2.ExecutionFenceV1
+    claim_id: str
+    toolkit_id: int
+    index_name: str
+    index_id: str
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., claim_id: _Optional[str] = ..., toolkit_id: _Optional[int] = ..., index_name: _Optional[str] = ..., index_id: _Optional[str] = ...) -> None: ...
+
+class RemoveIndexResponseV1(_message.Message):
+    __slots__ = ("disposition", "rejection")
+    DISPOSITION_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    disposition: RemoveIndexDispositionV1
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, disposition: _Optional[_Union[RemoveIndexDispositionV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

@@ -12,9 +12,10 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::command::{CommandShape, analyse};
+use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::policy::SandboxMode;
-use crate::sandbox::{Enforcement, SandboxConfig, SandboxRequest, credential_paths, prepare};
+use crate::sandbox::{Enforcement, Prepared, SandboxConfig, SandboxRequest, prepare};
 use crate::workspace::{EntryKind, Workspace, WsPath};
 
 /// Variables passed through from the host's environment; everything else
@@ -52,12 +53,27 @@ pub struct ShellConfig {
     /// workspace-write).
     pub temp_dir: PathBuf,
     pub sandbox: SandboxConfig,
-    /// More files or directories commands may not read (the host's data
-    /// directory: the session adds it); see
-    /// [`SandboxRequest::deny_paths`].
+    /// More files or directories no tool may read: the host app's own
+    /// config, data, log and cache directories as the host resolved them
+    /// (the authority for those), and the session's data directory (the
+    /// session adds it). Both spellings are denied (see
+    /// [`crate::deny`]).
     pub deny_read: Vec<PathBuf>,
-    /// Deny reading [`credential_paths`] under `HOME` (on by default).
+    /// Deny the credentials ([`crate::sandbox::credential_paths`]) and the
+    /// app's identifier directories under the home directory (on by
+    /// default).
     pub protect_credentials: bool,
+    /// The home directory those are looked up under, also the commands'
+    /// `HOME`. `None`: the host's `HOME`. For tests and hosts that run
+    /// commands under another home.
+    pub home: Option<PathBuf>,
+    /// The host app's identifier (a bundle id such as `com.example.app`):
+    /// its default directories under the home are denied too
+    /// ([`crate::deny::app_paths`]). The host's resolved directories in
+    /// [`Self::deny_read`] remain the authority.
+    pub app_id: Option<String>,
+    /// The session's deny list, once [`Self::freeze_deny_list`] built it.
+    frozen: Option<Arc<DenyList>>,
     /// Let commands with the network on listen for connections (off by
     /// default).
     pub allow_listen: bool,
@@ -81,10 +97,50 @@ impl ShellConfig {
             sandbox: SandboxConfig::default(),
             deny_read: Vec::new(),
             protect_credentials: true,
+            home: None,
+            app_id: None,
+            frozen: None,
             allow_listen: false,
             allow_keychain: false,
             git_global_config: None,
         }
+    }
+
+    /// The home directory credentials are looked up under: [`Self::home`],
+    /// else a non-empty `HOME`.
+    #[must_use]
+    pub fn home_dir(&self) -> Option<PathBuf> {
+        self.home.clone().or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(PathBuf::from)
+        })
+    }
+
+    /// The deny list these settings name: the one [`Self::freeze_deny_list`]
+    /// kept, else built now.
+    #[must_use]
+    pub fn deny_list(&self) -> Arc<DenyList> {
+        self.frozen
+            .clone()
+            .unwrap_or_else(|| Arc::new(self.build_deny_list()))
+    }
+
+    /// Build the deny list once and keep it: every later command, the host
+    /// git and the file tools share it. Change the fields before, not after.
+    pub fn freeze_deny_list(&mut self) -> Arc<DenyList> {
+        let list = Arc::new(self.build_deny_list());
+        self.frozen = Some(list.clone());
+        list
+    }
+
+    fn build_deny_list(&self) -> DenyList {
+        DenyList::for_session(
+            self.home_dir().as_deref(),
+            self.app_id.as_deref(),
+            self.protect_credentials,
+            self.deny_read.iter().cloned(),
+        )
     }
 }
 
@@ -112,6 +168,11 @@ pub struct CommandOutput {
     pub duration_ms: u64,
     pub sandbox: SandboxMode,
     pub enforcement: Enforcement,
+    /// What the enforcement leaves out, when the level alone does not say
+    /// (Landlock only: credentials and the desktop app's data are not
+    /// hidden).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforcement_note: Option<&'static str>,
     /// Whether it ran under `/bin/sh -c` (compound) or as plain argv.
     pub shell: bool,
 }
@@ -206,6 +267,10 @@ fn environment(config: &ShellConfig) -> Vec<(String, String)> {
     // PATH without relative or empty entries: a bare name never runs a
     // program from the workspace (the approval rules resolve it the same
     // way).
+    if let Some(home) = &config.home {
+        out.retain(|(name, _)| name != "HOME");
+        out.push(("HOME".to_owned(), home.display().to_string()));
+    }
     if let Some(entry) = out.iter_mut().find(|(name, _)| name == "PATH")
         && let Ok(joined) = std::env::join_paths(crate::command::search_path())
     {
@@ -242,16 +307,7 @@ pub fn sandbox_request(
     let temp = std::fs::canonicalize(&config.temp_dir).map_err(|error| {
         ToolError::io("cannot resolve the session's temporary directory", &error)
     })?;
-    let mut deny_paths: Vec<PathBuf> = config
-        .deny_read
-        .iter()
-        .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()))
-        .collect();
-    if config.protect_credentials
-        && let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty())
-    {
-        deny_paths.extend(credential_paths(std::path::Path::new(&home)));
-    }
+    let deny_paths = config.deny_list().paths().to_vec();
     Ok(SandboxRequest {
         mode,
         network,
@@ -293,6 +349,63 @@ pub async fn run(
     config: &ShellConfig,
     spec: &CommandSpec,
 ) -> ToolResult<CommandOutput> {
+    run_checked(workspace, config, spec, true).await
+}
+
+/// How `spec` would run: the sandbox [`prepare`] chooses for it now. What
+/// the session classifies a command by before asking about it.
+///
+/// # Errors
+///
+/// As [`run`], before anything runs.
+pub fn plan(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+) -> ToolResult<Prepared> {
+    let request = sandbox_request(workspace, config, spec.mode, spec.network)?;
+    let prepared = prepare(&request, &["/usr/bin/true".to_owned()], &config.sandbox)?;
+    Ok(Prepared {
+        // Full access with the network is no sandbox, by request: what
+        // the person allowed for it, not a sandbox falling short.
+        hides_denied: prepared.hides_denied || request.is_unconfined(),
+        ..prepared
+    })
+}
+
+/// The refusal [`run_checked`] makes: the sandbox chosen now does not hide
+/// what `request` denies, and the command was not approved that way.
+fn refuse_unhidden(
+    request: &SandboxRequest,
+    prepared: &Prepared,
+    unhidden_approved: bool,
+) -> ToolResult<()> {
+    if prepared.hides_denied || request.is_unconfined() || unhidden_approved {
+        return Ok(());
+    }
+    Err(ToolError::new(
+        ErrorCode::SandboxUnavailable,
+        format!(
+            "the sandbox can no longer hide what this command may not read ({}); nothing \
+             ran: run it again to be asked",
+            prepared.note.unwrap_or("no sandbox")
+        ),
+    ))
+}
+
+/// [`run`], refusing (nothing runs) when the sandbox chosen now does not
+/// hide what the request denies and `unhidden_approved` is false: the
+/// command was approved as confined, and the sandbox changed since.
+///
+/// # Errors
+///
+/// As [`run`], and [`ErrorCode::SandboxUnavailable`] for that refusal.
+pub async fn run_checked(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+    unhidden_approved: bool,
+) -> ToolResult<CommandOutput> {
     if workspace.stat(&spec.cwd)? != Some(EntryKind::Dir) {
         return Err(ToolError::invalid(format!(
             "`{}` is not a directory in the workspace",
@@ -308,6 +421,7 @@ pub async fn run(
     };
     let request = sandbox_request(workspace, config, spec.mode, spec.network)?;
     let prepared = prepare(&request, &argv, &config.sandbox)?;
+    refuse_unhidden(&request, &prepared, unhidden_approved)?;
     let timeout = spec
         .timeout
         .unwrap_or(config.default_timeout)
@@ -394,6 +508,7 @@ pub async fn run(
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         sandbox: spec.mode,
         enforcement: prepared.enforcement,
+        enforcement_note: prepared.note,
         shell,
     })
 }
@@ -517,6 +632,64 @@ mod tests {
         assert!(output.stdout.starts_with("1\n2\n"));
         assert!(output.stdout.trim_end().ends_with("10000"));
         assert!(output.stdout.contains("bytes omitted"));
+    }
+
+    /// The session's data directory sits under the desktop app's own data
+    /// directory, which is denied: the temporary directory inside it is
+    /// opened again (Seatbelt) or bound over the mask (bubblewrap), and
+    /// the home override decides which credentials are denied.
+    #[test]
+    fn the_temp_dir_under_the_denied_app_data_stays_writable() {
+        use crate::sandbox::{bubblewrap, seatbelt};
+        let dir = tempfile::tempdir().expect("dir");
+        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let home = base.join("home");
+        let app = home.join("Library/Application Support/ai.elitea.desktop");
+        let data = app.join("workspaces/w1");
+        let temp = data.join("tmp/w1");
+        std::fs::create_dir_all(&data).expect("data");
+        std::fs::create_dir(base.join("ws")).expect("ws");
+        let workspace = Workspace::open(&base.join("ws"), &[]).expect("workspace");
+        let mut config = ShellConfig::new(temp.clone());
+        config.home = Some(home.clone());
+        config.app_id = Some("ai.elitea.desktop".to_owned());
+        config.deny_read.push(data.clone());
+        let request =
+            super::sandbox_request(&workspace, &config, SandboxMode::WorkspaceWrite, false)
+                .expect("request");
+        assert!(
+            request.deny_paths.contains(&app),
+            "{:?}",
+            request.deny_paths
+        );
+        assert!(request.deny_paths.contains(&data));
+        assert_eq!(request.writable_roots[1], temp);
+
+        let (text, params) = seatbelt::profile(&request);
+        assert!(params.contains(&("WRITABLE_ROOT_1".to_owned(), temp.display().to_string())));
+        let deny = text
+            .find("(deny file-read-data file-write*")
+            .expect("denial");
+        let reopen = text
+            .find("(allow file-write* (subpath (param \"WRITABLE_ROOT_1\")))")
+            .expect("the temporary directory is opened again");
+        assert!(reopen > deny, "the reopening comes after the denial");
+        assert!(
+            text.contains(
+                "(allow file-read* file-read-data (subpath (param \"WRITABLE_ROOT_1\")))"
+            )
+        );
+
+        let masks = bubblewrap::Masks::discover(&request);
+        assert!(masks.hide_dirs.contains(&app));
+        let args = bubblewrap::args(&request, &masks, &["true".to_owned()]).join(" ");
+        let hide = args
+            .find(&format!("--tmpfs {}", app.display()))
+            .expect("app data hidden");
+        let rebind = args
+            .rfind(&format!("--bind {0} {0}", temp.display()))
+            .expect("temp bound");
+        assert!(rebind > hide, "bound over the mask");
     }
 
     #[tokio::test]
