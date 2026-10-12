@@ -44,6 +44,7 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 import { BASE_URL } from '../../playwright.config';
 import { SNAPSHOT_TOLERANCE, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
 
+
 /** The pack id the guard reads back; nothing on any stack states it. */
 const SECOND_PACK_ID = 'e2e-second-pack';
 

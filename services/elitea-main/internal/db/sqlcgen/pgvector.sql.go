@@ -36,6 +36,34 @@ func (q *Queries) DeleteCurrentProjectPgvectorConfiguration(ctx context.Context,
 	return result.RowsAffected(), nil
 }
 
+const existsCurrentProjectPgvectorConfiguration = `-- name: ExistsCurrentProjectPgvectorConfiguration :one
+
+SELECT EXISTS (
+    SELECT 1 FROM configuration
+    WHERE project_id = $1::integer
+      AND elitea_title = $2::text
+      AND type = 'pgvector'
+      AND section = 'vectorstorage'
+      AND source = 'system'
+) AS present
+`
+
+type ExistsCurrentProjectPgvectorConfigurationParams struct {
+	ProjectID   int32  `db:"project_id" json:"project_id"`
+	EliteaTitle string `db:"elitea_title" json:"elitea_title"`
+}
+
+// Whether the project's system PgVector row exists. It reads the same four
+// identity predicates the upsert and the delete above use, so a user-created
+// configuration that happens to carry the title does not count. The project
+// delete asks it inside its deciding transaction (#1211).
+func (q *Queries) ExistsCurrentProjectPgvectorConfiguration(ctx context.Context, arg ExistsCurrentProjectPgvectorConfigurationParams) (bool, error) {
+	row := q.db.QueryRow(ctx, existsCurrentProjectPgvectorConfiguration, arg.ProjectID, arg.EliteaTitle)
+	var present bool
+	err := row.Scan(&present)
+	return present, err
+}
+
 const upsertCurrentProjectPgvectorConfiguration = `-- name: UpsertCurrentProjectPgvectorConfiguration :one
 
 INSERT INTO configuration (

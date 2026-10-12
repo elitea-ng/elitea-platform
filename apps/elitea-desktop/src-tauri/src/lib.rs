@@ -15,11 +15,12 @@ mod discovery;
 mod doctor;
 mod error;
 mod history;
-mod http_scope;
+mod index;
 mod local_commands;
 mod logging;
 mod loopback;
 mod menu;
+mod net;
 mod pkce;
 mod platform;
 mod settings;
@@ -47,6 +48,7 @@ use crate::d0::remote_tools::RetryPolicy;
 use crate::d0::turn::{AgentHost, HostDeps};
 use crate::error::HostError;
 use crate::history::HistoryStore;
+use crate::index::{IndexRegistry, MainWindowIndexEvents};
 use crate::local_commands::{
     AppDoctorHooks, AuthCredentials, LocalState, MainWindowEvents, StoredPolicy,
 };
@@ -94,7 +96,6 @@ pub fn run() {
         );
     let built = builder
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(menu::Zoom::default())
@@ -105,25 +106,59 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if webview.label() == "main"
                 && payload.event() == tauri::webview::PageLoadEvent::Started
-                && let Some(queue) = webview.try_state::<app_events::CommandQueue>()
             {
-                queue.not_ready();
+                if let Some(queue) = webview.try_state::<app_events::CommandQueue>() {
+                    queue.not_ready();
+                }
+                // Nobody will read the old page's bodies or streams.
+                if let Some(fetches) = webview.try_state::<net::WebFetch>() {
+                    fetches.table.clear();
+                }
             }
         })
         .menu(menu::build)
         .on_menu_event(|app, event| menu::on_event(app, &event))
         .setup(|app| {
+            // Each app directory resolved once. Config and data are
+            // required; logs and cache are optional, but one that cannot be
+            // resolved is said, not dropped silently (it then cannot be
+            // kept out of local commands by its resolved path).
+            let log_dir = optional_app_dir("log", app.path().app_log_dir());
+            let cache_dir = optional_app_dir("cache", app.path().app_cache_dir());
             log::info!(
                 "Elitea {} starting (logs: {})",
                 env!("CARGO_PKG_VERSION"),
-                app.path()
-                    .app_log_dir()
+                log_dir
+                    .as_ref()
                     .map(|d| d.display().to_string())
                     .unwrap_or_default()
             );
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
-            let tokens = TokenEndpoint::new(env!("CARGO_PKG_VERSION"))?;
+            // What no local tool reads (commands, host git, file tools, the
+            // index): every directory the app keeps data in, as resolved
+            // here (XDG overrides and Windows included), and its identifier.
+            let sandbox_deny = d0::turn::app_dirs_for_sandbox([
+                Some(config_dir.clone()),
+                Some(data_dir.clone()),
+                log_dir.clone(),
+                cache_dir,
+            ]);
+            let app_id = sandbox_app_id(app.config());
+            let host_deny = Arc::new(elitea_local_tools::deny::DenyList::for_session(
+                std::env::var_os("HOME")
+                    .filter(|home| !home.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .as_deref(),
+                app_id.as_deref(),
+                true,
+                sandbox_deny.iter().cloned(),
+            ));
+            // The one HTTP client (src/net.rs). Its TLS roots load on a
+            // background thread, so they never hold the window back.
+            let http = net::SharedHttp::new(env!("CARGO_PKG_VERSION"));
+            http.prewarm();
+            let tokens = TokenEndpoint::shared(http.clone(), env!("CARGO_PKG_VERSION"));
             // Read once, on first use, then served from memory. Deliberately NO
             // migration from the old keychain item (`ai.elitea.desktop` /
             // `device-session`): touching the keychain is what prompted for the
@@ -148,8 +183,29 @@ pub fn run() {
                     auth.retry_pending_revokes().await;
                 });
             }
-            let stored_origin = auth.state().ok().and_then(|s| s.origin);
-            http_scope::grant_stored(app.handle(), stored_origin.as_deref());
+            let stored = auth.state().ok();
+            // The webview's fetch reaches the stored deployment, and no other.
+            let scope = Arc::new(net::HttpScope::default());
+            scope.grant_stored(stored.as_ref().and_then(|s| s.origin.as_deref()));
+            app.manage(net::WebFetch {
+                http: http.clone(),
+                scope,
+                table: net::FetchTable::default(),
+            });
+            // Signed in: start the launch's token refresh now, while the
+            // window and the page load, instead of when the page first asks.
+            // The page's own request joins it (refresh_inner re-checks the
+            // cache under the gate), so this never rotates twice.
+            if stored.as_ref().is_some_and(|s| s.signed_in) {
+                let auth = auth.clone();
+                tauri::async_runtime::spawn(async move {
+                    let started = std::time::Instant::now();
+                    match auth.access_token().await {
+                        Ok(_) => log::debug!("launch token ready in {:?}", started.elapsed()),
+                        Err(error) => log::debug!("launch token not ready: {error}"),
+                    }
+                });
+            }
             // Local work (ADR-0029 D0): workspaces and the local agent turn.
             // The thread history; the app runs without it when it is refused.
             let history = match HistoryStore::open(&data_dir) {
@@ -163,15 +219,33 @@ pub fn run() {
                 }
             };
             let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
+            let policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
+            // The local workspace indexes (ADR-0029 decision 7), opened on
+            // first use; kept across sign-out and wipe (src/index.rs).
+            let index = Arc::new(
+                IndexRegistry::new(
+                    workspaces.clone(),
+                    policy.clone(),
+                    Arc::new(MainWindowIndexEvents(app.handle().clone())),
+                )
+                .with_deny_list(host_deny),
+            );
             let agents = Arc::new(
                 AgentHost::new(HostDeps {
+                    http: http.clone(),
                     credentials: Arc::new(AuthCredentials(auth.clone())),
                     client_version: env!("CARGO_PKG_VERSION").to_owned(),
-                    policy: Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone()))),
+                    policy,
                     workspaces: workspaces.clone(),
                     emitter: Arc::new(MainWindowEvents(app.handle().clone())),
                     retry: RetryPolicy::default(),
                     history: history.clone(),
+                    index: Some(index.clone()),
+                    // The stored sign-in, the history, other workspaces'
+                    // checkpoints and indexes, and the logs stay out of
+                    // every local tool's reach.
+                    sandbox_deny,
+                    app_id,
                 })
                 .map_err(|error| error.message)?,
             );
@@ -183,7 +257,7 @@ pub fn run() {
                     }),
                     config_dir,
                     data_dir,
-                    log_dir: app.path().app_log_dir().ok(),
+                    log_dir,
                     credentials: credentials.clone(),
                     workspaces: workspaces.clone(),
                     history: history.clone(),
@@ -194,6 +268,7 @@ pub fn run() {
                 workspaces,
                 history,
                 agents,
+                index,
             });
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));
@@ -228,7 +303,17 @@ pub fn run() {
             local_commands::checkpoint_preview,
             local_commands::reveal_path,
             local_commands::open_path,
+            index::index_status,
+            index::index_open,
+            index::index_enable,
+            index::index_disable,
+            index::index_refresh,
+            index::index_cancel,
+            index::index_remove,
             platform::app_platform,
+            net::http_fetch,
+            net::http_read_body,
+            net::http_cancel,
             app_events::app_ready,
             doctor::doctor_run,
             doctor::doctor_fix,
@@ -271,4 +356,27 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     // Linux and Windows: a drop on the window is the only native open.
     #[cfg(not(target_os = "macos"))]
     let _ = (app, event);
+}
+
+/// An optional app directory, or `None` with a warning saying which one
+/// could not be resolved.
+fn optional_app_dir(
+    which: &str,
+    resolved: tauri::Result<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    resolved
+        .map_err(|error| {
+            log::warn!(
+                "the app {which} directory cannot be resolved ({error}); local tools are kept \
+                 out of it only by its default location"
+            );
+        })
+        .ok()
+}
+
+/// The identifier local tools deny the app's default directories under:
+/// the bundle identifier in the Tauri config (`tauri.conf.json`).
+pub(crate) fn sandbox_app_id(config: &tauri::Config) -> Option<String> {
+    let identifier = config.identifier.trim();
+    (!identifier.is_empty()).then(|| identifier.to_owned())
 }

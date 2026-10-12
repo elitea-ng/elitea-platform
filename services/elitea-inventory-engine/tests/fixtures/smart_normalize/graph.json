@@ -1,0 +1,336 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "UserService",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/n1.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n1.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n2",
+      "name": "login",
+      "type": "function",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/n2.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n2.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n3",
+      "name": "Checkout",
+      "type": "Feature",
+      "layer": "product",
+      "citations": [
+        {
+          "file_path": "src/n3.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n3.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n4",
+      "name": "Cart",
+      "type": "Feature",
+      "layer": "product",
+      "citations": [
+        {
+          "file_path": "src/n4.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n4.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n5",
+      "name": "Login screen",
+      "type": "ui_screen",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "src/n5.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n5.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n6",
+      "name": "Order total must be positive",
+      "type": "business_rule",
+      "citations": [
+        {
+          "file_path": "src/n6.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n6.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n7",
+      "name": "Retry policy",
+      "type": "retry_policy",
+      "citations": [
+        {
+          "file_path": "src/n7.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n7.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n8",
+      "name": "Gizmo",
+      "type": "widget",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "src/n8.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n8.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n9",
+      "name": "README",
+      "type": "documentation",
+      "layer": "documentation",
+      "citations": [
+        {
+          "file_path": "src/n9.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n9.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n10",
+      "name": "Payment flow",
+      "type": "payment_flow_step",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "src/n10.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n10.py",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "n11",
+      "name": "Caf\u00e9 \u00dcberblick",
+      "type": "\u00fcberblick_seite",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "src/n11.py",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/n11.py",
+          "content_hash": null
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "relation_type": "contains",
+      "source": "n1",
+      "target": "n2"
+    },
+    {
+      "relation_type": "relates_to",
+      "source": "n3",
+      "target": "n4"
+    },
+    {
+      "relation_type": "calls",
+      "source": "n5",
+      "target": "n2"
+    }
+  ],
+  "_indices": {
+    "entity_index": {
+      "userservice": [
+        "n1"
+      ],
+      "login": [
+        "n2"
+      ],
+      "checkout": [
+        "n3"
+      ],
+      "cart": [
+        "n4"
+      ],
+      "login screen": [
+        "n5"
+      ],
+      "order total must be positive": [
+        "n6"
+      ],
+      "retry policy": [
+        "n7"
+      ],
+      "gizmo": [
+        "n8"
+      ],
+      "readme": [
+        "n9"
+      ],
+      "payment flow": [
+        "n10"
+      ],
+      "caf\u00e9 \u00fcberblick": [
+        "n11"
+      ]
+    },
+    "type_index": {
+      "class": [
+        "n1"
+      ],
+      "function": [
+        "n2"
+      ],
+      "feature": [
+        "n3",
+        "n4"
+      ],
+      "concept": [
+        "n11",
+        "n8",
+        "n5"
+      ],
+      "rule": [
+        "n6",
+        "n7"
+      ],
+      "documentation": [
+        "n9"
+      ],
+      "process": [
+        "n10"
+      ]
+    },
+    "file_index": {
+      "src/n1.py": [
+        "n1"
+      ],
+      "src/n2.py": [
+        "n2"
+      ],
+      "src/n3.py": [
+        "n3"
+      ],
+      "src/n4.py": [
+        "n4"
+      ],
+      "src/n5.py": [
+        "n5"
+      ],
+      "src/n6.py": [
+        "n6"
+      ],
+      "src/n7.py": [
+        "n7"
+      ],
+      "src/n8.py": [
+        "n8"
+      ],
+      "src/n9.py": [
+        "n9"
+      ],
+      "src/n10.py": [
+        "n10"
+      ],
+      "src/n11.py": [
+        "n11"
+      ]
+    },
+    "source_doc_index": {
+      "repo:src/n1.py": [
+        "n1"
+      ],
+      "repo:src/n2.py": [
+        "n2"
+      ],
+      "repo:src/n3.py": [
+        "n3"
+      ],
+      "repo:src/n4.py": [
+        "n4"
+      ],
+      "repo:src/n5.py": [
+        "n5"
+      ],
+      "repo:src/n6.py": [
+        "n6"
+      ],
+      "repo:src/n7.py": [
+        "n7"
+      ],
+      "repo:src/n8.py": [
+        "n8"
+      ],
+      "repo:src/n9.py": [
+        "n9"
+      ],
+      "repo:src/n10.py": [
+        "n10"
+      ],
+      "repo:src/n11.py": [
+        "n11"
+      ]
+    }
+  },
+  "_metadata": {
+    "last_saved": "2026-10-09T00:00:00.000000",
+    "version": "2.1"
+  }
+}

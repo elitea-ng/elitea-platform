@@ -544,6 +544,17 @@ networkPolicies:
 main:
   # The API. Everything else is optional next to it.
   enabled: true
+  # The identity (certificate common name or DNS SAN) elitea-main presents to
+  # the application engines' platform gRPC services (#1243, #1244), which
+  # deepwiki.platformGrpc.clients / inventory.platformGrpc.clients must name.
+  # It is READ ONLY FOR OPERATOR-SUPPLIED client material: when
+  # fileConfig.<app>ClientMaterial mounts a Secret the chart did not issue, or a
+  # volume, the chart cannot read the certificate and checks the allowlist
+  # against this name instead. When the chart issues the facade client
+  # certificate itself (<app>.mtls, the default) the identity is that
+  # Certificate's common name, elitea-main, and this must stay at it (the
+  # chart refuses anything else).
+  platformClientName: elitea-main
   # PROTOTYPE VALUES ONLY. This chart does not yet define split database
   # principals or production secret delivery. Ingress NetworkPolicies for the
   # workloads below are on by default (see networkPolicies). An opt-in
@@ -1470,6 +1481,14 @@ main:
     # (so the credential is never written into one). Two allowlists that could
     # disagree would mean an invocation that starts and then fails.
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: ""
+    # Where elitea-main deletes a project's wiki search indexes when the project
+    # is deprovisioned (#1243): the engine's platform gRPC listener, host:port.
+    # Normally LEFT EMPTY and derived by the chart as <deepwiki.service.name>:
+    # <deepwiki.platformGrpc.port> whenever deepwiki.platformGrpc.clients is
+    # set and this facade is on — the three are one feature. The hop presents
+    # the facade's client certificate (the three files above), so a target
+    # beside a facade that is off is refused, here and at boot.
+    ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: ""
 
     # --- Inventory facade (ADR-0023 H4c) -----------------------------------
     #
@@ -1493,6 +1512,23 @@ main:
     # from the certificate's subject. Empty means "use the base URL's host".
     ELITEA_INVENTORY_SERVER_NAME: ""
     ELITEA_INVENTORY_TIMEOUT_SECONDS: ""
+    # Where elitea-main deletes an Inventory toolkit's graph when the toolkit is
+    # deleted, and every graph of a project when the project is deprovisioned
+    # (#1244): the engine's platform gRPC listener, host:port. Normally LEFT
+    # EMPTY and derived by the chart as <inventory.service.name>:
+    # <inventory.platformGrpc.port> whenever inventory.platformGrpc.clients is
+    # set and this facade is on. The hop presents the facade's client
+    # certificate, so a target beside a facade that is off is refused, here and
+    # at boot.
+    ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: ""
+    # The toolkit-deletion reconciler (#1244): the loop on every elitea-main
+    # replica that drains centry.toolkit_deletions — the engine-side deletion
+    # an Inventory toolkit's delete owes, recorded by the delete's own
+    # transaction and performed afterwards with backoff. ON by default; "false"
+    # switches it off on a replica that should not run it (an engine incident,
+    # a migration window), never to opt in. Independent of the project
+    # reconciler's ELITEA_PROJECT_DELETION_RECONCILER_ENABLED (same default).
+    ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "true"
 
     # --- The Inventory facade's source expansion (ADR-0023 H4c I2) ---
     #
@@ -3086,6 +3122,26 @@ deepwiki:
     port: 8443
     annotations: {}
 
+  # The platform gRPC service (elitea.subapp.v1.PlatformOperations, libs/proto):
+  # operations that are not a user's to run, such as deleting everything a
+  # project owns here when the project is deprovisioned. It is a second
+  # listener of the host container, behind the SAME server certificate and
+  # client CA as the SPI (mutual TLS is mandatory), and every call is
+  # authorised by the verified client certificate alone: its subject common
+  # name or a DNS SAN must be in `clients`.
+  #
+  #   clients  certificate identities allowed to call it. EMPTY (the default)
+  #            keeps the service OFF: no port is opened, rendered or admitted.
+  #            The facade client certificate this chart issues has the common
+  #            name elitea-main, so `[elitea-main]` is the usual value. Needs
+  #            mtls.enabled (the chart refuses it otherwise).
+  #   port     the container and Service port, exposed as `platform-grpc`.
+  #
+  # The NetworkPolicy admits elitea-main only on both ports.
+  platformGrpc:
+    clients: []
+    port: 9443
+
   env:
     # FAIL-CLOSED, and the chart refuses to render while it is empty — see
     # elitea-deepwiki.validateGuards. The SAME value belongs in
@@ -3228,19 +3284,19 @@ deepwiki:
 # refuses a half-configured install rather than rendering one that boots and
 # then fails.
 #
-# It has NO database of its own, unlike DeepWiki: there is no storage package,
-# no migrations and no migrate Job. A graph's home is the platform artifact
-# bucket, reached with the callback bearer the facade mints per invocation.
+# It has its OWN database schema, like DeepWiki (ADR-0027): the Rust engine
+# keeps each graph in the inventory_graph schema (pgvector extension needed) and
+# a pre-install migrate Job from the engine image creates it. The engine also
+# clones repositories itself, so it carries its own git allowlist.
 inventory:
   enabled: false
   replicaCount: 1
 
   # The provider pod is up to TWO containers (ADR-0023 H2): the Go
   # sub-application host, which serves the SPI, composes and uploads, and — for
-  # runner=legacy — the Python engine sidecar, which runs the knowledge-graph
-  # engine for it over a Unix socket the two share. `image` is the host;
-  # `engine.image` is the Python image, which must be the `-engine` variant for
-  # the legacy runner to run anything.
+  # env.ELITEA_INVENTORY_RUNNER=sidecar — the Rust-native engine sidecar
+  # (ADR-0027), which runs the knowledge-graph engine for it over a Unix socket
+  # the two share. `image` is the host; `engine.image` is the engine.
   image:
     repository: ghcr.io/elitea-ng/elitea-subapp-host
     # Empty means the chart-wide image.tag.
@@ -3248,19 +3304,33 @@ inventory:
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   engine:
+    # One distroless binary: its probe is the binary itself
+    # (`elitea-inventory-engine healthcheck`) and the migrate Job runs its
+    # `migrate` subcommand. The old Python image
+    # (ghcr.io/elitea-ng/elitea-inventory, `-engine` tags) is gone and the
+    # chart refuses it.
     image:
-      repository: ghcr.io/elitea-ng/elitea-inventory
-      # Empty means the chart-wide image.tag with `-engine` appended — the
-      # image that carries the engine's dependency closure. The guard in
-      # _helpers.tpl refuses a runner=legacy install whose engine tag lacks
-      # that suffix: the plain image carries the engine SOURCE and its FIXTURE
-      # runner only, and every engine tool would fail at invocation time.
+      repository: ghcr.io/elitea-ng/elitea-inventory-engine
+      # Empty means the chart-wide image.tag (no suffix: its own repository).
       tag: ""
       pullPolicy: IfNotPresent
-    # What the SIDECAR runs: legacy (the engine) or fixture (a canned
-    # knowledge graph, for a stack that proves the hop without the engine).
-    runner: legacy
+    # What the SIDECAR runs:
+    #   native  the engine. Needs ELITEA_INVENTORY_DATABASE_URL (secrets below,
+    #           or postgresql.existingSecret) and env.ELITEA_INVENTORY_GIT_
+    #           ALLOWLIST; the chart refuses to render without them.
+    #   fixture canned knowledge graph, for a stack that proves the hop without
+    #           the engine. It reads no database.
+    # (`legacy`, the Python engine, is refused.)
+    runner: native
     socketDir: /run/inventory
+    # A private CA for the callback origin (main.env.ELITEA_INVENTORY_CALLBACK_
+    # BASE_URL), when it is https under a CA the platform roots do not cover.
+    # Names a Secret in this namespace; only `key` is mounted, at `mountPath`,
+    # and ELITEA_INVENTORY_CALLBACK_CA_FILE points at it. Empty: not mounted.
+    callbackCa:
+      secretName: ""
+      key: ca.crt
+      mountPath: /run/elitea-callback-ca
     resources:
       requests:
         cpu: 250m
@@ -3277,32 +3347,49 @@ inventory:
 
   env:
     ELITEA_SUBAPP: inventory
-    # The HOST's runner. `legacy` reaches the engine sidecar over the socket
-    # below and renders that sidecar; `fixture` serves the host's OWN canned
+    # The HOST's runner. `sidecar` reaches the engine sidecar over the socket
+    # below and renders that sidecar (`legacy`, its name before the Rust
+    # engine, is still accepted as an alias). It is the HOST's word and is
+    # never passed to the engine container, whose own runner is
+    # inventory.engine.runner. `fixture` serves the host's OWN canned
     # knowledge graph in one container, which is what a stack that only needs
     # deterministic results wants; `unavailable` refuses every tool and says
-    # so. The guard refuses `legacy` with no socket and a socket with no
-    # `legacy`, because either is a service that looks healthy and serves
+    # so. The guard refuses `sidecar` with no socket and a socket with no
+    # `sidecar`, because either is a service that looks healthy and serves
     # nothing.
-    ELITEA_INVENTORY_RUNNER: "legacy"
+    ELITEA_INVENTORY_RUNNER: "sidecar"
     ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
     ELITEA_INVENTORY_SCRATCH_PATH: /var/scratch/inventory
     # The origin elitea-main proxies to. Must agree with
     # main.env.ELITEA_INVENTORY_BASE_URL.
     ELITEA_INVENTORY_SERVICE_LOCATION_URL: https://elitea-inventory-svc:8443
+    # The git hosts the ENGINE may clone from. FAIL-CLOSED, and the chart
+    # refuses to render a native engine while it is empty. The engine clones
+    # repositories itself (a shallow clone per ingestion), so unlike the Python
+    # engine's per-file API reads there IS a provider-side destination to
+    # check. Use the SAME value as main.env.ELITEA_INVENTORY_GIT_ALLOWLIST: the
+    # facade checks it before opening the vault, the engine before cloning, and
+    # two that disagree mean an ingestion that starts and then fails.
+    # Example: "github.com,*.github.com"; "*" disables the control explicitly.
+    ELITEA_INVENTORY_GIT_ALLOWLIST: ""
+    # Clone limits, optional; the engine's defaults apply when unset
+    # (2 GiB on disk per clone, among others). Raise them together with
+    # scratch.sizeLimit below:
+    #   ELITEA_INVENTORY_MAX_CLONE_BYTES, _MAX_FILE_COUNT, _MAX_FILE_BYTES,
+    #   _MAX_PARSED_BYTES, _CLONE_TIMEOUT_SECONDS
+    # Source types ingestion reads (default github,ado_repos):
+    #   ELITEA_INVENTORY_SOURCE_TYPES
+    # Ingestion model calls in flight at once (default 8; set to the chat model
+    # server's concurrent slots):
+    #   ELITEA_INVENTORY_MODEL_CONCURRENCY
 
-  # NO git allowlist here, and that is a difference from DeepWiki rather than
-  # an omission. DeepWiki CLONES from a URL in the request, so the destination
-  # is the provider's to allow or refuse as well as the facade's. Inventory
-  # reads its source through the ELITEA SDK's toolkit, whose destination is the
-  # toolkit's stored configuration — expanded by the facade, from a toolkit the
-  # caller can already see. There is no request-supplied clone URL for a
-  # provider-side allowlist to check, and one that always passed would look
-  # like an egress control while being none. main.env.
-  # ELITEA_INVENTORY_GIT_ALLOWLIST is the real one, checked before the vault is
-  # opened.
-
-  # Sensitive values from Kubernetes Secrets.
+  # Sensitive values from Kubernetes Secrets. ELITEA_INVENTORY_DATABASE_URL
+  # defaults to the chart-wide postgresql secret when one is set, exactly as
+  # every other component's database URL does; only the engine container and the
+  # migrate Job receive it. Uncomment to point at a dedicated secret:
+  #   ELITEA_INVENTORY_DATABASE_URL:
+  #     secretName: elitea-inventory-db
+  #     key: url
   secrets:
     # The HMAC key that verifies the identity headers elitea-main signs. It
     # must hold the SAME value as main's ELITEA_INVENTORY_IDENTITY_SECRET —
@@ -3313,13 +3400,55 @@ inventory:
       key: identity-secret
       optional: true
 
-  # Ephemeral source-read and graph-build space. Nothing durable lives here:
-  # the graph is uploaded to the artifact bucket, and a replica that dies
-  # mid-ingestion loses only work that is being redone anyway. Size it for the
-  # largest repository set this deployment expects to ingest.
+  # The engine's own migrations, run as a pre-install/pre-upgrade Job from the
+  # engine image (templates/inventory/migrate-job.yaml). Rendered only with a
+  # sidecar and a database secret. Database privileges: the chart creates no
+  # role. The Job runs as the role in ELITEA_INVENTORY_DATABASE_URL, which
+  # needs CREATE on the database (the inventory_graph schema) and permission to
+  # CREATE EXTENSION vector (migration 0004), or the extension pre-created by an
+  # administrator.
+  migrate:
+    enabled: true
+    backoffLimit: 3
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+
+  # Ephemeral clone space for the engine. Nothing durable lives here: the graph
+  # is in PostgreSQL, and a replica that dies mid-ingestion loses only work that
+  # is being redone anyway. 20Gi, not DeepWiki's 8Gi: the engine's default cap
+  # is 2 GiB on disk per clone, and a run may hold a checkout plus the files the
+  # parser stage reads while another tool call lands in the same pod, so the
+  # limit is a multiple of the cap rather than equal to it. Raise it together
+  # with ELITEA_INVENTORY_MAX_CLONE_BYTES.
   scratch:
     mountPath: /var/scratch/inventory
-    sizeLimit: 8Gi
+    sizeLimit: 20Gi
+
+  # The platform gRPC service (elitea.subapp.v1.PlatformOperations, libs/proto):
+  # operations that are not a user's to run - deleting an Inventory toolkit's
+  # graph when the toolkit is deleted (DeleteToolkit), and every graph of a
+  # project when the project is deprovisioned (DeleteProject). They are not
+  # toolkit tools: no user or agent is offered them. It is a second listener of
+  # the host container, behind the SAME server certificate and client CA as the
+  # SPI (mutual TLS is mandatory), and every call is authorised by the verified
+  # client certificate alone: its subject common name or a DNS SAN must be in
+  # `clients`.
+  #
+  #   clients  certificate identities allowed to call it. EMPTY (the default)
+  #            keeps the service OFF: no port is opened, rendered or admitted.
+  #            The facade client certificate this chart issues has the common
+  #            name elitea-main, so `[elitea-main]` is the usual value. Needs
+  #            mtls.enabled (the chart refuses it otherwise).
+  #   port     the container and Service port, exposed as `platform-grpc`.
+  #
+  # The NetworkPolicy admits elitea-main only on both ports.
+  platformGrpc:
+    clients: []
+    port: 9443
 
   # mTLS for the elitea-main -> inventory hop. cert-manager issues a server
   # cert (this Deployment mounts it) and a facade client cert (elitea-main
@@ -3383,6 +3512,206 @@ inventory:
   tolerations: []
   affinity: {}
 
+# ── elitea-vector and Qdrant (ADR-0031) ─────────────────────────────────────
+#
+# elitea-vector is the only Qdrant client: a stateless gRPC facade over mTLS.
+# Callers (the workers, later the engines) present a short-lived,
+# project-bound token. elitea-vector verifies it through elitea-main's
+# TokenIntrospectionService on the private control listener and injects the
+# project into every Qdrant filter and write. elitea-main itself is admitted
+# without a token by its client-certificate identity, for deletion and admin
+# reads only.
+#
+# OFF by default, like the providers. Turning it on NEEDS main.runtime.enabled:
+# introspection is served on the runtime control listener, so without it every
+# request is refused (fail closed). templates/guards.yaml refuses that render.
+#
+# TRUST. Every certificate below is issued by mtls.issuerRef, which MUST be an
+# issuer backed by the RUNTIME CA — the CA whose certificate is runtime-ca.crt
+# in main's runtime material and in worker.materialSecretName:
+#   * elitea-main's control listener verifies the introspection client
+#     certificate against runtime-ca.crt;
+#   * the workers' agent-worker-client certificate is a runtime-CA identity,
+#     and elitea-vector verifies callers against the issuer's ca.crt;
+#   * elitea-vector verifies elitea-main's control-server certificate against
+#     the same ca.crt.
+vector:
+  enabled: false
+
+  image:
+    repository: ghcr.io/elitea-ng/elitea-vector
+    # Empty means the chart-wide image.tag.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  # ADR-0031 decision 8: minimum 2 replicas, an HPA on CPU. (An in-flight-RPC
+  # metric needs a metrics adapter this chart does not install; CPU only.)
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  service:
+    # Named explicitly: the server certificate's DNS SANs name this Service.
+    name: elitea-vector
+    port: 9470
+  # The plain-HTTP health listener (/healthz, /readyz). Probe-only: it is not
+  # on the Service, and the NetworkPolicy admits nobody to it.
+  healthPort: 9471
+
+  # The client-certificate identities admitted as ADMINISTRATOR without a
+  # token (Delete, DropProject, Count, ListIndexes only), in the canonical form
+  # of elitea-main's workloadidentity: "dns:<the one DNS SAN>" or a spiffe://
+  # URI. elitea-main has no elitea-vector client in V0, so this is empty by
+  # default; the phase that adds that client issues its certificate and lists
+  # it here.
+  adminIdentities: []
+
+  # Token introspection on elitea-main's control listener.
+  introspection:
+    # Empty: https://<main fullname>.<namespace>.svc:<control port>.
+    url: ""
+    # The SAN of elitea-main's control-server certificate. Empty: the URL's
+    # host.
+    serverName: ""
+    timeoutMs: 2000
+
+  # The embedding spaces ("<model-slug>:<dimension>") elitea-vector may
+  # create; a request for any other space is refused. THIS is the hard bound
+  # on how many Qdrant collections exist. RECOMMENDED IN PRODUCTION: list the
+  # models you run. Empty (the default) allows any space up to
+  # ELITEA_VECTOR_MAX_COLLECTIONS, which is only a soft cap: concurrent
+  # creators can overshoot it by their number.
+  # Example: ["text-embedding-3-small:1536", "bge-m3:1024"]
+  allowedSpaces: []
+
+  collection:
+    # Applied when elitea-vector creates a collection on demand. Keep it at or
+    # below qdrant.internal.replicas: a factor above the node count leaves
+    # every shard under-replicated.
+    replicationFactor: 2
+    shardNumber: 1
+
+  mtls:
+    serverSecretName: elitea-vector-server-tls
+    # The certificate elitea-vector presents to elitea-main. It carries
+    # EXACTLY ONE DNS SAN (clientDnsName): workloadidentity admits a client
+    # certificate only with one DNS SAN or one SPIFFE URI SAN, and the server
+    # certificate carries several service names. elitea-main admits it as
+    # "dns:<clientDnsName>" (ELITEA_VECTOR_INTROSPECTION_CLIENTS, rendered by
+    # this chart).
+    clientSecretName: elitea-vector-client-tls
+    clientDnsName: elitea-vector
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    issuerRef:
+      # NOT created by this chart. An issuer backed by the RUNTIME CA (see
+      # TRUST above), not the provider hops' elitea-internal-ca.
+      name: elitea-runtime-ca
+      kind: ClusterIssuer
+    mountPath: /etc/elitea-vector/tls
+    clientMountPath: /etc/elitea-vector/client-tls
+
+  # Qdrant. `internal` runs a StatefulSet of the official image in this
+  # release; `external` points at a cluster you run. Either way elitea-vector
+  # is its only client and holds its API key.
+  qdrant:
+    mode: internal
+    # REQUIRED. The Secret and key that hold the Qdrant API key. Not created
+    # by this chart: a generated key would change on every upgrade. The
+    # internal StatefulSet reads the same Secret.
+    apiKeySecret:
+      name: ""
+      key: api-key
+    external:
+      # The gRPC URL, e.g. https://qdrant.example.internal:6334.
+      url: ""
+      # OPTIONAL. A Secret with a ca.crt key for a private Qdrant CA. The Rust
+      # client trusts the native roots, so the chart points SSL_CERT_FILE at
+      # this file, which then is the ONLY trusted root.
+      caSecretName: ""
+    internal:
+      image:
+        repository: docker.io/qdrant/qdrant
+        # The -unprivileged build runs as uid 1000 / gid 2000, which the
+        # podSecurityContext below requires; the plain tag runs as root and
+        # writes its init marker into the root-owned /qdrant.
+        tag: v1.19.2-unprivileged
+        pullPolicy: IfNotPresent
+      # ADR-0031 decision 8: three nodes, with collection.replicationFactor 2.
+      # One disables clustering. Peer, REST and gRPC TLS (also decision 8) is
+      # not rendered yet: in-cluster traffic is plaintext, restricted by the
+      # NetworkPolicy to elitea-vector and the peers.
+      replicas: 3
+      storage:
+        size: 50Gi
+        # Empty: the cluster's default StorageClass.
+        storageClassName: ""
+      resources:
+        requests:
+          cpu: 500m
+          memory: 2Gi
+        limits:
+          memory: 8Gi
+      podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 2000
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+
+  # Extra plain env for elitea-vector (RUST_LOG, OTEL_EXPORTER_OTLP_ENDPOINT).
+  # The chart sets every ELITEA_VECTOR_* variable itself.
+  env:
+    RUST_LOG: info
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  terminationGracePeriodSeconds: 30
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    # The Secret volumes are mounted 0440; fsGroup makes them readable by the
+    # container's group and by nobody else.
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 worker:
   # The agent worker: the ONLY producer of an answer. Requires main.runtime.enabled.
   enabled: false
@@ -3428,19 +3757,25 @@ worker:
   #   newer native agent runtime (checkpointing, step-limit enforcement) and no
   #   Python interpreter/dependency surface to patch.
   #   LOSES, as of this release:
-  #     - the 17 toolkit types #865 named, PLUS one more found verifying this
-  #       comment directly against the pinned catalogue and Rust snapshot
-  #       (`current_toolkit_catalogue_snapshot.json`,
-  #       `current_rust_worker_toolkit_capability_snapshot.json`) rather than
-  #       trusting the issue's own count — `zephyr_essential` is catalogued
-  #       and absent from the Rust worker's 22 materialized families the same
-  #       way the other 17 are. All 18: ado_boards, ado_plans, ado_repos,
-  #       ado_wiki, aha, bitbucket, confluence, figma, gitlab (plain —
-  #       distinct from the supported `gitlab_org`), jira, powerpoint
-  #       (catalogued as `pptx`), qtest, testIO (catalogued as `testio`),
-  #       testrail, xray (catalogued as `xray_cloud`), zephyr_enterprise,
-  #       zephyr_essential, zephyr_scale. Every tile is still shown, greyed,
-  #       with a reason (#865).
+  #     - whole toolkit types the Rust worker has no family for (checked
+  #       against `current_toolkit_catalogue_snapshot.json` and
+  #       `current_rust_worker_toolkit_capability_snapshot.json`): pptx,
+  #       imagegen and data_analysis (need a model lent to a toolkit),
+  #       memory, vectorstore, sandbox, delta_lake, aws and localgit (each
+  #       blocked on a platform decision recorded in the worker's
+  #       SOURCE_PARITY.md). #865's other 17 types are now Rust families.
+  #     - single tools inside partial Rust families: the indexing tools
+  #       (index_data, search_index, stepback_*) under indexingRuntime=python
+  #       — under indexingRuntime=rust the Rust worker serves search_index,
+  #       stepback_search_index, stepback_summary_index, list_indexes and
+  #       remove_index inside the I1 families (artifact, github, gitlab,
+  #       bitbucket, ado_repos; ADR-0030 I1), and index_data runs through
+  #       the Indexes tab — tools that need a vision model or LLM (for
+  #       example confluence get_page_with_image_descriptions, figma
+  #       analyze_file) and tools that upload artifact bytes (for example
+  #       aha attach_file, testrail add_file_to_case). The capability
+  #       snapshot's `supported_tools` lists exactly what is served; the
+  #       remaining tools are shown greyed with a reason (#865).
   #     - six internal chat-agent tools that
   #       `services/elitea-worker-rust/src/agents/internal_tools.rs` recognizes
   #       and then skips rather than runs (#866): image_generation (Image
@@ -3448,20 +3783,37 @@ worker:
   #       Tools), planner (Planner), swarm (Swarm Mode), lazy_tools_mode (Smart
   #       Tools Selection). A run that hits one of these now gets a visible
   #       assistant-facing notice instead of the tool silently doing nothing.
-  #   The Rust worker's own 22 supported toolkit families (azure, azure_search,
-  #   elastic, gcp, github, gitlab_org, google_places, k8s, keycloak, openapi,
-  #   postman, rally, report_portal, salesforce, service_now, sharepoint,
-  #   slack, sonar, sql, yagmail, zephyr, zephyr_squad) and its one internal
-  #   tool (ask_user) work exactly as on Python.
+  #   The Rust worker's other toolkit families (42 dispatched types: the
+  #   original azure, azure_search, elastic, gcp, github, gitlab_org,
+  #   google_places, k8s, keycloak, openapi, postman, rally, report_portal,
+  #   salesforce, service_now, sharepoint, slack, sonar, sql, yagmail, zephyr,
+  #   zephyr_squad, artifact, plus ado_*, aha, bigquery, bitbucket, carrier,
+  #   confluence, figma, gitlab, jira, qtest, testio, testrail, xray_cloud and
+  #   zephyr_enterprise/essential/scale) and its one internal tool
+  #   (ask_user) work as on Python, apart from the per-tool gaps above.
   #
   # Choosing `python` (the default): every toolkit type and internal tool
   # above is available, at the cost of the larger interpreter/dependency
   # image and process footprint the Rust worker was written to avoid.
   #
-  # Porting the missing 17 adapters and six tools to Rust is tracked as a
+  # Porting the remaining types and six tools to Rust is tracked as a
   # multi-sprint programme (umbrella #247); this default is the honest
   # near-term answer, not a statement that the port is done.
   implementation: python
+
+  # Which implementation indexes toolkit content (ADR-0030 decision 6,
+  # ADR-0031). Written to elitea-main as ELITEA_INDEXING_RUNTIME. A deployment
+  # runs indexing entirely on one side; there is no per-toolkit routing.
+  #
+  #   python (default) -- unchanged. Index metadata is the `index_meta` row in
+  #     the project's pgvector database, written by the SDK and by elitea-main.
+  #   rust -- the index routes (list, delete, configuration save) and the
+  #     admission initializer read and write elitea_runtime.index_registry, a
+  #     table only elitea-main writes. NOTHING IS MIGRATED: indexes created
+  #     under python are not listed, and users create their indexes again.
+  #     Requires worker.implementation=rust (only the Rust worker searches the
+  #     new vector store) and the index ingest dispatch plane.
+  indexingRuntime: python
 
   image:
     # Built, signed and published by this repository's own release workflow
@@ -3695,6 +4047,20 @@ worker:
     # the one the nats-bootstrap chart creates for it. The standalone profile
     # runs agent AND index commands on ELITEA_RT_V1_AGENT, so one fleet serves
     # both.
+    #
+    # configuration.validate.v1 is NOT served by that fleet: elitea-main sends
+    # it on ELITEA_RT_V1_VALIDATE (main.runtime.commandStream), which it
+    # refuses to share with agent or index dispatch. Both workers implement it
+    # (the Rust one validates the 32 SDK configuration types with the same
+    # verdicts as the pinned SDK's pydantic models). This block binds ONE
+    # stream, so a deployment that wants validation needs a worker bound to
+    # natsStream ELITEA_RT_V1_VALIDATE and natsConsumer
+    # elitea-configuration-worker-v1: either this block pointed there (a
+    # validation-only fleet; render-worker.sh holds that shape for
+    # implementation rust) or a second worker Deployment, which is what
+    # deploy/docker-compose.standalone-rust-validate.yml does for the compose
+    # stack. Nothing dispatches a validation until
+    # env.ELITEA_CONFIGURATIONS_MUTATION_ENABLED is "true".
     natsUrl: ""
     natsStream: "ELITEA_RT_V1_AGENT"
     natsConsumer: "elitea-agent-worker-v1"
@@ -3730,9 +4096,34 @@ worker:
     # image_digest, policy_revision, and timeout_seconds.
     # The target hostname must match the supervisor certificate SAN.
     sandboxRuntimes: []
+    # Rust worker, indexingRuntime=rust only (ADR-0030 I1, ADR-0031): where
+    # the worker finds elitea-vector, as `host:port`, reached with the
+    # worker's own runtime mTLS identity (agent-worker-client.crt, issued by
+    # the runtime CA elitea-vector's server certificate chains to). It is
+    # written to runtime.json as `vector_target`, which turns on
+    # index.ingest.v1 and the index tools inside the indexing families
+    # (search_index and the rest). Empty derives
+    # `<vector.service.name>:<vector.service.port>` from this chart's own
+    # elitea-vector when vector.enabled is true; indexingRuntime=rust with
+    # neither is refused at render time, because a Rust-indexing deployment
+    # whose worker has no vector store refuses every index run and lists no
+    # index tools, silently.
+    vectorTarget: ""
+    # Rust worker, indexingRuntime=rust only: the egress allowlist of the
+    # indexing connectors (ADR-0030 decision 3), hosts separated by spaces or
+    # commas; `*.example.com` admits direct subdomains; `*` disables the
+    # control. Written to runtime.json as `index_egress_allowlist`. EMPTY
+    # REFUSES EVERY SOURCE HOST (fail-closed): an index run against github.com
+    # fails with an egress refusal until the host is named here. The default
+    # names the public SaaS hosts the I1 families index from; add your
+    # self-hosted GitLab, Bitbucket or Azure DevOps hosts.
+    indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com"
     # Broader than the current `artifact.delete_file` rule, so metadata drift
-    # cannot bypass approval.
-    sensitiveTools: '{"*":["delete_file"]}'
+    # cannot bypass approval. `remove_index` is the indexing families' index
+    # delete (ADR-0030 I1): the Rust worker runs it through elitea-main's
+    # delete flow, and like `delete_file` it is destructive, so a human
+    # approves it by default.
+    sensitiveTools: '{"*":["delete_file","remove_index"]}'
     # The delivery cap and the synchronous SDK pool cap the same executions in
     # series. Raise delivery_max_concurrency together with sync_max_workers and
     # sync_max_in_flight, or the pool bounds the delivery cap. A worker pulls

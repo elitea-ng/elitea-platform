@@ -5,7 +5,7 @@
  * `&vibrancy` for the transparent sidebar over a stand-in wallpaper — the
  * worst case for the tint, as no real material softens it).
  *
- * The workspace and native-shell IPC are the in-memory fakes the tests use;
+ * The workspace, index and native-shell IPC are the in-memory fakes the tests use;
  * the few API calls the workspace screens make are answered from canned data.
  * `window.__harness.playTurn()` scripts an agent turn against the fake host.
  *
@@ -20,6 +20,7 @@ import Typography from '@mui/material/Typography';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { recordThread, WorkspaceIpcProvider } from '@/features/workspace';
+import { IndexIpcProvider } from '@/features/workspace-index';
 import WorkspaceSessionPage from '@/pages/workspace/WorkspaceSessionPage';
 import WorkspacesPage from '@/pages/workspace/WorkspacesPage';
 import { configureGeneratedClient } from '@/shared/api/generated/mutator';
@@ -27,6 +28,7 @@ import { BROWSER_PLATFORM } from '@/shared/desktop/appEvents';
 import { createFakeAppIpc, MACOS_PLATFORM } from '@/shared/desktop/appEvents.fake';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
+import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
 import { AppIpcProvider, DesktopFrame } from '@/widgets/desktop-shell';
 
@@ -99,6 +101,11 @@ export function mountDesktopHarness(container: HTMLElement): void {
       { path: 'src', kind: 'dir' },
       { path: 'src/main.rs', kind: 'file' },
     ],
+  });
+  // `&indexOff`: the policy turns the local index off.
+  const indexIpc = createFakeIndexIpc({
+    policyAllowed: !params.has('indexOff'),
+    statuses: { w1: { state: 'ready', files: 214, entities: 12_400, relations: 30_100, last_run: '2026-10-10T08:00:00Z' } },
   });
   const vibrancy = params.has('vibrancy');
   if (vibrancy) {
@@ -204,7 +211,9 @@ export function mountDesktopHarness(container: HTMLElement): void {
       <AppProviders>
         <AppIpcProvider ipc={appIpc}>
           <WorkspaceIpcProvider ipc={ipc}>
-            <RouterProvider router={router} />
+            <IndexIpcProvider ipc={indexIpc}>
+              <RouterProvider router={router} />
+            </IndexIpcProvider>
           </WorkspaceIpcProvider>
         </AppIpcProvider>
       </AppProviders>

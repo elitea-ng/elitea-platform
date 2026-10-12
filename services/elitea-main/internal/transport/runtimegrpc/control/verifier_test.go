@@ -93,6 +93,77 @@ func TestConformanceVerifierAcceptsStrictReferenceOnlyIndexIngestCommand(t *test
 	}
 }
 
+// The index id (rust indexing runtime) is the registry row the run writes:
+// empty, or a canonical lower-case UUID.
+func TestConformanceVerifierChecksTheIndexID(t *testing.T) {
+	verifier := newTestVerifier(t)
+	withIndexID := func(indexID string) []byte {
+		t.Helper()
+		command := &runtimev1.WorkerCommandV1{}
+		if err := proto.Unmarshal(validRawIndexWorkerCommand(t), command); err != nil {
+			t.Fatal(err)
+		}
+		command.GetIndexIngest().IndexId = indexID
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	const indexID = "3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c"
+	verified, err := verifier.Verify(context.Background(), signedEnvelope(withIndexID(indexID)))
+	if err != nil || verified.GetIndexIngest().GetIndexId() != indexID {
+		t.Fatalf("a command naming its registry row: %v err=%v", verified, err)
+	}
+	if verified, err := verifier.Verify(context.Background(), signedEnvelope(withIndexID(""))); err != nil || verified.GetIndexIngest().GetIndexId() != "" {
+		t.Fatalf("a python-path command without an index id: %v err=%v", verified, err)
+	}
+	for name, raw := range map[string][]byte{
+		"upper case": withIndexID("3F2A9C1E-7B4D-4E8A-9C21-5D6E7F8A9B0C"),
+		"no hyphens": withIndexID("3f2a9c1e7b4d4e8a9c215d6e7f8a9b0c"),
+		"too long":   withIndexID(indexID + "0"),
+		"label":      withIndexID("index-1"),
+	} {
+		if _, err := verifier.Verify(context.Background(), signedEnvelope(raw)); !errors.Is(err, ErrMalformedWorkerCommand) {
+			t.Fatalf("%s: %v, want ErrMalformedWorkerCommand", name, err)
+		}
+	}
+}
+
+// The expected embedding space (rust indexing runtime) is a pair: both set,
+// or neither.
+func TestConformanceVerifierChecksTheExpectedEmbeddingSpacePair(t *testing.T) {
+	verifier := newTestVerifier(t)
+	withExpected := func(model string, dimension uint32) []byte {
+		t.Helper()
+		command := &runtimev1.WorkerCommandV1{}
+		if err := proto.Unmarshal(validRawIndexWorkerCommand(t), command); err != nil {
+			t.Fatal(err)
+		}
+		command.GetIndexIngest().ExpectedEmbeddingModel = model
+		command.GetIndexIngest().ExpectedEmbeddingDimension = dimension
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	verified, err := verifier.Verify(context.Background(), signedEnvelope(withExpected("Org/Model.A", 1536)))
+	if err != nil || verified.GetIndexIngest().GetExpectedEmbeddingModel() != "Org/Model.A" ||
+		verified.GetIndexIngest().GetExpectedEmbeddingDimension() != 1536 {
+		t.Fatalf("a command with an expected space: %v err=%v", verified, err)
+	}
+	for name, raw := range map[string][]byte{
+		"model only":     withExpected("m", 0),
+		"dimension only": withExpected("", 8),
+		"too wide":       withExpected("m", 70000),
+	} {
+		if _, err := verifier.Verify(context.Background(), signedEnvelope(raw)); !errors.Is(err, ErrMalformedWorkerCommand) {
+			t.Fatalf("%s: %v, want ErrMalformedWorkerCommand", name, err)
+		}
+	}
+}
+
 func moveFirstFieldToEnd(t *testing.T, raw []byte) []byte {
 	t.Helper()
 	number, wireType, tagLength := protowire.ConsumeTag(raw)

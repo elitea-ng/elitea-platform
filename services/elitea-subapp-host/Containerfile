@@ -7,6 +7,10 @@
 # the driver; the retry loop is the scheduler's (a broken proxy stream is
 # not retried by Go itself).
 FROM golang:1.26-trixie AS builder
+WORKDIR /src
+# The generated platform gRPC contract (libs/proto), the module's one local
+# replace: go.mod points at ../../libs/proto/gen/go.
+COPY libs/proto/gen/go ./libs/proto/gen/go
 WORKDIR /src/services/elitea-subapp-host
 COPY services/elitea-subapp-host/go.mod services/elitea-subapp-host/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -31,6 +35,8 @@ COPY --from=builder /out/elitea-subapp-host /elitea-subapp-host
 # distroless has no shell: probe GET /health (or /ready) over HTTP from the
 # orchestrator. The probes bypass mutual TLS and identity, by design.
 ENV ELITEA_SUBAPP=deepwiki
-EXPOSE 8080
+# 8080 is the SPI; 9443 is the platform gRPC service, served only when
+# <PREFIX>PLATFORM_CLIENTS names the clients allowed to call it.
+EXPOSE 8080 9443
 USER nonroot:nonroot
 ENTRYPOINT ["/elitea-subapp-host"]

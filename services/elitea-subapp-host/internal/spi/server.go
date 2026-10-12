@@ -77,6 +77,11 @@ func NewServer(settings Settings, app App, logger *slog.Logger, options ...Optio
 	for _, option := range options {
 		option(s)
 	}
+	// A runner that wants the registry (to find and stop its own running
+	// invocations) is handed it once, after the options have chosen the store.
+	if aware, ok := app.Runner.(ManagerAware); ok {
+		aware.AttachManager(s.manager)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /descriptor", s.descriptor)
 	mux.HandleFunc("GET /health", s.health)
@@ -93,8 +98,39 @@ func NewServer(settings Settings, app App, logger *slog.Logger, options ...Optio
 func (s *Server) Manager() *Manager { return s.manager }
 
 // Start begins housekeeping; Stop ends every in-flight invocation.
-func (s *Server) Start(ctx context.Context) { s.manager.Start(ctx) }
-func (s *Server) Stop()                     { s.manager.Stop() }
+func (s *Server) Start(ctx context.Context) {
+	s.manager.Start(ctx)
+	if starter, ok := s.app.Runner.(Starter); ok {
+		starter.Start(ctx)
+	}
+}
+func (s *Server) Stop() { s.manager.Stop() }
+
+// ManagerAware is a runner that wants the invocation registry.
+type ManagerAware interface{ AttachManager(*Manager) }
+
+// Labeler is a runner that names, from the call alone, the labels an
+// invocation must carry from the moment it is registered (the project and
+// toolkit an ingest writes, say), so that a deletion's StopMatching finds it
+// whether or not the run has begun. The server asks before Submit
+// (Manager.SubmitLabelled); nil or empty means no labels.
+type Labeler interface {
+	Labels(call Invoke) map[string]string
+}
+
+// Starter is a runner with background work (refreshing what the engine can
+// do, say) that runs until the context ends.
+type Starter interface{ Start(ctx context.Context) }
+
+// Settings are the host's settings, for the code that starts its listeners.
+func (s *Server) Settings() Settings { return s.settings }
+
+// PlatformOps is the application's platform operations, when its runner has
+// any (platform.go).
+func (s *Server) PlatformOps() (PlatformOps, bool) {
+	ops, ok := s.app.Runner.(PlatformOps)
+	return ops, ok
+}
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }
 
@@ -135,7 +171,10 @@ func (s *Server) mtlsGate(next http.Handler) http.Handler {
 // back only what a valid signature vouches for. With a secret configured
 // and mTLS required, a request off the probes with no valid signature is
 // refused; without mTLS the headers are merely dropped, so a dev stack
-// still serves.
+// still serves. A dropped identity is EMPTY, never the body's: a runner
+// whose tools address tenant data must refuse a call with no verified
+// project (inventory's run.Runner.RequireVerifiedProject) rather than read
+// the project from the body the caller writes.
 func (s *Server) identityGate(next http.Handler) http.Handler {
 	secret := []byte(s.settings.IdentitySecret)
 	required := s.settings.MTLSRequired()
@@ -277,7 +316,18 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request) {
 		}
 		return s.app.Runner.Invoke(ctx, Invoke{Family: family, Toolkit: toolkit, Tool: tool, Request: request, Identity: identity}, tc)
 	}
-	invocation, err := s.manager.Submit(r.Context(), toolkit, tool, call)
+	// The labels a deletion finds the invocation by are set at
+	// registration, not by the run: a run that has not reached its
+	// SetLabel yet would be invisible to a StopMatching in between
+	// (Manager.SubmitLabelled). An unknown toolkit has no family and so no
+	// labels; the run refuses it.
+	var labels map[string]string
+	if labeler, ok := s.app.Runner.(Labeler); ok {
+		if family, err := s.app.Toolkits.Resolve(toolkit); err == nil {
+			labels = labeler.Labels(Invoke{Family: family, Toolkit: toolkit, Tool: tool, Request: request, Identity: identity})
+		}
+	}
+	invocation, err := s.manager.SubmitLabelled(r.Context(), toolkit, tool, labels, call)
 	if err != nil {
 		s.logger.Error("failed to accept an invocation", "toolkit", toolkit, "tool", tool, "error", err)
 		writeJSON(w, http.StatusInternalServerError, TransportError(http.StatusInternalServerError, "Internal Server Error"))

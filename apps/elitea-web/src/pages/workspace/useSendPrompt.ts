@@ -12,8 +12,8 @@ import { useEnsureConversation } from './useEnsureConversation';
 export interface SendPrompt {
   canSend: boolean;
   sendError: string | null;
-  /** `mentions`: the workspace paths the prompt references with "@". */
-  send: (prompt: string, planMode: boolean, mentions: string[]) => Promise<boolean>;
+  /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the agent's skills it invokes with "/". */
+  send: (prompt: string, planMode: boolean, mentions: string[], skills?: string[]) => Promise<boolean>;
 }
 
 /**
@@ -55,7 +55,7 @@ export function useSendPrompt(
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
 
-  const send = async (prompt: string, planMode: boolean, mentions: string[]): Promise<boolean> => {
+  const send = async (prompt: string, planMode: boolean, mentions: string[], skills: string[] = []): Promise<boolean> => {
     if (agent === undefined || version === undefined || prompt.trim() === '' || turn.busy || inFlight.current) return false;
     inFlight.current = true;
     setSending(true);
@@ -88,6 +88,7 @@ export function useSendPrompt(
         prompt,
         plan_mode: planMode,
         mentions,
+        skills,
       });
       // A refused start (its reason is the turn's startError) keeps the
       // prompt and the person's conversation choice as they were.

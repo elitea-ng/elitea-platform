@@ -170,6 +170,12 @@ deepwiki:
           memory: 64Mi
         limits:
           memory: 2Gi
+  # The platform gRPC service (#1243): elitea-main deletes a project's wiki
+  # indexes here when the project is deprovisioned. The chart derives
+  # main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET (elitea-deepwiki-svc:9443)
+  # from this.
+  platformGrpc:
+    clients: [elitea-main]
   env:
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
     ELITEA_DEEPWIKI_MODEL_ALLOWLIST: "*"

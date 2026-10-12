@@ -27,6 +27,8 @@ export interface TurnStartRequest {
   plan_mode: boolean;
   /** Workspace-relative paths the person referenced with "@" (a folder ends with `/`); the host checks them and lists them under the prompt. */
   mentions: string[];
+  /** The agent's skills the person picked with "/" (by name); the host resolves them against the agent version and applies them to this turn. */
+  skills: string[];
 }
 
 /** One match of `workspace_files` (the "@" picker). */

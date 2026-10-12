@@ -1,0 +1,61 @@
+package api
+
+// The application engines' platform services in the composition (#1243, #1244):
+// the one list of clients RouterConfig carries, and the two journals it is
+// wired into — the project provisioner's cleanup journal (one step per
+// application, recorded on the row when the project is deleted) and the
+// toolkit cleanup journal (one row per Inventory toolkit deleted).
+
+import (
+	"context"
+	"log/slog"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
+)
+
+// ApplicationDataClient is one application engine's platform service as the
+// composition sees it. *platformops.Client satisfies it.
+type ApplicationDataClient interface {
+	// App is the application's name: platformops.AppDeepWiki or AppInventory.
+	App() string
+	projectprovisioning.ApplicationDataRemover
+	// DeleteToolkitData removes what the engine holds for one toolkit.
+	// platformops.ErrNotSupported is the answer of an application that keeps
+	// nothing per toolkit; ErrRetryLater one that holds it for now.
+	DeleteToolkitData(ctx context.Context, projectID, toolkitID int64) (platformops.ToolkitDeletion, error)
+}
+
+// applicationDataOptions are the provisioner options that give the cleanup
+// journal one step per wired application.
+func applicationDataOptions(clients []ApplicationDataClient) []projectprovisioning.Option {
+	options := make([]projectprovisioning.Option, 0, len(clients))
+	for _, client := range clients {
+		if client == nil {
+			continue
+		}
+		options = append(options, projectprovisioning.WithApplicationData(client.App(), client))
+	}
+	return options
+}
+
+// toolkitCleanupOptions are the journal options that give the toolkit cleanup
+// journal one remover per wired application.
+func toolkitCleanupOptions(clients []ApplicationDataClient) []toolkitcleanup.Option {
+	options := make([]toolkitcleanup.Option, 0, len(clients))
+	for _, client := range clients {
+		if client == nil {
+			continue
+		}
+		options = append(options, toolkitcleanup.WithRemover(client.App(), client))
+	}
+	return options
+}
+
+// newToolkitCleanupJournal builds the toolkit cleanup journal over the shared
+// pool and the wired engines. The toolkit handler enqueues into it; the
+// process's reconciler (RouterConfig.OnToolkitCleanupJournal) drains it.
+func newToolkitCleanupJournal(cfg RouterConfig) *toolkitcleanup.Journal {
+	return toolkitcleanup.New(cfg.Pool, slog.Default(), toolkitCleanupOptions(cfg.ApplicationData)...)
+}

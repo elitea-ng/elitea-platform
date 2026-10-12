@@ -30,6 +30,7 @@ use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
@@ -38,6 +39,7 @@ use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 
 /// The most symlinks one resolution follows before giving up (Linux's
@@ -284,6 +286,10 @@ pub struct Workspace {
     root_fd: OwnedFd,
     deny: GlobSet,
     deny_patterns: Vec<String>,
+    /// The session's deny list (credentials, the host app's data, the
+    /// session's data directory): denied like `path_deny`, wherever the
+    /// workspace sits (a workspace bound at `~` holds `~/.ssh`).
+    deny_list: Option<Arc<DenyList>>,
 }
 
 impl fmt::Debug for Workspace {
@@ -337,7 +343,22 @@ impl Workspace {
             root_fd,
             deny,
             deny_patterns: path_deny.to_vec(),
+            deny_list: None,
         })
+    }
+
+    /// Deny what `list` covers too, for every read, write, listing and
+    /// search (see [`Self::denied_by`]).
+    #[must_use]
+    pub fn with_deny_list(mut self, list: Arc<DenyList>) -> Self {
+        self.deny_list = Some(list);
+        self
+    }
+
+    /// The session's deny list, when one was given.
+    #[must_use]
+    pub fn deny_list(&self) -> Option<&Arc<DenyList>> {
+        self.deny_list.as_ref()
     }
 
     /// The canonical root.
@@ -402,6 +423,11 @@ impl Workspace {
         if intent == Intent::Write && components.iter().any(|c| is_protected_name(c)) {
             return Some(format!("{PROTECTED_DIR} (protected)"));
         }
+        if let Some(list) = &self.deny_list
+            && list.covers(&self.absolute(path))
+        {
+            return Some("the session's deny list (credentials or the app's own data)".to_owned());
+        }
         (1..=components.len()).find_map(|end| {
             let prefix = nfc(&components[..end].join("/"));
             self.deny
@@ -417,16 +443,18 @@ impl Workspace {
     pub(crate) fn read_denied_filter(&self) -> impl Fn(&Path) -> bool + Send + Sync + 'static {
         let root = self.root.clone();
         let deny = self.deny.clone();
+        let list = self.deny_list.clone();
         move |absolute: &Path| {
-            absolute
-                .strip_prefix(&root)
-                .ok()
-                .and_then(|rest| WsPath::from_relative(rest).ok())
-                .is_some_and(|path| {
-                    let components = path.components();
-                    (1..=components.len())
-                        .any(|end| deny.is_match(nfc(&components[..end].join("/"))))
-                })
+            list.as_ref().is_some_and(|list| list.covers(absolute))
+                || absolute
+                    .strip_prefix(&root)
+                    .ok()
+                    .and_then(|rest| WsPath::from_relative(rest).ok())
+                    .is_some_and(|path| {
+                        let components = path.components();
+                        (1..=components.len())
+                            .any(|end| deny.is_match(nfc(&components[..end].join("/"))))
+                    })
         }
     }
 

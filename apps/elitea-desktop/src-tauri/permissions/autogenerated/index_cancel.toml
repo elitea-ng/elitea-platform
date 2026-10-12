@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-index-cancel"
+description = "Enables the index_cancel command without any pre-configured scope."
+commands.allow = ["index_cancel"]
+
+[[permission]]
+identifier = "deny-index-cancel"
+description = "Denies the index_cancel command without any pre-configured scope."
+commands.deny = ["index_cancel"]

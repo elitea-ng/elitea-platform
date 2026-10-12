@@ -425,6 +425,38 @@ async fn concurrent_refreshes_collapse_into_one_exchange() {
     );
 }
 
+/// A launch: the host starts the token refresh in setup (src/lib.rs) and
+/// the page asks for a token while it runs. Both get the one new token; the
+/// refresh token rotates once.
+#[tokio::test]
+async fn a_launch_refresh_and_the_pages_token_request_share_one_exchange() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let (h, _server) = signed_in(count.clone()).await;
+    let after_sign_in = count.load(Ordering::SeqCst);
+    // The next launch: the same files, nothing cached in memory.
+    let relaunched = Arc::new(AuthService::new(AuthConfig {
+        store: h.credentials.clone(),
+        pending_revokes: h.pending.clone(),
+        files: SettingsFiles::new(h.dir.clone()),
+        tokens: TokenEndpoint::new("0.1.0").unwrap(),
+        opener: h.browser.clone(),
+        build_client_id: None,
+        runtime_client_id: None,
+    }));
+    let (launch, page, page_again) = tokio::join!(
+        relaunched.access_token(),
+        relaunched.access_token(),
+        relaunched.access_token()
+    );
+    let tokens = [launch, page, page_again].map(|t| t.unwrap().unwrap().token);
+    assert!(tokens.iter().all(|t| *t == tokens[0]), "{tokens:?}");
+    assert_eq!(
+        count.load(Ordering::SeqCst) - after_sign_in,
+        1,
+        "one launch, one rotation"
+    );
+}
+
 #[tokio::test]
 async fn a_revoked_device_wipes_the_session_and_the_policy() {
     let (h, _server) = signed_in(Arc::default()).await;

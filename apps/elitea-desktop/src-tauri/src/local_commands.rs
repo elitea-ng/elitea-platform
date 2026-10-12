@@ -35,6 +35,8 @@ use elitea_local_tools::find::FoundPath;
 pub struct LocalState {
     pub workspaces: Arc<WorkspaceStore>,
     pub agents: Arc<AgentHost>,
+    /// The workspaces' local indexes (`src/index.rs`).
+    pub index: Arc<crate::index::IndexRegistry>,
     /// The thread history, flushed at exit (`None` runs without one).
     pub history: Option<Arc<crate::history::HistoryStore>>,
 }
@@ -61,6 +63,14 @@ impl crate::doctor::DoctorHooks for AppDoctorHooks {
             log::warn!("could not clear the webview's data: {error}");
         }
         crate::app_events::emit_live(&self.app, "signed_out");
+    }
+
+    fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
+        crate::doctor::DoctorHooks::with_index_closed(self.agents.as_ref(), workspace_id, work);
+    }
+
+    fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
+        crate::doctor::DoctorHooks::rebuild_index(self.agents.as_ref(), workspace_id)
     }
 }
 
@@ -441,8 +451,8 @@ pub fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, Ip
 /// Refused (`workspace_busy`) while a turn runs in the workspace; also
 /// drops the agent host's session and turns of it.
 #[tauri::command(rename_all = "snake_case")]
-pub fn workspace_remove(state: State<'_, LocalState>, id: String) -> Result<(), IpcError> {
-    Ok(state.agents.remove_workspace(&id)?)
+pub async fn workspace_remove(state: State<'_, LocalState>, id: String) -> Result<(), IpcError> {
+    Ok(state.agents.remove_workspace(&id).await?)
 }
 
 /// Refused (`workspace_busy`) while a turn runs in the workspace.
@@ -467,6 +477,7 @@ pub async fn agent_turn_start(
     prompt: String,
     plan_mode: bool,
     mentions: Option<Vec<String>>,
+    skills: Option<Vec<String>>,
 ) -> Result<TurnStarted, IpcError> {
     Ok(state
         .agents
@@ -479,6 +490,7 @@ pub async fn agent_turn_start(
             prompt,
             plan_mode,
             mentions: mentions.unwrap_or_default(),
+            skills: skills.unwrap_or_default(),
         })
         .await?)
 }

@@ -620,6 +620,9 @@ reads, which looks configured and does nothing.
 {{- if $clientMaterial.enabled -}}
 {{- fail "fileConfig.deepwikiClientMaterial.enabled is true but env.ELITEA_DEEPWIKI_ENABLED is off, so the material is mounted and never read. That is the state that looks configured and does nothing. Turn the facade on, or disable the material." -}}
 {{- end -}}
+{{- if get $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET" -}}
+{{- fail "env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET is set but env.ELITEA_DEEPWIKI_ENABLED is off. The platform gRPC client presents the facade's client certificate, so it cannot exist without the facade; cmd/elitea-main refuses the same at boot. Turn the facade on, or clear the target." -}}
+{{- end -}}
 {{- range $name, $value := $material -}}
 {{- if $value -}}
 {{- fail (printf "env.%s is set but env.ELITEA_DEEPWIKI_ENABLED is off, so no facade is composed and the material is never read. Turn it on, or clear env.%s." $name $name) -}}
@@ -696,6 +699,9 @@ reads, which looks configured and does nothing.
 {{- fail "fileConfig.inventoryClientMaterial.secretName and .volume are mutually exclusive: one Deployment volume cannot have two sources." -}}
 {{- end -}}
 {{- else -}}
+{{- if get $env "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET" -}}
+{{- fail "env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET is set but env.ELITEA_INVENTORY_ENABLED is off. The platform gRPC client presents the facade's client certificate, so it cannot exist without the facade; cmd/elitea-main refuses the same at boot. Turn the facade on, or clear the target." -}}
+{{- end -}}
 {{- if $clientMaterial.enabled -}}
 {{- fail "fileConfig.inventoryClientMaterial.enabled is true but env.ELITEA_INVENTORY_ENABLED is off, so the material is mounted and never read. That is the state that looks configured and does nothing. Turn the facade on, or disable the material." -}}
 {{- end -}}
@@ -840,6 +846,13 @@ and the term that actually moves is the one this counts.
       (int (default 4  (get $env "ELITEA_RUNTIME_DB_REPLAY_MAX_CONNS")))
       (int (default 2  (get $env "ELITEA_RUNTIME_DB_TERMINAL_MAX_CONNS")))
       (int (default 4  (get $env "ELITEA_RUNTIME_DB_CONTENT_MAX_CONNS"))) -}}
+{{- if .Values.vector.enabled -}}
+{{/* The seventh pool, opened only when ELITEA_VECTOR_INTROSPECTION_CLIENTS is
+     rendered (vector.enabled): elitea-vector's token introspection reads the
+     claim-token table on its own bounded pool, so a burst of introspection
+     calls cannot starve the lease/control pool. */}}
+{{- $perReplica = add $perReplica (int (default 8 (get $env "ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS"))) -}}
+{{- end -}}
 {{- end -}}
 
 {{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
@@ -1201,6 +1214,12 @@ ELITEA_RUNTIME_CONTENT_ADDRESS: {{ $listeners.contentAddress | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{- if .Values.vector.enabled }}
+{{/* ADR-0031: the client identities admitted to TokenIntrospectionService on
+     the control listener above — elitea-vector's client certificate, whose
+     one DNS SAN is vector.mtls.clientDnsName. */}}
+ELITEA_VECTOR_INTROSPECTION_CLIENTS: {{ include "elitea-vector.clientIdentity" . | quote }}
+{{- end }}
 {{- end -}}
 {{- end }}
 

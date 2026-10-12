@@ -12,12 +12,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
+import { IndexIpcProvider } from '@/features/workspace-index';
 import type { Application } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import type { AgentEvent, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
+import { createFakeIndexIpc, type FakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 
 import { server } from '../../test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -34,7 +36,7 @@ const globals = globalThis as unknown as Record<string, unknown>;
 const FOLDER: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: null, is_git: true };
 
 /** Mounts the pages at `path`; answers a function that opens another folder's session. */
-function mount(ipc: FakeWorkspaceIpc, path: string): (workspaceId: string) => Promise<void> {
+function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc): (workspaceId: string) => Promise<void> {
   const rootRoute = createRootRoute();
   const list = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces', component: WorkspacesPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage });
@@ -44,11 +46,10 @@ function mount(ipc: FakeWorkspaceIpc, path: string): (workspaceId: string) => Pr
     routeTree: rootRoute.addChildren([list, session, chat, createAgent]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
+  const pages = <RouterProvider router={router} />;
   render(
     <AppProviders>
-      <WorkspaceIpcProvider ipc={ipc}>
-        <RouterProvider router={router} />
-      </WorkspaceIpcProvider>
+      <WorkspaceIpcProvider ipc={ipc}>{indexIpc === undefined ? pages : <IndexIpcProvider ipc={indexIpc}>{pages}</IndexIpcProvider>}</WorkspaceIpcProvider>
     </AppProviders>,
   );
   return (workspaceId) => router.navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
@@ -92,6 +93,8 @@ describe('WorkspacesPage', () => {
     expect(within(rows[0] as HTMLElement).getByText('app')).toBeInTheDocument();
     expect(within(rows[0] as HTMLElement).getByText('/Users/me/code/app')).toBeInTheDocument();
     expect(within(rows[0] as HTMLElement).getByText('Git')).toBeInTheDocument();
+    // No host index client (a plain browser tab): no index chip.
+    expect(within(rows[0] as HTMLElement).queryByTestId('index-status-chip')).toBeNull();
     await waitFor(() => expect(within(rows[0] as HTMLElement).getByRole('combobox')).toHaveTextContent('Marketing'));
 
     await user.click(screen.getByRole('button', { name: 'Open folder' }));
@@ -100,6 +103,24 @@ describe('WorkspacesPage', () => {
     expect(within(after[1] as HTMLElement).queryByText('Git')).toBeNull();
     // An unbound folder cannot start a session yet.
     expect(within(after[1] as HTMLElement).getByRole('button', { name: 'Open' })).toBeDisabled();
+  });
+
+  it('shows each folder\'s code index on its row', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER, { ...FOLDER, id: 'w2', name: 'notes' }] });
+    mount(ipc, '/workspaces', createFakeIndexIpc({ statuses: { w1: { state: 'ready', entities: 42 } } }));
+    const rows = await screen.findAllByTestId('workspace-row');
+    await waitFor(() => expect(within(rows[0] as HTMLElement).getByTestId('index-status-chip')).toHaveTextContent('Ready · 42 entities'));
+    await waitFor(() => expect(within(rows[1] as HTMLElement).getByTestId('index-status-chip')).toHaveTextContent('Off'));
+  });
+
+  it('never opens or refreshes an index from the list (every row reads its status only)', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER, { ...FOLDER, id: 'w2', name: 'notes' }] });
+    const indexIpc = createFakeIndexIpc({ statuses: { w1: { state: 'stale', entities: 42 }, w2: { state: 'stale', entities: 7 } } });
+    mount(ipc, '/workspaces', indexIpc);
+    const rows = await screen.findAllByTestId('workspace-row');
+    await waitFor(() => expect(within(rows[1] as HTMLElement).getByTestId('index-status-chip')).toHaveTextContent('Stale'));
+    expect(indexIpc.calls.opened).toEqual([]);
+    expect(indexIpc.calls.refreshes).toEqual([]);
   });
 
   it('binds a project to a folder through the project picker', async () => {
@@ -152,9 +173,12 @@ describe('WorkspacesPage', () => {
 
 describe('WorkspaceSessionPage', () => {
   const createdConversations: unknown[] = [];
-  function serveProject(): void {
+  function serveProject(skills: { id: string; name: string; description?: string }[] = []): void {
     createdConversations.length = 0;
     server.use(
+      http.get(`${BASE}/elitea_core/application_skills/prompt_lib/42/9`, () =>
+        HttpResponse.json({ items: skills.map((s) => ({ ...s, project_id: '42', type: 'skill' })), total: skills.length, page: 1, page_size: skills.length, total_pages: 1 }),
+      ),
       http.get(`${BASE}/elitea_core/applications/prompt_lib/42`, () =>
         HttpResponse.json({ rows: [{ id: '5', name: 'Coder', tags: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', owner_id: '1', is_forked: false, meta: null, has_interrupt: false }], total: 1 }),
       ),
@@ -178,6 +202,16 @@ describe('WorkspaceSessionPage', () => {
       http.post(`${BASE}/elitea_core/participants/prompt_lib/42/77`, () => HttpResponse.json([])),
     );
   }
+
+  it('shows the folder\'s code index in the header', async () => {
+    serveProject();
+    const indexIpc = createFakeIndexIpc({ statuses: { w1: { state: 'stale' } } });
+    mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1', indexIpc);
+    const session = await screen.findByTestId('workspace-session');
+    // The session page opens the index, which checks the folder.
+    await waitFor(() => expect(within(session).getByTestId('index-status-chip')).toHaveTextContent('Building…'));
+    expect(indexIpc.calls.opened).toEqual(['w1']);
+  });
 
   it('asks to bind a project first when the folder has none', async () => {
     mount(createFakeWorkspaceIpc({ workspaces: [FOLDER] }), '/workspaces/w1');
@@ -215,6 +249,7 @@ describe('WorkspaceSessionPage', () => {
       prompt: 'fix the build',
       plan_mode: true,
       mentions: [],
+      skills: [],
     });
 
     const at = (seq: number) => ({ turn_id: 'turn-1', seq });
@@ -670,8 +705,8 @@ describe('WorkspaceSessionPage', () => {
       { path: 'README.md', kind: 'file' as const },
     ];
 
-    async function ready(ipc: FakeWorkspaceIpc): Promise<ReturnType<typeof userEvent.setup>> {
-      serveProject();
+    async function ready(ipc: FakeWorkspaceIpc, skills?: Parameters<typeof serveProject>[0]): Promise<ReturnType<typeof userEvent.setup>> {
+      serveProject(skills);
       const user = userEvent.setup();
       mount(ipc, '/workspaces/w1');
       await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
@@ -741,6 +776,8 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[0]?.prompt).toBe('one\ntwo');
     });
 
+    // Six commands, a turn and a new thread in one test: the default 5 s is not
+    // enough under the coverage shard's instrumentation (30 s below).
     it('runs the "/" commands: plan, help, agent, new, clear and undo', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       ipc.setChanges('turn-1', { files: [{ path: 'a.txt', status: 'modified', added: 1, removed: 1, diff: '' }] });
@@ -799,6 +836,50 @@ describe('WorkspaceSessionPage', () => {
       await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
       expect(created).toBe(1);
       expect(ipc.calls.started[1]?.conversation_id).toBe('78');
+    }, 30_000);
+
+    it('lists the agent\'s skills after the commands, filtered, and sends the one the message starts with', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [
+        { id: '7', name: 'style', description: 'The house style' },
+        { id: '8', name: 'code-review', description: 'Review a change' },
+      ]);
+      const input = screen.getByTestId('chat-message-input');
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(8));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
+        '/new', '/plan', '/undo', '/agent', '/clear', '/help', '/code-review', '/style',
+      ]);
+      expect(within(menu).getByText('Skills')).toBeInTheDocument();
+      expect(within(menu).getByText('The house style')).toBeInTheDocument();
+
+      // Filtered by what follows the "/": only the skills match "st".
+      await user.type(input, 'st');
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId('workspace-command-menu'))
+            .getAllByRole('option')
+            .map((o) => o.getAttribute('aria-label')),
+        ).toEqual(['/style']),
+      );
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('/style '));
+      expect(screen.queryByTestId('workspace-command-menu')).toBeNull();
+
+      await user.type(input, 'tidy the README{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('/style tidy the README');
+      expect(ipc.calls.started[0]?.skills).toEqual(['style']);
+    });
+
+    it('sends no skill when the message does not start with one', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [{ id: '7', name: 'style' }]);
+      await user.type(screen.getByTestId('chat-message-input'), 'use /style here{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.skills).toEqual([]);
     });
 
     it('does not open the command menu for a "/" inside the text', async () => {

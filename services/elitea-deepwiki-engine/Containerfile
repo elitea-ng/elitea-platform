@@ -66,9 +66,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # starting it: no system OpenSSL linked or shipped, CA roots present, and the
 # whole closure found inside the runtime root. A base change that drops a
 # library fails HERE, not as a sidecar that cannot start.
-COPY services/elitea-deepwiki-engine/scripts/verify-runtime.sh /usr/local/bin/verify-runtime
+# The script is shared (libs/rust/scripts), already in the builder with the libs.
 RUN --mount=type=bind,from=runtime-base,source=/,target=/runtime-root,readonly \
-    sh /usr/local/bin/verify-runtime /usr/local/bin/elitea-deepwiki-engine
+    sh /src/libs/rust/scripts/verify-runtime.sh /usr/local/bin/elitea-deepwiki-engine
 
 # The socket directory, built here because the runtime image has no shell.
 # A compose named volume (and Docker's fresh volume in particular) takes the

@@ -9,7 +9,7 @@ apps/elitea-web  --vite build --mode desktop-->  apps/elitea-web/dist-desktop
                                                         |  bundled as assets
 apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
         |   credentials.json (refresh token)|
-        |   loopback sign-in listener       +-- HTTP plugin --> your deployment
+        |   loopback sign-in listener       +-- one pooled HTTPS client --> your deployment
         +-- system browser (RFC 8252)
 ```
 
@@ -161,6 +161,25 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   on every keychain read. The keychain item older builds wrote is never read
   (reading it is what prompted); see "Upgrading from a keychain build".
 
+- **Local tools cannot read the app's own data or your credentials.** The
+  config, data, log and cache directories the app resolves once at launch
+  (wherever `XDG_*` or the platform puts them; one that cannot be resolved
+  is logged), the default locations under the bundle identifier from
+  `tauri.conf.json` (Application Support, Caches, Logs, WebKit,
+  HTTPStorages, Preferences, saved window state; `~/.config`,
+  `~/.local/share`, `~/.cache`) as a fallback, and your credentials
+  (`~/.ssh`, cloud, git and browser credentials, the keychains) form one
+  deny list per session. The OS sandbox of every command, the app's own
+  git, the file tools (`read_file`, `list_tree`, `search_files`,
+  `read_document`) and the local index all honour it, even for a workspace
+  opened at your home folder: the stored sign-in, the history, other
+  workspaces' checkpoints and indexes stay out of reach, while the
+  session's temporary directory inside them stays usable. A command whose
+  sandbox cannot hide them (Linux with only Landlock, a workspace too large
+  for bubblewrap's walk, no sandbox) is asked every time, and its result
+  says why. Indexes built before this list existed are rebuilt before they
+  answer.
+
 - The window loads **only bundled assets**. `on_navigation` refuses every other
   origin, so remote content never sits next to the IPC commands.
 - IPC is an explicit allowlist: eight `host_*` commands plus the local-work
@@ -184,14 +203,25 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   URL to send conversation data to another host.
 - The opener hands only `https` and loopback `http` URLs to the system browser.
 - The CSP allows scripts from `self` only. The webview reaches the deployment
-  through the HTTP plugin (a Rust-side request, so no CORS change is needed on
-  the deployment). `capabilities/default.json` grants that plugin no URL at
-  all; `src-tauri/src/http_scope.rs` adds a runtime capability scoped to the
-  connected deployment's origin (at launch for the stored one, and on every
-  connect). Runtime capabilities cannot be removed, so scopes accumulate per
-  process: an origin connected earlier stays reachable until the app
-  restarts. The bearer token is still attached only to the current origin
+  through the host's `http_fetch` command (`src-tauri/src/net.rs`, IPC.md
+  "Network"): a Rust-side request, so no CORS change is needed on the
+  deployment. It only reaches the connected deployment's origin (granted at
+  launch for the stored one, and on every connect; origins accumulate per
+  process, so one connected earlier stays reachable until the app restarts),
+  never follows a redirect, drops the fetch spec's forbidden headers and keeps
+  no cookies. The bearer token is still attached only to the current origin
   (checked in the webview's HTTP core and SSE client).
+- **One HTTP client.** Every host call (discovery, the token endpoint, the D0
+  platform and model calls) and every webview request share one pooled
+  `reqwest` client (keep-alive, HTTP/2). It is built once, on a background
+  thread at launch: building a client loads the TLS roots from the system
+  trust settings (85–470 ms, serialised across the process), which the HTTP
+  plugin used before did on every request, along with a new TCP + TLS
+  connection. Deadlines are per request (10 s token/discovery, 90 s platform
+  and model), never client-wide, so SSE streams stay open.
+- **Launch.** When a session is stored, the host starts the launch's token
+  refresh in its setup, while the window and the page load; the page's first
+  token request joins it, and the refresh token still rotates once.
 
 ### Diagnostics
 
@@ -200,7 +230,9 @@ Troubleshoot** open the Doctor (`src-tauri/src/doctor.rs`). It checks the
 stored sign-in (`credentials.json`: regular file, yours, `0600`, parses), the
 settings, data and logs folders (`0700`, yours, writable), the thread history
 (opens, `PRAGMA integrity_check`, schema version), `workspaces.json` (parses;
-every folder still there), the deployment (reachable, discovery valid), the
+every folder still there), each workspace's local code index (owner-only,
+`PRAGMA quick_check`, schema version; rebuilt from the folder when damaged, once
+confirmed), the deployment (reachable, discovery valid), the
 session (a refresh works), the client policy's `local_work.allowed` (and how
 an administrator turns it on) and the sign-outs still waiting to reach the
 server. Each problem it can repair has a **Fix** button: restrict a file to

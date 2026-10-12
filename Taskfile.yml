@@ -257,6 +257,13 @@ tasks:
       - task: helm:main-master-key
       - task: helm:worker-node-recovery
       - task: helm:gateway-master-key
+      - task: helm:indexing-runtime
+
+  helm:indexing-runtime:
+    desc: Check that worker.indexingRuntime reaches elitea-main as ELITEA_INDEXING_RUNTIME (default python) and that an unknown value, or rust without the Rust worker, is refused
+    cmds:
+      # ADR-0030 decision 6 / ADR-0031 V1. Needs python3 with PyYAML.
+      - bash deploy/helm/tests/render-indexing-runtime.sh
 
   helm:worker-node-recovery:
     desc: Check that worker.runtime.agentNodeRecovery is written for the Rust worker only when true, never for the Python worker, and that a non-boolean recovery switch is refused

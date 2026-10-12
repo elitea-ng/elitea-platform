@@ -1,0 +1,4 @@
+1 code text [unknown] 147c 34t | -- Monthly report: an extension the SDK treats a
+2 code text [unknown] 110c 30t |  ON p.id = t.project_id
+3 code text [unknown] 107c 29t | ER BY tickets DESC;
+4 code text [unknown] 77c 25t |  b.user_id

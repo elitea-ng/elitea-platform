@@ -207,6 +207,7 @@ export function planBackfill(existingEn, allEntries) {
 const DESKTOP_ONLY_PREFIXES = [
   'src/entries/desktop/',
   'src/features/workspace/',
+  'src/features/workspace-index/',
   'src/pages/workspace/',
   'src/shared/desktop/',
   'src/widgets/desktop-shell/',

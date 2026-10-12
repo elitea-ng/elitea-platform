@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
@@ -78,6 +79,29 @@ type Runner struct {
 	Tools      map[string]Tool
 	Artifacts  ArtifactClientFactory
 	Logger     *slog.Logger
+	// RequireVerifiedProject refuses a call whose verified identity carries
+	// no project. Set for a runner whose tools address the shared graph
+	// store (the engine sidecar's): there the project selects the tenant's
+	// graph, and only the signed identity may choose it. The identity gate
+	// (spi.Server.identityGate) DROPS an unsigned or badly signed identity
+	// on a hop without mTLS rather than refusing it, so an empty identity
+	// reaches Invoke; without this the body's project_id would select any
+	// tenant's graph. The fixture runner leaves it off: it serves one canned
+	// graph and reads no tenant data.
+	RequireVerifiedProject bool
+
+	// DeleteGraph and DeleteProjectGraphs are the engine's graph deletions.
+	// They are NOT in Tools, so no toolkit call reaches them: only the
+	// platform service does, through DeleteToolkit and DeleteProject
+	// (platform.go). Nil for a runner with no engine.
+	DeleteGraph         Tool
+	DeleteProjectGraphs Tool
+
+	// StopWait is how long a deletion waits for the ingests it stopped to
+	// end (default DefaultStopWait).
+	StopWait time.Duration
+
+	manager *spi.Manager
 }
 
 // Name is the runner's name as /health reports it.
@@ -118,12 +142,54 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 		return nil, err
 	}
 	identity := ExtractIdentity(family, call.Request, params)
+	// The graph's project is the one the gate VERIFIED, never one the body
+	// names. The native engine keys every graph by (project_id,
+	// application_id) in one shared store, so a body-chosen project would
+	// address another tenant's graph; and the facade sends none at all (the
+	// project travels in the signed identity), so without this every native
+	// call failed with "the call carries no integer project_id".
+	//
+	// A runner over the store refuses a call with no verified project, and
+	// never falls back to the body's project_id.
+	switch {
+	case call.Identity.ProjectID != "":
+		identity.ProjectID = call.Identity.ProjectID
+	case r.RequireVerifiedProject:
+		return nil, spi.Failf(spi.KindValue,
+			"'%s' needs the caller's project from the platform's signed identity, and this call carries none. "+
+				"Run the tool through the platform rather than calling the provider directly.",
+			call.Tool)
+	}
+
+	// The labels a deletion of this toolkit or project finds the ingest by
+	// (StopIngests) were set when the invocation was registered (Labels),
+	// not here: set here they would be missing for the whole stretch before
+	// this line.
 
 	if err := tc.Checkpoint(); err != nil {
 		return nil, err
 	}
 	if err := tc.Thinking(ctx, "Starting "+call.Tool); err != nil {
 		return nil, err
+	}
+	var exportClient ArtifactClient
+	if call.Tool == ExportTool {
+		// Refused before the engine reads the whole graph: an export's only
+		// output is the bucket object (see transfer.go).
+		client, err := r.ExportClient(params)
+		if err != nil {
+			return nil, err
+		}
+		exportClient = client
+	}
+	if call.Tool == ImportTool {
+		// Overwritten on every call: the document is the bucket's, never
+		// the caller's (see transfer.go).
+		document, err := r.ResolveGraphDocument(ctx, params, tc)
+		if err != nil {
+			return nil, err
+		}
+		params[GraphDocumentParam] = document
 	}
 
 	arguments := ArgumentsFor(family, call.Tool, params, identity)
@@ -145,7 +211,11 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 	}
 
 	objects := ComposeResultObjects(result, ResolveBucket(params))
-	objects, err = r.upload(ctx, objects, params, tc)
+	if exportClient != nil {
+		objects, err = r.StoreExport(ctx, objects, exportClient, tc)
+	} else {
+		objects, err = r.upload(ctx, objects, params, tc)
+	}
 	if err != nil {
 		return nil, err
 	}

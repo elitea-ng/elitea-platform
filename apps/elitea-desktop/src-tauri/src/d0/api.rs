@@ -203,30 +203,42 @@ pub struct MemoryRecall {
 
 /// The platform client of one turn.
 pub struct PlatformApi {
-    http: reqwest::Client,
+    http: crate::net::SharedHttp,
     credentials: std::sync::Arc<dyn Credentials>,
     client_version: String,
 }
 
 impl PlatformApi {
+    /// A client of its own (tests); the app passes its one client, [`Self::shared`].
+    ///
     /// # Errors
     ///
-    /// The HTTP client cannot be built.
+    /// Never today; kept for the callers that build one.
+    #[cfg(test)]
     pub fn new(
         credentials: std::sync::Arc<dyn Credentials>,
         client_version: &str,
     ) -> Result<Self, ApiError> {
-        let http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(API_TIMEOUT)
-            .user_agent(format!("elitea-desktop/{client_version}"))
-            .build()
-            .map_err(|_| ApiError::local("internal", "could not build the HTTP client"))?;
-        Ok(Self {
+        Ok(Self::shared(
+            crate::net::SharedHttp::new(client_version),
+            credentials,
+            client_version,
+        ))
+    }
+
+    /// On the app's one client (src/net.rs): no redirects, its User-Agent,
+    /// and [`API_TIMEOUT`] per request.
+    #[must_use]
+    pub fn shared(
+        http: crate::net::SharedHttp,
+        credentials: std::sync::Arc<dyn Credentials>,
+        client_version: &str,
+    ) -> Self {
+        Self {
             http,
             credentials,
             client_version: client_version.to_owned(),
-        })
+        }
     }
 
     /// The same client with other credentials (one turn's pinned ones).
@@ -239,9 +251,9 @@ impl PlatformApi {
         }
     }
 
-    #[must_use]
-    pub fn http(&self) -> &reqwest::Client {
-        &self.http
+    /// The shared client (awaits its first build).
+    pub async fn http(&self) -> &reqwest::Client {
+        self.http.client().await
     }
 
     #[must_use]
@@ -282,7 +294,10 @@ impl PlatformApi {
     ) -> Result<Answer, ApiError> {
         let mut request = self
             .http
+            .client()
+            .await
             .request(method.clone(), format!("{}{path}", bearer.origin))
+            .timeout(API_TIMEOUT)
             .bearer_auth(&bearer.token)
             .header(CLIENT_VERSION_HEADER, &self.client_version)
             .header("Accept", "application/json");

@@ -5,8 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Elitea</title>
     <style>
-      body {
+      /*
+       * A native window, not a page: the document is pinned to the window and
+       * never scrolls or rubber-bands (WebKit's elastic overscroll would show
+       * the window background under the app). The panes inside scroll.
+       */
+      html,
+      body,
+      #root {
+        height: 100%;
         margin: 0;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+      body {
         font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       }
     </style>

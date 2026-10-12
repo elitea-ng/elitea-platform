@@ -1,0 +1,55 @@
+[package]
+name = "elitea-vector-index"
+description = "The caller side of elitea-vector (ADR-0030 decisions 2 and 5): a typed elitea.vector.v1 gRPC client, the SDK search semantics, and the SDK filter translation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Also generates the elitea.vector.v1 SERVER, for the in-process fake the
+# tests serve. Nothing in a shipped binary needs it.
+test-server = ["dep:tokio", "tokio-stream/net"]
+# The SDK's output dicts keep their key order (`page_content`, `metadata`,
+# `score`) and `json.dumps` prints them in it; scores print the digits they
+# were parsed from. Both are serde_json features, and Cargo unifies them into
+# every crate of a binary: the agent worker builds serde_json WITHOUT
+# `preserve_order` (its canonical digests depend on sorted keys,
+# libs/rust/agent-runtime/src/canonical.rs), so this crate takes them only on
+# request. Off, every output has the same keys in sorted order; the tests run
+# with it on, which is the SDK's order.
+sdk-key-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"]
+
+[dependencies]
+# Python's repr/str/json.dumps/truthiness, shared with the engines, so the
+# SDK's printed outputs stay byte for byte.
+elitea-engine-core = { path = "../engine-core" }
+# `try_join_all` for the concurrent sub-searches of `extended_search`.
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+# Request and response messages of elitea.vector.v1.
+prost = "0.14.4"
+# Default features here; `sdk-key-order` (above) adds the SDK's key order.
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["net", "rt"], optional = true }
+tokio-stream = "0.1.19"
+# mTLS to elitea-vector, with ring like the worker (`tls-ring`). No
+# reqwest: this crate makes gRPC calls only; model calls go through the
+# `QueryEmbedder` and `StepbackModel` traits the worker implements.
+tonic = { version = "0.14.6", features = ["tls-ring"] }
+tonic-prost = "0.14.6"
+tracing = "0.1.44"
+
+[build-dependencies]
+protoc-bin-vendored = "3.2.0"
+tonic-prost-build = "0.14.6"
+
+[dev-dependencies]
+# The crate's own `test-server` and `sdk-key-order` features, so a plain
+# `cargo test -p` has the fake and the SDK's key order the goldens assume.
+elitea-vector-index = { path = ".", features = ["test-server", "sdk-key-order"] }
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

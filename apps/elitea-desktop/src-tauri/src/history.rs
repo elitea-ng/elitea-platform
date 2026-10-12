@@ -1833,8 +1833,11 @@ mod tests {
         let tap = TurnTap::new(Arc::new(VecEmitter::default()), Some(store.clone()));
         tap.activate(new_turn(owner(1), "t1", "42"));
         tap.emit(event("t1", 0, "status", json!({"phase": "running"})));
-        // The app quits here. A new launch reads it back.
+        // The app quits here: the tap is dropped and the exit path flushes the
+        // writer (without it, the new store below can read before the old
+        // writer's background commit lands). A new launch reads it back.
         drop(tap);
+        store.flush();
         let again = HistoryStore::open(store.path().parent().unwrap()).unwrap();
         let turns = again.thread(&owner(1), "w1", "42").unwrap();
         assert_eq!(turns[0].state, "interrupted");

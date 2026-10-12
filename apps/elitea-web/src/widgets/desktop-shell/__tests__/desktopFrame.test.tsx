@@ -127,6 +127,13 @@ describe('DesktopFrame sidebar layout', () => {
     expect(within(sidebar).queryByRole('button', { name: 'Open a folder to work in' })).toBeNull();
   });
 
+  it('clips the frame, so no pane can scroll the window itself', async () => {
+    mount({});
+    const frame = await screen.findByTestId('desktop-frame');
+    // `hidden` would still let a pane's scrollIntoView shift the whole frame.
+    expect(getComputedStyle(frame).overflow).toBe('clip');
+  });
+
   it('offers "Open a folder" as the empty state', async () => {
     const user = userEvent.setup();
     const picked: Workspace = { id: 'w3', path: '/tmp/new', name: 'new', project_id: null, is_git: false };

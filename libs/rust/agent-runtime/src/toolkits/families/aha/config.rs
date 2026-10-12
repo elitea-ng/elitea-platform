@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::toolkits::families::https_base_url::{self, BasePath, BaseUrlError};
 use reqwest::Url;
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
@@ -88,23 +89,12 @@ impl AhaToolkitConfig {
     }
 }
 
+/// An HTTPS origin with no path (the shared [`https_base_url`] rule).
 fn parse_base_url(value: &str) -> Result<Url, AhaConfigError> {
-    if value.contains(['%', '\\']) {
-        return Err(invalid_configuration());
-    }
-    let mut url = Url::parse(value).map_err(|_| invalid_configuration())?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || !matches!(url.path(), "" | "/")
-    {
-        return Err(invalid_configuration());
-    }
-    url.set_path("");
-    Ok(url)
+    https_base_url::parse(value, BasePath::OriginOnly).map_err(|error| match error {
+        BaseUrlError::TooLong => resource_exhausted(),
+        BaseUrlError::Invalid | BaseUrlError::PlainHttp => invalid_configuration(),
+    })
 }
 
 fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<Box<str>>, AhaConfigError> {

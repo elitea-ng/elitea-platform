@@ -2,10 +2,12 @@ package output
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"mime"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,6 +29,12 @@ var (
 	ErrIndexIngestArtifactMismatch    = errors.New("index ingest artifact metadata does not match durable storage")
 	ErrIndexIngestArtifactUnavailable = errors.New("index ingest artifact is not durably available")
 	ErrIndexIngestOutputConflict      = errors.New("index ingest output conflicts with a durable output")
+	// ErrIndexResultRefused is the typed refusal of a result the index registry
+	// cannot apply (ADR-0030 I1): it names another embedding space than the
+	// index is stamped with, or carries no typed summary. The projecting
+	// transaction rolls back and the frame is rejected, so nothing is recorded;
+	// the worker then settles the run failed with RESULT_REFUSED.
+	ErrIndexResultRefused = errors.New("index result refused by the registry")
 )
 
 // IndexInputBinding identifies one exact immutable input consumed by the
@@ -130,6 +138,11 @@ const (
 	IndexIngestTerminalScheduledReindex IndexIngestTerminalState = "scheduled_reindex"
 	IndexIngestTerminalFailed           IndexIngestTerminalState = "failed"
 	IndexIngestTerminalPartlyIndexed    IndexIngestTerminalState = "partly_indexed"
+	// IndexIngestTerminalCancelled is a Rust run stopped at a document
+	// boundary after it touched the vector store (ADR-0030 I1). Its status is
+	// error and its summary describes the store; the run settles CANCELLED and
+	// the registry row ends `cancelled`.
+	IndexIngestTerminalCancelled IndexIngestTerminalState = "cancelled"
 )
 
 // IndexIngestSummary is the allowlisted terminal result plus the bounded
@@ -144,9 +157,182 @@ type IndexIngestSummary struct {
 	Updated        uint64
 	ReindexPresent bool
 	Reindex        bool
+
+	// The typed result of the Rust indexing runtime (ADR-0030 decision 2).
+	// Main applies these to the index_registry row, so no result sentence is
+	// parsed. All of them are zero on the Python SDK path.
+	IndexedDocuments uint64
+	IndexedChunks    uint64
+	FailedChunks     uint64
+	// SkippedJSON is the closed skip breakdown as canonical JSON (an object of
+	// reason to count, keys sorted), or "" when nothing was skipped. A string
+	// and not a map keeps the summary comparable: the projection tells "no
+	// summary" from "a summary" with ==.
+	SkippedJSON        string
+	EmbeddingModel     string
+	EmbeddingDimension uint32
+	// TotalDocuments and TotalChunks are the WHOLE index as the vector store
+	// holds it after the run, which the list shows. Unlike
+	// IndexIngestResult.Documents they are never a bounded subset: the output
+	// frame is bounded at MaxIndexIngestResultBytes, the totals are two
+	// integers. TotalsPresent is their explicit presence
+	// (IndexIngestSummaryV1.total_documents/total_chunks are optional): a
+	// summary that carries them describes the store, zero included, and the
+	// registry records them as given; one without them says nothing about the
+	// store (the Python path, a run that failed before touching it). A failure
+	// after any write or delete carries them.
+	TotalsPresent  bool
+	TotalDocuments uint64
+	TotalChunks    uint64
+	// WholeIndexRecord is the worker's statement that the result's Documents
+	// name every document the store holds after the run (nothing truncated, no
+	// unchanged or retained document outside the list), so the registry may
+	// make its per-document rows exactly that list. It is never inferred from
+	// counts; when set, TotalDocuments equals the number of Documents.
+	WholeIndexRecord bool
+}
+
+const (
+	// MaxIndexSkipReasons and MaxIndexSkipReasonBytes bound the skip breakdown.
+	// A reason is a closed lower snake_case token, never free text.
+	MaxIndexSkipReasons     = 32
+	MaxIndexSkipReasonBytes = 64
+	// MaxIndexEmbeddingModelBytes and MaxIndexEmbeddingDimension bound the
+	// embedding stamp. 65535 is far above any model in use (768-3072).
+	MaxIndexEmbeddingModelBytes = 256
+	MaxIndexEmbeddingDimension  = 65535
+	// MaxIndexResultDocuments bounds each of the per-document lists a result
+	// carries (documents written, document keys removed). The frame is bounded
+	// at MaxIndexIngestResultBytes, so the lists are a bounded subset of what
+	// the run touched and DocumentsTruncated says when they are not all of it.
+	MaxIndexResultDocuments = 4096
+	// MaxIndexDocumentKeyBytes and MaxIndexDocumentVersionBytes mirror the
+	// CHECK constraints of elitea_runtime.index_registry_documents.
+	MaxIndexDocumentKeyBytes     = 4096
+	MaxIndexDocumentVersionBytes = 1024
+)
+
+// IndexIngestDocument is one document the run wrote: its source key, the
+// version the source reported (for the incremental sync of ADR-0030 decision
+// 3) and the chunks it became.
+type IndexIngestDocument struct {
+	Key        string
+	Version    string
+	ChunkCount uint32
+}
+
+func (d IndexIngestDocument) Validate() error {
+	if !validIndexDocumentKey(d.Key) || len(d.Version) > MaxIndexDocumentVersionBytes ||
+		!utf8.ValidString(d.Version) || strings.ContainsRune(d.Version, 0) {
+		return ErrInvalidIndexIngestOutput
+	}
+	return nil
+}
+
+func validIndexDocumentKey(key string) bool {
+	return key != "" && len(key) <= MaxIndexDocumentKeyBytes && utf8.ValidString(key) && !strings.ContainsRune(key, 0)
+}
+
+var indexSkipReasonPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// NewIndexSkipped encodes a skip breakdown as the canonical JSON the summary
+// carries. An empty breakdown is "". It is the only constructor of
+// SkippedJSON, so a value that reached a summary is sorted and bounded.
+func NewIndexSkipped(skipped map[string]uint64) (string, error) {
+	if len(skipped) == 0 {
+		return "", nil
+	}
+	if len(skipped) > MaxIndexSkipReasons {
+		return "", ErrInvalidIndexIngestOutput
+	}
+	for reason, count := range skipped {
+		if reason == "" || len(reason) > MaxIndexSkipReasonBytes ||
+			!indexSkipReasonPattern.MatchString(reason) || count > math.MaxInt64 {
+			return "", ErrInvalidIndexIngestOutput
+		}
+	}
+	// encoding/json sorts map keys, which is the canonical order.
+	encoded, err := json.Marshal(skipped)
+	if err != nil {
+		return "", ErrInvalidIndexIngestOutput
+	}
+	return string(encoded), nil
+}
+
+// Skipped decodes the breakdown. A summary that passed Validate always decodes.
+func (s IndexIngestSummary) Skipped() map[string]uint64 {
+	if s.SkippedJSON == "" {
+		return map[string]uint64{}
+	}
+	skipped := map[string]uint64{}
+	if err := json.Unmarshal([]byte(s.SkippedJSON), &skipped); err != nil {
+		return map[string]uint64{}
+	}
+	return skipped
+}
+
+func (s IndexIngestSummary) validateTyped() error {
+	if s.IndexedDocuments > math.MaxInt64 || s.IndexedChunks > math.MaxInt64 ||
+		s.FailedChunks > math.MaxInt64 || s.TotalDocuments > math.MaxInt64 || s.TotalChunks > math.MaxInt64 {
+		return ErrInvalidIndexIngestOutput
+	}
+	// Absent totals carry no value; a whole-index statement is about a
+	// record whose totals are known.
+	if !s.TotalsPresent && (s.TotalDocuments != 0 || s.TotalChunks != 0 || s.WholeIndexRecord) {
+		return ErrInvalidIndexIngestOutput
+	}
+	if s.SkippedJSON != "" {
+		var decoded map[string]uint64
+		if err := json.Unmarshal([]byte(s.SkippedJSON), &decoded); err != nil || len(decoded) == 0 {
+			return ErrInvalidIndexIngestOutput
+		}
+		canonical, err := NewIndexSkipped(decoded)
+		if err != nil || canonical != s.SkippedJSON {
+			return ErrInvalidIndexIngestOutput
+		}
+	}
+	// The stamp is a pair: a model without a dimension, or the reverse, would
+	// let the registry record half an embedding space.
+	if (s.EmbeddingModel == "") != (s.EmbeddingDimension == 0) {
+		return ErrInvalidIndexIngestOutput
+	}
+	if s.EmbeddingDimension > MaxIndexEmbeddingDimension ||
+		len(s.EmbeddingModel) > MaxIndexEmbeddingModelBytes ||
+		!utf8.ValidString(s.EmbeddingModel) || strings.ContainsRune(s.EmbeddingModel, '\x00') {
+		return ErrInvalidIndexIngestOutput
+	}
+	return nil
+}
+
+// SettlementOutcome is the terminal outcome a result carrying this summary
+// proposes and is settled with: SUCCEEDED for an ok or partly indexed run,
+// FAILED for an error, CANCELLED for a run stopped after it touched the store
+// (IndexIngestTerminalCancelled). The worker proposes exactly this; any other
+// proposal is malformed.
+func (s IndexIngestSummary) SettlementOutcome() executionapp.SettlementOutcome {
+	switch {
+	case s.TerminalState == IndexIngestTerminalCancelled:
+		return executionapp.SettlementCancelled
+	case s.Status == IndexIngestStatusError:
+		return executionapp.SettlementFailed
+	default:
+		return executionapp.SettlementSucceeded
+	}
+}
+
+// HasTypedResult reports whether the summary describes a Rust run: any typed
+// field set, the totals' presence included (so a run that wrote nothing and
+// reports an empty store is typed). The Python SDK path never sets one.
+func (s IndexIngestSummary) HasTypedResult() bool {
+	return s.IndexedDocuments != 0 || s.IndexedChunks != 0 || s.FailedChunks != 0 ||
+		s.SkippedJSON != "" || s.EmbeddingModel != "" ||
+		s.TotalsPresent || s.WholeIndexRecord
 }
 
 func (s IndexIngestSummary) Validate() error {
+	if err := s.validateTyped(); err != nil {
+		return err
+	}
 	switch s.Status {
 	case IndexIngestStatusOK, IndexIngestStatusPartlyIndexed, IndexIngestStatusError:
 	default:
@@ -172,6 +358,12 @@ func (s IndexIngestSummary) Validate() error {
 		}
 	case IndexIngestTerminalFailed:
 		if s.Status != IndexIngestStatusError {
+			return ErrInvalidIndexIngestOutput
+		}
+	case IndexIngestTerminalCancelled:
+		// A stopped run describes the store it left: without the totals the
+		// summary says nothing a plain cancellation would not.
+		if s.Status != IndexIngestStatusError || !s.TotalsPresent {
 			return ErrInvalidIndexIngestOutput
 		}
 	case IndexIngestTerminalPartlyIndexed:
@@ -219,6 +411,25 @@ type IndexIngestResult struct {
 	Bindings          IndexIngestBindings
 	ResultArtifact    IndexArtifactReference
 	ResultSummary     IndexIngestSummary
+	// Documents and RemovedDocumentKeys are the per-document rows of a Rust run
+	// (ADR-0030 decision 3), applied to index_registry_documents in the
+	// projecting transaction. They live here and not on the comparable summary
+	// because they are slices. DocumentsTruncated reports that the bounded
+	// frame did not fit every document the run touched; the summary's totals
+	// are still the whole index.
+	Documents           []IndexIngestDocument
+	RemovedDocumentKeys []string
+	DocumentsTruncated  bool
+}
+
+// ReportsWholeIndex reports whether Documents is every document of the index
+// after the run, as the worker stated it (IndexIngestSummary.WholeIndexRecord).
+// A registry application may then delete every document row the list does not
+// name (a clean re-index). It is the worker's statement, not a coincidence of
+// counts: Validate checks the statement against the list (nothing truncated,
+// TotalDocuments equal to the list's length).
+func (r IndexIngestResult) ReportsWholeIndex() bool {
+	return r.ResultSummary.WholeIndexRecord
 }
 
 func (r IndexIngestResult) Validate() error {
@@ -233,10 +444,55 @@ func (r IndexIngestResult) Validate() error {
 	if hasArtifact == hasSummary {
 		return ErrInvalidIndexIngestOutput
 	}
+	if err := r.validateDocuments(); err != nil {
+		return err
+	}
 	if hasArtifact {
 		return r.ResultArtifact.Validate()
 	}
 	return r.ResultSummary.Validate()
+}
+
+// validateDocuments bounds the per-document lists and keeps them exclusive to
+// a typed (Rust) summary: the Python path reports no documents, so a frame
+// that carries some without a typed summary is malformed. A whole-index
+// statement must be about the list it names: nothing truncated and the totals
+// (present) counting exactly the listed documents.
+func (r IndexIngestResult) validateDocuments() error {
+	if r.ResultSummary.WholeIndexRecord &&
+		(r.DocumentsTruncated || !r.ResultSummary.TotalsPresent ||
+			r.ResultSummary.TotalDocuments != uint64(len(r.Documents))) {
+		return ErrInvalidIndexIngestOutput
+	}
+	if len(r.Documents) == 0 && len(r.RemovedDocumentKeys) == 0 && !r.DocumentsTruncated {
+		return nil
+	}
+	if !r.ResultSummary.HasTypedResult() {
+		return ErrInvalidIndexIngestOutput
+	}
+	if len(r.Documents) > MaxIndexResultDocuments || len(r.RemovedDocumentKeys) > MaxIndexResultDocuments {
+		return ErrInvalidIndexIngestOutput
+	}
+	seen := make(map[string]struct{}, len(r.Documents)+len(r.RemovedDocumentKeys))
+	for _, document := range r.Documents {
+		if err := document.Validate(); err != nil {
+			return err
+		}
+		if _, duplicate := seen[document.Key]; duplicate {
+			return ErrInvalidIndexIngestOutput
+		}
+		seen[document.Key] = struct{}{}
+	}
+	for _, key := range r.RemovedDocumentKeys {
+		if !validIndexDocumentKey(key) {
+			return ErrInvalidIndexIngestOutput
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return ErrInvalidIndexIngestOutput
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 type IndexIngestFrame struct {
@@ -287,10 +543,7 @@ func (f IndexIngestFrame) Validate() error {
 	if err := f.Result.Validate(); err != nil {
 		return err
 	}
-	expectedOutcome := executionapp.SettlementSucceeded
-	if f.Result.ResultSummary.Status == IndexIngestStatusError {
-		expectedOutcome = executionapp.SettlementFailed
-	}
+	expectedOutcome := f.Result.ResultSummary.SettlementOutcome()
 	if err := f.Settlement.Validate(); err != nil || f.Settlement.Fence != f.Fence || f.Settlement.Outcome != expectedOutcome || f.Settlement.TerminalLogicalOutputID != f.LogicalOutputID || f.Settlement.TerminalEventID != f.EventID || f.Settlement.TerminalSequence != f.Sequence || f.Settlement.TerminalPayloadDigest != f.PayloadDigest || len(f.EncodedSettlement) == 0 || len(f.EncodedSettlement) > MaxIndexIngestResultBytes || runtimedomain.SHA256(f.EncodedSettlement) != f.Settlement.ProposalDigest {
 		return ErrInvalidIndexIngestOutput
 	}
@@ -471,6 +724,12 @@ func matchesExpectedIndexIdentity(expected ExpectedIndexIngest, frame IndexInges
 func cloneIndexIngestFrame(frame IndexIngestFrame) IndexIngestFrame {
 	frame.EncodedResult = append([]byte(nil), frame.EncodedResult...)
 	frame.EncodedSettlement = append([]byte(nil), frame.EncodedSettlement...)
+	if frame.Result.Documents != nil {
+		frame.Result.Documents = append([]IndexIngestDocument(nil), frame.Result.Documents...)
+	}
+	if frame.Result.RemovedDocumentKeys != nil {
+		frame.Result.RemovedDocumentKeys = append([]string(nil), frame.Result.RemovedDocumentKeys...)
+	}
 	return frame
 }
 

@@ -61,9 +61,11 @@ describe('the Workspaces route in the real app shell', () => {
     vi.stubEnv('MODE', 'desktop');
     const router = mountAt('/workspaces');
 
-    expect(await screen.findByTestId('workspaces-page')).toBeInTheDocument();
+    const page = await screen.findByTestId('workspaces-page');
     expect(router.state.location.pathname).toBe('/workspaces');
-    expect(await screen.findByRole('heading', { name: 'Local work' })).toBeInTheDocument();
+    // Scoped to the page: the desktop frame may also title itself "Local work"
+    // once it settles, and a slow (coverage) run sees both at once.
+    expect(await within(page).findByRole('heading', { name: 'Local work' })).toBeInTheDocument();
     // The frame replaced the web sidebar: folders first, Elitea features below.
     const sidebar = await screen.findByTestId('desktop-sidebar');
     const folder = await within(sidebar).findByTestId('shell-folder');

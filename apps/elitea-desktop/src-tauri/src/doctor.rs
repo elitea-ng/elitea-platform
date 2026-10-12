@@ -34,6 +34,10 @@ use crate::auth::AuthService;
 use crate::credentials_file::{self, CredentialsFile};
 use crate::error::HostError;
 use crate::history::{self, HistoryStore};
+use elitea_local_index::sqlite_store::{
+    FILE_NAME as INDEX_FILE, SCHEMA_VERSION as INDEX_SCHEMA_VERSION,
+};
+
 use crate::workspaces::{Workspace, WorkspaceStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -48,16 +52,18 @@ pub enum Status {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Check {
     /// Stable: `credentials`, `dir.config`, `dir.data`, `dir.logs`,
-    /// `history`, `workspaces`, `deployment`, `session`, `local_work`,
+    /// `history`, `workspaces`, `index.<workspace id>` (one per workspace
+    /// with a local index), `deployment`, `session`, `local_work`,
     /// `pending_revokes`.
-    pub id: &'static str,
+    pub id: String,
     pub title: &'static str,
     pub status: Status,
     /// For a person; never a secret.
     pub message: String,
-    /// The repair `doctor_fix` takes, when there is one.
+    /// The repair `doctor_fix` takes, when there is one. A workspace's
+    /// index repair names it: `index.<repair>:<workspace id>`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fix_id: Option<&'static str>,
+    pub fix_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix_label: Option<&'static str>,
     /// What the repair deletes, for the person to confirm first; the repair
@@ -78,15 +84,27 @@ pub trait DoctorHooks: Send + Sync {
     /// The session ended on this computer: forget every turn and tell the
     /// webview, as a local sign-out does.
     fn signed_out(&self);
+    /// Stop the workspace's local index and close its database (if open),
+    /// then run `work` (the move or deletion of its files) while still
+    /// holding it: nothing opens the index again until `work` is done.
+    fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send));
+    /// Turn the workspace's index on again and build it from nothing, after
+    /// its damaged files were deleted; why not, for a person.
+    ///
+    /// # Errors
+    ///
+    /// The index could not be turned on (the policy turns it off, …).
+    fn rebuild_index(&self, workspace_id: &str) -> Result<(), String>;
 }
 
 /// The repairs that delete what the app keeps: refused without `confirm`.
-const CONFIRMED_FIXES: &[&str] = &["workspaces.drop_missing"];
+/// A workspace's index repair is matched without its `:<workspace id>`.
+const CONFIRMED_FIXES: &[&str] = &["workspaces.drop_missing", "index.rebuild"];
 
 impl Check {
-    fn new(id: &'static str, title: &'static str, status: Status, message: String) -> Self {
+    fn new(id: impl Into<String>, title: &'static str, status: Status, message: String) -> Self {
         Self {
-            id,
+            id: id.into(),
             title,
             status,
             message,
@@ -96,8 +114,8 @@ impl Check {
         }
     }
 
-    fn fix(mut self, fix_id: &'static str, label: &'static str) -> Self {
-        self.fix_id = Some(fix_id);
+    fn fix(mut self, fix_id: impl Into<String>, label: &'static str) -> Self {
+        self.fix_id = Some(fix_id.into());
         self.fix_label = Some(label);
         self
     }
@@ -327,6 +345,7 @@ impl LocalDoctor {
         }
         checks.push(self.history_check());
         checks.push(self.workspaces_check());
+        checks.extend(self.index_checks());
         checks
     }
 
@@ -550,10 +569,16 @@ impl LocalDoctor {
     /// An unknown repair, an unconfirmed one that deletes data, or the
     /// repair failed.
     pub fn fix(&self, fix_id: &str, confirm: bool) -> Result<String, HostError> {
-        if CONFIRMED_FIXES.contains(&fix_id) && !confirm {
+        let (repair, workspace_id) = fix_id
+            .split_once(':')
+            .map_or((fix_id, None), |(repair, id)| (repair, Some(id)));
+        if CONFIRMED_FIXES.contains(&repair) && !confirm {
             return Err(HostError::Unsupported(
                 "this repair deletes what Elitea keeps for these folders; confirm it first".into(),
             ));
+        }
+        if let Some(workspace_id) = workspace_id {
+            return self.fix_index(repair, workspace_id);
         }
         match fix_id {
             "credentials.tighten" => {
@@ -646,6 +671,217 @@ impl LocalDoctor {
             "Moved to {}. Restart Elitea to start a new history.",
             aside.display()
         ))
+    }
+}
+
+/// A workspace's local index files: the database and its journals.
+fn index_files(dir: &Path) -> [PathBuf; 3] {
+    [
+        dir.join(INDEX_FILE),
+        dir.join(format!("{INDEX_FILE}-wal")),
+        dir.join(format!("{INDEX_FILE}-shm")),
+    ]
+}
+
+/// `PRAGMA quick_check`, then the schema version, read-only and without
+/// following a symlinked file; why it is damaged when it is.
+fn index_integrity(path: &Path) -> Result<i64, String> {
+    // The folder canonical, so no-follow refuses a symlinked FILE only.
+    let path = match (path.parent(), path.file_name()) {
+        (Some(dir), Some(name)) => fs::canonicalize(dir).map_err(|e| e.to_string())?.join(name),
+        _ => path.to_owned(),
+    };
+    let conn = rusqlite::Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|e| e.to_string())?;
+    let verdict: String = conn
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    if verdict != "ok" {
+        return Err(verdict);
+    }
+    conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|e| e.to_string())
+}
+
+/// The workspaces' local indexes (IPC.md, "Local index"): one check per
+/// workspace that has one on this computer, and their repairs.
+impl LocalDoctor {
+    fn index_dir(&self, workspace_id: &str) -> PathBuf {
+        self.workspaces.data_dir(workspace_id).join("index")
+    }
+
+    fn index_checks(&self) -> Vec<Check> {
+        // An unreadable list is the workspaces check's to report.
+        let Ok(all) = self.workspaces.all() else {
+            return Vec::new();
+        };
+        all.iter()
+            .filter(|workspace| fs::symlink_metadata(self.index_dir(&workspace.id)).is_ok())
+            .map(|workspace| self.index_check(workspace))
+            .collect()
+    }
+
+    fn index_check(&self, workspace: &Workspace) -> Check {
+        const TITLE: &str = "Code index";
+        let id = format!("index.{}", workspace.id);
+        let name = &workspace.name;
+        let fix = |repair: &str| format!("index.{repair}:{}", workspace.id);
+        let dir = self.index_dir(&workspace.id);
+        let [file, wal, shm] = index_files(&dir);
+        let untrusted = |path: &Path, why: &str| {
+            Check::new(
+                id.clone(),
+                TITLE,
+                Status::Fail,
+                format!(
+                    "{name}: {} {why}, so the app will not use it. Move it aside; the index can be turned on again.",
+                    path.display()
+                ),
+            )
+            .fix(fix("move_aside"), MOVE_ASIDE)
+        };
+        let loose = |path: &Path, mode: u32| {
+            Check::new(
+                id.clone(),
+                TITLE,
+                Status::Warn,
+                format!(
+                    "{name}: {} can be read by other users (mode {mode:o}); it should be owner-only.",
+                    path.display()
+                ),
+            )
+            .fix(fix("tighten"), RESTRICT)
+        };
+        match health(&dir, true) {
+            Health::Missing => {}
+            Health::Untrusted(why) => return untrusted(&dir, why),
+            Health::Loose(mode) => return loose(&dir, mode),
+            Health::Healthy => {}
+        }
+        match health(&file, false) {
+            Health::Missing => {
+                return Check::new(
+                    id,
+                    TITLE,
+                    Status::Ok,
+                    format!("{name}: not turned on (nothing is built)."),
+                );
+            }
+            Health::Untrusted(why) => return untrusted(&file, why),
+            Health::Loose(mode) => return loose(&file, mode),
+            Health::Healthy => {}
+        }
+        for sidecar in [&wal, &shm] {
+            match health(sidecar, false) {
+                Health::Missing | Health::Healthy => {}
+                Health::Untrusted(why) => return untrusted(sidecar, why),
+                Health::Loose(mode) => return loose(sidecar, mode),
+            }
+        }
+        match index_integrity(&file) {
+            Ok(version) if version > INDEX_SCHEMA_VERSION => Check::new(
+                id,
+                TITLE,
+                Status::Fail,
+                format!(
+                    "{name}: written by a newer version of Elitea (schema {version}); update the app."
+                ),
+            ),
+            Ok(_) => Check::new(
+                id,
+                TITLE,
+                Status::Ok,
+                format!("{name}: owner-only, opens and passes its integrity check."),
+            ),
+            Err(error) => Check::new(
+                id,
+                TITLE,
+                Status::Fail,
+                format!("{name}: the index is damaged ({error}). Rebuild it from the folder."),
+            )
+            .fix(fix("rebuild"), "Rebuild")
+            .confirming(format!(
+                "Delete the code index of {name} and build it again from the folder? \
+                 It is parsed again on this computer and costs nothing; nothing is sent \
+                 anywhere (it has no embeddings). The folder itself is not touched."
+            )),
+        }
+    }
+
+    /// `index.<repair>:<workspace id>`, for a workspace in the list only
+    /// (the id names a folder under the app's data).
+    fn fix_index(&self, repair: &str, workspace_id: &str) -> Result<String, HostError> {
+        let Some(workspace) = self.workspaces.get(workspace_id)? else {
+            return Err(HostError::Internal(format!(
+                "unknown repair `{repair}:{workspace_id}`"
+            )));
+        };
+        let dir = self.index_dir(&workspace.id);
+        match repair {
+            "index.tighten" => {
+                tighten_dir(&dir)?;
+                for file in index_files(&dir) {
+                    if fs::symlink_metadata(&file).is_ok() {
+                        tighten_file(&file)?;
+                    }
+                }
+                Ok(format!(
+                    "The code index of {} is now readable by you only.",
+                    workspace.name
+                ))
+            }
+            "index.move_aside" => {
+                let mut moved = None;
+                self.hooks
+                    .with_index_closed(&workspace.id, &mut || moved = Some(move_aside(&dir)));
+                Ok(match moved.unwrap_or(Ok(None))? {
+                    Some(aside) => format!(
+                        "Moved to {}. Turn the index on again to build a new one.",
+                        aside.display()
+                    ),
+                    None => "There was nothing to move.".into(),
+                })
+            }
+            "index.rebuild" => {
+                // Deleted only when the app trusts it; anything else is
+                // moved aside instead.
+                if matches!(health(&dir, true), Health::Untrusted(_)) {
+                    return Err(HostError::Storage(format!(
+                        "{} is not the app's own folder; move it aside instead",
+                        dir.display()
+                    )));
+                }
+                let mut deleted = None;
+                self.hooks.with_index_closed(&workspace.id, &mut || {
+                    deleted = Some(match fs::remove_dir_all(&dir) {
+                        Ok(()) => Ok(()),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                        Err(error) => Err(HostError::Storage(format!(
+                            "could not delete {}: {error}",
+                            dir.display()
+                        ))),
+                    });
+                });
+                deleted.unwrap_or(Ok(()))?;
+                log::warn!("diagnostics: deleted the damaged index {}", dir.display());
+                Ok(match self.hooks.rebuild_index(&workspace.id) {
+                    Ok(()) => format!(
+                        "Deleted the damaged index of {}; a new one is being built.",
+                        workspace.name
+                    ),
+                    Err(why) => format!(
+                        "Deleted the damaged index of {}. It was not built again ({why}).",
+                        workspace.name
+                    ),
+                })
+            }
+            _ => Err(HostError::Internal(format!(
+                "unknown repair `{repair}:{workspace_id}`"
+            ))),
+        }
     }
 }
 
@@ -914,6 +1150,12 @@ mod tests {
         busy: Mutex<Vec<String>>,
         removed: Mutex<Vec<String>>,
         signed_out: AtomicUsize,
+        /// Indexes closed, and rebuilt, through the app's paths.
+        closed_indexes: Mutex<Vec<String>>,
+        /// Whether each closed index's directory was gone (moved or
+        /// deleted) before the index was released again.
+        gone_while_closed: Mutex<Vec<bool>>,
+        rebuilt_indexes: Mutex<Vec<String>>,
     }
 
     impl DoctorHooks for FakeHooks {
@@ -937,6 +1179,27 @@ mod tests {
         fn signed_out(&self) {
             self.signed_out.fetch_add(1, Ordering::SeqCst);
         }
+
+        fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
+            self.closed_indexes
+                .lock()
+                .unwrap()
+                .push(workspace_id.to_owned());
+            work();
+            let dir = self.workspaces.data_dir(workspace_id).join("index");
+            self.gone_while_closed
+                .lock()
+                .unwrap()
+                .push(fs::symlink_metadata(dir).is_err());
+        }
+
+        fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
+            self.rebuilt_indexes
+                .lock()
+                .unwrap()
+                .push(workspace_id.to_owned());
+            Ok(())
+        }
     }
 
     struct Fixture {
@@ -959,6 +1222,9 @@ mod tests {
             busy: Mutex::default(),
             removed: Mutex::default(),
             signed_out: AtomicUsize::new(0),
+            closed_indexes: Mutex::default(),
+            gone_while_closed: Mutex::default(),
+            rebuilt_indexes: Mutex::default(),
         });
         let doctor = LocalDoctor {
             hooks: hooks.clone(),
@@ -1027,7 +1293,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         let c = check(&f.doctor.checks(), "credentials").clone();
         assert_eq!(c.status, Status::Warn);
-        assert_eq!(c.fix_id, Some("credentials.tighten"));
+        assert_eq!(c.fix_id.as_deref(), Some("credentials.tighten"));
         f.doctor.fix("credentials.tighten", false).unwrap();
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
@@ -1056,7 +1322,7 @@ mod tests {
         });
         let c = check(&doctor.local.checks(), "credentials").clone();
         assert_eq!(c.status, Status::Fail);
-        assert_eq!(c.fix_id, Some("credentials.move_aside"));
+        assert_eq!(c.fix_id.as_deref(), Some("credentials.move_aside"));
         doctor.fix("credentials.move_aside", false).await.unwrap();
         let doctor = &doctor.local;
         // The original is kept aside, untouched; sign-in works.
@@ -1109,7 +1375,7 @@ mod tests {
         fs::write(f.doctor.credentials.path(), "not json").unwrap();
         let c = check(&f.doctor.checks(), "credentials").clone();
         assert_eq!(c.status, Status::Fail);
-        assert_eq!(c.fix_id, Some("credentials.move_aside"));
+        assert_eq!(c.fix_id.as_deref(), Some("credentials.move_aside"));
     }
 
     #[cfg(unix)]
@@ -1121,7 +1387,7 @@ mod tests {
         fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).unwrap();
         let c = check(&f.doctor.checks(), "dir.logs").clone();
         assert_eq!(
-            (c.status, c.fix_id),
+            (c.status, c.fix_id.as_deref()),
             (Status::Warn, Some("dir.tighten.logs"))
         );
         f.doctor.fix("dir.tighten.logs", false).unwrap();
@@ -1141,7 +1407,7 @@ mod tests {
             .unwrap();
         let c = check(&f.doctor.checks(), "history").clone();
         assert_eq!(
-            (c.status, c.fix_id),
+            (c.status, c.fix_id.as_deref()),
             (Status::Fail, Some("history.move_aside")),
             "{c:?}"
         );
@@ -1237,7 +1503,7 @@ mod tests {
         f.hooks.busy.lock().unwrap().push(busy_id.clone());
         let c = check(&f.doctor.checks(), "workspaces").clone();
         assert_eq!(
-            (c.status, c.fix_id),
+            (c.status, c.fix_id.as_deref()),
             (Status::Warn, Some("workspaces.drop_missing"))
         );
         let confirm = c.fix_confirm.unwrap();
@@ -1373,7 +1639,7 @@ mod tests {
         fs::write(f.doctor.workspaces.file_path(), "[{").unwrap();
         let c = check(&f.doctor.checks(), "workspaces").clone();
         assert_eq!(
-            (c.status, c.fix_id),
+            (c.status, c.fix_id.as_deref()),
             (Status::Fail, Some("workspaces.move_aside"))
         );
         f.doctor.fix("workspaces.move_aside", false).unwrap();
@@ -1389,6 +1655,177 @@ mod tests {
         let on = serde_json::json!({"local_work": {"allowed": true}});
         assert_eq!(local_work_check(true, Some(&on)).status, Status::Ok);
         assert_eq!(local_work_check(false, None).status, Status::Ok);
+    }
+
+    /// A workspace over a real folder, with its index built (and closed);
+    /// the workspace, the index directory and the folder's guard.
+    fn indexed_workspace(f: &Fixture) -> (Workspace, PathBuf, tempfile::TempDir) {
+        let folder = tempfile::tempdir().unwrap();
+        let workspace = f.doctor.workspaces.add(folder.path()).unwrap();
+        fs::create_dir_all(f.doctor.workspaces.data_dir(&workspace.id)).unwrap();
+        let dir = f.doctor.index_dir(&workspace.id);
+        elitea_local_index::sqlite_store::SqliteGraphStore::open(&dir)
+            .unwrap()
+            .close();
+        (workspace, dir, folder)
+    }
+
+    fn index_check_of(f: &Fixture, workspace: &Workspace) -> Option<Check> {
+        f.doctor
+            .checks()
+            .into_iter()
+            .find(|c| c.id == format!("index.{}", workspace.id))
+    }
+
+    #[test]
+    fn a_workspace_without_an_index_has_no_index_check_and_a_built_one_passes() {
+        let f = fixture();
+        let folder = tempfile::tempdir().unwrap();
+        let plain = f.doctor.workspaces.add(folder.path()).unwrap();
+        assert!(index_check_of(&f, &plain).is_none());
+
+        let (workspace, dir, _folder) = indexed_workspace(&f);
+        let c = index_check_of(&f, &workspace).unwrap();
+        assert_eq!((c.status, c.fix_id.as_deref()), (Status::Ok, None), "{c:?}");
+        assert!(c.message.contains(&workspace.name), "{}", c.message);
+
+        // Turned on but nothing built yet: not a problem.
+        fs::remove_file(dir.join(INDEX_FILE)).unwrap();
+        assert_eq!(index_check_of(&f, &workspace).unwrap().status, Status::Ok);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_index_others_can_read_is_tightened() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        let (workspace, dir, _folder) = indexed_workspace(&f);
+        let file = dir.join(INDEX_FILE);
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let c = index_check_of(&f, &workspace).unwrap();
+        let fix = format!("index.tighten:{}", workspace.id);
+        assert_eq!(
+            (c.status, c.fix_id.as_deref()),
+            (Status::Warn, Some(fix.as_str()))
+        );
+        f.doctor.fix(&fix, false).unwrap();
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(index_check_of(&f, &workspace).unwrap().status, Status::Ok);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_index_is_moved_aside_after_it_is_closed() {
+        let f = fixture();
+        let (workspace, dir, _folder) = indexed_workspace(&f);
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::rename(&dir, elsewhere.path().join("index")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path().join("index"), &dir).unwrap();
+
+        let c = index_check_of(&f, &workspace).unwrap();
+        let fix = format!("index.move_aside:{}", workspace.id);
+        assert_eq!(
+            (c.status, c.fix_id.as_deref()),
+            (Status::Fail, Some(fix.as_str()))
+        );
+        assert!(c.message.contains("symbolic link"), "{}", c.message);
+        // A rebuild never deletes through it.
+        assert!(
+            f.doctor
+                .fix(&format!("index.rebuild:{}", workspace.id), true)
+                .is_err()
+        );
+        f.doctor.fix(&fix, false).unwrap();
+        assert_eq!(
+            *f.hooks.closed_indexes.lock().unwrap(),
+            vec![workspace.id.clone()]
+        );
+        assert!(fs::symlink_metadata(&dir).is_err());
+        assert_eq!(
+            *f.hooks.gone_while_closed.lock().unwrap(),
+            vec![true],
+            "moved while the index was held closed"
+        );
+        assert!(
+            elsewhere.path().join("index").join(INDEX_FILE).is_file(),
+            "the target is untouched"
+        );
+        assert!(index_check_of(&f, &workspace).is_none());
+    }
+
+    #[test]
+    fn a_damaged_index_is_rebuilt_only_once_confirmed() {
+        let f = fixture();
+        let (workspace, dir, _folder) = indexed_workspace(&f);
+        fs::write(dir.join(INDEX_FILE), vec![0x5a_u8; 8192]).unwrap();
+
+        let c = index_check_of(&f, &workspace).unwrap();
+        let fix = format!("index.rebuild:{}", workspace.id);
+        assert_eq!(
+            (c.status, c.fix_id.as_deref()),
+            (Status::Fail, Some(fix.as_str()))
+        );
+        assert!(
+            c.fix_confirm
+                .as_deref()
+                .is_some_and(|what| what.contains("costs nothing"))
+        );
+
+        assert!(
+            f.doctor.fix(&fix, false).is_err(),
+            "refused without confirm"
+        );
+        assert!(dir.join(INDEX_FILE).is_file());
+
+        let message = f.doctor.fix(&fix, true).unwrap();
+        assert!(message.contains("being built"), "{message}");
+        assert!(!dir.exists());
+        assert_eq!(
+            *f.hooks.closed_indexes.lock().unwrap(),
+            vec![workspace.id.clone()]
+        );
+        assert_eq!(
+            *f.hooks.rebuilt_indexes.lock().unwrap(),
+            vec![workspace.id.clone()]
+        );
+        assert_eq!(
+            *f.hooks.gone_while_closed.lock().unwrap(),
+            vec![true],
+            "deleted while the index was held closed"
+        );
+    }
+
+    #[test]
+    fn an_index_from_a_newer_app_asks_for_an_update() {
+        let f = fixture();
+        let (workspace, dir, _folder) = indexed_workspace(&f);
+        rusqlite::Connection::open(dir.join(INDEX_FILE))
+            .unwrap()
+            .execute_batch(&format!(
+                "PRAGMA user_version = {};",
+                INDEX_SCHEMA_VERSION + 1
+            ))
+            .unwrap();
+        let c = index_check_of(&f, &workspace).unwrap();
+        assert_eq!((c.status, c.fix_id.as_deref()), (Status::Fail, None));
+        assert!(c.message.contains("update the app"), "{}", c.message);
+    }
+
+    #[test]
+    fn an_index_repair_names_a_workspace_in_the_list() {
+        let f = fixture();
+        let (_workspace, _dir, _folder) = indexed_workspace(&f);
+        for fix in [
+            "index.tighten:nope",
+            "index.rebuild:../..",
+            "index.move_aside:",
+        ] {
+            assert!(f.doctor.fix(fix, true).is_err(), "{fix}");
+        }
+        assert!(f.hooks.closed_indexes.lock().unwrap().is_empty());
     }
 
     #[test]

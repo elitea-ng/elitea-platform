@@ -55,6 +55,11 @@ impl ModelFacade {
         Self { gateway }
     }
 
+    /// The gateway's embeddings route over the same channel (ADR-0030 I1).
+    pub(crate) fn embeddings(&self) -> super::embeddings_facade::EmbeddingsClient {
+        super::embeddings_facade::EmbeddingsClient::from_gateway(&self.gateway)
+    }
+
     /// Consume the claim credential into the selected native ADK adapter.
     pub(crate) fn bind(
         &self,

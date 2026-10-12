@@ -4,6 +4,7 @@ mod error;
 pub mod node_event;
 pub mod output;
 pub mod toolkit_execution;
+pub(crate) mod vector_token;
 pub(crate) mod wire;
 
 // Generated protobuf and gRPC clients mirror comments and method shapes owned

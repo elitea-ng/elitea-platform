@@ -1,4 +1,7 @@
-# Apply this overlay to test the Rust agent runtime without activating indexing.
+# Apply this overlay to run the Rust agent runtime, with indexing on the Rust
+# path (ADR-0030 I1): index.ingest.v1 is dispatched on the AGENT stream the one
+# native worker consumes, elitea-main keeps index metadata in its registry
+# (ELITEA_INDEXING_RUNTIME=rust) and vectors go to Qdrant through elitea-vector.
 #
 # docker compose \
 #   -f deploy/docker-compose.standalone-full.yml \
@@ -10,8 +13,15 @@ services:
 
   elitea-main:
     environment:
-      ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "false"
-      ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: ""
+      # Index runs ride the agent stream, as the base stack does (one worker,
+      # one durable); the native worker serves them from this change on.
+      ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
+      ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
+      # The registry, not the per-project pgvector index_meta rows, holds
+      # index metadata (ADR-0031 V1); nothing is migrated, indexes created
+      # under the Python path are not visible here, and new projects get no
+      # project_pgvector database.
+      ELITEA_INDEXING_RUNTIME: "rust"
       # This overlay is what selects the native worker, so it is also what tells
       # elitea-main which toolkit types the running worker can build. The native
       # worker materializes 22 families and SKIPS anything else with a warning,
@@ -74,6 +84,9 @@ services:
         condition: service_completed_successfully
       otel-collector:
         condition: service_started
+      # The index runs' vector store (worker-runtime.rust.json `vector_target`).
+      elitea-vector:
+        condition: service_healthy
       # The bundle SSL_CERT_FILE names must exist before the worker's first MCP
       # connection. `rustls-native-certs` reads it lazily, per client build, so
       # a late file would only break the runs that raced it — the worst kind of

@@ -25,6 +25,7 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
+import { WorkspaceIndexControl } from '@/features/workspace-index';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
@@ -33,6 +34,7 @@ import { AgentPickers, NoAgents } from './AgentPickers';
 import { COLUMN, EarlierTurns, Exchanges, firstError, FolderTitle, OpenInChat, PanelToggle, SessionNotices, ThreadIntro } from './sessionParts';
 import { SessionPanel } from './SessionPanel';
 import { UnboundFolder } from './UnboundFolder';
+import { useAgentSkills } from './useAgentSkills';
 import { useStickToBottom } from './useStickToBottom';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
 import { WorkspaceComposer } from './WorkspaceComposer';
@@ -49,7 +51,7 @@ interface HeaderProps {
   onProjectMenuOpenChange: (open: boolean) => void;
 }
 
-/** The folder, its project and agent, "Open in chat" for a started thread, and the panel toggle. */
+/** The folder, its project and agent, the folder's code index, "Open in chat" for a started thread, and the panel toggle. */
 function SessionHeader({ session, workspace, projectId, conversationId, busy, projectMenuOpen, onProjectMenuOpenChange }: HeaderProps): React.JSX.Element {
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
@@ -61,6 +63,7 @@ function SessionHeader({ session, workspace, projectId, conversationId, busy, pr
         logo={false}
         trailing={
           <>
+            <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} open />
             {conversationId !== '' && <OpenInChat conversationId={conversationId} />}
             {!changesOpen && <PanelToggle count={attention} />}
           </>
@@ -87,6 +90,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
   const session = useThreadSession(props);
   const { turn, commands, raw } = session;
+  const skills = useAgentSkills(projectId, raw.versionId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const appIpc = useAppIpc();
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
@@ -135,7 +139,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
             busy={turn.busy}
             planMode={commands.planMode}
             onPlanModeChange={commands.setPlanMode}
-            onSend={(prompt, mentions) => session.send(prompt, commands.planMode, mentions)}
+            skills={skills}
+            onSend={(prompt, mentions, picked) => session.send(prompt, commands.planMode, mentions, picked)}
             onStop={() => void turn.cancel()}
             onCommand={session.run}
           />

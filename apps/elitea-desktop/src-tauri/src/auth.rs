@@ -198,7 +198,7 @@ impl AuthService {
     /// deployment. Choosing a different deployment ends any session on the old one.
     pub async fn connect(self: &Arc<Self>, input: &str) -> Result<DeploymentInfo, HostError> {
         let origin = discovery::normalize_origin(input)?;
-        let document = discovery::fetch_discovery(self.tokens.http(), &origin).await?;
+        let document = self.tokens.discovery(&origin).await?;
         let origin_text = origin_string(&origin);
 
         let mut settings = self.files.settings()?;
@@ -235,7 +235,7 @@ impl AuthService {
         let origin = Url::parse(&origin_text).map_err(|e| HostError::Internal(e.to_string()))?;
         // Fresh discovery, not a cached one: endpoints are validated against the
         // origin the person confirmed, every time a credential is about to move.
-        let document = discovery::fetch_discovery(self.tokens.http(), &origin).await?;
+        let document = self.tokens.discovery(&origin).await?;
         let auth = document.native_auth()?.clone();
         let client_id = self.client_id(&settings);
 
@@ -409,6 +409,10 @@ impl AuthService {
             if current.is_some_and(|c| c != stale) && self.cached_token().await.is_some() {
                 return Ok(RefreshResult::Refreshed);
             }
+        } else if self.cached_token().await.is_some() {
+            // `access_token` found no token, then waited here behind a refresh
+            // that made one (the launch's, src/lib.rs): use it, do not rotate again.
+            return Ok(RefreshResult::Refreshed);
         }
         let settings = self.files.settings()?;
         let Some(session) = self.current_session().await? else {
@@ -418,7 +422,7 @@ impl AuthService {
             return Ok(RefreshResult::Ended);
         }
         let origin = Url::parse(&session.origin).map_err(|e| HostError::Internal(e.to_string()))?;
-        let document = match discovery::fetch_discovery(self.tokens.http(), &origin).await {
+        let document = match self.tokens.discovery(&origin).await {
             Ok(document) => document,
             Err(HostError::Unreachable | HostError::Unavailable) => {
                 return Ok(RefreshResult::Unavailable);
@@ -535,7 +539,7 @@ impl AuthService {
     /// As [`Self::connect`]'s discovery fetch.
     pub async fn probe_deployment(&self, origin: &str) -> Result<String, HostError> {
         let origin = discovery::normalize_origin(origin)?;
-        let document = discovery::fetch_discovery(self.tokens.http(), &origin).await?;
+        let document = self.tokens.discovery(&origin).await?;
         document.native_auth()?;
         Ok(document.display_name)
     }
@@ -562,7 +566,9 @@ impl AuthService {
     /// with the token (discovery validated it when the token was issued).
     async fn revoke(&self, pending: &PendingRevoke) -> bool {
         let fresh = match Url::parse(&pending.origin) {
-            Ok(origin) => discovery::fetch_discovery(self.tokens.http(), &origin)
+            Ok(origin) => self
+                .tokens
+                .discovery(&origin)
                 .await
                 .ok()
                 .and_then(|d| d.native_auth().ok().map(|a| a.revocation_endpoint.clone())),

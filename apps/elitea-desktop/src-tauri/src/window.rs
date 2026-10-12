@@ -4,8 +4,8 @@
 //! only ever show our own bundled assets. Tauri grants IPC by origin, and a
 //! navigation to a remote page would put a page we did not ship next to the
 //! credential-backed commands. `on_navigation` refuses every such navigation
-//! before it happens; the deployment is reached through the HTTP plugin from
-//! bundled code, never by navigating to it.
+//! before it happens; the deployment is reached through the host's fetch
+//! (src/net.rs) from bundled code, never by navigating to it.
 
 use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
 use url::{Host, Url};

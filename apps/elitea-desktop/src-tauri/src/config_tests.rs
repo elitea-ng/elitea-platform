@@ -183,3 +183,27 @@ fn no_keychain_crate_is_linked() {
     let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.lock")).unwrap();
     assert!(!lock.contains("name = \"keyring\""));
 }
+
+/// The host passes its bundle identifier from the Tauri config to the local
+/// tools, which deny the app's default directories under it: the shared
+/// library names no app.
+#[test]
+fn the_sandbox_gets_the_tauri_identifier() {
+    let config: tauri::Config =
+        serde_json::from_value(json("tauri.conf.json")).expect("tauri config");
+    assert_eq!(
+        crate::sandbox_app_id(&config).as_deref(),
+        Some("ai.elitea.desktop")
+    );
+    assert_eq!(config.identifier, "ai.elitea.desktop");
+}
+
+/// An app directory that cannot be resolved is left out with a warning,
+/// never an error that stops the app; one that resolves is kept.
+#[test]
+fn an_unresolvable_app_dir_is_dropped_not_fatal() {
+    let resolved = crate::optional_app_dir("cache", Ok(std::path::PathBuf::from("/c")));
+    assert_eq!(resolved, Some(std::path::PathBuf::from("/c")));
+    let missing = crate::optional_app_dir("cache", Err(tauri::Error::UnknownPath));
+    assert_eq!(missing, None);
+}

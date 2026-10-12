@@ -139,7 +139,7 @@ export function ThreadIntro({
       <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
         {unavailable
           ? t('workspace.thread.earlierHint', 'Earlier messages of this thread are in the conversation.')
-          : t('workspace.thread.newHint', 'Type @ to add a file, / for commands. The agent works in this folder, on this computer.')}
+          : t('workspace.thread.newHint', 'Type @ to add a file, / for commands and skills. The agent works in this folder, on this computer.')}
       </Typography>
       {unavailable && !isNew && (
         <Box sx={linkSx}>
