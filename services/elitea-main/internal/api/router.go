@@ -83,6 +83,7 @@ import (
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -420,6 +421,34 @@ type RouterConfig struct {
 	// is not listed keeps its data, and the composition root logs which are
 	// wired. See application_data.go.
 	ApplicationData []ApplicationDataClient
+	// ProjectVectorData deletes a project's vectors in elitea-vector when the
+	// project is deprovisioned (ADR-0031 decision 4: DropProject, every
+	// source): one cleanup-journal step, `vector_data`. Composed from
+	// ELITEA_VECTOR_GRPC_TARGET (infra/vectorclient); unassigned, a deleted
+	// project's vectors stay in Qdrant, and the composition root logs that
+	// under the Rust indexing runtime. Separate from ApplicationData because
+	// a TOOLKIT's vectors do not go through the toolkit journal: the row-first
+	// toolkit delete tombstones the toolkit's index_registry rows in its own
+	// transaction and the registry's tombstone sweeper deletes each index's
+	// namespace (v2/toolkits/toolkit_data.go), so elitea-vector needs no
+	// per-toolkit remover here.
+	ProjectVectorData projectprovisioning.ApplicationDataRemover
+	// ProjectVectorDataRecorded says whether a delete decided on this replica
+	// RECORDS the vector step on the journal row: true under the Rust indexing
+	// runtime, whose toolkit indexes live in elitea-vector, WITH OR WITHOUT a
+	// client (without one the step is recorded and left pending for a replica
+	// that has it). False (the Python runtime) with ProjectVectorData set makes
+	// the client drain-only: it runs the step rows other replicas recorded and
+	// records none itself.
+	ProjectVectorDataRecorded bool
+	// ProjectVectorCleanupAbandoned is the operator's
+	// ELITEA_VECTOR_CLEANUP_ABANDON=true: the deployment abandoned the vector
+	// store, so a pending vector step is closed with
+	// projectprovisioning.NoteVectorCleanupAbandoned instead of waiting for a
+	// client that never comes. No replica closes one on its own configuration
+	// (application_data.go). Ignored when ProjectVectorData is set; the
+	// composition root refuses that pair at boot.
+	ProjectVectorCleanupAbandoned bool
 	// OnToolkitCleanupJournal, when set, is called once with the toolkit
 	// cleanup journal the toolkit handler enqueues into (#1244), after it is
 	// built. The process uses it to start the toolkit-deletion reconciler over
@@ -772,6 +801,21 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	// wired engine. Optional in the same sense as the vector store — a
 	// deployment without an engine has no data there to delete.
 	options = append(options, applicationDataOptions(cfg.ApplicationData)...)
+	// elitea-vector (ADR-0031 decision 4): the project's vectors, every
+	// source, one journal step. Optional like the engines; recorded by every
+	// replica that indexes into the store, client or not (projectprovisioning/
+	// application_data.go explains the shapes and the abandon switch).
+	switch {
+	case cfg.ProjectVectorData != nil && cfg.ProjectVectorDataRecorded:
+		options = append(options, projectprovisioning.WithApplicationData(vectorclient.App, cfg.ProjectVectorData))
+	case cfg.ProjectVectorData != nil:
+		options = append(options, projectprovisioning.WithApplicationDataDrain(vectorclient.App, cfg.ProjectVectorData))
+	case cfg.ProjectVectorDataRecorded:
+		options = append(options, projectprovisioning.WithApplicationDataRecorded(vectorclient.App))
+	}
+	if cfg.ProjectVectorCleanupAbandoned {
+		options = append(options, projectprovisioning.WithVectorCleanupAbandoned())
+	}
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)
 		objectsRepo, objectsErr := dbrepos.NewArtifactObjectsRepository(cfg.Pool)

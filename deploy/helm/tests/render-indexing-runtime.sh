@@ -62,10 +62,19 @@ RUST=(
   >"$TMP/rust.yaml" 2>"$TMP/rust.err" \
   && ok "implementation=rust with indexingRuntime=rust and vector.enabled renders" \
   || bad "rust does not render: $(tail -1 "$TMP/rust.err")"
+# An elitea-vector deployed elsewhere: the worker is pointed at it, and so is
+# elitea-main's own client (ADR-0031 decision 4; render-vector.sh covers the
+# shape), because rust indexing without elitea-main's client is refused.
 "$HELM" template t "$CHART" "${RENDER[@]}" \
   --set worker.implementation=rust --set worker.indexingRuntime=rust \
   --set-string worker.runtime.vectorTarget=vector.platform.example:9470 \
   --set-string worker.runtime.indexEgressAllowlist= \
+  --set-string main.env.ELITEA_VECTOR_GRPC_TARGET=vector.platform.example:9470 \
+  --set-string main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/run/elitea-vector-client/tls.crt \
+  --set-string main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/elitea-vector-client/tls.key \
+  --set-string main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client/ca.crt \
+  --set main.fileConfig.vectorClientMaterial.enabled=true \
+  --set main.fileConfig.vectorClientMaterial.secretName=elitea-main-vector-client-tls \
   >"$TMP/external.yaml" 2>"$TMP/external.err" \
   && ok "indexingRuntime=rust with an external worker.runtime.vectorTarget renders" \
   || bad "external vector target does not render: $(tail -1 "$TMP/external.err")"

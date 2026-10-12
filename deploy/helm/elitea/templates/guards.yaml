@@ -10,6 +10,7 @@
 */ -}}
 
 {{- include "elitea.compiledSnapshots.validate" . }}
+{{- include "elitea.codeNodes.validateWorker" . }}
 {{- /*
   The runtime Redis (`runtimeRedis`: Deployment, Service, ConfigMap, PVC and
   the elitea-runtime-redis-material Secret) is removed. Nothing has read it
@@ -85,6 +86,9 @@
 {{- end }}
 {{- if and ((.Values.worker.extractor | default dict).enabled) (not (and .Values.worker.enabled (eq .Values.worker.implementation "rust") (eq (default "python" .Values.worker.indexingRuntime) "rust"))) }}
 {{- fail "worker.extractor.enabled needs worker.enabled=true, worker.implementation=rust and worker.indexingRuntime=rust. The document extraction sidecar (elitea-doc-extractor, ADR-0030 I1) is dialled by the Rust worker's index runs over a socket in the worker pod and by nothing else; the Python worker extracts documents itself, and without the Rust indexing runtime no run would ever reach the sidecar." }}
+{{- end }}
+{{- if and (eq (default "python" .Values.worker.indexingRuntime) "rust") (not (or (include "elitea-vector.mainClientEnabled" .) (get (.Values.main.env | default dict) "ELITEA_VECTOR_GRPC_TARGET"))) }}
+{{- fail "worker.indexingRuntime=rust needs elitea-main's elitea-vector client: keep vector.mainClient.enabled=true with this chart's elitea-vector, or set main.env.ELITEA_VECTOR_GRPC_TARGET (plus the three ELITEA_VECTOR_GRPC_*_FILE paths and main.fileConfig.vectorClientMaterial) for one deployed elsewhere. Without it a deleted index keeps its vectors for ever (the registry's tombstone sweeper has nothing to call) and a deleted project keeps every vector namespace in Qdrant (ADR-0031 decision 4)." }}
 {{- end }}
 {{- if and (eq (default "python" .Values.worker.indexingRuntime) "rust") (not (and .Values.main.runtime.enabled ((.Values.main.runtime.indexIngestDispatch | default dict).enabled))) }}
 {{- fail "worker.indexingRuntime=rust needs main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true (they set ELITEA_RUNTIME_ENABLED and ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED). elitea-main selects the registry only when index ingest dispatch is composed: without it the setting is silently dead, ELITEA_INDEXING_RUNTIME=rust is ignored, and the index routes keep reading the per-project pgvector index_meta rows a Rust worker never writes." }}

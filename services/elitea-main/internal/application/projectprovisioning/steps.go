@@ -122,6 +122,15 @@ const (
 	// derives them from the application's name.
 	StepDeepWikiData  = "deepwiki_data"
 	StepInventoryData = "inventory_data"
+	// StepVectorData is the same kind of step for elitea-vector (ADR-0031
+	// decision 4: "a project: deleting it calls DropProject, which removes
+	// every source"), wired as the application AppVector ("vector",
+	// infra/vectorclient.App). It removes every vector namespace of the
+	// project — toolkit indexes and wikis alike — in every collection. Under
+	// the Rust indexing runtime it is the project's vector deletion; the
+	// project_pgvector_drop step then has no database to drop and records
+	// "skipped". How it differs from the engine steps: application_data.go.
+	StepVectorData = AppVector + "_data"
 )
 
 // systemProjectRole is the project role the per-project system identity holds.

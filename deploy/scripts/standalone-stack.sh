@@ -885,8 +885,8 @@ case "${1:-}" in
       echo "ERROR: Inventory provider material missing. Run: $0 certs" >&2
       exit 1
     fi
-    if [ ! -f "${REPO_ROOT}/deploy/certs/vector/vector.crt" ]; then
-      echo "ERROR: elitea-vector material missing. Run: $0 certs" >&2
+    if [ ! -f "${REPO_ROOT}/deploy/certs/vector/vector.crt" ] || [ ! -f "${REPO_ROOT}/deploy/certs/vector/main-client.crt" ]; then
+      echo "ERROR: elitea-vector material missing (vector.crt and elitea-main's main-client.crt). Run: $0 certs" >&2
       exit 1
     fi
     # oidc-mock's published port must equal its container port (the issuer is

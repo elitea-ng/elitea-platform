@@ -382,12 +382,12 @@ describe('CreatePipeline', () => {
   });
 
   /*
-   * DEFECT this pins (post-merge browser pass on 0def77b22): a graph with a
-   * `type: split_out` node saved from this page as pipeline 161, although a
-   * production runtime refuses it and the editor's own save gate blocked every
-   * later save of it. The create page now applies the same admission verdict.
+   * DEFECT this pins (post-merge browser pass on 0def77b22): a graph with a node
+   * type the runtime refuses saved from this page as pipeline 161, and the
+   * editor's own save gate blocked every later save of it. The create page
+   * applies the same admission verdict.
    */
-  it('blocks Save with an inline reason when the graph holds a node type this deployment does not run', { timeout: 20_000 }, async () => {
+  it('blocks Save with an inline reason when the graph holds a node type the runtime does not run', { timeout: 20_000 }, async () => {
     const user = userEvent.setup({ delay: null });
     const createSpy = vi.fn(() => HttpResponse.json({ id: '7', version_details: { id: '1' } }, { status: 201 }));
     server.use(http.post('*/elitea_core/applications/prompt_lib/:projectId', createSpy));
@@ -397,14 +397,14 @@ describe('CreatePipeline', () => {
     await replaceInstructions(user, container, JSON.stringify({
       entry_point: 'split',
       state: { records: 'list', expanded: 'list' },
-      nodes: [{ id: 'split', type: 'split_out', source: 'records', split: { mode: 'list' }, destination: 'item', output: ['expanded'], transition: 'END' }],
+      nodes: [{ id: 'split', type: 'custom', source: 'records', transition: 'END' }],
     }));
     await user.type(screen.getByTestId('agent-name-input'), 'my-pipeline');
     await user.type(screen.getByTestId('agent-description-input'), 'does a thing');
 
     const alert = await screen.findByTestId('create-pipeline-admission');
     expect(alert).toHaveTextContent('This pipeline cannot be saved');
-    expect(alert).toHaveTextContent('Node split: type: "split_out" is not available on this deployment');
+    expect(alert).toHaveTextContent('Node split: type: "custom" is not a node type this runtime can run');
     const save = screen.getByTestId('pipeline-save-button');
     expect(save).toBeDisabled();
     expect(createSpy).not.toHaveBeenCalled();
@@ -417,7 +417,7 @@ describe('CreatePipeline', () => {
 
   it('shows the server\'s readable refusal instead of the generic create error', { timeout: 20_000 }, async () => {
     const user = userEvent.setup({ delay: null });
-    const refusal = 'Node "split" uses the "split_out" node type, which is not available on this deployment. Remove or replace that node before saving.';
+    const refusal = 'Node "split" uses the "custom" node type, which the pipeline runtime does not support. Remove or replace that node before saving.';
     server.use(http.post('*/elitea_core/applications/prompt_lib/:projectId', () => HttpResponse.json({ error: refusal }, { status: 400 })));
     renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
 

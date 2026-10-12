@@ -1,0 +1,364 @@
+//! Every row of the typed reducer table, its bounds and the ADK closure.
+
+use adk_graph::{Channel, StateSchema};
+use serde_json::{Value, json};
+
+use super::{MAX_APPEND_ELEMENTS, MAX_MERGE_KEYS, MAX_REDUCED_BYTES, ReducerFailure, StateReducer};
+
+fn number(text: &str) -> Value {
+    serde_json::from_str(text).expect("number fixture")
+}
+
+#[test]
+fn reducer_names_parse_to_typed_variants_and_overwrite_is_the_default() {
+    assert_eq!(StateReducer::parse("overwrite"), Ok(None));
+    assert_eq!(
+        StateReducer::parse("append"),
+        Ok(Some(StateReducer::Append))
+    );
+    assert_eq!(
+        StateReducer::parse("sum_int"),
+        Ok(Some(StateReducer::SumInt))
+    );
+    assert_eq!(StateReducer::parse("merge"), Ok(Some(StateReducer::Merge)));
+    for unknown in ["Append", "sum", "add", "custom", "", "extend"] {
+        assert!(StateReducer::parse(unknown).is_err(), "{unknown}");
+    }
+}
+
+#[test]
+fn each_reducer_names_its_only_compatible_state_type() {
+    assert_eq!(StateReducer::Append.state_type(), "list");
+    assert_eq!(StateReducer::SumInt.state_type(), "int");
+    assert_eq!(StateReducer::Merge.state_type(), "dict");
+}
+
+#[test]
+fn append_concatenates_in_order() {
+    let reduced = StateReducer::Append.reduce_checked(&json!([1, "a"]), &json!([{"b": 2}, null]));
+    assert_eq!(reduced, Ok(json!([1, "a", {"b": 2}, null])));
+    assert_eq!(
+        StateReducer::Append.reduce_checked(&json!([1]), &json!([])),
+        Ok(json!([1]))
+    );
+}
+
+#[test]
+fn append_never_wraps_a_scalar_and_null_never_clears() {
+    for update in [
+        json!(1),
+        json!("x"),
+        json!({"a": 1}),
+        Value::Null,
+        json!(true),
+    ] {
+        assert_eq!(
+            StateReducer::Append.reduce_checked(&json!([1]), &update),
+            Err(ReducerFailure::TypeMismatch),
+            "{update}"
+        );
+    }
+    assert_eq!(
+        StateReducer::Append.reduce_checked(&json!({}), &json!([1])),
+        Err(ReducerFailure::TypeMismatch)
+    );
+}
+
+#[test]
+fn append_is_bounded_by_element_count_at_limit_and_limit_plus_one() {
+    let current = Value::Array(vec![json!(0); MAX_APPEND_ELEMENTS - 1]);
+    let at_limit = StateReducer::Append
+        .reduce_checked(&current, &json!([1]))
+        .expect("exactly the element limit");
+    assert_eq!(at_limit.as_array().map(Vec::len), Some(MAX_APPEND_ELEMENTS));
+    assert_eq!(
+        StateReducer::Append.reduce_checked(&current, &json!([1, 2])),
+        Err(ReducerFailure::Limit)
+    );
+}
+
+#[test]
+fn append_is_bounded_by_serialized_bytes_at_limit_and_limit_plus_one() {
+    // `["…"]` costs four bytes of punctuation around the string.
+    let filler = "x".repeat(MAX_REDUCED_BYTES - 4);
+    let at_limit = StateReducer::Append
+        .reduce_checked(&json!([]), &json!([filler]))
+        .expect("exactly the byte limit");
+    assert_eq!(
+        serde_json::to_vec(&at_limit).expect("bytes").len(),
+        MAX_REDUCED_BYTES
+    );
+    let over = "x".repeat(MAX_REDUCED_BYTES - 3);
+    assert_eq!(
+        StateReducer::Append.reduce_checked(&json!([]), &json!([over])),
+        Err(ReducerFailure::Limit)
+    );
+}
+
+#[test]
+fn sum_int_adds_exact_integers_including_integral_spellings() {
+    assert_eq!(
+        StateReducer::SumInt.reduce_checked(&json!(2), &json!(3)),
+        Ok(json!(5))
+    );
+    assert_eq!(
+        StateReducer::SumInt.reduce_checked(&json!(-7), &number("2.0")),
+        Ok(json!(-5))
+    );
+    assert_eq!(
+        StateReducer::SumInt.reduce_checked(&json!(0), &number("1e2")),
+        Ok(json!(100))
+    );
+}
+
+#[test]
+fn sum_int_refuses_fractions_and_non_numbers() {
+    for update in [
+        number("2.5"),
+        json!("3"),
+        Value::Null,
+        json!([1]),
+        json!(true),
+    ] {
+        assert_eq!(
+            StateReducer::SumInt.reduce_checked(&json!(1), &update),
+            Err(ReducerFailure::TypeMismatch),
+            "{update}"
+        );
+    }
+    assert_eq!(
+        StateReducer::SumInt.reduce_checked(&number("1.5"), &json!(1)),
+        Err(ReducerFailure::TypeMismatch)
+    );
+}
+
+#[test]
+fn sum_int_overflows_at_i64_bounds_with_checked_arithmetic() {
+    assert_eq!(
+        StateReducer::SumInt.reduce_checked(&json!(i64::MAX - 1), &json!(1)),
+        Ok(json!(i64::MAX))
+    );
+    assert_eq!(
+        StateReducer::SumInt.reduce_checked(&json!(i64::MAX), &json!(1)),
+        Err(ReducerFailure::Overflow)
+    );
+    assert_eq!(
+        StateReducer::SumInt.reduce_checked(&json!(i64::MIN), &json!(-1)),
+        Err(ReducerFailure::Overflow)
+    );
+    assert_eq!(
+        StateReducer::SumInt.reduce_checked(&json!(0), &json!(u64::MAX)),
+        Err(ReducerFailure::Overflow)
+    );
+    // An exponent no integer can carry is not an exact i64 value at all. Only
+    // an `arbitrary_precision` build (the worker) can hold that value; without
+    // it serde_json refuses it at parse time (`exact_number` tests the text).
+    if let Ok(huge) = serde_json::from_str::<Value>("1e99999999999999999999") {
+        assert_eq!(
+            StateReducer::SumInt.reduce_checked(&json!(0), &huge),
+            Err(ReducerFailure::TypeMismatch)
+        );
+    }
+}
+
+#[test]
+fn merge_is_shallow_update_keys_win_and_null_sets_null() {
+    let reduced = StateReducer::Merge.reduce_checked(
+        &json!({"a": 1, "b": {"x": 1}, "c": 3}),
+        &json!({"b": {"y": 2}, "c": null, "d": 4}),
+    );
+    assert_eq!(
+        reduced,
+        Ok(json!({"a": 1, "b": {"y": 2}, "c": null, "d": 4}))
+    );
+}
+
+#[test]
+fn merge_requires_objects() {
+    for update in [json!([1]), json!(1), Value::Null, json!("x")] {
+        assert_eq!(
+            StateReducer::Merge.reduce_checked(&json!({}), &update),
+            Err(ReducerFailure::TypeMismatch),
+            "{update}"
+        );
+    }
+}
+
+#[test]
+fn merge_is_bounded_by_key_count_at_limit_and_limit_plus_one() {
+    let current: serde_json::Map<String, Value> = (0..MAX_MERGE_KEYS - 1)
+        .map(|index| (format!("k{index}"), json!(0)))
+        .collect();
+    let current = Value::Object(current);
+    assert!(
+        StateReducer::Merge
+            .reduce_checked(&current, &json!({"new": 1, "k0": 2}))
+            .is_ok()
+    );
+    assert_eq!(
+        StateReducer::Merge.reduce_checked(&current, &json!({"new": 1, "other": 2})),
+        Err(ReducerFailure::Limit)
+    );
+}
+
+#[test]
+fn merge_is_bounded_by_serialized_bytes() {
+    let big = "x".repeat(MAX_REDUCED_BYTES);
+    assert_eq!(
+        StateReducer::Merge.reduce_checked(&json!({}), &json!({ "k": big })),
+        Err(ReducerFailure::Limit)
+    );
+}
+
+#[test]
+fn failure_codes_are_stable_and_name_no_value() {
+    assert_eq!(
+        ReducerFailure::TypeMismatch.code(),
+        "graph.state.reducer_type_mismatch"
+    );
+    assert_eq!(ReducerFailure::Limit.code(), "graph.state.reducer_limit");
+    assert_eq!(
+        ReducerFailure::Overflow.code(),
+        "graph.state.reducer_overflow"
+    );
+}
+
+#[test]
+fn the_guard_check_agrees_with_the_reduction_at_every_bound() {
+    let filler = |bytes: usize| json!("x".repeat(bytes));
+    // `["a…","b…"]` costs both strings plus seven bytes of punctuation.
+    let half = (MAX_REDUCED_BYTES - 7) / 2;
+    let cases = [
+        (StateReducer::Append, json!([]), json!([])),
+        (StateReducer::Append, json!([1]), json!([])),
+        (StateReducer::Append, json!([]), json!([2])),
+        (StateReducer::Append, json!([1]), json!("scalar")),
+        (
+            StateReducer::Append,
+            json!([filler(half)]),
+            json!([filler(MAX_REDUCED_BYTES - 7 - half)]),
+        ),
+        (
+            StateReducer::Append,
+            json!([filler(half)]),
+            json!([filler(MAX_REDUCED_BYTES - 6 - half)]),
+        ),
+        (
+            StateReducer::Append,
+            json!([]),
+            json!([filler(MAX_REDUCED_BYTES - 4)]),
+        ),
+        (
+            StateReducer::Append,
+            json!([]),
+            json!([filler(MAX_REDUCED_BYTES - 3)]),
+        ),
+        (
+            StateReducer::Append,
+            Value::Array(vec![json!(0); MAX_APPEND_ELEMENTS]),
+            json!([1]),
+        ),
+        (StateReducer::SumInt, json!(i64::MAX), json!(1)),
+        (StateReducer::Merge, json!({"a": 1}), json!({"b": null})),
+    ];
+    for (reducer, current, update) in cases {
+        assert_eq!(
+            reducer.check_update(&current, &update),
+            reducer.reduce_checked(&current, &update).map(|_| ()),
+            "{reducer:?}"
+        );
+    }
+    // The two boundary rows straddle the byte limit exactly.
+    assert_eq!(
+        StateReducer::Append.check_update(
+            &json!([filler(half)]),
+            &json!([filler(MAX_REDUCED_BYTES - 7 - half)])
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        StateReducer::Append.check_update(
+            &json!([filler(half)]),
+            &json!([filler(MAX_REDUCED_BYTES - 6 - half)])
+        ),
+        Err(ReducerFailure::Limit)
+    );
+}
+
+#[test]
+fn bounds_check_a_value_the_reducer_would_hold() {
+    assert_eq!(StateReducer::Append.check_held(&json!([1, 2])), Ok(()));
+    assert_eq!(
+        StateReducer::Append.check_held(&Value::Array(vec![json!(0); MAX_APPEND_ELEMENTS + 1])),
+        Err(ReducerFailure::Limit)
+    );
+    assert_eq!(
+        StateReducer::SumInt.check_held(&json!(u64::MAX)),
+        Err(ReducerFailure::Overflow)
+    );
+    assert_eq!(
+        StateReducer::Merge.check_held(&json!([])),
+        Err(ReducerFailure::TypeMismatch)
+    );
+}
+
+#[test]
+fn the_adk_channel_reducer_repeats_the_reduction_and_never_panics() {
+    let mut schema = StateSchema::new();
+    for (name, reducer) in [
+        ("findings", StateReducer::Append),
+        ("total", StateReducer::SumInt),
+        ("seen", StateReducer::Merge),
+    ] {
+        schema.channels.insert(
+            name.to_owned(),
+            Channel::new(name).with_reducer(reducer.channel_reducer(name)),
+        );
+    }
+    let mut state = adk_graph::State::new();
+    state.insert("findings".to_owned(), json!(["a"]));
+    state.insert("total".to_owned(), json!(i64::MAX));
+    state.insert("seen".to_owned(), json!({"a": 1}));
+    schema.apply_update(&mut state, "findings", json!(["b"]));
+    schema.apply_update(&mut state, "seen", json!({"b": 2}));
+    assert_eq!(state["findings"], json!(["a", "b"]));
+    assert_eq!(state["seen"], json!({"a": 1, "b": 2}));
+    // A violation the guard should have refused keeps the current value.
+    schema.apply_update(&mut state, "total", json!(1));
+    schema.apply_update(&mut state, "findings", json!("scalar"));
+    assert_eq!(state["total"], json!(i64::MAX));
+    assert_eq!(state["findings"], json!(["a", "b"]));
+}
+
+/// Opt-in budget: one typed update at the bounds costs the guard check plus the
+/// channel reduction, each O(result bytes). Run with
+/// `cargo test --release -p elitea-agent-runtime --lib typed_update_budget -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing budget, run manually and record in the source mapping"]
+fn typed_update_budget_at_the_bounds() {
+    let element = json!("x".repeat(40));
+    let current = Value::Array(vec![element.clone(); MAX_APPEND_ELEMENTS - 1]);
+    let update = Value::Array(vec![element]);
+    let bytes = serde_json::to_vec(&current).expect("bytes").len();
+    assert!(bytes > 400 * 1024 && bytes < MAX_REDUCED_BYTES);
+    let rounds = 200_u32;
+    let started = std::time::Instant::now();
+    for _ in 0..rounds {
+        assert!(StateReducer::Append.check_update(&current, &update).is_ok());
+    }
+    let check = started.elapsed() / rounds;
+    let started = std::time::Instant::now();
+    for _ in 0..rounds {
+        assert!(
+            StateReducer::Append
+                .reduce_checked(&current, &update)
+                .is_ok()
+        );
+    }
+    let reduce = started.elapsed() / rounds;
+    println!(
+        "typed append at {bytes} bytes / {MAX_APPEND_ELEMENTS} elements: guard check {check:?}, channel reduction {reduce:?}"
+    );
+    // Generous in a debug build on a shared host; the release numbers are recorded in the source mapping.
+    assert!(check + reduce < std::time::Duration::from_millis(50));
+}

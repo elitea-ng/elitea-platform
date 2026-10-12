@@ -2175,14 +2175,12 @@ func (r *pgRepo) updateToolkit(
 	}, nil
 }
 
+// DeleteToolkit is the delete without a cleanup journal (no engine-side
+// deletion is recorded). The toolkit's registry indexes are still tombstoned
+// with the row (toolkit_data.go), so the path is the row-first one with a nil
+// journal.
 func (r *pgRepo) DeleteToolkit(ctx context.Context, projectID, toolkitID string) error {
-	s, err := tenantschema.Quote(projectID)
-	if err != nil {
-		return err
-	}
-	q := fmt.Sprintf(`DELETE FROM %s.elitea_tools WHERE id = $1`, s)
-	_, err = r.pool.Exec(ctx, q, toolkitID)
-	return err
+	return r.DeleteToolkitRowFirst(ctx, projectID, toolkitID, nil)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
