@@ -192,48 +192,8 @@ pub(crate) struct SharePointClientConfig {
 }
 
 fn resolve_site_url(value: &str, site_path: Option<&str>) -> Result<Url, SharePointConfigError> {
-    let mut site_url = parse_site_url(value)?;
-    if let Some(site_path) = site_path {
-        let normalized = site_path.trim().trim_matches('/');
-        let mut parts = normalized.splitn(2, '/');
-        let prefix = parts.next().unwrap_or_default();
-        let suffix = parts.next().unwrap_or_default();
-        if !matches!(prefix, "sites" | "teams")
-            || suffix.is_empty()
-            || suffix
-                .split('/')
-                .any(|part| part.is_empty() || part == "..")
-            || normalized.contains(['?', '#', '\\', '%'])
-            || normalized.chars().any(char::is_control)
-        {
-            return Err(invalid_configuration());
-        }
-        site_url.set_path(&format!("/{normalized}"));
-    }
-    if site_url.path().ends_with('/') && site_url.path() != "/" {
-        let path = site_url.path().trim_end_matches('/').to_owned();
-        site_url.set_path(&path);
-    }
-    Ok(site_url)
-}
-
-fn parse_site_url(value: &str) -> Result<Url, SharePointConfigError> {
-    if value.contains(['\\', '%']) {
-        return Err(invalid_configuration());
-    }
-    let url = Url::parse(value).map_err(|_| invalid_configuration())?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.path().split('/').any(|part| part == "..")
-    {
-        return Err(invalid_configuration());
-    }
-    Ok(url)
+    elitea_connectors::sharepoint_site::resolve_site_url(value, site_path)
+        .ok_or_else(invalid_configuration)
 }
 
 fn parse_discovery_url(value: &str) -> Result<Url, SharePointConfigError> {

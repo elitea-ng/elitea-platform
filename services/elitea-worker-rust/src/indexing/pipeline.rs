@@ -368,6 +368,15 @@ struct Runner<'a> {
     tally: Tally,
 }
 
+/// The version the store holds for each key that holds exactly one.
+fn single_versions(prior: &BTreeMap<String, Vec<(String, u64)>>) -> BTreeMap<String, String> {
+    prior
+        .iter()
+        .filter(|(_, versions)| versions.len() == 1)
+        .map(|(key, versions)| (key.clone(), versions[0].0.clone()))
+        .collect()
+}
+
 impl Runner<'_> {
     async fn run(mut self) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
         let plan = match self.plan().await {
@@ -397,26 +406,9 @@ impl Runner<'_> {
     /// (ADR-0030 decision 3).
     async fn plan(&mut self) -> Result<RunPlan, Halt> {
         let parameters = self.parameters;
-        let listing = self
-            .source
-            .list()
-            .await
-            .map_err(|error| halt(&source_text(&error)))?;
-        self.check_liveness()?;
-        let filter = PathFilter::new(&parameters.whitelist, &parameters.blacklist);
-        let listing: Vec<DocumentRef> = listing
-            .into_iter()
-            .filter(|reference| filter.keeps(&reference.key))
-            .collect();
-        if listing.len() > self.runtime.limits.max_documents {
-            return Err(halt(&format!(
-                "the source holds {} documents after filtering; one run indexes at most {}",
-                listing.len(),
-                self.runtime.limits.max_documents
-            )));
-        }
         let namespace = toolkit_namespace(&self.run.command.index_id);
         let mut prior: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
+        let filter = PathFilter::new(&parameters.whitelist, &parameters.blacklist);
         if !parameters.clean_index {
             // The listing is read where the index lives: the expected space's
             // collection when the index is stamped, every collection before
@@ -468,6 +460,26 @@ impl Runner<'_> {
             }
         }
         self.check_liveness()?;
+        // The source lists after the store is read, so a connector that can
+        // skip re-reading what has not moved is told what the index holds.
+        self.source.remember_versions(single_versions(&prior));
+        let listing = self
+            .source
+            .list()
+            .await
+            .map_err(|error| halt(&source_text(&error)))?;
+        self.check_liveness()?;
+        let listing: Vec<DocumentRef> = listing
+            .into_iter()
+            .filter(|reference| filter.keeps(&reference.key))
+            .collect();
+        if listing.len() > self.runtime.limits.max_documents {
+            return Err(halt(&format!(
+                "the source holds {} documents after filtering; one run indexes at most {}",
+                listing.len(),
+                self.runtime.limits.max_documents
+            )));
+        }
         let mut to_write: Vec<(DocumentRef, Plan)> = Vec::new();
         let listed: BTreeSet<&str> = listing.iter().map(|r| r.key.as_str()).collect();
         for reference in &listing {

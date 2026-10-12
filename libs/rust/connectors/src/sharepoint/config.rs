@@ -190,12 +190,13 @@ impl SharePointIndexConfig {
         &self.credential
     }
 
-    /// The hosts this connector sends to besides Graph: the identity provider
-    /// (when the credential is redeemed) and the site host (file downloads
-    /// redirect there).
+    /// Every host this connector sends to: Graph, the site host (file
+    /// downloads redirect there) and, when the client credential is
+    /// redeemed, the identity provider. The one list the egress permit
+    /// checks read.
     #[must_use]
     pub fn hosts(&self) -> Vec<&str> {
-        let mut hosts = vec![self.site_hostname.as_ref()];
+        let mut hosts = vec![super::graph::GRAPH_HOST, self.site_hostname.as_ref()];
         if let SharePointCredential::ClientCredential { token_endpoint, .. } = &self.credential
             && let Some(host) = token_endpoint.host_str()
         {
@@ -255,49 +256,7 @@ fn parse_authority(value: &str) -> Result<Url, SharePointConfigError> {
 }
 
 fn resolve_site_url(value: &str, site_path: Option<&str>) -> Result<Url, SharePointConfigError> {
-    let mut site_url = parse_site_url(value)?;
-    if let Some(site_path) = site_path {
-        let normalized = site_path.trim().trim_matches('/');
-        let mut parts = normalized.splitn(2, '/');
-        let prefix = parts.next().unwrap_or_default();
-        let suffix = parts.next().unwrap_or_default();
-        if !matches!(prefix, "sites" | "teams")
-            || suffix.is_empty()
-            || suffix
-                .split('/')
-                .any(|part| part.is_empty() || part == "..")
-            || normalized.contains(['?', '#', '\\', '%'])
-            || normalized.chars().any(char::is_control)
-        {
-            return Err(invalid_configuration());
-        }
-        site_url.set_path(&format!("/{normalized}"));
-    }
-    if site_url.path().ends_with('/') && site_url.path() != "/" {
-        let path = site_url.path().trim_end_matches('/').to_owned();
-        site_url.set_path(&path);
-    }
-    Ok(site_url)
-}
-
-fn parse_site_url(value: &str) -> Result<Url, SharePointConfigError> {
-    if value.contains(['\\', '%']) {
-        return Err(invalid_configuration());
-    }
-    let url = Url::parse(value.trim()).map_err(|_| invalid_configuration())?;
-    if url.scheme() != "https"
-        || url.host_str().is_none_or(str::is_empty)
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.cannot_be_a_base()
-        || url.path().split('/').any(|part| part == "..")
-    {
-        return Err(invalid_configuration());
-    }
-    Ok(url)
+    crate::sharepoint_site::resolve_site_url(value, site_path).ok_or_else(invalid_configuration)
 }
 
 fn required_text<'a>(
@@ -409,7 +368,11 @@ mod tests {
         );
         assert_eq!(
             host.hosts(),
-            ["contoso.sharepoint.com", "login.microsoftonline.com"]
+            [
+                "graph.microsoft.com",
+                "contoso.sharepoint.com",
+                "login.microsoftonline.com"
+            ]
         );
     }
 
@@ -426,7 +389,11 @@ mod tests {
             token.credential(),
             SharePointCredential::AccessToken(_)
         ));
-        assert_eq!(token.hosts(), ["sp.example.com"]);
+        assert_eq!(
+            token.hosts(),
+            ["graph.microsoft.com", "sp.example.com"],
+            "a pre-issued token redeems nothing: no identity provider host"
+        );
         // An on-premises host with a client credential names no tenant.
         let refused = parse(&json!({
             "sharepoint_configuration": {

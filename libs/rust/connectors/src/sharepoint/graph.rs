@@ -22,7 +22,7 @@ use crate::transport::{HeaderMap, HeaderValue, Method, Request, StatusCode, Url}
 
 /// Graph's base, the only host a listing URL may name.
 pub const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0/";
-const GRAPH_HOST: &str = "graph.microsoft.com";
+pub(super) const GRAPH_HOST: &str = "graph.microsoft.com";
 /// The scope of an app-only Graph token.
 const GRAPH_SCOPE: &str = "https://graph.microsoft.com/.default";
 /// Renew a token this long before the provider says it expires.

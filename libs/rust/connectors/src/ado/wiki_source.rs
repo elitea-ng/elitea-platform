@@ -5,7 +5,11 @@
 //!   branch; `pages?path=/&recursionLevel=full` gives every page with its
 //!   `gitItemPath` in one answer (sub-pages included, no page cap); the
 //!   repository's tree (`trees/{id}?recursive=true`, continuation followed)
-//!   gives each page file's blob id and size. `path_contains` keeps the pages
+//!   gives each page file's blob id and size. A code wiki publishes one
+//!   folder of its repository (`mappedPath`, `/docs`): only that folder's
+//!   tree is read, never the repository's, and its attachments are the ones
+//!   under `<mappedPath>/.attachments/`. A tree entry with an unusable path
+//!   or id is skipped (logged with the reason), not a failed listing. `path_contains` keeps the pages
 //!   whose path holds the text (case-insensitive, `-` equal to a space, as in
 //!   the SDK).
 //! * **Version.** The page file's git blob id: exact, and free with the
@@ -173,15 +177,22 @@ impl AdoWikiSource {
 
     /// The tree of `repository` at `branch`: each file's path to its blob id
     /// and size.
+    ///
+    /// `mapped` is the repository folder the wiki shows (empty: the root).
+    /// Only that folder's tree is read; the keys are repository paths
+    /// without the leading slash (`docs/Home.md`).
     async fn tree(
         &self,
         repository: &str,
         branch: &str,
+        mapped: &str,
     ) -> Result<BTreeMap<String, (String, u64)>, Failure> {
         let items = ["git", "repositories", repository, "items"];
+        let folder = if mapped.is_empty() { "/" } else { mapped };
+        let prefix = mapped.trim_matches('/');
         let request = self.build(
             AdoRequest::get(&items, GIT_API)
-                .query("path", "/")
+                .query("path", folder)
                 .query("recursionLevel", "None")
                 .query("versionDescriptor.versionType", "branch")
                 .query("versionDescriptor.version", branch),
@@ -224,19 +235,24 @@ impl AdoWikiSource {
                     text("gitObjectType"),
                     text("objectId"),
                 ) else {
-                    return Err(Failure::InvalidResponse("a tree entry is incomplete"));
+                    tracing::debug!("a wiki tree entry is incomplete; skipped");
+                    continue;
                 };
                 if kind != "blob" || text("mode") == Some(SYMLINK_MODE) {
                     continue;
                 }
-                let path = path.trim_start_matches('/');
-                if !valid_key(path) || !valid_git_object_id(id) {
-                    return Err(Failure::InvalidResponse(
-                        "a tree entry has an unsafe path or id",
-                    ));
+                let relative = path.trim_start_matches('/');
+                let path = if prefix.is_empty() {
+                    relative.to_owned()
+                } else {
+                    format!("{prefix}/{relative}")
+                };
+                if !valid_key(&path) || !valid_git_object_id(id) {
+                    tracing::debug!("a wiki tree entry has an unsafe path or id; skipped");
+                    continue;
                 }
                 let size = entry.get("size").and_then(Value::as_u64).unwrap_or(0);
-                files.insert(path.to_owned(), (id.to_ascii_lowercase(), size));
+                files.insert(path, (id.to_ascii_lowercase(), size));
                 if files.len() > MAX_PAGES {
                     return Err(Failure::InvalidResponse(
                         "the wiki repository holds more files than the listing cap",
@@ -282,6 +298,9 @@ impl AdoWikiSource {
             .unwrap_or(DEFAULT_BRANCH)
             .to_owned();
 
+        let mapped = mapped_path(&wiki_body)?;
+        let prefix = mapped.trim_matches('/').to_owned();
+
         let pages_segments = ["wiki", "wikis", wiki, "pages"];
         let request = self.build(
             AdoRequest::get(&pages_segments, WIKI_API)
@@ -293,7 +312,7 @@ impl AdoWikiSource {
         let mut pages = Vec::new();
         flatten(&root, &mut pages)?;
 
-        let files = self.tree(&repository, &branch).await?;
+        let files = self.tree(&repository, &branch, &mapped).await?;
         let needle = self
             .params
             .path_contains
@@ -318,7 +337,8 @@ impl AdoWikiSource {
             }
             let key = format!("{}.md", page.path.trim_matches('/'));
             if !valid_key(&key) {
-                return Err(Failure::InvalidResponse("a wiki page has an unsafe path"));
+                tracing::debug!("a wiki page has an unsafe path; skipped");
+                continue;
             }
             extras.insert(
                 key.clone(),
@@ -339,15 +359,23 @@ impl AdoWikiSource {
             self.http.check_count(listed.len())?;
         }
         if self.params.include_attachments {
+            // `.attachments/` sits at the wiki's root: inside the mapped
+            // folder of a code wiki, not at the repository's.
+            let attachments_dir = if prefix.is_empty() {
+                ATTACHMENTS_DIR.to_owned()
+            } else {
+                format!("{prefix}/{ATTACHMENTS_DIR}")
+            };
             for (path, (object_id, size)) in &files {
-                if !path.starts_with(ATTACHMENTS_DIR) || !self.params.attachments.admits(path) {
+                if !path.starts_with(&attachments_dir) {
                     continue;
                 }
-                if extras.contains_key(path) {
+                let key = path[prefix.len()..].trim_start_matches('/').to_owned();
+                if !self.params.attachments.admits(&key) || extras.contains_key(&key) {
                     continue;
                 }
                 extras.insert(
-                    path.clone(),
+                    key.clone(),
                     Extra {
                         kind: "attachment",
                         page_id: None,
@@ -357,7 +385,7 @@ impl AdoWikiSource {
                     },
                 );
                 listed.push(Listed::new(
-                    path.clone(),
+                    key,
                     object_id.clone(),
                     *size,
                     object_id.clone(),
@@ -421,18 +449,19 @@ fn flatten(node: &Value, out: &mut Vec<Page>) -> Result<(), Failure> {
     let text = |name: &str| node.get(name).and_then(Value::as_str).map(str::to_owned);
     if let Some(path) = text("path") {
         if path.contains(['\u{0}', '\n', '\r']) {
-            return Err(Failure::InvalidResponse("a wiki page path is malformed"));
-        }
-        out.push(Page {
-            id: node.get("id").and_then(Value::as_u64),
-            path,
-            git_item_path: text("gitItemPath"),
-            remote_url: text("remoteUrl").or_else(|| text("url")),
-        });
-        if out.len() > MAX_PAGES {
-            return Err(Failure::InvalidResponse(
-                "the wiki holds more pages than the listing cap",
-            ));
+            tracing::debug!("a wiki page path is malformed; skipped");
+        } else {
+            out.push(Page {
+                id: node.get("id").and_then(Value::as_u64),
+                path,
+                git_item_path: text("gitItemPath"),
+                remote_url: text("remoteUrl").or_else(|| text("url")),
+            });
+            if out.len() > MAX_PAGES {
+                return Err(Failure::InvalidResponse(
+                    "the wiki holds more pages than the listing cap",
+                ));
+            }
         }
     }
     if let Some(children) = node.get("subPages").and_then(Value::as_array) {
@@ -441,6 +470,23 @@ fn flatten(node: &Value, out: &mut Vec<Page>) -> Result<(), Failure> {
         }
     }
     Ok(())
+}
+
+/// The repository folder a code wiki shows (`mappedPath`, documented on the
+/// wiki), `/`-prefixed without a trailing slash; empty for a project wiki or
+/// a root mapping.
+fn mapped_path(wiki: &Value) -> Result<String, Failure> {
+    let Some(mapped) = wiki.get("mappedPath").and_then(Value::as_str) else {
+        return Ok(String::new());
+    };
+    let trimmed = mapped.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    if !valid_key(trimmed) {
+        return Err(Failure::InvalidResponse("the wiki's mapped path is unsafe"));
+    }
+    Ok(format!("/{trimmed}"))
 }
 
 /// The SDK's `path_contains` comparison form: lower case, `-` as a space.
@@ -713,5 +759,78 @@ mod tests {
         assert_eq!(listed.len(), 2);
         let seen = throttled.seen();
         assert_eq!(seen[0], seen[1], "the throttled request was repeated");
+    }
+
+    #[tokio::test]
+    async fn a_code_wiki_reads_only_its_mapped_folder_and_skips_bad_entries() {
+        const DOCS: &str = "2222222222222222222222222222222222222222";
+        let seen_paths = Arc::new(Mutex::new(Vec::<String>::new()));
+        let record = Arc::clone(&seen_paths);
+        let transport = Scripted::new(move |request, _| {
+            let path = request.url().path().to_owned();
+            record.lock().expect("lock").push(path.clone());
+            match path.as_str() {
+                "/contoso/Fabrikam/_apis/wiki/wikis/Fabrikam.wiki" => Reply::json(&json!({
+                    "id": "w1", "name": "Fabrikam.wiki", "repositoryId": REPO,
+                    "versions": [{"version": "main"}], "type": "codeWiki",
+                    "mappedPath": "/docs"
+                })),
+                "/contoso/Fabrikam/_apis/wiki/wikis/Fabrikam.wiki/pages" => Reply::json(&json!({
+                    "path": "/", "subPages": [
+                        {"id": 1, "path": "/Home", "gitItemPath": "/docs/Home.md"},
+                        {"id": 2, "path": "/Bad\nName", "gitItemPath": "/docs/Bad.md"},
+                    ]
+                })),
+                p if p == format!("/contoso/Fabrikam/_apis/git/repositories/{REPO}/items") => {
+                    assert_eq!(query(request, "path").as_deref(), Some("/docs"));
+                    assert_eq!(
+                        query(request, "versionDescriptor.version").as_deref(),
+                        Some("main")
+                    );
+                    Reply::json(
+                        &json!({"objectId": DOCS, "gitObjectType": "tree", "path": "/docs"}),
+                    )
+                }
+                p if p
+                    == format!("/contoso/Fabrikam/_apis/git/repositories/{REPO}/trees/{DOCS}") =>
+                {
+                    Reply::json(&json!({"treeEntries": [
+                        entry("Home.md", HOME, 11),
+                        entry("odd\nname.md", CHILD, 7),
+                        entry(".attachments/spec.pdf", SPEC, 5),
+                        {"relativePath": "no-id.md", "gitObjectType": "blob"},
+                    ]}))
+                }
+                other => panic!("unexpected request {other}"),
+            }
+        });
+        let source = AdoWikiSource::new(
+            config(),
+            params(&json!({"include_attachments": true})),
+            allow(),
+            transport,
+        )
+        .expect("source");
+        let listed = source
+            .list()
+            .await
+            .expect("listing survives the bad entries");
+        let keys: Vec<_> = listed
+            .iter()
+            .map(|d| (d.key.as_str(), d.version.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [(".attachments/spec.pdf", SPEC), ("Home.md", HOME)],
+            "attachments come from <mapped>/.attachments/, keyed relative to the wiki"
+        );
+        assert!(
+            seen_paths
+                .lock()
+                .expect("lock")
+                .iter()
+                .all(|path| !path.ends_with(&format!("/trees/{ROOT}"))),
+            "the repository's own tree is never read"
+        );
     }
 }

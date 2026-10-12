@@ -6,14 +6,16 @@
 //!   (`Plans/{plan}/Suites/{suite}/TestCase`, continuation followed). The SDK
 //!   reads the first page of each; here every page is read.
 //! * **Version.** The test case work item's `System.Rev`, which the test
-//!   case answer carries in `workItemFields`.
+//!   case answer carries in `workItemFields` (the listing asks for that one
+//!   field, and keeps only the revision: no rendered document is held).
 //! * **Document.** One markdown document per (suite, test case): the title,
 //!   the description as text and the steps
 //!   (`Microsoft.VSTS.TCM.Steps`) as a numbered list. The SDK indexes the raw
 //!   steps XML alone (`chunking_tool='xml'`); the rendered form keeps the
 //!   title and description searchable. A test case in several suites is a
-//!   document in each, as in the SDK. The listing answer already holds the
-//!   content, so a fetch sends nothing.
+//!   document in each, as in the SDK. A fetch reads the work item
+//!   (`wit/workitems/{id}`), refuses it as changed when its revision is not
+//!   the listed one, renders it, and holds it to the document cap.
 //! * **Dependents.** None: the SDK indexes no test case attachments or
 //!   shared steps, and neither does this connector (follow-up).
 
@@ -36,7 +38,10 @@ const PROVIDER: &str = "Azure DevOps";
 const TEST_PLAN_API: &str = "7.1";
 const CONTINUATION: &str = "x-ms-continuationtoken";
 /// The work item fields asked of each test case.
-const WIT_FIELDS: &str = "System.Title,System.Description,System.Rev,System.State,System.ChangedDate,Microsoft.VSTS.TCM.Steps";
+const LIST_FIELDS: &str = "System.Rev";
+/// The work item fields a fetch reads to render the test case.
+const FETCH_FIELDS: &str = "System.Title,System.Description,System.Rev,System.State,System.ChangedDate,Microsoft.VSTS.TCM.Steps";
+const WORK_ITEMS_API: &str = "7.1";
 const KEY_PREFIX: &str = "plans";
 
 /// The `index_data` arguments of the `ado_plans` family
@@ -64,13 +69,14 @@ impl AdoPlansIndexParams {
     }
 }
 
-/// One listed test case: its rendered document and metadata.
+/// One listed test case: what a fetch needs to read it again.
 #[derive(Clone, Debug)]
-struct Rendered {
-    bytes: Arc<Vec<u8>>,
+struct Case {
+    id: u64,
+    rev: u64,
+    suite_id: u64,
+    suite_name: String,
     title: String,
-    metadata: Map<String, Value>,
-    url: String,
 }
 
 /// The test cases of one plan, listed through the shared client.
@@ -79,7 +85,7 @@ pub struct AdoPlansSource {
     http: SourceHttp,
     params: AdoPlansIndexParams,
     cache: ListingCache,
-    rendered: Mutex<Arc<BTreeMap<String, Rendered>>>,
+    cases: Mutex<Arc<BTreeMap<String, Case>>>,
 }
 
 impl AdoPlansSource {
@@ -105,7 +111,7 @@ impl AdoPlansSource {
             http,
             params,
             cache: ListingCache::default(),
-            rendered: Mutex::new(Arc::new(BTreeMap::new())),
+            cases: Mutex::new(Arc::new(BTreeMap::new())),
         })
     }
 
@@ -180,7 +186,7 @@ impl AdoPlansSource {
             )
             .await?;
         let mut listed = Vec::new();
-        let mut rendered = BTreeMap::new();
+        let mut kept = BTreeMap::new();
         for suite in &suites {
             let suite_id = suite
                 .get("id")
@@ -205,7 +211,7 @@ impl AdoPlansSource {
                         suite_text.as_str(),
                         "TestCase",
                     ],
-                    &[("witFields", WIT_FIELDS)],
+                    &[("witFields", LIST_FIELDS)],
                     &mut pages,
                 )
                 .await?;
@@ -231,64 +237,25 @@ impl AdoPlansSource {
                     .or_else(|| fields.get("System.Title").and_then(Value::as_str))
                     .unwrap_or_default()
                     .to_owned();
-                let description = fields
-                    .get("System.Description")
-                    .and_then(Value::as_str)
-                    .map(html_to_text)
-                    .unwrap_or_default();
-                let steps = fields
-                    .get("Microsoft.VSTS.TCM.Steps")
-                    .and_then(Value::as_str)
-                    .map(steps_to_markdown)
-                    .unwrap_or_default();
-                let mut text = format!("# {title}\n\n");
-                if !description.is_empty() {
-                    text.push_str(&description);
-                    text.push_str("\n\n");
-                }
-                if !steps.is_empty() {
-                    text.push_str("## Steps\n\n");
-                    text.push_str(&steps);
-                }
                 let key = format!("{KEY_PREFIX}/{plan}/suites/{suite_id}/{id}.md");
-                let bytes = text.into_bytes();
-                let mut metadata = Map::new();
-                metadata.insert("id".to_owned(), Value::String(id.to_string()));
-                metadata.insert("type".to_owned(), Value::String("test_case".to_owned()));
-                metadata.insert("plan_id".to_owned(), Value::String(plan.clone()));
-                metadata.insert("suite_id".to_owned(), Value::String(suite_text.clone()));
-                metadata.insert("suite_name".to_owned(), Value::String(suite_name.clone()));
-                metadata.insert("updated_on".to_owned(), Value::String(rev.to_string()));
-                if let Some(state) = fields.get("System.State").and_then(Value::as_str) {
-                    metadata.insert("state".to_owned(), Value::String(state.to_owned()));
-                }
-                let url = format!(
-                    "{}/{}/_workitems/edit/{id}",
-                    self.client.organization_text(),
-                    self.client.project()
-                );
-                listed.push(Listed::new(
-                    key.clone(),
-                    rev.to_string(),
-                    bytes.len() as u64,
-                    id.to_string(),
-                ));
-                rendered.insert(
+                listed.push(Listed::new(key.clone(), rev.to_string(), 0, id.to_string()));
+                kept.insert(
                     key,
-                    Rendered {
-                        bytes: Arc::new(bytes),
+                    Case {
+                        id,
+                        rev,
+                        suite_id,
+                        suite_name: suite_name.clone(),
                         title,
-                        metadata,
-                        url,
                     },
                 );
                 self.http.check_count(listed.len())?;
             }
         }
         *self
-            .rendered
+            .cases
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(rendered);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(kept);
         Ok(listed)
     }
 
@@ -310,6 +277,84 @@ impl AdoPlansSource {
                     .map_err(|failure| failure.into_source_error(PROVIDER, None))
             })
             .await
+    }
+}
+
+impl AdoPlansSource {
+    fn work_item_url(&self, id: u64) -> String {
+        format!(
+            "{}/{}/_workitems/edit/{id}",
+            self.client.organization_text(),
+            self.client.project()
+        )
+    }
+
+    /// The test case as markdown and its metadata, read from the work item
+    /// now; refused when it is no longer the listed revision or is over the
+    /// document cap.
+    async fn render(&self, case: &Case) -> Result<(Vec<u8>, Map<String, Value>), Failure> {
+        let id_text = case.id.to_string();
+        let segments = ["wit", "workitems", id_text.as_str()];
+        let request =
+            self.build(AdoRequest::get(&segments, WORK_ITEMS_API).query("fields", FETCH_FIELDS))?;
+        let (_, body) = self.http.json(request).await?;
+        let rev = body
+            .get("rev")
+            .and_then(Value::as_u64)
+            .ok_or(Failure::InvalidResponse("the test case has no rev"))?;
+        if rev != case.rev {
+            return Err(Failure::Changed);
+        }
+        let fields = body
+            .get("fields")
+            .and_then(Value::as_object)
+            .ok_or(Failure::InvalidResponse("the test case has no fields"))?;
+        let text_field = |name: &str| fields.get(name).and_then(Value::as_str);
+        let description = text_field("System.Description")
+            .map(html_to_text)
+            .unwrap_or_default();
+        let steps = text_field("Microsoft.VSTS.TCM.Steps")
+            .map(steps_to_markdown)
+            .unwrap_or_default();
+        let mut text = format!("# {}\n\n", case.title);
+        if !description.is_empty() {
+            text.push_str(&description);
+            text.push_str("\n\n");
+        }
+        if !steps.is_empty() {
+            text.push_str("## Steps\n\n");
+            text.push_str(&steps);
+        }
+        let bytes = text.into_bytes();
+        self.http.check_size(bytes.len() as u64)?;
+        let plan = self.params.plan_id.to_string();
+        let mut metadata = Map::new();
+        metadata.insert("id".to_owned(), Value::String(id_text));
+        metadata.insert("type".to_owned(), Value::String("test_case".to_owned()));
+        metadata.insert("plan_id".to_owned(), Value::String(plan));
+        metadata.insert(
+            "suite_id".to_owned(),
+            Value::String(case.suite_id.to_string()),
+        );
+        metadata.insert(
+            "suite_name".to_owned(),
+            Value::String(case.suite_name.clone()),
+        );
+        // The ISO change date (the SDK's `updated_on`); the revision is
+        // the version, not a date.
+        metadata.insert(
+            "updated_on".to_owned(),
+            Value::String(
+                text_field("System.ChangedDate")
+                    .unwrap_or_default()
+                    .to_owned(),
+            ),
+        );
+        metadata.insert("rev".to_owned(), Value::from(rev));
+        if let Some(state) = text_field("System.State") {
+            metadata.insert("state".to_owned(), Value::String(state.to_owned()));
+        }
+        Ok((bytes, metadata))
     }
 }
 
@@ -344,21 +389,28 @@ impl ContentSource for AdoPlansSource {
         let listed = listing
             .get(key)
             .ok_or_else(|| SourceError::NotFound(key.to_owned()))?;
-        let rendered = Arc::clone(
+        let failed = |failure: Failure| failure.into_source_error(PROVIDER, Some(key));
+        self.http
+            .check_size(listed.reference.size)
+            .map_err(failed)?;
+        let cases = Arc::clone(
             &self
-                .rendered
+                .cases
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
-        let document = rendered
+        let case = cases
             .get(key)
             .ok_or_else(|| SourceError::NotFound(key.to_owned()))?;
+        let (bytes, metadata) = self.render(case).await.map_err(failed)?;
+        let mut reference = listed.reference.clone();
+        reference.size = bytes.len() as u64;
         Ok(Document {
-            title: document.title.clone(),
-            uri: Some(document.url.clone()),
-            reference: listed.reference.clone(),
-            bytes: document.bytes.as_ref().clone(),
-            metadata: document.metadata.clone(),
+            title: case.title.clone(),
+            uri: Some(self.work_item_url(case.id)),
+            reference,
+            bytes,
+            metadata,
         })
     }
 }
@@ -382,15 +434,26 @@ mod tests {
         HostAllowlist::parse(Some("dev.azure.com"))
     }
 
+    /// A test case as the listing documents it: the revision requested
+    /// through `witFields`, nothing else.
     fn case(id: u64, rev: u64, title: &str) -> Value {
         json!({
             "testPlan": {"id": 7}, "testSuite": {"id": 0},
-            "workItem": {"id": id, "name": title, "workItemFields": [
-                {"System.Rev": rev},
-                {"System.Description": "<p>Checks <b>login</b></p>"},
-                {"Microsoft.VSTS.TCM.Steps": "<steps id=\"0\" last=\"1\"><step id=\"1\" type=\"ValidateStep\"><parameterizedString isformatted=\"true\">&lt;P&gt;Open&lt;/P&gt;</parameterizedString><parameterizedString isformatted=\"true\">Opens</parameterizedString><description/></step></steps>"},
-                {"System.State": "Design"},
-            ]}
+            "workItem": {"id": id, "name": title, "workItemFields": [{"System.Rev": rev}]}
+        })
+    }
+
+    /// The work item as `GET wit/workitems/{id}?fields=…` answers it.
+    fn work_item(id: u64, rev: u64) -> Value {
+        json!({
+            "id": id, "rev": rev, "url": "https://dev.azure.com/contoso/_apis/wit/workItems/1",
+            "fields": {
+                "System.Rev": rev,
+                "System.ChangedDate": "2026-09-30T12:00:00.123Z",
+                "System.Description": "<p>Checks <b>login</b></p>",
+                "Microsoft.VSTS.TCM.Steps": "<steps id=\"0\" last=\"1\"><step id=\"1\" type=\"ValidateStep\"><parameterizedString isformatted=\"true\">&lt;P&gt;Open&lt;/P&gt;</parameterizedString><parameterizedString isformatted=\"true\">Opens</parameterizedString><description/></step></steps>",
+                "System.State": "Design",
+            }
         })
     }
 
@@ -413,7 +476,7 @@ mod tests {
                     }
                 }
                 "/contoso/Fabrikam/_apis/testplan/Plans/7/Suites/10/TestCase" => {
-                    assert_eq!(query(request, "witFields").as_deref(), Some(WIT_FIELDS));
+                    assert_eq!(query(request, "witFields").as_deref(), Some(LIST_FIELDS));
                     Reply::json(&json!({"value": [case(100, 2, "Smoke")]}))
                 }
                 "/contoso/Fabrikam/_apis/testplan/Plans/7/Suites/11/TestCase" => {
@@ -427,7 +490,19 @@ mod tests {
                 "/contoso/Fabrikam/_apis/testplan/Plans/7/Suites/12/TestCase" => {
                     Reply::json(&json!({"value": []}))
                 }
-                other => panic!("unexpected request {other}"),
+                other => match other.strip_prefix("/contoso/Fabrikam/_apis/wit/workitems/") {
+                    Some(id) => {
+                        assert_eq!(
+                            query(request, "fields").as_deref(),
+                            Some(FETCH_FIELDS),
+                            "a fetch asks for the fields the document renders"
+                        );
+                        let id: u64 = id.parse().expect("id");
+                        let rev = if id == 101 { 5 } else { 2 };
+                        Reply::json(&work_item(id, rev))
+                    }
+                    None => panic!("unexpected request {other}"),
+                },
             }
         })
     }
@@ -460,14 +535,22 @@ mod tests {
             .fetch("plans/7/suites/11/101.md")
             .await
             .expect("case");
-        assert_eq!(transport.seen().len(), requests, "a fetch sends nothing");
+        assert_eq!(
+            transport.seen().len(),
+            requests + 1,
+            "a fetch reads the work item; the listing kept no rendered document"
+        );
         let text = String::from_utf8(document.bytes).expect("utf8");
         assert_eq!(
             text,
             "# Login works\n\nChecks login\n\n## Steps\n\n1. Open\n   Expected: Opens\n"
         );
         assert_eq!(document.metadata["suite_name"], "Login");
-        assert_eq!(document.metadata["updated_on"], "5");
+        assert_eq!(
+            document.metadata["updated_on"], "2026-09-30T12:00:00.123Z",
+            "the change date, not the revision"
+        );
+        assert_eq!(document.metadata["rev"], 5);
         assert_eq!(document.metadata["state"], "Design");
         assert_eq!(
             document.uri.as_deref(),
@@ -503,5 +586,46 @@ mod tests {
         let source = AdoPlansSource::new(config(), params, allow(), forbidden).expect("source");
         let error = source.list().await.expect_err("403");
         assert!(error.to_string().contains("HTTP 403"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_test_case_over_the_document_cap_is_refused_and_a_moved_one_is_changed() {
+        let params = AdoPlansIndexParams::from_arguments(
+            json!({"plan_id": 7, "suite_ids": [11]})
+                .as_object()
+                .expect("object"),
+        )
+        .expect("params");
+        let source = AdoPlansSource::new(config(), params.clone(), allow(), fixture())
+            .expect("source")
+            .with_limits(SourceLimits {
+                max_document_bytes: 20,
+                ..SourceLimits::default()
+            });
+        source.list().await.expect("listing");
+        let error = source
+            .fetch("plans/7/suites/11/101.md")
+            .await
+            .expect_err("over the cap");
+        assert!(error.to_string().contains("20"), "{error}");
+
+        // The suite lists revision 5; the work item is now at revision 6.
+        let moved = Scripted::new(|request, _| {
+            let path = request.url().path();
+            if path.ends_with("/suites") {
+                Reply::json(&json!({"value": [{"id": 11, "name": "Login"}]}))
+            } else if path.ends_with("/TestCase") {
+                Reply::json(&json!({"value": [case(101, 5, "Login works")]}))
+            } else {
+                Reply::json(&work_item(101, 6))
+            }
+        });
+        let source = AdoPlansSource::new(config(), params, allow(), moved).expect("source");
+        source.list().await.expect("listing");
+        let error = source
+            .fetch("plans/7/suites/11/101.md")
+            .await
+            .expect_err("moved on");
+        assert!(matches!(error, SourceError::Changed(_)), "{error}");
     }
 }

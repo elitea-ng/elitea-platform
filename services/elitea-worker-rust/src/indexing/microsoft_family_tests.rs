@@ -628,7 +628,12 @@ fn board() -> Board {
 }
 
 fn board_fixture(state: Arc<Mutex<Board>>) -> Arc<Recorded> {
-    fn item(id: u64, rev: u64, comments: usize, description: &str, attachments: bool) -> Value {
+    fn item(id: u64, rev: u64, comments: &Comments, description: &str, attachments: bool) -> Value {
+        // As in Azure DevOps, a field edit and a comment add or edit are
+        // each a revision: the change date moves with them.
+        let moved = rev + comments.iter().map(|(_, version, _)| version).sum::<u64>();
+        let changed = format!("2026-10-01T00:{moved:02}:00Z");
+        let comments = comments.len();
         let mut relations = Vec::new();
         if attachments {
             relations.push(json!({"rel": "AttachedFile", "url": "https://dev.azure.com/contoso/p/_apis/wit/attachments/att-1",
@@ -637,7 +642,7 @@ fn board_fixture(state: Arc<Mutex<Board>>) -> Arc<Recorded> {
         }
         json!({"id": id, "rev": rev, "fields": {
             "System.Title": format!("Item {id}"), "System.WorkItemType": "Bug", "System.State": "Active",
-            "System.CommentCount": comments, "System.ChangedDate": "2026-10-01T00:00:00Z",
+            "System.CommentCount": comments, "System.ChangedDate": changed,
             "System.Description": description,
         }, "relations": relations})
     }
@@ -660,7 +665,7 @@ fn board_fixture(state: Arc<Mutex<Board>>) -> Arc<Recorded> {
                     .iter()
                     .filter(|(id, _)| asked.contains(id))
                     .map(|(id, (rev, comments, description))| {
-                        item(*id, *rev, comments.len(), description, *id == 1)
+                        item(*id, *rev, comments, description, *id == 1)
                     })
                     .collect();
                 Reply::json(&json!({"value": value}))
@@ -674,7 +679,7 @@ fn board_fixture(state: Arc<Mutex<Board>>) -> Arc<Recorded> {
                 assert_eq!(query(request, "$expand").as_deref(), Some("all"));
                 match items.get(&id) {
                     Some((rev, comments, description)) => {
-                        Reply::json(&item(id, *rev, comments.len(), description, id == 1))
+                        Reply::json(&item(id, *rev, comments, description, id == 1))
                     }
                     None => Reply::status(StatusCode::NOT_FOUND),
                 }
@@ -742,7 +747,12 @@ async fn ado_boards_indexes_work_items_with_their_dependents_then_only_what_chan
         points["work_items/1/attachments/log.txt"].0,
         "att-1:9:2026-09-30T00:00:00Z"
     );
-    assert_eq!(points["work_items/1/comments.md"].0.len(), 64);
+    let (hash, state) = points["work_items/1/comments.md"]
+        .0
+        .split_once('@')
+        .expect("hash@count@date");
+    assert_eq!(hash.len(), 64);
+    assert!(state.starts_with("1@"), "{state}");
 }
 
 /// The keys the second of two runs wrote, after `mutate` changed the board.
@@ -855,12 +865,28 @@ fn plan_fixture(state: Arc<Mutex<Plan>>) -> Arc<Recorded> {
                     .map(|((_, id), (rev, title))| {
                         json!({"workItem": {"id": id, "name": title, "workItemFields": [
                             {"System.Rev": rev},
-                            {"System.Description": format!("Checks that {title}.")},
-                            {"Microsoft.VSTS.TCM.Steps": "<steps><step id=\"1\"><parameterizedString>Do it</parameterizedString><parameterizedString>Done</parameterizedString></step></steps>"},
                         ]}})
                     })
                     .collect();
                 Reply::json(&json!({"value": value}))
+            }
+            p if p.starts_with("/contoso/Fabrikam/_apis/wit/workitems/") => {
+                let id: u64 = p
+                    .rsplit('/')
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .expect("id");
+                match cases.iter().find(|((_, case), _)| *case == id) {
+                    Some((_, (rev, title))) => {
+                        Reply::json(&json!({"id": id, "rev": rev, "fields": {
+                            "System.Rev": rev, "System.State": "Design",
+                            "System.ChangedDate": "2026-10-01T00:00:00Z",
+                            "System.Description": format!("Checks that {title}."),
+                            "Microsoft.VSTS.TCM.Steps": "<steps><step id=\"1\"><parameterizedString>Do it</parameterizedString><parameterizedString>Done</parameterizedString></step></steps>",
+                        }}))
+                    }
+                    None => Reply::status(StatusCode::NOT_FOUND),
+                }
             }
             other => panic!("unexpected request {other}"),
         }

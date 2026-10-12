@@ -457,10 +457,56 @@ impl AdoClient {
         Ok(http)
     }
 
+    /// Whether `url` is inside the configured organization (or collection):
+    /// the same scheme, host and port, and a path that starts with the
+    /// organization's path segments. The host alone is not enough on
+    /// `dev.azure.com`, where every organization shares it. Paths compare
+    /// case-insensitively (organization names do) and on whole segments, so
+    /// `/contoso-evil/...` is not inside `/contoso`.
+    #[must_use]
+    pub fn owns(&self, url: &Url) -> bool {
+        let organization = self.connection.organization_url();
+        if url.scheme() != organization.scheme()
+            || url.host_str().map(str::to_ascii_lowercase)
+                != organization.host_str().map(str::to_ascii_lowercase)
+            || url.port_or_known_default() != organization.port_or_known_default()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return false;
+        }
+        let prefix: Vec<&str> = organization
+            .path_segments()
+            .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+            .unwrap_or_default();
+        let Some(path) = url.path_segments() else {
+            return false;
+        };
+        let path: Vec<&str> = path.collect();
+        path.len() >= prefix.len()
+            && prefix
+                .iter()
+                .zip(&path)
+                .all(|(wanted, got)| wanted.eq_ignore_ascii_case(got))
+            // `..` or encoded dots would walk out of the prefix.
+            && !path.iter().any(|segment| matches!(*segment, ".." | "." | "%2e%2e" | "%2E%2E"))
+    }
+
     /// Put the connection's credential on a request the client did not
-    /// build (an attachment URL the provider handed out, on the
-    /// organization's own host).
+    /// build (an attachment URL the provider handed out).
+    ///
+    /// # Errors
+    ///
+    /// The request's URL is not inside the organization ([`Self::owns`]):
+    /// the credential is never attached to it.
     pub fn authorize(&self, request: &mut Request) -> Result<(), AdoClientError> {
+        if !self.owns(request.url()) {
+            return Err(AdoClientError {
+                code: AdoClientErrorCode::EgressRefused,
+                retryable: false,
+                provider_message: None,
+            });
+        }
         request
             .headers_mut()
             .insert(AUTHORIZATION, self.credential_header()?);

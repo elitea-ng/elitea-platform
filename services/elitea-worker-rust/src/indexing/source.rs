@@ -17,6 +17,7 @@
 //! shell wildcards (`fnmatch`, the connectors' `source::glob` clone of
 //! Python's) or as a bare extension (`py` matches `a.py`).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use elitea_connectors::ado::boards_source::{AdoBoardsIndexParams, AdoBoardsSource};
@@ -218,6 +219,15 @@ impl IndexSource {
             }
         };
         Ok(source)
+    }
+
+    /// Tell the connector which document versions the index holds, before
+    /// it lists. Only the boards connector uses them (to skip re-reading
+    /// the comments of a work item that has not moved).
+    pub(crate) fn remember_versions(&self, versions: BTreeMap<String, String>) {
+        if let Self::AdoBoards(source) = self {
+            source.remember_versions(versions);
+        }
     }
 
     /// Every document the source holds.

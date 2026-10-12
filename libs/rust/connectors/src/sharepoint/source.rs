@@ -51,6 +51,9 @@ const PAGE: &str = "999";
 const ITEM_SELECT: &str = "id,name,file,folder,root,size,cTag,eTag,lastModifiedDateTime,createdDateTime,webUrl,parentReference,deleted";
 const DRIVE_SELECT: &str = "id,name,webUrl,driveType";
 const MAX_DRIVES: usize = 10_000;
+/// The delta feed of one drive may hold this many entries (folders and
+/// files, whatever the scope) per document the listing may return.
+const FEED_ENTRIES_PER_DOCUMENT: usize = 10;
 /// Folder nesting deeper than this is a cycle in the feed, not a library.
 const MAX_DEPTH: usize = 512;
 
@@ -177,19 +180,12 @@ impl SharePointSource {
         allowlist: HostAllowlist,
         transport: Arc<dyn Transport>,
     ) -> Result<Self, SourceError> {
+        // Every host the connector sends to, from the one list the config
+        // keeps: Graph, the site and (when redeemed) the identity provider.
+        if !config.hosts().iter().all(|host| allowlist.permits(host)) {
+            return Err(Failure::Refused.into_source_error(PROVIDER, None));
+        }
         let http = SourceHttp::new(allowlist, transport);
-        let graph = Url::parse(super::graph::GRAPH_BASE).map_err(|_| {
-            Failure::Client("Graph base".to_owned()).into_source_error(PROVIDER, None)
-        })?;
-        if !http.permits(&graph) || !http.permits(config.site_url()) {
-            return Err(Failure::Refused.into_source_error(PROVIDER, None));
-        }
-        if let super::config::SharePointCredential::ClientCredential { token_endpoint, .. } =
-            config.credential()
-            && !http.permits(token_endpoint)
-        {
-            return Err(Failure::Refused.into_source_error(PROVIDER, None));
-        }
         let credential = config.credential().clone();
         Ok(Self {
             graph: GraphClient::new(credential, http),
@@ -450,13 +446,29 @@ impl SharePointSource {
                     }
                 };
                 entries.insert(item_id.to_owned(), entry);
-                self.http().check_count(entries.len())?;
+                // The feed names folders and files alike, and the whole
+                // library whatever the `path` scope: its own, higher bound
+                // keeps memory bounded without making the document cap a
+                // limit on how big a library may be.
+                if entries.len() > self.max_feed_entries() {
+                    return Err(Failure::InvalidResponse(
+                        "the drive's delta feed is longer than the feed cap",
+                    ));
+                }
             }
             match body.get("@odata.nextLink").and_then(Value::as_str) {
                 Some(next) => url = parse_graph_link(next)?,
                 None => return Ok(entries),
             }
         }
+    }
+
+    /// How many entries one drive's delta feed may hold.
+    fn max_feed_entries(&self) -> usize {
+        self.http()
+            .limits()
+            .max_documents
+            .saturating_mul(FEED_ENTRIES_PER_DOCUMENT)
     }
 
     /// The seed's files from its walked feed, scoped to the seed's folder:
@@ -546,23 +558,35 @@ impl SharePointSource {
             let seeds = self.seeds(drives)?;
             let mut pages = 0;
             let mut any = false;
-            let mut found = Vec::new();
+            let mut found: Vec<(Listed, Extra)> = Vec::new();
+            let limit = self
+                .params
+                .limit_files
+                .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX));
             for seed in &seeds {
                 let entries = self.walk(&seed.drive.id, &mut pages).await?;
+                // Only files under the `path` scope and passing the name
+                // filters reach `found`: folders and everything outside the
+                // scope never count against the document cap.
                 any |= self.materialize(seed, &entries, &mut found)?;
-                self.http().check_count(found.len())?;
+                if let Some(limit) = limit {
+                    // The first `limit_files` by library and path, kept as
+                    // the drives are walked.
+                    found.sort_by(|(_, a), (_, b)| {
+                        (&a.library, &a.path).cmp(&(&b.library, &b.path))
+                    });
+                    found.truncate(limit);
+                } else {
+                    self.http().check_count(found.len())?;
+                }
             }
             if !any && self.params.path.is_some() {
                 return Err(Failure::Client(
                     "the folder `path` names was not found in any document library".to_owned(),
                 ));
             }
-            // The first `limit_files` by library and path, as a reader
-            // would count them.
             found.sort_by(|(_, a), (_, b)| (&a.library, &a.path).cmp(&(&b.library, &b.path)));
-            if let Some(limit) = self.params.limit_files {
-                found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
-            }
+            self.http().check_count(found.len())?;
             for (item, extra) in found {
                 extras.insert(item.reference.key.clone(), extra);
                 listed.push(item);
@@ -1242,5 +1266,127 @@ mod tests {
             seen[2], seen[3],
             "the throttled page was asked again: {seen:?}"
         );
+    }
+
+    #[test]
+    fn every_host_the_config_names_must_be_on_the_allowlist() {
+        let hosts = config()
+            .hosts()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hosts,
+            [
+                "graph.microsoft.com",
+                "contoso.sharepoint.com",
+                "login.microsoftonline.com"
+            ]
+        );
+        for missing in &hosts {
+            let rest = hosts
+                .iter()
+                .filter(|host| *host != missing)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let result = SharePointSource::new(
+                config(),
+                SharePointIndexParams::default(),
+                HostAllowlist::parse(Some(&rest)),
+                Scripted::new(|_, _| panic!("no request")),
+            );
+            assert!(result.is_err(), "{missing} is required");
+        }
+    }
+
+    /// A library of `big` files in `Big/` and three in `Narrow/`, one delta
+    /// page: far more entries than the document cap the tests set.
+    fn large_library(big: usize) -> Arc<Scripted> {
+        Scripted::new(move |request, _| {
+            let url = request.url();
+            match (url.host_str().unwrap_or_default(), url.path()) {
+                ("login.microsoftonline.com", _) => Reply::json(
+                    &json!({"token_type": "Bearer", "expires_in": 3599, "access_token": "tok"}),
+                ),
+                ("graph.microsoft.com", "/v1.0/sites/contoso.sharepoint.com:/sites/eng") => {
+                    Reply::json(&json!({"id": SITE}))
+                }
+                ("graph.microsoft.com", p) if p.ends_with("/drives") => {
+                    Reply::json(&json!({"value": [
+                        {"id": DOCS, "name": "Documents", "webUrl": "https://contoso.sharepoint.com/sites/eng/Shared%20Documents"},
+                    ]}))
+                }
+                ("graph.microsoft.com", "/v1.0/drives/b!docs/root/delta") => {
+                    let mut value = vec![
+                        root(DOCS, "root-docs"),
+                        folder(DOCS, "big", "root-docs", "Big"),
+                        folder(DOCS, "narrow", "root-docs", "Narrow"),
+                    ];
+                    for n in 0..big {
+                        value.push(file(
+                            DOCS,
+                            &format!("b{n:04}"),
+                            "big",
+                            &format!("f{n:04}.md"),
+                            "c",
+                            1,
+                        ));
+                    }
+                    for n in 0..3 {
+                        value.push(file(
+                            DOCS,
+                            &format!("n{n}"),
+                            "narrow",
+                            &format!("n{n}.md"),
+                            "c",
+                            1,
+                        ));
+                    }
+                    Reply::json(&json!({"value": value}))
+                }
+                other => panic!("unexpected request {other:?}"),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn a_small_limit_or_a_narrow_path_never_trips_the_cap_on_a_large_library() {
+        // 100 files in `Big/`, 3 in `Narrow/`; the cap is 20 documents. The
+        // feed (106 entries with folders and root) is under its own bound.
+        let limits = SourceLimits {
+            max_documents: 20,
+            ..SourceLimits::default()
+        };
+        let list = |arguments: Value| async move {
+            SharePointSource::new(config(), params(&arguments), allow(), large_library(100))
+                .expect("source")
+                .with_limits(limits)
+                .list()
+                .await
+        };
+        let limited = list(json!({"limit_files": 10}))
+            .await
+            .expect("limit_files 10");
+        assert_eq!(limited.len(), 10);
+        let narrow = list(json!({"path": "Narrow"})).await.expect("narrow path");
+        assert_eq!(narrow.len(), 3, "only files under the scope count");
+        let error = list(json!({}))
+            .await
+            .expect_err("100 documents are over the cap");
+        assert!(error.to_string().contains("listing cap"), "{error}");
+        // The feed itself has its own, higher bound: 10 entries per document.
+        let error = SharePointSource::new(
+            config(),
+            params(&json!({"limit_files": 1})),
+            allow(),
+            large_library(300),
+        )
+        .expect("source")
+        .with_limits(limits)
+        .list()
+        .await
+        .expect_err("a feed longer than the feed cap");
+        assert!(error.to_string().contains("feed cap"), "{error}");
     }
 }

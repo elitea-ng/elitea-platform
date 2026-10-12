@@ -21,6 +21,20 @@
 //!   comment re-indexes the discussion and an unrelated field edit does
 //!   not). Both carry a `parent_key` (ADR-0030 "Dependent documents"). The
 //!   SDK indexes attachments and no comments.
+//! * **Comment cost.** The comments version is exact (the hash above), but
+//!   reading it costs a call per work item. The version string therefore
+//!   also carries what the work item looked like when it was computed:
+//!   `{hash}@{CommentCount}@{ChangedDate}`. The run tells the source the
+//!   versions the index already holds (`remember_versions`); a work item
+//!   whose `CommentCount` and `ChangedDate` (both in the batch answer
+//!   already read) still match the stored suffix reuses the stored version
+//!   with no comment call, so an unchanged run makes none. Any other work
+//!   item (new, a comment added, a field or comment edit that moved the
+//!   change date) has its comments read, eight work items at a time. When
+//!   the fresh hash equals the stored one (a field edit that left the
+//!   discussion alone) the stored version is kept as it is, so the
+//!   discussion is not re-indexed; the price is that such a work item has
+//!   its comments read again on later runs until its discussion changes.
 //! * **Fetch.** A work item is `workitems/{id}?$expand=all`, its fields
 //!   sanitised (HTML to text, identities to display names, as the SDK's
 //!   `sanitize`) and written as JSON, keeping `fields` when given; an
@@ -32,6 +46,7 @@ use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError, content_version};
+use futures_util::StreamExt as _;
 use serde_json::{Map, Value, json};
 
 use super::client::{AdoClient, AdoRequest, AdoScope};
@@ -59,6 +74,8 @@ const WIQL_CEILING: usize = 20_000;
 const BATCH: usize = 200;
 /// Comments per page (the server's maximum).
 const COMMENTS_PAGE: usize = 200;
+/// Work items whose comments are read at once.
+const COMMENT_CONCURRENCY: usize = 8;
 const MAX_WIQL_BYTES: usize = 32 * 1_024;
 const ATTACHED_FILE: &str = "AttachedFile";
 const KEY_PREFIX: &str = "work_items";
@@ -130,6 +147,8 @@ pub struct AdoBoardsSource {
     params: AdoBoardsIndexParams,
     cache: ListingCache,
     extras: Mutex<Arc<BTreeMap<String, Extra>>>,
+    /// The versions the index holds, by key (see the module notes).
+    known: Mutex<BTreeMap<String, String>>,
 }
 
 impl AdoBoardsSource {
@@ -156,6 +175,7 @@ impl AdoBoardsSource {
             params,
             cache: ListingCache::default(),
             extras: Mutex::new(Arc::new(BTreeMap::new())),
+            known: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -175,6 +195,25 @@ impl AdoBoardsSource {
     pub fn with_timeouts(mut self, timeouts: Timeouts) -> Self {
         self.http = self.http.with_timeouts(timeouts);
         self
+    }
+
+    /// Tell the source the document versions the index already holds (key,
+    /// version), so a listing can skip reading the comments of a work item
+    /// that has not moved. Without it every listing reads them all.
+    pub fn remember_versions(&self, versions: BTreeMap<String, String>) {
+        *self
+            .known
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = versions;
+    }
+
+    /// The version the index holds for `key`, if any.
+    fn stored_version(&self, key: &str) -> Option<String> {
+        self.known
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .cloned()
     }
 
     fn build(&self, request: AdoRequest<'_>) -> Result<Request, Failure> {
@@ -267,23 +306,30 @@ impl AdoBoardsSource {
     #[allow(clippy::too_many_lines)] // One pass over the batch answer: item, comments, attachments.
     async fn listing(&self) -> Result<Vec<Listed>, Failure> {
         let ids = self.ids().await?;
-        let organization_host = Url::parse(self.client.organization_text())
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned));
         let mut listed = Vec::new();
         let mut extras = BTreeMap::new();
         let segments = ["wit", "workitemsbatch"];
         for batch in ids.chunks(BATCH) {
             let request = self.build(
                 AdoRequest::new(Method::POST, AdoScope::Project, &segments, WORK_ITEMS_API)
-                    .json(json!({"ids": batch, "$expand": "relations"})),
+                    .json(json!({"ids": batch, "$expand": "relations", "errorPolicy": "Omit"})),
             )?;
             let (_, body) = self.http.json(request).await?;
             let items = body
                 .get("value")
                 .and_then(Value::as_array)
                 .ok_or(Failure::InvalidResponse("a batch answer has no value"))?;
+            let mut refresh: Vec<(u64, String, String, Option<String>)> = Vec::new();
             for item in items {
+                // `errorPolicy: Omit` answers a work item that was deleted
+                // or is not visible since the query as `null`: it is simply
+                // absent from the listing.
+                if item.is_null() {
+                    tracing::debug!(
+                        "a work item selected by the query is gone or hidden; left out"
+                    );
+                    continue;
+                }
                 let id = item
                     .get("id")
                     .and_then(Value::as_u64)
@@ -320,16 +366,24 @@ impl AdoBoardsSource {
                 listed.push(Listed::new(key, version.clone(), 0, id.to_string()));
                 if self.params.include_comments && comments > 0 {
                     let key = format!("{KEY_PREFIX}/{id}/comments.md");
-                    let (version, _) = self.comments(id).await?;
-                    extras.insert(
-                        key.clone(),
-                        Extra::Comments {
-                            id,
-                            title: title.clone(),
-                            version: version.clone(),
-                        },
-                    );
-                    listed.push(Listed::new(key, version, 0, id.to_string()));
+                    let suffix = format!("@{comments}@{}", field_text("System.ChangedDate"));
+                    let stored = self.stored_version(&key);
+                    if let Some(known) = stored
+                        .clone()
+                        .filter(|version| is_version_for(version, &suffix))
+                    {
+                        extras.insert(
+                            key.clone(),
+                            Extra::Comments {
+                                id,
+                                title: title.clone(),
+                                version: known.clone(),
+                            },
+                        );
+                        listed.push(Listed::new(key, known, 0, id.to_string()));
+                    } else {
+                        refresh.push((id, title.clone(), suffix, stored));
+                    }
                 }
                 if self.params.include_attachments
                     && let Some(relations) = item.get("relations").and_then(Value::as_array)
@@ -345,11 +399,9 @@ impl AdoBoardsSource {
                         else {
                             continue;
                         };
-                        if url.scheme() != "https"
-                            || url.host_str().map(str::to_owned) != organization_host
-                        {
+                        if !self.client.owns(&url) {
                             return Err(Failure::InvalidResponse(
-                                "an attachment URL is not on the organization's host",
+                                "an attachment URL is not inside the organization",
                             ));
                         }
                         let attributes = relation.get("attributes").and_then(Value::as_object);
@@ -403,6 +455,39 @@ impl AdoBoardsSource {
                 }
                 self.http.check_count(listed.len())?;
             }
+            // The work items whose discussion may have moved, eight at a
+            // time.
+            let read: Vec<Result<(u64, String, String), Failure>> =
+                futures_util::stream::iter(refresh)
+                    .map(|(id, title, suffix, stored)| async move {
+                        let (hash, _) = self.comments(id).await?;
+                        // The discussion is what it was: keep the stored
+                        // version, so the document is not rewritten.
+                        let version = match stored {
+                            Some(stored) if stored.split('@').next() == Some(hash.as_str()) => {
+                                stored
+                            }
+                            _ => format!("{hash}{suffix}"),
+                        };
+                        Ok((id, title, version))
+                    })
+                    .buffer_unordered(COMMENT_CONCURRENCY)
+                    .collect()
+                    .await;
+            for item in read {
+                let (id, title, version) = item?;
+                let key = format!("{KEY_PREFIX}/{id}/comments.md");
+                extras.insert(
+                    key.clone(),
+                    Extra::Comments {
+                        id,
+                        title,
+                        version: version.clone(),
+                    },
+                );
+                listed.push(Listed::new(key, version, 0, id.to_string()));
+            }
+            self.http.check_count(listed.len())?;
         }
         *self
             .extras
@@ -588,6 +673,14 @@ impl AdoBoardsSource {
     }
 }
 
+/// Whether `version` (`{hash}@{count}@{date}`) was computed for a work item
+/// that looks as `suffix` (`@{count}@{date}`) says now.
+fn is_version_for(version: &str, suffix: &str) -> bool {
+    version
+        .strip_suffix(suffix)
+        .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
 /// Whether a WIQL query is a link query (`FROM WorkItemLinks`).
 fn is_link_query(query: &str) -> bool {
     let lower = query.to_ascii_lowercase();
@@ -734,7 +827,7 @@ impl ContentSource for AdoBoardsSource {
             }
             Extra::Comments { id, title, version } => {
                 let (now, bytes) = self.comments(*id).await.map_err(failed)?;
-                if &now != version {
+                if version.split('@').next() != Some(now.as_str()) {
                     return Err(failed(Failure::Changed));
                 }
                 let mut metadata = Map::new();
@@ -888,6 +981,10 @@ mod tests {
             "/contoso/Fabrikam/_apis/wit/workitemsbatch" => {
                 let body = body_json(request);
                 assert_eq!(body["$expand"], "relations");
+                assert_eq!(
+                    body["errorPolicy"], "Omit",
+                    "a vanished work item is omitted, not a failed batch"
+                );
                 let ids: Vec<u64> = body["ids"]
                     .as_array()
                     .expect("ids")
@@ -985,7 +1082,12 @@ mod tests {
         );
         let first = group_of_one(&listed);
         let comments_version = first[3].1.clone();
-        assert_eq!(comments_version.len(), 64, "a hash: {comments_version}");
+        let (hash, state) = comments_version.split_once('@').expect("hash@count@date");
+        assert_eq!(hash.len(), 64, "a hash: {comments_version}");
+        assert_eq!(
+            state, "1@2026-10-01T00:00:00Z",
+            "the version carries the CommentCount and ChangedDate it was read at"
+        );
         assert_eq!(
             first,
             [
@@ -1342,5 +1444,184 @@ mod tests {
             "SELECT [System.Id] FROM workitemLinks WHERE ..."
         ));
         assert!(!is_link_query("SELECT [System.Id] FROM WorkItems"));
+    }
+
+    /// Calls for the comments of any work item.
+    fn comment_calls(fixture: &Scripted) -> usize {
+        fixture
+            .seen()
+            .iter()
+            .filter(|s| s.contains("/comments"))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_run_makes_no_comment_call_and_a_moved_item_alone_is_read_again() {
+        let items: Vec<(u64, u64, u64)> = vec![(1, 3, 2)];
+        let wiql =
+            json!({"wiql": "SELECT [System.Id] FROM WorkItems", "include_attachments": false});
+        let first_items = items.clone();
+        let first = Scripted::new(move |request, _| reply(request, &first_items));
+        let source =
+            AdoBoardsSource::new(config(), params(&wiql), allow(), first.clone()).expect("source");
+        let listed = source.list().await.expect("first listing");
+        assert_eq!(comment_calls(&first), 2, "a first run reads the discussion");
+        let stored: BTreeMap<String, String> = listed
+            .iter()
+            .map(|d| (d.key.clone(), d.version.clone()))
+            .collect();
+
+        // The same tenant, the index holding what the first run listed.
+        let second_items = items.clone();
+        let second = Scripted::new(move |request, _| reply(request, &second_items));
+        let source =
+            AdoBoardsSource::new(config(), params(&wiql), allow(), second.clone()).expect("source");
+        source.remember_versions(stored.clone());
+        let again = source.list().await.expect("second listing");
+        assert_eq!(comment_calls(&second), 0, "nothing moved: no comment call");
+        assert_eq!(again, listed, "the listing is the same");
+
+        // A comment was added: the count moved, so the discussion is read.
+        let third = Scripted::new(move |request, _| phased_reply(request, 2));
+        let source =
+            AdoBoardsSource::new(config(), params(&wiql), allow(), third.clone()).expect("source");
+        source.remember_versions(stored);
+        let moved = source.list().await.expect("third listing");
+        assert_eq!(comment_calls(&third), 1, "the moved item is read again");
+        let version = |listing: &[DocumentRef]| {
+            listing
+                .iter()
+                .find(|d| d.key.ends_with("comments.md"))
+                .map(|d| d.version.clone())
+                .expect("comments")
+        };
+        assert_ne!(version(&moved), version(&listed));
+
+        // A field edit moves the change date, not the discussion: the
+        // comments are read (the date is the only signal), the stored
+        // version is kept.
+        let edited = Scripted::new(move |request, _| {
+            let answer = reply(request, &[(1, 4, 2)]);
+            if request.url().path().ends_with("/workitemsbatch") {
+                return Reply::json(&json!({"value": [{
+                    "id": 1, "rev": 4,
+                    "fields": {"System.Title": "Item 1", "System.WorkItemType": "Bug",
+                               "System.CommentCount": 2, "System.ChangedDate": "2026-10-02T00:00:00Z"},
+                }]}));
+            }
+            answer
+        });
+        let comments_of = |listing: &[DocumentRef]| version(listing);
+        let source =
+            AdoBoardsSource::new(config(), params(&wiql), allow(), edited.clone()).expect("source");
+        source.remember_versions(
+            listed
+                .iter()
+                .map(|d| (d.key.clone(), d.version.clone()))
+                .collect(),
+        );
+        let after_edit = source.list().await.expect("fourth listing");
+        assert_eq!(
+            comment_calls(&edited),
+            2,
+            "the date moved: comments are read"
+        );
+        assert_eq!(
+            comments_of(&after_edit),
+            comments_of(&listed),
+            "the discussion is unchanged: its version is kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_vanished_work_item_is_omitted_and_the_rest_are_listed() {
+        let fixture = Scripted::new(|request, _| {
+            if request.url().path() == "/contoso/Fabrikam/_apis/wit/workitemsbatch" {
+                let body = body_json(request);
+                assert_eq!(body["errorPolicy"], "Omit");
+                // Work item 2 was deleted after the query ran: the documented
+                // `Omit` answer holds a null in its place.
+                return Reply::json(&json!({"count": 3, "value": [
+                    work_item(1, 3, 0, &[]), Value::Null, work_item(3, 5, 0, &[])
+                ]}));
+            }
+            reply(request, &[(1, 3, 0), (2, 3, 0), (3, 5, 0)])
+        });
+        let source = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems"})),
+            allow(),
+            fixture,
+        )
+        .expect("source");
+        let listed = source.list().await.expect("listing");
+        let keys: Vec<_> = listed.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(keys, ["work_items/1.json", "work_items/3.json"]);
+    }
+
+    #[tokio::test]
+    async fn an_attachment_url_outside_the_organization_gets_no_credential() {
+        for foreign in [
+            // Another organization on the shared host.
+            "https://dev.azure.com/other/p/_apis/wit/attachments/a9",
+            // A sibling whose name starts with ours.
+            "https://dev.azure.com/contoso-evil/p/_apis/wit/attachments/a9",
+            // Another host.
+            "https://attacker.example/contoso/p/_apis/wit/attachments/a9",
+        ] {
+            let url = foreign.to_owned();
+            let fixture = Scripted::new(move |request, _| {
+                if request.url().path() == "/contoso/Fabrikam/_apis/wit/workitemsbatch" {
+                    let mut item = work_item(1, 3, 0, &[]);
+                    item["relations"] = json!([{"rel": "AttachedFile", "url": url,
+                        "attributes": {"name": "x.pdf", "resourceSize": 1}}]);
+                    return Reply::json(&json!({"count": 1, "value": [item]}));
+                }
+                reply(request, &[(1, 3, 0)])
+            });
+            let source = AdoBoardsSource::new(
+                config(),
+                params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems"})),
+                allow(),
+                fixture.clone(),
+            )
+            .expect("source");
+            let error = source.list().await.expect_err("refused");
+            assert!(
+                error.to_string().contains("organization"),
+                "{foreign}: {error}"
+            );
+            assert!(
+                fixture
+                    .requests()
+                    .iter()
+                    .all(|r| r.url().path().starts_with("/contoso/Fabrikam/_apis/wit/")),
+                "nothing was requested from {foreign}"
+            );
+        }
+
+        // Defence in depth: the client itself never attaches the PAT to a
+        // URL outside the organization.
+        let (connection, _) = config().into_parts();
+        let client = AdoClient::new(connection, Scripted::new(|_, _| panic!("no request")));
+        for foreign in [
+            "https://dev.azure.com/other/_apis/x",
+            "https://dev.azure.com/contoso-evil/_apis/x",
+            "http://dev.azure.com/contoso/_apis/x",
+            "https://dev.azure.com:444/contoso/_apis/x",
+        ] {
+            let mut request = Request::new(Method::GET, Url::parse(foreign).expect("url"));
+            assert!(client.authorize(&mut request).is_err(), "{foreign}");
+            assert!(
+                request.headers().get("authorization").is_none(),
+                "{foreign}"
+            );
+        }
+        let mut own = Request::new(
+            Method::GET,
+            Url::parse("https://dev.azure.com/Contoso/p/_apis/wit/attachments/a1").expect("url"),
+        );
+        client.authorize(&mut own).expect("inside the organization");
+        assert!(own.headers().get("authorization").is_some());
     }
 }
