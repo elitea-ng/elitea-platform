@@ -19,6 +19,7 @@ PIPELINE_VARIANTS = {
     # 60 s AckWait redelivery and a replacement claim (combinations such as CX-01 and CX-03b).
     'code-nonce-sleep-50': ('code-nonce-sleep.yaml', 50000),
     'code-nonce-sleep-150': ('code-nonce-sleep.yaml', 150000),
+    'code-throw': ('code-throw.yaml', None),
 }
 
 

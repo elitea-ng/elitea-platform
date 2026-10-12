@@ -14,7 +14,7 @@ from unittest import mock
 SUITE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SUITE))
 
-from lib import catalog, compiled_manifest, report, stack_compose, verdict  # noqa: E402
+from lib import catalog, compiled_manifest, observe, report, stack_compose, verdict  # noqa: E402
 from lib.api import _FormParser  # noqa: E402
 from lib.common import parse_iso, seconds_between  # noqa: E402
 from lib.redact import scan_bytes, scan_tree, scrub_text  # noqa: E402
@@ -184,6 +184,22 @@ class VerdictTest(unittest.TestCase):
         p['replay']['terminal'] = [{'event_type': 'execution.failed', 'code': 'INTERNAL', 'safe_message': 'x'}]
         p['chat_answers'][0].update(is_error=True, message_id='other')
         self.assertEqual(verdict.evaluate(SCENARIO, run)['observed'], 'L')
+
+    def test_thrown_code_error_needs_its_replay_code_and_no_reconcile_card(self):
+        run = _run()
+        p = run['final']['product']
+        p['settlements'][0].update(disposition='FAILED', error_code=None)
+        p['replay']['terminal'] = [{'event_type': 'execution.failed', 'code': 'PIPELINE_CODE_FAILED', 'safe_message': 'x'}]
+        p['chat_answers'][0].update(is_error=True)
+        scenario = dict(SCENARIO, target='F', expect=dict(SCENARIO['expect'], settlement='FAILED',
+                                                           replay_codes=['PIPELINE_CODE_FAILED'], no_reconcile_card=True))
+        self.assertEqual((verdict.evaluate(scenario, run)['verdict'], verdict.evaluate(scenario, run)['observed']),
+                         ('PASS', 'F'))
+        p['replay']['by_type'] = {'execution.node_event:agent_node_recovery_required': 1}
+        self.assertEqual(verdict.evaluate(scenario, run)['invariants']['I8']['status'], 'violated')
+        p['replay']['by_type'] = {}
+        p['replay']['terminal'][0]['code'] = 'INTERNAL'
+        self.assertEqual(verdict.evaluate(scenario, run)['observed'], 'L')
 
     def test_undrained_stream_is_structural(self):
         run = _run()
@@ -413,3 +429,28 @@ class SnapshotRestoreTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ObserveTest(unittest.TestCase):
+    def _evidence(self, disposition='CANCELLED', jobs=('cancelled',), running=False, messages=0):
+        final = {'settlements': [{'disposition': disposition, 'error_code': None, 'committed_at': 't'}],
+                 'execution': [{'state': disposition}]}
+        after = {'sandbox': [{'job_key': f'k{i}', 'phase': phase} for i, phase in enumerate(jobs)]}
+        containers = [{'id': 'c' * 64, 'running': running}]
+        jsz = {'stream': {'messages': messages}, 'consumer': {'num_ack_pending': messages, 'num_pending': 0}}
+        return final, after, containers, jsz
+
+    def test_restored_hang_settles_cancelled_once_and_cleans_up(self):
+        self.assertTrue(observe.assess(*self._evidence(), 'CANCELLED')['ok'])
+
+    def test_each_failure_mode_is_reported(self):
+        cases = {'expected_disposition': dict(disposition='FAILED'), 'no_live_job': dict(jobs=('reserved',)),
+                 'no_running_runtime': dict(running=True), 'nats_drained': dict(messages=1)}
+        for check, kwargs in cases.items():
+            result = observe.assess(*self._evidence(**kwargs), 'CANCELLED')
+            self.assertFalse(result['ok'], check)
+            self.assertFalse(result['checks'][check], check)
+        final, after, containers, jsz = self._evidence()
+        final['settlements'] = []
+        self.assertFalse(observe.assess(final, after, containers, jsz, 'CANCELLED')['checks']['settled_once'])
+

@@ -119,6 +119,16 @@ snapshot volume is not one of this project's. It unpacks the spool and the NATS 
 project-labelled volumes and restores both databases (owners kept, grants re-applied). It then starts the stack on
 the images currently configured.
 
+Then follow the restored execution:
+
+```bash
+python3 scripts/crash-recovery/crashctl.py observe <execution-id> --expect CANCELLED --out <run-dir>/restore-<name>
+```
+
+It waits for the settlement, allows 60 s for cleanup, and checks five things: one settlement, the expected
+disposition, a drained agent stream, no reserved or dispatched sandbox job, and no running runtime of this execution.
+It exits non-zero if any check fails.
+
 ## Invariants and verdicts
 
 | Id | Checked from |

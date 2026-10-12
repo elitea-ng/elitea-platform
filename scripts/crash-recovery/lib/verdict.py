@@ -204,13 +204,18 @@ def i8_typed_failure(run, scenario):
     answer = _last(p.get('chat_answers') or []) or {}
     admission = _last(p['admission']['rows']) or {}
     allowed = scenario['expect'].get('error_codes') or []
+    replay_allowed = scenario['expect'].get('replay_codes') or []
+    reconcile_cards = (p['replay'].get('by_type') or {}).get('execution.node_event:agent_node_recovery_required', 0)
     facts = {'error_code': settlement['error_code'], 'allowed': allowed, 'replay_code': terminal.get('code'),
+             'replay_allowed': replay_allowed, 'reconcile_cards': reconcile_cards,
              'safe_message_present': bool(terminal.get('safe_message')),
              'generic_safe_message': terminal.get('safe_message') == 'The runtime operation failed.',
              'chat_is_error': answer.get('is_error'), 'chat_error_code': answer.get('error_code'),
              'support_reference_is_response_message': bool(admission.get('client_message_id')
                                                            and admission.get('client_message_id') == answer.get('message_id'))}
     ok = ((not allowed or settlement['error_code'] in allowed) and terminal.get('code') and facts['safe_message_present']
+          and (not replay_allowed or terminal.get('code') in replay_allowed)
+          and not (scenario['expect'].get('no_reconcile_card') and reconcile_cards)
           and answer.get('is_error') and facts['support_reference_is_response_message'])
     return _inv(HOLD if ok else VIOLATED, **facts)
 

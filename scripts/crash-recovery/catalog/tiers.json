@@ -3,6 +3,7 @@
     "BASE-code-50",
     "BASE-code-150",
     "BASE-model-slow",
+    "BASE-code-throw",
     "CR-WK-P10",
     "CR-WPK-P10",
     "CX-01",
@@ -19,7 +20,8 @@
   "T0-base": [
     "BASE-code-50",
     "BASE-code-150",
-    "BASE-model-slow"
+    "BASE-model-slow",
+    "BASE-code-throw"
   ],
   "T0-code": [
     "CR-WK-P10",

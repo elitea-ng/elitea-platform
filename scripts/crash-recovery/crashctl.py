@@ -13,6 +13,7 @@ Standard library only. Local and opt-in: CI never runs it. Subcommands:
   binary-check         §3b image identity check: extract each evidence binary and look for a marker
   snapshot DEST        replayable local snapshot of a stuck run: both DB dumps, the Worker spool, the NATS store
   restore-snapshot SRC recreate the (down, volume-less) crash stack from a snapshot and start it on current images
+  observe EXEC         after restore-snapshot: wait for EXEC to settle, then check settle-once, drain and cleanup
   down [--volumes]     stop the crash stack (only the crash project; never another stack)
 """
 import argparse
@@ -31,6 +32,7 @@ from lib.runner import preflight, run_scenario  # noqa: E402
 from lib.collectors import Collector  # noqa: E402
 from lib.stack_compose import Stack  # noqa: E402
 from lib.verdict import evaluate  # noqa: E402
+from lib import observe as observe_mod  # noqa: E402
 from fixtures import seed as seed_mod  # noqa: E402
 
 DEFAULT_PYTHON = '/Users/romanmitusov/Documents/Work/.claude/projects/venv/bin/python3'
@@ -163,6 +165,14 @@ def cmd_restore_snapshot(args):
     print(json.dumps(Stack(args.stack_dir).restore_snapshot(args.src), indent=2))
 
 
+def cmd_observe(args):
+    out = pathlib.Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    result = observe_mod.observe(Stack(args.stack_dir), args.exec_id, args.expect, out, budget_s=args.budget)
+    print(json.dumps(result, indent=2))
+    return 0 if result['ok'] else 1
+
+
 def cmd_down(args):
     Stack(args.stack_dir).down(volumes=args.volumes)
 
@@ -201,6 +211,12 @@ def main():
     p = sub.add_parser('restore-snapshot')
     p.add_argument('src')
     p.set_defaults(fn=cmd_restore_snapshot)
+    p = sub.add_parser('observe')
+    p.add_argument('exec_id')
+    p.add_argument('--expect', default='CANCELLED', choices=['SUCCEEDED', 'FAILED', 'CANCELLED'])
+    p.add_argument('--budget', type=int, default=600)
+    p.add_argument('--out', required=True)
+    p.set_defaults(fn=cmd_observe)
     p = sub.add_parser('snapshot')
     p.add_argument('dest')
     p.set_defaults(fn=cmd_snapshot)
@@ -209,11 +225,10 @@ def main():
     p.set_defaults(fn=cmd_down)
     args = parser.parse_args()
     try:
-        args.fn(args)
+        return args.fn(args) or 0
     except HarnessError as err:
         print(f'crashctl: {err}', file=sys.stderr)
         return 1
-    return 0
 
 
 if __name__ == '__main__':
