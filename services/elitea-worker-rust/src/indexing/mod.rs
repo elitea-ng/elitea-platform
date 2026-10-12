@@ -9,8 +9,10 @@
 //! embeds the chunks through the platform's `/llm` gateway
 //! ([`EmbeddingsClient`]) and writes the points; documents that disappeared
 //! from the source are deleted. It reports a typed [`IndexIngestSummaryV1`]:
-//! counts, skips by reason, the embedding stamp and the per-document record.
-//! elitea-main is the only writer of index metadata.
+//! counts, skips by reason, the embedding stamp, the store's totals (present
+//! whenever the store was touched, a failure included) and the per-document
+//! record with the run's own statement of whether that record is the whole
+//! index. elitea-main is the only writer of index metadata.
 //!
 //! * [`inputs`] — the three JSON entries, strictly read.
 //! * [`source`] — the toolkit type to its connector, with the `index_data`
@@ -32,6 +34,7 @@ pub(crate) mod source;
 mod tests;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use elitea_connectors::egress::HostAllowlist;
 use elitea_connectors::transport::Transport;
@@ -67,6 +70,9 @@ pub(crate) struct IndexRunLimits {
     pub(crate) max_documents: usize,
     /// One document's bytes.
     pub(crate) max_document_bytes: u64,
+    /// The wait before the second embeddings attempt of a batch after a
+    /// retryable refusal; the third waits twice that.
+    pub(crate) embedding_retry_backoff: Duration,
 }
 
 impl Default for IndexRunLimits {
@@ -76,6 +82,7 @@ impl Default for IndexRunLimits {
             embedding_batch: 64,
             max_documents: 50_000,
             max_document_bytes: 50 * 1024 * 1024,
+            embedding_retry_backoff: Duration::from_millis(500),
         }
     }
 }

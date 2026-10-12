@@ -117,10 +117,13 @@ func (r *IndexIngestResultsRepository) WithIndexRegistry() *IndexIngestResultsRe
 // After the row is applied, the run's per-document rows go into
 // index_registry_documents in the same transaction (ADR-0030 decision 3): the
 // documents written are upserted, the keys removed are deleted, and a run that
-// reported the WHOLE index (ReportsWholeIndex: not truncated, as many documents
-// as the index's total) makes the rows exactly its list. The frame is bounded,
+// stated its list is the WHOLE index (ReportsWholeIndex, the worker's
+// whole_index_record) makes the rows exactly its list. The frame is bounded,
 // so a truncated list is applied as far as it goes and logged; the row's totals
-// are the whole index's regardless.
+// are the store's whenever the summary carries them. An ERROR summary is
+// applied the same way: a run that failed after writing reports the rows it
+// wrote, the keys it deleted and the store's totals, so the registry follows
+// the store, not the outcome.
 func (r *IndexIngestResultsRepository) applyIndexRegistry(
 	ctx context.Context,
 	tx sqlExecutor,
@@ -195,9 +198,10 @@ func applyIndexRegistryDocuments(
 		return err
 	}
 	if result.ReportsWholeIndex() {
-		// The list is the whole index: a row it does not name is a document
-		// that is gone (a clean re-index, or a sync that removed more than the
-		// removed list could carry). This covers RemovedDocumentKeys too.
+		// The worker stated the list is the whole index: a row it does not
+		// name is a document that is gone (a clean re-index, or a sync that
+		// removed more than the removed list could carry). This covers
+		// RemovedDocumentKeys too.
 		_, err := deleteIndexRegistryDocumentsNotIn(ctx, tx, indexID, keep)
 		return err
 	}

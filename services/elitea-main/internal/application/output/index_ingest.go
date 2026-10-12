@@ -166,12 +166,25 @@ type IndexIngestSummary struct {
 	SkippedJSON        string
 	EmbeddingModel     string
 	EmbeddingDimension uint32
-	// TotalDocuments and TotalChunks are the WHOLE index after the run, which
-	// the list shows. Unlike IndexIngestResult.Documents they are never a
-	// bounded subset: the output frame is bounded at MaxIndexIngestResultBytes,
-	// the totals are two integers.
+	// TotalDocuments and TotalChunks are the WHOLE index as the vector store
+	// holds it after the run, which the list shows. Unlike
+	// IndexIngestResult.Documents they are never a bounded subset: the output
+	// frame is bounded at MaxIndexIngestResultBytes, the totals are two
+	// integers. TotalsPresent is their explicit presence
+	// (IndexIngestSummaryV1.total_documents/total_chunks are optional): a
+	// summary that carries them describes the store, zero included, and the
+	// registry records them as given; one without them says nothing about the
+	// store (the Python path, a run that failed before touching it). A failure
+	// after any write or delete carries them.
+	TotalsPresent  bool
 	TotalDocuments uint64
 	TotalChunks    uint64
+	// WholeIndexRecord is the worker's statement that the result's Documents
+	// name every document the store holds after the run (nothing truncated, no
+	// unchanged or retained document outside the list), so the registry may
+	// make its per-document rows exactly that list. It is never inferred from
+	// counts; when set, TotalDocuments equals the number of Documents.
+	WholeIndexRecord bool
 }
 
 const (
@@ -258,6 +271,11 @@ func (s IndexIngestSummary) validateTyped() error {
 		s.FailedChunks > math.MaxInt64 || s.TotalDocuments > math.MaxInt64 || s.TotalChunks > math.MaxInt64 {
 		return ErrInvalidIndexIngestOutput
 	}
+	// Absent totals carry no value; a whole-index statement is about a
+	// record whose totals are known.
+	if !s.TotalsPresent && (s.TotalDocuments != 0 || s.TotalChunks != 0 || s.WholeIndexRecord) {
+		return ErrInvalidIndexIngestOutput
+	}
 	if s.SkippedJSON != "" {
 		var decoded map[string]uint64
 		if err := json.Unmarshal([]byte(s.SkippedJSON), &decoded); err != nil || len(decoded) == 0 {
@@ -282,11 +300,12 @@ func (s IndexIngestSummary) validateTyped() error {
 }
 
 // HasTypedResult reports whether the summary describes a Rust run: any typed
-// field set. The Python SDK path never sets one.
+// field set, the totals' presence included (so a run that wrote nothing and
+// reports an empty store is typed). The Python SDK path never sets one.
 func (s IndexIngestSummary) HasTypedResult() bool {
 	return s.IndexedDocuments != 0 || s.IndexedChunks != 0 || s.FailedChunks != 0 ||
 		s.SkippedJSON != "" || s.EmbeddingModel != "" ||
-		s.TotalDocuments != 0 || s.TotalChunks != 0
+		s.TotalsPresent || s.WholeIndexRecord
 }
 
 func (s IndexIngestSummary) Validate() error {
@@ -377,12 +396,13 @@ type IndexIngestResult struct {
 }
 
 // ReportsWholeIndex reports whether Documents is every document of the index
-// after the run: nothing was truncated and the list is as long as the index.
+// after the run, as the worker stated it (IndexIngestSummary.WholeIndexRecord).
 // A registry application may then delete every document row the list does not
-// name (a clean re-index).
+// name (a clean re-index). It is the worker's statement, not a coincidence of
+// counts: Validate checks the statement against the list (nothing truncated,
+// TotalDocuments equal to the list's length).
 func (r IndexIngestResult) ReportsWholeIndex() bool {
-	return r.ResultSummary.HasTypedResult() && !r.DocumentsTruncated &&
-		r.ResultSummary.TotalDocuments == uint64(len(r.Documents))
+	return r.ResultSummary.WholeIndexRecord
 }
 
 func (r IndexIngestResult) Validate() error {
@@ -408,8 +428,15 @@ func (r IndexIngestResult) Validate() error {
 
 // validateDocuments bounds the per-document lists and keeps them exclusive to
 // a typed (Rust) summary: the Python path reports no documents, so a frame
-// that carries some without a typed summary is malformed.
+// that carries some without a typed summary is malformed. A whole-index
+// statement must be about the list it names: nothing truncated and the totals
+// (present) counting exactly the listed documents.
 func (r IndexIngestResult) validateDocuments() error {
+	if r.ResultSummary.WholeIndexRecord &&
+		(r.DocumentsTruncated || !r.ResultSummary.TotalsPresent ||
+			r.ResultSummary.TotalDocuments != uint64(len(r.Documents))) {
+		return ErrInvalidIndexIngestOutput
+	}
 	if len(r.Documents) == 0 && len(r.RemovedDocumentKeys) == 0 && !r.DocumentsTruncated {
 		return nil
 	}

@@ -486,20 +486,37 @@ type IndexIngestSummaryV1 struct {
 	EmbeddingDimension uint32 `protobuf:"varint,12,opt,name=embedding_dimension,json=embeddingDimension,proto3" json:"embedding_dimension,omitempty"`
 	// The per-document record of the Rust indexing runtime (ADR-0030 decision
 	// 3): the documents this run wrote (with the version and chunk count the
-	// vector store now holds) and the keys of documents that disappeared from
-	// the source and were deleted. elitea-main applies them to
-	// index_registry_documents in the same terminal transition. The output
+	// vector store now holds) and the keys of documents whose points this run
+	// deleted (they disappeared from the source, or their old points were
+	// deleted and the new ones could not be written). elitea-main applies them
+	// to index_registry_documents in the same terminal transition. The output
 	// frame is bounded (64 KiB), so a run that touched more documents than fit
-	// lists the first ones and sets documents_truncated; the totals below are
-	// always the whole index's, so the registry's counts stay exact.
+	// lists the first ones and sets documents_truncated. A record may carry
+	// only removed keys (a run that deleted and wrote nothing), only totals,
+	// or both.
 	Documents           []*IndexIngestDocumentV1 `protobuf:"bytes,16,rep,name=documents,proto3" json:"documents,omitempty"`
 	RemovedDocumentKeys []string                 `protobuf:"bytes,17,rep,name=removed_document_keys,json=removedDocumentKeys,proto3" json:"removed_document_keys,omitempty"`
 	DocumentsTruncated  bool                     `protobuf:"varint,18,opt,name=documents_truncated,json=documentsTruncated,proto3" json:"documents_truncated,omitempty"`
-	// The whole index after this run: documents present and their chunks.
-	TotalDocuments uint64 `protobuf:"varint,19,opt,name=total_documents,json=totalDocuments,proto3" json:"total_documents,omitempty"`
-	TotalChunks    uint64 `protobuf:"varint,20,opt,name=total_chunks,json=totalChunks,proto3" json:"total_chunks,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The whole index as the vector store holds it after this run: documents
+	// present and their chunks. Unchanged documents, documents this run wrote,
+	// and documents whose old points still stand (changed in the source but
+	// not re-indexed; vanished but not deleted when the run failed) all count.
+	// Presence is explicit: a summary that carries them describes the store,
+	// zero included, and elitea-main records them as given; one without them
+	// (the Python SDK path, a run that failed before touching the store) says
+	// nothing about the store. Set together or not at all. A run that failed
+	// after writing or deleting anything carries them, so the registry
+	// follows the store.
+	TotalDocuments *uint64 `protobuf:"varint,19,opt,name=total_documents,json=totalDocuments,proto3,oneof" json:"total_documents,omitempty"`
+	TotalChunks    *uint64 `protobuf:"varint,20,opt,name=total_chunks,json=totalChunks,proto3,oneof" json:"total_chunks,omitempty"`
+	// True when `documents` names every document the store holds after the
+	// run (nothing truncated, no unchanged or retained document outside the
+	// list): elitea-main then makes index_registry_documents exactly that
+	// list. It is a statement by the worker, never inferred from counts; when
+	// it is set, total_documents equals the length of `documents`.
+	WholeIndexRecord bool `protobuf:"varint,21,opt,name=whole_index_record,json=wholeIndexRecord,proto3" json:"whole_index_record,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *IndexIngestSummaryV1) Reset() {
@@ -638,17 +655,24 @@ func (x *IndexIngestSummaryV1) GetDocumentsTruncated() bool {
 }
 
 func (x *IndexIngestSummaryV1) GetTotalDocuments() uint64 {
-	if x != nil {
-		return x.TotalDocuments
+	if x != nil && x.TotalDocuments != nil {
+		return *x.TotalDocuments
 	}
 	return 0
 }
 
 func (x *IndexIngestSummaryV1) GetTotalChunks() uint64 {
-	if x != nil {
-		return x.TotalChunks
+	if x != nil && x.TotalChunks != nil {
+		return *x.TotalChunks
 	}
 	return 0
+}
+
+func (x *IndexIngestSummaryV1) GetWholeIndexRecord() bool {
+	if x != nil {
+		return x.WholeIndexRecord
+	}
+	return false
 }
 
 // IndexIngestDocumentV1 is one indexed document as the vector store holds it
@@ -867,7 +891,7 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\vbyte_length\x18\x04 \x01(\x04R\n" +
 	"byteLength\x123\n" +
 	"\x06digest\x18\x05 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x06digest\x12&\n" +
-	"\x0eclassification\x18\x06 \x01(\tR\x0eclassificationJ\x04\b\a\x10\x10\"\x83\a\n" +
+	"\x0eclassification\x18\x06 \x01(\tR\x0eclassificationJ\x04\b\a\x10\x10\"\xe0\a\n" +
 	"\x14IndexIngestSummaryV1\x12>\n" +
 	"\x06status\x18\x01 \x01(\x0e2&.elitea.runtime.v1.IndexIngestStatusV1R\x06status\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12T\n" +
@@ -884,14 +908,17 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\x13embedding_dimension\x18\f \x01(\rR\x12embeddingDimension\x12F\n" +
 	"\tdocuments\x18\x10 \x03(\v2(.elitea.runtime.v1.IndexIngestDocumentV1R\tdocuments\x122\n" +
 	"\x15removed_document_keys\x18\x11 \x03(\tR\x13removedDocumentKeys\x12/\n" +
-	"\x13documents_truncated\x18\x12 \x01(\bR\x12documentsTruncated\x12'\n" +
-	"\x0ftotal_documents\x18\x13 \x01(\x04R\x0etotalDocuments\x12!\n" +
-	"\ftotal_chunks\x18\x14 \x01(\x04R\vtotalChunks\x1a:\n" +
+	"\x13documents_truncated\x18\x12 \x01(\bR\x12documentsTruncated\x12,\n" +
+	"\x0ftotal_documents\x18\x13 \x01(\x04H\x01R\x0etotalDocuments\x88\x01\x01\x12&\n" +
+	"\ftotal_chunks\x18\x14 \x01(\x04H\x02R\vtotalChunks\x88\x01\x01\x12,\n" +
+	"\x12whole_index_record\x18\x15 \x01(\bR\x10wholeIndexRecord\x1a:\n" +
 	"\fSkippedEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01B\n" +
 	"\n" +
-	"\b_reindexJ\x04\b\r\x10\x10\"u\n" +
+	"\b_reindexB\x12\n" +
+	"\x10_total_documentsB\x0f\n" +
+	"\r_total_chunksJ\x04\b\r\x10\x10\"u\n" +
 	"\x15IndexIngestDocumentV1\x12!\n" +
 	"\fdocument_key\x18\x01 \x01(\tR\vdocumentKey\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1f\n" +

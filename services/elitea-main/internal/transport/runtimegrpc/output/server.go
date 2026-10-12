@@ -972,6 +972,11 @@ func indexIngestSummaryDomain(summary *runtimev1.IndexIngestSummaryV1) (outputap
 	if err != nil {
 		return outputapp.IndexIngestSummary{}, err
 	}
+	// The totals are optional fields set together or not at all; their
+	// presence is what the registry acts on, so half a pair is malformed.
+	if (summary.TotalDocuments == nil) != (summary.TotalChunks == nil) {
+		return outputapp.IndexIngestSummary{}, outputapp.ErrInvalidIndexIngestOutput
+	}
 	mapped := outputapp.IndexIngestSummary{
 		Status:             status,
 		Message:            summary.GetMessage(),
@@ -986,8 +991,10 @@ func indexIngestSummaryDomain(summary *runtimev1.IndexIngestSummaryV1) (outputap
 		SkippedJSON:        skippedJSON,
 		EmbeddingModel:     summary.GetEmbeddingModel(),
 		EmbeddingDimension: summary.GetEmbeddingDimension(),
+		TotalsPresent:      summary.TotalDocuments != nil,
 		TotalDocuments:     summary.GetTotalDocuments(),
 		TotalChunks:        summary.GetTotalChunks(),
+		WholeIndexRecord:   summary.GetWholeIndexRecord(),
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.IndexIngestSummary{}, err

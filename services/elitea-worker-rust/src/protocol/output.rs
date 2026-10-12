@@ -1237,6 +1237,16 @@ fn validate_index_summary(
     {
         return Err(malformed_restored_output());
     }
+    // The totals are a pair with one presence; a whole-index statement is
+    // about an untruncated list whose length its totals count
+    // (`IndexIngestResult.validateDocuments`).
+    if summary.total_documents.is_some() != summary.total_chunks.is_some()
+        || (summary.whole_index_record
+            && (summary.documents_truncated
+                || summary.total_documents != Some(summary.documents.len() as u64)))
+    {
+        return Err(malformed_restored_output());
+    }
     let mut seen = std::collections::BTreeSet::new();
     for key in summary
         .documents

@@ -8,6 +8,7 @@ import (
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	"google.golang.org/protobuf/proto"
 )
 
 func publishIndexSummary(t *testing.T, summary *runtimev1.IndexIngestSummaryV1) (*outputStreamStub, *indexIngestorStub) {
@@ -133,8 +134,8 @@ func TestOutputServerMapsTypedIndexDocumentsAndTotals(t *testing.T) {
 		},
 		RemovedDocumentKeys: []string{"docs/gone.md"},
 		DocumentsTruncated:  true,
-		TotalDocuments:      40,
-		TotalChunks:         120,
+		TotalDocuments:      proto.Uint64(40),
+		TotalChunks:         proto.Uint64(120),
 	})
 	if len(stream.acks) != 2 || stream.acks[1].GetRejection() != nil || len(indexes.frames) != 1 {
 		t.Fatalf("typed documents were not accepted: acks=%v frames=%d", stream.acks, len(indexes.frames))
@@ -145,11 +146,43 @@ func TestOutputServerMapsTypedIndexDocumentsAndTotals(t *testing.T) {
 		len(result.RemovedDocumentKeys) != 1 || result.RemovedDocumentKeys[0] != "docs/gone.md" || !result.DocumentsTruncated {
 		t.Fatalf("document lists changed during mapping: %+v", result)
 	}
-	if result.ResultSummary.TotalDocuments != 40 || result.ResultSummary.TotalChunks != 120 {
+	if !result.ResultSummary.TotalsPresent || result.ResultSummary.TotalDocuments != 40 || result.ResultSummary.TotalChunks != 120 {
 		t.Fatalf("totals changed during mapping: %+v", result.ResultSummary)
 	}
 	if result.ReportsWholeIndex() {
 		t.Fatal("a truncated list of 2 in an index of 40 is not the whole index")
+	}
+}
+
+// The totals' presence and the whole-index statement are carried as the
+// worker set them: zero totals present stay present, and absent totals stay
+// absent (zero without presence).
+func TestOutputServerMapsTotalsPresenceAndTheWholeIndexStatement(t *testing.T) {
+	stream, indexes := publishIndexSummary(t, &runtimev1.IndexIngestSummaryV1{
+		Status:              runtimev1.IndexIngestStatusV1_INDEX_INGEST_STATUS_V1_OK,
+		Message:             "Every document was removed.",
+		TerminalState:       runtimev1.IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_COMPLETED,
+		RemovedDocumentKeys: []string{"docs/a.md", "docs/b.md"},
+		TotalDocuments:      proto.Uint64(0),
+		TotalChunks:         proto.Uint64(0),
+		WholeIndexRecord:    true,
+	})
+	if len(stream.acks) != 2 || stream.acks[1].GetRejection() != nil || len(indexes.frames) != 1 {
+		t.Fatalf("a removal-only whole-index result was not accepted: acks=%v frames=%d", stream.acks, len(indexes.frames))
+	}
+	result := indexes.frames[0].Result
+	if !result.ResultSummary.TotalsPresent || result.ResultSummary.TotalDocuments != 0 || !result.ResultSummary.HasTypedResult() ||
+		!result.ReportsWholeIndex() || len(result.RemovedDocumentKeys) != 2 {
+		t.Fatalf("mapped = %+v", result)
+	}
+	stream, indexes = publishIndexSummary(t, &runtimev1.IndexIngestSummaryV1{
+		Status:           runtimev1.IndexIngestStatusV1_INDEX_INGEST_STATUS_V1_OK,
+		Message:          "Indexed.",
+		TerminalState:    runtimev1.IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_COMPLETED,
+		IndexedDocuments: 1,
+	})
+	if len(indexes.frames) != 1 || indexes.frames[0].Result.ResultSummary.TotalsPresent || indexes.frames[0].Result.ReportsWholeIndex() {
+		t.Fatalf("absent totals were mapped as present: acks=%v %+v", stream.acks, indexes.frames)
 	}
 }
 
@@ -160,13 +193,26 @@ func TestOutputServerRefusesMalformedTypedIndexDocuments(t *testing.T) {
 			Message:          "Indexed.",
 			TerminalState:    runtimev1.IndexIngestTerminalStateV1_INDEX_INGEST_TERMINAL_STATE_V1_COMPLETED,
 			IndexedDocuments: 1,
-			TotalDocuments:   1,
+			TotalDocuments:   proto.Uint64(1),
+			TotalChunks:      proto.Uint64(1),
 		}
 	}
 	tests := map[string]func(*runtimev1.IndexIngestSummaryV1){
 		"documents on an untyped (python) summary": func(s *runtimev1.IndexIngestSummaryV1) {
-			s.IndexedDocuments, s.TotalDocuments, s.Indexed = 0, 0, 1
+			s.IndexedDocuments, s.TotalDocuments, s.TotalChunks, s.Indexed = 0, nil, nil, 1
 			s.Documents = []*runtimev1.IndexIngestDocumentV1{{DocumentKey: "a", Version: "v"}}
+		},
+		"half a totals pair": func(s *runtimev1.IndexIngestSummaryV1) { s.TotalChunks = nil },
+		"whole-index statement on a truncated list": func(s *runtimev1.IndexIngestSummaryV1) {
+			s.Documents = []*runtimev1.IndexIngestDocumentV1{{DocumentKey: "a", Version: "v"}}
+			s.DocumentsTruncated, s.WholeIndexRecord = true, true
+		},
+		"whole-index statement disagreeing with its totals": func(s *runtimev1.IndexIngestSummaryV1) {
+			s.Documents = []*runtimev1.IndexIngestDocumentV1{{DocumentKey: "a", Version: "v"}}
+			s.TotalDocuments, s.WholeIndexRecord = proto.Uint64(2), true
+		},
+		"whole-index statement without totals": func(s *runtimev1.IndexIngestSummaryV1) {
+			s.TotalDocuments, s.TotalChunks, s.WholeIndexRecord = nil, nil, true
 		},
 		"empty document key": func(s *runtimev1.IndexIngestSummaryV1) {
 			s.Documents = []*runtimev1.IndexIngestDocumentV1{{DocumentKey: "", Version: "v"}}

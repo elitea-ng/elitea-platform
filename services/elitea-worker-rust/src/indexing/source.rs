@@ -197,7 +197,18 @@ impl IndexSource {
                 .iter()
                 .find(|document| document.reference.key == key)
                 .cloned()
-                .ok_or_else(|| SourceError::NotFound(key.to_owned())),
+                .ok_or_else(|| SourceError::NotFound(key.to_owned()))
+                .and_then(|document| {
+                    // A listed document whose fetch fails (the test marks it
+                    // with this metadata key).
+                    if document.metadata.contains_key("fixture_unfetchable") {
+                        Err(SourceError::Unavailable(format!(
+                            "fixture: '{key}' cannot be fetched"
+                        )))
+                    } else {
+                        Ok(document)
+                    }
+                }),
         }
     }
 }

@@ -848,7 +848,7 @@ func TestMetadataReportsIndexTotalsAndHistoryKeepsRunCounts(t *testing.T) {
 // (python) result leaves them alone.
 func TestApplyResultTakesTheIndexTotalsFromTheResult(t *testing.T) {
 	first, changed, _, err := applyResult(started(t, nil, 1), resultFor(1, okSummary(func(s *outputapp.IndexIngestSummary) {
-		s.TotalDocuments, s.TotalChunks = 120, 4800
+		s.TotalsPresent, s.TotalDocuments, s.TotalChunks = true, 120, 4800
 	})))
 	if err != nil || !changed || first.TotalDocuments != 120 || first.TotalChunks != 4800 {
 		t.Fatalf("first run totals = %d/%d changed=%v err=%v", first.TotalDocuments, first.TotalChunks, changed, err)
@@ -864,7 +864,7 @@ func TestApplyResultTakesTheIndexTotalsFromTheResult(t *testing.T) {
 	// An incremental run that removed documents reports smaller totals.
 	second, _, _, err := applyResult(next, resultFor(2, okSummary(func(s *outputapp.IndexIngestSummary) {
 		s.IndexedDocuments, s.IndexedChunks, s.FailedChunks, s.SkippedJSON = 0, 0, 0, `{"unchanged":119}`
-		s.TotalDocuments, s.TotalChunks = 119, 4790
+		s.TotalsPresent, s.TotalDocuments, s.TotalChunks = true, 119, 4790
 	})))
 	if err != nil || second.TotalDocuments != 119 || second.TotalChunks != 4790 {
 		t.Fatalf("incremental run totals = %d/%d err=%v", second.TotalDocuments, second.TotalChunks, err)
@@ -872,13 +872,39 @@ func TestApplyResultTakesTheIndexTotalsFromTheResult(t *testing.T) {
 	if metadata := Metadata(second); metadata["indexed"] != int64(119) || metadata["indexed_chunks"] != int64(4790) {
 		t.Fatalf("the list shows %v/%v, want the totals", metadata["indexed"], metadata["indexed_chunks"])
 	}
-	// A failed typed result reports the index as it is (the worker's totals),
-	// a python-shaped summary reports nothing about totals.
+	// A python-shaped summary reports nothing about totals.
 	third, _, _, err := applyResult(started(t, &second, 3), resultFor(3, outputapp.IndexIngestSummary{
 		Status: outputapp.IndexIngestStatusOK, Message: "ok", TerminalState: outputapp.IndexIngestTerminalCompleted, Indexed: 7,
 	}))
 	if err != nil || third.TotalDocuments != 119 || third.TotalChunks != 4790 || third.Indexed != 7 {
 		t.Fatalf("untyped result = %+v err=%v", third, err)
+	}
+	// A typed result WITHOUT the totals (a failure before the store was
+	// touched) leaves them alone too ...
+	fourth, _, _, err := applyResult(started(t, &third, 4), resultFor(4, outputapp.IndexIngestSummary{
+		Status: outputapp.IndexIngestStatusError, Message: "Index 'docs' failed: the source could not be read",
+		TerminalState: outputapp.IndexIngestTerminalFailed, SkippedJSON: `{"fetch_failed":1}`,
+	}))
+	if err != nil || fourth.State != StateFailed || fourth.TotalDocuments != 119 || fourth.TotalChunks != 4790 {
+		t.Fatalf("failure before any write = %+v err=%v", fourth, err)
+	}
+	// ... while a FAILED result that carries them (a run that wrote or deleted
+	// before failing) sets them, and so does a success that emptied the store
+	// (zero, present).
+	fifth, _, _, err := applyResult(started(t, &fourth, 5), resultFor(5, outputapp.IndexIngestSummary{
+		Status: outputapp.IndexIngestStatusError, Message: "Index 'docs' failed: the vector store refused the run",
+		TerminalState: outputapp.IndexIngestTerminalFailed, IndexedDocuments: 4, IndexedChunks: 16,
+		TotalsPresent: true, TotalDocuments: 100, TotalChunks: 4000,
+	}))
+	if err != nil || fifth.State != StateFailed || fifth.TotalDocuments != 100 || fifth.TotalChunks != 4000 || fifth.Indexed != 4 {
+		t.Fatalf("failure after writes = %+v err=%v", fifth, err)
+	}
+	sixth, _, _, err := applyResult(started(t, &fifth, 6), resultFor(6, outputapp.IndexIngestSummary{
+		Status: outputapp.IndexIngestStatusOK, Message: "Every document was removed.", TerminalState: outputapp.IndexIngestTerminalCompleted,
+		TotalsPresent: true,
+	}))
+	if err != nil || sixth.State != StateCompleted || sixth.TotalDocuments != 0 || sixth.TotalChunks != 0 || sixth.Indexed != 0 {
+		t.Fatalf("a run that emptied the store = %+v err=%v", sixth, err)
 	}
 }
 

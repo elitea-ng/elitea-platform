@@ -65,10 +65,16 @@ func (h registryProjectionHarness) frame(
 		h.t.Fatal(err)
 	}
 	fence := claimPostgresIndexExecution(h.t, h.pool, expected)
+	// The builder validates the frame before the document lists are attached,
+	// and a whole-index statement is checked against them; it is restored
+	// after mutate, and the frame validated as a whole.
+	whole := summary.WholeIndexRecord
+	summary.WholeIndexRecord = false
 	frame := postgresInlineIndexOutputFrame(h.t, expected, fence, summary)
 	if mutate != nil {
 		mutate(&frame.Result)
 	}
+	frame.Result.ResultSummary.WholeIndexRecord = whole
 	if err := frame.Validate(); err != nil {
 		h.t.Fatalf("frame %s: %v", key, err)
 	}
@@ -82,6 +88,28 @@ func (h registryProjectionHarness) project(frame outputapp.IndexIngestFrame) out
 		h.t.Fatalf("project %s: %+v err=%v", frame.Fence.ExecutionID, outcome, err)
 	}
 	return outcome
+}
+
+// settle prepares the run's settlement after its projection, as the worker
+// does; until then the run's job is active and the next run of the index
+// cannot be admitted.
+func (h registryProjectionHarness) settle(frame outputapp.IndexIngestFrame) {
+	h.t.Helper()
+	settlements, err := NewSettlementsRepository(h.pool)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	receipt, err := settlements.PrepareSettlement(context.Background(), frame.Settlement)
+	if err != nil || receipt.Outcome != frame.Settlement.Outcome {
+		h.t.Fatalf("settle %s: %+v err=%v", frame.Fence.ExecutionID, receipt, err)
+	}
+}
+
+// projectSettled is project followed by settle.
+func (h registryProjectionHarness) projectSettled(frame outputapp.IndexIngestFrame) {
+	h.t.Helper()
+	h.project(frame)
+	h.settle(frame)
 }
 
 func (h registryProjectionHarness) notifications(frame outputapp.IndexIngestFrame) int {
@@ -255,15 +283,19 @@ func TestIndexRegistryAppliesTheRunsDocumentsAndTotalsWithTheResult(t *testing.T
 	ctx := context.Background()
 	typed := func(totalDocuments, totalChunks uint64) outputapp.IndexIngestSummary {
 		summary := registrySummary(8, "m1")
-		summary.TotalDocuments, summary.TotalChunks = totalDocuments, totalChunks
+		summary.TotalsPresent, summary.TotalDocuments, summary.TotalChunks = true, totalDocuments, totalChunks
+		return summary
+	}
+	whole := func(summary outputapp.IndexIngestSummary) outputapp.IndexIngestSummary {
+		summary.WholeIndexRecord = true
 		return summary
 	}
 	document := func(key, version string, chunks uint32) outputapp.IndexIngestDocument {
 		return outputapp.IndexIngestDocument{Key: key, Version: version, ChunkCount: chunks}
 	}
 
-	// Run 1: a fresh index, the list is the whole index.
-	h.project(h.frame("docs", "docs-1", 1, typed(3, 9), func(r *outputapp.IndexIngestResult) {
+	// Run 1: a fresh index, the worker states the list is the whole index.
+	h.projectSettled(h.frame("docs", "docs-1", 1, whole(typed(3, 9)), func(r *outputapp.IndexIngestResult) {
 		r.Documents = []outputapp.IndexIngestDocument{document("a", "1", 2), document("b", "1", 3), document("c", "1", 4)}
 	}))
 	row := mustFind(t, h.registry, "docs")
@@ -279,7 +311,7 @@ func TestIndexRegistryAppliesTheRunsDocumentsAndTotalsWithTheResult(t *testing.T
 
 	// Run 2: incremental. b changed, c disappeared; a is unchanged and not in
 	// the list. The totals shrink and a stays.
-	h.project(h.frame("docs", "docs-2", 2, typed(2, 7), func(r *outputapp.IndexIngestResult) {
+	h.projectSettled(h.frame("docs", "docs-2", 2, typed(2, 7), func(r *outputapp.IndexIngestResult) {
 		r.Documents = []outputapp.IndexIngestDocument{document("b", "2", 5)}
 		r.RemovedDocumentKeys = []string{"c"}
 	}))
@@ -294,7 +326,7 @@ func TestIndexRegistryAppliesTheRunsDocumentsAndTotalsWithTheResult(t *testing.T
 	// Run 3: the frame could not carry every document (truncated). The one it
 	// carries is applied, nothing else is deleted, and the totals are still the
 	// worker's whole-index numbers.
-	h.project(h.frame("docs", "docs-3", 3, typed(3, 8), func(r *outputapp.IndexIngestResult) {
+	h.projectSettled(h.frame("docs", "docs-3", 3, typed(3, 8), func(r *outputapp.IndexIngestResult) {
 		r.Documents = []outputapp.IndexIngestDocument{document("d", "1", 1)}
 		r.DocumentsTruncated = true
 	}))
@@ -306,9 +338,9 @@ func TestIndexRegistryAppliesTheRunsDocumentsAndTotalsWithTheResult(t *testing.T
 		t.Fatalf("run 3 documents = %+v", got)
 	}
 
-	// Run 4: a clean re-index that reports the whole index as one document.
+	// Run 4: a clean re-index that states the whole index is one document.
 	// Every row the list does not name goes, with no removed list needed.
-	h.project(h.frame("docs", "docs-4", 4, typed(1, 1), func(r *outputapp.IndexIngestResult) {
+	h.projectSettled(h.frame("docs", "docs-4", 4, whole(typed(1, 1)), func(r *outputapp.IndexIngestResult) {
 		r.Documents = []outputapp.IndexIngestDocument{document("x", "1", 1)}
 	}))
 	row = mustFind(t, h.registry, "docs")
@@ -320,14 +352,52 @@ func TestIndexRegistryAppliesTheRunsDocumentsAndTotalsWithTheResult(t *testing.T
 	}
 
 	// Run 5: the source emptied out. Zero documents, nothing truncated: the
-	// whole index is reported empty, and the rows go with it.
-	frame := h.frame("docs", "docs-5", 5, typed(0, 0), func(r *outputapp.IndexIngestResult) {
+	// worker states the whole index is empty, and the rows go with it.
+	frame := h.frame("docs", "docs-5", 5, whole(typed(0, 0)), func(r *outputapp.IndexIngestResult) {
 		r.RemovedDocumentKeys = []string{"x"}
 	})
-	h.project(frame)
+	h.projectSettled(frame)
 	row = mustFind(t, h.registry, "docs")
 	if row.TotalDocuments != 0 || row.TotalChunks != 0 || len(h.documents(row.IndexID)) != 0 {
 		t.Fatalf("run 5 row = %+v documents=%+v", row, h.documents(row.IndexID))
+	}
+
+	// Run 6: a run that failed after writing. Its ERROR summary carries the
+	// rows it wrote, the key whose old points it deleted before the write
+	// failed, and the store's totals; the registry applies all three and
+	// records the run failed.
+	h.projectSettled(h.frame("docs", "docs-6", 6, typed(2, 5), func(r *outputapp.IndexIngestResult) {
+		r.Documents = []outputapp.IndexIngestDocument{document("p", "1", 2), document("q", "1", 3)}
+	}))
+	failed := outputapp.IndexIngestSummary{
+		Status: outputapp.IndexIngestStatusError, Message: "Index 'docs' failed: the vector store refused the run",
+		TerminalState: outputapp.IndexIngestTerminalFailed, IndexedDocuments: 1, IndexedChunks: 4,
+		TotalsPresent: true, TotalDocuments: 2, TotalChunks: 7,
+	}
+	h.projectSettled(h.frame("docs", "docs-7", 7, failed, func(r *outputapp.IndexIngestResult) {
+		r.Documents = []outputapp.IndexIngestDocument{document("p", "2", 4)}
+		r.RemovedDocumentKeys = []string{"q"}
+	}))
+	row = mustFind(t, h.registry, "docs")
+	if row.State != indexregistryapp.StateFailed || row.TotalDocuments != 2 || row.TotalChunks != 7 || row.Indexed != 1 {
+		t.Fatalf("run 7 (failed after writes) row = %+v", row)
+	}
+	if got := h.documents(row.IndexID); len(got) != 1 || got["p"].Version != "2" || got["p"].ChunkCount != 4 {
+		t.Fatalf("run 7 documents = %+v", got)
+	}
+
+	// Run 8: a removal-only run. No document written, no stamp, no skip: the
+	// summary carries only the (present) totals and the removed key, and it is
+	// applied: the row goes and the totals follow.
+	h.projectSettled(h.frame("docs", "docs-8", 8, outputapp.IndexIngestSummary{
+		Status: outputapp.IndexIngestStatusOK, Message: "Index 'docs': 0 documents indexed, 0 unchanged, 1 removed.",
+		TerminalState: outputapp.IndexIngestTerminalCompleted, TotalsPresent: true,
+	}, func(r *outputapp.IndexIngestResult) {
+		r.RemovedDocumentKeys = []string{"p"}
+	}))
+	row = mustFind(t, h.registry, "docs")
+	if row.State != indexregistryapp.StateCompleted || row.TotalDocuments != 0 || row.TotalChunks != 0 || len(h.documents(row.IndexID)) != 0 {
+		t.Fatalf("run 8 (removal only) row = %+v documents=%+v", row, h.documents(row.IndexID))
 	}
 
 	// The notification of a typed result still carries the run's own counts.

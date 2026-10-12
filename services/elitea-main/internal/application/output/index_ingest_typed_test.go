@@ -21,6 +21,7 @@ func typedIndexResult() IndexIngestResult {
 		IndexedChunks:      9,
 		EmbeddingModel:     "text-embedding-3-small",
 		EmbeddingDimension: 1536,
+		TotalsPresent:      true,
 		TotalDocuments:     3,
 		TotalChunks:        9,
 	}
@@ -76,8 +77,8 @@ func TestIndexIngestResultRefusesMalformedDocumentLists(t *testing.T) {
 			*r = frame.Result
 			r.Documents = []IndexIngestDocument{{Key: "a", Version: "v"}}
 		},
-		"empty key":    func(r *IndexIngestResult) { r.Documents = []IndexIngestDocument{{Key: "", Version: "v"}} },
-		"NUL in key":   func(r *IndexIngestResult) { r.Documents = []IndexIngestDocument{{Key: "a\x00b", Version: "v"}} },
+		"empty key":  func(r *IndexIngestResult) { r.Documents = []IndexIngestDocument{{Key: "", Version: "v"}} },
+		"NUL in key": func(r *IndexIngestResult) { r.Documents = []IndexIngestDocument{{Key: "a\x00b", Version: "v"}} },
 		"invalid UTF-8 key": func(r *IndexIngestResult) {
 			r.Documents = []IndexIngestDocument{{Key: "a\xffb", Version: "v"}}
 		},
@@ -87,7 +88,7 @@ func TestIndexIngestResultRefusesMalformedDocumentLists(t *testing.T) {
 		"oversized version": func(r *IndexIngestResult) {
 			r.Documents = []IndexIngestDocument{{Key: "a", Version: strings.Repeat("v", MaxIndexDocumentVersionBytes+1)}}
 		},
-		"NUL in version": func(r *IndexIngestResult) { r.Documents = []IndexIngestDocument{{Key: "a", Version: "v\x00"}} },
+		"NUL in version":    func(r *IndexIngestResult) { r.Documents = []IndexIngestDocument{{Key: "a", Version: "v\x00"}} },
 		"empty removed key": func(r *IndexIngestResult) { r.RemovedDocumentKeys = []string{""} },
 		"duplicate document key": func(r *IndexIngestResult) {
 			r.Documents = []IndexIngestDocument{{Key: "a", Version: "1"}, {Key: "a", Version: "2"}}
@@ -97,7 +98,7 @@ func TestIndexIngestResultRefusesMalformedDocumentLists(t *testing.T) {
 			r.Documents = []IndexIngestDocument{{Key: "a", Version: "1"}}
 			r.RemovedDocumentKeys = []string{"a"}
 		},
-		"too many documents":   func(r *IndexIngestResult) { r.Documents = many(MaxIndexResultDocuments + 1) },
+		"too many documents": func(r *IndexIngestResult) { r.Documents = many(MaxIndexResultDocuments + 1) },
 		"too many removed keys": func(r *IndexIngestResult) {
 			for _, document := range many(MaxIndexResultDocuments + 1) {
 				r.RemovedDocumentKeys = append(r.RemovedDocumentKeys, document.Key)
@@ -121,13 +122,13 @@ func TestIndexIngestResultRefusesMalformedDocumentLists(t *testing.T) {
 	}
 }
 
-// The totals are the whole index after the run; they are typed fields, so a
-// summary carrying only them is a typed (Rust) result, and they are bounded
-// like every other count.
+// The totals are the store after the run with an explicit presence; a summary
+// carrying only them (zero included) is a typed (Rust) result, a value without
+// presence is malformed, and they are bounded like every other count.
 func TestIndexIngestSummaryTotalsAreTypedAndBounded(t *testing.T) {
 	summary := IndexIngestSummary{
 		Status: IndexIngestStatusOK, Message: "Nothing changed.", TerminalState: IndexIngestTerminalCompleted,
-		TotalDocuments: 12, TotalChunks: 40,
+		TotalsPresent: true, TotalDocuments: 12, TotalChunks: 40,
 	}
 	if !summary.HasTypedResult() {
 		t.Fatal("a summary with totals is a typed result")
@@ -135,9 +136,27 @@ func TestIndexIngestSummaryTotalsAreTypedAndBounded(t *testing.T) {
 	if err := summary.Validate(); err != nil {
 		t.Fatalf("totals only = %v", err)
 	}
+	// A run that emptied the store reports zero totals, present: still typed,
+	// so the registry resets its totals instead of ignoring the run.
+	emptied := IndexIngestSummary{
+		Status: IndexIngestStatusOK, Message: "Everything was removed.", TerminalState: IndexIngestTerminalCompleted,
+		TotalsPresent: true,
+	}
+	if err := emptied.Validate(); err != nil || !emptied.HasTypedResult() {
+		t.Fatalf("zero totals, present = %v typed=%v", err, emptied.HasTypedResult())
+	}
+	// The whole-index statement alone is typed too, and refused on its own
+	// (its totals are what it is checked against).
+	if (IndexIngestSummary{Status: IndexIngestStatusOK, Message: "ok", TerminalState: IndexIngestTerminalCompleted, WholeIndexRecord: true}).Validate() == nil {
+		t.Fatal("a whole-index statement without totals was accepted")
+	}
 	for name, mutate := range map[string]func(*IndexIngestSummary){
-		"documents beyond int64": func(s *IndexIngestSummary) { s.TotalDocuments = math.MaxInt64 + 1 },
-		"chunks beyond int64":    func(s *IndexIngestSummary) { s.TotalChunks = math.MaxInt64 + 1 },
+		"documents beyond int64":     func(s *IndexIngestSummary) { s.TotalDocuments = math.MaxInt64 + 1 },
+		"chunks beyond int64":        func(s *IndexIngestSummary) { s.TotalChunks = math.MaxInt64 + 1 },
+		"documents without presence": func(s *IndexIngestSummary) { s.TotalsPresent = false },
+		"chunks without presence": func(s *IndexIngestSummary) {
+			s.TotalsPresent, s.TotalDocuments = false, 0
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := summary
@@ -150,31 +169,74 @@ func TestIndexIngestSummaryTotalsAreTypedAndBounded(t *testing.T) {
 }
 
 // ReportsWholeIndex is the clean-index decision: the registry may delete every
-// document row the list does not name only when the list IS the index.
-func TestIndexIngestResultReportsWholeIndexOnlyWhenTheListIsTheIndex(t *testing.T) {
+// document row the list does not name only when the worker STATED the list is
+// the index (whole_index_record). Counts never imply it; the statement is
+// checked against the list instead.
+func TestIndexIngestResultReportsWholeIndexOnlyWhenTheWorkerStatesIt(t *testing.T) {
 	result := typedIndexResult()
 	result.Documents = []IndexIngestDocument{{Key: "a", Version: "1"}, {Key: "b", Version: "1"}, {Key: "c", Version: "1"}}
 	result.ResultSummary.TotalDocuments = 3
+	if result.ReportsWholeIndex() {
+		t.Fatal("three documents of an index of three is not a whole-index statement")
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("an incremental result = %v", err)
+	}
+	result.ResultSummary.WholeIndexRecord = true
 	if !result.ReportsWholeIndex() {
-		t.Fatal("three documents of an index of three is the whole index")
+		t.Fatal("the worker's statement was not read")
 	}
-	truncated := result
-	truncated.DocumentsTruncated = true
-	if truncated.ReportsWholeIndex() {
-		t.Fatal("a truncated list is never the whole index, whatever its length")
+	if err := result.Validate(); err != nil {
+		t.Fatalf("a whole-index record of three = %v", err)
 	}
-	partial := result
-	partial.ResultSummary.TotalDocuments = 10
-	if partial.ReportsWholeIndex() {
-		t.Fatal("three documents of an index of ten is an incremental run")
+	for name, mutate := range map[string]func(*IndexIngestResult){
+		"truncated":       func(r *IndexIngestResult) { r.DocumentsTruncated = true },
+		"totals disagree": func(r *IndexIngestResult) { r.ResultSummary.TotalDocuments = 10 },
+		"totals absent": func(r *IndexIngestResult) {
+			r.ResultSummary.TotalsPresent, r.ResultSummary.TotalDocuments, r.ResultSummary.TotalChunks = false, 0, 0
+		},
+		"list shorter than it": func(r *IndexIngestResult) { r.Documents = r.Documents[:2] },
+	} {
+		t.Run(name, func(t *testing.T) {
+			stated := result
+			stated.Documents = append([]IndexIngestDocument(nil), result.Documents...)
+			mutate(&stated)
+			if err := stated.Validate(); !errors.Is(err, ErrInvalidIndexIngestOutput) {
+				t.Fatalf("a whole-index statement that does not describe its list: %v", err)
+			}
+		})
 	}
-	// A run that emptied the index: no documents, total 0, nothing truncated.
+	// A run that emptied the index: no documents, totals zero (present), the
+	// worker states the (empty) list is the index.
 	emptied := typedIndexResult()
 	emptied.Documents = nil
 	emptied.RemovedDocumentKeys = []string{"a", "b"}
 	emptied.ResultSummary.TotalDocuments, emptied.ResultSummary.TotalChunks = 0, 0
-	if !emptied.ReportsWholeIndex() {
-		t.Fatal("an index reported empty is wholly reported")
+	emptied.ResultSummary.WholeIndexRecord = true
+	if err := emptied.Validate(); err != nil || !emptied.ReportsWholeIndex() {
+		t.Fatalf("an index stated empty: err=%v whole=%v", err, emptied.ReportsWholeIndex())
+	}
+	// A run that only removed documents, with no other typed field than the
+	// (zero) totals, is a valid typed result.
+	removalOnly := typedIndexResult()
+	removalOnly.ResultSummary = IndexIngestSummary{
+		Status: IndexIngestStatusOK, Message: "Two documents were removed.", TerminalState: IndexIngestTerminalCompleted,
+		TotalsPresent: true,
+	}
+	removalOnly.RemovedDocumentKeys = []string{"a", "b"}
+	if err := removalOnly.Validate(); err != nil || removalOnly.ReportsWholeIndex() {
+		t.Fatalf("a removal-only result: err=%v whole=%v", err, removalOnly.ReportsWholeIndex())
+	}
+	// A failed run that wrote before failing reports what it wrote and the
+	// store's totals; the record is applied like any other.
+	failed := typedIndexResult()
+	failed.ResultSummary.Status, failed.ResultSummary.TerminalState = IndexIngestStatusError, IndexIngestTerminalFailed
+	failed.ResultSummary.EmbeddingModel, failed.ResultSummary.EmbeddingDimension = "", 0
+	failed.ResultSummary.TotalDocuments, failed.ResultSummary.TotalChunks = 1, 2
+	failed.Documents = []IndexIngestDocument{{Key: "a", Version: "1", ChunkCount: 2}}
+	failed.RemovedDocumentKeys = []string{"dropped"}
+	if err := failed.Validate(); err != nil {
+		t.Fatalf("a failed result with its record = %v", err)
 	}
 	// A Python (untyped) result reports nothing about the whole index.
 	frame, _, _ := validIndexIngestOutput()

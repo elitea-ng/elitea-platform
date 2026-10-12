@@ -520,9 +520,12 @@ func RecordedSummary(row Row, summary outputapp.IndexIngestSummary) (recorded ou
 // dimension, or another model, touches neither the counts nor the stamp and
 // fails the run with a message that says so, and so does a result without a
 // typed summary (the output projection refuses such a result before reaching
-// here; see RecordedSummary). A typed result also sets the index's totals
-// (TotalDocuments, TotalChunks) from the summary: they are the whole index
-// after the run, not a sum over the bounded document list.
+// here; see RecordedSummary). A result that carries the totals
+// (Summary.TotalsPresent) sets the index's totals (TotalDocuments,
+// TotalChunks) from them, zero included and whatever its status: they are the
+// store as it is after the run, not a sum over the bounded document list, and
+// a run that failed after writing reports the store it left behind. A result
+// without them leaves the totals as they were.
 func ApplyResult(row Row, result Result) (next Row, changed bool, err error) {
 	if result.ExecutionID == "" || result.Generation == 0 ||
 		result.Generation > math.MaxInt64 || result.OccurredAt.IsZero() {
@@ -556,10 +559,12 @@ func ApplyResult(row Row, result Result) (next Row, changed bool, err error) {
 
 	if summary.HasTypedResult() {
 		next.Indexed = int64(summary.IndexedDocuments)
-		next.TotalDocuments = int64(summary.TotalDocuments)
-		next.TotalChunks = int64(summary.TotalChunks)
 	} else {
 		next.Indexed = int64(summary.Indexed)
+	}
+	if summary.TotalsPresent {
+		next.TotalDocuments = int64(summary.TotalDocuments)
+		next.TotalChunks = int64(summary.TotalChunks)
 	}
 	next.Updated = int64(summary.Updated)
 	next.Chunks = int64(summary.IndexedChunks)

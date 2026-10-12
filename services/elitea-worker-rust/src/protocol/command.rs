@@ -683,10 +683,23 @@ fn configuration_validation_identities(
 /// `_accepted_index_claim` and Main's control verifier, in one place): the two
 /// required entry ids, the optional ones when named, distinct among
 /// themselves; a closed initiator and `sio_event`; the expected embedding
-/// space as a pair or absent; the index id as a canonical UUID or absent; the
-/// embedding binding, when present, with a SHA-256 content digest.
+/// space as a pair or absent; the index id as a canonical UUID; the embedding
+/// binding, when present, with a SHA-256 content digest.
+///
+/// A command without an index id was dispatched under the Python indexing
+/// runtime (`ELITEA_INDEXING_RUNTIME=python`), whose index has no registry
+/// row and whose vectors live in a pgvector database this worker never
+/// touches. It is refused as [`ProtocolError::UnsupportedCapability`] before
+/// any claim, exactly as this worker refused every index command before it
+/// served the capability: the delivery is dead-lettered as an unsupported
+/// command, never claimed and never failed in the user's name.
 fn index_ingest_identities(index: &IndexIngestCommandV1) -> Result<Vec<&str>, ProtocolError> {
     let malformed = || ProtocolError::InvalidInput("the index ingest command is malformed");
+    if index.index_id.is_empty() {
+        return Err(ProtocolError::UnsupportedCapability(
+            "index.ingest.v1 without a registry index is the python runtime's; this worker serves the rust indexing runtime only",
+        ));
+    }
     let mut required = vec![
         index.toolkit_configuration_entry_id.as_str(),
         index.tool_parameters_entry_id.as_str(),
@@ -740,7 +753,7 @@ fn index_ingest_identities(index: &IndexIngestCommandV1) -> Result<Vec<&str>, Pr
     {
         return Err(malformed());
     }
-    if !index.index_id.is_empty() && !canonical_uuid(&index.index_id) {
+    if !canonical_uuid(&index.index_id) {
         return Err(malformed());
     }
     for text in [&index.client_stream_id, &index.client_message_id] {

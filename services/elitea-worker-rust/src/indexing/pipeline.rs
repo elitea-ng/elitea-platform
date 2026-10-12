@@ -14,14 +14,28 @@
 //!
 //! What the run reports is a typed [`IndexIngestSummaryV1`]. A run that
 //! cannot proceed for a reason the user can act on (an unserved toolkit, a
-//! refused connector, a model that returns another dimension) is an
-//! `ERROR` summary with that reason, not a runtime failure: elitea-main
-//! records it on the index and the user reads it.
+//! refused connector, a model that returns another dimension, a gateway that
+//! refuses the credential or the budget) is an `ERROR` summary with that
+//! reason, not a runtime failure: elitea-main records it on the index and the
+//! user reads it.
+//!
+//! The summary describes the STORE, not the run's wishes. Its totals are the
+//! documents and chunks the namespace holds after the run: unchanged
+//! documents, documents this run wrote, changed documents whose old points
+//! stayed because they could not be re-indexed, and (when the run failed
+//! before deleting them) vanished documents still there. They are present
+//! whenever the run touched the store; a run that failed before any write or
+//! delete carries none, so the registry keeps what it had. A run that failed
+//! after touching the store carries them too, with the documents it wrote
+//! and the keys whose points it deleted, so elitea-main's registry follows
+//! the store. `whole_index_record` is the run's statement that the record
+//! names every document the store holds (nothing truncated, no unchanged or
+//! retained document outside it); it is never left for Main to infer.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::time::Duration;
 
 use elitea_content_source::{Acl, DocumentRef, SourceError};
 use elitea_doc_chunk::{Chunk, ChunkError, ChunkOptions, ChunkingConfig};
@@ -54,6 +68,9 @@ const DOCUMENT_RECORD_BYTES: usize = 40 * 1024;
 const DELETE_BATCH: usize = 256;
 /// Embedding attempts per batch when the gateway's refusal is retryable.
 const EMBEDDING_ATTEMPTS: u32 = 3;
+/// Documents in a row whose embedding failed for a retryable reason before
+/// the run stops: a gateway outage must not end as every document skipped.
+pub(crate) const MAX_CONSECUTIVE_EMBEDDING_FAILURES: u32 = 5;
 /// Closed skip reasons (`IndexIngestSummaryV1.skipped`).
 const SKIP_UNSUPPORTED: &str = "unsupported_type";
 const SKIP_UNREADABLE: &str = "unreadable";
@@ -106,10 +123,11 @@ pub(crate) enum IndexRunFailure {
     LeaseLost,
 }
 
-/// Why a run stopped early: with a summary the user reads, or as a runtime
-/// failure.
+/// Why a run stopped early: for a reason the user reads (an `ERROR`
+/// summary, with the store's record when the store was touched), or as a
+/// runtime failure.
 enum Halt {
-    Summary(Box<IndexIngestSummaryV1>),
+    Reason(String),
     Failure(IndexRunFailure),
 }
 
@@ -120,11 +138,13 @@ impl From<IndexRunFailure> for Halt {
 }
 
 /// What `plan` decided: the namespace, the documents to write and those to
-/// delete.
+/// delete (with the chunks the store holds for them).
 struct RunPlan {
     namespace: pb::Namespace,
     to_write: Vec<(DocumentRef, Plan)>,
-    vanished: Vec<String>,
+    /// Documents the source no longer lists, with their stored chunk count,
+    /// deleted last and in order.
+    vanished: Vec<(String, u64)>,
     reindex: bool,
 }
 
@@ -138,15 +158,28 @@ struct Tally {
     skipped: BTreeMap<&'static str, u64>,
     unchanged_documents: u64,
     unchanged_chunks: u64,
-    removed_documents: u64,
     /// The documents written: key, version, chunk count.
     written: Vec<IndexIngestDocumentV1>,
-    removed_keys: Vec<String>,
+    /// Vanished documents deleted so far: a prefix of `RunPlan::vanished`.
+    vanished_deleted: usize,
+    /// Changed documents whose old points were deleted and whose new points
+    /// were not written (the write failed): gone from the store.
+    dropped: BTreeSet<String>,
+    /// Whether any delete or upsert was issued. Once true, a failure
+    /// summary carries the store's totals and record.
+    store_touched: bool,
 }
 
 impl Tally {
     fn skip(&mut self, reason: &'static str) {
         *self.skipped.entry(reason).or_default() += 1;
+    }
+
+    fn written_keys(&self) -> BTreeSet<&str> {
+        self.written
+            .iter()
+            .map(|document| document.document_key.as_str())
+            .collect()
     }
 }
 
@@ -154,7 +187,12 @@ impl Tally {
 #[derive(Clone, Copy)]
 enum Plan {
     New,
-    Changed,
+    /// The store holds another version (or several): its points are deleted
+    /// before the new ones are written. `prior_chunks` is what it holds now,
+    /// which stays the document's chunk count if it cannot be re-indexed.
+    Changed {
+        prior_chunks: u64,
+    },
 }
 
 /// A document fetched, extracted and chunked, ready to embed.
@@ -175,6 +213,15 @@ enum Preparation {
     Configuration(String),
 }
 
+/// The store as the summary describes it.
+struct StoreRecord {
+    total_documents: u64,
+    total_chunks: u64,
+    /// No unchanged, retained or still-present vanished document stands
+    /// outside `Tally::written`.
+    complete: bool,
+}
+
 /// Runs one index and reports its summary.
 ///
 /// # Errors
@@ -190,6 +237,8 @@ pub(crate) async fn run_index(
     let parameters = inputs::index_parameters(run.tool_parameters)
         .map_err(|error| IndexRunFailure::InvalidInput(error.0))?;
     if run.command.index_id.is_empty() {
+        // The command verifier refuses such a command as unsupported (it is
+        // the Python runtime's); this is the defence behind it.
         return Err(IndexRunFailure::InvalidInput(
             "the index command names no registry index".to_owned(),
         ));
@@ -260,6 +309,8 @@ pub(crate) async fn run_index(
         token,
         source,
         chunking: Arc::new(chunking),
+        space: expected_space(run.command),
+        consecutive_embedding_failures: 0,
         tally: Tally::default(),
     }
     .run()
@@ -275,6 +326,11 @@ struct Runner<'a> {
     token: &'a VectorClaimToken,
     source: Arc<IndexSource>,
     chunking: Arc<ChunkingConfig>,
+    /// The embedding space the run writes into: the command's expected space,
+    /// or the one the first embeddings answer fixed.
+    space: Option<pb::EmbeddingSpace>,
+    /// Documents in a row whose embedding failed for a retryable reason.
+    consecutive_embedding_failures: u32,
     tally: Tally,
 }
 
@@ -282,18 +338,15 @@ impl Runner<'_> {
     async fn run(mut self) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
         let plan = match self.plan().await {
             Ok(plan) => plan,
-            Err(Halt::Summary(summary)) => return Ok(*summary),
+            // Nothing is written before the plan is made.
+            Err(Halt::Reason(reason)) => return Ok(failure(self.parameters, &reason)),
             Err(Halt::Failure(failure)) => return Err(failure),
         };
         match self.write(&plan).await {
-            Ok(space) => Ok(self.summary(space.as_ref(), plan.reindex)),
-            Err(Halt::Summary(summary)) => Ok(*summary),
+            Ok(()) => Ok(self.summary(&plan)),
+            Err(Halt::Reason(reason)) => Ok(self.failed(&reason, &plan)),
             Err(Halt::Failure(failure)) => Err(failure),
         }
-    }
-
-    fn halt(&self, reason: &str) -> Halt {
-        Halt::Summary(Box::new(failure(self.parameters, reason)))
     }
 
     /// Lists the source, reads what the store holds and diffs the two
@@ -304,7 +357,7 @@ impl Runner<'_> {
             .source
             .list()
             .await
-            .map_err(|error| self.halt(&source_text(&error)))?;
+            .map_err(|error| halt(&source_text(&error)))?;
         self.check_liveness()?;
         let filter = PathFilter::new(&parameters.whitelist, &parameters.blacklist);
         let listing: Vec<DocumentRef> = listing
@@ -312,7 +365,7 @@ impl Runner<'_> {
             .filter(|reference| filter.keeps(&reference.key))
             .collect();
         if listing.len() > self.runtime.limits.max_documents {
-            return Err(self.halt(&format!(
+            return Err(halt(&format!(
                 "the source holds {} documents after filtering; one run indexes at most {}",
                 listing.len(),
                 self.runtime.limits.max_documents
@@ -321,17 +374,39 @@ impl Runner<'_> {
         let namespace = toolkit_namespace(&self.run.command.index_id);
         let mut prior: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
         if !parameters.clean_index {
-            let documents = self
+            // The listing is read where the index lives: the expected space's
+            // collection when the index is stamped, every collection before
+            // the first run stamps it. The pages are folded as they arrive
+            // and bounded: an index that outgrew what one run handles is
+            // refused, not silently diffed against part of itself.
+            let max_rows = self.runtime.limits.max_documents.saturating_mul(2);
+            let mut rows = 0_usize;
+            let consumed = self
                 .runtime
                 .vector
-                .list_documents(self.token, namespace.clone(), None)
+                .list_documents_with(
+                    self.token,
+                    namespace.clone(),
+                    expected_space(self.run.command),
+                    |document| {
+                        rows += 1;
+                        if rows > max_rows {
+                            return ControlFlow::Break(());
+                        }
+                        prior
+                            .entry(document.document_key)
+                            .or_default()
+                            .push((document.document_version, document.chunk_count));
+                        ControlFlow::Continue(())
+                    },
+                )
                 .await
-                .map_err(|error| self.halt(&vector_text(&error)))?;
-            for document in documents {
-                prior
-                    .entry(document.document_key)
-                    .or_default()
-                    .push((document.document_version, document.chunk_count));
+                .map_err(|error| halt(&vector_text(&error)))?;
+            if consumed.is_break() {
+                return Err(halt(&format!(
+                    "the vector store holds more than {max_rows} document versions for this index; one run handles at most {}; re-index into a new index",
+                    self.runtime.limits.max_documents
+                )));
             }
         }
         self.check_liveness()?;
@@ -344,13 +419,23 @@ impl Runner<'_> {
                     self.tally.unchanged_documents += 1;
                     self.tally.unchanged_chunks += versions[0].1;
                 }
-                Some(_) => to_write.push((reference.clone(), Plan::Changed)),
+                Some(versions) => to_write.push((
+                    reference.clone(),
+                    Plan::Changed {
+                        prior_chunks: versions.iter().map(|(_, chunks)| chunks).sum(),
+                    },
+                )),
             }
         }
-        let vanished: Vec<String> = prior
-            .keys()
-            .filter(|key| !listed.contains(key.as_str()))
-            .cloned()
+        let vanished: Vec<(String, u64)> = prior
+            .iter()
+            .filter(|(key, _)| !listed.contains(key.as_str()))
+            .map(|(key, versions)| {
+                (
+                    key.clone(),
+                    versions.iter().map(|(_, chunks)| chunks).sum::<u64>(),
+                )
+            })
             .collect();
         Ok(RunPlan {
             namespace,
@@ -361,12 +446,10 @@ impl Runner<'_> {
     }
 
     /// Fetches, extracts and chunks with bounded concurrency; embeds and
-    /// writes as documents complete; deletes the vanished ones last. Returns
-    /// the embedding space the run wrote into (`None` when nothing was
-    /// embedded).
+    /// writes as documents complete; deletes the vanished ones last. The
+    /// embedding space the run wrote into is left in `self.space`.
     #[allow(clippy::too_many_lines)] // One linear pass: prepare, embed, fence, write.
-    async fn write(&mut self, plan: &RunPlan) -> Result<Option<pb::EmbeddingSpace>, Halt> {
-        let mut space: Option<pb::EmbeddingSpace> = expected_space(self.run.command);
+    async fn write(&mut self, plan: &RunPlan) -> Result<(), Halt> {
         let mut cleaned = !self.parameters.clean_index;
         let mut pending = plan.to_write.iter().cloned();
         let mut tasks: JoinSet<Preparation> = JoinSet::new();
@@ -391,19 +474,35 @@ impl Runner<'_> {
                         self.tally.skip(reason);
                         continue;
                     }
-                    Ok(Preparation::Configuration(reason)) => break Err(self.halt(&reason)),
+                    Ok(Preparation::Configuration(reason)) => break Err(halt(&reason)),
                     Err(_) => {
-                        break Err(self.halt(
+                        break Err(halt(
                             "a document could not be prepared: the preparation task stopped unexpectedly",
                         ));
                     }
                 };
                 let vectors = match self.embed_all(&prepared.chunks).await {
-                    Ok(vectors) => vectors,
-                    Err(EmbedOutcome::Mismatch(message)) => break Err(self.halt(&message)),
-                    Err(EmbedOutcome::Failed) => {
+                    Ok(vectors) => {
+                        self.consecutive_embedding_failures = 0;
+                        vectors
+                    }
+                    Err(EmbedOutcome::Mismatch(message) | EmbedOutcome::Fatal(message)) => {
+                        break Err(halt(&message));
+                    }
+                    Err(EmbedOutcome::TooLarge) => {
+                        self.tally.skip(SKIP_TOO_LARGE);
+                        continue;
+                    }
+                    Err(EmbedOutcome::Failed(cause)) => {
                         self.tally.failed_chunks += prepared.chunks.len() as u64;
                         self.tally.skip(SKIP_EMBEDDING_FAILED);
+                        self.consecutive_embedding_failures += 1;
+                        if self.consecutive_embedding_failures >= MAX_CONSECUTIVE_EMBEDDING_FAILURES {
+                            break Err(halt(&format!(
+                                "the embedding gateway failed for {} documents in a row ({cause}); the run stopped rather than skip every document, retry once the gateway is healthy",
+                                self.consecutive_embedding_failures
+                            )));
+                        }
                         continue;
                     }
                 };
@@ -411,15 +510,18 @@ impl Runner<'_> {
                 if let Some(expected) = expected_dimension(self.run.command)
                     && expected != dimension
                 {
-                    break Err(self.halt(&format!(
+                    break Err(halt(&format!(
                         "embedding dimension changed from {expected} ({}) to {dimension} ({}): an index keeps one embedding space, re-index into a new index to change the model",
                         self.run.command.expected_embedding_model, self.model
                     )));
                 }
-                let written_into = space.get_or_insert_with(|| pb::EmbeddingSpace {
-                    model_slug: vector_space_slug(self.model),
-                    dimension: u32::try_from(dimension).unwrap_or(u32::MAX),
-                });
+                let written_into = self
+                    .space
+                    .get_or_insert_with(|| pb::EmbeddingSpace {
+                        model_slug: vector_space_slug(self.model),
+                        dimension: u32::try_from(dimension).unwrap_or(u32::MAX),
+                    })
+                    .clone();
                 // Nothing was written before this point. A clean_index drops
                 // the namespace once, now that the embedding space is proven.
                 if !cleaned {
@@ -427,32 +529,33 @@ impl Runner<'_> {
                         .await?;
                     cleaned = true;
                 }
-                if matches!(prepared.plan, Plan::Changed) {
+                let key = prepared.reference.key.clone();
+                if matches!(prepared.plan, Plan::Changed { .. }) {
                     self.delete(
                         &plan.namespace,
-                        DeleteSelector::Documents(vec![prepared.reference.key.clone()]),
+                        DeleteSelector::Documents(vec![key.clone()]),
                     )
                     .await?;
+                    // Its old points are gone; until the new ones are written
+                    // the document is not in the store.
+                    self.tally.dropped.insert(key.clone());
                 }
                 let points = points_of(&prepared, vectors);
                 let count = points.len() as u64;
+                self.tally.store_touched = true;
                 self.runtime
                     .vector
-                    .upsert(
-                        self.token,
-                        written_into.clone(),
-                        plan.namespace.clone(),
-                        points,
-                    )
+                    .upsert(self.token, written_into, plan.namespace.clone(), points)
                     .await
-                    .map_err(|error| self.halt(&vector_text(&error)))?;
+                    .map_err(|error| halt(&vector_text(&error)))?;
+                self.tally.dropped.remove(&key);
                 self.tally.indexed_documents += 1;
-                if matches!(prepared.plan, Plan::Changed) {
+                if matches!(prepared.plan, Plan::Changed { .. }) {
                     self.tally.updated_documents += 1;
                 }
                 self.tally.indexed_chunks += count;
                 self.tally.written.push(IndexIngestDocumentV1 {
-                    document_key: prepared.reference.key.clone(),
+                    document_key: key,
                     version: prepared.reference.version.clone(),
                     chunk_count: u32::try_from(count).unwrap_or(u32::MAX),
                 });
@@ -470,25 +573,29 @@ impl Runner<'_> {
         }
         for batch in plan.vanished.chunks(DELETE_BATCH) {
             self.check_liveness()?;
-            self.delete(&plan.namespace, DeleteSelector::Documents(batch.to_vec()))
+            let keys: Vec<String> = batch.iter().map(|(key, _)| key.clone()).collect();
+            self.delete(&plan.namespace, DeleteSelector::Documents(keys))
                 .await?;
-            self.tally.removed_documents += batch.len() as u64;
-            self.tally.removed_keys.extend(batch.iter().cloned());
+            self.tally.vanished_deleted += batch.len();
         }
-        Ok(space)
+        Ok(())
     }
 
+    /// One delete. The store counts as touched before the call: a delete
+    /// that failed may or may not have happened, and the summary must then
+    /// describe the store rather than keep silent about it.
     async fn delete(
-        &self,
+        &mut self,
         namespace: &pb::Namespace,
         selector: DeleteSelector,
     ) -> Result<(), Halt> {
+        self.tally.store_touched = true;
         self.runtime
             .vector
             .delete(self.token, None, namespace.clone(), selector)
             .await
             .map(|_| ())
-            .map_err(|error| self.halt(&vector_text(&error)))
+            .map_err(|error| halt(&vector_text(&error)))
     }
 
     /// Stop and the deadline, checked between documents.
@@ -507,7 +614,11 @@ impl Runner<'_> {
     }
 
     /// Every chunk of one document, in batches, with bounded retries for a
-    /// retryable gateway refusal.
+    /// retryable gateway refusal. The gateway's answer is classified: a
+    /// refusal that another attempt cannot cure (the credential, the
+    /// project, the budget, an unknown model, any other 4xx but 429) is
+    /// fatal to the run; a retryable one (429, 5xx, a timeout, the
+    /// transport) fails this document.
     async fn embed_all(&self, chunks: &[Chunk]) -> Result<Vec<Vec<f32>>, EmbedOutcome> {
         let batch_size = self
             .runtime
@@ -522,6 +633,7 @@ impl Runner<'_> {
                 self.run.context,
                 self.model,
                 &inputs,
+                self.runtime.limits.embedding_retry_backoff,
             )
             .await
             .map_err(|error| {
@@ -530,7 +642,7 @@ impl Runner<'_> {
                     error = %error,
                     retryable = error.retryable(),
                 );
-                EmbedOutcome::Failed
+                classify_embedding_error(error)
             })?;
             if let Some(first) = vectors.first().map(Vec::len)
                 && embedded.vectors.iter().any(|vector| vector.len() != first)
@@ -545,11 +657,50 @@ impl Runner<'_> {
         Ok(vectors)
     }
 
-    fn summary(self, space: Option<&pb::EmbeddingSpace>, reindex: bool) -> IndexIngestSummaryV1 {
-        let tally = self.tally;
-        let total_documents = tally.unchanged_documents + tally.indexed_documents;
-        let total_chunks = tally.unchanged_chunks + tally.indexed_chunks;
-        let partial = tally.failed_chunks > 0 || !tally.skipped.is_empty();
+    /// The store after the run, from the plan and what the run did to it:
+    /// unchanged documents, documents written, changed documents whose old
+    /// points stayed (not written, not dropped), and vanished documents not
+    /// deleted yet.
+    fn store_record(&self, plan: &RunPlan) -> StoreRecord {
+        let written = self.tally.written_keys();
+        let mut retained_documents = 0_u64;
+        let mut retained_chunks = 0_u64;
+        for (reference, decided) in &plan.to_write {
+            if let Plan::Changed { prior_chunks } = decided
+                && !written.contains(reference.key.as_str())
+                && !self.tally.dropped.contains(&reference.key)
+            {
+                retained_documents += 1;
+                retained_chunks += prior_chunks;
+            }
+        }
+        for (_, chunks) in &plan.vanished[self.tally.vanished_deleted..] {
+            retained_documents += 1;
+            retained_chunks += chunks;
+        }
+        StoreRecord {
+            total_documents: self.tally.unchanged_documents
+                + self.tally.written.len() as u64
+                + retained_documents,
+            total_chunks: self.tally.unchanged_chunks + self.tally.indexed_chunks + retained_chunks,
+            complete: self.tally.unchanged_documents == 0 && retained_documents == 0,
+        }
+    }
+
+    /// The keys whose points this run deleted: vanished documents deleted,
+    /// and changed documents dropped by a failed write.
+    fn removed_keys(&self, plan: &RunPlan) -> Vec<String> {
+        plan.vanished[..self.tally.vanished_deleted]
+            .iter()
+            .map(|(key, _)| key.clone())
+            .chain(self.tally.dropped.iter().cloned())
+            .collect()
+    }
+
+    /// The summary of a run that went through: the counts, the store's
+    /// totals and record, the stamp.
+    fn summary(self, plan: &RunPlan) -> IndexIngestSummaryV1 {
+        let partial = self.tally.failed_chunks > 0 || !self.tally.skipped.is_empty();
         let (status, state) = if partial {
             (
                 IndexIngestStatusV1::PartlyIndexed,
@@ -561,6 +712,7 @@ impl Runner<'_> {
                 IndexIngestTerminalStateV1::Completed,
             )
         };
+        let tally = &self.tally;
         let mut message = format!(
             "Index '{}' of toolkit '{}': {} documents indexed ({} chunks), {} unchanged, {} removed.",
             self.parameters.index_name,
@@ -568,7 +720,7 @@ impl Runner<'_> {
             tally.indexed_documents,
             tally.indexed_chunks,
             tally.unchanged_documents,
-            tally.removed_documents,
+            tally.vanished_deleted,
         );
         if !tally.skipped.is_empty() {
             let reasons: Vec<String> = tally
@@ -581,11 +733,41 @@ impl Runner<'_> {
         if tally.failed_chunks > 0 {
             let _ = write!(message, " {} chunks failed to embed.", tally.failed_chunks);
         }
+        self.with_record(status, state, message, plan)
+    }
+
+    /// The `ERROR` summary of a run that stopped for `reason`. Once the store
+    /// was touched it carries the store's totals and record, so the registry
+    /// follows what was written and deleted before the failure; before that,
+    /// it says nothing about the store.
+    fn failed(self, reason: &str, plan: &RunPlan) -> IndexIngestSummaryV1 {
+        let bare = failure(self.parameters, reason);
+        if !self.tally.store_touched {
+            return bare;
+        }
+        self.with_record(
+            IndexIngestStatusV1::Error,
+            IndexIngestTerminalStateV1::Failed,
+            bare.message,
+            plan,
+        )
+    }
+
+    fn with_record(
+        self,
+        status: IndexIngestStatusV1,
+        state: IndexIngestTerminalStateV1,
+        message: String,
+        plan: &RunPlan,
+    ) -> IndexIngestSummaryV1 {
+        let store = self.store_record(plan);
+        let removed = self.removed_keys(plan);
+        let tally = self.tally;
         let (documents, removed_document_keys, documents_truncated) =
-            bounded_record(tally.written, tally.removed_keys);
+            bounded_record(tally.written, removed);
         // The stamp is reported only when vectors were written: an empty
         // run has nothing to stamp (Main stamps on the first chunk).
-        let (embedding_model, embedding_dimension) = match (space, tally.indexed_chunks) {
+        let (embedding_model, embedding_dimension) = match (&self.space, tally.indexed_chunks) {
             (Some(space), chunks) if chunks > 0 => (self.model.to_owned(), space.dimension),
             _ => (String::new(), 0),
         };
@@ -595,7 +777,7 @@ impl Runner<'_> {
             terminal_state: state as i32,
             indexed: tally.indexed_documents,
             updated: tally.updated_documents,
-            reindex: Some(reindex),
+            reindex: Some(plan.reindex),
             indexed_documents: tally.indexed_documents,
             indexed_chunks: tally.indexed_chunks,
             failed_chunks: tally.failed_chunks,
@@ -606,20 +788,45 @@ impl Runner<'_> {
                 .collect(),
             embedding_model,
             embedding_dimension,
+            whole_index_record: store.complete && !documents_truncated,
             documents,
             removed_document_keys,
             documents_truncated,
-            total_documents,
-            total_chunks,
+            total_documents: Some(store.total_documents),
+            total_chunks: Some(store.total_chunks),
         }
     }
 }
 
 enum EmbedOutcome {
-    /// The gateway failed for this document; the run goes on.
-    Failed,
+    /// The gateway failed for this document for a reason another attempt
+    /// could cure; the run goes on (up to
+    /// [`MAX_CONSECUTIVE_EMBEDDING_FAILURES`] documents in a row).
+    Failed(String),
+    /// The gateway refused for a reason no attempt cures: the credential,
+    /// the project, the budget, an unknown model, another 4xx. The run
+    /// stops with the reason.
+    Fatal(String),
+    /// One request of this document exceeds the request bound; the document
+    /// is skipped `too_large`.
+    TooLarge,
     /// The vectors disagree with the index's space; the run stops.
     Mismatch(String),
+}
+
+fn classify_embedding_error(error: EmbeddingsError) -> EmbedOutcome {
+    match error {
+        EmbeddingsError::Refused {
+            code,
+            retryable: false,
+        } => EmbedOutcome::Fatal(format!(
+            "the embedding gateway refused the run ({code}); nothing further was embedded"
+        )),
+        EmbeddingsError::TooLarge => EmbedOutcome::TooLarge,
+        retryable @ (EmbeddingsError::Refused { .. }
+        | EmbeddingsError::Transport
+        | EmbeddingsError::InvalidResponse(_)) => EmbedOutcome::Failed(retryable.to_string()),
+    }
 }
 
 async fn embed_with_retry(
@@ -627,6 +834,7 @@ async fn embed_with_retry(
     context: &ClaimScopedEliteaContext,
     model: &str,
     inputs: &[String],
+    backoff: std::time::Duration,
 ) -> Result<crate::transport::embeddings_facade::Embedded, EmbeddingsError> {
     let mut attempt = 0;
     loop {
@@ -634,7 +842,7 @@ async fn embed_with_retry(
             Ok(embedded) => return Ok(embedded),
             Err(error) if error.retryable() && attempt + 1 < EMBEDDING_ATTEMPTS => {
                 attempt += 1;
-                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
+                tokio::time::sleep(backoff * attempt).await;
             }
             Err(error) => return Err(error),
         }
@@ -818,7 +1026,8 @@ fn bounded_record(
     (documents, removed_keys, truncated)
 }
 
-/// An `ERROR` summary with `reason`, before or instead of any write.
+/// An `ERROR` summary with `reason` and nothing about the store: the run
+/// stopped before touching it.
 fn failure(parameters: &IndexParameters, reason: &str) -> IndexIngestSummaryV1 {
     const MAX_MESSAGE: usize = 8 * 1024;
     let mut message = format!("Index '{}' failed: {reason}", parameters.index_name);
@@ -835,6 +1044,12 @@ fn failure(parameters: &IndexParameters, reason: &str) -> IndexIngestSummaryV1 {
         terminal_state: IndexIngestTerminalStateV1::Failed as i32,
         ..IndexIngestSummaryV1::default()
     }
+}
+
+/// The run stops for `reason`; `Runner::run` decides whether the summary
+/// carries the store's record (see `Runner::failed`).
+fn halt(reason: &str) -> Halt {
+    Halt::Reason(reason.to_owned())
 }
 
 fn source_text(error: &SourceError) -> String {

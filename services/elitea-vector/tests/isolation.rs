@@ -496,6 +496,7 @@ fn only_project(points: &[pb::ScoredPoint], project: i64) {
 // ── reads ───────────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario, every read RPC in turn.
 async fn a_token_reads_only_its_own_project() {
     let _ = require_qdrant!();
     let mut h = harness().await.expect("harness");

@@ -1,7 +1,8 @@
 //! The index run against the in-process fake of `elitea-vector`
 //! (`elitea_vector_index::testing`), a scripted embeddings gateway and a
 //! fixture source: first run, incremental run (unchanged, changed, vanished),
-//! clean run, the embedding-space fence, Stop, and the bounded record.
+//! clean run, the embedding-space fence, the gateway's refusal classes, a
+//! failure after the store was touched, Stop, and the bounded record.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,12 +38,18 @@ const TOKEN: &str = "elvc_0123456789abcdef0123456789abcdef0123456789a";
 const MODEL: &str = "text-embedding-3-small";
 
 /// A gateway that answers every embeddings request with a deterministic
-/// 4-dimensional vector per input (its byte sum), and counts the calls.
+/// vector per input (its byte sum), and counts the calls. `fail_with` makes
+/// it answer with that status instead: for every request, or only for a
+/// request whose inputs contain `fail_marker`.
 struct ScriptedEmbeddings {
     calls: AtomicUsize,
     dimension: usize,
     fail_with: Option<StatusCode>,
+    fail_marker: Option<&'static str>,
 }
+
+/// The text that makes the scripted gateway refuse a request.
+const FAIL_MARKER: &str = "FAILME";
 
 #[async_trait]
 impl ModelGatewayTransport for ScriptedEmbeddings {
@@ -60,7 +67,14 @@ impl ModelGatewayTransport for ScriptedEmbeddings {
             .to_bytes();
         let parsed: Value = serde_json::from_slice(&body).expect("json body");
         assert_eq!(parsed["model"], MODEL);
-        if let Some(status) = self.fail_with {
+        let marked = self.fail_marker.is_none_or(|marker| {
+            parsed["input"].as_array().is_some_and(|inputs| {
+                inputs
+                    .iter()
+                    .any(|input| input.as_str().is_some_and(|text| text.contains(marker)))
+            })
+        });
+        if let Some(status) = self.fail_with.filter(|_| marked) {
             return Ok(Response::builder()
                 .status(status)
                 .version(Version::HTTP_2)
@@ -124,6 +138,14 @@ struct Harness {
 }
 
 async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
+    harness_failing(dimension, fail_with, None).await
+}
+
+async fn harness_failing(
+    dimension: usize,
+    fail_with: Option<StatusCode>,
+    fail_marker: Option<&'static str>,
+) -> Harness {
     let fake = FakeVector::new(&[(TOKEN, 1)]);
     let (address, server) = fake.clone().serve().await.expect("serve");
     let mut config = ClientConfig::new(format!("http://{address}"));
@@ -133,6 +155,7 @@ async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
         calls: AtomicUsize::new(0),
         dimension,
         fail_with,
+        fail_marker,
     });
     let runtime = IndexIngestRuntime {
         vector,
@@ -151,6 +174,7 @@ async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
         limits: IndexRunLimits {
             document_concurrency: 2,
             embedding_batch: 3,
+            embedding_retry_backoff: Duration::from_millis(1),
             ..IndexRunLimits::default()
         },
     };
@@ -168,6 +192,16 @@ async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
         context: ClaimScopedEliteaContext::fixture(1, "pat"),
         _server: server,
     }
+}
+
+/// A listed document whose fetch fails (see `IndexSource::fetch`'s fixture
+/// arm).
+fn unfetchable(key: &str, version: &str, text: &str) -> Document {
+    let mut document = document(key, version, text);
+    document
+        .metadata
+        .insert("fixture_unfetchable".to_owned(), Value::Bool(true));
+    document
 }
 
 fn document(key: &str, version: &str, text: &str) -> Document {
@@ -298,10 +332,17 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
     assert_eq!(summary.skipped.get("unsupported_type"), Some(&1));
     assert_eq!(summary.embedding_model, MODEL);
     assert_eq!(summary.embedding_dimension, 4);
-    assert_eq!(summary.total_documents, 2);
-    assert_eq!(summary.total_chunks, summary.indexed_chunks);
+    assert_eq!(summary.total_documents, Some(2));
+    assert_eq!(summary.total_chunks, Some(summary.indexed_chunks));
+    assert!(
+        summary.whole_index_record,
+        "a first run's record is the whole index"
+    );
     assert_eq!(summary.reindex, Some(false));
     assert!(!summary.documents_truncated);
+    // Before the index is stamped, the store is listed across every
+    // collection (ADR-0030 decision 2: the first run stamps it).
+    assert_eq!(harness.fake.listed_spaces(), vec![None]);
     let mut written: Vec<&str> = summary
         .documents
         .iter()
@@ -332,7 +373,7 @@ async fn an_incremental_run_skips_unchanged_rewrites_changed_and_deletes_vanishe
     )
     .await
     .expect("first");
-    assert_eq!(first.total_documents, 3);
+    assert_eq!(first.total_documents, Some(3));
     let calls_after_first = harness.embeddings.calls.load(Ordering::SeqCst);
 
     let second = run(
@@ -351,11 +392,23 @@ async fn an_incremental_run_skips_unchanged_rewrites_changed_and_deletes_vanishe
     assert_eq!(second.indexed_documents, 1);
     assert_eq!(second.updated, 1);
     assert_eq!(second.removed_document_keys, vec!["c.md"]);
-    assert_eq!(second.total_documents, 2);
+    assert_eq!(second.total_documents, Some(2));
     assert_eq!(second.reindex, Some(true));
     assert_eq!(second.documents.len(), 1);
     assert_eq!(second.documents[0].document_key, "b.md");
     assert_eq!(second.documents[0].version, "v2");
+    assert!(
+        !second.whole_index_record,
+        "a.md is unchanged and outside the record"
+    );
+    // The stamped index is listed in its own space (finding: the listing
+    // names the expected space when the command does).
+    assert_eq!(
+        harness.fake.listed_spaces().last().cloned().flatten(),
+        Some((super::slug::vector_space_slug(MODEL), 4))
+    );
+    let stored_chunks: u64 = stored(&harness).await.iter().map(|p| p.chunk_count).sum();
+    assert_eq!(second.total_chunks, Some(stored_chunks));
     // Only the changed document was embedded again.
     assert_eq!(
         harness.embeddings.calls.load(Ordering::SeqCst),
@@ -401,7 +454,8 @@ async fn a_clean_run_starts_the_index_empty_and_a_dimension_change_writes_nothin
     .await
     .expect("clean");
     assert_eq!(clean.indexed_documents, 1, "{clean:?}");
-    assert_eq!(clean.total_documents, 1);
+    assert_eq!(clean.total_documents, Some(1));
+    assert!(clean.whole_index_record);
     let points = stored(&harness).await;
     assert_eq!(points.len(), 1);
     assert_eq!(points[0].document_key, "a.md");
@@ -432,6 +486,10 @@ async fn a_clean_run_starts_the_index_empty_and_a_dimension_change_writes_nothin
         mismatch.message
     );
     assert!(mismatch.embedding_model.is_empty());
+    assert_eq!(
+        mismatch.total_documents, None,
+        "nothing was written, so the summary says nothing about the store"
+    );
     assert_eq!(other.fake.point_count(), before);
     assert_eq!(stored(&other).await[0].document_version, "v1");
 }
@@ -477,23 +535,391 @@ async fn a_different_expected_model_fails_before_listing() {
     assert_eq!(harness.fake.point_count(), 0);
 }
 
+/// A refusal no attempt cures (the credential, the project, the budget, an
+/// unknown model: 4xx but 429) fails the run at once, with the reason; no
+/// further document is embedded and nothing is written.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_gateway_refusal_marks_the_document_failed_and_the_run_partly_indexed() {
-    let harness = harness(4, Some(StatusCode::FORBIDDEN)).await;
+async fn a_non_retryable_gateway_refusal_fails_the_run_at_once() {
+    for (status, code) in [
+        (StatusCode::FORBIDDEN, "model_gateway.forbidden"),
+        (
+            StatusCode::PAYMENT_REQUIRED,
+            "model_gateway.budget_exhausted",
+        ),
+        (StatusCode::NOT_FOUND, "model_gateway.rejected"),
+    ] {
+        let harness = harness(4, Some(status)).await;
+        let summary = run(
+            &harness,
+            vec![
+                document("a.md", "v1", "alpha"),
+                document("b.md", "v1", "bravo"),
+                document("c.md", "v1", "charlie"),
+            ],
+            &command(NS, None),
+            &parameters(false, json!({})),
+            &Always,
+        )
+        .await
+        .expect("summary");
+        assert_eq!(
+            summary.status,
+            IndexIngestStatusV1::Error as i32,
+            "{status}: {summary:?}"
+        );
+        assert_eq!(
+            summary.terminal_state,
+            IndexIngestTerminalStateV1::Failed as i32
+        );
+        assert!(
+            summary
+                .message
+                .contains("the embedding gateway refused the run")
+                && summary.message.contains(code),
+            "{status}: {}",
+            summary.message
+        );
+        assert_eq!(
+            harness.embeddings.calls.load(Ordering::SeqCst),
+            1,
+            "{status}: one answer decided the run; nothing further was embedded"
+        );
+        assert_eq!(harness.fake.point_count(), 0);
+        assert_eq!(summary.total_documents, None, "the store was not touched");
+        assert!(summary.embedding_model.is_empty());
+    }
+}
+
+/// A retryable failure (429, 5xx, a timeout) is retried, then fails the
+/// document and the run goes on: the other documents are indexed and the
+/// run is partly indexed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retryable_gateway_failure_skips_the_document_and_the_run_goes_on() {
+    let harness = harness_failing(4, Some(StatusCode::TOO_MANY_REQUESTS), Some(FAIL_MARKER)).await;
     let summary = run(
         &harness,
-        vec![document("a.md", "v1", "alpha")],
+        vec![
+            document("a.md", "v1", "alpha"),
+            document("bad.md", "v1", &format!("bravo {FAIL_MARKER}")),
+            document("c.md", "v1", "charlie"),
+        ],
         &command(NS, None),
         &parameters(false, json!({})),
         &Always,
     )
     .await
     .expect("summary");
-    assert_eq!(summary.status, IndexIngestStatusV1::PartlyIndexed as i32);
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::PartlyIndexed as i32,
+        "{summary:?}"
+    );
     assert!(summary.failed_chunks >= 1);
     assert_eq!(summary.skipped.get("embedding_failed"), Some(&1));
-    assert_eq!(summary.indexed_documents, 0);
-    assert!(summary.embedding_model.is_empty());
+    assert_eq!(summary.indexed_documents, 2);
+    assert_eq!(summary.total_documents, Some(2));
+    assert_eq!(summary.embedding_model, MODEL);
+    let points = stored(&harness).await;
+    assert!(points.iter().all(|p| p.document_key != "bad.md"));
+    assert_eq!(points.len(), 2);
+}
+
+/// Retryable failures on several documents in a row are a gateway outage,
+/// not a property of the documents: after
+/// `MAX_CONSECUTIVE_EMBEDDING_FAILURES` the run stops as FAILED rather than
+/// marking every document skipped.
+#[tokio::test(flavor = "multi_thread")]
+async fn consecutive_retryable_failures_stop_the_run() {
+    let harness = harness(4, Some(StatusCode::SERVICE_UNAVAILABLE)).await;
+    let documents: Vec<Document> = (0..8)
+        .map(|n| document(&format!("d{n}.md"), "v1", &format!("text {n}")))
+        .collect();
+    let summary = run(
+        &harness,
+        documents,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Error as i32,
+        "{summary:?}"
+    );
+    assert!(
+        summary.message.contains(&format!(
+            "failed for {} documents in a row",
+            super::pipeline::MAX_CONSECUTIVE_EMBEDDING_FAILURES
+        )),
+        "{}",
+        summary.message
+    );
+    // Each failed document was attempted thrice (the retry), and no later
+    // document was embedded.
+    assert_eq!(
+        harness.embeddings.calls.load(Ordering::SeqCst),
+        3 * super::pipeline::MAX_CONSECUTIVE_EMBEDDING_FAILURES as usize
+    );
+    assert_eq!(harness.fake.point_count(), 0);
+    assert_eq!(summary.total_documents, None);
+}
+
+/// The totals describe the store after the run: a changed document whose
+/// re-index failed (here: the fetch) keeps its old points, so it stays
+/// counted with its old chunks, and the record is not the whole index.
+#[tokio::test(flavor = "multi_thread")]
+async fn totals_count_changed_documents_whose_old_points_stayed() {
+    let harness = harness(4, None).await;
+    let first_run: Vec<Document> = (0..10)
+        .map(|n| document(&format!("d{n}.md"), "v1", &format!("text one {n}")))
+        .collect();
+    let first = run(
+        &harness,
+        first_run,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("first");
+    assert_eq!(first.total_documents, Some(10));
+    let before: Vec<pb::IndexedDocument> = stored(&harness).await;
+    let old_chunks = |key: &str| -> u64 {
+        before
+            .iter()
+            .filter(|p| p.document_key == key)
+            .map(|p| p.chunk_count)
+            .sum()
+    };
+
+    // Every document changed; three cannot be fetched again.
+    let second_run: Vec<Document> = (0..10)
+        .map(|n| {
+            let (key, version, text) = (format!("d{n}.md"), "v2", format!("text two {n} more"));
+            if n % 3 == 0 {
+                unfetchable(&key, version, &text)
+            } else {
+                document(&key, version, &text)
+            }
+        })
+        .collect();
+    let second = run(
+        &harness,
+        second_run,
+        &command(NS, Some((MODEL, 4))),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("second");
+    assert_eq!(
+        second.status,
+        IndexIngestStatusV1::PartlyIndexed as i32,
+        "{second:?}"
+    );
+    assert_eq!(second.indexed_documents, 6);
+    assert_eq!(second.skipped.get("fetch_failed"), Some(&4));
+    assert_eq!(
+        second.total_documents,
+        Some(10),
+        "the four documents that could not be re-indexed are still in the store"
+    );
+    let retained: u64 = ["d0.md", "d3.md", "d6.md", "d9.md"]
+        .iter()
+        .map(|key| old_chunks(key))
+        .sum();
+    assert_eq!(second.total_chunks, Some(second.indexed_chunks + retained));
+    assert!(
+        !second.whole_index_record,
+        "four documents stand outside the record"
+    );
+    let after = stored(&harness).await;
+    assert_eq!(after.len(), 10);
+    assert_eq!(
+        after.iter().filter(|p| p.document_version == "v1").count(),
+        4
+    );
+    let stored_chunks: u64 = after.iter().map(|p| p.chunk_count).sum();
+    assert_eq!(second.total_chunks, Some(stored_chunks));
+}
+
+/// A clean run that fails after it started writing reports the store it
+/// left: the namespace was emptied, one document was written, so the record
+/// is that document and it is the whole index.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_clean_run_that_fails_mid_way_reports_the_store_it_left() {
+    let harness = harness(4, None).await;
+    run(
+        &harness,
+        vec![
+            document("a.md", "v1", "alpha"),
+            document("b.md", "v1", "bravo"),
+            document("c.md", "v1", "charlie"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("first");
+    assert_eq!(stored(&harness).await.len(), 3);
+    // The second upsert of the clean run fails.
+    harness.fake.fail_call(
+        "upsert",
+        2,
+        elitea_vector_index::testing::status(tonic::Code::Unavailable),
+    );
+    let failed = run(
+        &harness,
+        vec![
+            document("a.md", "v2", "alpha two"),
+            document("b.md", "v2", "bravo two"),
+            document("c.md", "v2", "charlie two"),
+        ],
+        &command(NS, Some((MODEL, 4))),
+        &parameters(true, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        failed.status,
+        IndexIngestStatusV1::Error as i32,
+        "{failed:?}"
+    );
+    assert_eq!(
+        failed.terminal_state,
+        IndexIngestTerminalStateV1::Failed as i32
+    );
+    assert!(
+        failed.message.contains("the vector store refused the run"),
+        "{}",
+        failed.message
+    );
+    assert_eq!(failed.indexed_documents, 1);
+    assert_eq!(failed.total_documents, Some(1));
+    assert_eq!(failed.total_chunks, Some(failed.indexed_chunks));
+    assert_eq!(failed.documents.len(), 1);
+    assert_eq!(failed.documents[0].version, "v2");
+    assert!(failed.removed_document_keys.is_empty());
+    assert!(
+        failed.whole_index_record,
+        "the namespace was emptied and one document written: the record is the store"
+    );
+    let points = stored(&harness).await;
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].document_key, failed.documents[0].document_key);
+    assert_eq!(points[0].document_version, "v2");
+    assert_eq!(harness.fake.point_count() as u64, failed.indexed_chunks);
+}
+
+/// An incremental run that fails on its first write: the changed document
+/// whose old points were deleted is reported removed (it is gone from the
+/// store), the other changed document keeps its old points and stays
+/// counted, and the record is not the whole index.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_incremental_run_that_fails_mid_way_reports_dropped_and_retained_documents() {
+    let harness = harness(4, None).await;
+    let first = run(
+        &harness,
+        vec![
+            document("a.md", "v1", "alpha"),
+            document("b.md", "v1", "bravo"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("first");
+    let before = stored(&harness).await;
+    harness.fake.fail_call(
+        "upsert",
+        1,
+        elitea_vector_index::testing::status(tonic::Code::Unavailable),
+    );
+    let failed = run(
+        &harness,
+        vec![
+            document("a.md", "v2", "alpha two"),
+            document("b.md", "v2", "bravo two"),
+        ],
+        &command(NS, Some((MODEL, 4))),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        failed.status,
+        IndexIngestStatusV1::Error as i32,
+        "{failed:?}"
+    );
+    assert_eq!(failed.indexed_documents, 0);
+    assert!(failed.documents.is_empty());
+    assert_eq!(
+        failed.removed_document_keys.len(),
+        1,
+        "the document whose old points went before the write failed"
+    );
+    assert_eq!(failed.total_documents, Some(1));
+    let dropped = failed.removed_document_keys[0].as_str();
+    let retained_chunks: u64 = before
+        .iter()
+        .filter(|p| p.document_key != dropped)
+        .map(|p| p.chunk_count)
+        .sum();
+    assert_eq!(failed.total_chunks, Some(retained_chunks));
+    assert!(!failed.whole_index_record);
+    assert_eq!(failed.reindex, Some(true));
+    let after = stored(&harness).await;
+    assert_eq!(after.len(), 1);
+    assert_ne!(after[0].document_key, dropped);
+    assert_eq!(after[0].document_version, "v1");
+    assert_eq!(first.total_documents, Some(2));
+}
+
+/// A run whose only effect is to remove documents carries the (zero)
+/// totals, present, and states its empty record is the whole index: the
+/// registry resets its rows and totals instead of ignoring the run.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_that_only_removes_documents_reports_zero_totals_present() {
+    let harness = harness(4, None).await;
+    run(
+        &harness,
+        vec![
+            document("a.md", "v1", "alpha"),
+            document("b.md", "v1", "bravo"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("first");
+    let emptied = run(
+        &harness,
+        Vec::new(),
+        &command(NS, Some((MODEL, 4))),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("second");
+    assert_eq!(
+        emptied.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{emptied:?}"
+    );
+    assert_eq!(emptied.indexed_documents, 0);
+    assert_eq!(emptied.removed_document_keys, vec!["a.md", "b.md"]);
+    assert_eq!(emptied.total_documents, Some(0));
+    assert_eq!(emptied.total_chunks, Some(0));
+    assert!(emptied.whole_index_record);
+    assert!(emptied.embedding_model.is_empty());
+    assert_eq!(harness.fake.point_count(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -548,7 +974,8 @@ async fn whitelist_blacklist_and_the_needs_model_chunker_are_honoured() {
     assert_eq!(needs_model.indexed_documents, 0);
     // The earlier document is no longer listed by the source, so it is gone.
     assert_eq!(needs_model.removed_document_keys, vec!["a.md"]);
-    assert_eq!(needs_model.total_documents, 0);
+    assert_eq!(needs_model.total_documents, Some(0));
+    assert!(needs_model.whole_index_record);
 }
 
 #[tokio::test]
@@ -669,4 +1096,6 @@ fn a_failure_summary_names_the_index_and_is_bounded() {
     assert!(summary.message.len() <= 8 * 1024);
     assert!(summary.embedding_model.is_empty());
     assert_eq!(summary.indexed_documents, 0);
+    assert_eq!(summary.total_documents, None);
+    assert!(!summary.whole_index_record);
 }

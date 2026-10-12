@@ -507,8 +507,9 @@ func TestIndexRegistryRunLivenessComesFromTheExecutionJob(t *testing.T) {
 	}
 }
 
-// The list and the exact read carry the index's totals from
-// index_registry_documents; the row's own counts are the last run's.
+// The list and the exact read carry the index's totals as the last applied
+// result reported them (the store's, with explicit presence); the row's own
+// counts are the last run's.
 func TestIndexRegistryReadsCarryDocumentTotals(t *testing.T) {
 	repo, _ := newRegistryTestRepo(t)
 	ctx := context.Background()
@@ -527,6 +528,7 @@ func TestIndexRegistryReadsCarryDocumentTotals(t *testing.T) {
 	// An incremental run that changed nothing reports zero for itself.
 	summary := registrySummary(8, "m")
 	summary.IndexedDocuments, summary.FailedChunks, summary.SkippedJSON = 0, 0, `{"unchanged":2}`
+	summary.TotalsPresent, summary.TotalDocuments, summary.TotalChunks = true, 2, 7
 	if _, err := repo.ApplyResult(ctx, 1, registryResult(1, "docs", summary)); err != nil {
 		t.Fatal(err)
 	}

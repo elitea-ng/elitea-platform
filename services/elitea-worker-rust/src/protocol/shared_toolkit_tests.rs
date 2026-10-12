@@ -1405,8 +1405,9 @@ fn index_summary() -> IndexIngestSummaryV1 {
                 chunk_count: 3,
             },
         ],
-        total_documents: 2,
-        total_chunks: 5,
+        total_documents: Some(2),
+        total_chunks: Some(5),
+        whole_index_record: true,
         ..Default::default()
     }
 }
@@ -1520,15 +1521,35 @@ fn index_ingest_command_rejects_malformed_identities_and_wire() {
         }
         assert!(!accepts(&command), "mutation {mutation}");
     }
-    // The pair may be absent, and the index id too (the Python path).
+    // The pair may be absent (the first run stamps the index). The index id
+    // may not: a command without one is the Python runtime's and is refused
+    // as unsupported, before any claim, as every index command was before
+    // this worker served the capability.
     let mut unstamped = good.clone();
     let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
         unstamped.capability_command.as_mut()
     else {
         unreachable!()
     };
-    index.index_id.clear();
+    index.expected_embedding_model.clear();
+    index.expected_embedding_dimension = 0;
     assert!(accepts(&unstamped));
+    let mut python_runtime = good.clone();
+    let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+        python_runtime.capability_command.as_mut()
+    else {
+        unreachable!()
+    };
+    index.index_id.clear();
+    let refused = parse_and_verify_execution_command(
+        &signed_bytes(&python_runtime),
+        Some(&TestOnlyConformanceHmacAuthenticator),
+    );
+    assert!(
+        matches!(refused, Err(ProtocolError::UnsupportedCapability(_))),
+        "a command without an index id must be refused as unsupported: {:?}",
+        refused.err()
+    );
     // Wire-level: a reserved field inside the index command is refused.
     let mut with_unknown = index_command_message(&good).encode_to_vec();
     with_unknown.extend_from_slice(&[0x52, 0x00]); // field 10: reserved
@@ -1683,6 +1704,24 @@ fn index_ingest_output_rejects_unbound_entries_and_summaries_outside_mains_bound
         Box::new(|r| {
             let summary = r.result_summary.as_mut().unwrap();
             summary.removed_document_keys = vec![summary.documents[0].document_key.clone()];
+        }),
+        Box::new(|r| {
+            // Half a totals pair.
+            r.result_summary.as_mut().unwrap().total_chunks = None;
+        }),
+        Box::new(|r| {
+            // A whole-index statement over a truncated list.
+            r.result_summary.as_mut().unwrap().documents_truncated = true;
+        }),
+        Box::new(|r| {
+            // A whole-index statement whose totals do not count its list.
+            r.result_summary.as_mut().unwrap().total_documents = Some(3);
+        }),
+        Box::new(|r| {
+            // A whole-index statement without totals.
+            let summary = r.result_summary.as_mut().unwrap();
+            summary.total_documents = None;
+            summary.total_chunks = None;
         }),
         Box::new(|r| {
             // A success that names another space than the command expects.

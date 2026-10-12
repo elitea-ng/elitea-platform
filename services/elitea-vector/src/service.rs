@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use qdrant_client::Payload;
 use qdrant_client::qdrant::point_id::PointIdOptions;
@@ -586,10 +587,19 @@ impl pb::vector_service_server::VectorService for VectorService {
         // Every point of the namespace is read (payload only, two keys) and
         // folded per (document_key, document_version) before the first page
         // goes out: a document's chunk count is not known until its last
-        // point was seen, and Qdrant scrolls by point id, not by key.
+        // point was seen, and Qdrant scrolls by point id, not by key (an
+        // `order_by` scroll needs a numeric payload index, and the key is
+        // text), so a page cannot be final before the fold is. What is
+        // bounded instead: the points read, across every collection of this
+        // one call (MAX_SCROLLED_POINTS), the fold (one entry per document
+        // version, each a few hundred bytes at most, far below the points),
+        // and the answer, which is paged lazily out of the fold rather than
+        // copied into every page first.
+        let scrolled = AtomicU64::new(0);
         let counted = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
             let filter = filter.clone();
-            async move { self.scroll_documents(&collection, filter).await }
+            let scrolled = &scrolled;
+            async move { self.scroll_documents(&collection, filter, scrolled).await }
         })
         .await?;
         let mut documents: BTreeMap<(String, String), u64> = BTreeMap::new();
@@ -598,30 +608,30 @@ impl pb::vector_service_server::VectorService for VectorService {
                 *documents.entry(key).or_default() += count;
             }
         }
-        let pages: Vec<Result<pb::ListDocumentsResponse, Status>> = documents
-            .into_iter()
-            .map(
-                |((document_key, document_version), chunk_count)| pb::IndexedDocument {
-                    document_key,
-                    document_version,
-                    chunk_count,
-                },
-            )
-            .collect::<Vec<_>>()
-            .chunks(MAX_DOCUMENTS_PAGE)
-            .map(|page| {
-                Ok(pb::ListDocumentsResponse {
-                    documents: page.to_vec(),
-                })
-            })
-            .collect();
         tracing::debug!(
             project_id,
             source,
             caller = caller_label(&caller),
-            pages = pages.len(),
+            documents = documents.len(),
+            points = scrolled.load(Ordering::Relaxed),
+            pages = documents.len().div_ceil(MAX_DOCUMENTS_PAGE),
             "documents listed"
         );
+        let mut documents =
+            documents
+                .into_iter()
+                .map(
+                    |((document_key, document_version), chunk_count)| pb::IndexedDocument {
+                        document_key,
+                        document_version,
+                        chunk_count,
+                    },
+                );
+        let pages = std::iter::from_fn(move || {
+            let page: Vec<pb::IndexedDocument> =
+                documents.by_ref().take(MAX_DOCUMENTS_PAGE).collect();
+            (!page.is_empty()).then(|| Ok(pb::ListDocumentsResponse { documents: page }))
+        });
         Ok(Response::new(Box::pin(tokio_stream::iter(pages))))
     }
 }
@@ -635,21 +645,25 @@ pub type ListDocumentsStream = std::pin::Pin<
 pub const MAX_DOCUMENTS_PAGE: usize = 1024;
 /// Points read per Qdrant scroll call by `ListDocuments`.
 const SCROLL_PAGE: u32 = 2048;
-/// The most points one `ListDocuments` folds, across collections. A toolkit
-/// index far beyond this is listed in part and the caller is told.
+/// The most points one `ListDocuments` reads, summed over every collection
+/// the call scrolls. A toolkit index beyond this is refused
+/// (`RESOURCE_EXHAUSTED`), not listed in part: a partial listing would make
+/// an incremental indexer delete documents it did not see.
 const MAX_SCROLLED_POINTS: u64 = 4_000_000;
 
 impl VectorService {
     /// Folds every point `filter` selects in `collection` into
-    /// `(document_key, document_version) -> chunk count`.
+    /// `(document_key, document_version) -> chunk count`. `scrolled` is the
+    /// call's running point count, shared by the collections it scrolls
+    /// concurrently, and the bound is on that sum.
     async fn scroll_documents(
         &self,
         collection: &str,
         filter: Filter,
+        scrolled: &AtomicU64,
     ) -> Result<HashMap<(String, String), u64>, Status> {
         let mut counts: HashMap<(String, String), u64> = HashMap::new();
         let mut offset: Option<PointId> = None;
-        let mut scrolled: u64 = 0;
         loop {
             let mut scroll = ScrollPointsBuilder::new(collection)
                 .filter(filter.clone())
@@ -691,8 +705,8 @@ impl VectorService {
                     .entry((document_key, text(key::DOCUMENT_VERSION)))
                     .or_default() += 1;
             }
-            scrolled += response.result.len() as u64;
-            if scrolled > MAX_SCROLLED_POINTS {
+            let read = response.result.len() as u64;
+            if scrolled.fetch_add(read, Ordering::Relaxed) + read > MAX_SCROLLED_POINTS {
                 return Err(Status::resource_exhausted(
                     "the namespace holds more points than one listing reads",
                 ));

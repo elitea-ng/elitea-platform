@@ -131,18 +131,35 @@ message IndexIngestSummaryV1 {
 
   // The per-document record of the Rust indexing runtime (ADR-0030 decision
   // 3): the documents this run wrote (with the version and chunk count the
-  // vector store now holds) and the keys of documents that disappeared from
-  // the source and were deleted. elitea-main applies them to
-  // index_registry_documents in the same terminal transition. The output
+  // vector store now holds) and the keys of documents whose points this run
+  // deleted (they disappeared from the source, or their old points were
+  // deleted and the new ones could not be written). elitea-main applies them
+  // to index_registry_documents in the same terminal transition. The output
   // frame is bounded (64 KiB), so a run that touched more documents than fit
-  // lists the first ones and sets documents_truncated; the totals below are
-  // always the whole index's, so the registry's counts stay exact.
+  // lists the first ones and sets documents_truncated. A record may carry
+  // only removed keys (a run that deleted and wrote nothing), only totals,
+  // or both.
   repeated IndexIngestDocumentV1 documents = 16;
   repeated string removed_document_keys = 17;
   bool documents_truncated = 18;
-  // The whole index after this run: documents present and their chunks.
-  uint64 total_documents = 19;
-  uint64 total_chunks = 20;
+  // The whole index as the vector store holds it after this run: documents
+  // present and their chunks. Unchanged documents, documents this run wrote,
+  // and documents whose old points still stand (changed in the source but
+  // not re-indexed; vanished but not deleted when the run failed) all count.
+  // Presence is explicit: a summary that carries them describes the store,
+  // zero included, and elitea-main records them as given; one without them
+  // (the Python SDK path, a run that failed before touching the store) says
+  // nothing about the store. Set together or not at all. A run that failed
+  // after writing or deleting anything carries them, so the registry
+  // follows the store.
+  optional uint64 total_documents = 19;
+  optional uint64 total_chunks = 20;
+  // True when `documents` names every document the store holds after the
+  // run (nothing truncated, no unchanged or retained document outside the
+  // list): elitea-main then makes index_registry_documents exactly that
+  // list. It is a statement by the worker, never inferred from counts; when
+  // it is set, total_documents equals the length of `documents`.
+  bool whole_index_record = 21;
 }
 
 // IndexIngestDocumentV1 is one indexed document as the vector store holds it
