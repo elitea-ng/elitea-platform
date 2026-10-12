@@ -104,8 +104,15 @@ group "standalone" {
     "elitea-llm-gateway", "llm-mock", "elitea-deepwiki", "elitea-deepwiki-engine",
     "elitea-deepwiki-migrate",
     "elitea-inventory", "elitea-inventory-engine",
-    "elitea-vector", "elitea-doc-extractor",
+    "elitea-vector",
     "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",
     "ado-mock",
   ]
+}
+
+// The standalone stack plus deploy/docker-compose.standalone-rust-agent.yml,
+// whose elitea-doc-extractor sidecar only that overlay defines (a group that
+// named it without the overlay would have no build context).
+group "standalone-rust" {
+  targets = ["standalone", "elitea-doc-extractor"]
 }

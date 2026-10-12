@@ -748,7 +748,7 @@ jobs:
           cache-hcl: |
             ci/bake-cache.hcl
             ci/bake-cache-rust.hcl
-          targets: standalone
+          targets: standalone-rust
           mount-cache-suffix: rust
       - name: Run the journeys against a fresh Rust-runtime stack
         # The Rust worker is compiled from source by the stack's own `build`
@@ -910,7 +910,7 @@ jobs:
           cache-hcl: |
             ci/bake-cache.hcl
             ci/bake-cache-rust.hcl
-          targets: standalone
+          targets: standalone-rust
           mount-cache-suffix: rust
       - name: Run the journeys against a fresh real-model stack
         # The same script and lifecycle as `chat-stream`. What differs is the
@@ -1081,7 +1081,7 @@ jobs:
           cache-hcl: |
             ci/bake-cache.hcl
             ci/bake-cache-rust.hcl
-          targets: standalone
+          targets: standalone-rust
           mount-cache-suffix: rust
       - name: Run the live toolkit journeys against a real-model stack
         if: steps.lanes.outputs.toolkits != '0'
