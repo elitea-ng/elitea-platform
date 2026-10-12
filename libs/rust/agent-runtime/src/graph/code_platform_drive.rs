@@ -1,10 +1,77 @@
 //! Service the retained Code process across the complete submission observation.
 
 use std::future::Future;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
+use tokio::sync::Notify;
 
 pub enum ObservationFailure<E> {
     Deadline,
     Platform(E),
+}
+
+/// Whether the platform pump was inside one Main step. A step that Main began
+/// may have reached an effect, so a pump dropped while it was in flight leaves
+/// its outcome unknown ([`StepTracker::interrupted`]).
+#[derive(Clone, Default)]
+pub struct StepTracker(Arc<TrackerState>);
+
+#[derive(Default)]
+struct TrackerState {
+    in_flight: AtomicBool,
+    interrupted: AtomicBool,
+    settled: Notify,
+}
+
+impl StepTracker {
+    /// Mark one step as started. Call [`StepGuard::finish`] once it returned;
+    /// dropping the guard first (the pump future was dropped) marks the
+    /// tracker interrupted for good.
+    pub fn begin(&self) -> StepGuard {
+        self.0.in_flight.store(true, Ordering::SeqCst);
+        StepGuard {
+            state: Some(self.0.clone()),
+        }
+    }
+
+    #[must_use]
+    pub fn in_flight(&self) -> bool {
+        self.0.in_flight.load(Ordering::SeqCst)
+    }
+
+    /// A step was abandoned mid-flight: its effect on Main is not known.
+    #[must_use]
+    pub fn interrupted(&self) -> bool {
+        self.0.interrupted.load(Ordering::SeqCst)
+    }
+}
+
+/// One step in flight; see [`StepTracker::begin`].
+#[must_use]
+pub struct StepGuard {
+    state: Option<Arc<TrackerState>>,
+}
+
+impl StepGuard {
+    pub fn finish(mut self) {
+        if let Some(state) = self.state.take() {
+            state.in_flight.store(false, Ordering::SeqCst);
+            state.settled.notify_one();
+        }
+    }
+}
+
+impl Drop for StepGuard {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            state.interrupted.store(true, Ordering::SeqCst);
+            state.in_flight.store(false, Ordering::SeqCst);
+            state.settled.notify_one();
+        }
+    }
 }
 
 /// Both futures belong to this attempt. Dropping the attempt drops both.
@@ -20,12 +87,51 @@ where
     S: Future<Output = T>,
     P: Future<Output = E>,
 {
+    drive_tracked(
+        submission,
+        platform,
+        deadline,
+        &StepTracker::default(),
+        Duration::ZERO,
+    )
+    .await
+}
+
+/// [`drive`] for a pump that reports its Main steps through `tracker`. When the
+/// terminal receipt wins while a step is in flight, the pump keeps running for
+/// at most `step_grace` so the step can reach its boundary; a step still in
+/// flight then is dropped and the tracker reports it interrupted.
+pub async fn drive_tracked<S, P, T, E>(
+    submission: S,
+    platform: P,
+    deadline: tokio::time::Instant,
+    tracker: &StepTracker,
+    step_grace: Duration,
+) -> Result<T, ObservationFailure<E>>
+where
+    S: Future<Output = T>,
+    P: Future<Output = E>,
+{
     tokio::pin!(submission, platform);
     tokio::time::timeout_at(deadline, async {
         tokio::select! {
             // A terminal receipt owns completion when both are ready.
             biased;
-            outcome = &mut submission => Ok(outcome),
+            outcome = &mut submission => {
+                if tracker.in_flight() && !step_grace.is_zero() {
+                    let _ = tokio::time::timeout(step_grace, async {
+                        while tracker.in_flight() {
+                            tokio::select! {
+                                biased;
+                                _ = &mut platform => return,
+                                () = tracker.0.settled.notified() => {}
+                            }
+                        }
+                    })
+                    .await;
+                }
+                Ok(outcome)
+            }
             failure = &mut platform => Err(ObservationFailure::Platform(failure)),
         }
     })
@@ -234,5 +340,106 @@ mod tests {
             }
         }
         assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_step_in_flight_when_the_receipt_wins_finishes_inside_the_grace() {
+        let tracker = StepTracker::default();
+        let finished = Arc::new(AtomicUsize::new(0));
+        let outcome = drive_tracked(
+            async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                7
+            },
+            async {
+                let guard = tracker.begin();
+                // The step outlasts the receipt but fits inside the grace.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                guard.finish();
+                finished.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+            },
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            &tracker,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(matches!(outcome, Ok(7)));
+        assert_eq!(finished.load(Ordering::SeqCst), 1, "the step reached its boundary");
+        assert!(!tracker.interrupted());
+        assert!(!tracker.in_flight());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_step_that_outlasts_the_grace_is_dropped_and_reported_interrupted() {
+        let tracker = StepTracker::default();
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let pump_guard = DropCount(dropped.clone());
+        let outcome = drive_tracked(
+            async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                7
+            },
+            async {
+                let _pump = pump_guard;
+                let _step = tracker.begin();
+                tokio::time::sleep(Duration::from_mins(1)).await;
+                std::future::pending::<()>().await;
+            },
+            tokio::time::Instant::now() + Duration::from_mins(5),
+            &tracker,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(matches!(outcome, Ok(7)));
+        assert!(tracker.interrupted(), "a step dropped mid-flight is unknown");
+        assert!(!tracker.in_flight());
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pump_between_steps_is_dropped_at_once_and_is_not_interrupted() {
+        let tracker = StepTracker::default();
+        let started = tokio::time::Instant::now();
+        let outcome = drive_tracked(
+            async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                7
+            },
+            async {
+                tracker.begin().finish();
+                // Idle sleep between steps: nothing is in flight.
+                std::future::pending::<()>().await;
+            },
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            &tracker,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(matches!(outcome, Ok(7)));
+        assert!(!tracker.interrupted());
+        assert_eq!(
+            tokio::time::Instant::now() - started,
+            Duration::from_millis(10),
+            "no grace wait when no step was in flight"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn plain_drive_never_waits_for_a_step() {
+        // `drive` keeps its original contract: the pump is dropped at once.
+        let tracker = StepTracker::default();
+        let started = tokio::time::Instant::now();
+        let outcome = drive(
+            async { 1 },
+            async {
+                let _step = tracker.begin();
+                std::future::pending::<()>().await;
+            },
+            started + Duration::from_secs(30),
+        )
+        .await;
+        assert!(matches!(outcome, Ok(1)));
+        assert_eq!(tokio::time::Instant::now(), started);
     }
 }

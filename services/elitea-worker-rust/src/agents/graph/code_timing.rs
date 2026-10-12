@@ -16,6 +16,10 @@ pub(crate) const OBSERVATION_MARGIN: Duration = Duration::from_secs(90);
 pub(crate) const PLATFORM_PUMP_MIN_INTERVAL: Duration = CODE_FAST_RECONCILE_INTERVAL;
 /// Platform pump: idle cap. Costs at most this much latency for a call after quiet.
 pub(crate) const PLATFORM_PUMP_MAX_IDLE_INTERVAL: Duration = Duration::from_secs(1);
+/// How long a Main platform step already in flight may finish after the
+/// terminal receipt won, so the pump is dropped at a step boundary instead of
+/// mid-step (a step dropped mid-flight leaves its effect unknown).
+pub(crate) const PLATFORM_STEP_SETTLE_GRACE: Duration = Duration::from_secs(5);
 /// Upper bound on idle pump steps in one minute (60 s / 1 s cap, plus warm-up).
 #[cfg(test)]
 pub(crate) const PLATFORM_PUMP_IDLE_STEPS_PER_MINUTE_BUDGET: usize = 70;

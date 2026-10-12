@@ -207,8 +207,11 @@ impl RemoteCodeRuntime {
             job.fingerprint()
                 .map_err(|_| before(CodeAttemptPhase::Input, NodeFailureClass::InvalidInput))?
         };
+        // Reserve the activation for a stop before hydration, but do not say a
+        // submission was sent: that marker is written just before the first
+        // submission, so a claim lost during hydration proves "no submission".
         self.journal
-            .register(
+            .register_unsubmitted(
                 &scope,
                 &invocation.activation,
                 &request_digest,
@@ -328,11 +331,30 @@ impl RemoteCodeRuntime {
         }
         let mut platform_call_effect = None;
         let mut platform_unknown_effect = false;
+        let step_tracker = super::platform_drive::StepTracker::default();
         let result=observe_typed(
             trace.as_ref(),
             CodePhase::Execution,
             async {
                 let deadline = observation_deadline(profile.timeout_seconds);
+                // Durable before the effect: from here a submission may reach the
+                // supervisor, and a recovery must read the dispatch as possible.
+                self.journal
+                    .mark_submission_started(
+                        &scope,
+                        &invocation.activation,
+                        &request_digest,
+                        profile.client.audience(),
+                    )
+                    .await
+                    .map_err(|_| {
+                        classify(
+                            CodeAttemptPhase::Dispatch,
+                            NodeFailureClass::DependencyUnavailable,
+                            invocation.activation,
+                            prior_dispatch,
+                        )
+                    })?;
                 // Keep one pump alive while the exact submission reconciles and backs off.
                 // A nonterminal RPC response must not cancel a pending broker step.
                 let platform = async {
@@ -350,6 +372,9 @@ impl RemoteCodeRuntime {
                     };
                     let mut idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
                     loop {
+                        // A step Main began may reach an effect. The tracker says
+                        // whether this pump was dropped inside one.
+                        let in_step = step_tracker.begin();
                         let step = match content.step_code_platform(
                             &self.authority,
                             invocation.activation,
@@ -363,6 +388,7 @@ impl RemoteCodeRuntime {
                                 true,
                             ),
                         };
+                        in_step.finish();
                         use crate::transport::input_content::code_platform_content::CodePlatformStep;
                         match step {
                             CodePlatformStep::Idle => idle = code_timing::next_idle_interval(idle),
@@ -517,7 +543,13 @@ impl RemoteCodeRuntime {
                         .await;
                     }
                 };
-                let outcome = super::platform_drive::drive(submission, platform, deadline)
+                let outcome = super::platform_drive::drive_tracked(
+                    submission,
+                    platform,
+                    deadline,
+                    &step_tracker,
+                    code_timing::PLATFORM_STEP_SETTLE_GRACE,
+                )
                     .await
                     .map_err(|error| match error {
                         super::platform_drive::ObservationFailure::Deadline => classify(
@@ -579,13 +611,17 @@ impl RemoteCodeRuntime {
                             .await;
                         // The runtime reached a definite terminal phase. It has no
                         // network, so only a platform-client call can have left an
-                        // effect. The platform journal decides, not the failure kind.
+                        // effect, and Main's durable platform-call journal decides,
+                        // not the failure kind. A step dropped mid-flight, an
+                        // unknown call seen by this pump, or any journal answer
+                        // other than "nothing unresolved" keeps the effect possible.
                         let effect_possible = invocation.platform_client
                             && (platform_unknown_effect
+                                || step_tracker.interrupted()
                                 || match job.fingerprint() {
                                     Ok(prepared) => {
-                                        unreceipted_platform_effect_possible(|| {
-                                            content.step_code_platform(
+                                        platform_effects_possible(|| {
+                                            content.code_platform_effects(
                                                 &self.authority,
                                                 invocation.activation,
                                                 prepared,
@@ -646,10 +682,21 @@ impl RemoteCodeRuntime {
         digest: &[u8; 32],
         failure: &CodeAttemptFailure,
     ) {
-        use crate::protocol::elitea::runtime::v1::SandboxJobStatusV1;
         if failure.failure.replay != ReplaySafety::NoExternalEffect {
             return;
         }
+        self.release_hydrated_job(profile, activation, digest).await;
+    }
+
+    /// The release itself, for a caller that knows no submission was sent (the
+    /// raw `execute` path never reaches a submission after a hydration failure).
+    pub(super) async fn release_hydrated_job(
+        &self,
+        profile: &super::CodeRuntimeProfile,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+    ) {
+        use crate::protocol::elitea::runtime::v1::SandboxJobStatusV1;
         let Ok(scope) = self.authority.dispatch_scope() else {
             return;
         };
@@ -695,10 +742,12 @@ impl RemoteCodeRuntime {
 /// Whether user code may already have been dispatched for this activation.
 ///
 /// A recovered `Running` journal says only that an earlier attempt began. The
-/// Worker registers the execution's dispatch row before it submits the first
-/// execute request, so with no row for the activation no submission was ever
-/// sent and a failure before dispatch (for example a lost preparation job)
-/// repeats nothing. A row, a missing scope or a lookup error keep the
+/// Worker registers the execution's dispatch row before hydration, so the row
+/// alone proves nothing, and it durably marks the row just before the first
+/// execute submission is sent. With no row, or a row still pending its
+/// submission, no submission was ever sent and a failure before dispatch (for
+/// example a lost preparation job, or a claim lost during hydration) repeats
+/// nothing. A submitted row, a missing scope or a lookup error keep the
 /// conservative answer: the effect may have happened.
 pub(in crate::agents::graph) async fn prior_dispatch_possible(
     journal: &crate::sandbox::dispatch::DispatchJournal,
@@ -713,7 +762,7 @@ pub(in crate::agents::graph) async fn prior_dispatch_possible(
         return true;
     };
     journal
-        .contains_activation(scope, activation)
+        .submission_started(scope, activation)
         .await
         .unwrap_or(true)
 }
@@ -748,34 +797,31 @@ where
     }
 }
 
-/// Bound for the final platform-journal drain after a terminal runtime phase.
-const PLATFORM_DRAIN_STEPS: usize = 8;
+/// How long the platform-journal proof retries Main after a terminal runtime
+/// phase before it gives up and keeps the effect possible.
+const PLATFORM_PROOF_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Read the platform-call journal once the runtime is terminal. `true` means
-/// an effectful call may exist without its receipt (an unknown step), or the
-/// journal could not prove otherwise (an error, or more steps than the bound).
-/// A runtime without a pending broker call leaves the outcome known.
-pub(in crate::agents::graph) async fn unreceipted_platform_effect_possible<F, Fut>(
-    mut step: F,
-) -> bool
+/// Ask Main's platform-call journal whether any call of this activation has an
+/// unknown outcome once the runtime is terminal. The answer is the read-only,
+/// fenced and authorized `code-platform/effects` query. Only an explicit
+/// `None` proves the outcome known: a refusal, an unreadable journal after
+/// the retry budget, and a `Possible` answer all keep the effect possible.
+pub(in crate::agents::graph) async fn platform_effects_possible<F, Fut>(mut proof: F) -> bool
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<
             Output = Result<
-                crate::transport::input_content::code_platform_content::CodePlatformStep,
+                crate::transport::input_content::code_platform_content::CodePlatformEffects,
                 crate::transport::InputContentError,
             >,
         >,
 {
-    use crate::transport::input_content::code_platform_content::CodePlatformStep;
-    for _ in 0..PLATFORM_DRAIN_STEPS {
-        match step().await {
-            Ok(CodePlatformStep::Idle) => return false,
-            Ok(CodePlatformStep::Committed { .. }) => {}
-            Ok(CodePlatformStep::Unknown { .. }) | Err(_) => return true,
-        }
-    }
-    true
+    use crate::transport::input_content::code_platform_content::CodePlatformEffects;
+    let deadline = tokio::time::Instant::now() + PLATFORM_PROOF_RETRY_BUDGET;
+    !matches!(
+        retry_transient_main(deadline, &mut proof).await,
+        Ok(CodePlatformEffects::None)
+    )
 }
 
 pub(super) fn workspace_attempt_failure(

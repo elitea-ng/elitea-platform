@@ -218,6 +218,28 @@ impl CodeRuntimeFactory {
 }
 
 impl RemoteCodeRuntime {
+    /// Hydrate the prepared dependencies for the raw `execute` path. A failure
+    /// happens before any submission, so the runtime this attempt hydrated is
+    /// released with the claim-bound stop instead of waiting out the
+    /// supervisor's retention sweep.
+    async fn hydrate_or_release(
+        &self,
+        profile: &CodeRuntimeProfile,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        bundle: &crate::sandbox::dependency_bundle::DependencyBundle,
+    ) -> Result<(), GraphError> {
+        let hydrated = self
+            .hydrate_python_dependencies(profile, activation, job, bundle, None)
+            .await
+            .map_err(super::code_runtime::CodePreparationFailure::graph_error);
+        if hydrated.is_err() {
+            self.release_hydrated_job(profile, activation, digest).await;
+        }
+        hydrated
+    }
+
     fn selected_compiled_profile<'a>(
         &'a self,
         profile: &'a CodeRuntimeProfile,
@@ -336,17 +358,11 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         if selected.is_none()
             && let Some(bundle) = &bundle
         {
-            observe(trace.as_ref(), CodePhase::Hydration, async {
-                self.hydrate_python_dependencies(
-                    profile,
-                    &invocation.activation,
-                    &job,
-                    bundle,
-                    None,
-                )
-                .await
-                .map_err(super::code_runtime::CodePreparationFailure::graph_error)
-            })
+            observe(
+                trace.as_ref(),
+                CodePhase::Hydration,
+                self.hydrate_or_release(profile, &invocation.activation, &digest, &job, bundle),
+            )
             .await?;
         }
         // Hydration remains inert and has its own fixed observation budget.
@@ -561,6 +577,51 @@ pub(super) fn original_prepared_job_fixture(
 #[cfg(test)]
 #[path = "code_remote_authority_tests.rs"]
 mod authority_tests;
+
+#[cfg(test)]
+impl CodeRuntimeFactory {
+    /// Drive the raw-path hydration step with a bundle and no preparation
+    /// profile, so hydration fails before any submission (review L6).
+    pub(in crate::agents) async fn raw_hydration_failure_fixture(
+        &self,
+        authority: Arc<ClaimBoundSandboxAuthority>,
+        activation: [u8; 32],
+        digest: [u8; 32],
+    ) -> Result<(), GraphError> {
+        let runtime = RemoteCodeRuntime {
+            saved_child_scope: None,
+            intent_content: self.intent_content.clone(),
+            control: self.control.clone(),
+            authority,
+            profiles: self.profiles.clone(),
+            journal: self.journal.clone(),
+            compiled_profile: self.compiled_profile.clone(),
+            debug_sink: self.debug_sink.clone(),
+        };
+        let profile = runtime
+            .profiles
+            .iter()
+            .find(|profile| profile.platform_client.is_none())
+            .expect("a pure profile");
+        let job = original_prepared_job_fixture(&CodeInvocation {
+            activation,
+            language: profile.language,
+            platform_client: false,
+            source: "return 41",
+            dependencies_toml: None,
+            provenance: super::code::CodeProvenance::SavedLiteral,
+            input_json: b"{}".to_vec(),
+            trace: None,
+            original: None,
+            debug: None,
+            workspace: None,
+        })?;
+        let bundle = crate::sandbox::preparation::frozen_lookup_tests::fixture().1;
+        runtime
+            .hydrate_or_release(profile, &activation, &digest, &job, &bundle)
+            .await
+    }
+}
 
 #[path = "code_workspace_remote.rs"]
 mod workspace_remote;

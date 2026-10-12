@@ -18,6 +18,9 @@ use std::collections::BTreeMap;
 struct InterruptedCode(AtomicU64);
 #[path = "node_recovery_code_debug_caller_tests.rs"]
 mod debug_caller_tests;
+#[cfg(feature = "sandbox-supervisor")]
+#[path = "node_recovery_code_wiring_tests.rs"]
+mod wiring_tests;
 
 struct CaptureOriginalVisit(Mutex<Vec<Vec<u8>>>);
 #[async_trait]
@@ -679,12 +682,16 @@ mod preparation_recovery {
             .execute(&database.pool)
             .await
             .unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../../../elitea-main/migrations/agentstate/0007_sandbox_dispatch_journal.sql"
-        ))
-        .execute(&database.pool)
-        .await
-        .unwrap();
+        for migration in [
+            include_str!(
+                "../../../../elitea-main/migrations/agentstate/0007_sandbox_dispatch_journal.sql"
+            ),
+            include_str!(
+                "../../../../elitea-main/migrations/agentstate/0014_sandbox_dispatch_submission_marker.sql"
+            ),
+        ] {
+            sqlx::raw_sql(migration).execute(&database.pool).await.unwrap();
+        }
         let scope = DispatchScope::from_identity(&ExecutionIdentityV1 {
             tenant_id: "dispatch-test".into(),
             resource_project_id: "2".into(),
@@ -871,11 +878,9 @@ mod preparation_recovery {
 /// unreceipted platform-client effect leaves it unknown (CR-SK-P09-hyd H).
 mod terminal_runtime_failure {
     use super::*;
-    use crate::agents::graph::code_remote::attempt_remote::{
-        classify, unreceipted_platform_effect_possible,
-    };
+    use crate::agents::graph::code_remote::attempt_remote::{classify, platform_effects_possible};
     use crate::transport::InputContentError;
-    use crate::transport::input_content::code_platform_content::CodePlatformStep;
+    use crate::transport::input_content::code_platform_content::CodePlatformEffects;
 
     struct FailedRuntime {
         effect_possible: bool,
@@ -948,47 +953,44 @@ mod terminal_runtime_failure {
         assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
     }
 
-    fn script(
-        steps: Vec<Result<CodePlatformStep, InputContentError>>,
-    ) -> impl FnMut() -> std::future::Ready<Result<CodePlatformStep, InputContentError>> {
-        let mut steps = std::collections::VecDeque::from(steps);
-        move || std::future::ready(steps.pop_front().unwrap_or(Ok(CodePlatformStep::Idle)))
-    }
-
-    #[tokio::test]
-    async fn platform_journal_drain_proves_or_withholds_the_known_outcome() {
-        let receipt = || CodePlatformStep::Committed {
-            call_effect: [4; 32],
-        };
-        // An empty journal, and receipted calls, leave the outcome known.
-        assert!(!unreceipted_platform_effect_possible(script(vec![])).await);
+    /// Main's journal answers "nothing unresolved" or the effect stays possible.
+    #[tokio::test(start_paused = true)]
+    async fn platform_journal_proof_clears_the_effect_only_on_an_explicit_none() {
+        // The only answer that proves a known outcome.
+        assert!(!platform_effects_possible(|| async { Ok(CodePlatformEffects::None) }).await);
+        // A call dispatched or uncertain in the journal, a refusal of the query
+        // and an unusable answer all keep the effect possible.
+        assert!(platform_effects_possible(|| async { Ok(CodePlatformEffects::Possible) }).await);
         assert!(
-            !unreceipted_platform_effect_possible(script(vec![
-                Ok(receipt()),
-                Ok(receipt()),
-                Ok(CodePlatformStep::Idle),
-            ]))
+            platform_effects_possible(|| async {
+                Err(InputContentError::AuthorizationFailed("refused"))
+            })
             .await
         );
-        // An unreceipted call, an unreadable journal and an unbounded drain do not.
+        // Main briefly unavailable is retried, not a verdict.
+        let mut calls = 0;
+        let recovered = platform_effects_possible(|| {
+            calls += 1;
+            let attempt = calls;
+            async move {
+                if attempt < 3 {
+                    Err(InputContentError::DependencyUnavailable("main restarting"))
+                } else {
+                    Ok(CodePlatformEffects::None)
+                }
+            }
+        })
+        .await;
+        assert!(!recovered);
+        assert_eq!(calls, 3);
+        // Main down for the whole budget never proves the outcome.
+        let started = tokio::time::Instant::now();
         assert!(
-            unreceipted_platform_effect_possible(script(vec![
-                Ok(receipt()),
-                Ok(CodePlatformStep::Unknown {
-                    call_effect: [5; 32]
-                }),
-            ]))
+            platform_effects_possible(|| async {
+                Err(InputContentError::DependencyUnavailable("main down"))
+            })
             .await
         );
-        assert!(
-            unreceipted_platform_effect_possible(script(vec![Err(
-                InputContentError::DependencyUnavailable("journal unavailable")
-            )]))
-            .await
-        );
-        assert!(
-            unreceipted_platform_effect_possible(script((0..16).map(|_| Ok(receipt())).collect()))
-                .await
-        );
+        assert!(tokio::time::Instant::now() - started >= std::time::Duration::from_secs(30));
     }
 }
