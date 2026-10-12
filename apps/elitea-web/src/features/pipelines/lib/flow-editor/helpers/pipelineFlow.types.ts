@@ -125,6 +125,8 @@ export interface YamlPipelineDocument {
 interface YamlStateVariableSpec {
   readonly type?: string;
   readonly value?: unknown;
+  /** Typed reducer (`append`, `sum_int`, `merge`). Edited in YAML only for now; the canvas keeps it as written. */
+  readonly reducer?: string;
 }
 
 /** A React-Flow-shaped node/edge id and everything downstream needs — kept structural rather than importing `@xyflow/react`'s `Node`/`Edge` generics into every helper signature. */
