@@ -97,6 +97,9 @@ services:
       ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"
 
   postgres:
+    # An init process as PID 1: the postmaster must not reap orphaned exec or healthcheck processes. One that
+    # exits non-zero is taken for a crashed backend and restarts every connection (seen on 2026-10-12).
+    init: true
     command:
       - postgres
       - -c
