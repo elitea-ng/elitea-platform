@@ -66,16 +66,7 @@ func (s *ContentServer) PostCodePlatformStep(w http.ResponseWriter, r *http.Requ
 	}
 	result, err := s.codePlatformPump.Step(r.Context(), claim, request.DispatchActivation, request.PreparedRequestFingerprint)
 	if err != nil {
-		switch {
-		case errors.Is(err, domain.ErrUnauthorized), errors.Is(err, ErrContentUnauthorized):
-			http.Error(w, "Code platform authority denied", http.StatusForbidden)
-		case errors.Is(err, domain.ErrFrame):
-			http.Error(w, "Invalid Code platform step", http.StatusBadRequest)
-		case errors.Is(err, domain.ErrConflict), errors.Is(err, code.ErrRejected):
-			http.Error(w, "Code platform original binding refused", http.StatusConflict)
-		default:
-			http.Error(w, "Code platform dependency unavailable", http.StatusServiceUnavailable)
-		}
+		writeCodePlatformError(w, err, "Invalid Code platform step")
 		return
 	}
 	response := CodePlatformStepResponse{Schema: "elitea.runtime.code-platform-step-response.v1", Revision: 1, Disposition: "idle"}
@@ -103,5 +94,21 @@ func (s *ContentServer) PostCodePlatformStep(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Cache-Control", "no-store")
 	if err = json.NewEncoder(w).Encode(response); err != nil {
 		return
+	}
+}
+
+// writeCodePlatformError is the single status mapping for the claim-bound Code
+// platform routes: 403 authority denied, 400 invalid frame, 409 binding refused,
+// 503 anything else (including a missing dependency). It never echoes err.
+func writeCodePlatformError(w http.ResponseWriter, err error, invalid string) {
+	switch {
+	case errors.Is(err, domain.ErrUnauthorized), errors.Is(err, ErrContentUnauthorized):
+		http.Error(w, "Code platform authority denied", http.StatusForbidden)
+	case errors.Is(err, domain.ErrFrame):
+		http.Error(w, invalid, http.StatusBadRequest)
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, code.ErrRejected):
+		http.Error(w, "Code platform original binding refused", http.StatusConflict)
+	default:
+		http.Error(w, "Code platform dependency unavailable", http.StatusServiceUnavailable)
 	}
 }

@@ -372,6 +372,7 @@ func (s *ContentServer) Routes() http.Handler {
 	}
 	if s.codePlatformPump != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/code-platform/step", s.PostCodePlatformStep)
+		r.Post("/executions/{executionID}/generations/{generation}/code-platform/effects", s.PostCodePlatformEffects)
 	}
 	if s.nodeRecovery != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/control", s.PostNodeRecoveryControl)

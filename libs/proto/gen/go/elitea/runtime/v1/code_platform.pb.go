@@ -227,6 +227,59 @@ func (CodePlatformStepDispositionV1) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_code_platform_proto_rawDescGZIP(), []int{2}
 }
 
+type CodePlatformEffectsDispositionV1 int32
+
+const (
+	CodePlatformEffectsDispositionV1_CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED CodePlatformEffectsDispositionV1 = 0
+	// No platform call of this activation is in dispatching or uncertain state, and no committed
+	// call has a non-terminal toolkit child. Also the answer for a job without registration.
+	CodePlatformEffectsDispositionV1_CODE_PLATFORM_EFFECTS_DISPOSITION_V1_NONE CodePlatformEffectsDispositionV1 = 1
+	// At least one call is dispatching or uncertain, or a committed call's toolkit child execution
+	// is still PENDING, DISPATCHED, CLAIMED, RUNNING or SETTLING. A typed failure must not be settled.
+	CodePlatformEffectsDispositionV1_CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE CodePlatformEffectsDispositionV1 = 2
+)
+
+// Enum value maps for CodePlatformEffectsDispositionV1.
+var (
+	CodePlatformEffectsDispositionV1_name = map[int32]string{
+		0: "CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED",
+		1: "CODE_PLATFORM_EFFECTS_DISPOSITION_V1_NONE",
+		2: "CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE",
+	}
+	CodePlatformEffectsDispositionV1_value = map[string]int32{
+		"CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED": 0,
+		"CODE_PLATFORM_EFFECTS_DISPOSITION_V1_NONE":        1,
+		"CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE":    2,
+	}
+)
+
+func (x CodePlatformEffectsDispositionV1) Enum() *CodePlatformEffectsDispositionV1 {
+	p := new(CodePlatformEffectsDispositionV1)
+	*p = x
+	return p
+}
+
+func (x CodePlatformEffectsDispositionV1) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CodePlatformEffectsDispositionV1) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_runtime_v1_code_platform_proto_enumTypes[3].Descriptor()
+}
+
+func (CodePlatformEffectsDispositionV1) Type() protoreflect.EnumType {
+	return &file_elitea_runtime_v1_code_platform_proto_enumTypes[3]
+}
+
+func (x CodePlatformEffectsDispositionV1) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CodePlatformEffectsDispositionV1.Descriptor instead.
+func (CodePlatformEffectsDispositionV1) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_code_platform_proto_rawDescGZIP(), []int{3}
+}
+
 type CodePlatformJobBindingV1 struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
 	Revision              uint32                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
@@ -618,6 +671,139 @@ func (x *CodePlatformStepResponseV1) GetEffectId() string {
 	return ""
 }
 
+// POST /runtime/content/executions/{executionID}/generations/{generation}/code-platform/effects.
+// A read-only, fenced question about Main's durable platform-call journal: does this dispatch
+// activation hold any call whose outcome is not known? Same claim/fence/lease authority and
+// 512-byte body bound as the step route. Selectors only; the response names no effect id,
+// state or count. JSON uses exact lowercase strings, not Proto bytes.
+type CodePlatformEffectsRequestV1 struct {
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	Schema                     string                 `protobuf:"bytes,1,opt,name=schema,proto3" json:"schema,omitempty"`                                                                             // elitea.runtime.code-platform-effects-request.v1
+	Revision                   uint32                 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`                                                                        // 1
+	DispatchActivation         string                 `protobuf:"bytes,3,opt,name=dispatch_activation,json=dispatchActivation,proto3" json:"dispatch_activation,omitempty"`                           // exact 64 lowercase hex, nonzero
+	PreparedRequestFingerprint string                 `protobuf:"bytes,4,opt,name=prepared_request_fingerprint,json=preparedRequestFingerprint,proto3" json:"prepared_request_fingerprint,omitempty"` // exact registered prepared fingerprint, 64 lowercase hex, nonzero
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *CodePlatformEffectsRequestV1) Reset() {
+	*x = CodePlatformEffectsRequestV1{}
+	mi := &file_elitea_runtime_v1_code_platform_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodePlatformEffectsRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodePlatformEffectsRequestV1) ProtoMessage() {}
+
+func (x *CodePlatformEffectsRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_code_platform_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodePlatformEffectsRequestV1.ProtoReflect.Descriptor instead.
+func (*CodePlatformEffectsRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_code_platform_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CodePlatformEffectsRequestV1) GetSchema() string {
+	if x != nil {
+		return x.Schema
+	}
+	return ""
+}
+
+func (x *CodePlatformEffectsRequestV1) GetRevision() uint32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *CodePlatformEffectsRequestV1) GetDispatchActivation() string {
+	if x != nil {
+		return x.DispatchActivation
+	}
+	return ""
+}
+
+func (x *CodePlatformEffectsRequestV1) GetPreparedRequestFingerprint() string {
+	if x != nil {
+		return x.PreparedRequestFingerprint
+	}
+	return ""
+}
+
+type CodePlatformEffectsResponseV1 struct {
+	state         protoimpl.MessageState           `protogen:"open.v1"`
+	Schema        string                           `protobuf:"bytes,1,opt,name=schema,proto3" json:"schema,omitempty"`                                                                    // elitea.runtime.code-platform-effects-response.v1
+	Revision      uint32                           `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`                                                               // 1
+	Disposition   CodePlatformEffectsDispositionV1 `protobuf:"varint,3,opt,name=disposition,proto3,enum=elitea.runtime.v1.CodePlatformEffectsDispositionV1" json:"disposition,omitempty"` // JSON: none, possible
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CodePlatformEffectsResponseV1) Reset() {
+	*x = CodePlatformEffectsResponseV1{}
+	mi := &file_elitea_runtime_v1_code_platform_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodePlatformEffectsResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodePlatformEffectsResponseV1) ProtoMessage() {}
+
+func (x *CodePlatformEffectsResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_code_platform_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodePlatformEffectsResponseV1.ProtoReflect.Descriptor instead.
+func (*CodePlatformEffectsResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_code_platform_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CodePlatformEffectsResponseV1) GetSchema() string {
+	if x != nil {
+		return x.Schema
+	}
+	return ""
+}
+
+func (x *CodePlatformEffectsResponseV1) GetRevision() uint32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *CodePlatformEffectsResponseV1) GetDisposition() CodePlatformEffectsDispositionV1 {
+	if x != nil {
+		return x.Disposition
+	}
+	return CodePlatformEffectsDispositionV1_CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED
+}
+
 var File_elitea_runtime_v1_code_platform_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_code_platform_proto_rawDesc = "" +
@@ -656,7 +842,16 @@ const file_elitea_runtime_v1_code_platform_proto_rawDesc = "" +
 	"\vdisposition\x18\x03 \x01(\x0e20.elitea.runtime.v1.CodePlatformStepDispositionV1R\vdisposition\x12 \n" +
 	"\teffect_id\x18\x04 \x01(\tH\x00R\beffectId\x88\x01\x01B\f\n" +
 	"\n" +
-	"_effect_id*\xa7\a\n" +
+	"_effect_id\"\xc5\x01\n" +
+	"\x1cCodePlatformEffectsRequestV1\x12\x16\n" +
+	"\x06schema\x18\x01 \x01(\tR\x06schema\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\rR\brevision\x12/\n" +
+	"\x13dispatch_activation\x18\x03 \x01(\tR\x12dispatchActivation\x12@\n" +
+	"\x1cprepared_request_fingerprint\x18\x04 \x01(\tR\x1apreparedRequestFingerprint\"\xaa\x01\n" +
+	"\x1dCodePlatformEffectsResponseV1\x12\x16\n" +
+	"\x06schema\x18\x01 \x01(\tR\x06schema\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\rR\brevision\x12U\n" +
+	"\vdisposition\x18\x03 \x01(\x0e23.elitea.runtime.v1.CodePlatformEffectsDispositionV1R\vdisposition*\xa7\a\n" +
 	"\x17CodePlatformOperationV1\x12*\n" +
 	"&CODE_PLATFORM_OPERATION_V1_UNSPECIFIED\x10\x00\x12/\n" +
 	"+CODE_PLATFORM_OPERATION_V1_APPLICATION_LIST\x10\x01\x12.\n" +
@@ -688,7 +883,11 @@ const file_elitea_runtime_v1_code_platform_proto_rawDesc = "" +
 	"-CODE_PLATFORM_STEP_DISPOSITION_V1_UNSPECIFIED\x10\x00\x12*\n" +
 	"&CODE_PLATFORM_STEP_DISPOSITION_V1_IDLE\x10\x01\x12/\n" +
 	"+CODE_PLATFORM_STEP_DISPOSITION_V1_COMMITTED\x10\x02\x12-\n" +
-	")CODE_PLATFORM_STEP_DISPOSITION_V1_UNKNOWN\x10\x03BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	")CODE_PLATFORM_STEP_DISPOSITION_V1_UNKNOWN\x10\x03*\xba\x01\n" +
+	" CodePlatformEffectsDispositionV1\x124\n" +
+	"0CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED\x10\x00\x12-\n" +
+	")CODE_PLATFORM_EFFECTS_DISPOSITION_V1_NONE\x10\x01\x121\n" +
+	"-CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE\x10\x02BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_code_platform_proto_rawDescOnce sync.Once
@@ -702,27 +901,31 @@ func file_elitea_runtime_v1_code_platform_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_code_platform_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_code_platform_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_elitea_runtime_v1_code_platform_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_elitea_runtime_v1_code_platform_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_elitea_runtime_v1_code_platform_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_elitea_runtime_v1_code_platform_proto_goTypes = []any{
-	(CodePlatformOperationV1)(0),        // 0: elitea.runtime.v1.CodePlatformOperationV1
-	(CodePlatformReceiptStateV1)(0),     // 1: elitea.runtime.v1.CodePlatformReceiptStateV1
-	(CodePlatformStepDispositionV1)(0),  // 2: elitea.runtime.v1.CodePlatformStepDispositionV1
-	(*CodePlatformJobBindingV1)(nil),    // 3: elitea.runtime.v1.CodePlatformJobBindingV1
-	(*CodePlatformCallV1)(nil),          // 4: elitea.runtime.v1.CodePlatformCallV1
-	(*CodePlatformEffectReceiptV1)(nil), // 5: elitea.runtime.v1.CodePlatformEffectReceiptV1
-	(*CodePlatformStepRequestV1)(nil),   // 6: elitea.runtime.v1.CodePlatformStepRequestV1
-	(*CodePlatformStepResponseV1)(nil),  // 7: elitea.runtime.v1.CodePlatformStepResponseV1
+	(CodePlatformOperationV1)(0),          // 0: elitea.runtime.v1.CodePlatformOperationV1
+	(CodePlatformReceiptStateV1)(0),       // 1: elitea.runtime.v1.CodePlatformReceiptStateV1
+	(CodePlatformStepDispositionV1)(0),    // 2: elitea.runtime.v1.CodePlatformStepDispositionV1
+	(CodePlatformEffectsDispositionV1)(0), // 3: elitea.runtime.v1.CodePlatformEffectsDispositionV1
+	(*CodePlatformJobBindingV1)(nil),      // 4: elitea.runtime.v1.CodePlatformJobBindingV1
+	(*CodePlatformCallV1)(nil),            // 5: elitea.runtime.v1.CodePlatformCallV1
+	(*CodePlatformEffectReceiptV1)(nil),   // 6: elitea.runtime.v1.CodePlatformEffectReceiptV1
+	(*CodePlatformStepRequestV1)(nil),     // 7: elitea.runtime.v1.CodePlatformStepRequestV1
+	(*CodePlatformStepResponseV1)(nil),    // 8: elitea.runtime.v1.CodePlatformStepResponseV1
+	(*CodePlatformEffectsRequestV1)(nil),  // 9: elitea.runtime.v1.CodePlatformEffectsRequestV1
+	(*CodePlatformEffectsResponseV1)(nil), // 10: elitea.runtime.v1.CodePlatformEffectsResponseV1
 }
 var file_elitea_runtime_v1_code_platform_proto_depIdxs = []int32{
 	0, // 0: elitea.runtime.v1.CodePlatformCallV1.operation:type_name -> elitea.runtime.v1.CodePlatformOperationV1
 	1, // 1: elitea.runtime.v1.CodePlatformEffectReceiptV1.state:type_name -> elitea.runtime.v1.CodePlatformReceiptStateV1
 	2, // 2: elitea.runtime.v1.CodePlatformStepResponseV1.disposition:type_name -> elitea.runtime.v1.CodePlatformStepDispositionV1
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 3: elitea.runtime.v1.CodePlatformEffectsResponseV1.disposition:type_name -> elitea.runtime.v1.CodePlatformEffectsDispositionV1
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_code_platform_proto_init() }
@@ -736,8 +939,8 @@ func file_elitea_runtime_v1_code_platform_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_code_platform_proto_rawDesc), len(file_elitea_runtime_v1_code_platform_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   5,
+			NumEnums:      4,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

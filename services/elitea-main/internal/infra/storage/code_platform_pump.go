@@ -34,6 +34,7 @@ type CodePlatformPump struct {
 	signer    CodePlatformOwnerSigner
 	calls     CodePlatformCallFactory
 	jobs      CodePlatformJobRegistrar
+	effects   CodePlatformUnresolvedEffectReader
 	requester string
 }
 
