@@ -20,9 +20,14 @@ import (
 // or PgVector database behind for ever. The flag exists to switch it off on a
 // replica that should not run it (an incident, a migration window), not to opt
 // in.
+//
+// The toolkit-deletion reconciler (#1244) has a flag of its own, with the same
+// default and the same purpose: the two journals are drained independently, and
+// switching one off (an engine incident) must not stop the other.
 const (
 	projectDeletionReconcilerEnv = "ELITEA_PROJECT_DELETION_RECONCILER_ENABLED"
 	projectDeletionGraceEnv      = "ELITEA_PROJECT_DELETION_RECONCILER_GRACE"
+	toolkitDeletionReconcilerEnv = "ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED"
 	// projectDeleteBudgetEnv is how long DELETE of a project waits for the slow
 	// cleanup before it answers 202 and leaves the rest to the journal.
 	projectDeleteBudgetEnv = "ELITEA_PROJECT_DELETE_REQUEST_BUDGET"
@@ -97,19 +102,37 @@ func startProjectDeletionReconciler(
 	return nil
 }
 
+// toolkitDeletionReconcilerSettings is what the toolkit reconciler reads from
+// the environment: its own flag, on by default.
+type toolkitDeletionReconcilerSettings struct {
+	Enabled bool
+}
+
+func toolkitDeletionReconcilerFromEnv(lookup func(string) (string, bool)) (toolkitDeletionReconcilerSettings, error) {
+	settings := toolkitDeletionReconcilerSettings{Enabled: true}
+	if raw, ok := lookup(toolkitDeletionReconcilerEnv); ok && strings.TrimSpace(raw) != "" {
+		enabled, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return settings, fmt.Errorf("%s must be a boolean, got %q", toolkitDeletionReconcilerEnv, raw)
+		}
+		settings.Enabled = enabled
+	}
+	return settings, nil
+}
+
 // startToolkitDeletionReconciler runs the toolkit-deletion reconciler (#1244)
-// over the toolkit cleanup journal the router builds, until ctx ends. It is on
-// and off with the project one (the same flag: both drain a cleanup journal
-// that nothing else drains), and runs with no grace: a toolkit delete never
-// works its own row, so there is no request to keep out of the way of.
+// over the toolkit cleanup journal the router builds, until ctx ends. It has a
+// flag of its own (ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED, on by default),
+// and runs with no grace: a toolkit delete never works its own row, so there
+// is no request to keep out of the way of.
 func startToolkitDeletionReconciler(
 	ctx context.Context,
-	settings projectDeletionReconcilerSettings,
+	settings toolkitDeletionReconcilerSettings,
 	journal *toolkitcleanup.Journal,
 	logger *slog.Logger,
 ) error {
 	if !settings.Enabled {
-		logger.Info("toolkit deletion reconciler is disabled", "env", projectDeletionReconcilerEnv)
+		logger.Info("toolkit deletion reconciler is disabled", "env", toolkitDeletionReconcilerEnv)
 		return nil
 	}
 	reconciler, err := runtimecomposition.NewToolkitDeletionReconciler(

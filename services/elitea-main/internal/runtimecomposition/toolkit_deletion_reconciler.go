@@ -13,15 +13,15 @@ package runtimecomposition
 // the row, so a restart or another replica keeps it.
 //
 // It is a sibling rather than the project reconciler generalised: the two
-// journals key their rows differently (a project id against a surrogate id) and
-// report different terminal errors, and the project one is covered by #1245's
-// tests as it stands. The loop is the same ~80 lines, and deliberately so.
+// journals key their rows differently (a project id against a surrogate id and
+// its generation) and report different terminal errors, and the project one is
+// covered by #1245's tests as it stands. What the two loops share word for word
+// — the jittered pass loop — is runReconcilerPasses.
 
 import (
 	"context"
 	"errors"
 	"log/slog"
-	"math/rand/v2"
 	"sync/atomic"
 	"time"
 
@@ -39,9 +39,11 @@ const (
 // ToolkitDeletionJournal is the cleanup journal the reconciler drains.
 // *toolkitcleanup.Journal implements it.
 type ToolkitDeletionJournal interface {
-	ClaimNext(ctx context.Context, grace time.Duration) (id int64, ok bool, err error)
+	// ClaimNext leases one row and returns the claim (the row's id and its
+	// generation at the claim), which Resume must present.
+	ClaimNext(ctx context.Context, grace time.Duration) (claim toolkitcleanup.Claim, ok bool, err error)
 	// Resume reports completed only when the journal row ended closed.
-	Resume(ctx context.Context, id int64) (completed bool, err error)
+	Resume(ctx context.Context, claim toolkitcleanup.Claim) (completed bool, err error)
 }
 
 // ToolkitDeletionReconcilerConfig tunes the loop. Zero Interval and BatchSize
@@ -118,7 +120,7 @@ func (r *ToolkitDeletionReconciler) RunOnce(ctx context.Context) (int, error) {
 		if err := ctx.Err(); err != nil {
 			return worked, err
 		}
-		id, ok, err := r.journal.ClaimNext(ctx, r.config.GracePeriod)
+		claim, ok, err := r.journal.ClaimNext(ctx, r.config.GracePeriod)
 		if err != nil {
 			return worked, err
 		}
@@ -126,47 +128,44 @@ func (r *ToolkitDeletionReconciler) RunOnce(ctx context.Context) (int, error) {
 			return worked, nil
 		}
 		worked++
-		completed, err := r.journal.Resume(ctx, id)
+		completed, err := r.journal.Resume(ctx, claim)
 		switch {
 		case err == nil && completed:
 			r.finished.Add(1)
-			r.logger.InfoContext(ctx, "finished the engine-side cleanup of a deleted toolkit", "journal_id", id)
+			r.logger.InfoContext(ctx, "finished the engine-side cleanup of a deleted toolkit", "journal_id", claim.ID, "generation", claim.Generation)
 		case errors.Is(err, toolkitcleanup.ErrRowNotFound):
 			// The row vanished between the claim and the read: nothing left to
 			// finish, nothing finished by this pass.
-			r.logger.WarnContext(ctx, "a claimed toolkit deletion has no journal row", "journal_id", id)
+			r.logger.WarnContext(ctx, "a claimed toolkit deletion has no journal row", "journal_id", claim.ID)
+		case errors.Is(err, toolkitcleanup.ErrClaimLost):
+			// The row was reopened under the claim (the toolkit id was deleted
+			// again): the new obligation is claimed on its own, and this run
+			// touched nothing. Not a failure of the row.
+			r.logger.InfoContext(ctx, "a toolkit deletion was reopened under its claim; the new obligation is worked on its own",
+				"journal_id", claim.ID, "generation", claim.Generation)
 		case err == nil && ctx.Err() != nil:
 			// Not completed, and the process is stopping: the run released its
 			// lease without counting an attempt.
-			r.logger.InfoContext(ctx, "the cleanup of a deleted toolkit was interrupted; the journal keeps it open", "journal_id", id)
+			r.logger.InfoContext(ctx, "the cleanup of a deleted toolkit was interrupted; the journal keeps it open", "journal_id", claim.ID)
 		default:
 			r.failed.Add(1)
 			r.logger.ErrorContext(ctx, "the engine-side cleanup of a deleted toolkit did not finish; the journal retries it after its backoff",
-				"journal_id", id, "failed_total", r.failed.Load(), "err", err)
+				"journal_id", claim.ID, "generation", claim.Generation, "failed_total", r.failed.Load(), "err", err)
 		}
 	}
 	return worked, nil
 }
 
 // Run loops until ctx is cancelled. The interval is jittered by up to +-20% so
-// replicas do not run their passes in step.
+// replicas do not run their passes in step (runReconcilerPasses).
 func (r *ToolkitDeletionReconciler) Run(ctx context.Context) error {
 	if r == nil || r.journal == nil || ctx == nil {
 		return errors.New("toolkit deletion reconciler is incomplete")
 	}
-	for {
-		if _, err := r.RunOnce(ctx); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			r.errored.Add(1)
-			r.logger.ErrorContext(ctx, "toolkit deletion reconciliation failed", "err", err)
-		}
-		jitter := 0.8 + 0.4*rand.Float64()
-		if err := r.wait(ctx, time.Duration(float64(r.config.Interval)*jitter)); err != nil {
-			return err
-		}
-	}
+	return runReconcilerPasses(ctx, r.config.Interval, r.wait, r.RunOnce, func(err error) {
+		r.errored.Add(1)
+		r.logger.ErrorContext(ctx, "toolkit deletion reconciliation failed", "err", err)
+	})
 }
 
 var _ publisherRunner = (*ToolkitDeletionReconciler)(nil)

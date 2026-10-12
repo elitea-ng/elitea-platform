@@ -168,8 +168,15 @@ func TestTerminalEngineAnswersCloseTheStepWithTheReason(t *testing.T) {
 		t.Fatalf("journal = %+v, want complete", entry)
 	}
 	notes := journalNotes(entry)
-	if note, _ := notes[projectprovisioning.StepInventoryData].(string); !strings.HasPrefix(note, "failed permanently: ") || !strings.Contains(note, "allowlist") {
-		t.Fatalf("inventory note = %q, want the permanent reason", note)
+	if note, _ := notes[projectprovisioning.StepInventoryData].(string); note != projectprovisioning.NoteRefused || strings.Contains(note, "allowlist") {
+		t.Fatalf("inventory note = %q, want the class %q, never the engine's message", note, projectprovisioning.NoteRefused)
+	}
+	// The same class text is what DELETE of the project reports for the step:
+	// the response carries no raw engine error either.
+	for _, step := range result.RollbackSteps {
+		if step.Step == projectprovisioning.StepInventoryData && (step.Msg != projectprovisioning.NoteRefused || strings.Contains(step.Msg, "allowlist")) {
+			t.Fatalf("DELETE reports %q for the inventory step, want %q", step.Msg, projectprovisioning.NoteRefused)
+		}
 	}
 	if notes[projectprovisioning.StepDeepWikiData] != projectprovisioning.NoteUnsupported {
 		t.Fatalf("deepwiki note = %v, want %q", notes[projectprovisioning.StepDeepWikiData], projectprovisioning.NoteUnsupported)

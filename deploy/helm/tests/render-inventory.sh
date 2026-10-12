@@ -388,6 +388,15 @@ refuses "platform clients without mutual TLS" --set 'inventory.platformGrpc.clie
 refuses "a platform port that is the SPI's" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.platformGrpc.port=8080
 refuses "the platform env set by hand beside the values" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.env.ELITEA_INVENTORY_PLATFORM_CLIENTS=elitea-main
 refuses "an allowlist that does not name elitea-main" --set 'inventory.platformGrpc.clients={someone-else}'
+# The expected name follows the client material. Chart-issued (the default):
+# elitea-main, and a stated main.platformClientName that differs is refused.
+# Operator-supplied (main mounts a Secret the chart did not issue): the
+# allowlist is checked against main.platformClientName instead.
+refuses "a custom main.platformClientName while the chart issues the certificate" --set 'inventory.platformGrpc.clients={platform-main}' --set main.platformClientName=platform-main
+refuses "operator material whose allowlist does not name main.platformClientName" --set 'inventory.platformGrpc.clients={elitea-main}' --set main.platformClientName=platform-main --set main.fileConfig.inventoryClientMaterial.secretName=my-own-material
+operator="$(render $COMPLETE --set 'inventory.platformGrpc.clients={platform-main}' --set main.platformClientName=platform-main --set main.fileConfig.inventoryClientMaterial.secretName=my-own-material)" \
+  || fail "operator-supplied client material with its own name does not render: $operator"
+expect "operator material: the allowlist carries the operator's name" "$(printf '%s' "$operator" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-inventory") | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_PLATFORM_CLIENTS") | .value' -)" "platform-main"
 
 # ── elitea-main's side of the platform service (#1244) ───────────────────────
 #

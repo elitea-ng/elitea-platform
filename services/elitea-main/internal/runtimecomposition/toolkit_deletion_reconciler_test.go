@@ -31,30 +31,33 @@ type fakeToolkitJournal struct {
 	maxOutstanding int
 }
 
-func (f *fakeToolkitJournal) ClaimNext(_ context.Context, grace time.Duration) (int64, bool, error) {
+func (f *fakeToolkitJournal) ClaimNext(_ context.Context, grace time.Duration) (toolkitcleanup.Claim, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.graces = append(f.graces, grace)
 	if f.claimErr != nil {
-		return 0, false, f.claimErr
+		return toolkitcleanup.Claim{}, false, f.claimErr
 	}
 	if len(f.claimable) == 0 {
-		return 0, false, nil
+		return toolkitcleanup.Claim{}, false, nil
 	}
 	f.outstanding++
 	f.maxOutstanding = max(f.maxOutstanding, f.outstanding)
 	id := f.claimable[0]
 	f.claimable = f.claimable[1:]
-	return id, true, nil
+	return toolkitcleanup.Claim{ID: id, Generation: 1}, true, nil
 }
 
-func (f *fakeToolkitJournal) Resume(_ context.Context, id int64) (bool, error) {
+func (f *fakeToolkitJournal) Resume(_ context.Context, claim toolkitcleanup.Claim) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.resumed = append(f.resumed, id)
+	if claim.Generation != 1 {
+		return false, errors.New("the fake was handed a claim it did not issue")
+	}
+	f.resumed = append(f.resumed, claim.ID)
 	f.outstanding--
-	err := f.failures[id]
-	return err == nil && !f.unfinished[id], err
+	err := f.failures[claim.ID]
+	return err == nil && !f.unfinished[claim.ID], err
 }
 
 func newTestToolkitReconciler(t *testing.T, journal ToolkitDeletionJournal, config ToolkitDeletionReconcilerConfig) *ToolkitDeletionReconciler {
@@ -68,24 +71,29 @@ func newTestToolkitReconciler(t *testing.T, journal ToolkitDeletionJournal, conf
 
 // One pass claims one batch with the configured grace and resumes each row,
 // one lease at a time. Closed and still-open rows are counted apart; a row
-// that stays open does not stop the batch, and a row that vanished is neither.
+// that stays open does not stop the batch, and a row that vanished, or was
+// reopened under its claim, is neither finished nor failed.
 func TestToolkitDeletionReconcilerResumesTheClaimedBatch(t *testing.T) {
 	t.Parallel()
 	journal := &fakeToolkitJournal{
-		claimable:  []int64{11, 12, 13, 14, 15},
-		failures:   map[int64]error{12: errors.New("engine unavailable"), 14: toolkitcleanup.ErrRowNotFound},
+		claimable: []int64{11, 12, 13, 14, 15, 16},
+		failures: map[int64]error{
+			12: errors.New("engine unavailable"),
+			14: toolkitcleanup.ErrRowNotFound,
+			15: toolkitcleanup.ErrClaimLost,
+		},
 		unfinished: map[int64]bool{13: true},
 	}
-	reconciler := newTestToolkitReconciler(t, journal, ToolkitDeletionReconcilerConfig{BatchSize: 4})
+	reconciler := newTestToolkitReconciler(t, journal, ToolkitDeletionReconcilerConfig{BatchSize: 5})
 
 	worked, err := reconciler.RunOnce(context.Background())
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if worked != 4 {
-		t.Fatalf("worked = %d, want the batch of 4", worked)
+	if worked != 5 {
+		t.Fatalf("worked = %d, want the batch of 5", worked)
 	}
-	if !slices.Equal(journal.resumed, []int64{11, 12, 13, 14}) {
+	if !slices.Equal(journal.resumed, []int64{11, 12, 13, 14, 15}) {
 		t.Fatalf("resumed = %v", journal.resumed)
 	}
 	if journal.maxOutstanding != 1 {
@@ -97,7 +105,7 @@ func TestToolkitDeletionReconcilerResumesTheClaimedBatch(t *testing.T) {
 		}
 	}
 	if reconciler.Finished() != 1 || reconciler.Failed() != 2 {
-		t.Fatalf("finished=%d failed=%d, want 1 and 2 (the vanished row counts as neither)",
+		t.Fatalf("finished=%d failed=%d, want 1 and 2 (the vanished and the reopened rows count as neither)",
 			reconciler.Finished(), reconciler.Failed())
 	}
 }
@@ -162,7 +170,7 @@ type cancellingToolkitJournal struct {
 	cancel context.CancelFunc
 }
 
-func (c *cancellingToolkitJournal) Resume(ctx context.Context, id int64) (bool, error) {
+func (c *cancellingToolkitJournal) Resume(ctx context.Context, claim toolkitcleanup.Claim) (bool, error) {
 	c.cancel()
-	return c.fakeToolkitJournal.Resume(ctx, id)
+	return c.fakeToolkitJournal.Resume(ctx, claim)
 }

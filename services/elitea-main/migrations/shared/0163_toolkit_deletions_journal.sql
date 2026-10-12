@@ -20,9 +20,11 @@
 --
 -- ONE ROW IS ONE ENGINE CALL. A toolkit type belongs to exactly one
 -- application, so the row carries the application (`app`) and nothing else to
--- choose. `app` is recorded at enqueue time from the configuration of the
--- replica that took the delete; a replica that has no client for that
--- application leaves the row pending (logged) rather than closing it.
+-- choose. `app` is the type's application (an exact allow-list of the types the
+-- engines publish), recorded wherever the delete is taken, whether or not that
+-- replica has a client for it; a replica that has no client for the row's
+-- application leaves the row pending with a backoff (logged) rather than
+-- closing it, and a replica that has one drains it.
 --
 -- OUTCOMES (`outcome`, set together with completed_at):
 --   deleted           the engine deleted the toolkit's data
@@ -30,14 +32,18 @@
 --   unsupported       the engine keeps nothing of this kind (UNIMPLEMENTED)
 --   failed_permanent  the engine refused this process's certificate, or the
 --                     request itself was invalid: retrying cannot fix it. The
---                     row is closed with the reason in `note` and an error is
---                     logged; an operator finds these with
+--                     row is closed with the CLASS of the reason in `note`
+--                     ("failed permanently: the engine refused this process's
+--                     client certificate" / "...: the request was invalid")
+--                     and the engine's own message is logged with the row's
+--                     ids; an operator finds these with
 --                     WHERE outcome = 'failed_permanent'.
 --   superseded        a toolkit with this id exists again in the project
 --                     (a restored database); nothing was touched
--- `note` is the engine's one-line account, or the reason of a permanent
--- failure. `last_error` is the last failed run's cause by class only ("engine
--- unavailable; retry"), never a raw error: it can carry an address.
+-- `note` is the engine's one-line account, or the class of a permanent
+-- failure; never a raw error. `last_error` is the last failed run's cause by
+-- class only ("engine unavailable; retry"), never a raw error either: it can
+-- carry an address.
 --
 -- attempts / next_attempt_at / claimed_until are the journal mechanics of
 -- shared/0161: runs so far, the backoff, and the lease of the run working the
@@ -48,6 +54,13 @@
 -- serial, so a second delete of the same id (the id came back) REOPENS the
 -- row rather than adding one. The surrogate `id` is what the reconciler
 -- claims by.
+--
+-- `generation` is the row's obligation counter: 1 at insert, +1 on every
+-- reopen (which also clears the lease). A claim reads the generation with the
+-- id, and every write a run makes (close, fail, release) requires it, so a run
+-- still working the previous obligation — its engine call outlasted the
+-- lease, or the row was reopened under it — matches no row and touches
+-- nothing of the new one.
 --
 -- No foreign key to centry.project: the row outlives the toolkit, and may
 -- outlive the project (whose own journal step then also deletes the data; the
@@ -68,6 +81,7 @@ CREATE TABLE IF NOT EXISTS centry.toolkit_deletions (
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     claimed_until   TIMESTAMPTZ,
     completed_at    TIMESTAMPTZ,
+    generation      BIGINT      NOT NULL DEFAULT 1,
     CONSTRAINT toolkit_deletions_one_row_per_toolkit UNIQUE (project_id, toolkit_id, app),
     CONSTRAINT toolkit_deletions_outcome_check CHECK (
         outcome IS NULL OR outcome IN ('deleted', 'nothing_to_delete', 'unsupported', 'failed_permanent', 'superseded')

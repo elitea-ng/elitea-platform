@@ -261,6 +261,11 @@ services:
       # their indexes (logged at boot). The server certificate's SANs name
       # elitea-deepwiki (gen-deepwiki-certs.sh), which is what this verifies.
       ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "${ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET:-}"
+      # The toolkit-deletion reconciler (#1244): drains centry.toolkit_deletions,
+      # the engine-side deletion an Inventory toolkit's delete owes. On by
+      # default (its own flag, apart from ELITEA_PROJECT_DELETION_RECONCILER_
+      # ENABLED); "false" stops the loop on this replica.
+      ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "${ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED:-true}"
     volumes:
       # Read-only, and shared with the gateway hop: one dev CA signs both, and
       # `CN=elitea-main` is the same client on both.

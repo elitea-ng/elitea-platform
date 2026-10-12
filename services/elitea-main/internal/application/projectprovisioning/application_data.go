@@ -31,8 +31,12 @@ package projectprovisioning
 //   - ErrNotAllowed, ErrConfig: the engine refused this process's certificate,
 //     or the request is invalid. Retrying cannot fix either, so the step is
 //     closed the way #1245 closes a drop it gave up on: marked done with the
-//     reason in its note ("failed permanently: ..."), with an Error log. An
-//     operator finds these rows by the note; nothing else is retried.
+//     CLASS of the reason as its note (cleanupjournal.NoteRefused /
+//     NoteInvalidRequest, "failed permanently: ..."), with an Error log that
+//     carries the engine's message. The note is stored on the row and reported
+//     by DELETE of the project (StepStatus.Msg), so it never carries the raw
+//     error, which can hold an address or what the engine refused. An operator
+//     finds these rows by the note; nothing else is retried.
 //   - anything else: the step fails and the journal retries it.
 //
 // THE CALL FITS THE RUN. A run has one bound (cleanupTimeout, 5 minutes); the
@@ -53,6 +57,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
@@ -61,9 +66,16 @@ import (
 // index, an Inventory graph). The cleanup journal retries it.
 var ErrApplicationDataNotRemoved = errors.New("projectprovisioning: application data was not removed")
 
-// NoteUnsupported is the note of an application step closed because the engine
-// does not support the deletion (UNIMPLEMENTED).
-const NoteUnsupported = "engine does not support deletion"
+// The notes of an application step closed without the engine deleting
+// anything, shared with the toolkit journal (cleanupjournal): the engine does
+// not support the deletion (UNIMPLEMENTED); the engine refused this process's
+// certificate; the request was invalid. Class texts, never the engine's
+// message.
+const (
+	NoteUnsupported    = cleanupjournal.NoteUnsupported
+	NoteRefused        = cleanupjournal.NoteRefused
+	NoteInvalidRequest = cleanupjournal.NoteInvalidRequest
+)
 
 // ApplicationDataRemover deletes everything one application's engine holds for
 // a project. It is satisfied by *platformops.Client.
@@ -97,7 +109,7 @@ func ApplicationDataStep(app string) string { return app + "_data" }
 func WithApplicationData(app string, remover ApplicationDataRemover) Option {
 	return func(p *Provisioner) {
 		app = strings.TrimSpace(app)
-		if app == "" || remover == nil || isNilPointer(remover) {
+		if app == "" || remover == nil || cleanupjournal.IsNilPointer(remover) {
 			return
 		}
 		for i := range p.applications {
@@ -145,7 +157,8 @@ func (e notWiredError) Error() string {
 // closedWithNote is the outcome of an application step that is marked DONE
 // without the engine deleting anything, for a reason retrying cannot change
 // (the engine does not support the deletion; the engine refuses this process;
-// the request is invalid). The note is recorded on the step.
+// the request is invalid). The note is recorded on the step and reported to
+// the caller, so it is one of the class texts above, never the raw error.
 type closedWithNote struct{ note string }
 
 func (e closedWithNote) Error() string { return "step closed: " + e.note }
@@ -189,9 +202,15 @@ func runApplicationStep(app string, following []string) func(context.Context, *P
 				attrs...)
 			return "", closedWithNote{note: NoteUnsupported}
 		case errors.Is(err, platformops.ErrNotAllowed), errors.Is(err, platformops.ErrConfig):
+			// The reason is logged here, with the project id; the note (stored,
+			// and reported by DELETE of the project) is the class only.
+			note := NoteInvalidRequest
+			if errors.Is(err, platformops.ErrNotAllowed) {
+				note = NoteRefused
+			}
 			p.logger.LogAttrs(ctx, slog.LevelError, "project delete cleanup FAILED PERMANENTLY: the engine refused this process or the request is invalid; the project's data stays in the engine until an operator intervenes",
-				append(attrs, slog.Any("err", err))...)
-			return "", closedWithNote{note: "failed permanently: " + err.Error()}
+				append(attrs, slog.String("note", note), slog.Any("err", err))...)
+			return "", closedWithNote{note: note}
 		}
 		// ErrRetryLater (a partial deletion carries its summary, kept as the
 		// note) or the engine's failure: the journal retries the step.
@@ -221,7 +240,7 @@ func applicationCallContext(ctx context.Context, stepsLeft int) (context.Context
 	if !ok {
 		return context.WithCancel(ctx)
 	}
-	remaining := time.Until(deadline) - bookkeepingTimeout
+	remaining := time.Until(deadline) - cleanupjournal.BookkeepingTimeout
 	if remaining <= 0 {
 		return context.WithCancel(ctx)
 	}

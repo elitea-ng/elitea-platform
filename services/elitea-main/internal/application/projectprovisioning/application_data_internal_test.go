@@ -11,11 +11,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
@@ -169,19 +171,30 @@ func TestAnUnsupportedDeletionClosesTheStepWithANote(t *testing.T) {
 }
 
 // A refused certificate or an invalid request is permanent (C): the step is
-// closed with the reason in its note rather than retried for ever.
-func TestAPermanentFailureClosesTheStepWithTheReason(t *testing.T) {
-	for _, cause := range []error{platformops.ErrNotAllowed, platformops.ErrConfig} {
-		remover := &fakeRemover{err: fmt.Errorf("%w: inventory delete_project: client not in allowlist", cause)}
-		p := New(nil, nil, nil, WithApplicationData("inventory", remover))
+// closed rather than retried for ever, with the CLASS of the reason as its note.
+// The note reaches the journal row and DELETE's response, so the engine's
+// message (an identity, an address) is logged and never stored or reported.
+func TestAPermanentFailureClosesTheStepWithTheReasonsClass(t *testing.T) {
+	for cause, wantNote := range map[error]string{platformops.ErrNotAllowed: NoteRefused, platformops.ErrConfig: NoteInvalidRequest} {
+		var log strings.Builder
+		remover := &fakeRemover{err: fmt.Errorf("%w: inventory delete_project: CN=elitea-main not in allowlist at 10.0.7.3:9443", cause)}
+		p := New(nil, nil, slog.New(slog.NewTextHandler(&log, nil)), WithApplicationData("inventory", remover))
 		row := rowWithApps("inventory")
 		_, err := lastStep(p, row).run(context.Background(), p, 7, row)
 		var closed closedWithNote
 		if !errors.As(err, &closed) {
 			t.Fatalf("%v: run = %v, want closedWithNote", cause, err)
 		}
-		if !strings.HasPrefix(closed.note, "failed permanently: ") || !strings.Contains(closed.note, "allowlist") {
-			t.Fatalf("%v: note = %q, want the reason", cause, closed.note)
+		if closed.note != wantNote {
+			t.Fatalf("%v: note = %q, want %q", cause, closed.note, wantNote)
+		}
+		for _, leak := range []string{"allowlist", "10.0.7.3", "CN="} {
+			if strings.Contains(closed.note, leak) {
+				t.Fatalf("%v: note %q carries the engine's message (%q)", cause, closed.note, leak)
+			}
+		}
+		if !strings.Contains(log.String(), "10.0.7.3:9443") || !strings.Contains(log.String(), "project_id=7") {
+			t.Fatalf("%v: the raw error and the project id are not in the log: %s", cause, log.String())
 		}
 	}
 }
@@ -225,7 +238,7 @@ func TestEachApplicationCallGetsItsShareOfTheRun(t *testing.T) {
 	steps := p.cleanupSteps(row)
 	deepwiki, inventory := steps[len(steps)-2], steps[len(steps)-1]
 
-	runBound := 4*time.Minute + bookkeepingTimeout
+	runBound := 4*time.Minute + cleanupjournal.BookkeepingTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), runBound)
 	defer cancel()
 	if _, err := deepwiki.run(ctx, p, 7, row); err != nil {
@@ -254,7 +267,7 @@ func TestEachApplicationCallGetsItsShareOfTheRun(t *testing.T) {
 }
 
 func TestApplicationCallContextSharesTheRemainingBound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+bookkeepingTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+cleanupjournal.BookkeepingTimeout)
 	defer cancel()
 	callCtx, cancelCall := applicationCallContext(ctx, 3)
 	defer cancelCall()

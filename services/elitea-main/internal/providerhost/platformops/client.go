@@ -43,6 +43,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,8 +55,8 @@ import (
 )
 
 // The two applications that serve the platform service today. App names are
-// the provider descriptors' own names, which are also the prefix of the toolkit
-// types they publish (see AppForToolkitType).
+// the names the facades and the composition know them by; the toolkit types
+// each publishes are pinned in toolkitTypeApps (see AppForToolkitType).
 const (
 	AppDeepWiki  = "deepwiki"
 	AppInventory = "inventory"
@@ -330,25 +331,59 @@ func (c *Client) classify(op string, err error) error {
 // all, rather than one that is known to be refused.
 func AppKeepsToolkitData(app string) bool { return app == AppInventory }
 
-// AppForToolkitType names the application whose engine holds data for a
-// toolkit of the given type, or "" for a type no platform service covers.
+// toolkitTypeApps is the allow-list of the toolkit types the two applications
+// publish, each to its application: EXACT type names, not prefixes.
 //
-// A provider's toolkit types are projected as `<provider name>_<toolkit name>`
-// (internal/api/v2/toolkits.projectProviderToolkits), or the descriptor's own
-// type override. DeepWiki's descriptor has been named both `deepwiki` and
-// `wikis` (internal/api/v2/deepwiki.AdmittedWikisToolkitTypes lists the four
-// spellings), Inventory's is `inventory`. The bare provider name is accepted
-// too, for a type override that is just the name.
+// WHY A LIST. elitea-main has no in-process registry of toolkit types: a
+// provider's types are projected from the admitted manifests in the database
+// (internal/api/v2/toolkits.projectProviderToolkits reads centry's provider-hub
+// rows for the public project), per request, and a toolkit delete must decide
+// inside its own transaction, from the deleted row's `type` alone, whether an
+// engine is owed a call. A prefix match ("inventory_*") would also claim any
+// future toolkit of another provider whose name happens to start the same way,
+// and a lookup in the manifests would make a delete depend on the admission
+// table. So the types are pinned here, from the descriptors this repository
+// ships (services/elitea-subapp-host/internal/apps/<app>/descriptor.json), and
+// TestAppForToolkitTypeCoversTheShippedDescriptors fails when a descriptor
+// publishes a type this list does not know.
+//
+// A projected type is the descriptor's `toolkit_metadata.type_override`, or
+// `<provider name>_<toolkit name>` without one. Inventory's two toolkits both
+// override: `inventory` (a graph) and `inventory_search` (a search over another
+// toolkit's graph; the engine holds nothing for it and answers "nothing to
+// delete", which is the correct close of its row). DeepWiki's descriptor is
+// named `wikis`; its `Wikis` toolkit has no override and the other two do. The
+// historical spellings `deepwiki_Deepwiki`, `deepwiki` and `wikis` are the ones
+// internal/api/v2/deepwiki.AdmittedWikisToolkitTypes still admits for stored
+// rows.
+var toolkitTypeApps = map[string]string{
+	"inventory":        AppInventory,
+	"inventory_search": AppInventory,
+
+	"wikis_Wikis":       AppDeepWiki,
+	"wikis_query":       AppDeepWiki,
+	"wiki_query":        AppDeepWiki,
+	"deepwiki_Deepwiki": AppDeepWiki,
+	"deepwiki":          AppDeepWiki,
+	"wikis":             AppDeepWiki,
+}
+
+// AppForToolkitType names the application whose engine holds data for a
+// toolkit of the given type, or "" for a type no platform service covers. The
+// match is exact (toolkitTypeApps), after trimming whitespace.
 func AppForToolkitType(toolkitType string) string {
-	name := strings.ToLower(strings.TrimSpace(toolkitType))
-	if at := strings.IndexByte(name, '_'); at > 0 {
-		name = name[:at]
+	return toolkitTypeApps[strings.TrimSpace(toolkitType)]
+}
+
+// ToolkitTypesOf lists the toolkit types AppForToolkitType maps to app, sorted.
+// For the tests that pin the list and for a startup log.
+func ToolkitTypesOf(app string) []string {
+	types := make([]string, 0, len(toolkitTypeApps))
+	for toolkitType, owner := range toolkitTypeApps {
+		if owner == app {
+			types = append(types, toolkitType)
+		}
 	}
-	switch name {
-	case AppDeepWiki, "wikis":
-		return AppDeepWiki
-	case AppInventory:
-		return AppInventory
-	}
-	return ""
+	sort.Strings(types)
+	return types
 }

@@ -544,6 +544,17 @@ networkPolicies:
 main:
   # The API. Everything else is optional next to it.
   enabled: true
+  # The identity (certificate common name or DNS SAN) elitea-main presents to
+  # the application engines' platform gRPC services (#1243, #1244), which
+  # deepwiki.platformGrpc.clients / inventory.platformGrpc.clients must name.
+  # It is READ ONLY FOR OPERATOR-SUPPLIED client material: when
+  # fileConfig.<app>ClientMaterial mounts a Secret the chart did not issue, or a
+  # volume, the chart cannot read the certificate and checks the allowlist
+  # against this name instead. When the chart issues the facade client
+  # certificate itself (<app>.mtls, the default) the identity is that
+  # Certificate's common name, elitea-main, and this must stay at it (the
+  # chart refuses anything else).
+  platformClientName: elitea-main
   # PROTOTYPE VALUES ONLY. This chart does not yet define split database
   # principals or production secret delivery. Ingress NetworkPolicies for the
   # workloads below are on by default (see networkPolicies). An opt-in
@@ -1510,6 +1521,14 @@ main:
     # certificate, so a target beside a facade that is off is refused, here and
     # at boot.
     ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: ""
+    # The toolkit-deletion reconciler (#1244): the loop on every elitea-main
+    # replica that drains centry.toolkit_deletions — the engine-side deletion
+    # an Inventory toolkit's delete owes, recorded by the delete's own
+    # transaction and performed afterwards with backoff. ON by default; "false"
+    # switches it off on a replica that should not run it (an engine incident,
+    # a migration window), never to opt in. Independent of the project
+    # reconciler's ELITEA_PROJECT_DELETION_RECONCILER_ENABLED (same default).
+    ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "true"
 
     # --- The Inventory facade's source expansion (ADR-0023 H4c I2) ---
     #

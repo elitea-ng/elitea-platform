@@ -95,6 +95,38 @@ Checked at `helm template` time and not only at container start, because the
 container's own refusal is a CrashLoopBackOff an operator has to go read logs
 for, and this is a message in the terminal that ran the command.
 */}}
+{{/*
+elitea-inventory.platformClientMaterialIsChartIssued — "true" when the client
+material elitea-main presents on the Inventory hops is the facade client
+certificate THIS chart issues (inventory.mtls, common name elitea-main) and main,
+rendered here, mounts that very Secret. Empty for operator-supplied material:
+main mounts another Secret or a volume, mtls is off, or main is not rendered
+in this release.
+*/}}
+{{- define "elitea-inventory.platformClientMaterialIsChartIssued" -}}
+{{- $main := .Values.main | default dict -}}
+{{- $material := get ($main.fileConfig | default dict) "inventoryClientMaterial" | default dict -}}
+{{- $secret := $material.secretName | default "" | toString -}}
+{{- $volume := $material.volume | default dict -}}
+{{- if and $main.enabled .Values.inventory.mtls.enabled (not $volume) (or (eq $secret "") (eq $secret (.Values.inventory.mtls.clientSecretName | toString))) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+elitea-inventory.platformClientName — the identity (certificate common name or DNS
+SAN) inventory.platformGrpc.clients must name for elitea-main's calls to be
+admitted: elitea-main when the chart issues the material, otherwise
+main.platformClientName (default elitea-main).
+*/}}
+{{- define "elitea-inventory.platformClientName" -}}
+{{- if include "elitea-inventory.platformClientMaterialIsChartIssued" . -}}
+elitea-main
+{{- else -}}
+{{ .Values.main.platformClientName | default "elitea-main" }}
+{{- end -}}
+{{- end -}}
+
 {{- define "elitea-inventory.validateGuards" -}}
 {{- $env := .Values.inventory.env | default dict -}}
 {{- $runner := get $env "ELITEA_INVENTORY_RUNNER" | toString -}}
@@ -112,8 +144,27 @@ for, and this is a message in the terminal that ran the command.
 {{- if eq (.Values.inventory.platformGrpc.port | int) 8080 -}}
 {{- fail "inventory.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
 {{- end -}}
-{{- if not (has "elitea-main" .Values.inventory.platformGrpc.clients) -}}
+{{- /*
+  The allowlist must name the identity elitea-main presents on this hop. When
+  this chart issues the facade client certificate itself (inventory.mtls, with
+  main mounting that Secret), the identity is the Certificate's common name,
+  elitea-main, and nothing else can be right. With OPERATOR-SUPPLIED material
+  (main mounts another Secret, or a volume, or main is not rendered here) the
+  chart cannot read the certificate, so the operator states the name in
+  main.platformClientName (default elitea-main) and the allowlist is checked
+  against that instead.
+*/ -}}
+{{- $expectedClient := include "elitea-inventory.platformClientName" . -}}
+{{- $statedClient := .Values.main.platformClientName | default "elitea-main" | toString -}}
+{{- if and (include "elitea-inventory.platformClientMaterialIsChartIssued" .) (ne $statedClient "elitea-main") -}}
+{{- fail (printf "main.platformClientName is %q, but the chart issues the Inventory facade client certificate itself (inventory.mtls) with the common name elitea-main, which is what elitea-main presents on this hop. Leave main.platformClientName at elitea-main, or point main.fileConfig.inventoryClientMaterial at your own material." $statedClient) -}}
+{{- end -}}
+{{- if not (has $expectedClient .Values.inventory.platformGrpc.clients) -}}
+{{- if include "elitea-inventory.platformClientMaterialIsChartIssued" . -}}
 {{- fail (printf "inventory.platformGrpc.clients is %v, which does not name elitea-main. The facade client certificate this chart issues (inventory.mtls) has the common name elitea-main, and it is the certificate elitea-main presents on this hop too, so an allowlist without it refuses every call elitea-main makes and the service deletes nothing. Add elitea-main." .Values.inventory.platformGrpc.clients) -}}
+{{- else -}}
+{{- fail (printf "inventory.platformGrpc.clients is %v, which does not name %q (main.platformClientName), the identity of the operator-supplied client material elitea-main presents on this hop. An allowlist without it refuses every call elitea-main makes and the service deletes nothing. Add it, or set main.platformClientName to the name the material carries." .Values.inventory.platformGrpc.clients $expectedClient) -}}
+{{- end -}}
 {{- end -}}
 {{- if or (hasKey $env "ELITEA_INVENTORY_PLATFORM_CLIENTS") (hasKey $env "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") -}}
 {{- fail "inventory.env sets ELITEA_INVENTORY_PLATFORM_CLIENTS or ELITEA_INVENTORY_PLATFORM_GRPC_ADDR; the chart renders both from inventory.platformGrpc (clients, port). Remove them from env." -}}

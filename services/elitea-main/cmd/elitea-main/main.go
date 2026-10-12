@@ -2389,10 +2389,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	// The toolkit-deletion reconciler (#1244) drains the toolkit cleanup
 	// journal the toolkit handler enqueues into, over the same journal, from
-	// the router's hook; it shares the project reconciler's flag.
+	// the router's hook; it has a flag of its own.
+	toolkitReconciler, err := toolkitDeletionReconcilerFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load toolkit deletion reconciler settings: %w", err)
+	}
 	var toolkitReconcilerErr error
 	startToolkitReconciler := func(journal *toolkitcleanup.Journal) {
-		toolkitReconcilerErr = startToolkitDeletionReconciler(ctx, deletionReconciler, journal, logger)
+		toolkitReconcilerErr = startToolkitDeletionReconciler(ctx, toolkitReconciler, journal, logger)
 	}
 
 	r := api.NewRouter(api.RouterConfig{

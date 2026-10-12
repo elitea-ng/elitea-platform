@@ -10,6 +10,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
@@ -47,10 +48,11 @@ func TestEveryClientBecomesOneProvisionerOption(t *testing.T) {
 	}
 }
 
-// The toolkit journal the router builds knows the wired applications, and
-// decides from them (and from which applications keep data per toolkit) which
-// toolkit types owe a row: Inventory yes, DeepWiki never, others never.
-func TestTheToolkitJournalEnqueuesForTheWiredEnginesOnly(t *testing.T) {
+// The toolkit journal the router builds knows the wired applications; which
+// toolkit types owe a row is decided from the type alone (Inventory yes,
+// DeepWiki never, others never), on every replica, so a replica without the
+// Inventory client records the obligation for one that has it.
+func TestTheToolkitJournalKnowsTheWiredEnginesAndTheTypesThatOweARow(t *testing.T) {
 	t.Parallel()
 	journal := newToolkitCleanupJournal(RouterConfig{ApplicationData: []ApplicationDataClient{
 		&fakeApplicationClient{app: platformops.AppInventory},
@@ -59,19 +61,23 @@ func TestTheToolkitJournalEnqueuesForTheWiredEnginesOnly(t *testing.T) {
 	if got := journal.AppsWired(); !slices.Equal(got, []string{"deepwiki", "inventory"}) {
 		t.Fatalf("AppsWired = %v", got)
 	}
-	ctx := context.Background()
-	if app := journal.AppToEnqueue(ctx, 7, 70, "inventory_inventory"); app != platformops.AppInventory {
+	if app := toolkitcleanup.AppToEnqueue("inventory"); app != platformops.AppInventory {
 		t.Fatalf("inventory toolkit → %q", app)
 	}
-	if app := journal.AppToEnqueue(ctx, 7, 71, "deepwiki_Deepwiki"); app != "" {
+	if app := toolkitcleanup.AppToEnqueue("deepwiki_Deepwiki"); app != "" {
 		t.Fatalf("a DeepWiki toolkit owes an engine call: %q", app)
 	}
-	if app := journal.AppToEnqueue(ctx, 7, 72, "github"); app != "" {
+	if app := toolkitcleanup.AppToEnqueue("github"); app != "" {
 		t.Fatalf("a github toolkit owes an engine call: %q", app)
 	}
 
 	unwired := newToolkitCleanupJournal(RouterConfig{})
-	if app := unwired.AppToEnqueue(ctx, 7, 70, "inventory_inventory"); app != "" {
-		t.Fatalf("a replica without the Inventory client enqueued for it: %q", app)
+	if got := unwired.AppsWired(); len(got) != 0 {
+		t.Fatalf("a replica with no engines has clients: %v", got)
+	}
+	// It still records the obligation: Enqueue reaches for the transaction
+	// rather than skipping the row.
+	if _, err := unwired.Enqueue(context.Background(), nil, 7, 70, "inventory"); err == nil {
+		t.Fatal("a replica without the Inventory client skipped the journal row")
 	}
 }

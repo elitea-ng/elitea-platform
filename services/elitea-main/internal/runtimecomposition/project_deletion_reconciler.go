@@ -165,16 +165,33 @@ func (r *ProjectDeletionReconciler) Run(ctx context.Context) error {
 	if r == nil || r.journal == nil || ctx == nil {
 		return errors.New("project deletion reconciler is incomplete")
 	}
+	return runReconcilerPasses(ctx, r.config.Interval, r.wait, r.RunOnce, func(err error) {
+		r.errored.Add(1)
+		r.logger.ErrorContext(ctx, "project deletion reconciliation failed", "err", err)
+	})
+}
+
+// runReconcilerPasses is the pass loop the two cleanup-journal reconcilers
+// share (this one and ToolkitDeletionReconciler): runOnce, then wait the
+// interval jittered by up to +-20% so replicas do not run their passes in step,
+// until ctx ends. A pass that fails for a reason other than ctx ending is
+// reported to onError and the loop goes on; ctx's end is returned.
+func runReconcilerPasses(
+	ctx context.Context,
+	interval time.Duration,
+	wait func(context.Context, time.Duration) error,
+	runOnce func(context.Context) (int, error),
+	onError func(error),
+) error {
 	for {
-		if _, err := r.RunOnce(ctx); err != nil {
+		if _, err := runOnce(ctx); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			r.errored.Add(1)
-			r.logger.ErrorContext(ctx, "project deletion reconciliation failed", "err", err)
+			onError(err)
 		}
 		jitter := 0.8 + 0.4*rand.Float64()
-		if err := r.wait(ctx, time.Duration(float64(r.config.Interval)*jitter)); err != nil {
+		if err := wait(ctx, time.Duration(float64(interval)*jitter)); err != nil {
 			return err
 		}
 	}

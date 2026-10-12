@@ -89,6 +89,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
 )
@@ -146,15 +147,14 @@ var ErrVectorStoreNotDropped = errors.New("projectprovisioning: project vector s
 // detached from the request (the project row is already gone, so a client that
 // hangs up must not abandon the cleanup half way), so this is its deadline.
 // vectorDropTimeout bounds the drop inside it: the advisory-lock wait plus the
-// drop itself. bookkeepingTimeout bounds each journal write a run makes, on a
-// context of its own so a run that hit its deadline still records what it did.
-// leaseMargin is added to a run's bound to make its lease. Variables so a test
-// can shrink them.
+// drop itself. Each journal write a run makes is on a context of its own
+// (cleanupjournal.BookkeepingContext), so a run that hit its deadline still
+// records what it did. leaseMargin is added to a run's bound to make its lease.
+// Variables so a test can shrink them.
 var (
-	cleanupTimeout     = 5 * time.Minute
-	vectorDropTimeout  = 2 * time.Minute
-	bookkeepingTimeout = 10 * time.Second
-	leaseMargin        = time.Minute
+	cleanupTimeout    = 5 * time.Minute
+	vectorDropTimeout = 2 * time.Minute
+	leaseMargin       = time.Minute
 )
 
 // cleanupLease is how long a run bounded by bound owns a journal row: the bound
@@ -583,7 +583,7 @@ func (p *Provisioner) pendingResult(projectID int64, cleanup *deletionCleanup, d
 // has nothing pending; a read that fails reports every step pending, which is
 // true of anything not yet recorded.
 func (p *Provisioner) pendingFromJournal(runCtx context.Context, projectID int64) Result {
-	ctx, cancel := bookkeepingContext(runCtx)
+	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	var (
 		encoded   []byte
@@ -845,7 +845,7 @@ RETURNING project_id`,
 // project took effect: the project row is gone AND its journal row exists. The
 // two are written in one transaction, so seeing both is seeing the commit.
 func (p *Provisioner) deletionCommitted(ctx context.Context, projectID int64) (bool, error) {
-	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bookkeepingTimeout)
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupjournal.BookkeepingTimeout)
 	defer cancel()
 	var rowExists, journalExists bool
 	if err := p.pool.QueryRow(checkCtx, `
@@ -917,7 +917,7 @@ func (p *Provisioner) recordCleanup(ctx context.Context, transaction pgx.Tx, pro
 // without counting an attempt or growing the backoff (last_error is
 // "interrupted").
 //
-// The journal writes use a context of their own (bookkeepingContext), so a run
+// The journal writes use a context of their own (cleanupjournal.BookkeepingContext), so a run
 // whose context ended still records the steps it finished. A step not reached
 // because the deadline passed is pending, not failed: it has no status of its own
 // and no error, and the journal row stays open for the next run.
@@ -1088,17 +1088,11 @@ func (p *Provisioner) projectRowExists(ctx context.Context, projectID int64) (bo
 	return exists, nil
 }
 
-// bookkeepingContext is the context for one journal write: detached from the
-// run's (which may have ended at its deadline) with a short bound of its own.
-func bookkeepingContext(runCtx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(runCtx), bookkeepingTimeout)
-}
-
 // restampLease gives the run its full lease from now: the decision stamped one
 // when it inserted the row, and a decision that waited on a lock has used part of
 // it. A failure is logged only; the decision's lease still stands.
 func (p *Provisioner) restampLease(runCtx context.Context, projectID int64) {
-	ctx, cancel := bookkeepingContext(runCtx)
+	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
@@ -1114,7 +1108,7 @@ WHERE project_id = $1 AND completed_at IS NULL`,
 // note. A failure is logged only: the step is idempotent, so the worst outcome is
 // that a later run repeats it.
 func (p *Provisioner) markCleanupStep(runCtx context.Context, projectID int64, step, note string) {
-	ctx, cancel := bookkeepingContext(runCtx)
+	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
@@ -1132,7 +1126,7 @@ WHERE project_id = $1`, projectID, step, note); err != nil {
 // failed step did before it failed (a partial engine deletion). A failure is
 // logged only.
 func (p *Provisioner) recordCleanupNote(runCtx context.Context, projectID int64, step, note string) {
-	ctx, cancel := bookkeepingContext(runCtx)
+	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
@@ -1146,7 +1140,7 @@ WHERE project_id = $1`, projectID, step, note); err != nil {
 // recordQuietFailures stores how many quiet drop failures the journal has seen,
 // so the limit holds across runs and restarts.
 func (p *Provisioner) recordQuietFailures(runCtx context.Context, projectID int64, count int) {
-	ctx, cancel := bookkeepingContext(runCtx)
+	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
@@ -1161,7 +1155,7 @@ WHERE project_id = $1`, projectID, count); err != nil {
 // completed, flagged cleanup.superseded, lease released. It reports whether the
 // row is closed.
 func (p *Provisioner) closeSuperseded(runCtx context.Context, projectID int64) bool {
-	ctx, cancel := bookkeepingContext(runCtx)
+	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
@@ -1181,7 +1175,7 @@ WHERE project_id = $1 AND completed_at IS NULL`, projectID); err != nil {
 // row records "interrupted", and neither attempts nor the backoff move, so a
 // restart does not make the cleanup of every in-flight delete wait longer.
 func (p *Provisioner) releaseInterrupted(runCtx context.Context, projectID int64) {
-	ctx, cancel := bookkeepingContext(runCtx)
+	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	if _, err := p.pool.Exec(ctx, `
 UPDATE centry.project_deletions
@@ -1197,7 +1191,7 @@ WHERE project_id = $1 AND completed_at IS NULL`, projectID); err != nil {
 // raw error can carry SQL or addresses) and next_attempt_at backs off by the
 // number of runs so far. It reports whether the row is now complete.
 func (p *Provisioner) finishCleanupRun(runCtx context.Context, projectID int64, failedSteps []string) bool {
-	ctx, cancel := bookkeepingContext(runCtx)
+	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
 	defer cancel()
 	var lastError *string
 	if len(failedSteps) > 0 {

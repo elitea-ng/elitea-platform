@@ -14,12 +14,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -347,21 +349,74 @@ func TestConfigValidation(t *testing.T) {
 func TestAppForToolkitType(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"deepwiki_Deepwiki":   platformops.AppDeepWiki,
-		"wikis_Wikis":         platformops.AppDeepWiki,
-		"deepwiki":            platformops.AppDeepWiki,
-		"wikis":               platformops.AppDeepWiki,
-		"inventory_inventory": platformops.AppInventory,
-		"inventory":           platformops.AppInventory,
-		"Inventory_Graph":     platformops.AppInventory,
-		"github":              "",
+		// The types the shipped descriptors project (type_override, or
+		// <provider>_<toolkit>), and the historical DeepWiki spellings.
+		"inventory":         platformops.AppInventory,
+		"inventory_search":  platformops.AppInventory,
+		" inventory ":       platformops.AppInventory,
+		"wikis_Wikis":       platformops.AppDeepWiki,
+		"wikis_query":       platformops.AppDeepWiki,
+		"wiki_query":        platformops.AppDeepWiki,
+		"deepwiki_Deepwiki": platformops.AppDeepWiki,
+		"deepwiki":          platformops.AppDeepWiki,
+		"wikis":             platformops.AppDeepWiki,
+		// Exact matches only: no prefix, no case folding, no guessing.
+		"inventory_inventory": "",
+		"Inventory":           "",
+		"Inventory_Graph":     "",
 		"inventorying_x":      "",
 		"_inventory":          "",
+		"github":              "",
 		"":                    "",
 	}
 	for in, want := range cases {
 		if got := platformops.AppForToolkitType(in); got != want {
 			t.Errorf("AppForToolkitType(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := platformops.ToolkitTypesOf(platformops.AppInventory); !slices.Equal(got, []string{"inventory", "inventory_search"}) {
+		t.Errorf("ToolkitTypesOf(inventory) = %v", got)
+	}
+	if got := platformops.ToolkitTypesOf("github"); len(got) != 0 {
+		t.Errorf("ToolkitTypesOf(github) = %v", got)
+	}
+}
+
+// The allow-list is pinned to the descriptors this repository ships: every
+// toolkit type a descriptor projects (internal/api/v2/toolkits.
+// projectProviderToolkits: the toolkit's type_override, or <provider name>_
+// <toolkit name>) must resolve to its application, so a toolkit added to an
+// engine cannot be deleted without its engine data from the day it ships.
+func TestAppForToolkitTypeCoversTheShippedDescriptors(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join("..", "..", "..", "..", "elitea-subapp-host", "internal", "apps")
+	for directory, app := range map[string]string{"inventory": platformops.AppInventory, "deepwiki": platformops.AppDeepWiki} {
+		raw, err := os.ReadFile(filepath.Join(root, directory, "descriptor.json"))
+		if err != nil {
+			t.Skipf("the shipped descriptor is not readable from here: %v", err)
+		}
+		var descriptor struct {
+			Name     string `json:"name"`
+			Toolkits []struct {
+				Name     string         `json:"name"`
+				Metadata map[string]any `json:"toolkit_metadata"`
+			} `json:"provided_toolkits"`
+		}
+		if err := json.Unmarshal(raw, &descriptor); err != nil {
+			t.Fatalf("%s descriptor: %v", directory, err)
+		}
+		if len(descriptor.Toolkits) == 0 {
+			t.Fatalf("%s descriptor publishes no toolkit", directory)
+		}
+		for _, toolkit := range descriptor.Toolkits {
+			toolkitType, _ := toolkit.Metadata["type_override"].(string)
+			if toolkitType == "" {
+				toolkitType = descriptor.Name + "_" + toolkit.Name
+			}
+			if got := platformops.AppForToolkitType(toolkitType); got != app {
+				t.Errorf("%s descriptor projects type %q, which AppForToolkitType maps to %q, want %q: add it to toolkitTypeApps",
+					directory, toolkitType, got, app)
+			}
 		}
 	}
 }

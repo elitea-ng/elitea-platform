@@ -1051,6 +1051,10 @@ services:
       # allows CN=elitea-main (ELITEA_INVENTORY_PLATFORM_CLIENTS) and its
       # server certificate's SANs name elitea-inventory.
       ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: "elitea-inventory:9443"
+      # The toolkit-deletion reconciler (#1244) drains the journal those
+      # deletes write (centry.toolkit_deletions). On by default; its own flag,
+      # apart from the project reconciler's.
+      ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "${ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED:-true}"
       # The project whose configurations are treated as PUBLIC and merged into
       # every other project's option lookups.
       #

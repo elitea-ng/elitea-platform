@@ -20,9 +20,10 @@ package toolkits
 // documents no 404), and journals nothing.
 //
 // WHICH TYPES OWE A JOURNAL ROW is the journal's decision
-// (toolkitcleanup.Journal.AppToEnqueue): Inventory types on a replica with the
-// Inventory client; DeepWiki types never (DeepWiki keeps nothing per toolkit);
-// every other type never.
+// (toolkitcleanup.AppToEnqueue), from the type alone: the Inventory types (an
+// exact allow-list), on every replica whether or not it has the Inventory
+// client — a replica that has one drains the row; DeepWiki types never
+// (DeepWiki keeps nothing per toolkit); every other type never.
 
 import (
 	"context"
@@ -38,8 +39,8 @@ import (
 // ToolkitCleanupJournal records, inside the delete's transaction, the
 // engine-side deletion a toolkit owes. *toolkitcleanup.Journal satisfies it.
 type ToolkitCleanupJournal interface {
-	// Enqueue writes the journal row for the toolkit when its type owes one on
-	// this replica, and returns the application queued ("" when none).
+	// Enqueue writes the journal row for the toolkit when its type owes one,
+	// and returns the application queued ("" when none).
 	Enqueue(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64, toolkitType string) (app string, err error)
 }
 

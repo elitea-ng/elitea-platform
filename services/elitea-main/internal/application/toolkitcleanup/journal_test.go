@@ -1,8 +1,8 @@
 package toolkitcleanup
 
-// The journal's decisions that need no database: which toolkit types owe a row
-// on this replica, and how one engine call's answer is classified. The SQL
-// (enqueue, claim, resume, close, backoff) is tested against Postgres in
+// The journal's decisions that need no database: which toolkit types owe a row,
+// and how one engine call's answer is classified. The SQL (enqueue, claim,
+// resume, close, backoff, generation) is tested against Postgres in
 // journal_postgres_integration_test.go.
 
 import (
@@ -31,38 +31,46 @@ func (f *fakeRemover) DeleteToolkitData(_ context.Context, projectID, toolkitID 
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-func TestOnlyInventoryTypesOnAWiredReplicaOweARow(t *testing.T) {
+// Which types owe a row is a property of the type alone: the Inventory types
+// (exact names), never a DeepWiki type (nothing per toolkit), never another.
+func TestOnlyInventoryTypesOweARow(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	wired := New(nil, quiet(), WithRemover(platformops.AppInventory, &fakeRemover{}), WithRemover(platformops.AppDeepWiki, &fakeRemover{}))
 	for toolkitType, want := range map[string]string{
-		"inventory_inventory": platformops.AppInventory,
-		"inventory":           platformops.AppInventory,
-		"Inventory_Graph":     platformops.AppInventory,
+		"inventory":        platformops.AppInventory,
+		"inventory_search": platformops.AppInventory,
 		// DeepWiki keeps nothing per toolkit: no row, no call, in any spelling.
 		"deepwiki_Deepwiki": "",
+		"wikis_Wikis":       "",
 		"wikis":             "",
 		"deepwiki":          "",
+		// Not a published type: exact matches only.
+		"inventory_inventory": "",
+		"Inventory_Graph":     "",
 		// No engine at all.
 		"github": "",
 		"":       "",
 	} {
-		if got := wired.AppToEnqueue(ctx, 7, 70, toolkitType); got != want {
+		if got := AppToEnqueue(toolkitType); got != want {
 			t.Errorf("AppToEnqueue(%q) = %q, want %q", toolkitType, got, want)
 		}
 	}
+	wired := New(nil, quiet(), WithRemover(platformops.AppInventory, &fakeRemover{}), WithRemover(platformops.AppDeepWiki, &fakeRemover{}))
 	if got := wired.AppsWired(); !slices.Equal(got, []string{"deepwiki", "inventory"}) {
 		t.Fatalf("AppsWired = %v", got)
 	}
+}
 
-	// A replica without the Inventory client records nothing: there is no
-	// engine for it to call, and a row nobody here can drain is not a plan.
+// The obligation does not depend on the replica's wiring: a replica without
+// the Inventory client enqueues the row all the same (and so needs the
+// transaction), for a replica that has the client to drain.
+func TestAnUnwiredReplicaEnqueuesTheObligationAllTheSame(t *testing.T) {
+	t.Parallel()
 	unwired := New(nil, quiet())
-	if got := unwired.AppToEnqueue(ctx, 7, 70, "inventory_inventory"); got != "" {
-		t.Fatalf("an unwired replica enqueues: %q", got)
+	if _, err := unwired.Enqueue(context.Background(), nil, 7, 70, "inventory"); err == nil {
+		t.Fatal("Enqueue on an unwired replica skipped the row (no transaction was needed)")
 	}
-	if app, err := unwired.Enqueue(ctx, nil, 7, 70, "inventory_inventory"); app != "" || err != nil {
-		t.Fatalf("Enqueue on an unwired replica = %q, %v", app, err)
+	if app, err := unwired.Enqueue(context.Background(), nil, 7, 70, "github"); app != "" || err != nil {
+		t.Fatalf("Enqueue of a type with no engine = %q, %v", app, err)
 	}
 }
 
@@ -78,13 +86,13 @@ func TestANilOrTypedNilRemoverIsIgnored(t *testing.T) {
 func TestEnqueueOnAWiredReplicaNeedsTheTransaction(t *testing.T) {
 	t.Parallel()
 	j := New(nil, quiet(), WithRemover(platformops.AppInventory, &fakeRemover{}))
-	if _, err := j.Enqueue(context.Background(), nil, 7, 70, "inventory_inventory"); err == nil {
+	if _, err := j.Enqueue(context.Background(), nil, 7, 70, "inventory"); err == nil {
 		t.Fatal("Enqueue without a transaction succeeded")
 	}
 }
 
 func inventoryRow() row {
-	return row{id: 1, projectID: 7, toolkitID: 70, app: platformops.AppInventory, toolkitType: "inventory_inventory"}
+	return row{id: 1, generation: 1, projectID: 7, toolkitID: 70, app: platformops.AppInventory, toolkitType: "inventory"}
 }
 
 func TestTheEngineAnswersAreClassified(t *testing.T) {
@@ -102,9 +110,9 @@ func TestTheEngineAnswersAreClassified(t *testing.T) {
 		{"unsupported", &fakeRemover{err: fmt.Errorf("%w: inventory delete_toolkit", platformops.ErrNotSupported)},
 			outcomeDone, OutcomeUnsupported, NoteUnsupported, ""},
 		{"not allowed", &fakeRemover{err: fmt.Errorf("%w: inventory delete_toolkit: CN=elitea-main not in allowlist (PermissionDenied)", platformops.ErrNotAllowed)},
-			outcomeDone, OutcomeFailedPermanent, "failed permanently: ", ""},
+			outcomeDone, OutcomeFailedPermanent, NoteRefused, ""},
 		{"bad request", &fakeRemover{err: fmt.Errorf("%w: toolkit id 0 is not a positive int32", platformops.ErrConfig)},
-			outcomeDone, OutcomeFailedPermanent, "failed permanently: ", ""},
+			outcomeDone, OutcomeFailedPermanent, NoteInvalidRequest, ""},
 		{"retry later", &fakeRemover{err: fmt.Errorf("%w: inventory delete_toolkit: ingest running (FailedPrecondition)", platformops.ErrRetryLater)},
 			outcomeRetry, "", "", lastErrorRetryLater},
 		{"engine failure", &fakeRemover{err: errors.New("inventory delete_toolkit failed: boom (Internal)")},
@@ -120,8 +128,8 @@ func TestTheEngineAnswersAreClassified(t *testing.T) {
 			if got.result != testCase.wantResult {
 				t.Errorf("result = %q, want %q", got.result, testCase.wantResult)
 			}
-			if !strings.HasPrefix(got.note, testCase.wantNote) {
-				t.Errorf("note = %q, want prefix %q", got.note, testCase.wantNote)
+			if got.note != testCase.wantNote {
+				t.Errorf("note = %q, want %q", got.note, testCase.wantNote)
 			}
 			if got.lastError != testCase.wantError {
 				t.Errorf("lastError = %q, want %q", got.lastError, testCase.wantError)
@@ -136,15 +144,26 @@ func TestTheEngineAnswersAreClassified(t *testing.T) {
 	}
 }
 
-// The permanent note carries the engine's reason, which is what an operator
-// needs to fix the allowlist.
-func TestAPermanentFailureNotesTheReason(t *testing.T) {
+// The permanent note is the CLASS of the failure, never the engine's message:
+// the message (an identity, an address, what the engine refused) is logged
+// with the row's ids and stored nowhere.
+func TestAPermanentFailureNotesTheClassNotTheReason(t *testing.T) {
 	t.Parallel()
-	j := New(nil, quiet(), WithRemover(platformops.AppInventory,
-		&fakeRemover{err: fmt.Errorf("%w: inventory delete_toolkit: CN=elitea-main not in allowlist (PermissionDenied)", platformops.ErrNotAllowed)}))
+	var log strings.Builder
+	logger := slog.New(slog.NewTextHandler(&log, nil))
+	j := New(nil, logger, WithRemover(platformops.AppInventory,
+		&fakeRemover{err: fmt.Errorf("%w: inventory delete_toolkit: CN=elitea-main not in allowlist at 10.0.7.3:9443 (PermissionDenied)", platformops.ErrNotAllowed)}))
 	got := j.deleteInEngine(context.Background(), inventoryRow())
-	if !strings.Contains(got.note, "allowlist") {
-		t.Fatalf("note = %q, want the engine's reason", got.note)
+	if got.note != NoteRefused {
+		t.Fatalf("note = %q, want %q", got.note, NoteRefused)
+	}
+	for _, leak := range []string{"allowlist", "10.0.7.3", "CN="} {
+		if strings.Contains(got.note, leak) {
+			t.Fatalf("note %q carries the engine's message (%q)", got.note, leak)
+		}
+	}
+	if !strings.Contains(log.String(), "10.0.7.3:9443") || !strings.Contains(log.String(), "toolkit_id=70") {
+		t.Fatalf("the raw error and the row's ids are not in the log: %s", log.String())
 	}
 }
 
@@ -169,7 +188,7 @@ func TestAJournalWithoutADatabaseClaimsAndResumesNothing(t *testing.T) {
 	if _, _, err := j.ClaimNext(context.Background(), 0); err == nil {
 		t.Fatal("ClaimNext without a database succeeded")
 	}
-	if _, err := j.Resume(context.Background(), 1); err == nil {
+	if _, err := j.Resume(context.Background(), Claim{ID: 1, Generation: 1}); err == nil {
 		t.Fatal("Resume without a database succeeded")
 	}
 }
