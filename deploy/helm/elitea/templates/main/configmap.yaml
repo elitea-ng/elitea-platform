@@ -70,6 +70,25 @@
 {{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $.Values.worker.indexingRuntime) }}
 {{- end }}
 {{- /*
+  The application engines' platform gRPC targets (#1243, #1244): where
+  elitea-main deletes a project's (and a toolkit's) data in DeepWiki and
+  Inventory. DERIVED from the engine's own values — <service name>:<platformGrpc
+  port> — whenever the engine is rendered WITH its platform service on
+  (platformGrpc.clients non-empty) and the matching facade is on here, because
+  the three are one feature: an engine that serves the deletion with no caller
+  configured keeps the data exactly as before. An explicit env entry wins, and
+  one set beside a facade that is off is refused (elitea-main.validateDeepWiki /
+  validateInventory), as cmd/elitea-main refuses it at boot.
+*/ -}}
+{{- $deepwikiTarget := include "elitea-deepwiki.platformGrpcTarget" . }}
+{{- if and $deepwikiTarget (not (get $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET")) (has (lower (get $env "ELITEA_DEEPWIKI_ENABLED" | toString)) (list "1" "true" "yes" "on")) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET" $deepwikiTarget) }}
+{{- end }}
+{{- $inventoryTarget := include "elitea-inventory.platformGrpcTarget" . }}
+{{- if and $inventoryTarget (not (get $env "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET")) (has (lower (get $env "ELITEA_INVENTORY_ENABLED" | toString)) (list "1" "true" "yes" "on")) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET" $inventoryTarget) }}
+{{- end }}
+{{- /*
   ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are DERIVED
   the same way (issues #394 and #395). Each route is now the ONLY handler for
   its path — the prototype fallbacks in internal/api/router.go are deleted — so

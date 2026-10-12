@@ -65,6 +65,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
@@ -1602,6 +1603,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
 		}
 	}
+	// The application engines' platform services (#1243, #1244): the gRPC
+	// clients that delete a project's (and a toolkit's) data in DeepWiki and
+	// Inventory, read beside the two facades whose mTLS material they present.
+	// They are shared by the project provisioner's cleanup journal (one step
+	// each) and the toolkit cleanup journal (one row per Inventory toolkit),
+	// through RouterConfig.ApplicationData.
+	applicationData, closePlatformOperations, err := composePlatformOperations(
+		logger, deepwikiConfig, inventoryConfig, os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("compose application platform operations: %w", err)
+	}
+	defer closePlatformOperations()
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -2374,11 +2387,24 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	startDeletionReconciler := func(provisioner *projectprovisioning.Provisioner) {
 		deletionReconcilerErr = startProjectDeletionReconciler(ctx, deletionReconciler, provisioner, logger)
 	}
+	// The toolkit-deletion reconciler (#1244) drains the toolkit cleanup
+	// journal the toolkit handler enqueues into, over the same journal, from
+	// the router's hook; it has a flag of its own.
+	toolkitReconciler, err := toolkitDeletionReconcilerFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load toolkit deletion reconciler settings: %w", err)
+	}
+	var toolkitReconcilerErr error
+	startToolkitReconciler := func(journal *toolkitcleanup.Journal) {
+		toolkitReconcilerErr = startToolkitDeletionReconciler(ctx, toolkitReconciler, journal, logger)
+	}
 
 	r := api.NewRouter(api.RouterConfig{
 		OnProjectProvisioner:         startDeletionReconciler,
+		OnToolkitCleanupJournal:      startToolkitReconciler,
 		ProjectCleanupContext:        ctx,
 		ProjectDeleteBudget:          projectDeleteBudget,
+		ApplicationData:              applicationData,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,
@@ -2542,6 +2568,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	})
 	if deletionReconcilerErr != nil {
 		return fmt.Errorf("start project deletion reconciler: %w", deletionReconcilerErr)
+	}
+	if toolkitReconcilerErr != nil {
+		return fmt.Errorf("start toolkit deletion reconciler: %w", toolkitReconcilerErr)
 	}
 
 	// NOTE(#126): the Socket.IO prototype server (internal/api/socketio) is

@@ -30,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +37,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 )
 
 // TenantMigrator applies the embedded tenant history to one project's schema.
@@ -235,6 +236,10 @@ type Provisioner struct {
 	commit        func(context.Context, pgx.Tx) error
 	defaultModels ProjectDefaultModelSeeder
 	logger        *slog.Logger
+	// applications are the engines a delete removes the project's data from
+	// (a DeepWiki wiki index, an Inventory graph), one journal step each. See
+	// application_data.go. Empty where none is wired.
+	applications []applicationCleanup
 
 	// lifecycle is the context whose end means the process is shutting down.
 	// The detached cleanup runs of a delete derive from it, so a shutdown
@@ -273,7 +278,7 @@ func WithProjectVault(vault ProjectVaultBootstrapper) Option {
 // WithVectorStore gives.
 func WithDefaultModelSeeder(seeder ProjectDefaultModelSeeder) Option {
 	return func(p *Provisioner) {
-		if seeder == nil || isNilPointer(seeder) {
+		if seeder == nil || cleanupjournal.IsNilPointer(seeder) {
 			return
 		}
 		p.defaultModels = seeder
@@ -300,19 +305,11 @@ func WithDefaultModelSeeder(seeder ProjectDefaultModelSeeder) Option {
 // wiring that caused it.
 func WithVectorStore(vectorStore ProjectVectorStore) Option {
 	return func(p *Provisioner) {
-		if isNilPointer(vectorStore) {
+		if cleanupjournal.IsNilPointer(vectorStore) {
 			return
 		}
 		p.vectorStore = vectorStore
 	}
-}
-
-// isNilPointer reports a nil pointer wrapped in a non-nil interface.
-//
-// The same helper internal/infra/authattempt uses, for the same reason.
-func isNilPointer(value any) bool {
-	reflected := reflect.ValueOf(value)
-	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
 }
 
 func New(pool *pgxpool.Pool, migrator TenantMigrator, logger *slog.Logger, options ...Option) *Provisioner {

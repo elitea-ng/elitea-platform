@@ -101,6 +101,10 @@ func (m *mockRepo) DeleteToolkit(_ context.Context, _, _ string) error {
 	return m.err
 }
 
+func (m *mockRepo) DeleteToolkitRowFirst(_ context.Context, _, _ string, _ toolkits.ToolkitCleanupJournal) error {
+	return m.err
+}
+
 // setupRouter wires up a chi router with the given mock repo attached at the
 // URL patterns matching router.go.
 func setupRouter(repo toolkits.Repository) *chi.Mux {

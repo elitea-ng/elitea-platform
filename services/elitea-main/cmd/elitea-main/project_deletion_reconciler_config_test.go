@@ -32,3 +32,26 @@ func TestProjectDeletionReconcilerFromEnv(t *testing.T) {
 		}
 	}
 }
+
+// The toolkit reconciler has a flag of its own: on by default, off only when
+// ITS variable says so, and the project reconciler's flag does not reach it.
+func TestToolkitDeletionReconcilerFromEnv(t *testing.T) {
+	lookup := func(values map[string]string) func(string) (string, bool) {
+		return func(key string) (string, bool) { v, ok := values[key]; return v, ok }
+	}
+	if got, err := toolkitDeletionReconcilerFromEnv(lookup(nil)); err != nil || !got.Enabled {
+		t.Fatalf("defaults = %+v, %v; want enabled", got, err)
+	}
+	if got, err := toolkitDeletionReconcilerFromEnv(lookup(map[string]string{toolkitDeletionReconcilerEnv: " false "})); err != nil || got.Enabled {
+		t.Fatalf("off = %+v, %v; want disabled", got, err)
+	}
+	if got, err := toolkitDeletionReconcilerFromEnv(lookup(map[string]string{toolkitDeletionReconcilerEnv: ""})); err != nil || !got.Enabled {
+		t.Fatalf("empty = %+v, %v; want the default", got, err)
+	}
+	if got, err := toolkitDeletionReconcilerFromEnv(lookup(map[string]string{projectDeletionReconcilerEnv: "false"})); err != nil || !got.Enabled {
+		t.Fatalf("project flag off = %+v, %v; want the toolkit reconciler still enabled", got, err)
+	}
+	if _, err := toolkitDeletionReconcilerFromEnv(lookup(map[string]string{toolkitDeletionReconcilerEnv: "maybe"})); err == nil {
+		t.Fatal("a non-boolean flag was accepted")
+	}
+}

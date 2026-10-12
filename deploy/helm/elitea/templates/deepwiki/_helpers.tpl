@@ -70,6 +70,51 @@ otherwise, and the service is then not configured, exposed or admitted at all.
 {{- if (.Values.deepwiki.platformGrpc | default dict).clients -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+elitea-deepwiki.platformGrpcTarget — the host:port elitea-main dials for the
+platform gRPC service (#1243): the Service name (which the server certificate's
+SANs name, so the client verifies exactly that) and the platform port. Empty
+unless the component is rendered with the service on; templates/main/
+configmap.yaml derives ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET from it.
+*/}}
+{{- define "elitea-deepwiki.platformGrpcTarget" -}}
+{{- if and .Values.deepwiki.enabled (include "elitea-deepwiki.platformGrpc" .) -}}
+{{- printf "%s:%d" .Values.deepwiki.service.name (.Values.deepwiki.platformGrpc.port | int) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+elitea-deepwiki.platformClientMaterialIsChartIssued — "true" when the client
+material elitea-main presents on the DeepWiki hops is the facade client
+certificate THIS chart issues (deepwiki.mtls, common name elitea-main) and main,
+rendered here, mounts that very Secret. Empty for operator-supplied material:
+main mounts another Secret or a volume, mtls is off, or main is not rendered
+in this release.
+*/}}
+{{- define "elitea-deepwiki.platformClientMaterialIsChartIssued" -}}
+{{- $main := .Values.main | default dict -}}
+{{- $material := get ($main.fileConfig | default dict) "deepwikiClientMaterial" | default dict -}}
+{{- $secret := $material.secretName | default "" | toString -}}
+{{- $volume := $material.volume | default dict -}}
+{{- if and $main.enabled .Values.deepwiki.mtls.enabled (not $volume) (or (eq $secret "") (eq $secret (.Values.deepwiki.mtls.clientSecretName | toString))) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+elitea-deepwiki.platformClientName — the identity (certificate common name or DNS
+SAN) deepwiki.platformGrpc.clients must name for elitea-main's calls to be
+admitted: elitea-main when the chart issues the material, otherwise
+main.platformClientName (default elitea-main).
+*/}}
+{{- define "elitea-deepwiki.platformClientName" -}}
+{{- if include "elitea-deepwiki.platformClientMaterialIsChartIssued" . -}}
+elitea-main
+{{- else -}}
+{{ .Values.main.platformClientName | default "elitea-main" }}
+{{- end -}}
+{{- end -}}
+
 {{- define "elitea-deepwiki.validateGuards" -}}
 {{- $env := .Values.deepwiki.env | default dict -}}
 
@@ -84,6 +129,28 @@ otherwise, and the service is then not configured, exposed or admitted at all.
 {{- end -}}
 {{- if eq (.Values.deepwiki.platformGrpc.port | int) 8080 -}}
 {{- fail "deepwiki.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
+{{- end -}}
+{{- /*
+  The allowlist must name the identity elitea-main presents on this hop. When
+  this chart issues the facade client certificate itself (deepwiki.mtls, with
+  main mounting that Secret), the identity is the Certificate's common name,
+  elitea-main, and nothing else can be right. With OPERATOR-SUPPLIED material
+  (main mounts another Secret, or a volume, or main is not rendered here) the
+  chart cannot read the certificate, so the operator states the name in
+  main.platformClientName (default elitea-main) and the allowlist is checked
+  against that instead.
+*/ -}}
+{{- $expectedClient := include "elitea-deepwiki.platformClientName" . -}}
+{{- $statedClient := .Values.main.platformClientName | default "elitea-main" | toString -}}
+{{- if and (include "elitea-deepwiki.platformClientMaterialIsChartIssued" .) (ne $statedClient "elitea-main") -}}
+{{- fail (printf "main.platformClientName is %q, but the chart issues the DeepWiki facade client certificate itself (deepwiki.mtls) with the common name elitea-main, which is what elitea-main presents on this hop. Leave main.platformClientName at elitea-main, or point main.fileConfig.deepwikiClientMaterial at your own material." $statedClient) -}}
+{{- end -}}
+{{- if not (has $expectedClient .Values.deepwiki.platformGrpc.clients) -}}
+{{- if include "elitea-deepwiki.platformClientMaterialIsChartIssued" . -}}
+{{- fail (printf "deepwiki.platformGrpc.clients is %v, which does not name elitea-main. The facade client certificate this chart issues (deepwiki.mtls) has the common name elitea-main, and it is the certificate elitea-main presents on this hop too, so an allowlist without it refuses every call elitea-main makes and the service deletes nothing. Add elitea-main." .Values.deepwiki.platformGrpc.clients) -}}
+{{- else -}}
+{{- fail (printf "deepwiki.platformGrpc.clients is %v, which does not name %q (main.platformClientName), the identity of the operator-supplied client material elitea-main presents on this hop. An allowlist without it refuses every call elitea-main makes and the service deletes nothing. Add it, or set main.platformClientName to the name the material carries." .Values.deepwiki.platformGrpc.clients $expectedClient) -}}
+{{- end -}}
 {{- end -}}
 {{- if or (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") -}}
 {{- fail "deepwiki.env sets ELITEA_DEEPWIKI_PLATFORM_CLIENTS or ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR; the chart renders both from deepwiki.platformGrpc (clients, port). Remove them from env." -}}

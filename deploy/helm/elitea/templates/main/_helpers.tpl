@@ -620,6 +620,9 @@ reads, which looks configured and does nothing.
 {{- if $clientMaterial.enabled -}}
 {{- fail "fileConfig.deepwikiClientMaterial.enabled is true but env.ELITEA_DEEPWIKI_ENABLED is off, so the material is mounted and never read. That is the state that looks configured and does nothing. Turn the facade on, or disable the material." -}}
 {{- end -}}
+{{- if get $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET" -}}
+{{- fail "env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET is set but env.ELITEA_DEEPWIKI_ENABLED is off. The platform gRPC client presents the facade's client certificate, so it cannot exist without the facade; cmd/elitea-main refuses the same at boot. Turn the facade on, or clear the target." -}}
+{{- end -}}
 {{- range $name, $value := $material -}}
 {{- if $value -}}
 {{- fail (printf "env.%s is set but env.ELITEA_DEEPWIKI_ENABLED is off, so no facade is composed and the material is never read. Turn it on, or clear env.%s." $name $name) -}}
@@ -696,6 +699,9 @@ reads, which looks configured and does nothing.
 {{- fail "fileConfig.inventoryClientMaterial.secretName and .volume are mutually exclusive: one Deployment volume cannot have two sources." -}}
 {{- end -}}
 {{- else -}}
+{{- if get $env "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET" -}}
+{{- fail "env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET is set but env.ELITEA_INVENTORY_ENABLED is off. The platform gRPC client presents the facade's client certificate, so it cannot exist without the facade; cmd/elitea-main refuses the same at boot. Turn the facade on, or clear the target." -}}
+{{- end -}}
 {{- if $clientMaterial.enabled -}}
 {{- fail "fileConfig.inventoryClientMaterial.enabled is true but env.ELITEA_INVENTORY_ENABLED is off, so the material is mounted and never read. That is the state that looks configured and does nothing. Turn the facade on, or disable the material." -}}
 {{- end -}}
