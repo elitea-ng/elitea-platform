@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -285,6 +285,8 @@ struct RecoveryControl {
     authorize_disposition: Option<AuthorizeInvocationDispositionV1>,
     authorize_unavailable: bool,
     renew_fail_after: Option<usize>,
+    /// Fails every renewal once set, independent of how many ran before.
+    renew_fail_switch: Option<Arc<AtomicBool>>,
     renew_attempts: AtomicUsize,
     observe_states: Mutex<VecDeque<i32>>,
 }
@@ -388,6 +390,13 @@ impl ControlRpc for RecoveryControl {
     ) -> Result<Response<RenewLeaseResponseV1>, Status> {
         self.trace.lock().expect("trace").push("renew");
         let attempt = self.renew_attempts.fetch_add(1, Ordering::SeqCst);
+        if self
+            .renew_fail_switch
+            .as_ref()
+            .is_some_and(|switch| switch.load(Ordering::SeqCst))
+        {
+            return Err(Status::unavailable("test lease renewal unavailable"));
+        }
         if self
             .renew_fail_after
             .is_some_and(|successful| attempt >= successful)
@@ -527,6 +536,7 @@ fn recovery_control_with_policy(
                 authorize_disposition: None,
                 authorize_unavailable: false,
                 renew_fail_after,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(
                     observe_states
@@ -558,6 +568,7 @@ fn authorization_control_with_disposition(
                 authorize_disposition: Some(disposition),
                 authorize_unavailable: false,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(VecDeque::new()),
             },
@@ -599,6 +610,7 @@ fn authorized_control_with_policy(
                 authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
                 authorize_unavailable: false,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(
                     observe_states
@@ -636,6 +648,7 @@ fn output_recovery_control(
                 authorize_disposition: None,
                 authorize_unavailable: false,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(VecDeque::new()),
             },
@@ -661,6 +674,7 @@ fn unavailable_authorization_control(
                 authorize_disposition: None,
                 authorize_unavailable: true,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(VecDeque::new()),
             },
@@ -4786,6 +4800,7 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
                     authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
                     authorize_unavailable: false,
                     renew_fail_after: None,
+                    renew_fail_switch: None,
                     renew_attempts: AtomicUsize::new(0),
                     observe_states: Mutex::new(VecDeque::new()),
                 },
@@ -4925,6 +4940,7 @@ async fn run_checkpoint_delivery_with_pending_progress(
                 authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
                 authorize_unavailable: false,
                 renew_fail_after: None,
+                renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
                 observe_states: Mutex::new(VecDeque::new()),
             },
@@ -5188,4 +5204,185 @@ async fn a_stop_settles_cancelled_once_while_output_recovery_is_pending() {
     assert!(frames[0].terminal);
     assert_eq!(frames[0].sequence, 5);
     assert_eq!(failure_code(&frames[0]), RuntimeErrorCodeV1::Cancelled as i32);
+}
+
+/// Parks before its first event while holding a marker, like an agent
+/// suspended inside a session write when its claim lease is lost.
+struct ParkedAgent {
+    started: Arc<Notify>,
+    released: Arc<AtomicBool>,
+}
+
+struct ReleaseOnDrop(Arc<AtomicBool>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl Agent for ParkedAgent {
+    fn name(&self) -> &'static str {
+        "root-agent"
+    }
+
+    fn description(&self) -> &'static str {
+        "parked native lifecycle fixture"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, _context: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
+        let started = Arc::clone(&self.started);
+        let held = ReleaseOnDrop(Arc::clone(&self.released));
+        Ok(Box::pin(async_stream::stream! {
+            let _held = held;
+            started.notify_one();
+            std::future::pending::<()>().await;
+            yield Ok(Event::with_id("never", "never"));
+        }))
+    }
+}
+
+fn authorized_control_failing_renewal(
+    trace: Arc<Mutex<Vec<&'static str>>>,
+    switch: Arc<AtomicBool>,
+) -> Arc<AgentControlClient<RecoveryControl>> {
+    Arc::new(
+        AgentControlClient::new(
+            RecoveryControl {
+                trace,
+                claim_fixture: "accepted_claim",
+                settlement_fails: false,
+                authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
+                authorize_unavailable: false,
+                renew_fail_after: None,
+                renew_fail_switch: Some(switch),
+                renew_attempts: AtomicUsize::new(0),
+                observe_states: Mutex::new(VecDeque::new()),
+            },
+            ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "workload-1".to_owned(),
+                producer_id: "worker-1".to_owned(),
+            },
+        )
+        .expect("authorized control"),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+#[allow(clippy::too_many_lines)] // One lifecycle story keeps lease loss and cleanup ordering together.
+async fn lease_loss_releases_a_parked_agent_stream_and_retains_the_command() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let (temporary, output_root) = root();
+    let outcome = preflight(output_root, "worker-1")
+        .prepare(fresh())
+        .await
+        .expect("empty lease-loss lifecycle preflight");
+    let AgentOutputPreflightOutcome::Empty(empty) = outcome else {
+        panic!("new lease-loss lifecycle spool must be empty");
+    };
+    let renewals_fail = Arc::new(AtomicBool::new(false));
+    let control =
+        authorized_control_failing_renewal(Arc::clone(&trace), Arc::clone(&renewals_fail));
+    let admission = InvocationAdmission::new(
+        InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("invocation admission"),
+    );
+    let supervisor = InvocationSupervisor::new(admission.clone());
+    let prepared = prepare_fresh_agent_invocation_with(
+        *empty,
+        Arc::clone(&control),
+        &admission,
+        &ValidAgentInput {
+            trace: Arc::clone(&trace),
+        },
+        Arc::new(|| NOW),
+        AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation config"),
+    )
+    .await
+    .expect("prepared lease-loss invocation");
+    let AgentPreparationOutcome::Prepared(prepared) = prepared else {
+        panic!("valid lease-loss input must reach authorization");
+    };
+    let progress_state =
+        FakeProgressState::new(std::iter::repeat_n(LiveProgressAction::Acknowledge, 4), []);
+    let connector = FakeProgressConnector {
+        state: Arc::clone(&progress_state),
+    };
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
+    let started = Arc::new(Notify::new());
+    let released = Arc::new(AtomicBool::new(false));
+    let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
+        Arc::new(TestNativeAssembler {
+            trace: Arc::clone(&trace),
+            agent: Arc::new(ParkedAgent {
+                started: Arc::clone(&started),
+                released: Arc::clone(&released),
+            }),
+            sensitive: false,
+        }),
+        connector.clone(),
+        Arc::clone(&control),
+        Arc::clone(&retirer),
+        Arc::new(|| NOW + 3),
+        1,
+        recovery_config(1),
+    ));
+    let (reservation, job) = AgentAuthorizationJob::new(
+        *prepared,
+        control,
+        retirer,
+        Arc::new(connector),
+        Arc::new(|| NOW + 3),
+        recovery_config(1),
+        lifecycle,
+    );
+    let invocation = match supervisor.submit(reservation, job) {
+        Ok(invocation) => invocation,
+        Err(rejected) => panic!(
+            "lease-loss lifecycle supervision failed: {}",
+            rejected.error()
+        ),
+    };
+    started.notified().await;
+    assert!(
+        !released.load(Ordering::SeqCst),
+        "the agent stream is parked mid-turn"
+    );
+    // From here every renewal fails; paused time advances to the next one.
+    renewals_fail.store(true, Ordering::SeqCst);
+    let completion = invocation
+        .wait()
+        .await
+        .expect("lease-loss lifecycle result");
+    let AgentAuthorizationJobCompletion::Authorized(completion) = completion else {
+        panic!("the lease-loss lifecycle must own the authorized outcome");
+    };
+    supervisor
+        .close()
+        .await
+        .expect("lease-loss lifecycle drain");
+
+    assert!(
+        matches!(
+            completion.disposition(),
+            AgentAuthorizedLifecycleDisposition::RecoveryRequiredNoAck { .. }
+        ),
+        "lease loss retains the command for recovery"
+    );
+    assert!(
+        released.load(Ordering::SeqCst),
+        "the parked agent stream (and any session write it held) is released"
+    );
+    let observed = trace.lock().expect("trace");
+    assert!(observed.contains(&"renew"));
+    assert!(!observed.contains(&"settlement"));
+    assert!(!observed.contains(&"retire"));
+    drop(observed);
+    assert_eq!(admission.available_capacity(), 1);
+    drop(temporary);
 }

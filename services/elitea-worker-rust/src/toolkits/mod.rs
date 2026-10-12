@@ -26,6 +26,6 @@ pub(crate) use direct_runtime::{
 pub(crate) use elitea_agent_runtime::toolkits::*;
 
 #[cfg(test)]
-mod artifact_tests;
+pub(crate) mod artifact_tests;
 #[cfg(test)]
 mod openapi_pipeline_tests;
