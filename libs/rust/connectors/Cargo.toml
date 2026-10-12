@@ -23,7 +23,7 @@ providers = [
 ]
 # `ContentSource` implementations over the provider clients (list with
 # pagination and 429 backoff, fetch under a separate size cap).
-content-source = ["providers", "dep:elitea-content-source"]
+content-source = ["providers", "dep:elitea-content-source", "dep:futures-util"]
 # A `Transport` over a host-built reqwest 0.12 client (the agent worker and
 # the desktop host). No TLS feature is named here: the binary's own reqwest
 # features pick the TLS stack, and Cargo unifies them.
@@ -47,6 +47,8 @@ url = "2.5.8"
 base64 = { version = "0.23.1", optional = true }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"], optional = true }
 elitea-content-source = { path = "../content-source", optional = true }
+# `buffer_unordered` for the bounded per-issue comment listings (ADR-0030 I2).
+futures-util = { version = "0.3.34", default-features = false, features = ["std"], optional = true }
 # RS256 for the GitHub App JWT only; it is not a TLS provider.
 ring = { version = "0.17.14", optional = true }
 # Default features only: nothing here may depend on map order or number

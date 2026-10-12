@@ -445,23 +445,17 @@ fn tracker_transport(state: Arc<Mutex<Tracker>>) -> Arc<Recorded> {
         if path == "/rest/api/3/issue/1/comment" {
             return (
                 StatusCode::OK,
-                json!({"comments": [{"id": "77", "created": "c0", "updated": tracker.comment_updated}], "total": 1}),
-            );
-        }
-        if path.ends_with("/comment") {
-            return (StatusCode::OK, json!({"comments": [], "total": 0}));
-        }
-        if path == "/rest/api/3/issue/1/comment/77" {
-            return (
-                StatusCode::OK,
-                json!({
+                json!({"comments": [{
                     "id": "77", "created": "c0", "updated": tracker.comment_updated,
                     "author": {"displayName": "Cy"},
                     "body": {"type": "doc", "content": [{"type": "paragraph", "content": [
                         {"type": "text", "text": format!("Comment as of {}.", tracker.comment_updated)}
                     ]}]},
-                }),
+                }], "maxResults": 100, "startAt": 0, "total": 1}),
             );
+        }
+        if path.ends_with("/comment") {
+            return (StatusCode::OK, json!({"comments": [], "total": 0}));
         }
         if let Some(id) = path.strip_prefix("/rest/api/3/issue/") {
             let id: u64 = id.parse().expect("an issue id");

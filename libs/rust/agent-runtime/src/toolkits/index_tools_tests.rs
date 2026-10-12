@@ -997,3 +997,27 @@ fn withheld_reasons_name_the_cause() {
             .is_none()
     );
 }
+
+/// The served families have one source of truth, shared with the Go
+/// `indexcatalog` tests and the worker's: a list that drifts fails.
+#[test]
+fn the_served_families_match_the_shared_fixture() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("families/index_served_families.json"))
+            .expect("the fixture is JSON");
+    let expected: Vec<&str> = fixture["families"]
+        .as_array()
+        .expect("families")
+        .iter()
+        .map(|family| family.as_str().expect("a name"))
+        .collect();
+    let mut served: Vec<&str> = I1_INDEX_FAMILIES
+        .into_iter()
+        .chain(I2_ATLASSIAN_INDEX_FAMILIES)
+        .collect();
+    served.sort_unstable();
+    assert_eq!(served, expected);
+    for family in &expected {
+        assert!(is_index_family(family), "{family}");
+    }
+}

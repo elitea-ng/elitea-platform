@@ -4645,6 +4645,6 @@ fn the_index_tool_host_is_built_only_for_a_snapshot_carrying_a_catalog() {
     assert!(!carries(serde_json::json!([])));
     assert!(!carries(serde_json::json!([github(
         Some(&catalog),
-        "confluence"
+        "sharepoint"
     )])));
 }

@@ -119,6 +119,12 @@ pub struct JiraIndexArguments {
     pub include_comments: bool,
     /// Lower-case dotted extensions (`.png`) of attachments left out.
     pub skip_attachment_extensions: Vec<String>,
+    /// Whether a comment restricted to a group is listed, recorded as
+    /// `Acl::Restricted` with that group (the Confluence argument of the
+    /// same name). Without it every restricted comment is left out. A
+    /// role-restricted comment and an issue with a security level are left
+    /// out either way: neither names principals this runtime can record.
+    pub include_restricted_content: bool,
 }
 
 impl JiraIndexArguments {
@@ -153,6 +159,7 @@ impl JiraIndexArguments {
             fields_to_index: fields("fields_to_index")?,
             include_attachments: flag("include_attachments")?,
             include_comments: flag("include_comments")?,
+            include_restricted_content: flag("include_restricted_content")?,
             skip_attachment_extensions: text_list(
                 arguments,
                 "skip_attachment_extensions",
@@ -233,6 +240,7 @@ mod tests {
         assert_eq!(parsed.fields_to_extract, vec!["labels", "Priority"]);
         assert_eq!(parsed.fields_to_index, vec!["labels", "priority"]);
         assert!(parsed.include_attachments && !parsed.include_comments);
+        assert!(!parsed.include_restricted_content);
         assert_eq!(parsed.skip_attachment_extensions, vec![".png", ".jpg"]);
         assert!(parsed.skips_attachment("shot.PNG"));
         assert!(!parsed.skips_attachment("spec.pdf"));

@@ -369,6 +369,29 @@ fn class(pattern: &[char], start: usize, character: char) -> Option<(bool, usize
 mod tests {
     use super::*;
 
+    /// The served families have one source of truth, shared with the Go
+    /// `indexcatalog` and the agent-runtime tests (review round 1).
+    #[test]
+    fn the_served_families_match_the_shared_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../libs/rust/agent-runtime/src/toolkits/families/index_served_families.json");
+        let fixture: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("the fixture is readable"))
+                .expect("the fixture is JSON");
+        let expected: Vec<&str> = fixture["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .map(|family| family.as_str().expect("a name"))
+            .collect();
+        let mut served: Vec<&str> = SERVED_TOOLKIT_TYPES
+            .into_iter()
+            .chain(I2_SERVED_TOOLKIT_TYPES)
+            .collect();
+        served.sort_unstable();
+        assert_eq!(served, expected);
+    }
+
     #[test]
     fn fnmatch_follows_python() {
         assert!(fnmatch("*.py", "src/app.py"));

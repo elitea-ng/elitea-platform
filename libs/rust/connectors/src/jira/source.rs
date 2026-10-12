@@ -1,17 +1,32 @@
 //! Jira as a `ContentSource` (ADR-0030 decision 3, stage I2).
 //!
 //! * **List.** Every issue the JQL matches (the SDK's default JQL when
-//!   `index_data` names none): v3 `search/jql` with `nextPageToken`, v2
-//!   `search` with `startAt`, 100 issues a page, until the API says the
-//!   listing is over. There is no issue cap: `max_total_issues` is accepted
-//!   and ignored, and the source's document cap bounds the run.
+//!   `index_data` names none). Jira Cloud is searched through
+//!   `search/jql` with `nextPageToken` under the configured API version
+//!   (Cloud serves `/rest/api/2/search/jql` and `/rest/api/3/search/jql`;
+//!   the old `search` is being removed there); Server and Data Center keep
+//!   `search` with `startAt`/`total`. 100 issues a page, until the API says
+//!   the listing is over. There is no issue cap: `max_total_issues` is
+//!   accepted and ignored, and the source's document cap bounds the run.
+//!   Each paginated listing (the search, one issue's comment overflow) has
+//!   the page cap to itself.
 //! * **Dependents.** With `include_attachments`, the `attachment` field of
 //!   each issue lists its attachments (less `skip_attachment_extensions`);
-//!   with `include_comments`, each issue's comments are listed
-//!   (`issue/{id}/comment`, paged). Each is a document of its own with
-//!   `parent_key`, and its own version: an attachment is immutable in Jira
-//!   (a re-upload is a new id), a comment carries `updated`. The SDK gives
-//!   every dependent the issue's `updated` instead.
+//!   with `include_comments`, the `comment` field of each issue carries its
+//!   comments — bodies included, so no comment is read again — and only an
+//!   issue whose embedded page is short of `total` has the rest listed
+//!   (`issue/{id}/comment`, paged), a bounded number of issues at a time.
+//!   Each is a document of its own with `parent_key`, and its own version:
+//!   an attachment is immutable in Jira (a re-upload is a new id), a comment
+//!   carries `updated`. The SDK gives every dependent the issue's `updated`
+//!   instead.
+//! * **Restrictions.** An issue with a security level (`fields.security`)
+//!   is left out with its dependents: the level's members are not
+//!   principals this runtime can record. A comment with `visibility` is left
+//!   out unless `include_restricted_content`, and then a group-restricted
+//!   comment is recorded as [`Acl::Restricted`] with that group; a
+//!   role-restricted comment and a Service Management internal note
+//!   (`jsdPublic: false`) stay out either way.
 //! * **Keys and versions.** An issue is `issue/{id}.md` (the numeric id,
 //!   stable across key renames; the SDK keys by id too), versioned by
 //!   `fields.updated`; an attachment is
@@ -22,36 +37,46 @@
 //!   as `SourceError::Changed` when `updated` moved; its document is the
 //!   SDK's markdown: `# Summary`, `# Description` (ADF rendered as text on
 //!   Cloud, wiki markup as written on Server) and one `# {field}` section
-//!   per `fields_to_index`. A comment's body is rendered the same way. An
-//!   attachment is downloaded from its `content` URL — Cloud answers with a
-//!   redirect to its media host, followed once through the egress guard, so
-//!   a deployment allowlists that host too — or, on Server and Data Center,
-//!   from `secure/attachment/{id}/{file name}`.
+//!   per `fields_to_index`. A comment's document is the body the listing
+//!   already holds, rendered the same way. An attachment is downloaded from
+//!   the Jira origin only: its listed `content` URL when that URL is on the
+//!   configured base URL's origin (scheme included), otherwise the download
+//!   is refused; without one, `attachment/content/{id}` on Cloud and
+//!   `secure/attachment/{id}/{file name}` on Server. Cloud answers with a
+//!   redirect to its media host, followed once through the egress guard
+//!   without the credential and only to an `https` location, so a
+//!   deployment allowlists that host too.
 //! * **Auth and limits.** The credential and custom headers come from the
 //!   toolkit configuration ([`super::config`]); a 401 or 403 on a listing is
 //!   an error naming the credential, never an empty listing; a 429 (or a
 //!   `Retry-After`) backs off within the shared bound.
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
+use elitea_content_source::{
+    Acl, ContentSource, Document, DocumentRef, Principal, PrincipalKind, SourceError,
+};
+use futures_util::StreamExt as _;
 use serde_json::{Map, Value};
 
-use super::config::{JiraApiVersion, JiraConnectorConfig, JiraIndexArguments, PROVIDER};
-use crate::atlassian::{adf_text, id_of, safe_identifier, size_of, text_of};
+use super::config::{JiraConnectorConfig, JiraIndexArguments, PROVIDER};
+use crate::atlassian::{
+    COMMENT_LISTING_CONCURRENCY, DetailedListing, Details, adf_text, authorized_json, id_of,
+    key_segment, safe_identifier, same_origin, size_of, text_of,
+};
 use crate::egress::HostAllowlist;
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references, web_url,
+    Backoff, Failure, Listed, SourceHttp, SourceLimits, Timeouts, references, web_url,
 };
 use crate::transport::header::LOCATION;
-use crate::transport::{Method, Request, StatusCode, Transport, Url};
+use crate::transport::{Method, Request, Transport, Url};
 
 /// Issues (and comments) asked per page; Jira caps `maxResults` itself.
 const PAGE_SIZE: usize = 100;
-/// The fields the SDK always requests.
-const DEFAULT_FIELDS: [&str; 9] = [
+/// The fields the SDK always requests, plus `security`: an issue's security
+/// level decides whether it is listed at all.
+const DEFAULT_FIELDS: [&str; 10] = [
     "status",
     "summary",
     "reporter",
@@ -61,9 +86,17 @@ const DEFAULT_FIELDS: [&str; 9] = [
     "assignee",
     "project",
     "issuetype",
+    "security",
 ];
 
-type Details = BTreeMap<String, Map<String, Value>>;
+/// One issue whose embedded comment page did not hold every comment: the
+/// rest is listed from `start`.
+struct CommentTail {
+    issue_id: String,
+    issue_key: String,
+    parent_key: String,
+    start: usize,
+}
 
 /// One Jira toolkit's issues, attachments and comments.
 pub struct JiraSource {
@@ -72,8 +105,7 @@ pub struct JiraSource {
     /// The `fields` query every search and issue read sends.
     fields: String,
     http: SourceHttp,
-    cache: ListingCache,
-    details: Mutex<Arc<Details>>,
+    listing: DetailedListing,
 }
 
 impl JiraSource {
@@ -110,13 +142,15 @@ impl JiraSource {
         if arguments.include_attachments && !fields.iter().any(|field| field == "attachment") {
             fields.push("attachment".to_owned());
         }
+        if arguments.include_comments && !fields.iter().any(|field| field == "comment") {
+            fields.push("comment".to_owned());
+        }
         Ok(Self {
             config,
             arguments,
             fields: fields.join(","),
             http,
-            cache: ListingCache::default(),
-            details: Mutex::new(Arc::new(Details::new())),
+            listing: DetailedListing::default(),
         })
     }
 
@@ -157,16 +191,7 @@ impl JiraSource {
     }
 
     async fn json(&self, url: Url) -> Result<Value, Failure> {
-        match self.http.json(self.get(url)?).await {
-            Ok((_, value)) => Ok(value),
-            Err(Failure::Status(status @ (StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN))) => {
-                Err(Failure::Client(format!(
-                    "Jira refused the credential (HTTP {}); check the toolkit's token or API key",
-                    status.as_u16()
-                )))
-            }
-            Err(failure) => Err(failure),
-        }
+        authorized_json(&self.http, self.get(url)?, PROVIDER).await
     }
 
     fn browse_url(&self, key: &str) -> String {
@@ -176,35 +201,44 @@ impl JiraSource {
         )
     }
 
-    /// Every issue the JQL matches, in search order.
-    async fn issues(&self, pages_seen: &mut usize) -> Result<Vec<Value>, Failure> {
+    /// One search page: Cloud's `search/jql` continued by `next_token`,
+    /// Server's `search` continued by `start`.
+    fn search_url(&self, start: usize, next_token: Option<&str>) -> Result<Url, Failure> {
+        let mut url = if self.config.cloud() {
+            self.api(&["search", "jql"])?
+        } else {
+            self.api(&["search"])?
+        };
+        {
+            let mut query = url.query_pairs_mut();
+            query
+                .append_pair("jql", self.arguments.jql())
+                .append_pair("fields", &self.fields)
+                .append_pair("maxResults", &PAGE_SIZE.to_string());
+            if self.config.cloud() {
+                if let Some(token) = next_token {
+                    query.append_pair("nextPageToken", token);
+                }
+            } else {
+                query.append_pair("startAt", &start.to_string());
+            }
+        }
+        Ok(url)
+    }
+
+    /// Every issue the JQL matches, in search order, under the search's own
+    /// page cap.
+    async fn issues(&self) -> Result<Vec<Value>, Failure> {
         let mut issues = Vec::new();
         let mut start = 0_usize;
         let mut next_token: Option<String> = None;
-        let token_pagination = self.config.api_version() == JiraApiVersion::V3;
+        let mut pages_seen = 0_usize;
         loop {
-            *pages_seen += 1;
-            self.http.check_pages(*pages_seen)?;
-            let mut url = if token_pagination {
-                self.api(&["search", "jql"])?
-            } else {
-                self.api(&["search"])?
-            };
-            {
-                let mut query = url.query_pairs_mut();
-                query
-                    .append_pair("jql", self.arguments.jql())
-                    .append_pair("fields", &self.fields)
-                    .append_pair("maxResults", &PAGE_SIZE.to_string());
-                if token_pagination {
-                    if let Some(token) = &next_token {
-                        query.append_pair("nextPageToken", token);
-                    }
-                } else {
-                    query.append_pair("startAt", &start.to_string());
-                }
-            }
-            let page = self.json(url).await?;
+            pages_seen += 1;
+            self.http.check_pages(pages_seen)?;
+            let page = self
+                .json(self.search_url(start, next_token.as_deref())?)
+                .await?;
             let batch = match page.get("issues") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(Value::Array(items)) => items.clone(),
@@ -217,7 +251,7 @@ impl JiraSource {
             let got = batch.len();
             issues.extend(batch);
             self.http.check_count(issues.len())?;
-            if token_pagination {
+            if self.config.cloud() {
                 let last = page.get("isLast").and_then(Value::as_bool).unwrap_or(false);
                 next_token = text_of(&page, "/nextPageToken").map(ToOwned::to_owned);
                 if last || next_token.is_none() {
@@ -240,13 +274,23 @@ impl JiraSource {
     }
 
     async fn listing(&self) -> Result<(Vec<Listed>, Details), Failure> {
-        let mut pages_seen = 0_usize;
         let mut listed = Vec::new();
         let mut details = Details::new();
-        for issue in self.issues(&mut pages_seen).await? {
+        let mut tails: Vec<CommentTail> = Vec::new();
+        for issue in self.issues().await? {
             let id = id_of(&issue, "/id").ok_or(Failure::InvalidResponse("an issue has no id"))?;
             if !safe_identifier(&id) {
                 return Err(Failure::InvalidResponse("an issue id is not an identifier"));
+            }
+            // A security level restricts the issue to the level's members
+            // (groups, roles, the reporter, …), which this runtime cannot
+            // record as principals: the issue and its dependents are left
+            // out whatever `include_restricted_content` says.
+            if issue
+                .pointer("/fields/security")
+                .is_some_and(|level| !level.is_null())
+            {
+                continue;
             }
             let issue_key = text_of(&issue, "/key").unwrap_or(&id).to_owned();
             let version = text_of(&issue, "/fields/updated")
@@ -259,15 +303,36 @@ impl JiraSource {
                 self.list_attachments(&issue, &id, &issue_key, &key, &mut listed, &mut details)?;
             }
             if self.arguments.include_comments {
-                self.list_comments(
-                    &id,
-                    &issue_key,
-                    &key,
-                    &mut pages_seen,
-                    &mut listed,
-                    &mut details,
-                )
-                .await?;
+                let page = issue.pointer("/fields/comment");
+                let embedded = match page.and_then(|page| page.get("comments")) {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(items)) => items.clone(),
+                    Some(_) => return Err(Failure::InvalidResponse("comments is not a list")),
+                };
+                self.keep_comments(&embedded, &id, &issue_key, &key, &mut listed, &mut details)?;
+                let start_at = page
+                    .and_then(|page| page.get("startAt"))
+                    .and_then(Value::as_u64)
+                    .and_then(|start| usize::try_from(start).ok())
+                    .unwrap_or(0);
+                let covered = start_at.saturating_add(embedded.len());
+                let total = page
+                    .and_then(|page| page.get("total"))
+                    .and_then(Value::as_u64);
+                let tail = match (page, total) {
+                    // No `comment` field at all: list the comments apart.
+                    (None, _) => Some(0),
+                    (Some(_), Some(total)) if (covered as u64) < total => Some(covered),
+                    _ => None,
+                };
+                if let Some(start) = tail {
+                    tails.push(CommentTail {
+                        issue_id: id.clone(),
+                        issue_key: issue_key.clone(),
+                        parent_key: key.clone(),
+                        start,
+                    });
+                }
             }
             let mut issue_details = Map::new();
             issue_details.insert("id".into(), Value::String(id));
@@ -275,6 +340,24 @@ impl JiraSource {
             issue_details.insert("type".into(), Value::String("jira_issue".into()));
             issue_details.insert("url".into(), Value::String(self.browse_url(&issue_key)));
             details.insert(key, issue_details);
+        }
+        // The comments the embedded pages did not hold, a bounded number of
+        // issues at a time; each issue's listing has the page cap to itself.
+        let mut remaining = futures_util::stream::iter(tails.into_iter().map(|tail| async move {
+            let comments = self.comment_pages(&tail.issue_id, tail.start).await?;
+            Ok::<_, Failure>((tail, comments))
+        }))
+        .buffer_unordered(COMMENT_LISTING_CONCURRENCY);
+        while let Some(result) = remaining.next().await {
+            let (tail, comments) = result?;
+            self.keep_comments(
+                &comments,
+                &tail.issue_id,
+                &tail.issue_key,
+                &tail.parent_key,
+                &mut listed,
+                &mut details,
+            )?;
         }
         Ok((listed, details))
     }
@@ -351,94 +434,124 @@ impl JiraSource {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn list_comments(
-        &self,
-        issue_id: &str,
-        issue_key: &str,
-        parent_key: &str,
-        pages_seen: &mut usize,
-        listed: &mut Vec<Listed>,
-        details: &mut Details,
-    ) -> Result<(), Failure> {
-        let mut start = 0_usize;
+    /// The comments of `issue_id` from `start` on (`issue/{id}/comment`,
+    /// paged), under this listing's own page cap.
+    async fn comment_pages(&self, issue_id: &str, start: usize) -> Result<Vec<Value>, Failure> {
+        let mut comments = Vec::new();
+        let mut start = start;
+        let mut pages_seen = 0_usize;
         loop {
-            *pages_seen += 1;
-            self.http.check_pages(*pages_seen)?;
+            pages_seen += 1;
+            self.http.check_pages(pages_seen)?;
             let mut url = self.api(&["issue", issue_id, "comment"])?;
             url.query_pairs_mut()
                 .append_pair("startAt", &start.to_string())
                 .append_pair("maxResults", &PAGE_SIZE.to_string());
             let page = self.json(url).await?;
-            let comments = match page.get("comments") {
+            let batch = match page.get("comments") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(Value::Array(items)) => items.clone(),
                 Some(_) => return Err(Failure::InvalidResponse("comments is not a list")),
             };
-            if comments.is_empty() {
-                return Ok(());
+            if batch.is_empty() {
+                return Ok(comments);
             }
-            start += comments.len();
-            for comment in &comments {
-                let id =
-                    id_of(comment, "/id").ok_or(Failure::InvalidResponse("a comment has no id"))?;
-                if !safe_identifier(&id) {
-                    return Err(Failure::InvalidResponse(
-                        "a comment id is not an identifier",
-                    ));
-                }
-                let version = text_of(comment, "/updated")
-                    .or_else(|| text_of(comment, "/created"))
-                    .ok_or(Failure::InvalidResponse("a comment carries no `updated`"))?
-                    .to_owned();
-                let key = format!("issue/{issue_id}/comment/{id}.md");
-                listed.push(Listed::new(key.clone(), version, 0, id.clone()));
-                self.http.check_count(listed.len())?;
-                let mut comment_details = Map::new();
-                comment_details.insert("id".into(), Value::String(id));
-                comment_details.insert("type".into(), Value::String("comment".into()));
-                comment_details.insert("issue_key".into(), Value::String(issue_key.to_owned()));
-                comment_details.insert("parent_key".into(), Value::String(parent_key.to_owned()));
-                comment_details.insert("parent_id".into(), Value::String(issue_id.to_owned()));
-                comment_details.insert("url".into(), Value::String(self.browse_url(issue_key)));
-                details.insert(key, comment_details);
-            }
+            start += batch.len();
+            let got = batch.len();
+            comments.extend(batch);
+            self.http.check_count(comments.len())?;
             let total = page.get("total").and_then(Value::as_u64);
             if total.is_some_and(|total| start as u64 >= total)
-                || total.is_none() && comments.len() < PAGE_SIZE
+                || total.is_none() && got < PAGE_SIZE
             {
-                return Ok(());
+                return Ok(comments);
             }
         }
     }
 
-    async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
-        self.cache.get_or_list(|| self.list_and_remember()).await
+    /// Who may read `comment`: everyone in the project, the listed group, or
+    /// nobody this runtime can name (`None`: the comment is left out).
+    fn comment_acl(&self, comment: &Value) -> Option<Acl> {
+        // A Service Management internal note is read by the project's
+        // agents, who are not principals.
+        if comment.get("jsdPublic").and_then(Value::as_bool) == Some(false) {
+            return None;
+        }
+        let visibility = match comment.get("visibility") {
+            None | Some(Value::Null) => return Some(Acl::Project),
+            Some(visibility) => visibility,
+        };
+        if !self.arguments.include_restricted_content {
+            return None;
+        }
+        match text_of(visibility, "/type") {
+            Some("group") => {
+                let group =
+                    text_of(visibility, "/value").or_else(|| text_of(visibility, "/identifier"))?;
+                Some(Acl::Restricted {
+                    principals: vec![Principal {
+                        kind: PrincipalKind::Group,
+                        id: group.to_owned(),
+                    }],
+                })
+            }
+            // A project role has no principal of its own.
+            _ => None,
+        }
     }
 
-    async fn listed_fresh(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
-        self.cache.list_shared(|| self.list_and_remember()).await
-    }
-
-    async fn list_and_remember(&self) -> Result<Vec<Listed>, SourceError> {
-        let (listed, details) = self
-            .listing()
-            .await
-            .map_err(|failure| failure.into_source_error(PROVIDER, None))?;
-        *self
-            .details
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(details);
-        Ok(listed)
-    }
-
-    fn details_of(&self, key: &str) -> Map<String, Value> {
-        self.details
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(key)
-            .cloned()
-            .unwrap_or_default()
+    /// `comments` as documents under `parent_key`, bodies rendered now so
+    /// the fetch reads nothing again.
+    fn keep_comments(
+        &self,
+        comments: &[Value],
+        issue_id: &str,
+        issue_key: &str,
+        parent_key: &str,
+        listed: &mut Vec<Listed>,
+        details: &mut Details,
+    ) -> Result<(), Failure> {
+        for comment in comments {
+            let id =
+                id_of(comment, "/id").ok_or(Failure::InvalidResponse("a comment has no id"))?;
+            if !safe_identifier(&id) {
+                return Err(Failure::InvalidResponse(
+                    "a comment id is not an identifier",
+                ));
+            }
+            let Some(acl) = self.comment_acl(comment) else {
+                continue;
+            };
+            let version = text_of(comment, "/updated")
+                .or_else(|| text_of(comment, "/created"))
+                .ok_or(Failure::InvalidResponse("a comment carries no `updated`"))?
+                .to_owned();
+            let key = format!("issue/{issue_id}/comment/{id}.md");
+            let mut item = Listed::new(key.clone(), version.clone(), 0, id.clone());
+            item.reference.acl = acl;
+            listed.push(item);
+            self.http.check_count(listed.len())?;
+            let mut comment_details = Map::new();
+            comment_details.insert("id".into(), Value::String(id));
+            comment_details.insert("type".into(), Value::String("comment".into()));
+            comment_details.insert("issue_key".into(), Value::String(issue_key.to_owned()));
+            comment_details.insert("parent_key".into(), Value::String(parent_key.to_owned()));
+            comment_details.insert("parent_id".into(), Value::String(issue_id.to_owned()));
+            comment_details.insert("url".into(), Value::String(self.browse_url(issue_key)));
+            comment_details.insert(
+                "body".into(),
+                Value::String(comment.get("body").map(adf_text).unwrap_or_default()),
+            );
+            if let Some(created) = text_of(comment, "/created") {
+                comment_details.insert("created".into(), Value::String(created.to_owned()));
+            }
+            comment_details.insert("updated_on".into(), Value::String(version));
+            if let Some(author) = text_of(comment, "/author/displayName") {
+                comment_details.insert("author".into(), Value::String(author.to_owned()));
+            }
+            details.insert(key, comment_details);
+        }
+        Ok(())
     }
 
     /// The SDK's issue document: `# Summary`, `# Description`, then one
@@ -466,20 +579,32 @@ impl JiraSource {
         content
     }
 
-    /// An attachment's bytes: its `content` URL (Cloud; one redirect to the
-    /// media host followed through the egress guard) or the Server download
-    /// path.
+    /// An attachment's bytes, from the Jira origin only: the listed
+    /// `content` URL when it is on the base URL's origin (a link elsewhere
+    /// is refused, so the credential never leaves the configured origin),
+    /// otherwise the Cloud `attachment/content/{id}` or the Server
+    /// `secure/attachment` path. Cloud's one redirect to the media host is
+    /// followed without the credential, through the egress guard, and only
+    /// to an `https` location.
     async fn download(
         &self,
         listed: &Listed,
         details: &Map<String, Value>,
     ) -> Result<Vec<u8>, Failure> {
         let url = match details.get("content_url").and_then(Value::as_str) {
-            Some(content) => Url::parse(content)
-                .map_err(|_| Failure::InvalidResponse("an attachment content link is not a URL"))?,
-            None if self.config.cloud() || self.config.api_version() == JiraApiVersion::V3 => {
-                self.api(&["attachment", "content", &listed.handle])?
+            Some(content) => {
+                let content = Url::parse(content).map_err(|_| {
+                    Failure::InvalidResponse("an attachment content link is not a URL")
+                })?;
+                if !same_origin(self.config.base_url(), &content) {
+                    return Err(Failure::Client(
+                        "the attachment's content link is not on the Jira origin, so the download was refused (the credential is sent only there)"
+                            .to_owned(),
+                    ));
+                }
+                content
             }
+            None if self.config.cloud() => self.api(&["attachment", "content", &listed.handle])?,
             None => {
                 let filename = details
                     .get("filename")
@@ -504,6 +629,12 @@ impl JiraSource {
             let target = url
                 .join(location)
                 .map_err(|_| Failure::InvalidResponse("a redirect Location is not a URL"))?;
+            if target.scheme() != "https" {
+                return Err(Failure::Client(
+                    "the attachment redirect points at a plain-HTTP location, which this runtime does not follow"
+                        .to_owned(),
+                ));
+            }
             // The media host is another origin: the credential is not
             // forwarded, the egress guard still applies.
             return self.http.raw(Request::new(Method::GET, target)).await;
@@ -517,7 +648,10 @@ impl JiraSource {
 
 impl ContentSource for JiraSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        let listing = self.listed_fresh().await?;
+        let listing = self
+            .listing
+            .list_shared(PROVIDER, || self.listing())
+            .await?;
         Ok(references(&listing))
     }
 
@@ -526,12 +660,15 @@ impl ContentSource for JiraSource {
         reason = "one arm per document kind: issue, attachment, comment"
     )]
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
-        let listing = self.listed().await?;
+        let listing = self
+            .listing
+            .get_or_list(PROVIDER, || self.listing())
+            .await?;
         let listed = listing
             .get(key)
             .ok_or_else(|| SourceError::NotFound(key.to_owned()))?;
         let failed = |failure: Failure| failure.into_source_error(PROVIDER, Some(key));
-        let mut metadata = self.details_of(key);
+        let mut metadata = self.listing.details_of(key);
         let kind = metadata
             .get("type")
             .and_then(Value::as_str)
@@ -552,31 +689,11 @@ impl ContentSource for JiraSource {
                 (bytes, title)
             }
             "comment" => {
-                let issue_id = metadata
-                    .get("parent_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                let url = self
-                    .api(&["issue", &issue_id, "comment", &listed.handle])
-                    .map_err(failed)?;
-                let comment = self.json(url).await.map_err(failed)?;
-                let version = text_of(&comment, "/updated")
-                    .or_else(|| text_of(&comment, "/created"))
-                    .ok_or_else(|| {
-                        failed(Failure::InvalidResponse("a comment carries no `updated`"))
-                    })?;
-                if version != listed.reference.version {
-                    return Err(failed(Failure::Changed));
-                }
-                let body = comment.get("body").map(adf_text).unwrap_or_default();
-                if let Some(created) = text_of(&comment, "/created") {
-                    metadata.insert("created".into(), Value::String(created.to_owned()));
-                }
-                metadata.insert("updated_on".into(), Value::String(version.to_owned()));
-                if let Some(author) = text_of(&comment, "/author/displayName") {
-                    metadata.insert("author".into(), Value::String(author.to_owned()));
-                }
+                // The body was listed with the version: nothing is read again.
+                let body = match metadata.remove("body") {
+                    Some(Value::String(body)) => body,
+                    _ => String::new(),
+                };
                 let issue_key = metadata
                     .get("issue_key")
                     .and_then(Value::as_str)
@@ -712,32 +829,13 @@ fn field_text(value: &Value) -> String {
     }
 }
 
-/// A file name as one key segment: no `/`, no control characters, never
-/// empty.
-fn key_segment(name: &str) -> String {
-    let segment: String = name
-        .trim()
-        .chars()
-        .map(|character| {
-            if character == '/' || character == '\\' || character.is_control() {
-                '_'
-            } else {
-                character
-            }
-        })
-        .collect();
-    if segment.is_empty() {
-        "attachment".to_owned()
-    } else {
-        segment
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::source::fixture::{Reply, Scripted, query};
+    use crate::transport::StatusCode;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
     fn config(url: &str, extra: &Value) -> JiraConnectorConfig {
@@ -761,9 +859,29 @@ mod tests {
         HostAllowlist::parse(Some("acme.atlassian.net,jira.corp.example,media.example"))
     }
 
+    /// A comment as Jira Cloud's `comment` field (and `issue/{id}/comment`)
+    /// lists it.
+    fn comment(id: &str, updated: &str, text: &str) -> Value {
+        json!({
+            "self": format!("https://acme.atlassian.net/rest/api/3/issue/1/comment/{id}"),
+            "id": id, "created": "c1", "updated": updated,
+            "author": {"accountId": "5b10a2844c20165700ede21g", "displayName": "Cy"},
+            "updateAuthor": {"accountId": "5b10a2844c20165700ede21g", "displayName": "Cy"},
+            "body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]},
+            "jsdPublic": true,
+        })
+    }
+
+    /// The `comment` field: a page of comments as the issue carries it.
+    #[allow(clippy::needless_pass_by_value)]
+    fn comment_page(comments: Vec<Value>, total: u64) -> Value {
+        json!({"comments": comments, "self": "https://acme.atlassian.net/rest/api/3/issue/1/comment",
+               "maxResults": 100, "total": total, "startAt": 0})
+    }
+
     fn issue(id: &str, key: &str, updated: &str) -> Value {
         json!({
-            "id": id, "key": key,
+            "id": id, "key": key, "self": format!("https://acme.atlassian.net/rest/api/3/issue/{id}"),
             "fields": {
                 "summary": format!("Summary of {key}"),
                 "description": {"type": "doc", "version": 1, "content": [
@@ -773,12 +891,14 @@ mod tests {
                 "created": "2026-09-01T00:00:00.000+0000", "updated": updated,
                 "project": {"key": "PROJ"}, "issuetype": {"name": "Task"},
                 "labels": ["a", "b"],
+                "security": null,
                 "attachment": [
                     {"id": "9001", "filename": "spec.pdf", "size": 9, "mimeType": "application/pdf", "created": "2026-09-02T00:00:00.000+0000",
                      "author": {"displayName": "Bob"}, "content": "https://acme.atlassian.net/rest/api/3/attachment/content/9001"},
                     {"id": "9002", "filename": "shot.PNG", "size": 5, "mimeType": "image/png",
                      "content": "https://acme.atlassian.net/rest/api/3/attachment/content/9002"},
                 ],
+                "comment": comment_page(vec![comment("77", "c2", "LGTM")], 1),
             }
         })
     }
@@ -796,10 +916,13 @@ mod tests {
                     assert_eq!(query(request, "maxResults").as_deref(), Some("100"));
                     let fields = query(request, "fields").unwrap();
                     assert!(
-                        fields.contains("summary") && fields.contains("labels"),
+                        fields.contains("summary")
+                            && fields.contains("labels")
+                            && fields.contains("security"),
                         "{fields}"
                     );
-                    assert!(!fields.contains("attachment"));
+                    assert!(!fields.contains("attachment") && !fields.contains("comment"));
+                    assert!(query(request, "startAt").is_none());
                     match query(request, "nextPageToken").as_deref() {
                         None => Reply::json(
                             &json!({"issues": [issue("1", "PROJ-1", "u1"), issue("2", "PROJ-2", "u1")], "nextPageToken": "t2", "isLast": false}),
@@ -864,6 +987,35 @@ mod tests {
         assert!(basic.to_str().unwrap().starts_with("Basic "));
     }
 
+    /// Review round 1, finding 5: Jira Cloud removed `search`; the token
+    /// search is used there whatever `api_version` says (Cloud serves it
+    /// under `/rest/api/2` and `/rest/api/3`), and `startAt` is never sent.
+    #[tokio::test]
+    async fn cloud_searches_through_search_jql_under_either_api_version() {
+        let transport = Scripted::new(|request, _| {
+            assert_eq!(request.url().path(), "/rest/api/2/search/jql");
+            assert!(query(request, "startAt").is_none(), "{}", request.url());
+            match query(request, "nextPageToken").as_deref() {
+                None => Reply::json(
+                    &json!({"issues": [issue("1", "PROJ-1", "u1")], "nextPageToken": "n2", "isLast": false}),
+                ),
+                Some("n2") => {
+                    Reply::json(&json!({"issues": [issue("2", "PROJ-2", "u1")], "isLast": true}))
+                }
+                other => panic!("unexpected token {other:?}"),
+            }
+        });
+        let source = JiraSource::new(
+            config("https://acme.atlassian.net", &json!({"api_version": "2"})),
+            arguments(&json!({})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        assert_eq!(source.list().await.expect("listing").len(), 2);
+        assert_eq!(transport.seen().len(), 2);
+    }
+
     #[tokio::test]
     async fn v2_search_follows_start_at_and_total() {
         let transport = Scripted::new(|request, _| {
@@ -897,20 +1049,10 @@ mod tests {
             let path = request.url().path();
             match path {
                 "/rest/api/3/search/jql" => {
-                    assert!(query(request, "fields").unwrap().contains("attachment"));
+                    let fields = query(request, "fields").unwrap();
+                    assert!(fields.contains("attachment") && fields.contains("comment"));
                     Reply::json(&json!({"issues": [issue("1", "PROJ-1", "u1")], "isLast": true}))
                 }
-                "/rest/api/3/issue/1/comment" => {
-                    assert_eq!(query(request, "startAt").as_deref(), Some("0"));
-                    Reply::json(&json!({"comments": [
-                        {"id": "77", "created": "c1", "updated": "c2", "author": {"displayName": "Cy"},
-                         "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "LGTM"}]}]}},
-                    ], "startAt": 0, "maxResults": 100, "total": 1}))
-                }
-                "/rest/api/3/issue/1/comment/77" => Reply::json(&json!({
-                    "id": "77", "created": "c1", "updated": "c2", "author": {"displayName": "Cy"},
-                    "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "LGTM"}]}]},
-                })),
                 "/rest/api/3/attachment/content/9001" => Reply::status(StatusCode::SEE_OTHER)
                     .header("location", "https://media.example/blob/9001?token=x"),
                 "/blob/9001" => {
@@ -927,7 +1069,7 @@ mod tests {
             cloud(),
             arguments(&json!({"include_attachments": true, "include_comments": true, "skip_attachment_extensions": [".png"]})),
             allow(),
-            transport,
+            transport.clone(),
         )
         .expect("source");
         let listed = source.list().await.expect("listing");
@@ -962,18 +1104,301 @@ mod tests {
         assert_eq!(attachment.metadata["author"], "Bob");
         assert_eq!(attachment.metadata["type"], "attachment");
         assert!(attachment.metadata.get("content_url").is_none());
+        let requests_before = transport.seen().len();
         let comment = source
             .fetch("issue/1/comment/77.md")
             .await
             .expect("comment");
+        assert_eq!(
+            transport.seen().len(),
+            requests_before,
+            "the comment body came with the search: nothing is read again"
+        );
         assert_eq!(comment.bytes, b"LGTM\n");
         assert_eq!(comment.title, "Comment 77 on PROJ-1");
         assert_eq!(comment.metadata["parent_key"], "issue/1.md");
         assert_eq!(comment.metadata["author"], "Cy");
         assert_eq!(comment.metadata["created"], "c1");
+        assert_eq!(comment.metadata["updated_on"], "c2");
+        assert!(comment.metadata.get("body").is_none());
         assert_eq!(
             comment.uri.as_deref(),
             Some("https://acme.atlassian.net/browse/PROJ-1")
+        );
+    }
+
+    /// Review round 1, finding 9: comments come with the search; only an
+    /// issue whose embedded page is short of `total` has the rest listed,
+    /// one request per missing page and none per comment.
+    #[tokio::test]
+    async fn only_the_comment_overflow_is_listed_apart_and_the_call_count_shows_it() {
+        let transport = Scripted::new(|request, _| {
+            let path = request.url().path();
+            if path == "/rest/api/3/search/jql" {
+                let mut issues = Vec::new();
+                for n in 1..=20_u32 {
+                    let mut issue = issue(&n.to_string(), &format!("PROJ-{n}"), "u1");
+                    // Every issue's page holds 1 of 2 comments; issue 20 is
+                    // complete.
+                    let total = if n == 20 { 1 } else { 2 };
+                    issue["fields"]["comment"] =
+                        comment_page(vec![comment(&format!("{n}01"), "c2", "first")], total);
+                    issues.push(issue);
+                }
+                return Reply::json(&json!({"issues": issues, "isLast": true}));
+            }
+            let issue_id = path
+                .strip_prefix("/rest/api/3/issue/")
+                .and_then(|rest| rest.strip_suffix("/comment"))
+                .unwrap_or_else(|| panic!("unexpected request {path}"));
+            assert_eq!(query(request, "startAt").as_deref(), Some("1"));
+            Reply::json(&json!({
+                "comments": [comment(&format!("{issue_id}02"), "c3", "second")],
+                "maxResults": 100, "total": 2, "startAt": 1,
+            }))
+        });
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"include_comments": true})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        let listed = source.list().await.expect("listing");
+        assert_eq!(listed.len(), 20 + 19 * 2 + 1);
+        let seen = transport.seen();
+        assert_eq!(
+            seen.len(),
+            1 + 19,
+            "one search, one overflow page per short issue: {seen:?}"
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|request| request.contains("/issue/20/comment")),
+            "{seen:?}"
+        );
+        let second = source
+            .fetch("issue/7/comment/702.md")
+            .await
+            .expect("an overflow comment");
+        assert_eq!(second.bytes, b"second\n");
+        assert_eq!(second.metadata["parent_key"], "issue/7.md");
+        assert_eq!(transport.seen().len(), 20, "no request per comment");
+    }
+
+    /// Review round 1, finding 4: each paginated listing has the page cap
+    /// to itself. Twenty one-page comment overflows pass a cap of one page;
+    /// a two-page overflow does not.
+    #[tokio::test]
+    async fn the_page_cap_applies_per_listing_not_across_them() {
+        let listing = |long_tail_for: Option<&'static str>| {
+            Scripted::new(move |request, _| {
+                let path = request.url().path();
+                if path == "/rest/api/3/search/jql" {
+                    let issues: Vec<Value> = (1..=20_u32)
+                        .map(|n| {
+                            let mut issue = issue(&n.to_string(), &format!("PROJ-{n}"), "u1");
+                            issue["fields"]["comment"] =
+                                comment_page(vec![comment(&format!("{n}01"), "c2", "first")], 2);
+                            issue
+                        })
+                        .collect();
+                    return Reply::json(&json!({"issues": issues, "isLast": true}));
+                }
+                let issue_id = path
+                    .strip_prefix("/rest/api/3/issue/")
+                    .and_then(|rest| rest.strip_suffix("/comment"))
+                    .unwrap_or_else(|| panic!("unexpected request {path}"));
+                let start: u64 = query(request, "startAt").unwrap().parse().unwrap();
+                // The long tail says "3 in total" and hands one per page.
+                let total = if Some(issue_id) == long_tail_for {
+                    3
+                } else {
+                    2
+                };
+                Reply::json(&json!({
+                    "comments": [comment(&format!("{issue_id}9{start}"), "c3", "more")],
+                    "maxResults": 1, "total": total, "startAt": start,
+                }))
+            })
+        };
+        let one_page = SourceLimits {
+            max_pages: 1,
+            ..SourceLimits::default()
+        };
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"include_comments": true})),
+            allow(),
+            listing(None),
+        )
+        .expect("source")
+        .with_limits(one_page);
+        assert_eq!(source.list().await.expect("listing").len(), 60);
+
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"include_comments": true})),
+            allow(),
+            listing(Some("7")),
+        )
+        .expect("source")
+        .with_limits(one_page);
+        let error = source.list().await.expect_err("a two-page listing");
+        assert!(error.to_string().contains("page cap"), "{error}");
+    }
+
+    /// Review round 1, finding 2: a comment's `visibility` and an issue's
+    /// security level restrict readers. By default both are left out; with
+    /// `include_restricted_content` a group-visible comment is recorded with
+    /// its group, while a role-visible comment, a Service Management
+    /// internal note and a secured issue stay out.
+    #[tokio::test]
+    async fn restricted_comments_and_secured_issues_are_left_out_unless_expressible_and_asked() {
+        let transport = Scripted::new(|_, _| {
+            let mut secured = issue("2", "PROJ-2", "u1");
+            secured["fields"]["security"] = json!({
+                "self": "https://acme.atlassian.net/rest/api/3/securitylevel/10021",
+                "id": "10021", "description": "Only the reporter and internal staff can see this issue.", "name": "Reporter Only",
+            });
+            let mut open = issue("1", "PROJ-1", "u1");
+            let mut by_group = comment("78", "c2", "for devs");
+            by_group["visibility"] = json!({"type": "group", "value": "jira-developers", "identifier": "276f955c-63d7-42c8-9520-92d01dca0625"});
+            let mut by_role = comment("79", "c2", "for admins");
+            by_role["visibility"] =
+                json!({"type": "role", "value": "Administrators", "identifier": "Administrators"});
+            let mut internal = comment("80", "c2", "internal note");
+            internal["jsdPublic"] = json!(false);
+            open["fields"]["comment"] = comment_page(
+                vec![comment("77", "c2", "LGTM"), by_group, by_role, internal],
+                4,
+            );
+            Reply::json(&json!({"issues": [open, secured], "isLast": true}))
+        });
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"include_comments": true, "include_attachments": true})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        let keys: Vec<String> = source
+            .list()
+            .await
+            .expect("listing")
+            .into_iter()
+            .map(|d| d.key)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "issue/1.md",
+                "issue/1/attachment/9001/spec.pdf",
+                "issue/1/attachment/9002/shot.PNG",
+                "issue/1/comment/77.md",
+            ],
+            "the secured issue, its dependents and every restricted comment are out"
+        );
+
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"include_comments": true, "include_restricted_content": true})),
+            allow(),
+            transport,
+        )
+        .expect("source");
+        let listed = source.list().await.expect("listing");
+        let acls: BTreeMap<&str, &Acl> = listed.iter().map(|d| (d.key.as_str(), &d.acl)).collect();
+        assert_eq!(
+            acls.keys().copied().collect::<Vec<_>>(),
+            [
+                "issue/1.md",
+                "issue/1/comment/77.md",
+                "issue/1/comment/78.md"
+            ]
+        );
+        assert_eq!(acls["issue/1/comment/77.md"], &Acl::Project);
+        assert_eq!(
+            acls["issue/1/comment/78.md"],
+            &Acl::Restricted {
+                principals: vec![Principal {
+                    kind: PrincipalKind::Group,
+                    id: "jira-developers".into()
+                }]
+            }
+        );
+    }
+
+    /// Review round 1, finding 1: the credential goes to the Jira origin
+    /// only. A `content` link on another origin, or on the same host over
+    /// plain HTTP, is refused before any request; the media-host redirect is
+    /// followed without the credential and never to plain HTTP.
+    #[tokio::test]
+    async fn attachment_downloads_never_send_the_credential_off_the_jira_origin() {
+        let transport = Scripted::new(|request, _| match request.url().path() {
+            "/rest/api/3/search/jql" => {
+                let mut issue = issue("1", "PROJ-1", "u1");
+                issue["fields"]["attachment"] = json!([
+                    {"id": "1", "filename": "foreign.txt", "size": 3, "content": "https://media.example/rest/api/3/attachment/content/1"},
+                    {"id": "2", "filename": "downgrade.txt", "size": 3, "content": "http://acme.atlassian.net/rest/api/3/attachment/content/2"},
+                    {"id": "3", "filename": "redirected.txt", "size": 3, "content": "https://acme.atlassian.net/rest/api/3/attachment/content/3"},
+                    {"id": "4", "filename": "built.txt", "size": 3},
+                ]);
+                Reply::json(&json!({"issues": [issue], "isLast": true}))
+            }
+            "/rest/api/3/attachment/content/3" => Reply::status(StatusCode::SEE_OTHER)
+                .header("location", "http://media.example/blob/3"),
+            "/rest/api/3/attachment/content/4" => {
+                assert!(request.headers().get("authorization").is_some());
+                Reply::bytes(b"abc")
+            }
+            other => panic!("the credential must not reach {other}"),
+        });
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"include_attachments": true})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        let foreign = source
+            .fetch("issue/1/attachment/1/foreign.txt")
+            .await
+            .expect_err("another origin");
+        assert!(
+            foreign.to_string().contains("not on the Jira origin"),
+            "{foreign}"
+        );
+        let downgrade = source
+            .fetch("issue/1/attachment/2/downgrade.txt")
+            .await
+            .expect_err("plain HTTP on the same host");
+        assert!(
+            downgrade.to_string().contains("not on the Jira origin"),
+            "{downgrade}"
+        );
+        let redirected = source
+            .fetch("issue/1/attachment/3/redirected.txt")
+            .await
+            .expect_err("a plain-HTTP redirect");
+        assert!(
+            redirected.to_string().contains("plain-HTTP location"),
+            "{redirected}"
+        );
+        let built = source
+            .fetch("issue/1/attachment/4/built.txt")
+            .await
+            .expect("built from the base URL");
+        assert_eq!(built.bytes, b"abc");
+        let seen = transport.seen();
+        assert_eq!(
+            seen.iter()
+                .filter(|request| request.contains("attachment/content"))
+                .count(),
+            2,
+            "{seen:?}"
         );
     }
 

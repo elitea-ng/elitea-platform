@@ -3,12 +3,15 @@
 //! * **List.** Pages by the toolkit's space (`/rest/api/content?spaceKey=`),
 //!   or — when `index_data` selects them — by `cql`, by `label` and by
 //!   `page_ids`, deduplicated by id; the SDK ignores the space whenever one of
-//!   those is given, and so does this connector. Every listing follows
-//!   `start`/`limit` until the API stops answering with more (a Server
-//!   instance caps `limit` below what is asked, so a short page is the end
-//!   only when no `_links.next` is sent). There is no page cap: the SDK's
-//!   `limit` and `max_pages` arguments are accepted and ignored, and the
-//!   source's document cap bounds the run.
+//!   those is given, and so does this connector. A listing is continued
+//!   through the `_links.next` the API sends (Cloud's `content/search`
+//!   paginates by `cursor` and has no `start`); only a full page without a
+//!   `next` link falls back to the `start` offset. The listing ends when a
+//!   page is short and carries no `next`. There is no page cap on the run:
+//!   the SDK's `limit` and `max_pages` arguments are accepted and ignored,
+//!   the source's document cap bounds the run, and each paginated listing
+//!   (the pages, one page's attachments, one page's comments) has the
+//!   transport's page cap to itself.
 //! * **Dependents.** With `include_attachments`, each page's attachments
 //!   (`/child/attachment`, filtered by `include_extensions` and
 //!   `skip_extensions`) are listed as documents of their own under the
@@ -29,17 +32,25 @@
 //!   `version.number` moved since the listing is `SourceError::Changed`. An
 //!   attachment is downloaded through its listed `_links.download`, which
 //!   names the listed version.
-//! * **Restrictions.** Without `include_restricted_content`, a page with read
-//!   restrictions is left out (the SDK's `is_public_page`). With it, the
-//!   restriction's users and groups are recorded as the document's
-//!   [`Acl::Restricted`] principals, which its dependents inherit.
+//! * **Restrictions.** Confluence read restrictions are inherited: a page is
+//!   restricted when it or any ancestor carries one. The listing expands the
+//!   page's own read restrictions and its `ancestors`, and reads each
+//!   ancestor's read restrictions once per run
+//!   (`content/{id}/restriction/byOperation/read`). Without
+//!   `include_restricted_content`, a restricted page is left out with its
+//!   dependents (the SDK's `is_public_page`, which looked at the page
+//!   alone). With it, the readers are the intersection of every restricting
+//!   level's users and groups, recorded as the document's
+//!   [`Acl::Restricted`] principals that its dependents inherit; a page whose
+//!   intersection is empty (a user-restricted child under a group-restricted
+//!   parent, say) cannot be expressed by the ACL model and is left out.
 //! * **Auth and limits.** The credential and custom headers come from the
 //!   toolkit configuration ([`super::config`]); a 401 or 403 on a listing is
 //!   an error naming the credential, never an empty listing; a 429 (or a
 //!   `Retry-After`) backs off within the shared bound.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use elitea_content_source::{
     Acl, ContentSource, Document, DocumentRef, Principal, PrincipalKind, SourceError,
@@ -48,11 +59,12 @@ use serde_json::{Map, Value};
 
 use super::config::{ConfluenceConnectorConfig, ConfluenceIndexArguments, PROVIDER};
 use crate::atlassian::{
-    attachment_passes, id_of, safe_identifier, size_of, strip_base64_images, text_of,
+    DetailedListing, Details, attachment_passes, authorized_json, id_of, key_segment,
+    safe_identifier, same_origin, size_of, strip_base64_images, text_of,
 };
 use crate::egress::HostAllowlist;
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references, web_url,
+    Backoff, Failure, Listed, SourceHttp, SourceLimits, Timeouts, references, web_url,
 };
 use crate::transport::{Method, Request, StatusCode, Transport, Url};
 
@@ -61,17 +73,46 @@ const PAGE_SIZE: usize = 100;
 /// The media type a page or comment body is handed over as.
 const HTML: &str = "text/html";
 
-/// What the listing learnt about a document beyond its reference: the
-/// metadata its fetch reports, and for an attachment the download path.
-type Details = BTreeMap<String, Map<String, Value>>;
+/// Who may read a page once every restricting level is folded in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Readers {
+    /// No read restriction on the page or any ancestor.
+    Everyone,
+    /// The intersection of the restricting levels' users and groups.
+    Only(Vec<Principal>),
+    /// Restricted, but to no principal this runtime can record (an empty
+    /// intersection, an ancestor whose restrictions cannot be read).
+    Nobody,
+}
+
+impl Readers {
+    /// This level's readers narrowed by `level` (`None`: the level is open).
+    fn narrowed_by(self, level: Option<Vec<Principal>>) -> Self {
+        match (self, level) {
+            (readers, None) => readers,
+            (Self::Everyone, Some(principals)) => Self::Only(principals),
+            (Self::Only(mine), Some(theirs)) => {
+                let both: Vec<Principal> = mine
+                    .into_iter()
+                    .filter(|principal| theirs.contains(principal))
+                    .collect();
+                if both.is_empty() {
+                    Self::Nobody
+                } else {
+                    Self::Only(both)
+                }
+            }
+            (Self::Nobody, Some(_)) => Self::Nobody,
+        }
+    }
+}
 
 /// One Confluence toolkit's pages, attachments and comments.
 pub struct ConfluenceSource {
     config: ConfluenceConnectorConfig,
     arguments: ConfluenceIndexArguments,
     http: SourceHttp,
-    cache: ListingCache,
-    details: Mutex<Arc<Details>>,
+    listing: DetailedListing,
 }
 
 impl ConfluenceSource {
@@ -102,8 +143,7 @@ impl ConfluenceSource {
             config,
             arguments,
             http,
-            cache: ListingCache::default(),
-            details: Mutex::new(Arc::new(Details::new())),
+            listing: DetailedListing::default(),
         })
     }
 
@@ -146,31 +186,62 @@ impl ConfluenceSource {
     /// A listing page; a refused credential is named, not folded into "HTTP
     /// 401".
     async fn json(&self, url: Url) -> Result<Value, Failure> {
-        match self.http.json(self.get(url)?).await {
-            Ok((_, value)) => Ok(value),
-            Err(Failure::Status(status @ (StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN))) => {
-                Err(Failure::Client(format!(
-                    "Confluence refused the credential (HTTP {}); check the toolkit's token or API key",
-                    status.as_u16()
-                )))
-            }
-            Err(failure) => Err(failure),
-        }
+        authorized_json(&self.http, self.get(url)?, PROVIDER).await
     }
 
-    /// Every result of a `start`/`limit` listing at `url` (its own query
-    /// kept), under the page cap.
-    async fn paginate(&self, url: &Url, pages_seen: &mut usize) -> Result<Vec<Value>, Failure> {
+    /// The URL a `_links.next` continues at: a context-relative path
+    /// (`/rest/api/content/search?cursor=…`) under the API root, or an
+    /// absolute URL on the API root's origin.
+    fn continuation(&self, next: &str) -> Result<Url, Failure> {
+        if next.starts_with('/') {
+            return Url::parse(&format!(
+                "{}{next}",
+                self.config.api_root().as_str().trim_end_matches('/')
+            ))
+            .map_err(|_| Failure::InvalidResponse("a continuation link is not a URL"));
+        }
+        let url = Url::parse(next)
+            .map_err(|_| Failure::InvalidResponse("a continuation link is not a URL"))?;
+        if !same_origin(self.config.api_root(), &url) {
+            return Err(Failure::InvalidResponse(
+                "a continuation link leaves the Confluence origin",
+            ));
+        }
+        Ok(url)
+    }
+
+    /// Every result of the listing at `url` (its own query kept): continued
+    /// through `_links.next` while the API sends one, by the `start` offset
+    /// only for a full page without one, under this listing's own page cap.
+    async fn paginate(&self, url: &Url) -> Result<Vec<Value>, Failure> {
         let mut results = Vec::new();
         let mut start = 0_usize;
+        let mut next: Option<Url> = None;
+        let mut pages_seen = 0_usize;
         loop {
-            *pages_seen += 1;
-            self.http.check_pages(*pages_seen)?;
-            let mut page_url = url.clone();
-            page_url
-                .query_pairs_mut()
-                .append_pair("start", &start.to_string())
-                .append_pair("limit", &PAGE_SIZE.to_string());
+            pages_seen += 1;
+            self.http.check_pages(pages_seen)?;
+            let page_url = if let Some(mut continued) = next.take() {
+                // A link that dropped the caller's query (`expand`) would
+                // change the shape of the later pages.
+                let kept: Vec<(String, String)> = continued
+                    .query_pairs()
+                    .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                    .collect();
+                for (key, value) in url.query_pairs() {
+                    if !kept.iter().any(|(have, _)| *have == key) {
+                        continued.query_pairs_mut().append_pair(&key, &value);
+                    }
+                }
+                continued
+            } else {
+                let mut page_url = url.clone();
+                page_url
+                    .query_pairs_mut()
+                    .append_pair("start", &start.to_string())
+                    .append_pair("limit", &PAGE_SIZE.to_string());
+                page_url
+            };
             let page = self.json(page_url).await?;
             let batch = match page.get("results") {
                 None | Some(Value::Null) => Vec::new(),
@@ -180,9 +251,6 @@ impl ConfluenceSource {
             if batch.is_empty() {
                 return Ok(results);
             }
-            let has_next = page
-                .pointer("/_links/next")
-                .is_some_and(|next| !next.is_null());
             let asked = page
                 .get("limit")
                 .and_then(Value::as_u64)
@@ -193,15 +261,19 @@ impl ConfluenceSource {
             let short = batch.len() < asked.min(PAGE_SIZE);
             results.extend(batch);
             self.http.check_count(results.len())?;
-            if !has_next && short {
-                return Ok(results);
+            match text_of(&page, "/_links/next") {
+                Some(link) => next = Some(self.continuation(link)?),
+                None if short => return Ok(results),
+                // A full page and no link (a Server that sends none): the
+                // offset continues.
+                None => {}
             }
         }
     }
 
     /// The `expand` every page listing asks for: the version, the labels
-    /// when wanted, the read restrictions when they decide inclusion or the
-    /// ACL.
+    /// when wanted, the read restrictions and the ancestors (whose own
+    /// restrictions the page inherits).
     fn page_expand(&self) -> String {
         let mut expand = vec!["version"];
         if self.arguments.include_labels {
@@ -209,11 +281,12 @@ impl ConfluenceSource {
         }
         expand.push("restrictions.read.restrictions.user");
         expand.push("restrictions.read.restrictions.group");
+        expand.push("ancestors");
         expand.join(",")
     }
 
     /// The pages the run selects, by id, in listing order.
-    async fn pages(&self, pages_seen: &mut usize) -> Result<Vec<Value>, Failure> {
+    async fn pages(&self) -> Result<Vec<Value>, Failure> {
         fn keep(
             by_id: &mut BTreeMap<String, Value>,
             order: &mut Vec<String>,
@@ -241,7 +314,7 @@ impl ConfluenceSource {
                     url.query_pairs_mut()
                         .append_pair("includeArchivedSpaces", "true");
                 }
-                for page in self.paginate(&url, pages_seen).await? {
+                for page in self.paginate(&url).await? {
                     keep(&mut by_id, &mut order, page)?;
                 }
             }
@@ -253,7 +326,7 @@ impl ConfluenceSource {
                         &format!("type=page AND label=\"{}\"", escape_cql(label)),
                     )
                     .append_pair("expand", &expand);
-                for page in self.paginate(&url, pages_seen).await? {
+                for page in self.paginate(&url).await? {
                     keep(&mut by_id, &mut order, page)?;
                 }
             }
@@ -262,8 +335,6 @@ impl ConfluenceSource {
                 if by_id.contains_key(id) {
                     continue;
                 }
-                *pages_seen += 1;
-                self.http.check_pages(*pages_seen)?;
                 let mut url = self.api(&["content", id])?;
                 url.query_pairs_mut().append_pair("expand", &expand);
                 let page = match self.json(url).await {
@@ -288,14 +359,15 @@ impl ConfluenceSource {
                 .append_pair("type", "page")
                 .append_pair(
                     "status",
+                    // Never `any`: that would list trashed pages and drafts.
                     if self.arguments.include_archived_content {
-                        "any"
+                        "current,archived"
                     } else {
                         "current"
                     },
                 )
                 .append_pair("expand", &expand);
-            for page in self.paginate(&url, pages_seen).await? {
+            for page in self.paginate(&url).await? {
                 keep(&mut by_id, &mut order, page)?;
             }
         }
@@ -305,16 +377,83 @@ impl ConfluenceSource {
             .collect())
     }
 
+    /// The read restrictions of ancestor `id`, read once per run
+    /// (`content/{id}/restriction/byOperation/read`). An ancestor whose
+    /// restrictions cannot be read (404, 403) is restricted to nobody this
+    /// runtime can name.
+    async fn ancestor_restrictions(
+        &self,
+        id: &str,
+        cache: &mut BTreeMap<String, Readers>,
+    ) -> Result<Readers, Failure> {
+        if let Some(readers) = cache.get(id) {
+            return Ok(readers.clone());
+        }
+        let mut url = self.api(&["content", id, "restriction", "byOperation", "read"])?;
+        url.query_pairs_mut()
+            .append_pair("expand", "restrictions.user,restrictions.group")
+            .append_pair("limit", &PAGE_SIZE.to_string());
+        let readers = match self.json(url).await {
+            Ok(read) => Readers::Everyone.narrowed_by(principals_of(&read)),
+            Err(Failure::Status(StatusCode::NOT_FOUND)) => Readers::Nobody,
+            Err(Failure::Client(message)) if message.contains("refused the credential") => {
+                Readers::Nobody
+            }
+            Err(failure) => return Err(failure),
+        };
+        cache.insert(id.to_owned(), readers.clone());
+        Ok(readers)
+    }
+
+    /// Who may read `page`: its own read restrictions narrowed by every
+    /// ancestor's.
+    async fn readers_of(
+        &self,
+        page: &Value,
+        cache: &mut BTreeMap<String, Readers>,
+    ) -> Result<Readers, Failure> {
+        let mut readers = Readers::Everyone
+            .narrowed_by(page.pointer("/restrictions/read").and_then(principals_of));
+        for ancestor in page
+            .get("ancestors")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(id) = id_of(ancestor, "/id") else {
+                return Err(Failure::InvalidResponse("an ancestor has no id"));
+            };
+            if !safe_identifier(&id) {
+                return Err(Failure::InvalidResponse(
+                    "an ancestor id is not an identifier",
+                ));
+            }
+            readers = match self.ancestor_restrictions(&id, cache).await? {
+                Readers::Everyone => readers,
+                Readers::Only(principals) => readers.narrowed_by(Some(principals)),
+                Readers::Nobody => Readers::Nobody,
+            };
+            if readers == Readers::Nobody {
+                break;
+            }
+        }
+        Ok(readers)
+    }
+
     async fn listing(&self) -> Result<(Vec<Listed>, Details), Failure> {
-        let mut pages_seen = 0_usize;
         let mut listed = Vec::new();
         let mut details = Details::new();
-        for page in self.pages(&mut pages_seen).await? {
+        let mut ancestors: BTreeMap<String, Readers> = BTreeMap::new();
+        for page in self.pages().await? {
             let id = id_of(&page, "/id").ok_or(Failure::InvalidResponse("a page has no id"))?;
-            let acl = match read_restrictions(&page) {
-                None => Acl::Project,
-                Some(_) if !self.arguments.include_restricted_content => continue,
-                Some(principals) => Acl::Restricted { principals },
+            let acl = match self.readers_of(&page, &mut ancestors).await? {
+                Readers::Everyone => Acl::Project,
+                Readers::Only(principals) if self.arguments.include_restricted_content => {
+                    Acl::Restricted { principals }
+                }
+                // Restricted and not asked for, or restricted to readers the
+                // ACL model cannot express: left out with its dependents.
+                Readers::Only(_) | Readers::Nobody => continue,
             };
             let version = version_of(&page)
                 .ok_or(Failure::InvalidResponse("a page carries no version number"))?;
@@ -340,11 +479,11 @@ impl ConfluenceSource {
             listed.push(item);
             self.http.check_count(listed.len())?;
             if self.arguments.include_attachments {
-                self.list_attachments(&id, &key, &acl, &mut pages_seen, &mut listed, &mut details)
+                self.list_attachments(&id, &key, &acl, &mut listed, &mut details)
                     .await?;
             }
             if self.arguments.include_comments {
-                self.list_comments(&id, &key, &acl, &mut pages_seen, &mut listed, &mut details)
+                self.list_comments(&id, &key, &acl, &mut listed, &mut details)
                     .await?;
             }
             details.insert(key, page_details);
@@ -352,20 +491,18 @@ impl ConfluenceSource {
         Ok((listed, details))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn list_attachments(
         &self,
         page_id: &str,
         page_key: &str,
         acl: &Acl,
-        pages_seen: &mut usize,
         listed: &mut Vec<Listed>,
         details: &mut Details,
     ) -> Result<(), Failure> {
         let mut url = self.api(&["content", page_id, "child", "attachment"])?;
         url.query_pairs_mut()
             .append_pair("expand", "version,metadata.labels");
-        for attachment in self.paginate(&url, pages_seen).await? {
+        for attachment in self.paginate(&url).await? {
             let id = id_of(&attachment, "/id")
                 .ok_or(Failure::InvalidResponse("an attachment has no id"))?;
             if !safe_identifier(&id) {
@@ -427,13 +564,11 @@ impl ConfluenceSource {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn list_comments(
         &self,
         page_id: &str,
         page_key: &str,
         acl: &Acl,
-        pages_seen: &mut usize,
         listed: &mut Vec<Listed>,
         details: &mut Details,
     ) -> Result<(), Failure> {
@@ -441,7 +576,7 @@ impl ConfluenceSource {
         url.query_pairs_mut()
             .append_pair("expand", "version")
             .append_pair("depth", "all");
-        for comment in self.paginate(&url, pages_seen).await? {
+        for comment in self.paginate(&url).await? {
             let id =
                 id_of(&comment, "/id").ok_or(Failure::InvalidResponse("a comment has no id"))?;
             if !safe_identifier(&id) {
@@ -491,35 +626,6 @@ impl ConfluenceSource {
         format!("{base}{path}")
     }
 
-    async fn listed(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
-        self.cache.get_or_list(|| self.list_and_remember()).await
-    }
-
-    async fn listed_fresh(&self) -> Result<Arc<BTreeMap<String, Listed>>, SourceError> {
-        self.cache.list_shared(|| self.list_and_remember()).await
-    }
-
-    async fn list_and_remember(&self) -> Result<Vec<Listed>, SourceError> {
-        let (listed, details) = self
-            .listing()
-            .await
-            .map_err(|failure| failure.into_source_error(PROVIDER, None))?;
-        *self
-            .details
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(details);
-        Ok(listed)
-    }
-
-    fn details_of(&self, key: &str) -> Map<String, Value> {
-        self.details
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(key)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     /// A page or comment body (`content/{id}`), pinned to the listed version.
     async fn fetch_content(
         &self,
@@ -551,7 +657,10 @@ impl ConfluenceSource {
 
 impl ContentSource for ConfluenceSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        let listing = self.listed_fresh().await?;
+        let listing = self
+            .listing
+            .list_shared(PROVIDER, || self.listing())
+            .await?;
         Ok(references(&listing))
     }
 
@@ -560,12 +669,15 @@ impl ContentSource for ConfluenceSource {
         reason = "one arm per document kind: page, attachment, comment"
     )]
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
-        let listing = self.listed().await?;
+        let listing = self
+            .listing
+            .get_or_list(PROVIDER, || self.listing())
+            .await?;
         let listed = listing
             .get(key)
             .ok_or_else(|| SourceError::NotFound(key.to_owned()))?;
         let failed = |failure: Failure| failure.into_source_error(PROVIDER, Some(key));
-        let mut metadata = self.details_of(key);
+        let mut metadata = self.listing.details_of(key);
         let kind = metadata
             .get("type")
             .and_then(Value::as_str)
@@ -674,9 +786,11 @@ fn version_of(content: &Value) -> Option<String> {
     }
 }
 
-/// The read restrictions on a page as principals: `None` when the page is
-/// public (no user and no group restriction, or none expanded).
-fn read_restrictions(page: &Value) -> Option<Vec<Principal>> {
+/// The principals of one read restriction level — a page's expanded
+/// `restrictions.read`, or the `byOperation/read` answer, both shaped
+/// `{restrictions: {user: {results}, group: {results}}}`: `None` when the
+/// level restricts nobody (the page is open at that level).
+fn principals_of(read: &Value) -> Option<Vec<Principal>> {
     let mut principals: Vec<Principal> = Vec::new();
     let mut add = |kind: PrincipalKind, id: &str| {
         let principal = Principal {
@@ -687,8 +801,8 @@ fn read_restrictions(page: &Value) -> Option<Vec<Principal>> {
             principals.push(principal);
         }
     };
-    for user in page
-        .pointer("/restrictions/read/restrictions/user/results")
+    for user in read
+        .pointer("/restrictions/user/results")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -703,8 +817,8 @@ fn read_restrictions(page: &Value) -> Option<Vec<Principal>> {
             add(PrincipalKind::Email, email);
         }
     }
-    for group in page
-        .pointer("/restrictions/read/restrictions/group/results")
+    for group in read
+        .pointer("/restrictions/group/results")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -732,27 +846,6 @@ fn labels_of(content: &Value) -> Value {
 /// CQL string delimiters only (`_escape_cql_query`).
 fn escape_cql(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// An attachment title as one key segment: no `/`, no control characters,
-/// never empty.
-fn key_segment(title: &str) -> String {
-    let segment: String = title
-        .trim()
-        .chars()
-        .map(|character| {
-            if character == '/' || character == '\\' || character.is_control() {
-                '_'
-            } else {
-                character
-            }
-        })
-        .collect();
-    if segment.is_empty() {
-        "attachment".to_owned()
-    } else {
-        segment
-    }
 }
 
 #[cfg(test)]
@@ -787,10 +880,26 @@ mod tests {
         json!({
             "id": id, "type": "page", "status": "current", "title": title,
             "version": {"number": version, "when": "2026-10-01T00:00:00.000Z", "by": {"displayName": "Ann"}},
+            "ancestors": [],
             "_links": {"webui": format!("/spaces/DOCS/pages/{id}/{title}")},
             "space": {"key": "DOCS"},
             "metadata": {"labels": {"results": [{"name": "guide"}]}},
             "body": {"view": {"value": format!("<h1>{title}</h1><p>v{version}</p>")}},
+        })
+    }
+
+    /// A `byOperation/read` answer as Confluence documents it.
+    fn read_restriction(users: &[(&str, &str)], groups: &[&str]) -> Value {
+        json!({
+            "operation": "read",
+            "restrictions": {
+                "user": {"results": users.iter().map(|(account_id, email)| json!({"type": "known", "accountId": account_id, "email": email})).collect::<Vec<_>>(),
+                         "start": 0, "limit": 100, "size": users.len()},
+                "group": {"results": groups.iter().map(|name| json!({"type": "group", "name": name, "id": format!("g-{name}")})).collect::<Vec<_>>(),
+                          "start": 0, "limit": 100, "size": groups.len()},
+            },
+            "_expandable": {"content": "/rest/api/content/10"},
+            "_links": {"self": "https://acme.atlassian.net/wiki/rest/api/content/10/restriction/byOperation/read"},
         })
     }
 
@@ -803,16 +912,26 @@ mod tests {
             if path == CONTENT {
                 assert_eq!(query(request, "spaceKey").as_deref(), Some("DOCS"));
                 assert_eq!(query(request, "status").as_deref(), Some("current"));
-                assert_eq!(query(request, "limit").as_deref(), Some("100"));
+                let expand = query(request, "expand").unwrap();
+                assert!(expand.contains("ancestors"), "{expand}");
                 return match query(request, "start").as_deref() {
-                    // A Server that caps the page at 2 and says there is more.
-                    Some("0") => Reply::json(&json!({
-                        "results": [page("1", "Alpha", 3), page("2", "Bravo", 1)],
-                        "limit": 2, "size": 2, "_links": {"next": "/rest/api/content?start=2"},
-                    })),
-                    Some("2") => Reply::json(
-                        &json!({"results": [page("3", "Charlie", 7)], "limit": 2, "size": 1}),
-                    ),
+                    // A Server that caps the page at 2 and says there is
+                    // more, through the link it documents.
+                    Some("0") => {
+                        assert_eq!(query(request, "limit").as_deref(), Some("100"));
+                        Reply::json(&json!({
+                            "results": [page("1", "Alpha", 3), page("2", "Bravo", 1)],
+                            "start": 0, "limit": 2, "size": 2,
+                            "_links": {"base": "https://acme.atlassian.net/wiki", "context": "/wiki",
+                                       "next": "/rest/api/content?spaceKey=DOCS&type=page&status=current&limit=2&start=2"},
+                        }))
+                    }
+                    Some("2") => {
+                        assert_eq!(query(request, "limit").as_deref(), Some("2"));
+                        Reply::json(
+                            &json!({"results": [page("3", "Charlie", 7)], "start": 2, "limit": 2, "size": 1}),
+                        )
+                    }
                     other => panic!("unexpected start {other:?}"),
                 };
             }
@@ -863,6 +982,95 @@ mod tests {
             .expect("bearer");
         assert!(bearer.is_sensitive());
         assert_eq!(bearer, "Bearer fixture-token");
+    }
+
+    /// Review round 1, finding 7: Confluence Cloud's `content/search`
+    /// paginates by cursor and ignores `start`; the listing follows
+    /// `_links.next` and never loops on the first page.
+    #[tokio::test]
+    async fn a_cursor_listing_is_followed_through_links_next() {
+        let transport = Scripted::new(|request, _| {
+            assert_eq!(request.url().path(), "/wiki/rest/api/content/search");
+            // Whatever `start` says, the first page comes back until a
+            // cursor is sent.
+            match query(request, "cursor").as_deref() {
+                None => Reply::json(&json!({
+                    "results": [page("1", "Alpha", 1), page("2", "Bravo", 1)],
+                    "start": 0, "limit": 2, "size": 2, "cqlQuery": "type=page", "searchDuration": 12, "totalSize": 3,
+                    "_links": {"base": "https://acme.atlassian.net/wiki", "context": "/wiki",
+                               "next": "/rest/api/content/search?cql=type%3Dpage&expand=version&cursor=eyJpZCI6IjIifQ&limit=2",
+                               "self": "https://acme.atlassian.net/wiki/rest/api/content/search?cql=type%3Dpage"},
+                })),
+                Some("eyJpZCI6IjIifQ") => Reply::json(&json!({
+                    "results": [page("3", "Charlie", 1)],
+                    "start": 0, "limit": 2, "size": 1, "totalSize": 3,
+                    "_links": {"base": "https://acme.atlassian.net/wiki", "context": "/wiki",
+                               "prev": "/rest/api/content/search?cql=type%3Dpage&cursor=eyJpZCI6IjAifQ&limit=2"},
+                })),
+                other => panic!("unexpected cursor {other:?}"),
+            }
+        });
+        let source = ConfluenceSource::new(
+            config(None),
+            arguments(&json!({"cql": "type=page"})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        let keys: Vec<String> = source
+            .list()
+            .await
+            .expect("listing")
+            .into_iter()
+            .map(|d| d.key)
+            .collect();
+        assert_eq!(keys, ["page/1.html", "page/2.html", "page/3.html"]);
+        assert_eq!(transport.seen().len(), 2, "{:?}", transport.seen());
+
+        // A continuation that leaves the origin is refused.
+        let transport = Scripted::new(|_, _| {
+            Reply::json(&json!({
+                "results": [page("1", "Alpha", 1)], "limit": 1, "size": 1,
+                "_links": {"next": "https://evil.example/wiki/rest/api/content/search?cursor=x"},
+            }))
+        });
+        let source = ConfluenceSource::new(
+            config(None),
+            arguments(&json!({"cql": "type=page"})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        let error = source.list().await.expect_err("off-origin link");
+        assert!(
+            error.to_string().contains("leaves the Confluence origin"),
+            "{error}"
+        );
+        assert_eq!(transport.seen().len(), 1);
+    }
+
+    /// Review round 1, finding 8: archived pages are asked for together with
+    /// current ones, never `any` (which would list trashed pages and drafts).
+    #[tokio::test]
+    async fn archived_pages_are_listed_with_current_ones_never_trashed_or_drafts() {
+        let transport = Scripted::new(|request, _| {
+            assert_eq!(request.url().path(), CONTENT);
+            assert_eq!(
+                query(request, "status").as_deref(),
+                Some("current,archived")
+            );
+            let mut archived = page("2", "Old", 1);
+            archived["status"] = json!("archived");
+            Reply::json(&json!({"results": [page("1", "Alpha", 1), archived], "size": 2}))
+        });
+        let source = ConfluenceSource::new(
+            config(Some("DOCS")),
+            arguments(&json!({"include_archived_content": true})),
+            allow(),
+            transport,
+        )
+        .expect("source");
+        assert_eq!(source.list().await.expect("listing").len(), 2);
     }
 
     #[tokio::test]
@@ -959,6 +1167,62 @@ mod tests {
         );
     }
 
+    /// Review round 1, finding 4: each paginated listing has the page cap to
+    /// itself. Five one-page attachment listings pass a cap of one page; a
+    /// two-page attachment listing does not.
+    #[tokio::test]
+    async fn the_page_cap_applies_per_listing_not_across_them() {
+        let listing = |long_for: Option<&'static str>| {
+            Scripted::new(move |request, _| {
+                let path = request.url().path();
+                if path == CONTENT {
+                    let pages: Vec<Value> = (1..=5_u32)
+                        .map(|n| page(&n.to_string(), &format!("Page {n}"), 1))
+                        .collect();
+                    return Reply::json(&json!({"results": pages, "size": 5, "limit": 100}));
+                }
+                let page_id = path
+                    .strip_prefix("/wiki/rest/api/content/")
+                    .and_then(|rest| rest.strip_suffix("/child/attachment"))
+                    .unwrap_or_else(|| panic!("unexpected request {path}"));
+                let start: u64 = query(request, "start").unwrap().parse().unwrap();
+                let more = Some(page_id) == long_for && start == 0;
+                let mut reply = json!({"results": [
+                    {"id": format!("att-{page_id}-{start}"), "title": "a.txt", "extensions": {"fileSize": 1},
+                     "version": {"number": 1}, "_links": {"download": "/download/attachments/a.txt"}},
+                ], "start": start, "limit": if more { 1 } else { 100 }, "size": 1});
+                if more {
+                    reply["_links"] = json!({"next": format!("/rest/api/content/{page_id}/child/attachment?start=1&limit=1")});
+                }
+                Reply::json(&reply)
+            })
+        };
+        let one_page = SourceLimits {
+            max_pages: 1,
+            ..SourceLimits::default()
+        };
+        let source = ConfluenceSource::new(
+            config(Some("DOCS")),
+            arguments(&json!({"include_attachments": true})),
+            allow(),
+            listing(None),
+        )
+        .expect("source")
+        .with_limits(one_page);
+        assert_eq!(source.list().await.expect("listing").len(), 10);
+
+        let source = ConfluenceSource::new(
+            config(Some("DOCS")),
+            arguments(&json!({"include_attachments": true})),
+            allow(),
+            listing(Some("3")),
+        )
+        .expect("source")
+        .with_limits(one_page);
+        let error = source.list().await.expect_err("a two-page listing");
+        assert!(error.to_string().contains("page cap"), "{error}");
+    }
+
     #[tokio::test]
     async fn cql_label_and_page_ids_select_pages_and_the_space_is_ignored() {
         let transport = Scripted::new(|request, _| {
@@ -1010,9 +1274,9 @@ mod tests {
     async fn restricted_pages_are_left_out_unless_asked_and_then_carry_an_acl() {
         let restricted = || {
             let mut page = page("7", "Secret", 1);
-            page["restrictions"] = json!({"read": {"restrictions": {
-                "user": {"results": [{"accountId": "u-1", "email": "ann@example.com"}]},
-                "group": {"results": [{"name": "leads"}]},
+            page["restrictions"] = json!({"read": {"operation": "read", "restrictions": {
+                "user": {"results": [{"type": "known", "accountId": "u-1", "email": "ann@example.com"}], "start": 0, "limit": 100, "size": 1},
+                "group": {"results": [{"type": "group", "name": "leads", "id": "g-leads"}], "start": 0, "limit": 100, "size": 1},
             }}});
             page
         };
@@ -1069,6 +1333,165 @@ mod tests {
                 ]
             }
         );
+    }
+
+    /// Review round 1, finding 3: a read restriction is inherited, so a page
+    /// under a restricted parent is restricted though it carries none of
+    /// its own. Each ancestor's restrictions are read once per run; the
+    /// ACL is the intersection of the levels, and a page whose intersection
+    /// is empty is left out even when restricted content is asked for.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_restricted_parent_restricts_its_unrestricted_children() {
+        let leads = || Principal {
+            kind: PrincipalKind::Group,
+            id: "leads".into(),
+        };
+        let transport = Scripted::new(|request, _| {
+            let path = request.url().path();
+            if path == CONTENT {
+                let mut parent = page("10", "Parent", 1);
+                parent["restrictions"] = json!({"read": {"operation": "read", "restrictions": {
+                    "user": {"results": [], "start": 0, "limit": 100, "size": 0},
+                    "group": {"results": [{"type": "group", "name": "leads", "id": "g-leads"}], "start": 0, "limit": 100, "size": 1},
+                }}});
+                let mut child = page("11", "Child", 1);
+                child["ancestors"] =
+                    json!([{"id": "10", "type": "page", "status": "current", "title": "Parent"}]);
+                let mut grandchild = page("12", "Grandchild", 1);
+                grandchild["ancestors"] = json!([
+                    {"id": "10", "type": "page", "status": "current", "title": "Parent"},
+                    {"id": "11", "type": "page", "status": "current", "title": "Child"},
+                ]);
+                // Its own restriction names a user the parent's group level
+                // does not: the intersection is empty.
+                grandchild["restrictions"] = json!({"read": {"operation": "read", "restrictions": {
+                    "user": {"results": [{"type": "known", "accountId": "u-2"}], "start": 0, "limit": 100, "size": 1},
+                    "group": {"results": [], "start": 0, "limit": 100, "size": 0},
+                }}});
+                let mut sibling = page("13", "Sibling", 1);
+                sibling["ancestors"] =
+                    json!([{"id": "10", "type": "page", "status": "current", "title": "Parent"}]);
+                sibling["restrictions"] = json!({"read": {"operation": "read", "restrictions": {
+                    "user": {"results": [], "start": 0, "limit": 100, "size": 0},
+                    "group": {"results": [{"type": "group", "name": "leads", "id": "g-leads"}], "start": 0, "limit": 100, "size": 1},
+                }}});
+                let mut open = page("1", "Open", 1);
+                open["ancestors"] =
+                    json!([{"id": "5", "type": "page", "status": "current", "title": "Home"}]);
+                return Reply::json(
+                    &json!({"results": [open, parent, child, grandchild, sibling], "size": 5}),
+                );
+            }
+            match path {
+                "/wiki/rest/api/content/5/restriction/byOperation/read" => {
+                    assert_eq!(
+                        query(request, "expand").as_deref(),
+                        Some("restrictions.user,restrictions.group")
+                    );
+                    Reply::json(&read_restriction(&[], &[]))
+                }
+                "/wiki/rest/api/content/10/restriction/byOperation/read" => {
+                    Reply::json(&read_restriction(&[], &["leads"]))
+                }
+                "/wiki/rest/api/content/11/restriction/byOperation/read" => {
+                    Reply::json(&read_restriction(&[], &[]))
+                }
+                other => panic!("unexpected request {other}"),
+            }
+        });
+        let source = ConfluenceSource::new(
+            config(Some("DOCS")),
+            arguments(&json!({})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        let keys: Vec<String> = source
+            .list()
+            .await
+            .expect("listing")
+            .into_iter()
+            .map(|d| d.key)
+            .collect();
+        assert_eq!(keys, ["page/1.html"], "the restricted subtree is out");
+        let restriction_reads = |seen: Vec<String>| {
+            seen.iter()
+                .filter(|request| request.contains("/restriction/byOperation/read"))
+                .count()
+        };
+        assert_eq!(
+            restriction_reads(transport.seen()),
+            2,
+            "ancestors 5 and 10 read once each (the grandchild stops at 10, never reaching 11): {:?}",
+            transport.seen()
+        );
+
+        let source = ConfluenceSource::new(
+            config(Some("DOCS")),
+            arguments(&json!({"include_restricted_content": true})),
+            allow(),
+            transport.clone(),
+        )
+        .expect("source");
+        let listed = source.list().await.expect("listing");
+        let acls: Vec<(&str, &Acl)> = listed.iter().map(|d| (d.key.as_str(), &d.acl)).collect();
+        assert_eq!(
+            acls,
+            [
+                ("page/1.html", &Acl::Project),
+                (
+                    "page/10.html",
+                    &Acl::Restricted {
+                        principals: vec![leads()]
+                    }
+                ),
+                (
+                    "page/11.html",
+                    &Acl::Restricted {
+                        principals: vec![leads()]
+                    }
+                ),
+                (
+                    "page/13.html",
+                    &Acl::Restricted {
+                        principals: vec![leads()]
+                    }
+                ),
+            ],
+            "the child inherits the parent's readers; the grandchild's empty intersection cannot be expressed and is left out"
+        );
+        assert_eq!(
+            restriction_reads(transport.seen()),
+            4,
+            "each run reads its ancestors once"
+        );
+    }
+
+    #[test]
+    fn readers_narrow_by_intersection() {
+        let user = |id: &str| Principal {
+            kind: PrincipalKind::User,
+            id: id.into(),
+        };
+        assert_eq!(Readers::Everyone.narrowed_by(None), Readers::Everyone);
+        assert_eq!(
+            Readers::Everyone.narrowed_by(Some(vec![user("a")])),
+            Readers::Only(vec![user("a")])
+        );
+        assert_eq!(
+            Readers::Only(vec![user("a"), user("b")]).narrowed_by(Some(vec![user("b"), user("c")])),
+            Readers::Only(vec![user("b")])
+        );
+        assert_eq!(
+            Readers::Only(vec![user("a")]).narrowed_by(Some(vec![user("c")])),
+            Readers::Nobody
+        );
+        assert_eq!(
+            Readers::Nobody.narrowed_by(Some(vec![user("a")])),
+            Readers::Nobody
+        );
+        assert_eq!(Readers::Nobody.narrowed_by(None), Readers::Nobody);
     }
 
     #[tokio::test]

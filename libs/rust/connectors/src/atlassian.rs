@@ -1,8 +1,10 @@
 //! What the Confluence and Jira connectors share (ADR-0030 I2): the SDK's
 //! credential model (a bearer token, a `JSESSIONID` cookie string, or a
 //! username and API key sent as Basic), the Cloud-versus-Server decision, the
-//! bounded custom headers, and the text helpers both configurations read
-//! settings with.
+//! bounded custom headers, the text helpers both configurations read
+//! settings with, and (feature `content-source`) the listing scaffolding
+//! both connectors run on: the credential-naming JSON read, the remembered
+//! listing with its per-document details, the key segment rule.
 //!
 //! The agent-runtime families keep their own copies of this logic for now
 //! (`toolkits/families/{confluence,jira}/config.rs`); they are to be pointed
@@ -18,6 +20,11 @@ use zeroize::Zeroizing;
 use crate::base_url::{self, BasePath, BaseUrlError, host_matches_domain};
 use crate::transport::Request;
 use crate::transport::header::{ACCEPT, AUTHORIZATION, COOKIE, HeaderName, HeaderValue};
+
+#[cfg(feature = "content-source")]
+pub use self::listing::{
+    COMMENT_LISTING_CONCURRENCY, DetailedListing, Details, authorized_json, same_origin,
+};
 
 /// The longest secret a configuration carries.
 pub const MAX_SECRET_BYTES: usize = 16 * 1_024;
@@ -437,20 +444,41 @@ pub fn optional_flag(
 /// The SDK's attachment-name filter: a pattern matches the whole name,
 /// ASCII case-insensitively, with `*` standing for any run and every other
 /// character literal (`re.escape(pattern).replace(r'\*', '.*') + '$'`).
+///
+/// Linear in the pattern and the name (review round 1, finding 6): the
+/// two-pointer walk backtracks only to the last `*`, so a pattern such as
+/// `a*a*a*a*a*b` against a long run of `a` cannot go exponential.
 #[must_use]
 pub fn name_matches(pattern: &str, name: &str) -> bool {
-    fn matches(pattern: &[char], name: &[char]) -> bool {
-        match pattern.split_first() {
-            None => name.is_empty(),
-            Some(('*', rest)) => (0..=name.len()).any(|skip| matches(rest, &name[skip..])),
-            Some((head, rest)) => name
-                .split_first()
-                .is_some_and(|(first, tail)| first == head && matches(rest, tail)),
-        }
-    }
     let pattern: Vec<char> = pattern.chars().flat_map(char::to_lowercase).collect();
     let name: Vec<char> = name.chars().flat_map(char::to_lowercase).collect();
-    matches(&pattern, &name)
+    let (mut at_pattern, mut at_name) = (0_usize, 0_usize);
+    // The pattern position after the last `*` and the name position it
+    // currently covers up to.
+    let mut star: Option<(usize, usize)> = None;
+    while at_name < name.len() {
+        match pattern.get(at_pattern) {
+            Some('*') => {
+                star = Some((at_pattern + 1, at_name));
+                at_pattern += 1;
+            }
+            Some(head) if *head == name[at_name] => {
+                at_pattern += 1;
+                at_name += 1;
+            }
+            _ => match star {
+                Some((after_star, covered)) => {
+                    at_pattern = after_star;
+                    at_name = covered + 1;
+                    star = Some((after_star, covered + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[at_pattern..]
+        .iter()
+        .all(|character| *character == '*')
 }
 
 /// Whether an attachment named `name` passes the SDK's include/skip lists:
@@ -687,6 +715,160 @@ pub fn safe_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
+/// A file name or title as one key segment: no `/` or `\\`, no control
+/// characters, never empty (`attachment` when nothing is left).
+#[must_use]
+pub fn key_segment(name: &str) -> String {
+    let segment: String = name
+        .trim()
+        .chars()
+        .map(|character| {
+            if character == '/' || character == '\\' || character.is_control() {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect();
+    if segment.is_empty() {
+        "attachment".to_owned()
+    } else {
+        segment
+    }
+}
+
+/// The listing scaffolding the two `ContentSource` connectors share.
+#[cfg(feature = "content-source")]
+mod listing {
+    use std::collections::BTreeMap;
+    use std::future::Future;
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use elitea_content_source::SourceError;
+    use serde_json::{Map, Value};
+
+    use crate::source::{Failure, Listed, Listing, ListingCache, SourceHttp};
+    use crate::transport::{Request, StatusCode, Url};
+
+    /// How many per-issue (or per-page) dependent listings run at once when
+    /// the embedded page did not hold everything (review round 1, finding 9).
+    pub const COMMENT_LISTING_CONCURRENCY: usize = 8;
+
+    /// What a listing learnt about each document beyond its reference: the
+    /// metadata its fetch reports and whatever the fetch needs (a download
+    /// path, a comment body already listed).
+    pub type Details = BTreeMap<String, Map<String, Value>>;
+
+    /// A listing page read with the credential; a 401 or 403 is an error
+    /// naming the credential, never folded into "HTTP 401" and never an
+    /// empty listing.
+    ///
+    /// # Errors
+    ///
+    /// See [`SourceHttp::json`].
+    pub async fn authorized_json(
+        http: &SourceHttp,
+        request: Request,
+        provider: &str,
+    ) -> Result<Value, Failure> {
+        match http.json(request).await {
+            Ok((_, value)) => Ok(value),
+            Err(Failure::Status(status @ (StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN))) => {
+                Err(Failure::Client(format!(
+                    "{provider} refused the credential (HTTP {}); check the toolkit's token or API key",
+                    status.as_u16()
+                )))
+            }
+            Err(failure) => Err(failure),
+        }
+    }
+
+    /// Whether two URLs share an origin: scheme, host and (default) port.
+    #[must_use]
+    pub fn same_origin(left: &Url, right: &Url) -> bool {
+        left.scheme() == right.scheme()
+            && left.host_str() == right.host_str()
+            && left.port_or_known_default() == right.port_or_known_default()
+    }
+
+    /// The remembered listing and the details it learnt, so a fetch reads
+    /// the version it was listed with (and a fetch before any listing lists
+    /// once). See [`ListingCache`] for the sharing rules.
+    #[derive(Default)]
+    pub struct DetailedListing {
+        cache: ListingCache,
+        details: Mutex<Arc<Details>>,
+    }
+
+    impl DetailedListing {
+        /// The remembered listing, or `list` run once.
+        ///
+        /// # Errors
+        ///
+        /// Whatever `list` fails with, as the provider's source error.
+        pub async fn get_or_list<F, Fut>(
+            &self,
+            provider: &str,
+            list: F,
+        ) -> Result<Arc<Listing>, SourceError>
+        where
+            F: FnOnce() -> Fut,
+            Fut: Future<Output = Result<(Vec<Listed>, Details), Failure>>,
+        {
+            self.cache
+                .get_or_list(|| self.remember(provider, list))
+                .await
+        }
+
+        /// A fresh listing (an explicit `list()`), shared with callers that
+        /// arrive while it runs.
+        ///
+        /// # Errors
+        ///
+        /// Whatever `list` fails with, as the provider's source error.
+        pub async fn list_shared<F, Fut>(
+            &self,
+            provider: &str,
+            list: F,
+        ) -> Result<Arc<Listing>, SourceError>
+        where
+            F: FnOnce() -> Fut,
+            Fut: Future<Output = Result<(Vec<Listed>, Details), Failure>>,
+        {
+            self.cache
+                .list_shared(|| self.remember(provider, list))
+                .await
+        }
+
+        async fn remember<F, Fut>(
+            &self,
+            provider: &str,
+            list: F,
+        ) -> Result<Vec<Listed>, SourceError>
+        where
+            F: FnOnce() -> Fut,
+            Fut: Future<Output = Result<(Vec<Listed>, Details), Failure>>,
+        {
+            let (listed, details) = list()
+                .await
+                .map_err(|failure| failure.into_source_error(provider, None))?;
+            *self.details.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(details);
+            Ok(listed)
+        }
+
+        /// The details the last listing recorded for `key` (empty when none).
+        #[must_use]
+        pub fn details_of(&self, key: &str) -> Map<String, Value> {
+            self.details
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(key)
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,6 +1034,56 @@ mod tests {
         assert!(!attachment_passes("draft-guide.pdf", &include, &skip));
         assert!(!attachment_passes("photo.png", &include, &skip));
         assert!(attachment_passes("photo.png", &[], &skip));
+        assert!(name_matches("*a", "a"));
+        assert!(name_matches("**", ""));
+        assert!(!name_matches("a*", ""));
+        assert!(name_matches("a*c*", "abcabc"));
+        assert!(!name_matches("a*c*d", "abcabc"));
+    }
+
+    /// Review round 1, finding 6: the backtracking matcher took exponential
+    /// time on this pattern; the two-pointer walk is linear.
+    #[test]
+    fn a_pathological_pattern_is_matched_in_linear_time() {
+        let pattern = "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
+        let name = "a".repeat(4_000);
+        let started = std::time::Instant::now();
+        assert!(!name_matches(pattern, &name));
+        assert!(name_matches(pattern, &format!("{name}b")));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn key_segments_carry_no_separators() {
+        assert_eq!(key_segment("notes/with slash.txt"), "notes_with slash.txt");
+        assert_eq!(key_segment("a\\b\tc"), "a_b_c");
+        assert_eq!(key_segment("  "), "attachment");
+    }
+
+    #[cfg(feature = "content-source")]
+    #[test]
+    fn origins_compare_scheme_host_and_port() {
+        let base = url::Url::parse("https://acme.atlassian.net/").unwrap();
+        assert!(same_origin(
+            &base,
+            &url::Url::parse("https://acme.atlassian.net:443/rest/x").unwrap()
+        ));
+        assert!(!same_origin(
+            &base,
+            &url::Url::parse("http://acme.atlassian.net/rest/x").unwrap()
+        ));
+        assert!(!same_origin(
+            &base,
+            &url::Url::parse("https://evil.example/rest/x").unwrap()
+        ));
+        assert!(!same_origin(
+            &base,
+            &url::Url::parse("https://acme.atlassian.net:8443/").unwrap()
+        ));
     }
 
     #[test]
