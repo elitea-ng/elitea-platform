@@ -750,8 +750,11 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			return nil, nil, "", err
 		}
 		originalSource, sourceErr := service.restoreContinuationSource(ctx, RootSourceRestoreRequest{request.ProjectID, request.ActorUserID, request.ConversationUUID, request.ResponseMessageID, target.ExecutionGeneration})
-		if sourceErr != nil || originalSource != nil && originalSource.Reference.Kind != "saved_application" {
-			return nil, nil, "", ErrUnsupportedCurrentAgentStart
+		if sourceErr != nil {
+			return nil, nil, "", sourceErr
+		}
+		if originalSource != nil && originalSource.Reference.Kind != "saved_application" {
+			return nil, nil, "", unsupportedStart("original source is not a saved application")
 		}
 		resolved.OriginalSource = nil
 		if originalSource != nil {
@@ -810,8 +813,11 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			return nil, nil, "", err
 		}
 		originalSource, sourceErr := service.restoreContinuationSource(ctx, RootSourceRestoreRequest{request.ProjectID, request.ActorUserID, request.ConversationUUID, request.ResponseMessageID, target.ExecutionGeneration})
-		if sourceErr != nil || originalSource != nil && originalSource.Reference.Kind != "ephemeral_definition" {
-			return nil, nil, "", ErrUnsupportedCurrentAgentStart
+		if sourceErr != nil {
+			return nil, nil, "", sourceErr
+		}
+		if originalSource != nil && originalSource.Reference.Kind != "ephemeral_definition" {
+			return nil, nil, "", unsupportedStart("original source is not a ephemeral definition")
 		}
 		resolved.OriginalSource = nil
 		if originalSource != nil {
