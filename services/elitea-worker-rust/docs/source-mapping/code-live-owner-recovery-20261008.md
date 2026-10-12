@@ -330,6 +330,71 @@ Send API, not browser clicks.
   Its support details give `PIPELINE_CODE_FAILED` and Message ID `0d57d804-…`, with a copy button.
 - After reload, Run history keeps the run as `FAILED · 4s · TERMINAL`.
 
+## Preparation-failure recovery hang (crash suite CR-WK-P09-hyd)
+
+Findings from the crash suite (2026-10-12): executions `097ca8e5a5e41a99623f98fd546bacad` (CR-WK-P09-hyd), `4e160a9d8aeca4f419e2517aff77fa3e` (CR-SK-P09-hyd r2) and `0b19b052f3345b52d60c61116ead7b47` (CR-MK-P09-hyd r1), plus two Kubernetes matrix findings. Part letters A to I match the work brief. The trigger in the first case was a claim lease lost during Python dependency preparation, then a redelivery. Neutral wording: no host fault is the product cause.
+
+**Business behavior kept from the current platform.** A Code job that fails is a typed, readable failure (`PIPELINE_CODE_FAILED`, preparation variants) with a support reference. Nothing is run again from scratch. **Deliberately not ported:** the current application's generic "operation failed" answer and its lost-on-restart behavior.
+
+### Mechanism and changed paths
+
+| Part | Defect | Mechanism (`path:line`) |
+|---|---|---|
+| A | A recovered `Running` journal made every pre-dispatch failure an unknown external effect, so a lost preparation job paused for reconciliation. | `src/agents/graph/code_attempt_remote.rs:703` `prior_dispatch_possible`, called at `:41`: the dispatch ledger decides. No `sandbox_dispatches` row for the execute activation means no submission was ever sent (the row is registered before the first submit). A row, a missing scope or a lookup error keep the conservative answer. |
+| B | Worker built a `failure_class: unknown` reconcile receipt that Main, the JSON schema and the web parser refused (`PROTOCOL_VIOLATION`, no operator card). | Decision: the receipt is legitimate (see "Decision B"). `src/agents/graph/node_recovery_receipt.rs:49` `validate` (unknown only on reconcile), `services/elitea-main/internal/domain/noderecovery/contract.go` `Receipt.Validate`, `libs/jsonschema/runtime/v1/node-recovery-required.schema.json`, `apps/elitea-web/src/shared/lib/nodeRecovery.ts`. |
+| C | A pending frame Main refused with a bound, non-retryable `PROTOCOL_VIOLATION` looped forever. | `src/transport/output_session.rs` `OutputSessionError::FrameRefused` (bound, non-retryable, zero credit, desired state unspecified); `src/transport/output_grpc.rs` `ProgressRejectionWinner::FrameRefused` (replacement authority, settles `Internal`); `:394` `replace_pending_with_failure`; `src/execution/output_delivery.rs:2678,2737` `replay_checkpoint_progress` returns the bound rejection and `settle_rejected_checkpoint_progress` replaces the exact frame at its own sequence; `agent_delivery_processor.rs:301` settles through `recover_accepted_terminal` (one settlement, double-ack retirement). Main logs the reason of a refused claim: `services/elitea-main/internal/transport/runtimegrpc/control/server.go` `logClaimRejection`. |
+| D | Stop never settled behind a pending frame (`agent_delivery.output_recovery_pending`, retryable, forever). | `output_delivery.rs:2807` `prepare_empty_recovery(.., settle_pending)`: one unaccepted nonterminal frame at the sequence after Main's watermark no longer blocks; `PreparedAgentOutput::persist_terminal` replaces that exact frame with the canonical cancelled (or internal) terminal; a frame Main already covers is reconciled away first. |
+| E | Hydration discarded the supervisor and content error kind; the run ended as a generic internal failure with nothing logged. | `src/agents/graph/code_preparation.rs:358` `hydrate_python_dependencies` returns a typed `CodePreparationFailure` and logs a static reason (`code_hydration_failed`, `code_hydration_unconfirmed`); `:467` `intent_disposition` retries transient content or Main errors, `:477` `hydration_reason`; supervisor side `src/sandbox/service.rs:376,592` `sandbox_hydration_refused` with `supervisor_error_reason`. Settles `pipeline.code_preparation_failed` or `_unconfirmed`. |
+| F | A job reserved and hydrated, then failed before any dispatch, kept a live runtime until the one-hour hydration retention. | `code_attempt_remote.rs:642` `release_undispatched`: the claim-bound stop (`sandbox_authority.rs` `release_undispatched_sandbox_job`), only when the replay safety proves no dispatch. Supervisor reap is the existing cancellation path. |
+| G | No HTTP/2 or TCP keepalive: a force-deleted Main Pod left the connection in conntrack for about 16 minutes. | `src/transport/keepalive.rs:15` constants and `:49` `with_keepalive`, applied in `bootstrap.rs` `connect_private_grpc` (control, output, sandbox profiles), `transport/input_content.rs`, `transport/runtime_context.rs`, `transport/openai_compatible_facade.rs`, and the supervisor's `sandbox/dependency_content.rs` reqwest client. |
+| H | A Code job in a definite `failed` phase paused for operator reconcile. | `code_attempt_remote.rs:758` `unreceipted_platform_effect_possible` drains the platform-call journal after the terminal phase; no unknown or unreadable step means the outcome is known (`NoExternalEffect`, `pipeline.code_failed`, class F). |
+| I | After a Main outage and a takeover, claim 2 replayed claim 1's spooled frame under the old fence (`STALE_FENCE`) forever. | `src/spool.rs:434` `retire_pending` (an encrypted `.retired` record, never replayed, counted, bounded to 16), `output_grpc.rs:426` `retire_superseded_progress`, `output_delivery.rs:2871` `retire_superseded_frame` used by `prepare`, `prepare_checkpoint` and `prepare_node_recovery`; `protocol/control.rs` `supersedes_output_fence`. `code_attempt_remote.rs:724` `retry_transient_main` makes Main being down during intent admission or finalization retry until the deadline. |
+
+### Decision B (contract parity)
+
+`failure_class: unknown` with an unknown or unclassified external effect is a legitimate reconciliation receipt, so Main accepts it and the other contract surfaces follow. Reasons: the Worker deliberately emits it (the journal tests pin it, and the direct-tool path produces it for an unclassified stage); the ledger already handles it end to end (`reconcile_verified_no_effect` plans a terminal `not_retryable` stop, a committed owner result resumes); and refusing it would turn an unknown external effect into a plain failure, losing class C (never repeated blindly, reconciled from owner proof or escalated). `unknown` is valid only with `effect_reconciliation_required` and `["reconcile"]`; a retry or a result resume with `unknown` stays refused, and an `unknown` failure with no effect uncertainty stays terminal. One set of golden vectors, `libs/jsonschema/runtime/v1/fixtures/node-recovery-required-v1*.json` (a `.invalid.` name must be refused), is read by the Go domain test, the Go schema test and the Worker test, so drift fails on both sides.
+
+### Decision I (superseded claim's frame)
+
+The spool stream is bound to the fence, and only terminal frames have a rebinding protocol. A progress frame of a superseded claim describes an attempt Main has replaced, and the resumed run emits its own events from Main's watermark. So it is **retired with a durable, encrypted record, not re-fenced and not replayed**. The route that owns the claim then decides the outcome: resume (checkpoint and node routes), or settle (output recovery: the canonical terminal replaces the pending frame under the new fence). `STALE_FENCE` therefore never reaches a loop, for progress frames; for a terminal frame the existing terminal rebinding is unchanged. The brief's "settle `STALE_FENCE` as a typed failure" is covered where the run cannot resume (output recovery); a resumable run is not failed. Open: the retired record is a spool file and a log event, not a database row.
+
+### Tests (counts)
+
+| Case | Test | Result |
+|---|---|---|
+| 1 preparation failure in recovery, no dispatch row, settles typed once | `node_recovery_code_owner_tests.rs` `preparation_recovery::preparation_failure_in_recovery_without_a_dispatch_row_settles_typed_once` (real PostgreSQL) | passes; mutation (decision reverted to the error kind) fails it |
+| 2 dispatch row present stays reconcile, receipt Main accepts | `preparation_failure_in_recovery_with_a_dispatch_row_stays_reconcile_with_an_accepted_receipt` (real PostgreSQL; the emitted receipt equals the golden vector `reconcile-unknown-class` once identities are normalized) | passes |
+| 3 shared vectors, both sides | Go `TestNodeRecoveryReceiptSharedGoldenVectors`, `TestNodeRecoveryRequiredSchemaMatchesSharedVectors`; Rust `worker_and_main_agree_on_every_shared_receipt_vector`; web `nodeRecovery.test.ts` | pass (6 valid, 8 invalid vectors) |
+| 4 refused frame settles typed, retired, not resent | `output_delivery_tests.rs` `a_frame_main_refuses_settles_an_internal_failure_once_and_is_not_resent`, `frame_refused_by_main_is_retained_as_a_rejection_and_never_resent`; transport `bound_protocol_violation_mints_a_frame_refused_rejection_and_nothing_else_does` (bound, retryable, foreign stream, credit) | pass |
+| 5 stop with output recovery pending settles CANCELLED once | `a_stop_settles_cancelled_once_while_output_recovery_is_pending`, `a_stop_wins_over_a_pending_progress_frame_and_settles_once` | pass; the first fails when `settle_pending` is off |
+| E hydration cause kept, transient errors retry | `code_preparation.rs` `hydration_reason_tests`, `code_attempt_remote.rs` `transient_main_errors_retry_until_the_deadline_and_others_do_not` | pass |
+| F orphan reaped once | `docker_hydration_deadline_tests.rs` `hydrated_never_dispatched_job_is_reaped_once_after_a_settled_failure` (real PostgreSQL: reserved, `runtime_id` set, no `dispatched_at`; termination and cleanup once, repeat adds none) | passes |
+| G keepalive | `keepalive::tests` (schedule against the claim lease, every production endpoint applies it), `client_disconnect_tests.rs` `black_holed_peer_fails_within_the_keepalive_bound_and_the_channel_reconnects` (proxy that stops forwarding without closing: fails `Unavailable` inside the bound, same channel reconnects) | pass |
+| H terminal failed phase is known | `terminal_runtime_failure` (typed, no operator; unreceipted effect still reconciles; journal drain truth table) | pass |
+| I takeover never replays the old frame | `a_takeover_never_replays_a_superseded_claims_pending_progress`, `output_recovery_replaces_a_pending_superseded_frame_and_settles_once`, spool `a_retired_frame_leaves_replay_but_stays_as_an_encrypted_record` | pass |
+
+Suites (2026-10-12, this branch): Worker `cargo clippy --offline --locked --all-targets --all-features -- -D warnings` clean; `cargo test --offline --locked --all-targets --all-features` 1996 passed, 0 failed, 77 ignored (lib 1900 passed). The real-PostgreSQL cases above pass against a disposable PG18 with `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` and `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`; ignored suites that also need Docker, Kubernetes or `ELITEA_TEST_BUNDLE_TLS` were not run. `libs/rust`: the same clippy command is clean and `cargo test --offline --locked --all-targets --all-features` passes 1611 tests, 0 failed (no `libs/rust` code changed). Web `vitest` `nodeRecovery.test.ts` 29 passed. Main `go test` for `noderecovery`, `runtimecontracts`, `runtimegrpc/...` and `infra/storage` passes in `golang:1.26.9-bookworm`.
+
+### Recovery classes after the fix
+
+| Component x phase | Before | After | Notes |
+|---|---|---|---|
+| Worker x P09, claim lease lost during preparation, redelivered | L (hang) | F | Typed `pipeline.code_preparation_failed`, support reference, one settlement. If a dispatch row exists: C (operator card Main accepts). |
+| Worker x P09, hydration fails (supervisor refusal, content error) | F, generic cause lost | F typed | `pipeline.code_preparation_failed` or `_unconfirmed`; transient Main or content errors retry (I, R). |
+| Worker x P10, runtime `failed` phase | C (operator for a user code error) | F | Known outcome; C only for an unreceipted platform effect. |
+| Worker x P14 / Main x P14, refused or superseded pending frame | L (infinite redelivery) | F or R | Refused: F (internal failure, once). Superseded claim: frame retired, run resumes (R) or settles. |
+| Main x P14, stop with a pending frame | L | F (cancelled) | One settlement, writer fencing unchanged. |
+| Worker x Main channel, dead peer | L for about 16 minutes | R | Detected within 15 s by HTTP/2 PING (60 s lease). |
+| Supervisor x P09, job hydrated and never dispatched after a failure | L (hour-long orphan) | I | Released at once; the retention sweep remains the backstop. |
+
+### Follow-ups
+
+- Bounded redelivery or backoff on the NATS consumer (`max_deliver=-1`, no backoff in `bootstrap.sh`): not changed here; with the settle paths above a poisoned frame no longer redelivers forever.
+- The retired record is an encrypted spool file plus a log event; a database row is not written.
+- Release on failure (F) is best effort; a failure after a possible dispatch is never released here.
+- The root cause of the `4e160a9d` (CR-SK-P09-hyd r2) generic failure is not proven from the retained logs: the error text was discarded (E). The code paths that could end a hydrated run within 0.2 s of the last lease release now keep their kind. A rerun on the fixed images will show it in `code_hydration_failed` or `code_main_call_retrying`.
+- Deployed re-proof of CR-WK-P09-hyd, CR-SK-P09-hyd and CR-MK-P09-hyd (x3) and a Kubernetes force-delete run for G.
+
 ## Performance (PERF-1084)
 
 Source: the PR #1084 performance review (findings F1, F2, F3, F4, F8, F9). Costs are estimates from code paths except where a test measures them. No durability rule changes: NATS `sync_interval`, the end-of-transaction fence re-check, the stored result copies and unsettled ledger rows are untouched, and nothing answers from memory before commit.
