@@ -332,7 +332,7 @@ Send API, not browser clicks.
 
 ## Preparation-failure recovery hang (crash suite CR-WK-P09-hyd)
 
-Findings from the crash suite (2026-10-12): executions `097ca8e5a5e41a99623f98fd546bacad` (CR-WK-P09-hyd), `4e160a9d8aeca4f419e2517aff77fa3e` (CR-SK-P09-hyd r2) and `0b19b052f3345b52d60c61116ead7b47` (CR-MK-P09-hyd r1), plus two Kubernetes matrix findings. Part letters A to I match the work brief. The trigger in the first case was a claim lease lost during Python dependency preparation, then a redelivery. Neutral wording: no host fault is the product cause.
+Findings from the crash suite (2026-10-12): executions `097ca8e5a5e41a99623f98fd546bacad` (CR-WK-P09-hyd), `4e160a9d8aeca4f419e2517aff77fa3e` (CR-SK-P09-hyd r2) and `0b19b052f3345b52d60c61116ead7b47` (CR-MK-P09-hyd r1), plus two Kubernetes matrix findings. Part letters A to I match the work brief; Part J follows the follow-ups. The trigger in the first case was a claim lease lost during Python dependency preparation, then a redelivery. Neutral wording: no host fault is the product cause.
 
 **Business behavior kept from the current platform.** A Code job that fails is a typed, readable failure (`PIPELINE_CODE_FAILED`, preparation variants) with a support reference. Nothing is run again from scratch. **Deliberately not ported:** the current application's generic "operation failed" answer and its lost-on-restart behavior.
 
@@ -394,6 +394,43 @@ Suites (2026-10-12, this branch): Worker `cargo clippy --offline --locked --all-
 - Release on failure (F) is best effort; a failure after a possible dispatch is never released here.
 - The root cause of the `4e160a9d` (CR-SK-P09-hyd r2) generic failure is not proven from the retained logs: the error text was discarded (E). The code paths that could end a hydrated run within 0.2 s of the last lease release now keep their kind. A rerun on the fixed images will show it in `code_hydration_failed` or `code_main_call_retrying`.
 - Deployed re-proof of CR-WK-P09-hyd, CR-SK-P09-hyd and CR-MK-P09-hyd (x3) and a Kubernetes force-delete run for G.
+
+### Part J: HITL continuation refused when Main owner recovery is on and a child stores `openai`
+
+Found on a deployed stack with `ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED=true` (the combination Helm requires for node recovery with Code). Pipeline 138 "Gate5 agent variable parent" has two application nodes calling agent 137, whose stored `agent_type` is `openai`. Answering the first `ask_user` card returned 422 `unsupported_agent_execution`.
+
+**Business behavior kept from the current platform.** A paused turn continues from its original captured source, with the application handles the turn was admitted with; an edited child never replaces them. **Not ported:** nothing; this is a parity defect of the new platform.
+
+**Mechanism.**
+
+| Step | Path |
+|---|---|
+| Continuation restores the original source, only when original-source capture is configured (`originalSources != nil`, which is why stacks without owner recovery worked) | `services/elitea-main/internal/application/agentexecution/original_source_continuation.go:30` `restoreContinuationSource`, called from `continue.go:752` and `:812` |
+| Strict comparison of each captured application tool with the tool admitted at turn start | `original_source_continuation.go` `restoreOriginalApplicationHandles` (`bytes.Equal` of the two frozen handles) |
+| The captured source keeps the stored spelling `"agent_type":"openai"`; admission renamed the admitted copy to `"agent"` | `tools.go:175` and `:764-781` `normalizeCurrentAgentRuntimeProfile` / `normalizeCurrentAgentTypeField` |
+| Fix: both sides pass through `normalizeCurrentAgentTypeField` before the comparison. It is the only field `normalizeCurrentAgentRuntimeProfile` rewrites on an application tool, so no other comparison has the blind spot (`context_policy.go:123` compares settings, which admission does not rename). The comparison stays strict for id, version id, application id, settings, variables and name | `original_source_continuation.go` (two call sites) |
+| Every refusal in the restore path carries a fixed reason, and the two callers return it instead of the bare sentinel, so a log names the site. `errors.Is(err, ErrUnsupportedCurrentAgentStart)` still maps to 422 | `original_source_continuation.go`, `continue.go:754,817` |
+
+**Provenance.** The comparison came with `f8a1499d1` (original-source continuation). It did not account for the stored-to-runtime rename of `0f682f7c9` (#1032). Pre-existing on `main`.
+
+**Web (same flow).** `resumeHitlOverRest` returned only `outcome.started`, so a `rejected` outcome fell through to the socket stub and the user read "The message was not sent: no chat connection is available" instead of the server's reason. It now returns the outcome; `continueHitl` restores the card with the server message and does not emit on a rejection (`apps/elitea-web/src/widgets/chat-box/ui/hooks/useChatBoxHandlers.ts` `resumeHitlOverRest`, `continueHitl`), the way `continueTokenLimit` and the authorization flow already do.
+
+**Tests.**
+
+| Case | Test | Result |
+|---|---|---|
+| Captured `openai`, admitted `agent` (and a legacy admitted `openai`) restore; handle is in runtime spelling | `original_source_agent_type_test.go` `TestRestoreOriginalApplicationHandlesComparesInRuntimeSpelling` (admitted handles are produced by the production normalizer) | passes; fails with the two normalize calls removed |
+| Still strict: changed version id, application id, name, agent type beyond the rename, variables, each with its named reason | `TestRestoreOriginalApplicationHandlesStaysStrictBeyondAgentType` (5 cases) | pass |
+| `ContinueCurrentAgent` with original sources configured and an `openai` child application accepts; child is `agent` on the wire | `TestOriginalSourceContinueAcceptsStoredOpenAIChildApplication` (actual snapshot freezer, real start then continue) | passes; fails on the old code |
+| A drifted handle is refused with the site named | `TestOriginalSourceContinueRefusalNamesItsSite` | passes |
+| Web: a 422 on HITL continue shows the server message, restores the card, never emits; an absent route still falls back to the socket | `useChatBoxHandlers.test.ts` `continueHitl — a continuation the route refused` (2 tests) | pass; the first fails on the old code |
+
+Suites (2026-10-12): Main `go build ./...`, `go vet`, and `go test` for `internal/application/agentexecution` (221 top-level tests, 0 failed), `internal/api/v2/agentexecution` (59) and `internal/runtimecomposition` (279) pass in `golang:1.26.9-bookworm`. Web `tsc --noEmit` and lint clean; `useChatBoxHandlers.test.ts` 46 passed; the whole `src/widgets/chat-box` folder 31 files, 346 tests passed.
+
+**Recovery class.** Main x P06/P07, a HITL or authorization continuation with owner recovery on, for a turn containing a stored-`openai` application tool: was F with a generic refusal (the run stayed paused, no way forward); after the fix R, as for every other agent type. The refusal reason is now named in the Main log.
+
+**Real-browser proof: pending** on the rebuilt stack (pipeline 138, answer card 1, reload). Fixture: the existing pipeline 138 and agent 137 rows on the deployed stack; how they were created is not re-verified here.
+
 
 ## Performance (PERF-1084)
 
