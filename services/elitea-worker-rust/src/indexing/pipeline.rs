@@ -1179,7 +1179,16 @@ fn acl_entries(acl: &Acl) -> Vec<String> {
 
 /// The points of one prepared document: the chunk's metadata over the
 /// document's, the chunk id as text, the chunk type, the text and the ACL.
+/// A dependent document (an attachment, a discussion; ADR-0030 "Dependent
+/// documents") names its parent in `parent_id`, from the connector's
+/// `parent_key` metadata.
 fn points_of(prepared: &Prepared, vectors: Vec<Vec<f32>>) -> Vec<pb::Point> {
+    let parent_id = prepared
+        .metadata
+        .get("parent_key")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     prepared
         .chunks
         .iter()
@@ -1192,7 +1201,7 @@ fn points_of(prepared: &Prepared, vectors: Vec<Vec<f32>>) -> Vec<pb::Point> {
             pb::Point {
                 document_key: prepared.reference.key.clone(),
                 document_version: prepared.reference.version.clone(),
-                parent_id: String::new(),
+                parent_id: parent_id.clone(),
                 chunk_id: chunk.chunk_id.to_string(),
                 chunk_type: chunk.chunk_type.to_owned(),
                 acl: prepared.acl.clone(),
@@ -1291,6 +1300,7 @@ pub(super) fn failure_for_test(index_name: &str, reason: &str) -> IndexIngestSum
             branch: None,
             whitelist: Vec::new(),
             blacklist: Vec::new(),
+            raw: Map::new(),
         },
         reason,
     )

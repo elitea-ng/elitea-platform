@@ -461,6 +461,19 @@ impl AdoClient {
         Ok(http)
     }
 
+    /// Put the connection's credential on a request the client did not
+    /// build (an attachment URL the provider handed out, on the
+    /// organization's own host).
+    pub fn authorize(&self, request: &mut Request) -> Result<(), AdoClientError> {
+        let credential =
+            Zeroizing::new(BASE64_STANDARD.encode(format!(":{}", self.connection.token())));
+        let mut authorization = HeaderValue::from_str(&format!("Basic {}", credential.as_str()))
+            .map_err(|_| invalid_configuration())?;
+        authorization.set_sensitive(true);
+        request.headers_mut().insert(AUTHORIZATION, authorization);
+        Ok(())
+    }
+
     /// Send one request and map its status. Only a 2xx response comes back.
     pub async fn send(
         &self,

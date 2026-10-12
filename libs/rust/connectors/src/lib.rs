@@ -45,6 +45,8 @@ pub mod github;
 pub mod gitlab;
 mod reqwest_adapter;
 #[cfg(feature = "content-source")]
+pub mod sharepoint;
+#[cfg(feature = "content-source")]
 pub mod source;
 pub mod transport;
 

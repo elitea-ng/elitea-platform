@@ -2,9 +2,14 @@
 //! path filters.
 //!
 //! I1 serves the five families whose connectors exist (ADR-0030 decision 7):
-//! `github`, `gitlab`, `bitbucket`, `ado_repos` and `artifact`. Every other
+//! `github`, `gitlab`, `bitbucket`, `ado_repos` and `artifact`; I2 adds
+//! `sharepoint`, `ado_wiki`, `ado_boards` and `ado_plans`. Every other
 //! indexing toolkit type is refused with its name, so a run on a deployment
 //! that switched too early fails with a reason instead of indexing nothing.
+//!
+//! The family-specific `index_data` arguments (`wiql`, `plan_id`,
+//! `wiki_identifier`, `path`, …) reach the connector as the raw argument map
+//! (`IndexParameters::raw`); each connector reads its own strictly.
 //!
 //! The whitelist and blacklist keep the SDK's rule (`CodeIndexerToolkit`):
 //! a path is kept when it matches any whitelist pattern (or the whitelist is
@@ -13,8 +18,12 @@
 
 use std::sync::Arc;
 
+use elitea_connectors::ado::boards_source::{AdoBoardsIndexParams, AdoBoardsSource};
+use elitea_connectors::ado::config::AdoToolkitConfig;
+use elitea_connectors::ado::plans_source::{AdoPlansIndexParams, AdoPlansSource};
 use elitea_connectors::ado::repos::AdoReposToolkitConfig;
 use elitea_connectors::ado::source::AdoReposSource;
+use elitea_connectors::ado::wiki_source::{AdoWikiIndexParams, AdoWikiSource};
 use elitea_connectors::artifact::client::ArtifactPlatform;
 use elitea_connectors::artifact::source::ArtifactSource;
 use elitea_connectors::bitbucket::config::BitbucketToolkitConfig;
@@ -24,6 +33,8 @@ use elitea_connectors::github::config::GitHubToolkitConfig;
 use elitea_connectors::github::source::GitHubSource;
 use elitea_connectors::gitlab::config::GitLabToolkitConfig;
 use elitea_connectors::gitlab::source::GitLabSource;
+use elitea_connectors::sharepoint::config::SharePointIndexConfig;
+use elitea_connectors::sharepoint::source::{SharePointIndexParams, SharePointSource};
 use elitea_connectors::source::SourceLimits;
 use elitea_connectors::transport::Transport;
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
@@ -32,9 +43,19 @@ use serde_json::Value;
 use super::IndexRunLimits;
 use super::inputs::{IndexParameters, ToolkitConfiguration};
 
-/// The families I1 indexes.
-pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 5] =
-    ["github", "gitlab", "bitbucket", "ado_repos", "artifact"];
+/// The families this worker indexes (ADR-0030 I1, and I2's Microsoft
+/// families).
+pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 9] = [
+    "github",
+    "gitlab",
+    "bitbucket",
+    "ado_repos",
+    "artifact",
+    "sharepoint",
+    "ado_wiki",
+    "ado_boards",
+    "ado_plans",
+];
 
 /// A connector could not be built. The text names the toolkit type and the
 /// connector's own data-free reason.
@@ -56,6 +77,10 @@ pub(crate) enum IndexSource {
     Bitbucket(BitbucketSource),
     AdoRepos(AdoReposSource),
     Artifact(ArtifactSource),
+    SharePoint(SharePointSource),
+    AdoWiki(AdoWikiSource),
+    AdoBoards(AdoBoardsSource),
+    AdoPlans(AdoPlansSource),
     #[cfg(test)]
     Fixture(Vec<Document>),
 }
@@ -77,6 +102,7 @@ impl IndexSource {
     ///
     /// An unserved toolkit type, settings the connector refuses, or a host
     /// the allowlist does not permit.
+    #[allow(clippy::too_many_lines)] // One arm per served family.
     pub(crate) fn build(
         configuration: &ToolkitConfiguration,
         parameters: &IndexParameters,
@@ -144,6 +170,38 @@ impl IndexSource {
                     .map_err(|e| refused(&e))?;
                 Self::Artifact(source.with_limits(source_limits))
             }
+            "sharepoint" => {
+                let config = SharePointIndexConfig::parse(settings).map_err(|e| refused(&e))?;
+                let params = SharePointIndexParams::from_arguments(&parameters.raw)
+                    .map_err(|e| refused(&e))?;
+                let source = SharePointSource::new(config, params, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::SharePoint(source.with_limits(source_limits))
+            }
+            "ado_wiki" => {
+                let config = AdoToolkitConfig::parse(settings).map_err(|e| refused(&e))?;
+                let params =
+                    AdoWikiIndexParams::from_arguments(&parameters.raw).map_err(|e| refused(&e))?;
+                let source = AdoWikiSource::new(config, params, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::AdoWiki(source.with_limits(source_limits))
+            }
+            "ado_boards" => {
+                let config = AdoToolkitConfig::parse(settings).map_err(|e| refused(&e))?;
+                let params = AdoBoardsIndexParams::from_arguments(&parameters.raw)
+                    .map_err(|e| refused(&e))?;
+                let source = AdoBoardsSource::new(config, params, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::AdoBoards(source.with_limits(source_limits))
+            }
+            "ado_plans" => {
+                let config = AdoToolkitConfig::parse(settings).map_err(|e| refused(&e))?;
+                let params = AdoPlansIndexParams::from_arguments(&parameters.raw)
+                    .map_err(|e| refused(&e))?;
+                let source = AdoPlansSource::new(config, params, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::AdoPlans(source.with_limits(source_limits))
+            }
             // The tests' in-memory toolkit: the documents the test staged.
             #[cfg(test)]
             "fixture" => match super::tests::take_fixture_source() {
@@ -152,7 +210,7 @@ impl IndexSource {
             },
             other => {
                 return Err(SourceBuildError(format!(
-                    "the {other} toolkit is not indexed by this worker yet (ADR-0030 I1 serves {})",
+                    "the {other} toolkit is not indexed by this worker yet (ADR-0030 I1/I2 serve {})",
                     SERVED_TOOLKIT_TYPES.join(", ")
                 )));
             }
@@ -172,6 +230,10 @@ impl IndexSource {
             Self::Bitbucket(source) => source.list().await,
             Self::AdoRepos(source) => source.list().await,
             Self::Artifact(source) => source.list().await,
+            Self::SharePoint(source) => source.list().await,
+            Self::AdoWiki(source) => source.list().await,
+            Self::AdoBoards(source) => source.list().await,
+            Self::AdoPlans(source) => source.list().await,
             #[cfg(test)]
             Self::Fixture(documents) => Ok(documents
                 .iter()
@@ -192,6 +254,10 @@ impl IndexSource {
             Self::Bitbucket(source) => source.fetch(key).await,
             Self::AdoRepos(source) => source.fetch(key).await,
             Self::Artifact(source) => source.fetch(key).await,
+            Self::SharePoint(source) => source.fetch(key).await,
+            Self::AdoWiki(source) => source.fetch(key).await,
+            Self::AdoBoards(source) => source.fetch(key).await,
+            Self::AdoPlans(source) => source.fetch(key).await,
             #[cfg(test)]
             Self::Fixture(documents) => documents
                 .iter()
@@ -385,6 +451,7 @@ mod tests {
             branch: None,
             whitelist: Vec::new(),
             blacklist: Vec::new(),
+            raw: serde_json::Map::new(),
         };
         let platform = PlatformAccess {
             origin: "https://platform",

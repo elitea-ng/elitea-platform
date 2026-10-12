@@ -37,6 +37,9 @@ pub(crate) struct IndexParameters {
     pub(crate) branch: Option<String>,
     pub(crate) whitelist: Vec<String>,
     pub(crate) blacklist: Vec<String>,
+    /// Every argument as given: the family-specific ones (`wiql`, `plan_id`,
+    /// `wiki_identifier`, `path`, …) are read by the family's connector.
+    pub(crate) raw: Map<String, Value>,
 }
 
 /// Why an entry was refused. The text names a key, never a value.
@@ -117,6 +120,7 @@ pub(crate) fn index_parameters(raw: &[u8]) -> Result<IndexParameters, InputError
         branch: optional_text(&map, "branch")?,
         whitelist: text_list(&map, "whitelist")?,
         blacklist: text_list(&map, "blacklist")?,
+        raw: map,
     })
 }
 
@@ -185,6 +189,7 @@ mod tests {
         assert_eq!(parameters.chunking_config["max_tokens"], 256);
         assert_eq!(parameters.branch.as_deref(), Some("dev"));
         assert_eq!(parameters.whitelist, vec!["*.md"]);
+        assert_eq!(parameters.raw["progress_step"], 5);
         let minimal = index_parameters(br#"{"index_name":"n"}"#).expect("ok");
         assert_eq!(minimal.chunking_config, Value::Null);
         assert!(!minimal.clean_index);

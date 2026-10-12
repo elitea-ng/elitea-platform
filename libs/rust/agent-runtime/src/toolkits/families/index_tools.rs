@@ -59,10 +59,22 @@ const MAX_DIMENSION: u64 = 65_536;
 const MAX_SELECTED_TOOLS: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
-/// The toolkit types whose families carry the index tools in stage I1.
-pub const I1_INDEX_FAMILIES: [&str; 5] = ["ado_repos", "artifact", "bitbucket", "github", "gitlab"];
+/// The toolkit types whose families carry the index tools: stage I1 and the
+/// I2 Microsoft families (ADR-0030; elitea-main's `indexcatalog.Families`
+/// lists the same types).
+pub const I1_INDEX_FAMILIES: [&str; 9] = [
+    "ado_boards",
+    "ado_plans",
+    "ado_repos",
+    "ado_wiki",
+    "artifact",
+    "bitbucket",
+    "github",
+    "gitlab",
+    "sharepoint",
+];
 
-/// Whether `toolkit_type` is an I1 indexing family.
+/// Whether `toolkit_type` is a Rust-indexed family.
 #[must_use]
 pub fn is_index_family(toolkit_type: &str) -> bool {
     I1_INDEX_FAMILIES.contains(&toolkit_type)

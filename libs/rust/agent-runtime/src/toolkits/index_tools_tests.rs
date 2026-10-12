@@ -839,21 +839,16 @@ async fn an_index_only_selection_is_accepted_only_when_the_index_toolset_is_comp
             );
         }
     }
-    // The ADO families that are not indexing families keep refusing it
-    // whatever the toolkit carries: a catalog on `ado_boards` is not a
-    // catalog this stage reads.
+    // A family that is not an indexing family yet (figma, I3) keeps refusing
+    // it whatever the toolkit carries: a catalog on `figma` is not a catalog
+    // this stage reads.
     let version = json!({"tools": [{
         "id": 7,
-        "type": "ado_boards",
-        "toolkit_name": "boards",
+        "type": "figma",
+        "toolkit_name": "designs",
         "indexes": catalog_value(),
         "settings": {
-            "ado_configuration": {
-                "organization_url": "https://dev.azure.com/contoso/",
-                "token": "fixture-token"
-            },
-            "project": "Fabrikam Fiber",
-            "limit": 5,
+            "figma_configuration": {"token": "fixture-token"},
             "selected_tools": ["search_index"]
         }
     }]});
@@ -869,7 +864,7 @@ async fn an_index_only_selection_is_accepted_only_when_the_index_toolset_is_comp
     )
     .await
     .expect("materialized");
-    assert!(toolsets.is_empty(), "ado_boards never composes index tools");
+    assert!(toolsets.is_empty(), "figma never composes index tools");
 }
 
 /// Review round 1, finding 4: on a path that lends no artifact authority

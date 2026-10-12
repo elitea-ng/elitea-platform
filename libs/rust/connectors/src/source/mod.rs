@@ -12,6 +12,7 @@
 
 #[cfg(test)]
 pub(crate) mod fixture;
+pub mod glob;
 
 use std::collections::BTreeMap;
 use std::future::Future;

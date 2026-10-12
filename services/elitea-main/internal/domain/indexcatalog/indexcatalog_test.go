@@ -51,8 +51,8 @@ func TestFamilyAndToolNames(t *testing.T) {
 			t.Fatalf("%s is a family", family)
 		}
 	}
-	if Family("sharepoint") || Family("") {
-		t.Fatal("sharepoint is an I2 family and the empty type is none")
+	if Family("figma") || Family("") {
+		t.Fatal("figma is an I3 family and the empty type is none")
 	}
 	if len(ToolNames) != 5 {
 		t.Fatalf("five index tools are served, not %d", len(ToolNames))
