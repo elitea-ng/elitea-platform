@@ -857,6 +857,22 @@ main:
       mountPath: /run/elitea-inventory
       defaultMode: 0444
       volume: {}
+    # elitea-main's client material for an elitea-vector deployed OUTSIDE this
+    # chart (ADR-0031 decision 4). With this chart's own elitea-vector
+    # (vector.enabled) leave this OFF: vector.mainClient issues the
+    # certificate, mounts it and writes the five ELITEA_VECTOR_GRPC_* env
+    # entries itself. Turn this on only together with an explicit
+    # env.ELITEA_VECTOR_GRPC_TARGET and the three file paths under mountPath;
+    # the Secret must hold a client certificate with ONE DNS SAN, issued by
+    # the RUNTIME CA that elitea-vector's listener trusts, and that
+    # elitea-vector's ELITEA_VECTOR_ADMIN_IDENTITIES must list it as
+    # dns:<that SAN>. Same 0444 reasoning as the blocks above.
+    vectorClientMaterial:
+      enabled: false
+      secretName: ""
+      mountPath: /run/elitea-vector-client
+      defaultMode: 0444
+      volume: {}
     brandPack:
       enabled: false
       configMapName: ""
@@ -1529,6 +1545,31 @@ main:
     # a migration window), never to opt in. Independent of the project
     # reconciler's ELITEA_PROJECT_DELETION_RECONCILER_ENABLED (same default).
     ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "true"
+
+    # --- elitea-vector gRPC client (ADR-0031 decision 4) ---------------------
+    #
+    # Where elitea-main deletes a toolkit index's vectors (the index delete and
+    # the registry's tombstone sweeper) and a deleted project's every vector
+    # namespace (the cleanup journal's vector_data step): elitea-vector's gRPC
+    # listener, host:port, reached over mTLS with NO token as the administrator
+    # identity elitea-vector's ELITEA_VECTOR_ADMIN_IDENTITIES lists. Normally
+    # LEFT EMPTY and derived by the chart as <vector.service.name>:
+    # <vector.service.port> when vector.enabled and vector.mainClient.enabled,
+    # together with the three file paths below (vector.mainClient issues and
+    # mounts the certificate). Set them explicitly, with
+    # fileConfig.vectorClientMaterial, for an elitea-vector deployed elsewhere.
+    # A target without its three files, or files without a target, is refused
+    # here and at boot. Without a target: deleted indexes keep their vectors
+    # (tombstones stay pending) and deleted projects keep theirs.
+    ELITEA_VECTOR_GRPC_TARGET: ""
+    # The client certificate (one DNS SAN, runtime CA), its key, and the CA
+    # elitea-vector's server certificate chains to. PATHS, not material.
+    ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE: ""
+    ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE: ""
+    ELITEA_VECTOR_GRPC_CA_FILE: ""
+    # Overrides the name verified against elitea-vector's certificate. Empty
+    # means the target's host.
+    ELITEA_VECTOR_GRPC_SERVER_NAME: ""
 
     # --- The Inventory facade's source expansion (ADR-0023 H4c I2) ---
     #
@@ -3565,13 +3606,35 @@ vector:
   # on the Service, and the NetworkPolicy admits nobody to it.
   healthPort: 9471
 
-  # The client-certificate identities admitted as ADMINISTRATOR without a
-  # token (Delete, DropProject, Count, ListIndexes only), in the canonical form
-  # of elitea-main's workloadidentity: "dns:<the one DNS SAN>" or a spiffe://
-  # URI. elitea-main has no elitea-vector client in V0, so this is empty by
-  # default; the phase that adds that client issues its certificate and lists
-  # it here.
+  # ADDITIONAL client-certificate identities admitted as ADMINISTRATOR without
+  # a token (Delete, DropProject, Count, ListIndexes only), in the canonical
+  # form of elitea-main's workloadidentity: "dns:<the one DNS SAN>" or a
+  # spiffe:// URI. This chart's own elitea-main is admitted automatically
+  # (mainClient below); list here an elitea-main of ANOTHER release that
+  # shares this vector store, or an operator tool.
   adminIdentities: []
+
+  # elitea-main's client of elitea-vector (ADR-0031 decision 4): deleting a
+  # toolkit index calls Delete on its namespace, deprovisioning a project
+  # calls DropProject. With enabled, the chart issues elitea-main a client
+  # certificate from the same RUNTIME-CA issuer as the two above (ONE DNS SAN,
+  # dnsName, client auth), mounts it into the elitea-main pods at mountPath,
+  # writes ELITEA_VECTOR_GRPC_TARGET and the three file paths into
+  # elitea-main's ConfigMap, and lists dns:<dnsName> in
+  # ELITEA_VECTOR_ADMIN_IDENTITIES. Off, nothing deletes vectors: deleted
+  # indexes keep theirs (tombstones stay pending), deleted projects keep
+  # theirs. Under worker.indexingRuntime=rust that is refused at render time.
+  mainClient:
+    enabled: true
+    # The certificate's only DNS SAN and so the identity elitea-vector
+    # admits. A name, not a Service: nothing dials it.
+    dnsName: elitea-main
+    secretName: elitea-main-vector-client-tls
+    mountPath: /run/elitea-vector-client
+    # The kubelet owns the Secret's files as root and the elitea-main pod runs
+    # as nonroot without an fsGroup, so the other-read bit is what reaches it
+    # (the main.fileConfig.*ClientMaterial blocks explain the same choice).
+    defaultMode: 0444
 
   # Token introspection on elitea-main's control listener.
   introspection:

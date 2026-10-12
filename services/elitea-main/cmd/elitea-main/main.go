@@ -61,6 +61,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
+	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
@@ -1634,6 +1635,27 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose application platform operations: %w", err)
 	}
 	defer closePlatformOperations()
+	// elitea-vector's gRPC client (ADR-0031 decision 4): the two platform
+	// deletions in the vector store — a toolkit index's namespace (the index
+	// delete route and the registry's tombstone sweeper, through the runtime
+	// composition's IndexVectorDeleter) and a deleted project's every
+	// namespace (one cleanup-journal step, RouterConfig.ProjectVectorData).
+	// Presents its own runtime-CA client certificate, not a facade's. nil
+	// without ELITEA_VECTOR_GRPC_TARGET; see vector_client_config.go.
+	vectorClient, closeVectorClient, err := composeVectorClient(
+		logger, os.LookupEnv, runtimeConfig.RustIndexing())
+	if err != nil {
+		return fmt.Errorf("compose elitea-vector client: %w", err)
+	}
+	defer closeVectorClient()
+	// Through nil INTERFACES, never a typed nil: both consumers decide on
+	// `!= nil`, and a typed-nil *Client would pass and then dereference.
+	var indexVectorDeleter indexingapp.IndexVectorDeleter
+	var projectVectorData projectprovisioning.ApplicationDataRemover
+	if vectorClient != nil {
+		indexVectorDeleter = vectorClient
+		projectVectorData = vectorClient
+	}
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -1785,7 +1807,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ProjectSystemTokenSource:         formGraph,
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
-			CallbackTokenFacts:      dbrepos.NewCallbackTokenGrants(pool),
+			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
+			// elitea-vector's Delete for the registry (ADR-0031 decision 4);
+			// nil keeps the deferred hook and an idle sweeper.
+			IndexVectorDeleter:      indexVectorDeleter,
 			PermissionResolver:      legacyrbac.NewPostgresResolver(pool),
 			Logger:                  logger,
 			ObjectStore:             objectStore,
@@ -2432,6 +2457,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ProjectCleanupContext:        ctx,
 		ProjectDeleteBudget:          projectDeleteBudget,
 		ApplicationData:              applicationData,
+		ProjectVectorData:            projectVectorData,
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,

@@ -89,6 +89,22 @@
 {{- $env = merge (deepCopy $env) (dict "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET" $inventoryTarget) }}
 {{- end }}
 {{- /*
+  elitea-main's elitea-vector client (ADR-0031 decision 4): the target and the
+  three file paths of the administrator certificate vector.mainClient issues
+  and mounts, DERIVED whenever this chart's elitea-vector is on with
+  mainClient enabled. An explicit env entry wins (an elitea-vector elsewhere,
+  with fileConfig.vectorClientMaterial), and the mix of the two is refused by
+  elitea-main.validateVectorClient.
+*/ -}}
+{{- if and (include "elitea-vector.mainClientEnabled" .) (not (get $env "ELITEA_VECTOR_GRPC_TARGET")) }}
+{{- $mount := .Values.vector.mainClient.mountPath }}
+{{- $env = merge (deepCopy $env) (dict
+      "ELITEA_VECTOR_GRPC_TARGET" (include "elitea-vector.grpcTarget" .)
+      "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" (printf "%s/tls.crt" $mount)
+      "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" (printf "%s/tls.key" $mount)
+      "ELITEA_VECTOR_GRPC_CA_FILE" (printf "%s/ca.crt" $mount)) }}
+{{- end }}
+{{- /*
   ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are DERIVED
   the same way (issues #394 and #395). Each route is now the ONLY handler for
   its path — the prototype fallbacks in internal/api/router.go are deleted — so

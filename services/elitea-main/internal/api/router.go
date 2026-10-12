@@ -83,6 +83,7 @@ import (
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -420,6 +421,15 @@ type RouterConfig struct {
 	// is not listed keeps its data, and the composition root logs which are
 	// wired. See application_data.go.
 	ApplicationData []ApplicationDataClient
+	// ProjectVectorData deletes a project's vectors in elitea-vector when the
+	// project is deprovisioned (ADR-0031 decision 4: DropProject, every
+	// source): one cleanup-journal step, `vector_data`, recorded on the row
+	// like the application steps above. Composed from ELITEA_VECTOR_GRPC_TARGET
+	// (infra/vectorclient); unassigned, a deleted project's vectors stay in
+	// Qdrant, and the composition root logs that under the Rust indexing
+	// runtime. Separate from ApplicationData because elitea-vector holds
+	// nothing per toolkit the toolkit journal could ask for.
+	ProjectVectorData projectprovisioning.ApplicationDataRemover
 	// OnToolkitCleanupJournal, when set, is called once with the toolkit
 	// cleanup journal the toolkit handler enqueues into (#1244), after it is
 	// built. The process uses it to start the toolkit-deletion reconciler over
@@ -772,6 +782,11 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	// wired engine. Optional in the same sense as the vector store — a
 	// deployment without an engine has no data there to delete.
 	options = append(options, applicationDataOptions(cfg.ApplicationData)...)
+	// elitea-vector (ADR-0031 decision 4): the project's vectors, every
+	// source, one journal step. Optional like the engines.
+	if cfg.ProjectVectorData != nil {
+		options = append(options, projectprovisioning.WithApplicationData(vectorclient.App, cfg.ProjectVectorData))
+	}
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)
 		objectsRepo, objectsErr := dbrepos.NewArtifactObjectsRepository(cfg.Pool)

@@ -107,6 +107,11 @@ func TestTheStepNamesAreTheApplicationNamePlusData(t *testing.T) {
 		t.Fatalf("ApplicationDataStep disagrees with the constants: %q %q",
 			ApplicationDataStep("deepwiki"), ApplicationDataStep("inventory"))
 	}
+	// elitea-vector is wired as the application "vector" (infra/vectorclient.App;
+	// spelled here so this package does not import the client).
+	if ApplicationDataStep("vector") != StepVectorData {
+		t.Fatalf("ApplicationDataStep(vector) = %q, want %q", ApplicationDataStep("vector"), StepVectorData)
+	}
 }
 
 func lastStep(p *Provisioner, cleanup *deletionCleanup) cleanupStep {

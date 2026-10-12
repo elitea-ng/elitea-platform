@@ -280,6 +280,7 @@ because it passes a manifest the binary then rejects.
 {{- include "elitea-main.validateLLMGateway" . -}}
 {{- include "elitea-main.validateDeepWiki" . -}}
 {{- include "elitea-main.validateInventory" . -}}
+{{- include "elitea-main.validateVectorClient" . -}}
 {{- include "elitea-main.validateSelfLLMOrigins" . -}}
 {{- include "elitea-main.validateRuntime" . -}}
 {{- include "elitea-main.validateConnectionBudget" . -}}
@@ -627,6 +628,66 @@ reads, which looks configured and does nothing.
 {{- if $value -}}
 {{- fail (printf "env.%s is set but env.ELITEA_DEEPWIKI_ENABLED is off, so no facade is composed and the material is never read. Turn it on, or clear env.%s." $name $name) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.validateVectorClient — elitea-main's client of elitea-vector
+(ADR-0031 decision 4), all-or-nothing like the hops above.
+
+cmd/elitea-main/vector_client_config.go refuses a target without its three
+material paths, and material beside no target. Two sources can supply them:
+this chart's own elitea-vector (vector.enabled + vector.mainClient.enabled
+derives all four into the ConfigMap and mounts the issued certificate), or an
+explicit env block with fileConfig.vectorClientMaterial for an elitea-vector
+deployed elsewhere. Mixing the two would mount one certificate and name
+another's paths, so it is refused.
+*/}}
+{{- define "elitea-main.validateVectorClient" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $material := dict "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" (get $env "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" | toString)
+                      "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" (get $env "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" | toString)
+                      "ELITEA_VECTOR_GRPC_CA_FILE" (get $env "ELITEA_VECTOR_GRPC_CA_FILE" | toString) -}}
+{{- $clientMaterial := .Values.main.fileConfig.vectorClientMaterial -}}
+{{- $mountPath := $clientMaterial.mountPath | toString -}}
+{{- $target := get $env "ELITEA_VECTOR_GRPC_TARGET" | toString -}}
+{{- $chartClient := include "elitea-vector.mainClientEnabled" . -}}
+{{- if and $chartClient $clientMaterial.enabled -}}
+{{- fail "fileConfig.vectorClientMaterial.enabled is true while vector.enabled and vector.mainClient.enabled already issue and mount elitea-main's elitea-vector client certificate. One Deployment volume cannot have two sources: disable fileConfig.vectorClientMaterial, or set vector.mainClient.enabled=false and name the external elitea-vector in env.ELITEA_VECTOR_GRPC_TARGET." -}}
+{{- end -}}
+{{- if $target -}}
+{{- if contains "://" $target -}}
+{{- fail (printf "env.ELITEA_VECTOR_GRPC_TARGET must be host:port, not a URL, got %q: the transport is always gRPC over mutual TLS." $target) -}}
+{{- end -}}
+{{- range $name, $value := $material -}}
+{{- if not $value -}}
+{{- fail (printf "env.ELITEA_VECTOR_GRPC_TARGET is set, so env.%s must be set too. elitea-vector requires a client certificate issued by the runtime CA and admits elitea-main by its identity; without the material every deletion is refused, and cmd/elitea-main exits at boot." $name) -}}
+{{- end -}}
+{{- if not (hasPrefix "/" $value) -}}
+{{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q — it is passed to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
+{{- end -}}
+{{- if and $clientMaterial.enabled (not (hasPrefix $mountPath $value)) -}}
+{{- fail (printf "env.%s is %q, which fileConfig.vectorClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container." $name $value $mountPath) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (or $clientMaterial.enabled $chartClient) -}}
+{{- fail "env.ELITEA_VECTOR_GRPC_TARGET is set, so the three paths need a volume: enable fileConfig.vectorClientMaterial (a Secret holding a client certificate with one DNS SAN, issued by the runtime CA that elitea-vector trusts), or use this chart's elitea-vector with vector.mainClient.enabled and leave the env entries empty." -}}
+{{- end -}}
+{{- if and $clientMaterial.secretName $clientMaterial.volume -}}
+{{- fail "fileConfig.vectorClientMaterial.secretName and .volume are mutually exclusive: one Deployment volume cannot have two sources." -}}
+{{- end -}}
+{{- else -}}
+{{- if $clientMaterial.enabled -}}
+{{- fail "fileConfig.vectorClientMaterial.enabled is true but env.ELITEA_VECTOR_GRPC_TARGET is empty, so the material is mounted and never read. That is the state that looks configured and does nothing. Set the target, or disable the material." -}}
+{{- end -}}
+{{- range $name, $value := $material -}}
+{{- if $value -}}
+{{- fail (printf "env.%s is set but env.ELITEA_VECTOR_GRPC_TARGET is empty, so no client is composed and the material is never read; cmd/elitea-main refuses the same at boot. Set the target, or clear env.%s." $name $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if get $env "ELITEA_VECTOR_GRPC_SERVER_NAME" -}}
+{{- fail "env.ELITEA_VECTOR_GRPC_SERVER_NAME is set but env.ELITEA_VECTOR_GRPC_TARGET is empty (and this chart's elitea-vector derives its own name). Set the target, or clear the server name." -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

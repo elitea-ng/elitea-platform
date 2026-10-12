@@ -1251,6 +1251,19 @@ services:
       # DNS:elitea-vector, signed by the runtime CA that listener trusts
       # (deploy/scripts/gen-vector-certs.sh).
       ELITEA_VECTOR_INTROSPECTION_CLIENTS: "dns:elitea-vector"
+      # ── elitea-vector gRPC client (ADR-0031 decision 4) ────────────────
+      # The hop the OTHER way: this service deletes a toolkit index's
+      # namespace (the index delete, the registry's tombstone sweeper) and a
+      # deleted project's every namespace (the cleanup journal's vector_data
+      # step) with no token, as elitea-vector's administrator. It presents
+      # main-client.crt — DNS:elitea-main, client use, runtime CA
+      # (gen-vector-certs.sh) — which elitea-vector admits by
+      # ELITEA_VECTOR_ADMIN_IDENTITIES below. Not the provider hops' client.crt:
+      # that chains to deploy/certs/ca.crt, which elitea-vector does not trust.
+      ELITEA_VECTOR_GRPC_TARGET: "elitea-vector:9470"
+      ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE: /run/elitea-vector-client/main-client.crt
+      ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE: /run/elitea-vector-client/main-client.key
+      ELITEA_VECTOR_GRPC_CA_FILE: /run/elitea-vector-client/runtime-ca.crt
     volumes:
       # Only the gateway-client keypair and its CA — three files, not the
       # ./certs directory. Bind-mounting the parent handed elitea-main the whole
@@ -1265,6 +1278,12 @@ services:
       # Installed by runtime-material with per-file owner/mode; NOT a bind mount
       # of deploy/certs/runtime, which securefile would reject.
       - standalone_runtime_main:/run/elitea-runtime:ro
+      # elitea-vector's administrator client material (gen-vector-certs.sh):
+      # three files, like the provider hop's above, read by tls.LoadX509KeyPair
+      # with no permission contract, so a plain read-only bind mount is right.
+      - ./certs/vector/main-client.crt:/run/elitea-vector-client/main-client.crt:ro
+      - ./certs/vector/main-client.key:/run/elitea-vector-client/main-client.key:ro
+      - ./certs/vector/runtime-ca.crt:/run/elitea-vector-client/runtime-ca.crt:ro
       # The auth config itself carries no secrets — only paths — and is read as
       # public material, so a plain read-only bind mount is correct here.
       - ./runtime/auth.form.yml:/etc/elitea/auth.form.yml:ro
@@ -1673,6 +1692,10 @@ services:
   # the project into every Qdrant filter and write. One certificate
   # (DNS:elitea-vector, runtime CA) serves both its listener and its client
   # hop to elitea-main; elitea-main admits it by ELITEA_VECTOR_INTROSPECTION_CLIENTS.
+  # elitea-main calls back WITHOUT a token, as the administrator identity
+  # dns:elitea-main (main-client.crt), to delete a toolkit index's namespace
+  # and a deleted project's vectors (ADR-0031 decision 4; the
+  # ELITEA_VECTOR_GRPC_* block on elitea-main above).
   elitea-vector:
     image: ghcr.io/elitea-ng/elitea-vector:standalone
     build:

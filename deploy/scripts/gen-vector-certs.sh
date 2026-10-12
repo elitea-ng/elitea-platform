@@ -17,6 +17,16 @@
 # exactly one DNS SAN or one SPIFFE URI SAN, so elitea-main reads the client
 # identity as `dns:elitea-vector` (ELITEA_VECTOR_INTROSPECTION_CLIENTS).
 #
+# elitea-main's ADMINISTRATOR identity is the third hop (ADR-0031 decision 4):
+# its gRPC client deletes a toolkit index's namespace and a deleted project's
+# every namespace, with no token, admitted by elitea-vector's
+# ELITEA_VECTOR_ADMIN_IDENTITIES (`dns:elitea-main`). elitea-main's runtime
+# listener certificates carry DNS:elitea-main but serverAuth ONLY, and the
+# provider hops' client.crt chains to the other CA, so this script issues a
+# dedicated client certificate: main-client.{crt,key}, DNS SAN `elitea-main`,
+# clientAuth, signed by the runtime CA. elitea-main reads it through
+# ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE / _KEY_FILE / _CA_FILE.
+#
 # WHY A SEPARATE DIRECTORY AND NOT deploy/certs/runtime. gen-runtime-certs.sh
 # rotates its whole tree when any listed file is missing, which also rotates
 # vault-master-key and the PAT key. Adding files to that list would rotate a
@@ -25,8 +35,9 @@
 # runtime rotation without forcing one.
 #
 # Output (gitignored, deploy/certs/ is in .gitignore):
-#   deploy/certs/vector/vector.{crt,key}   elitea-vector server + client
-#   deploy/certs/vector/runtime-ca.crt     copy of the runtime trust root
+#   deploy/certs/vector/vector.{crt,key}       elitea-vector server + client
+#   deploy/certs/vector/main-client.{crt,key}  elitea-main's administrator client
+#   deploy/certs/vector/runtime-ca.crt         copy of the runtime trust root
 #   deploy/certs/vector/qdrant-api-key     Qdrant API key (random, 32 bytes)
 #
 # Idempotent: regenerates only what is missing, expiring within 24h, or not
@@ -68,6 +79,28 @@ if [ "$needs_cert" -eq 1 ]; then
     -out "$VECTOR_DIR/vector.crt" -days "$DAYS" \
     -extfile <(printf 'subjectAltName=DNS:elitea-vector\nextendedKeyUsage=serverAuth,clientAuth\nkeyUsage=critical,digitalSignature,keyEncipherment\n') 2>/dev/null
   rm -f "$VECTOR_DIR/vector.csr" "$VECTOR_DIR/runtime-ca.srl"
+fi
+
+needs_main=0
+if [ "${FORCE:-0}" = "1" ] || [ ! -f "$VECTOR_DIR/main-client.crt" ] || [ ! -f "$VECTOR_DIR/main-client.key" ]; then
+  needs_main=1
+elif ! openssl x509 -checkend 86400 -noout -in "$VECTOR_DIR/main-client.crt" >/dev/null 2>&1; then
+  needs_main=1
+elif ! openssl verify -CAfile "$RUNTIME_DIR/runtime-ca.crt" "$VECTOR_DIR/main-client.crt" >/dev/null 2>&1; then
+  needs_main=1
+fi
+
+if [ "$needs_main" -eq 1 ]; then
+  echo "→ issuing main-client.crt (DNS:elitea-main, client; elitea-vector's administrator identity)"
+  openssl req -newkey rsa:2048 -nodes \
+    -keyout "$VECTOR_DIR/main-client.key" -out "$VECTOR_DIR/main-client.csr" \
+    -subj "/CN=elitea-main" 2>/dev/null
+  openssl x509 -req -in "$VECTOR_DIR/main-client.csr" \
+    -CA "$RUNTIME_DIR/runtime-ca.crt" -CAkey "$RUNTIME_DIR/runtime-ca.key" -CAcreateserial \
+    -CAserial "$VECTOR_DIR/runtime-ca.srl" \
+    -out "$VECTOR_DIR/main-client.crt" -days "$DAYS" \
+    -extfile <(printf 'subjectAltName=DNS:elitea-main\nextendedKeyUsage=clientAuth\nkeyUsage=critical,digitalSignature\n') 2>/dev/null
+  rm -f "$VECTOR_DIR/main-client.csr" "$VECTOR_DIR/runtime-ca.srl"
 fi
 
 cp "$RUNTIME_DIR/runtime-ca.crt" "$VECTOR_DIR/runtime-ca.crt"
