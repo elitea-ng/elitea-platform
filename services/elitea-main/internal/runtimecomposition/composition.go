@@ -2210,7 +2210,6 @@ func phaseOneGRPCPolicy(maxConcurrentStreams uint32) runtimegrpc.GRPCServerPolic
 	return runtimegrpc.GRPCServerPolicy{
 		MaxConcurrentStreams:  maxConcurrentStreams,
 		MaxConnections:        64,
-		MinClientPingInterval: 30 * time.Second,
 		KeepaliveTime:         time.Minute,
 		KeepaliveTimeout:      10 * time.Second,
 		MaxConnectionIdle:     5 * time.Minute,
