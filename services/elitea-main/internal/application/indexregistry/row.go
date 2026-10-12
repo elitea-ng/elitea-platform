@@ -106,9 +106,11 @@ type Row struct {
 	// grace (SettlingGrace) is measured.
 	ObservedAt time.Time
 
-	// TotalDocuments and TotalChunks are the index's totals: the number of
-	// index_registry_documents rows and the sum of their chunk_count. They are
-	// read by the list and exact reads only, and never stored on the row; the
+	// TotalDocuments and TotalChunks are the index's totals after the last
+	// applied result (total_documents, total_chunks; shared/0164): the WHOLE
+	// index as the worker reported it in IndexIngestSummaryV1.total_documents
+	// and total_chunks. They are not derived from index_registry_documents,
+	// which is a bounded subset (the result frame is bounded at 64 KiB). The
 	// Indexed/Updated/Chunks/Failed columns above are the LAST run's counts.
 	TotalDocuments int64
 	TotalChunks    int64

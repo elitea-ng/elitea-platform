@@ -7,8 +7,8 @@ use super::{
     ProtocolError,
     elitea::runtime::v1::{
         AgentExecutionCommandV1, ConfigurationValidationCommandV1, DigestAlgorithmV1, DigestV1,
-        ExecutionInputBundleReferenceV1, SignatureProfileV1, SignedWorkerCommandEnvelopeV1,
-        WorkerCommandTypeV1, WorkerCommandV1, worker_command_v1,
+        ExecutionInputBundleReferenceV1, IndexIngestCommandV1, SignatureProfileV1,
+        SignedWorkerCommandEnvelopeV1, WorkerCommandTypeV1, WorkerCommandV1, worker_command_v1,
     },
 };
 use crate::agents::AgentExecutionKind;
@@ -25,6 +25,10 @@ pub const TOOLKIT_CALL_TOOL_CAPABILITY_ID: &str = "toolkit.call_tool.v1";
 pub const TOOLKIT_AVAILABLE_TOOLS_CAPABILITY_ID: &str = "toolkit.available_tools.v1";
 pub const CONFIGURATION_VALIDATE_CAPABILITY_ID: &str = "configuration.validate.v1";
 pub const CONFIGURATION_VALIDATE_CAPABILITY_VERSION: &str = "1";
+pub const INDEX_INGEST_CAPABILITY_ID: &str = "index.ingest.v1";
+/// The version elitea-main dispatches and the Python worker accepts
+/// (`elitea_worker/constants.py`).
+pub const INDEX_INGEST_CAPABILITY_VERSION: &str = "2";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolkitCommandKind {
@@ -36,6 +40,10 @@ pub enum ToolkitCommandKind {
     /// machinery with the toolkit kinds; only its input, result and logical
     /// output identity differ.
     ConfigurationValidate,
+    /// `index.ingest.v1` (ADR-0030 I1): one toolkit index run. It rides the
+    /// same claim, lease, output and retirement machinery; its inputs are the
+    /// index bundle's entries, its result the typed `IndexIngestResultV1`.
+    IndexIngest,
 }
 
 impl ToolkitCommandKind {
@@ -46,6 +54,7 @@ impl ToolkitCommandKind {
             Self::CallTool => "toolkit-call-tool",
             Self::AvailableTools => "toolkit-available-tools",
             Self::ConfigurationValidate => "configuration-validation",
+            Self::IndexIngest => "index-ingest",
         }
     }
 }
@@ -72,6 +81,10 @@ pub(crate) fn terminal_logical_output_id(command: &WorkerCommandV1) -> String {
         ),
         Some(CapabilityCommand::ToolkitAvailableTools(_)) => (
             ToolkitCommandKind::AvailableTools.output_prefix(),
+            command.execution_id.as_str(),
+        ),
+        Some(CapabilityCommand::IndexIngest(_)) => (
+            ToolkitCommandKind::IndexIngest.output_prefix(),
             command.execution_id.as_str(),
         ),
         _ => ("agent-execution", command.execution_id.as_str()),
@@ -201,6 +214,9 @@ impl VerifiedToolkitExecuteReadCommand {
             }
             Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(command)) => {
                 &command.settings_entry_id
+            }
+            Some(worker_command_v1::CapabilityCommand::IndexIngest(command)) => {
+                &command.toolkit_configuration_entry_id
             }
             Some(worker_command_v1::CapabilityCommand::ConfigurationValidation(command)) => {
                 &command.settings_entry_id
@@ -368,7 +384,8 @@ pub(crate) fn parse_and_verify_execution_command(
             worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)
             | worker_command_v1::CapabilityCommand::ToolkitCallTool(_)
             | worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)
-            | worker_command_v1::CapabilityCommand::ConfigurationValidation(_),
+            | worker_command_v1::CapabilityCommand::ConfigurationValidation(_)
+            | worker_command_v1::CapabilityCommand::IndexIngest(_),
         ) => {
             scan_toolkit_execute_read_worker_command(&common.signed.worker_command_bytes)?;
             let kind = validate_toolkit_execute_read_command(&common.command)?;
@@ -481,6 +498,18 @@ fn scan_toolkit_execute_read_worker_command(raw: &[u8]) -> Result<(), ProtocolEr
         }
         return Ok(());
     }
+    if fields.contains(34) {
+        let index = fields.length_field(34, "the index ingest command is missing")?;
+        let index_fields = scan_message(index, Schema::IndexIngestCommand)?;
+        if index_fields.contains(9) {
+            let binding = index_fields.length_field(9, "the embedding binding is missing")?;
+            let binding_fields = scan_message(binding, Schema::IndexIngestInputBinding)?;
+            let digest =
+                binding_fields.length_field(3, "the embedding binding digest is missing")?;
+            scan_message(digest, Schema::Digest)?;
+        }
+        return Ok(());
+    }
     let (tag, schema) = if fields.contains(64) {
         (64, Schema::ToolkitExecuteReadCommand)
     } else if fields.contains(36) {
@@ -517,6 +546,7 @@ fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKin
     Ok(kind)
 }
 
+#[allow(clippy::too_many_lines)] // One arm per direct-execution kind; each is a few lines.
 fn validate_toolkit_execute_read_command(
     command: &WorkerCommandV1,
 ) -> Result<ToolkitCommandKind, ProtocolError> {
@@ -579,16 +609,27 @@ fn validate_toolkit_execute_read_command(
                 configuration_validation_identities(validation)?,
             )
         }
+        Some(worker_command_v1::CapabilityCommand::IndexIngest(index))
+            if command.capability_id == INDEX_INGEST_CAPABILITY_ID
+                && command.command_type == WorkerCommandTypeV1::IndexIngest as i32 =>
+        {
+            (
+                ToolkitCommandKind::IndexIngest,
+                index_ingest_identities(index)?,
+            )
+        }
         _ => {
             return Err(ProtocolError::UnsupportedCapability(
                 "the worker command capability is not supported",
             ));
         }
     };
-    let expected_version = if kind == ToolkitCommandKind::ConfigurationValidate {
-        CONFIGURATION_VALIDATE_CAPABILITY_VERSION
-    } else {
-        TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION
+    let expected_version = match kind {
+        ToolkitCommandKind::ConfigurationValidate => CONFIGURATION_VALIDATE_CAPABILITY_VERSION,
+        ToolkitCommandKind::IndexIngest => INDEX_INGEST_CAPABILITY_VERSION,
+        ToolkitCommandKind::ExecuteRead
+        | ToolkitCommandKind::CallTool
+        | ToolkitCommandKind::AvailableTools => TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION,
     };
     if command.capability_version != expected_version {
         return Err(ProtocolError::UnsupportedCapability(
@@ -636,6 +677,96 @@ fn configuration_validation_identities(
         validation.schema_revision.as_str(),
         validation.settings_entry_id.as_str(),
     ])
+}
+
+/// The identities an index ingest command must carry (the Python worker's
+/// `_accepted_index_claim` and Main's control verifier, in one place): the two
+/// required entry ids, the optional ones when named, distinct among
+/// themselves; a closed initiator and `sio_event`; the expected embedding
+/// space as a pair or absent; the index id as a canonical UUID or absent; the
+/// embedding binding, when present, with a SHA-256 content digest.
+fn index_ingest_identities(index: &IndexIngestCommandV1) -> Result<Vec<&str>, ProtocolError> {
+    let malformed = || ProtocolError::InvalidInput("the index ingest command is malformed");
+    let mut required = vec![
+        index.toolkit_configuration_entry_id.as_str(),
+        index.tool_parameters_entry_id.as_str(),
+        index.initiator.as_str(),
+    ];
+    let mut entry_ids = vec![
+        index.toolkit_configuration_entry_id.as_str(),
+        index.tool_parameters_entry_id.as_str(),
+    ];
+    for optional in [
+        &index.llm_model_entry_id,
+        &index.llm_configuration_entry_id,
+        &index.mcp_tokens_entry_id,
+    ] {
+        if !optional.is_empty() {
+            required.push(optional.as_str());
+            entry_ids.push(optional.as_str());
+        }
+    }
+    if let Some(binding) = index.embedding_binding.as_ref() {
+        require_sha256(
+            binding.content_digest.as_ref(),
+            "the embedding binding digest is malformed",
+        )?;
+        required.push(binding.entry_id.as_str());
+        required.push(binding.immutable_version.as_str());
+        entry_ids.push(binding.entry_id.as_str());
+    }
+    for (position, entry_id) in entry_ids.iter().enumerate() {
+        if !entry_id.is_empty() && entry_ids[..position].contains(entry_id) {
+            return Err(ProtocolError::InvalidInput(
+                "the index input references must be distinct",
+            ));
+        }
+    }
+    if !matches!(
+        index.sio_event.as_str(),
+        "" | "chat_predict" | "test_toolkit_tool"
+    ) || !matches!(index.initiator.as_str(), "user" | "llm" | "schedule")
+    {
+        return Err(malformed());
+    }
+    let model = index.expected_embedding_model.as_str();
+    let dimension = index.expected_embedding_dimension;
+    if (model.is_empty()) != (dimension == 0)
+        || dimension > 65_535
+        || model.len() > MAX_SAFE_STRING_BYTES
+        || model
+            .bytes()
+            .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    {
+        return Err(malformed());
+    }
+    if !index.index_id.is_empty() && !canonical_uuid(&index.index_id) {
+        return Err(malformed());
+    }
+    for text in [&index.client_stream_id, &index.client_message_id] {
+        if text.len() > MAX_SAFE_STRING_BYTES
+            || text
+                .bytes()
+                .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+        {
+            return Err(malformed());
+        }
+    }
+    Ok(required)
+}
+
+/// `8-4-4-4-12` lower-case hex: the text form elitea-vector accepts for a
+/// namespace id.
+pub(crate) fn canonical_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(position, byte)| {
+            if matches!(position, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
+            }
+        })
 }
 
 fn select_agent_entrypoint(

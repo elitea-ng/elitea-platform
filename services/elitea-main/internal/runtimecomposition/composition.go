@@ -378,7 +378,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// rustIndexing selects the registry for every index-metadata effect below
 	// (ELITEA_INDEXING_RUNTIME=rust). The python writer is then never built, so
 	// a rust deployment holds no pgvector connection code path at all.
-	rustIndexing := config.IndexIngestDispatchEnabled && config.IndexingRuntime == IndexingRuntimeRust
+	rustIndexing := config.RustIndexing()
 	// Until elitea-main has an elitea-vector client, deleting an index's
 	// vectors is a deferred hook (ADR-0031 decision 4): the registry keeps the
 	// tombstone, and nothing is reported as deleted that was not.

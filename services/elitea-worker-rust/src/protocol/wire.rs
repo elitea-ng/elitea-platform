@@ -86,6 +86,8 @@ pub(crate) enum Schema {
     ToolkitCallToolCommand,
     ToolkitAvailableToolsCommand,
     ConfigurationValidationCommand,
+    IndexIngestCommand,
+    IndexIngestInputBinding,
     ToolkitExecuteReadInput,
     NodeEvent,
 }
@@ -279,6 +281,19 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::ConfigurationValidationCommand => match field {
             1..=8 => Some(length()),
+            _ => None,
+        },
+        // IndexIngestCommandV1: entry ids 1-5, client correlation 6-8, the
+        // embedding binding message 9, initiator 16, the expected model 17
+        // and index id 19 are length-delimited; the expected dimension 18 is
+        // a varint. 10-15 are reserved.
+        Schema::IndexIngestCommand => match field {
+            1..=9 | 16 | 17 | 19 => Some(length()),
+            18 => Some(varint()),
+            _ => None,
+        },
+        Schema::IndexIngestInputBinding => match field {
+            1..=3 => Some(length()),
             _ => None,
         },
         Schema::ToolkitExecuteReadInput => match field {

@@ -29,6 +29,12 @@ var (
 	ErrIndexIngestArtifactMismatch    = errors.New("index ingest artifact metadata does not match durable storage")
 	ErrIndexIngestArtifactUnavailable = errors.New("index ingest artifact is not durably available")
 	ErrIndexIngestOutputConflict      = errors.New("index ingest output conflicts with a durable output")
+	// ErrIndexResultRefused is the typed refusal of a result the index registry
+	// cannot apply (ADR-0030 I1): it names another embedding space than the
+	// index is stamped with, or carries no typed summary. The projecting
+	// transaction rolls back and the frame is rejected, so nothing is recorded;
+	// the worker then settles the run failed with RESULT_REFUSED.
+	ErrIndexResultRefused = errors.New("index result refused by the registry")
 )
 
 // IndexInputBinding identifies one exact immutable input consumed by the
@@ -160,6 +166,12 @@ type IndexIngestSummary struct {
 	SkippedJSON        string
 	EmbeddingModel     string
 	EmbeddingDimension uint32
+	// TotalDocuments and TotalChunks are the WHOLE index after the run, which
+	// the list shows. Unlike IndexIngestResult.Documents they are never a
+	// bounded subset: the output frame is bounded at MaxIndexIngestResultBytes,
+	// the totals are two integers.
+	TotalDocuments uint64
+	TotalChunks    uint64
 }
 
 const (
@@ -171,7 +183,37 @@ const (
 	// embedding stamp. 65535 is far above any model in use (768-3072).
 	MaxIndexEmbeddingModelBytes = 256
 	MaxIndexEmbeddingDimension  = 65535
+	// MaxIndexResultDocuments bounds each of the per-document lists a result
+	// carries (documents written, document keys removed). The frame is bounded
+	// at MaxIndexIngestResultBytes, so the lists are a bounded subset of what
+	// the run touched and DocumentsTruncated says when they are not all of it.
+	MaxIndexResultDocuments = 4096
+	// MaxIndexDocumentKeyBytes and MaxIndexDocumentVersionBytes mirror the
+	// CHECK constraints of elitea_runtime.index_registry_documents.
+	MaxIndexDocumentKeyBytes     = 4096
+	MaxIndexDocumentVersionBytes = 1024
 )
+
+// IndexIngestDocument is one document the run wrote: its source key, the
+// version the source reported (for the incremental sync of ADR-0030 decision
+// 3) and the chunks it became.
+type IndexIngestDocument struct {
+	Key        string
+	Version    string
+	ChunkCount uint32
+}
+
+func (d IndexIngestDocument) Validate() error {
+	if !validIndexDocumentKey(d.Key) || len(d.Version) > MaxIndexDocumentVersionBytes ||
+		!utf8.ValidString(d.Version) || strings.ContainsRune(d.Version, 0) {
+		return ErrInvalidIndexIngestOutput
+	}
+	return nil
+}
+
+func validIndexDocumentKey(key string) bool {
+	return key != "" && len(key) <= MaxIndexDocumentKeyBytes && utf8.ValidString(key) && !strings.ContainsRune(key, 0)
+}
 
 var indexSkipReasonPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -213,7 +255,7 @@ func (s IndexIngestSummary) Skipped() map[string]uint64 {
 
 func (s IndexIngestSummary) validateTyped() error {
 	if s.IndexedDocuments > math.MaxInt64 || s.IndexedChunks > math.MaxInt64 ||
-		s.FailedChunks > math.MaxInt64 {
+		s.FailedChunks > math.MaxInt64 || s.TotalDocuments > math.MaxInt64 || s.TotalChunks > math.MaxInt64 {
 		return ErrInvalidIndexIngestOutput
 	}
 	if s.SkippedJSON != "" {
@@ -243,7 +285,8 @@ func (s IndexIngestSummary) validateTyped() error {
 // field set. The Python SDK path never sets one.
 func (s IndexIngestSummary) HasTypedResult() bool {
 	return s.IndexedDocuments != 0 || s.IndexedChunks != 0 || s.FailedChunks != 0 ||
-		s.SkippedJSON != "" || s.EmbeddingModel != ""
+		s.SkippedJSON != "" || s.EmbeddingModel != "" ||
+		s.TotalDocuments != 0 || s.TotalChunks != 0
 }
 
 func (s IndexIngestSummary) Validate() error {
@@ -322,6 +365,24 @@ type IndexIngestResult struct {
 	Bindings          IndexIngestBindings
 	ResultArtifact    IndexArtifactReference
 	ResultSummary     IndexIngestSummary
+	// Documents and RemovedDocumentKeys are the per-document rows of a Rust run
+	// (ADR-0030 decision 3), applied to index_registry_documents in the
+	// projecting transaction. They live here and not on the comparable summary
+	// because they are slices. DocumentsTruncated reports that the bounded
+	// frame did not fit every document the run touched; the summary's totals
+	// are still the whole index.
+	Documents           []IndexIngestDocument
+	RemovedDocumentKeys []string
+	DocumentsTruncated  bool
+}
+
+// ReportsWholeIndex reports whether Documents is every document of the index
+// after the run: nothing was truncated and the list is as long as the index.
+// A registry application may then delete every document row the list does not
+// name (a clean re-index).
+func (r IndexIngestResult) ReportsWholeIndex() bool {
+	return r.ResultSummary.HasTypedResult() && !r.DocumentsTruncated &&
+		r.ResultSummary.TotalDocuments == uint64(len(r.Documents))
 }
 
 func (r IndexIngestResult) Validate() error {
@@ -336,10 +397,48 @@ func (r IndexIngestResult) Validate() error {
 	if hasArtifact == hasSummary {
 		return ErrInvalidIndexIngestOutput
 	}
+	if err := r.validateDocuments(); err != nil {
+		return err
+	}
 	if hasArtifact {
 		return r.ResultArtifact.Validate()
 	}
 	return r.ResultSummary.Validate()
+}
+
+// validateDocuments bounds the per-document lists and keeps them exclusive to
+// a typed (Rust) summary: the Python path reports no documents, so a frame
+// that carries some without a typed summary is malformed.
+func (r IndexIngestResult) validateDocuments() error {
+	if len(r.Documents) == 0 && len(r.RemovedDocumentKeys) == 0 && !r.DocumentsTruncated {
+		return nil
+	}
+	if !r.ResultSummary.HasTypedResult() {
+		return ErrInvalidIndexIngestOutput
+	}
+	if len(r.Documents) > MaxIndexResultDocuments || len(r.RemovedDocumentKeys) > MaxIndexResultDocuments {
+		return ErrInvalidIndexIngestOutput
+	}
+	seen := make(map[string]struct{}, len(r.Documents)+len(r.RemovedDocumentKeys))
+	for _, document := range r.Documents {
+		if err := document.Validate(); err != nil {
+			return err
+		}
+		if _, duplicate := seen[document.Key]; duplicate {
+			return ErrInvalidIndexIngestOutput
+		}
+		seen[document.Key] = struct{}{}
+	}
+	for _, key := range r.RemovedDocumentKeys {
+		if !validIndexDocumentKey(key) {
+			return ErrInvalidIndexIngestOutput
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return ErrInvalidIndexIngestOutput
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 type IndexIngestFrame struct {
@@ -574,6 +673,12 @@ func matchesExpectedIndexIdentity(expected ExpectedIndexIngest, frame IndexInges
 func cloneIndexIngestFrame(frame IndexIngestFrame) IndexIngestFrame {
 	frame.EncodedResult = append([]byte(nil), frame.EncodedResult...)
 	frame.EncodedSettlement = append([]byte(nil), frame.EncodedSettlement...)
+	if frame.Result.Documents != nil {
+		frame.Result.Documents = append([]IndexIngestDocument(nil), frame.Result.Documents...)
+	}
+	if frame.Result.RemovedDocumentKeys != nil {
+		frame.Result.RemovedDocumentKeys = append([]string(nil), frame.Result.RemovedDocumentKeys...)
+	}
 	return frame
 }
 

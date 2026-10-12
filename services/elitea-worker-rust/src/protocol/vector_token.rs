@@ -75,10 +75,7 @@ impl VectorSource {
 
     /// The payload keyword elitea-vector uses.
     #[must_use]
-    #[allow(
-        dead_code,
-        reason = "The vector-index client (ADR-0030) is its consumer."
-    )]
+    #[allow(dead_code)] // Read by the index tools' catalog (ADR-0030 I2).
     pub(crate) const fn keyword(self) -> &'static str {
         match self {
             Self::ToolkitIndex => "toolkit_index",
@@ -156,9 +153,9 @@ impl VectorClaimToken {
     }
 
     /// The bearer, for the `authorization` metadata of an elitea-vector
-    /// call and nothing else.
+    /// call and nothing else (the `vector-index` client reads it through
+    /// `ClaimToken`).
     #[must_use]
-    #[allow(dead_code)] // The vector-index client (ADR-0030) is its consumer.
     pub(crate) fn bearer(&self) -> &str {
         self.bearer.as_str()
     }
@@ -166,7 +163,7 @@ impl VectorClaimToken {
     /// The latest instant the token can be valid. Main revokes it earlier
     /// when the claim ends.
     #[must_use]
-    #[allow(dead_code)] // The vector-index client (ADR-0030) is its consumer.
+    #[allow(dead_code)] // Read by the index tools' catalog refresh (ADR-0030 I2).
     pub(crate) const fn expires_at_unix_millis(&self) -> i64 {
         self.expires_at_unix_millis
     }
@@ -174,7 +171,6 @@ impl VectorClaimToken {
     /// Whether the token is admitted for `source`. elitea-vector enforces
     /// this too; checking first spares a refused call.
     #[must_use]
-    #[allow(dead_code)] // The vector-index client (ADR-0030) is its consumer.
     pub(crate) fn allows(&self, source: VectorSource) -> bool {
         self.sources.contains(&source)
     }
@@ -189,6 +185,13 @@ impl VectorClaimToken {
             expires_at_unix_millis: self.expires_at_unix_millis,
             sources: self.sources.clone(),
         }
+    }
+}
+
+/// The `vector-index` client reads the bearer through this, and only this.
+impl elitea_vector_index::ClaimToken for VectorClaimToken {
+    fn bearer(&self) -> &str {
+        Self::bearer(self)
     }
 }
 

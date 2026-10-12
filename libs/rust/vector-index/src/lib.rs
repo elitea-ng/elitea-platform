@@ -15,6 +15,15 @@
 //! The crate pins no model: queries are embedded through [`QueryEmbedder`]
 //! and the step-back tools call a [`StepbackModel`], both implemented by
 //! the worker on its existing model path.
+//!
+//! **Key order.** The SDK prints its result dicts with the keys in insertion
+//! order (`page_content`, `metadata`, `score`). That is `serde_json`'s
+//! `preserve_order`, which Cargo would unify into every crate of the binary;
+//! the agent worker must build without it (its canonical digests, ADR-0029).
+//! So this crate takes it through the `sdk-key-order` feature: on for its
+//! own tests and for hosts that can afford it, off in the worker, where the
+//! same keys come out sorted (`metadata`, `page_content`, `score`). Nothing
+//! else changes.
 
 #![allow(
     clippy::module_name_repetitions,

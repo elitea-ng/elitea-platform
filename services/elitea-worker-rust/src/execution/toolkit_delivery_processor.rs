@@ -24,6 +24,7 @@ use super::toolkit_output::{
     ToolkitTerminalRecovery, prepare_empty_toolkit_recovery, prepare_toolkit_output,
     replay_toolkit_terminal_with_replacement,
 };
+use crate::indexing::{IndexIngestRuntime, IndexRun, IndexRunFailure, run_index};
 use crate::protocol::ProtocolError;
 use crate::protocol::command::{ToolkitCommandKind, VerifiedToolkitExecuteReadCommand};
 use crate::protocol::control::{
@@ -32,9 +33,11 @@ use crate::protocol::control::{
     InvocationAuthorizationDecision, LeaseMonitoredAgentExecution, ToolkitInvocationPayload,
 };
 use crate::protocol::elitea::runtime::v1::{
-    ConfigurationValidationResultV1, DigestV1, ToolkitAuthorizationRequiredV1,
-    ToolkitAvailableToolsResultV1, ToolkitCallToolResultV1, ToolkitCallToolStatusV1,
-    ToolkitCallToolSummaryV1, ToolkitExecuteReadResultV1, worker_command_v1,
+    ConfigurationValidationResultV1, DigestV1, ExecutionInputEntryV1, IndexIngestCommandV1,
+    IndexIngestInputBindingV1, IndexIngestResultV1, IndexIngestSummaryV1,
+    ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsResultV1, ToolkitCallToolResultV1,
+    ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, ToolkitExecuteReadResultV1,
+    worker_command_v1,
 };
 use crate::protocol::output::{RuntimeFailureKind, ToolkitExecuteReadTerminalOutput};
 use crate::toolkits::{
@@ -44,6 +47,8 @@ use crate::toolkits::{
 use crate::transport::command_bus::{
     CommandBusError, CommandDelivery, CommandRetirementClient, CommandRetirer,
 };
+use crate::transport::platform_client::PlatformClient;
+use crate::transport::runtime_context::RuntimeContextError;
 use crate::transport::{ControlRpc, InputContentError, MaterializedInput};
 use crate::validation::SettingsRefusal;
 
@@ -59,6 +64,12 @@ pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
     preparation: AgentPreparationConfig,
     terminal_recovery: AgentTerminalRecoveryConfig,
     runtime: DirectToolkitRuntime,
+    /// The claim's PAT redemption, for an index run's gateway and platform
+    /// calls.
+    platform: Arc<PlatformClient>,
+    /// `index.ingest.v1` (ADR-0030 I1); `None` on a deployment without a
+    /// vector target, which refuses the capability.
+    index_runtime: Option<Arc<IndexIngestRuntime>>,
 }
 
 impl<R, RC, T, K, I> ToolkitDeliveryProcessor<R, RC, T, K, I>
@@ -81,6 +92,8 @@ where
         preparation: AgentPreparationConfig,
         terminal_recovery: AgentTerminalRecoveryConfig,
         runtime: DirectToolkitRuntime,
+        platform: Arc<PlatformClient>,
+        index_runtime: Option<Arc<IndexIngestRuntime>>,
     ) -> Self {
         Self {
             router: ToolkitDeliveryRouter::new(Arc::clone(&control), Arc::clone(&retirer)),
@@ -94,6 +107,8 @@ where
             preparation,
             terminal_recovery,
             runtime,
+            platform,
+            index_runtime,
         }
     }
 
@@ -173,7 +188,7 @@ where
                 true,
             ));
         };
-        self.reconcile_empty_recovery(recovery, failure).await?;
+        Box::pin(self.reconcile_empty_recovery(recovery, failure)).await?;
         Ok(ToolkitProcessOutcome::completed(
             "toolkit_delivery.ambiguous_execution_reconciled",
         ))
@@ -253,6 +268,12 @@ where
         if verified.kind() == ToolkitCommandKind::ConfigurationValidate {
             return Box::pin(self.execute_validation(delivery, verified, execution, output, lease))
                 .await;
+        }
+        if verified.kind() == ToolkitCommandKind::IndexIngest {
+            return Box::pin(
+                self.execute_index_ingest(delivery, verified, execution, output, lease),
+            )
+            .await;
         }
         let request = match self
             .materialize_request(&verified, &execution, &mut lease)
@@ -400,6 +421,233 @@ where
             execution.request_entry(),
             &issues,
         )
+    }
+
+    /// `index.ingest.v1` (ADR-0030 I1). The bundle's entries are fetched,
+    /// the invocation is authorized (a run has effects: vectors are written
+    /// and deleted), the claim's PAT is redeemed for the gateway and the
+    /// platform object API, and the run executes under the lease. Its typed
+    /// summary is the terminal; only Stop, the deadline, a lost lease or a
+    /// malformed input is a runtime failure.
+    async fn execute_index_ingest(
+        &self,
+        delivery: CommandDelivery,
+        verified: VerifiedToolkitExecuteReadCommand,
+        execution: LeaseMonitoredAgentExecution,
+        output: PreparedAgentOutput,
+        mut lease: ClaimLeaseMonitor,
+    ) -> Result<ToolkitProcessOutcome, ToolkitProcessError> {
+        let Some(runtime) = self.index_runtime.as_ref() else {
+            tracing::warn!(
+                event = "index_ingest_unsupported",
+                "this worker has no vector_target, so index.ingest.v1 is refused"
+            );
+            Box::pin(self.publish_fresh_terminal(
+                delivery,
+                verified,
+                execution.into_output_authority(),
+                output,
+                lease,
+                ToolkitExecuteReadTerminalOutput::Failure(
+                    RuntimeFailureKind::UnsupportedCapability,
+                ),
+            ))
+            .await?;
+            return Ok(ToolkitProcessOutcome::completed(
+                "toolkit_delivery.index_unsupported_retired",
+            ));
+        };
+        let inputs = match self
+            .materialize_index_inputs(&verified, &execution, &mut lease)
+            .await
+        {
+            Ok(inputs) => inputs,
+            Err(failure) => {
+                Box::pin(self.publish_fresh_terminal(
+                    delivery,
+                    verified,
+                    execution.into_output_authority(),
+                    output,
+                    lease,
+                    ToolkitExecuteReadTerminalOutput::Failure(failure),
+                ))
+                .await?;
+                return Ok(ToolkitProcessOutcome::completed(
+                    "toolkit_delivery.preparation_terminal_retired",
+                ));
+            }
+        };
+        let authorized = match self
+            .control
+            .authorize_agent_invocation(execution.bind_invocation(ToolkitInvocationPayload))
+            .await
+        {
+            InvocationAuthorizationDecision::AuthorizedNow(execution) => *execution,
+            InvocationAuthorizationDecision::AlreadyAuthorized(terminal)
+            | InvocationAuthorizationDecision::Rejected(terminal) => {
+                let failure = terminal.cause.runtime_failure_kind();
+                Box::pin(self.publish_fresh_terminal(
+                    delivery,
+                    verified,
+                    terminal.output,
+                    output,
+                    lease,
+                    ToolkitExecuteReadTerminalOutput::Failure(failure),
+                ))
+                .await?;
+                return Ok(ToolkitProcessOutcome::completed(
+                    "toolkit_delivery.authorization_terminal_retired",
+                ));
+            }
+            InvocationAuthorizationDecision::Unknown(unknown) => {
+                lease.close().await.map_err(ToolkitProcessError::Lease)?;
+                return Err(ToolkitProcessError::Control(unknown.error));
+            }
+        };
+        let outcome = self
+            .run_index_ingest(&verified, &authorized, &mut lease, runtime, &inputs)
+            .await;
+        let output_authority = authorized.into_output_authority();
+        let terminal = match outcome {
+            Ok(result) => ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(result)),
+            Err(failure) => {
+                record_toolkit_execution_failure(
+                    "index_ingest",
+                    runtime_failure_code(failure),
+                    false,
+                );
+                ToolkitExecuteReadTerminalOutput::Failure(failure)
+            }
+        };
+        Box::pin(self.publish_fresh_terminal(
+            delivery,
+            verified,
+            output_authority,
+            output,
+            lease,
+            terminal,
+        ))
+        .await?;
+        Ok(ToolkitProcessOutcome::completed(
+            "toolkit_delivery.index_executed_retired",
+        ))
+    }
+
+    async fn materialize_index_inputs(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        execution: &LeaseMonitoredAgentExecution,
+        lease: &mut ClaimLeaseMonitor,
+    ) -> Result<IndexInputs, RuntimeFailureKind> {
+        let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+            verified.command().capability_command.as_ref()
+        else {
+            return Err(RuntimeFailureKind::InvalidInput);
+        };
+        // The toolkit configuration is the claim's request entry.
+        let toolkit_configuration = self.fetch_input(verified, execution, lease).await?;
+        let tool_parameters = self
+            .fetch_entry(execution, lease, &index.tool_parameters_entry_id)
+            .await?;
+        let embedding_binding = match index.embedding_binding.as_ref() {
+            Some(binding) => Some(
+                self.fetch_entry(execution, lease, &binding.entry_id)
+                    .await?,
+            ),
+            None => None,
+        };
+        Ok(IndexInputs {
+            toolkit_configuration,
+            tool_parameters,
+            embedding_binding,
+        })
+    }
+
+    async fn fetch_entry(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        lease: &mut ClaimLeaseMonitor,
+        entry_id: &str,
+    ) -> Result<MaterializedInput, RuntimeFailureKind> {
+        lease
+            .run_pre_invocation(self.input.materialize_entry(execution, entry_id))
+            .await
+            .map_err(|error| lease_failure(&error))?
+            .map_err(|error| {
+                record_toolkit_input_failure("index_input_materialization", &error);
+                input_failure(&error)
+            })
+    }
+
+    async fn run_index_ingest(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+        runtime: &IndexIngestRuntime,
+        inputs: &IndexInputs,
+    ) -> Result<IndexIngestResultV1, RuntimeFailureKind> {
+        let command = verified.command();
+        let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+            command.capability_command.as_ref()
+        else {
+            return Err(RuntimeFailureKind::InvalidInput);
+        };
+        if deadline_exceeded(verified, self.clock.as_ref()) {
+            record_toolkit_deadline("pre_index_deadline");
+            return Err(RuntimeFailureKind::DeadlineExceeded);
+        }
+        let context = lease
+            .run_pre_invocation(
+                self.platform
+                    .redeem_elitea_context(authorized.runtime_context()),
+            )
+            .await
+            .map_err(|error| lease_failure(&error))?
+            .map_err(|error| runtime_context_failure(&error))?;
+        let execution = authorized.execution();
+        let probe = lease.state_probe();
+        let clock = Arc::clone(&self.clock);
+        let now = move || clock.now_unix_millis();
+        let run = IndexRun {
+            command: index,
+            toolkit_configuration: inputs.toolkit_configuration.as_bytes(),
+            tool_parameters: inputs.tool_parameters.as_bytes(),
+            embedding_binding: inputs
+                .embedding_binding
+                .as_ref()
+                .map(MaterializedInput::as_bytes),
+            vector_token: execution.vector_token(),
+            context: &context,
+            lease: &probe,
+            deadline_unix_millis: command.deadline_unix_millis,
+            now_unix_millis: &now,
+        };
+        let summary = match lease.run_pre_invocation(run_index(runtime, run)).await {
+            Ok(Ok(summary)) => summary,
+            Ok(Err(IndexRunFailure::Cancelled)) => return Err(RuntimeFailureKind::Cancelled),
+            Ok(Err(IndexRunFailure::DeadlineExceeded)) => {
+                record_toolkit_deadline("index_deadline");
+                return Err(RuntimeFailureKind::DeadlineExceeded);
+            }
+            Ok(Err(IndexRunFailure::LeaseLost)) => {
+                return Err(RuntimeFailureKind::DependencyUnavailable);
+            }
+            Ok(Err(IndexRunFailure::InvalidInput(reason))) => {
+                tracing::warn!(
+                    event = "index_ingest_input_invalid",
+                    reason,
+                    "an index input entry is malformed"
+                );
+                return Err(RuntimeFailureKind::InvalidInput);
+            }
+            Err(error) => return Err(lease_failure(&error)),
+        };
+        lease
+            .check_now()
+            .await
+            .map_err(|error| lease_failure(&error))?;
+        bind_index_result(execution, index, summary)
     }
 
     async fn materialize_request(
@@ -891,6 +1139,69 @@ where
     }
 }
 
+/// The index bundle's materialized entries.
+struct IndexInputs {
+    toolkit_configuration: MaterializedInput,
+    tool_parameters: MaterializedInput,
+    embedding_binding: Option<MaterializedInput>,
+}
+
+/// The typed result: the admitted bundle and entries restated (Main checks
+/// every binding against the claim), and the run's summary.
+fn bind_index_result(
+    execution: &LeaseMonitoredAgentExecution,
+    index: &IndexIngestCommandV1,
+    summary: IndexIngestSummaryV1,
+) -> Result<IndexIngestResultV1, RuntimeFailureKind> {
+    let bundle = execution.input_bundle_ref();
+    let binding =
+        |entry: &ExecutionInputEntryV1| -> Result<IndexIngestInputBindingV1, RuntimeFailureKind> {
+            Ok(IndexIngestInputBindingV1 {
+                entry_id: entry.entry_id.clone(),
+                immutable_version: entry.immutable_version.clone(),
+                content_digest: entry_digest(entry)?,
+            })
+        };
+    let optional =
+        |entry_id: &str| -> Result<Option<IndexIngestInputBindingV1>, RuntimeFailureKind> {
+            if entry_id.is_empty() {
+                return Ok(None);
+            }
+            let entry = execution
+                .input_entry(entry_id)
+                .ok_or(RuntimeFailureKind::InvalidInput)?;
+            binding(entry).map(Some)
+        };
+    Ok(IndexIngestResultV1 {
+        input_bundle_id: bundle.input_bundle_id.clone(),
+        input_bundle_digest: clone_digest(bundle.digest.as_ref())?,
+        toolkit_configuration: Some(binding(execution.request_entry())?),
+        tool_parameters: Some(binding(
+            execution
+                .arguments_entry()
+                .ok_or(RuntimeFailureKind::InvalidInput)?,
+        )?),
+        llm_model: optional(&index.llm_model_entry_id)?,
+        llm_configuration: optional(&index.llm_configuration_entry_id)?,
+        mcp_tokens: optional(&index.mcp_tokens_entry_id)?,
+        result_artifact: None,
+        result_summary: Some(summary),
+        embedding_binding: index.embedding_binding.clone(),
+    })
+}
+
+const fn runtime_context_failure(error: &RuntimeContextError) -> RuntimeFailureKind {
+    match error {
+        RuntimeContextError::AuthorizationFailed(_) => RuntimeFailureKind::AuthorizationFailed,
+        RuntimeContextError::ResourceExhausted(_) => RuntimeFailureKind::ResourceExhausted,
+        RuntimeContextError::InvalidConfiguration(_) => RuntimeFailureKind::Internal,
+        RuntimeContextError::DependencyUnavailable(_)
+        | RuntimeContextError::Transport(_)
+        | RuntimeContextError::Timeout(_) => RuntimeFailureKind::DependencyUnavailable,
+        _ => RuntimeFailureKind::InvalidInput,
+    }
+}
+
 fn bind_call_result(
     execution: &LeaseMonitoredAgentExecution,
     request: &DirectToolkitRequest,
@@ -1128,6 +1439,7 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::DeadlineExceeded => "runtime.deadline_exceeded",
         RuntimeFailureKind::AuthorizationFailed => "runtime.authorization_failed",
         RuntimeFailureKind::Cancelled => "runtime.cancelled",
+        RuntimeFailureKind::ResultRefused => "runtime.result_refused",
         RuntimeFailureKind::OutputContinuationExhausted => "runtime.output_continuation_exhausted",
         RuntimeFailureKind::ModelTimeout => "runtime.model_timeout",
         RuntimeFailureKind::ModelRateLimited => "runtime.model_rate_limited",

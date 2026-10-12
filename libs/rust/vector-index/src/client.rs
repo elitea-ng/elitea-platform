@@ -468,6 +468,44 @@ impl VectorClient {
     }
 }
 
+impl VectorClient {
+    /// Lists the documents of one toolkit-index namespace as the store holds
+    /// them: each (`document_key`, `document_version`) with its chunk count,
+    /// in `document_key` order. `space` narrows the read to one collection;
+    /// without it every collection is read. An incremental indexer compares
+    /// this with the source's listing (ADR-0030 decision 3).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidToken`] or the facade's refusal.
+    pub async fn list_documents(
+        &self,
+        token: &dyn ClaimToken,
+        namespace: pb::Namespace,
+        space: Option<pb::EmbeddingSpace>,
+    ) -> Result<Vec<pb::IndexedDocument>> {
+        let request = authorize(
+            token,
+            pb::ListDocumentsRequest {
+                project_id: 0,
+                namespace: Some(namespace),
+                space,
+            },
+        )?;
+        let mut pages = self
+            .inner
+            .clone()
+            .list_documents(request)
+            .await?
+            .into_inner();
+        let mut documents = Vec::new();
+        while let Some(page) = pages.message().await? {
+            documents.extend(page.documents);
+        }
+        Ok(documents)
+    }
+}
+
 /// Wraps a message with the claim's `authorization: Bearer …` metadata.
 /// The header is marked sensitive so transports and logs do not print it.
 fn authorize<T>(token: &dyn ClaimToken, message: T) -> Result<Request<T>> {

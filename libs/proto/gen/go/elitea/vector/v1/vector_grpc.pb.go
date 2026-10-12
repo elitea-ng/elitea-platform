@@ -52,13 +52,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	VectorService_Upsert_FullMethodName       = "/elitea.vector.v1.VectorService/Upsert"
-	VectorService_Delete_FullMethodName       = "/elitea.vector.v1.VectorService/Delete"
-	VectorService_DropProject_FullMethodName  = "/elitea.vector.v1.VectorService/DropProject"
-	VectorService_Search_FullMethodName       = "/elitea.vector.v1.VectorService/Search"
-	VectorService_HybridSearch_FullMethodName = "/elitea.vector.v1.VectorService/HybridSearch"
-	VectorService_Count_FullMethodName        = "/elitea.vector.v1.VectorService/Count"
-	VectorService_ListIndexes_FullMethodName  = "/elitea.vector.v1.VectorService/ListIndexes"
+	VectorService_Upsert_FullMethodName        = "/elitea.vector.v1.VectorService/Upsert"
+	VectorService_Delete_FullMethodName        = "/elitea.vector.v1.VectorService/Delete"
+	VectorService_DropProject_FullMethodName   = "/elitea.vector.v1.VectorService/DropProject"
+	VectorService_Search_FullMethodName        = "/elitea.vector.v1.VectorService/Search"
+	VectorService_HybridSearch_FullMethodName  = "/elitea.vector.v1.VectorService/HybridSearch"
+	VectorService_Count_FullMethodName         = "/elitea.vector.v1.VectorService/Count"
+	VectorService_ListIndexes_FullMethodName   = "/elitea.vector.v1.VectorService/ListIndexes"
+	VectorService_ListDocuments_FullMethodName = "/elitea.vector.v1.VectorService/ListDocuments"
 )
 
 // VectorServiceClient is the client API for VectorService service.
@@ -88,6 +89,12 @@ type VectorServiceClient interface {
 	Count(ctx context.Context, in *CountRequest, opts ...grpc.CallOption) (*CountResponse, error)
 	// ListIndexes lists the namespaces of one project, per embedding space.
 	ListIndexes(ctx context.Context, in *ListIndexesRequest, opts ...grpc.CallOption) (*ListIndexesResponse, error)
+	// ListDocuments lists the documents of one namespace as the store holds
+	// them: each (document_key, document_version) with its chunk count, in
+	// pages. An incremental indexer (ADR-0030 decision 3) reads it to skip
+	// unchanged documents and delete vanished ones; the store, not a mirror,
+	// is what was written.
+	ListDocuments(ctx context.Context, in *ListDocumentsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListDocumentsResponse], error)
 }
 
 type vectorServiceClient struct {
@@ -171,6 +178,25 @@ func (c *vectorServiceClient) ListIndexes(ctx context.Context, in *ListIndexesRe
 	return out, nil
 }
 
+func (c *vectorServiceClient) ListDocuments(ctx context.Context, in *ListDocumentsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListDocumentsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &VectorService_ServiceDesc.Streams[1], VectorService_ListDocuments_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ListDocumentsRequest, ListDocumentsResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VectorService_ListDocumentsClient = grpc.ServerStreamingClient[ListDocumentsResponse]
+
 // VectorServiceServer is the server API for VectorService service.
 // All implementations must embed UnimplementedVectorServiceServer
 // for forward compatibility.
@@ -198,6 +224,12 @@ type VectorServiceServer interface {
 	Count(context.Context, *CountRequest) (*CountResponse, error)
 	// ListIndexes lists the namespaces of one project, per embedding space.
 	ListIndexes(context.Context, *ListIndexesRequest) (*ListIndexesResponse, error)
+	// ListDocuments lists the documents of one namespace as the store holds
+	// them: each (document_key, document_version) with its chunk count, in
+	// pages. An incremental indexer (ADR-0030 decision 3) reads it to skip
+	// unchanged documents and delete vanished ones; the store, not a mirror,
+	// is what was written.
+	ListDocuments(*ListDocumentsRequest, grpc.ServerStreamingServer[ListDocumentsResponse]) error
 	mustEmbedUnimplementedVectorServiceServer()
 }
 
@@ -228,6 +260,9 @@ func (UnimplementedVectorServiceServer) Count(context.Context, *CountRequest) (*
 }
 func (UnimplementedVectorServiceServer) ListIndexes(context.Context, *ListIndexesRequest) (*ListIndexesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListIndexes not implemented")
+}
+func (UnimplementedVectorServiceServer) ListDocuments(*ListDocumentsRequest, grpc.ServerStreamingServer[ListDocumentsResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ListDocuments not implemented")
 }
 func (UnimplementedVectorServiceServer) mustEmbedUnimplementedVectorServiceServer() {}
 func (UnimplementedVectorServiceServer) testEmbeddedByValue()                       {}
@@ -365,6 +400,17 @@ func _VectorService_ListIndexes_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VectorService_ListDocuments_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ListDocumentsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(VectorServiceServer).ListDocuments(m, &grpc.GenericServerStream[ListDocumentsRequest, ListDocumentsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VectorService_ListDocumentsServer = grpc.ServerStreamingServer[ListDocumentsResponse]
+
 // VectorService_ServiceDesc is the grpc.ServiceDesc for VectorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -402,6 +448,11 @@ var VectorService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "Upsert",
 			Handler:       _VectorService_Upsert_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "ListDocuments",
+			Handler:       _VectorService_ListDocuments_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "elitea/vector/v1/vector.proto",

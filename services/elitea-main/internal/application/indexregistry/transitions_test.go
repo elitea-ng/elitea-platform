@@ -843,6 +843,45 @@ func TestMetadataReportsIndexTotalsAndHistoryKeepsRunCounts(t *testing.T) {
 	}
 }
 
+// ADR-0030 I1: the index's totals are what the typed result reports for the
+// WHOLE index, not a count of the bounded document list, and an untyped
+// (python) result leaves them alone.
+func TestApplyResultTakesTheIndexTotalsFromTheResult(t *testing.T) {
+	first, changed, _, err := applyResult(started(t, nil, 1), resultFor(1, okSummary(func(s *outputapp.IndexIngestSummary) {
+		s.TotalDocuments, s.TotalChunks = 120, 4800
+	})))
+	if err != nil || !changed || first.TotalDocuments != 120 || first.TotalChunks != 4800 {
+		t.Fatalf("first run totals = %d/%d changed=%v err=%v", first.TotalDocuments, first.TotalChunks, changed, err)
+	}
+	if first.Indexed != 3 || first.Chunks != 9 {
+		t.Fatalf("the run's own counts were replaced by the totals: %+v", first)
+	}
+	// A new run keeps the totals until its result lands.
+	next := started(t, &first, 2)
+	if next.TotalDocuments != 120 || next.TotalChunks != 4800 {
+		t.Fatalf("starting a run changed the totals: %d/%d", next.TotalDocuments, next.TotalChunks)
+	}
+	// An incremental run that removed documents reports smaller totals.
+	second, _, _, err := applyResult(next, resultFor(2, okSummary(func(s *outputapp.IndexIngestSummary) {
+		s.IndexedDocuments, s.IndexedChunks, s.FailedChunks, s.SkippedJSON = 0, 0, 0, `{"unchanged":119}`
+		s.TotalDocuments, s.TotalChunks = 119, 4790
+	})))
+	if err != nil || second.TotalDocuments != 119 || second.TotalChunks != 4790 {
+		t.Fatalf("incremental run totals = %d/%d err=%v", second.TotalDocuments, second.TotalChunks, err)
+	}
+	if metadata := Metadata(second); metadata["indexed"] != int64(119) || metadata["indexed_chunks"] != int64(4790) {
+		t.Fatalf("the list shows %v/%v, want the totals", metadata["indexed"], metadata["indexed_chunks"])
+	}
+	// A failed typed result reports the index as it is (the worker's totals),
+	// a python-shaped summary reports nothing about totals.
+	third, _, _, err := applyResult(started(t, &second, 3), resultFor(3, outputapp.IndexIngestSummary{
+		Status: outputapp.IndexIngestStatusOK, Message: "ok", TerminalState: outputapp.IndexIngestTerminalCompleted, Indexed: 7,
+	}))
+	if err != nil || third.TotalDocuments != 119 || third.TotalChunks != 4790 || third.Indexed != 7 {
+		t.Fatalf("untyped result = %+v err=%v", third, err)
+	}
+}
+
 func TestARustResultWithoutATypedSummaryIsRecordedFailed(t *testing.T) {
 	row := started(t, nil, 1)
 	recorded, overridden := RecordedSummary(row, outputapp.IndexIngestSummary{})

@@ -557,6 +557,66 @@ async fn a_token_reads_only_its_own_project() {
     assert_eq!(mine.len(), 1, "{indexes:?}");
     assert_eq!(mine[0].namespace_id, NAMESPACE_A);
     assert_eq!(mine[0].point_count, 2);
+
+    // ListDocuments: A's documents of the shared namespace id only, with
+    // their versions and chunk counts; B's copies under the same keys are
+    // invisible.
+    let mut pages = h
+        .worker
+        .list_documents(with_token(
+            TOKEN_A,
+            pb::ListDocumentsRequest {
+                project_id: 0,
+                namespace: Some(Harness::namespace(NAMESPACE_A)),
+                // This test's collection: the namespace id is shared with
+                // other tests' collections on the same Qdrant.
+                space: Some(h.space()),
+            },
+        ))
+        .await
+        .expect("list documents")
+        .into_inner();
+    let mut documents = Vec::new();
+    while let Some(page) = pages.message().await.expect("page") {
+        documents.extend(page.documents);
+    }
+    let listed: Vec<(String, String, u64)> = documents
+        .iter()
+        .map(|d| {
+            (
+                d.document_key.clone(),
+                d.document_version.clone(),
+                d.chunk_count,
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            ("a-doc-1".to_owned(), "1".to_owned(), 1),
+            ("a-doc-2".to_owned(), "1".to_owned(), 1),
+        ]
+    );
+    // B's token over B's namespace sees B's two documents, and an unknown
+    // namespace lists nothing.
+    let mut pages = h
+        .worker
+        .list_documents(with_token(
+            TOKEN_B,
+            pb::ListDocumentsRequest {
+                project_id: 0,
+                namespace: Some(Harness::namespace(NAMESPACE_B)),
+                space: Some(h.space()),
+            },
+        ))
+        .await
+        .expect("list documents")
+        .into_inner();
+    let mut count = 0;
+    while let Some(page) = pages.message().await.expect("page") {
+        count += page.documents.len();
+    }
+    assert_eq!(count, 2);
 }
 
 #[tokio::test]

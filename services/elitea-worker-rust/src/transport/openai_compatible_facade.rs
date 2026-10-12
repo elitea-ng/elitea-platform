@@ -199,7 +199,7 @@ impl fmt::Display for ModelFacadeError {
 impl std::error::Error for ModelFacadeError {}
 
 #[async_trait]
-pub(super) trait ModelGatewayTransport: Send + Sync {
+pub(crate) trait ModelGatewayTransport: Send + Sync {
     async fn post(
         &self,
         request: Request<Body>,
@@ -225,7 +225,7 @@ impl ModelGatewayTransport for TonicModelGatewayTransport {
     }
 }
 
-pub(super) enum ModelGatewayTransportError {
+pub(crate) enum ModelGatewayTransportError {
     Unavailable,
     Tonic(tonic::transport::Error),
 }

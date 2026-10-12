@@ -2365,6 +2365,178 @@ func (x *ListIndexesResponse) GetIndexes() []*IndexInfo {
 	return nil
 }
 
+type ListDocumentsRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId int64                  `protobuf:"varint,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	// namespace names the points to list. Its generation, when set, narrows
+	// the listing to one build; empty lists every generation of the
+	// namespace.
+	Namespace *Namespace `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	// space is optional. Without it every collection is read.
+	Space         *EmbeddingSpace `protobuf:"bytes,3,opt,name=space,proto3" json:"space,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListDocumentsRequest) Reset() {
+	*x = ListDocumentsRequest{}
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListDocumentsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListDocumentsRequest) ProtoMessage() {}
+
+func (x *ListDocumentsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListDocumentsRequest.ProtoReflect.Descriptor instead.
+func (*ListDocumentsRequest) Descriptor() ([]byte, []int) {
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ListDocumentsRequest) GetProjectId() int64 {
+	if x != nil {
+		return x.ProjectId
+	}
+	return 0
+}
+
+func (x *ListDocumentsRequest) GetNamespace() *Namespace {
+	if x != nil {
+		return x.Namespace
+	}
+	return nil
+}
+
+func (x *ListDocumentsRequest) GetSpace() *EmbeddingSpace {
+	if x != nil {
+		return x.Space
+	}
+	return nil
+}
+
+// IndexedDocument is one (document_key, document_version) pair the store
+// holds, with the number of its chunks (points).
+type IndexedDocument struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	DocumentKey     string                 `protobuf:"bytes,1,opt,name=document_key,json=documentKey,proto3" json:"document_key,omitempty"`
+	DocumentVersion string                 `protobuf:"bytes,2,opt,name=document_version,json=documentVersion,proto3" json:"document_version,omitempty"`
+	ChunkCount      uint64                 `protobuf:"varint,3,opt,name=chunk_count,json=chunkCount,proto3" json:"chunk_count,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *IndexedDocument) Reset() {
+	*x = IndexedDocument{}
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IndexedDocument) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IndexedDocument) ProtoMessage() {}
+
+func (x *IndexedDocument) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IndexedDocument.ProtoReflect.Descriptor instead.
+func (*IndexedDocument) Descriptor() ([]byte, []int) {
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *IndexedDocument) GetDocumentKey() string {
+	if x != nil {
+		return x.DocumentKey
+	}
+	return ""
+}
+
+func (x *IndexedDocument) GetDocumentVersion() string {
+	if x != nil {
+		return x.DocumentVersion
+	}
+	return ""
+}
+
+func (x *IndexedDocument) GetChunkCount() uint64 {
+	if x != nil {
+		return x.ChunkCount
+	}
+	return 0
+}
+
+type ListDocumentsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// documents is one page, at most 1024 entries, ordered by document_key
+	// within the whole stream.
+	Documents     []*IndexedDocument `protobuf:"bytes,1,rep,name=documents,proto3" json:"documents,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListDocumentsResponse) Reset() {
+	*x = ListDocumentsResponse{}
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListDocumentsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListDocumentsResponse) ProtoMessage() {}
+
+func (x *ListDocumentsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_vector_v1_vector_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListDocumentsResponse.ProtoReflect.Descriptor instead.
+func (*ListDocumentsResponse) Descriptor() ([]byte, []int) {
+	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ListDocumentsResponse) GetDocuments() []*IndexedDocument {
+	if x != nil {
+		return x.Documents
+	}
+	return nil
+}
+
 var File_elitea_vector_v1_vector_proto protoreflect.FileDescriptor
 
 const file_elitea_vector_v1_vector_proto_rawDesc = "" +
@@ -2544,12 +2716,24 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\vpoint_count\x18\x05 \x01(\x04R\n" +
 	"pointCount\"L\n" +
 	"\x13ListIndexesResponse\x125\n" +
-	"\aindexes\x18\x01 \x03(\v2\x1b.elitea.vector.v1.IndexInfoR\aindexes*e\n" +
+	"\aindexes\x18\x01 \x03(\v2\x1b.elitea.vector.v1.IndexInfoR\aindexes\"\xa8\x01\n" +
+	"\x14ListDocumentsRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\x03R\tprojectId\x129\n" +
+	"\tnamespace\x18\x02 \x01(\v2\x1b.elitea.vector.v1.NamespaceR\tnamespace\x126\n" +
+	"\x05space\x18\x03 \x01(\v2 .elitea.vector.v1.EmbeddingSpaceR\x05space\"\x80\x01\n" +
+	"\x0fIndexedDocument\x12!\n" +
+	"\fdocument_key\x18\x01 \x01(\tR\vdocumentKey\x12)\n" +
+	"\x10document_version\x18\x02 \x01(\tR\x0fdocumentVersion\x12\x1f\n" +
+	"\vchunk_count\x18\x03 \x01(\x04R\n" +
+	"chunkCount\"X\n" +
+	"\x15ListDocumentsResponse\x12?\n" +
+	"\tdocuments\x18\x01 \x03(\v2!.elitea.vector.v1.IndexedDocumentR\tdocuments*e\n" +
 	"\x06Source\x12\x16\n" +
 	"\x12SOURCE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SOURCE_TOOLKIT_INDEX\x10\x01\x12\x13\n" +
 	"\x0fSOURCE_DEEPWIKI\x10\x02\x12\x14\n" +
-	"\x10SOURCE_INVENTORY\x10\x032\xd9\x04\n" +
+	"\x10SOURCE_INVENTORY\x10\x032\xbd\x05\n" +
 	"\rVectorService\x12M\n" +
 	"\x06Upsert\x12\x1f.elitea.vector.v1.UpsertRequest\x1a .elitea.vector.v1.UpsertResponse(\x01\x12K\n" +
 	"\x06Delete\x12\x1f.elitea.vector.v1.DeleteRequest\x1a .elitea.vector.v1.DeleteResponse\x12Z\n" +
@@ -2557,7 +2741,8 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\x06Search\x12\x1f.elitea.vector.v1.SearchRequest\x1a .elitea.vector.v1.SearchResponse\x12]\n" +
 	"\fHybridSearch\x12%.elitea.vector.v1.HybridSearchRequest\x1a&.elitea.vector.v1.HybridSearchResponse\x12H\n" +
 	"\x05Count\x12\x1e.elitea.vector.v1.CountRequest\x1a\x1f.elitea.vector.v1.CountResponse\x12Z\n" +
-	"\vListIndexes\x12$.elitea.vector.v1.ListIndexesRequest\x1a%.elitea.vector.v1.ListIndexesResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
+	"\vListIndexes\x12$.elitea.vector.v1.ListIndexesRequest\x1a%.elitea.vector.v1.ListIndexesResponse\x12b\n" +
+	"\rListDocuments\x12&.elitea.vector.v1.ListDocumentsRequest\x1a'.elitea.vector.v1.ListDocumentsResponse0\x01BQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
 
 var (
 	file_elitea_vector_v1_vector_proto_rawDescOnce sync.Once
@@ -2572,42 +2757,45 @@ func file_elitea_vector_v1_vector_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_vector_v1_vector_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_vector_v1_vector_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_elitea_vector_v1_vector_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_elitea_vector_v1_vector_proto_goTypes = []any{
-	(Source)(0),                  // 0: elitea.vector.v1.Source
-	(*EmbeddingSpace)(nil),       // 1: elitea.vector.v1.EmbeddingSpace
-	(*Namespace)(nil),            // 2: elitea.vector.v1.Namespace
-	(*Point)(nil),                // 3: elitea.vector.v1.Point
-	(*UpsertHeader)(nil),         // 4: elitea.vector.v1.UpsertHeader
-	(*UpsertBatch)(nil),          // 5: elitea.vector.v1.UpsertBatch
-	(*UpsertRequest)(nil),        // 6: elitea.vector.v1.UpsertRequest
-	(*UpsertResponse)(nil),       // 7: elitea.vector.v1.UpsertResponse
-	(*DocumentKeys)(nil),         // 8: elitea.vector.v1.DocumentKeys
-	(*Generations)(nil),          // 9: elitea.vector.v1.Generations
-	(*GenerationsExcept)(nil),    // 10: elitea.vector.v1.GenerationsExcept
-	(*WholeNamespace)(nil),       // 11: elitea.vector.v1.WholeNamespace
-	(*DeleteRequest)(nil),        // 12: elitea.vector.v1.DeleteRequest
-	(*DeleteResponse)(nil),       // 13: elitea.vector.v1.DeleteResponse
-	(*DropProjectRequest)(nil),   // 14: elitea.vector.v1.DropProjectRequest
-	(*DropProjectResponse)(nil),  // 15: elitea.vector.v1.DropProjectResponse
-	(*StringList)(nil),           // 16: elitea.vector.v1.StringList
-	(*Condition)(nil),            // 17: elitea.vector.v1.Condition
-	(*Range)(nil),                // 18: elitea.vector.v1.Range
-	(*IsEmpty)(nil),              // 19: elitea.vector.v1.IsEmpty
-	(*IsNull)(nil),               // 20: elitea.vector.v1.IsNull
-	(*Filter)(nil),               // 21: elitea.vector.v1.Filter
-	(*ActiveGeneration)(nil),     // 22: elitea.vector.v1.ActiveGeneration
-	(*Scope)(nil),                // 23: elitea.vector.v1.Scope
-	(*ScoredPoint)(nil),          // 24: elitea.vector.v1.ScoredPoint
-	(*SearchRequest)(nil),        // 25: elitea.vector.v1.SearchRequest
-	(*SearchResponse)(nil),       // 26: elitea.vector.v1.SearchResponse
-	(*HybridSearchRequest)(nil),  // 27: elitea.vector.v1.HybridSearchRequest
-	(*HybridSearchResponse)(nil), // 28: elitea.vector.v1.HybridSearchResponse
-	(*CountRequest)(nil),         // 29: elitea.vector.v1.CountRequest
-	(*CountResponse)(nil),        // 30: elitea.vector.v1.CountResponse
-	(*ListIndexesRequest)(nil),   // 31: elitea.vector.v1.ListIndexesRequest
-	(*IndexInfo)(nil),            // 32: elitea.vector.v1.IndexInfo
-	(*ListIndexesResponse)(nil),  // 33: elitea.vector.v1.ListIndexesResponse
+	(Source)(0),                   // 0: elitea.vector.v1.Source
+	(*EmbeddingSpace)(nil),        // 1: elitea.vector.v1.EmbeddingSpace
+	(*Namespace)(nil),             // 2: elitea.vector.v1.Namespace
+	(*Point)(nil),                 // 3: elitea.vector.v1.Point
+	(*UpsertHeader)(nil),          // 4: elitea.vector.v1.UpsertHeader
+	(*UpsertBatch)(nil),           // 5: elitea.vector.v1.UpsertBatch
+	(*UpsertRequest)(nil),         // 6: elitea.vector.v1.UpsertRequest
+	(*UpsertResponse)(nil),        // 7: elitea.vector.v1.UpsertResponse
+	(*DocumentKeys)(nil),          // 8: elitea.vector.v1.DocumentKeys
+	(*Generations)(nil),           // 9: elitea.vector.v1.Generations
+	(*GenerationsExcept)(nil),     // 10: elitea.vector.v1.GenerationsExcept
+	(*WholeNamespace)(nil),        // 11: elitea.vector.v1.WholeNamespace
+	(*DeleteRequest)(nil),         // 12: elitea.vector.v1.DeleteRequest
+	(*DeleteResponse)(nil),        // 13: elitea.vector.v1.DeleteResponse
+	(*DropProjectRequest)(nil),    // 14: elitea.vector.v1.DropProjectRequest
+	(*DropProjectResponse)(nil),   // 15: elitea.vector.v1.DropProjectResponse
+	(*StringList)(nil),            // 16: elitea.vector.v1.StringList
+	(*Condition)(nil),             // 17: elitea.vector.v1.Condition
+	(*Range)(nil),                 // 18: elitea.vector.v1.Range
+	(*IsEmpty)(nil),               // 19: elitea.vector.v1.IsEmpty
+	(*IsNull)(nil),                // 20: elitea.vector.v1.IsNull
+	(*Filter)(nil),                // 21: elitea.vector.v1.Filter
+	(*ActiveGeneration)(nil),      // 22: elitea.vector.v1.ActiveGeneration
+	(*Scope)(nil),                 // 23: elitea.vector.v1.Scope
+	(*ScoredPoint)(nil),           // 24: elitea.vector.v1.ScoredPoint
+	(*SearchRequest)(nil),         // 25: elitea.vector.v1.SearchRequest
+	(*SearchResponse)(nil),        // 26: elitea.vector.v1.SearchResponse
+	(*HybridSearchRequest)(nil),   // 27: elitea.vector.v1.HybridSearchRequest
+	(*HybridSearchResponse)(nil),  // 28: elitea.vector.v1.HybridSearchResponse
+	(*CountRequest)(nil),          // 29: elitea.vector.v1.CountRequest
+	(*CountResponse)(nil),         // 30: elitea.vector.v1.CountResponse
+	(*ListIndexesRequest)(nil),    // 31: elitea.vector.v1.ListIndexesRequest
+	(*IndexInfo)(nil),             // 32: elitea.vector.v1.IndexInfo
+	(*ListIndexesResponse)(nil),   // 33: elitea.vector.v1.ListIndexesResponse
+	(*ListDocumentsRequest)(nil),  // 34: elitea.vector.v1.ListDocumentsRequest
+	(*IndexedDocument)(nil),       // 35: elitea.vector.v1.IndexedDocument
+	(*ListDocumentsResponse)(nil), // 36: elitea.vector.v1.ListDocumentsResponse
 }
 var file_elitea_vector_v1_vector_proto_depIdxs = []int32{
 	0,  // 0: elitea.vector.v1.Namespace.source:type_name -> elitea.vector.v1.Source
@@ -2648,25 +2836,30 @@ var file_elitea_vector_v1_vector_proto_depIdxs = []int32{
 	1,  // 35: elitea.vector.v1.IndexInfo.space:type_name -> elitea.vector.v1.EmbeddingSpace
 	0,  // 36: elitea.vector.v1.IndexInfo.source:type_name -> elitea.vector.v1.Source
 	32, // 37: elitea.vector.v1.ListIndexesResponse.indexes:type_name -> elitea.vector.v1.IndexInfo
-	6,  // 38: elitea.vector.v1.VectorService.Upsert:input_type -> elitea.vector.v1.UpsertRequest
-	12, // 39: elitea.vector.v1.VectorService.Delete:input_type -> elitea.vector.v1.DeleteRequest
-	14, // 40: elitea.vector.v1.VectorService.DropProject:input_type -> elitea.vector.v1.DropProjectRequest
-	25, // 41: elitea.vector.v1.VectorService.Search:input_type -> elitea.vector.v1.SearchRequest
-	27, // 42: elitea.vector.v1.VectorService.HybridSearch:input_type -> elitea.vector.v1.HybridSearchRequest
-	29, // 43: elitea.vector.v1.VectorService.Count:input_type -> elitea.vector.v1.CountRequest
-	31, // 44: elitea.vector.v1.VectorService.ListIndexes:input_type -> elitea.vector.v1.ListIndexesRequest
-	7,  // 45: elitea.vector.v1.VectorService.Upsert:output_type -> elitea.vector.v1.UpsertResponse
-	13, // 46: elitea.vector.v1.VectorService.Delete:output_type -> elitea.vector.v1.DeleteResponse
-	15, // 47: elitea.vector.v1.VectorService.DropProject:output_type -> elitea.vector.v1.DropProjectResponse
-	26, // 48: elitea.vector.v1.VectorService.Search:output_type -> elitea.vector.v1.SearchResponse
-	28, // 49: elitea.vector.v1.VectorService.HybridSearch:output_type -> elitea.vector.v1.HybridSearchResponse
-	30, // 50: elitea.vector.v1.VectorService.Count:output_type -> elitea.vector.v1.CountResponse
-	33, // 51: elitea.vector.v1.VectorService.ListIndexes:output_type -> elitea.vector.v1.ListIndexesResponse
-	45, // [45:52] is the sub-list for method output_type
-	38, // [38:45] is the sub-list for method input_type
-	38, // [38:38] is the sub-list for extension type_name
-	38, // [38:38] is the sub-list for extension extendee
-	0,  // [0:38] is the sub-list for field type_name
+	2,  // 38: elitea.vector.v1.ListDocumentsRequest.namespace:type_name -> elitea.vector.v1.Namespace
+	1,  // 39: elitea.vector.v1.ListDocumentsRequest.space:type_name -> elitea.vector.v1.EmbeddingSpace
+	35, // 40: elitea.vector.v1.ListDocumentsResponse.documents:type_name -> elitea.vector.v1.IndexedDocument
+	6,  // 41: elitea.vector.v1.VectorService.Upsert:input_type -> elitea.vector.v1.UpsertRequest
+	12, // 42: elitea.vector.v1.VectorService.Delete:input_type -> elitea.vector.v1.DeleteRequest
+	14, // 43: elitea.vector.v1.VectorService.DropProject:input_type -> elitea.vector.v1.DropProjectRequest
+	25, // 44: elitea.vector.v1.VectorService.Search:input_type -> elitea.vector.v1.SearchRequest
+	27, // 45: elitea.vector.v1.VectorService.HybridSearch:input_type -> elitea.vector.v1.HybridSearchRequest
+	29, // 46: elitea.vector.v1.VectorService.Count:input_type -> elitea.vector.v1.CountRequest
+	31, // 47: elitea.vector.v1.VectorService.ListIndexes:input_type -> elitea.vector.v1.ListIndexesRequest
+	34, // 48: elitea.vector.v1.VectorService.ListDocuments:input_type -> elitea.vector.v1.ListDocumentsRequest
+	7,  // 49: elitea.vector.v1.VectorService.Upsert:output_type -> elitea.vector.v1.UpsertResponse
+	13, // 50: elitea.vector.v1.VectorService.Delete:output_type -> elitea.vector.v1.DeleteResponse
+	15, // 51: elitea.vector.v1.VectorService.DropProject:output_type -> elitea.vector.v1.DropProjectResponse
+	26, // 52: elitea.vector.v1.VectorService.Search:output_type -> elitea.vector.v1.SearchResponse
+	28, // 53: elitea.vector.v1.VectorService.HybridSearch:output_type -> elitea.vector.v1.HybridSearchResponse
+	30, // 54: elitea.vector.v1.VectorService.Count:output_type -> elitea.vector.v1.CountResponse
+	33, // 55: elitea.vector.v1.VectorService.ListIndexes:output_type -> elitea.vector.v1.ListIndexesResponse
+	36, // 56: elitea.vector.v1.VectorService.ListDocuments:output_type -> elitea.vector.v1.ListDocumentsResponse
+	49, // [49:57] is the sub-list for method output_type
+	41, // [41:49] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_elitea_vector_v1_vector_proto_init() }
@@ -2704,7 +2897,7 @@ func file_elitea_vector_v1_vector_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_vector_v1_vector_proto_rawDesc), len(file_elitea_vector_v1_vector_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   33,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

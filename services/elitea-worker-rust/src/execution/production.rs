@@ -225,6 +225,7 @@ impl ProductionAgentRuntime {
             model_facade,
             agentstate,
             sandbox,
+            index_runtime,
         } = bundle;
         let limits = deployment.limits;
         let output_config = OutputGrpcConfig {
@@ -283,7 +284,7 @@ impl ProductionAgentRuntime {
             .map_err(|_| ProductionRuntimeBuildError)?;
         let assembler = Arc::new(
             NativeRuntimeAssembler::postgres(
-                platform,
+                Arc::clone(&platform),
                 model_facade,
                 tool_policy,
                 agentstate,
@@ -320,6 +321,8 @@ impl ProductionAgentRuntime {
             preparation,
             terminal_recovery,
             DirectToolkitRuntime::default(),
+            platform,
+            index_runtime,
         );
         let processor = Arc::new(ExecutionDeliveryProcessor::new(
             command_authenticator,

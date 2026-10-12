@@ -60,6 +60,12 @@ service VectorService {
   rpc Count(CountRequest) returns (CountResponse);
   // ListIndexes lists the namespaces of one project, per embedding space.
   rpc ListIndexes(ListIndexesRequest) returns (ListIndexesResponse);
+  // ListDocuments lists the documents of one namespace as the store holds
+  // them: each (document_key, document_version) with its chunk count, in
+  // pages. An incremental indexer (ADR-0030 decision 3) reads it to skip
+  // unchanged documents and delete vanished ones; the store, not a mirror,
+  // is what was written.
+  rpc ListDocuments(ListDocumentsRequest) returns (stream ListDocumentsResponse);
 }
 
 // Source names the consumer that owns a namespace (payload key `source`).
@@ -358,4 +364,28 @@ message IndexInfo {
 
 message ListIndexesResponse {
   repeated IndexInfo indexes = 1;
+}
+
+message ListDocumentsRequest {
+  int64 project_id = 1;
+  // namespace names the points to list. Its generation, when set, narrows
+  // the listing to one build; empty lists every generation of the
+  // namespace.
+  Namespace namespace = 2;
+  // space is optional. Without it every collection is read.
+  EmbeddingSpace space = 3;
+}
+
+// IndexedDocument is one (document_key, document_version) pair the store
+// holds, with the number of its chunks (points).
+message IndexedDocument {
+  string document_key = 1;
+  string document_version = 2;
+  uint64 chunk_count = 3;
+}
+
+message ListDocumentsResponse {
+  // documents is one page, at most 1024 entries, ordered by document_key
+  // within the whole stream.
+  repeated IndexedDocument documents = 1;
 }

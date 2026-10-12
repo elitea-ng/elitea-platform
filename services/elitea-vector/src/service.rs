@@ -10,7 +10,7 @@
 //! 4. send Qdrant a filter whose first `must` condition is that project
 //!    ([`Scope`]).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use qdrant_client::Payload;
@@ -18,8 +18,9 @@ use qdrant_client::qdrant::point_id::PointIdOptions;
 use qdrant_client::qdrant::value::Kind;
 use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, DeletePointsBuilder, Document, FacetCountsBuilder, Filter,
-    NamedVectors, PointId, PointStruct, PrefetchQueryBuilder, Query, QueryPointsBuilder, Rrf,
-    UpsertPointsBuilder, Value, Vector, VectorsSelector, vector_output, with_vectors_selector,
+    NamedVectors, PayloadIncludeSelector, PointId, PointStruct, PrefetchQueryBuilder, Query,
+    QueryPointsBuilder, Rrf, ScrollPointsBuilder, UpsertPointsBuilder, Value, Vector,
+    VectorsSelector, vector_output, with_vectors_selector,
 };
 use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
@@ -553,6 +554,155 @@ impl pb::vector_service_server::VectorService for VectorService {
             ))
         });
         Ok(Response::new(pb::ListIndexesResponse { indexes }))
+    }
+
+    type ListDocumentsStream = ListDocumentsStream;
+
+    async fn list_documents(
+        &self,
+        request: Request<pb::ListDocumentsRequest>,
+    ) -> Result<Response<Self::ListDocumentsStream>, Status> {
+        let caller = self.auth.authenticate(&request).await?;
+        let request = request.into_inner();
+        let project_id = caller.project(request.project_id)?;
+        let namespace = request
+            .namespace
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
+        caller.require_source(namespace.source)?;
+        let source = layout::source_keyword(namespace.source)?;
+        layout::namespace_uuid(&namespace.namespace_id)?;
+        let generation = layout::generation(&namespace.generation)?;
+        let space = request
+            .space
+            .as_ref()
+            .map(|space| Space::from_proto(Some(space)))
+            .transpose()?;
+        let scope = Scope::project(project_id)
+            .source(source)
+            .namespaces(vec![namespace.namespace_id.clone()])
+            .generation(generation);
+        let filter = scope.filter(None);
+        // Every point of the namespace is read (payload only, two keys) and
+        // folded per (document_key, document_version) before the first page
+        // goes out: a document's chunk count is not known until its last
+        // point was seen, and Qdrant scrolls by point id, not by key.
+        let counted = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
+            let filter = filter.clone();
+            async move { self.scroll_documents(&collection, filter).await }
+        })
+        .await?;
+        let mut documents: BTreeMap<(String, String), u64> = BTreeMap::new();
+        for partial in counted {
+            for (key, count) in partial {
+                *documents.entry(key).or_default() += count;
+            }
+        }
+        let pages: Vec<Result<pb::ListDocumentsResponse, Status>> = documents
+            .into_iter()
+            .map(
+                |((document_key, document_version), chunk_count)| pb::IndexedDocument {
+                    document_key,
+                    document_version,
+                    chunk_count,
+                },
+            )
+            .collect::<Vec<_>>()
+            .chunks(MAX_DOCUMENTS_PAGE)
+            .map(|page| {
+                Ok(pb::ListDocumentsResponse {
+                    documents: page.to_vec(),
+                })
+            })
+            .collect();
+        tracing::debug!(
+            project_id,
+            source,
+            caller = caller_label(&caller),
+            pages = pages.len(),
+            "documents listed"
+        );
+        Ok(Response::new(Box::pin(tokio_stream::iter(pages))))
+    }
+}
+
+/// The pages of one `ListDocuments` answer.
+pub type ListDocumentsStream = std::pin::Pin<
+    Box<dyn tokio_stream::Stream<Item = Result<pb::ListDocumentsResponse, Status>> + Send>,
+>;
+
+/// The most documents in one `ListDocuments` page.
+pub const MAX_DOCUMENTS_PAGE: usize = 1024;
+/// Points read per Qdrant scroll call by `ListDocuments`.
+const SCROLL_PAGE: u32 = 2048;
+/// The most points one `ListDocuments` folds, across collections. A toolkit
+/// index far beyond this is listed in part and the caller is told.
+const MAX_SCROLLED_POINTS: u64 = 4_000_000;
+
+impl VectorService {
+    /// Folds every point `filter` selects in `collection` into
+    /// `(document_key, document_version) -> chunk count`.
+    async fn scroll_documents(
+        &self,
+        collection: &str,
+        filter: Filter,
+    ) -> Result<HashMap<(String, String), u64>, Status> {
+        let mut counts: HashMap<(String, String), u64> = HashMap::new();
+        let mut offset: Option<PointId> = None;
+        let mut scrolled: u64 = 0;
+        loop {
+            let mut scroll = ScrollPointsBuilder::new(collection)
+                .filter(filter.clone())
+                .limit(SCROLL_PAGE)
+                .with_payload(PayloadIncludeSelector {
+                    fields: vec![
+                        key::DOCUMENT_KEY.to_owned(),
+                        key::DOCUMENT_VERSION.to_owned(),
+                    ],
+                })
+                .with_vectors(false);
+            if let Some(offset) = offset.take() {
+                scroll = scroll.offset(offset);
+            }
+            let response = self
+                .store
+                .client()
+                .scroll(scroll)
+                .await
+                .map_err(|error| unavailable("scroll", &error))?;
+            for point in &response.result {
+                let text = |name: &str| -> String {
+                    match point
+                        .payload
+                        .get(name)
+                        .and_then(|value| value.kind.as_ref())
+                    {
+                        Some(Kind::StringValue(text)) => text.clone(),
+                        _ => String::new(),
+                    }
+                };
+                let document_key = text(key::DOCUMENT_KEY);
+                if document_key.is_empty() {
+                    // Every point is written with a key; a damaged one is not
+                    // a document the caller can act on.
+                    continue;
+                }
+                *counts
+                    .entry((document_key, text(key::DOCUMENT_VERSION)))
+                    .or_default() += 1;
+            }
+            scrolled += response.result.len() as u64;
+            if scrolled > MAX_SCROLLED_POINTS {
+                return Err(Status::resource_exhausted(
+                    "the namespace holds more points than one listing reads",
+                ));
+            }
+            match response.next_page_offset {
+                Some(next) => offset = Some(next),
+                None => break,
+            }
+        }
+        Ok(counts)
     }
 }
 

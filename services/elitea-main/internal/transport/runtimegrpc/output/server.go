@@ -761,11 +761,15 @@ func indexIngestResultDomain(result *runtimev1.IndexIngestResultV1) (outputapp.I
 		}
 	}
 	resultSummary := outputapp.IndexIngestSummary{}
+	var documents []outputapp.IndexIngestDocument
+	var removedDocumentKeys []string
+	documentsTruncated := false
 	if result.GetResultSummary() != nil {
 		resultSummary, err = indexIngestSummaryDomain(result.GetResultSummary())
 		if err != nil {
 			return outputapp.IndexIngestResult{}, err
 		}
+		documents, removedDocumentKeys, documentsTruncated = indexIngestDocumentsDomain(result.GetResultSummary())
 	}
 
 	mapped := outputapp.IndexIngestResult{
@@ -779,13 +783,38 @@ func indexIngestResultDomain(result *runtimev1.IndexIngestResultV1) (outputapp.I
 			MCPTokens:            mcpTokens,
 			EmbeddingBinding:     embeddingBinding,
 		},
-		ResultArtifact: artifact,
-		ResultSummary:  resultSummary,
+		ResultArtifact:      artifact,
+		ResultSummary:       resultSummary,
+		Documents:           documents,
+		RemovedDocumentKeys: removedDocumentKeys,
+		DocumentsTruncated:  documentsTruncated,
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.IndexIngestResult{}, err
 	}
 	return mapped, nil
+}
+
+// indexIngestDocumentsDomain copies the per-document lists of a typed (Rust)
+// summary onto the result; IndexIngestResult.Validate bounds them. A nil
+// document entry is kept as a zero value, which validation refuses (empty key).
+func indexIngestDocumentsDomain(summary *runtimev1.IndexIngestSummaryV1) ([]outputapp.IndexIngestDocument, []string, bool) {
+	var documents []outputapp.IndexIngestDocument
+	if wire := summary.GetDocuments(); len(wire) != 0 {
+		documents = make([]outputapp.IndexIngestDocument, 0, len(wire))
+		for _, document := range wire {
+			documents = append(documents, outputapp.IndexIngestDocument{
+				Key:        document.GetDocumentKey(),
+				Version:    document.GetVersion(),
+				ChunkCount: document.GetChunkCount(),
+			})
+		}
+	}
+	var removed []string
+	if wire := summary.GetRemovedDocumentKeys(); len(wire) != 0 {
+		removed = append([]string(nil), wire...)
+	}
+	return documents, removed, summary.GetDocumentsTruncated()
 }
 
 func agentExecutionResultDomain(result *runtimev1.AgentExecutionResultV1) (outputapp.AgentExecutionResult, error) {
@@ -957,6 +986,8 @@ func indexIngestSummaryDomain(summary *runtimev1.IndexIngestSummaryV1) (outputap
 		SkippedJSON:        skippedJSON,
 		EmbeddingModel:     summary.GetEmbeddingModel(),
 		EmbeddingDimension: summary.GetEmbeddingDimension(),
+		TotalDocuments:     summary.GetTotalDocuments(),
+		TotalChunks:        summary.GetTotalChunks(),
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.IndexIngestSummary{}, err
@@ -1188,6 +1219,10 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "MODEL_UNAVAILABLE", SafeMessage: "The model service could not be reached or is temporarily unavailable. Try again; ask an administrator to check the connection if it persists.", Retryable: true}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE:
 		return runtimeFailurePolicy{Code: "MODEL_PROVIDER_FAILURE", SafeMessage: "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.", Retryable: true}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESULT_REFUSED:
+		// The platform refused the worker's typed result (index registry,
+		// ADR-0030 I1); the worker then settles the run failed with this code.
+		return runtimeFailurePolicy{Code: "RESULT_REFUSED", SafeMessage: "The index result was refused by the platform.", Retryable: false}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL:
 		return runtimeFailurePolicy{Code: "INTERNAL", SafeMessage: "The runtime operation failed."}, true
 	default:
@@ -1282,6 +1317,8 @@ func safeOutputError(err error) (runtimev1.RuntimeErrorCodeV1, string, bool) {
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The output does not match the admitted validation input.", false
 	case errors.Is(err, outputapp.ErrIndexIngestBindingMismatch):
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The output does not match the admitted index input.", false
+	case errors.Is(err, outputapp.ErrIndexResultRefused):
+		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESULT_REFUSED, "The index result was refused: it names another embedding space than the index is stamped with, or carries no typed summary.", false
 	case errors.Is(err, outputapp.ErrAgentExecutionBindingMismatch):
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION, "The output does not match the admitted agent input.", false
 	case errors.Is(err, outputapp.ErrAgentExecutionResultMismatch):

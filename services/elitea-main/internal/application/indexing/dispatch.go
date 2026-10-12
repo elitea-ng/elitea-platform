@@ -58,6 +58,10 @@ type IndexIngestDispatch struct {
 	// path). The worker must refuse to write vectors of another space.
 	ExpectedEmbeddingModel     string
 	ExpectedEmbeddingDimension uint32
+	// IndexID is the index_registry row the run writes (rust indexing runtime
+	// only; empty on the Python path, where the index has no registry row).
+	// Canonical lower-case UUID when set.
+	IndexID string
 }
 
 // MaxExpectedEmbeddingModelBytes bounds the expected model name: the limit the
@@ -125,6 +129,9 @@ func (d IndexIngestDispatch) Validate() error {
 	if (d.ExpectedEmbeddingModel == "") != (d.ExpectedEmbeddingDimension == 0) ||
 		(d.ExpectedEmbeddingModel != "" && !validDispatchTextWithLimit(d.ExpectedEmbeddingModel, MaxExpectedEmbeddingModelBytes)) ||
 		d.ExpectedEmbeddingDimension > math.MaxUint16 {
+		return ErrInvalidIndexIngestDispatch
+	}
+	if d.IndexID != "" && !validCanonicalUUID(d.IndexID) {
 		return ErrInvalidIndexIngestDispatch
 	}
 	return nil

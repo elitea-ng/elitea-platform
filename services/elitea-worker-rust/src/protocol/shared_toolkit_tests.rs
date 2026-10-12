@@ -5,7 +5,9 @@ use crate::protocol::command::{
 };
 use crate::protocol::elitea::runtime::v1::{
     ConfigurationValidationCommandV1, ConfigurationValidationIssueV1,
-    ConfigurationValidationResultV1, ExecutionOutputEventTypeV1, SignedWorkerCommandEnvelopeV1,
+    ConfigurationValidationResultV1, ExecutionOutputEventTypeV1, IndexIngestCommandV1,
+    IndexIngestDocumentV1, IndexIngestInputBindingV1, IndexIngestResultV1, IndexIngestStatusV1,
+    IndexIngestSummaryV1, IndexIngestTerminalStateV1, SignedWorkerCommandEnvelopeV1,
     ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsArtifactReferenceV1,
     ToolkitAvailableToolsCommandV1, ToolkitAvailableToolsResultV1, ToolkitCallToolCommandV1,
     ToolkitCallToolResultV1, ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, VectorClaimTokenV1,
@@ -124,9 +126,75 @@ fn fixture(kind: ToolkitCommandKind) -> (WorkerCommandV1, ClaimCommandResponseV1
             );
         }
         ToolkitCommandKind::ExecuteRead => unreachable!(),
+        ToolkitCommandKind::IndexIngest => {
+            index_ingest_fixture(&mut command, manifest, &settings);
+        }
     }
     rebind_manifest(&mut command, &mut response);
     (command, response)
+}
+
+/// The index bundle: the toolkit configuration, the tool parameters, a model
+/// name and the embedding binding (its digest pinned by the command).
+fn index_ingest_fixture(
+    command: &mut WorkerCommandV1,
+    manifest: &mut crate::protocol::elitea::runtime::v1::ExecutionInputBundleV1,
+    settings: &crate::protocol::elitea::runtime::v1::ExecutionInputEntryV1,
+) {
+    let entry = |id: &str, role: &str, content_id: &str, digest: &[u8]| {
+        let mut entry = settings.clone();
+        entry.entry_id = id.into();
+        entry.semantic_role = role.into();
+        let content = entry.content.as_mut().unwrap();
+        content.content_id = content_id.into();
+        content.digest = Some(sha256(digest));
+        entry
+    };
+    let configuration = entry(
+        "index-toolkit-configuration",
+        "index.toolkit_configuration",
+        "configuration-content",
+        b"configuration",
+    );
+    let parameters = entry(
+        "index-tool-parameters",
+        "index.tool_parameters",
+        "parameters-content",
+        b"parameters",
+    );
+    let model = entry(
+        "index-llm-model",
+        "index.llm_model",
+        "model-content",
+        b"model",
+    );
+    let binding = entry(
+        "index-embedding-binding",
+        "index.embedding_binding",
+        "binding-content",
+        b"binding",
+    );
+    let pinned = crate::protocol::elitea::runtime::v1::IndexIngestInputBindingV1 {
+        entry_id: binding.entry_id.clone(),
+        immutable_version: binding.immutable_version.clone(),
+        content_digest: binding.content.as_ref().unwrap().digest.clone(),
+    };
+    manifest.entries = vec![configuration, parameters, model, binding];
+    command.command_type = WorkerCommandTypeV1::IndexIngest as i32;
+    command.capability_id = "index.ingest.v1".into();
+    command.capability_version = "2".into();
+    command.capability_command = Some(worker_command_v1::CapabilityCommand::IndexIngest(
+        crate::protocol::elitea::runtime::v1::IndexIngestCommandV1 {
+            toolkit_configuration_entry_id: "index-toolkit-configuration".into(),
+            tool_parameters_entry_id: "index-tool-parameters".into(),
+            llm_model_entry_id: "index-llm-model".into(),
+            embedding_binding: Some(pinned),
+            initiator: "user".into(),
+            sio_event: "test_toolkit_tool".into(),
+            index_id: "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b".into(),
+            ..Default::default()
+        },
+    ));
 }
 
 fn rebind_manifest(command: &mut WorkerCommandV1, response: &mut ClaimCommandResponseV1) {
@@ -1298,4 +1366,409 @@ fn a_bad_vector_token_never_fails_the_claim() {
             .expect("accepted");
     let token = claim.vector_token().expect("carried");
     assert!(token.allows(VectorSource::ToolkitIndex));
+}
+
+// ── index.ingest.v1 (ADR-0030 I1) ────────────────────────────────────────────
+
+fn index_command_message(command: &WorkerCommandV1) -> &IndexIngestCommandV1 {
+    let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+        command.capability_command.as_ref()
+    else {
+        panic!("index command")
+    };
+    index
+}
+
+type Mutation = Box<dyn Fn(&mut IndexIngestResultV1)>;
+
+fn index_summary() -> IndexIngestSummaryV1 {
+    IndexIngestSummaryV1 {
+        status: IndexIngestStatusV1::Ok as i32,
+        message: "Index 'docs': 2 documents indexed (5 chunks).".to_owned(),
+        terminal_state: IndexIngestTerminalStateV1::Completed as i32,
+        indexed: 2,
+        updated: 0,
+        reindex: Some(false),
+        indexed_documents: 2,
+        indexed_chunks: 5,
+        embedding_model: "text-embedding-3-small".to_owned(),
+        embedding_dimension: 1536,
+        documents: vec![
+            IndexIngestDocumentV1 {
+                document_key: "README.md".to_owned(),
+                version: "abc".to_owned(),
+                chunk_count: 2,
+            },
+            IndexIngestDocumentV1 {
+                document_key: "src/app.py".to_owned(),
+                version: "def".to_owned(),
+                chunk_count: 3,
+            },
+        ],
+        total_documents: 2,
+        total_chunks: 5,
+        ..Default::default()
+    }
+}
+
+fn index_result(claim: &AcceptedAgentClaim, summary: IndexIngestSummaryV1) -> IndexIngestResultV1 {
+    let binding = |entry: &crate::protocol::elitea::runtime::v1::ExecutionInputEntryV1| {
+        IndexIngestInputBindingV1 {
+            entry_id: entry.entry_id.clone(),
+            immutable_version: entry.immutable_version.clone(),
+            content_digest: entry.content.as_ref().unwrap().digest.clone(),
+        }
+    };
+    let by_id = |id: &str| binding(claim.input_entry(id).expect("entry"));
+    IndexIngestResultV1 {
+        input_bundle_id: claim.input_bundle_ref.input_bundle_id.clone(),
+        input_bundle_digest: claim.input_bundle_ref.digest.clone(),
+        toolkit_configuration: Some(binding(&claim.request_entry)),
+        tool_parameters: Some(binding(claim.arguments_entry.as_ref().unwrap())),
+        llm_model: Some(by_id("index-llm-model")),
+        embedding_binding: Some(by_id("index-embedding-binding")),
+        result_summary: Some(summary),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn index_ingest_command_is_a_verified_kind_with_the_execution_keyed_output_identity() {
+    let (command, response) = fixture(ToolkitCommandKind::IndexIngest);
+    let VerifiedExecutionCommandKind::ToolkitExecuteRead(verified) =
+        parse_and_verify_execution_command(
+            &signed_bytes(&command),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .unwrap()
+    else {
+        panic!("index ingest rides the direct-execution wrapper")
+    };
+    assert_eq!(verified.kind(), ToolkitCommandKind::IndexIngest);
+    assert_eq!(verified.request_entry_id(), "index-toolkit-configuration");
+    let expected = format!("index-ingest:{}", command.execution_id);
+    assert_eq!(verified.logical_output_id(), expected);
+    assert_eq!(terminal_logical_output_id(&command), expected);
+    let execution = LeaseMonitoredAgentExecution {
+        claim: claim(&command, response),
+    };
+    assert_eq!(
+        execution.request_entry().entry_id,
+        "index-toolkit-configuration"
+    );
+    assert_eq!(
+        execution
+            .arguments_entry()
+            .map(|entry| entry.entry_id.as_str()),
+        Some("index-tool-parameters")
+    );
+    // Every bundle entry is fetchable by id, nothing else is.
+    for id in [
+        "index-toolkit-configuration",
+        "index-tool-parameters",
+        "index-llm-model",
+        "index-embedding-binding",
+    ] {
+        assert!(
+            execution.input_content_authority_for_entry(id).is_some(),
+            "{id}"
+        );
+    }
+    assert!(
+        execution
+            .input_content_authority_for_entry("toolkit-runtime-context")
+            .is_none()
+    );
+}
+
+#[test]
+fn index_ingest_command_rejects_malformed_identities_and_wire() {
+    let accepts = |command: &WorkerCommandV1| {
+        parse_and_verify_execution_command(
+            &signed_bytes(command),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .is_ok()
+    };
+    let (good, _) = fixture(ToolkitCommandKind::IndexIngest);
+    assert!(accepts(&good));
+    for mutation in 0..13 {
+        let mut command = good.clone();
+        let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+            command.capability_command.as_mut()
+        else {
+            unreachable!()
+        };
+        match mutation {
+            0 => command.capability_id = "toolkit.call_tool.v1".into(),
+            1 => command.command_type = WorkerCommandTypeV1::ConfigurationValidate as i32,
+            2 => command.capability_version = "1".into(),
+            3 => index.toolkit_configuration_entry_id.clear(),
+            4 => index.tool_parameters_entry_id = index.toolkit_configuration_entry_id.clone(),
+            5 => index.initiator = "cron".into(),
+            6 => index.sio_event = "other".into(),
+            7 => index.expected_embedding_model = "m".into(),
+            8 => {
+                index.expected_embedding_model = "m".into();
+                index.expected_embedding_dimension = 70_000;
+            }
+            9 => index.index_id = "not-a-uuid".into(),
+            10 => index.index_id = "0B0F8C1E-6C1A-4D8E-9B1A-2F6D1C3E4A5B".into(),
+            11 => index.embedding_binding.as_mut().unwrap().content_digest = None,
+            12 => index.client_stream_id = "x".repeat(257),
+            _ => unreachable!(),
+        }
+        assert!(!accepts(&command), "mutation {mutation}");
+    }
+    // The pair may be absent, and the index id too (the Python path).
+    let mut unstamped = good.clone();
+    let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+        unstamped.capability_command.as_mut()
+    else {
+        unreachable!()
+    };
+    index.index_id.clear();
+    assert!(accepts(&unstamped));
+    // Wire-level: a reserved field inside the index command is refused.
+    let mut with_unknown = index_command_message(&good).encode_to_vec();
+    with_unknown.extend_from_slice(&[0x52, 0x00]); // field 10: reserved
+    let mut raw = good.clone();
+    raw.capability_command = None;
+    let mut raw = raw.encode_to_vec();
+    raw.extend_from_slice(&[0x92, 0x02, u8::try_from(with_unknown.len()).unwrap()]);
+    raw.extend_from_slice(&with_unknown);
+    assert!(
+        parse_and_verify_execution_command(
+            &sign_raw(raw),
+            Some(&TestOnlyConformanceHmacAuthenticator)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn index_ingest_claim_admits_exactly_the_bundles_entries() {
+    for mutation in 0..6 {
+        let (mut command, mut response) = fixture(ToolkitCommandKind::IndexIngest);
+        let entries = &mut response
+            .receipt
+            .as_mut()
+            .unwrap()
+            .input_bundle
+            .as_mut()
+            .unwrap()
+            .entries;
+        match mutation {
+            0 => entries[0].semantic_role = "index.tool_parameters".into(),
+            1 => entries[1].content.as_mut().unwrap().media_type = "text/plain".into(),
+            2 => {
+                let mut extra = entries[0].clone();
+                extra.entry_id = "index-mcp-tokens".into();
+                extra.semantic_role = "index.mcp_tokens".into();
+                entries.push(extra);
+            }
+            3 => {
+                entries.remove(2);
+            }
+            4 => entries[3].content.as_mut().unwrap().digest = Some(sha256(b"other")),
+            5 => entries[3].immutable_version = "other".into(),
+            _ => unreachable!(),
+        }
+        rebind_manifest(&mut command, &mut response);
+        assert!(
+            parse_accepted_agent_claim(
+                &verified(&command),
+                response,
+                "workload-1",
+                "worker-1",
+                NOW
+            )
+            .is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn index_ingest_output_binds_every_entry_and_derives_the_outcome_from_the_status() {
+    let (command, response) = fixture(ToolkitCommandKind::IndexIngest);
+    let claim = claim(&command, response);
+    let verified = verified(&command);
+    let frame = AgentExecutionOutputAuthority {
+        claim: claim_again_for(&command),
+    }
+    .bind_toolkit_execute_read_terminal(
+        &verified,
+        ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(index_result(
+            &claim,
+            index_summary(),
+        ))),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(
+        frame.event_type,
+        ExecutionOutputEventTypeV1::IndexIngestResult as i32
+    );
+    assert_eq!(frame.logical_output_id, verified.logical_output_id());
+    let proposal = frame.settlement_proposal.as_ref().unwrap();
+    assert_eq!(
+        proposal.requested_outcome,
+        crate::protocol::elitea::runtime::v1::ExecutionOutcomeV1::Succeeded as i32
+    );
+    assert!(validate_restored_toolkit_execute_read_output_frame(&verified, &frame).is_ok());
+
+    let mut failed = index_summary();
+    failed.status = IndexIngestStatusV1::Error as i32;
+    failed.terminal_state = IndexIngestTerminalStateV1::Failed as i32;
+    failed.embedding_model.clear();
+    failed.embedding_dimension = 0;
+    let frame = AgentExecutionOutputAuthority {
+        claim: claim_again_for(&command),
+    }
+    .bind_toolkit_execute_read_terminal(
+        &verified,
+        ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(index_result(&claim, failed))),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(
+        frame.settlement_proposal.unwrap().requested_outcome,
+        crate::protocol::elitea::runtime::v1::ExecutionOutcomeV1::Failed as i32
+    );
+}
+
+#[test]
+fn index_ingest_output_rejects_unbound_entries_and_summaries_outside_mains_bounds() {
+    let (command, response) = fixture(ToolkitCommandKind::IndexIngest);
+    let accepted = claim(&command, response);
+    let good = verified(&command);
+    let bind = |result: IndexIngestResultV1| {
+        AgentExecutionOutputAuthority {
+            claim: claim_again_for(&command),
+        }
+        .bind_toolkit_execute_read_terminal(
+            &good,
+            ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(result)),
+            NOW,
+        )
+        .is_ok()
+    };
+    assert!(bind(index_result(&accepted, index_summary())));
+    let mutations: Vec<Mutation> = vec![
+        Box::new(|r| r.toolkit_configuration.as_mut().unwrap().entry_id = "other".into()),
+        Box::new(|r| r.tool_parameters = None),
+        Box::new(|r| r.llm_model = None),
+        Box::new(|r| r.embedding_binding.as_mut().unwrap().content_digest = Some(sha256(b"x"))),
+        Box::new(|r| r.input_bundle_digest = Some(sha256(b"x"))),
+        Box::new(|r| r.result_summary = None),
+        Box::new(|r| r.result_summary.as_mut().unwrap().message.clear()),
+        Box::new(|r| r.result_summary.as_mut().unwrap().status = 0),
+        Box::new(|r| {
+            // A completed state on an error status.
+            r.result_summary.as_mut().unwrap().status = IndexIngestStatusV1::Error as i32;
+        }),
+        Box::new(|r| {
+            let summary = r.result_summary.as_mut().unwrap();
+            summary.embedding_dimension = 0;
+        }),
+        Box::new(|r| {
+            let summary = r.result_summary.as_mut().unwrap();
+            summary.skipped.insert("Needs Model".into(), 1);
+        }),
+        Box::new(|r| {
+            let summary = r.result_summary.as_mut().unwrap();
+            summary.documents[1].document_key = summary.documents[0].document_key.clone();
+        }),
+        Box::new(|r| {
+            let summary = r.result_summary.as_mut().unwrap();
+            summary.removed_document_keys = vec![summary.documents[0].document_key.clone()];
+        }),
+        Box::new(|r| {
+            // A success that names another space than the command expects.
+            r.result_summary.as_mut().unwrap().embedding_dimension = 3;
+        }),
+    ];
+    // The last mutation needs an expected space on the command.
+    for (position, mutate) in mutations.iter().enumerate() {
+        let mut result = index_result(&accepted, index_summary());
+        mutate(&mut result);
+        if position == mutations.len() - 1 {
+            let mut stamped = command.clone();
+            let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+                stamped.capability_command.as_mut()
+            else {
+                unreachable!()
+            };
+            index.expected_embedding_model = "text-embedding-3-small".into();
+            index.expected_embedding_dimension = 1536;
+            let (_, response) = fixture(ToolkitCommandKind::IndexIngest);
+            let stamped_claim = claim(&stamped, response);
+            let rejected = AgentExecutionOutputAuthority {
+                claim: stamped_claim,
+            }
+            .bind_toolkit_execute_read_terminal(
+                &verified(&stamped),
+                ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(result)),
+                NOW,
+            )
+            .is_err();
+            assert!(rejected, "mutation {position}");
+            continue;
+        }
+        assert!(!bind(result), "mutation {position}");
+    }
+}
+
+#[test]
+fn a_failed_settlement_receipt_is_accepted_for_a_succeeded_proposal() {
+    use crate::protocol::elitea::runtime::v1::{ExecutionOutcomeV1, PrepareSettlementResponseV1};
+    let (command, response) = fixture(ToolkitCommandKind::IndexIngest);
+    let claim = claim(&command, response);
+    let verified = verified(&command);
+    let frame = AgentExecutionOutputAuthority {
+        claim: claim_again_for(&command),
+    }
+    .bind_toolkit_execute_read_terminal(
+        &verified,
+        ToolkitExecuteReadTerminalOutput::IndexIngest(Box::new(index_result(
+            &claim,
+            index_summary(),
+        ))),
+        NOW,
+    )
+    .unwrap();
+    let proposal = frame.settlement_proposal.clone().unwrap();
+    let retirement = command_retirement_binding(&verified);
+    let receipt = parse_prepare_settlement_response(
+        PrepareSettlementResponseV1 {
+            settlement_receipt_id: "receipt-1".into(),
+            outcome: ExecutionOutcomeV1::Failed as i32,
+            ..Default::default()
+        },
+        ExecutionOutcomeV1::try_from(proposal.requested_outcome).unwrap(),
+        retirement,
+    )
+    .expect("a refused result settles failed");
+    assert_eq!(receipt.outcome(), ExecutionOutcomeV1::Failed);
+    let retirement = command_retirement_binding(&verified);
+    assert!(
+        parse_prepare_settlement_response(
+            PrepareSettlementResponseV1 {
+                settlement_receipt_id: "receipt-1".into(),
+                outcome: ExecutionOutcomeV1::Cancelled as i32,
+                ..Default::default()
+            },
+            ExecutionOutcomeV1::Succeeded,
+            command_retirement_binding(&verified),
+        )
+        .is_err(),
+        "only FAILED may replace SUCCEEDED"
+    );
+    drop(retirement);
+}
+
+fn claim_again_for(command: &WorkerCommandV1) -> AcceptedAgentClaim {
+    let (_, response) = fixture(ToolkitCommandKind::IndexIngest);
+    claim(command, response)
 }

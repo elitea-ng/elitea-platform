@@ -603,6 +603,68 @@ impl VectorService for FakeVector {
                 .collect(),
         }))
     }
+
+    type ListDocumentsStream = std::pin::Pin<
+        Box<
+            dyn tokio_stream::Stream<Item = Result<pb::ListDocumentsResponse, Status>>
+                + Send
+                + 'static,
+        >,
+    >;
+
+    async fn list_documents(
+        &self,
+        request: Request<pb::ListDocumentsRequest>,
+    ) -> Result<Response<Self::ListDocumentsStream>, Status> {
+        let project = self.authenticate("list_documents", &request)?;
+        let request = request.into_inner();
+        let namespace = request
+            .namespace
+            .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
+        let space = request.space.map(|s| (s.model_slug, s.dimension));
+        let state = self.state.lock().expect("lock");
+        let mut counts: std::collections::BTreeMap<(String, String), u64> =
+            std::collections::BTreeMap::new();
+        for stored in state.points.iter().filter(|stored| {
+            stored.project_id == project
+                && stored.source == namespace.source
+                && stored.namespace_id == namespace.namespace_id
+                && (namespace.generation.is_empty() || stored.generation == namespace.generation)
+                && space.as_ref().is_none_or(|space| *space == stored.space)
+        }) {
+            *counts
+                .entry((
+                    stored.point.document_key.clone(),
+                    stored.point.document_version.clone(),
+                ))
+                .or_default() += 1;
+        }
+        drop(state);
+        let documents: Vec<pb::IndexedDocument> = counts
+            .into_iter()
+            .map(
+                |((document_key, document_version), chunk_count)| pb::IndexedDocument {
+                    document_key,
+                    document_version,
+                    chunk_count,
+                },
+            )
+            .collect();
+        // Two pages whenever there is more than one document, so a client
+        // that stopped after the first page would be caught.
+        let split = documents.len() / 2;
+        let pages: Vec<Result<pb::ListDocumentsResponse, Status>> =
+            [&documents[..split], &documents[split..]]
+                .into_iter()
+                .filter(|page| !page.is_empty())
+                .map(|page| {
+                    Ok(pb::ListDocumentsResponse {
+                        documents: page.to_vec(),
+                    })
+                })
+                .collect();
+        Ok(Response::new(Box::pin(tokio_stream::iter(pages))))
+    }
 }
 
 /// A status with this code, for [`FakeVector::fail_next`].

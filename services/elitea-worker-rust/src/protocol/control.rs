@@ -78,6 +78,14 @@ const TOOLKIT_EXECUTE_READ_REQUEST_ROLE: &str = "toolkit.execute_read_request";
 const TOOLKIT_EXECUTE_READ_INPUT_MEDIA_TYPE: &str =
     "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf";
 const INPUT_GRANT_AUDIENCE: &str = "elitea.runtime.input.read.v1";
+/// The index bundle's entry roles (Main's `executiondomain.Index*Role`, the
+/// Python worker's `_INDEX_*_ROLE`).
+const INDEX_TOOLKIT_CONFIGURATION_ROLE: &str = "index.toolkit_configuration";
+const INDEX_TOOL_PARAMETERS_ROLE: &str = "index.tool_parameters";
+const INDEX_LLM_MODEL_ROLE: &str = "index.llm_model";
+const INDEX_LLM_CONFIGURATION_ROLE: &str = "index.llm_configuration";
+const INDEX_MCP_TOKENS_ROLE: &str = "index.mcp_tokens";
+const INDEX_EMBEDDING_BINDING_ROLE: &str = "index.embedding_binding";
 const DEADLINE_RETIREMENT_SAFE_MESSAGE: &str =
     "The execution deadline was exceeded before worker authority was granted.";
 
@@ -452,6 +460,58 @@ impl AcceptedAgentClaim {
                 &result.settings_entry_id,
                 &result.settings_entry_version,
                 result.settings_content_digest.as_ref(),
+            )
+    }
+
+    /// An index result must restate the bundle and every entry the claim
+    /// admitted: the toolkit configuration (the request entry), the tool
+    /// parameters (the arguments entry), and each optional entry the
+    /// manifest holds, with no binding for an entry it does not.
+    #[must_use]
+    pub(crate) fn matches_index_ingest_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::IndexIngestResultV1,
+    ) -> bool {
+        use super::elitea::runtime::v1::IndexIngestInputBindingV1;
+        fn matches(
+            binding: Option<&IndexIngestInputBindingV1>,
+            entry: Option<&ExecutionInputEntryV1>,
+        ) -> bool {
+            match (binding, entry) {
+                (None, None) => true,
+                (Some(binding), Some(entry)) => entry.content.as_ref().is_some_and(|content| {
+                    binding.entry_id == entry.entry_id
+                        && binding.immutable_version == entry.immutable_version
+                        && binding.content_digest.as_ref() == content.digest.as_ref()
+                }),
+                _ => false,
+            }
+        }
+        let by_role = |role: &str| {
+            self.input_bundle
+                .entries
+                .iter()
+                .find(|entry| entry.semantic_role == role)
+        };
+        result.input_bundle_id == self.input_bundle_ref.input_bundle_id
+            && result.input_bundle_digest.as_ref() == self.input_bundle_ref.digest.as_ref()
+            && matches(
+                result.toolkit_configuration.as_ref(),
+                Some(&self.request_entry),
+            )
+            && matches(
+                result.tool_parameters.as_ref(),
+                self.arguments_entry.as_ref(),
+            )
+            && matches(result.llm_model.as_ref(), by_role(INDEX_LLM_MODEL_ROLE))
+            && matches(
+                result.llm_configuration.as_ref(),
+                by_role(INDEX_LLM_CONFIGURATION_ROLE),
+            )
+            && matches(result.mcp_tokens.as_ref(), by_role(INDEX_MCP_TOKENS_ROLE))
+            && matches(
+                result.embedding_binding.as_ref(),
+                by_role(INDEX_EMBEDDING_BINDING_ROLE),
             )
     }
 
@@ -1197,6 +1257,9 @@ impl AgentExecutionOutputAuthority {
             ToolkitExecuteReadTerminalOutput::ConfigurationValidation(result) => self
                 .claim
                 .matches_configuration_validation_result_binding(result),
+            ToolkitExecuteReadTerminalOutput::IndexIngest(result) => {
+                self.claim.matches_index_ingest_result_binding(result)
+            }
             ToolkitExecuteReadTerminalOutput::Failure(_) => true,
         };
         if !inputs_match {
@@ -3019,17 +3082,33 @@ fn parse_prepare_settlement_response(
         }
         return Err(runtime_rejection(rejection));
     }
+    let settled =
+        ExecutionOutcomeV1::try_from(response.outcome).unwrap_or(ExecutionOutcomeV1::Unspecified);
+    // Main may settle a SUCCEEDED proposal as FAILED: an index result whose
+    // typed summary the registry refused is one case (ADR-0030 I1). Any
+    // other difference is a malformed receipt.
+    let accepted = settled == expected_outcome
+        || (expected_outcome == ExecutionOutcomeV1::Succeeded
+            && settled == ExecutionOutcomeV1::Failed);
     if !bounded_text(&response.settlement_receipt_id, MAX_CONTROL_IDENTITY_BYTES)
-        || response.outcome != expected_outcome as i32
+        || !accepted
         || !terminal_outcome(expected_outcome)
     {
         return Err(ControlSemanticError::InvalidInput(
             "the settlement receipt is malformed",
         ));
     }
+    if settled != expected_outcome {
+        tracing::warn!(
+            event = "settlement_outcome_overridden",
+            proposed = ?expected_outcome,
+            settled = ?settled,
+            "Main settled the proposal with another terminal outcome"
+        );
+    }
     Ok(SettlementReceipt {
         receipt_id: response.settlement_receipt_id,
-        outcome: expected_outcome,
+        outcome: settled,
         retirement,
     })
 }
@@ -3112,7 +3191,7 @@ fn validate_manifest_binding(
         || !valid_identifier(&manifest.input_bundle_id)
         || !valid_version(&manifest.immutable_version)
         || manifest.entries.is_empty()
-        || manifest.entries.len() > 3
+        || manifest.entries.len() > MAX_MANIFEST_ENTRIES
     {
         return Err(ControlSemanticError::InvalidInput(
             "the accepted claim input manifest is malformed",
@@ -3121,10 +3200,21 @@ fn validate_manifest_binding(
     Ok(())
 }
 
+/// The most entries a claim manifest may hold: the index bundle's six (the
+/// toolkit configuration, the tool parameters, the model, the model
+/// configuration, the MCP tokens and the embedding binding). Each capability's
+/// entry rules then require their exact set.
+const MAX_MANIFEST_ENTRIES: usize = 6;
+
 fn validate_execution_request_entries(
     command: &super::elitea::runtime::v1::WorkerCommandV1,
     manifest: &ExecutionInputBundleV1,
 ) -> Result<(ExecutionInputEntryV1, Option<ExecutionInputEntryV1>), ControlSemanticError> {
+    if let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
+        command.capability_command.as_ref()
+    {
+        return validate_index_ingest_entries(index, manifest);
+    }
     let (request_entry_id, semantic_role, media_type, max_bytes, arguments_id) =
         match command.capability_command.as_ref() {
             Some(worker_command_v1::CapabilityCommand::AgentExecution(agent)) => (
@@ -3217,6 +3307,70 @@ fn validate_execution_request_entries(
         )?;
     }
     Ok((request, arguments))
+}
+
+/// The index bundle (the Python worker's `_accepted_index_claim`): the
+/// toolkit configuration and tool parameters are required, the model, model
+/// configuration and MCP token entries are present exactly when the command
+/// names them, and the embedding binding entry must carry the version and
+/// digest the command pins. Nothing else may be in the manifest. The toolkit
+/// configuration becomes the claim's request entry and the tool parameters
+/// its arguments entry; the others are fetched by id.
+fn validate_index_ingest_entries(
+    index: &super::elitea::runtime::v1::IndexIngestCommandV1,
+    manifest: &ExecutionInputBundleV1,
+) -> Result<(ExecutionInputEntryV1, Option<ExecutionInputEntryV1>), ControlSemanticError> {
+    let mut expected = 2;
+    let select = |entry_id: &str, role: &str| {
+        validate_selected_input_entry(
+            manifest,
+            entry_id,
+            role,
+            "application/json",
+            MAX_TOOLKIT_JSON_INPUT_BYTES,
+        )
+    };
+    let configuration = select(
+        &index.toolkit_configuration_entry_id,
+        INDEX_TOOLKIT_CONFIGURATION_ROLE,
+    )?;
+    let parameters = select(&index.tool_parameters_entry_id, INDEX_TOOL_PARAMETERS_ROLE)?;
+    for (entry_id, role) in [
+        (&index.llm_model_entry_id, INDEX_LLM_MODEL_ROLE),
+        (
+            &index.llm_configuration_entry_id,
+            INDEX_LLM_CONFIGURATION_ROLE,
+        ),
+        (&index.mcp_tokens_entry_id, INDEX_MCP_TOKENS_ROLE),
+    ] {
+        if !entry_id.is_empty() {
+            select(entry_id, role)?;
+            expected += 1;
+        }
+    }
+    if let Some(binding) = index.embedding_binding.as_ref() {
+        let entry = select(&binding.entry_id, INDEX_EMBEDDING_BINDING_ROLE)?;
+        let content = entry
+            .content
+            .as_ref()
+            .ok_or(ControlSemanticError::InvalidInput(
+                "the embedding binding entry is malformed",
+            ))?;
+        if entry.immutable_version != binding.immutable_version
+            || content.digest.as_ref() != binding.content_digest.as_ref()
+        {
+            return Err(ControlSemanticError::InvalidInput(
+                "the embedding binding does not match its entry",
+            ));
+        }
+        expected += 1;
+    }
+    if manifest.entries.len() != expected {
+        return Err(ControlSemanticError::InvalidInput(
+            "the input manifest has unbound or duplicate entries",
+        ));
+    }
+    Ok((configuration, Some(parameters)))
 }
 
 fn validate_selected_input_entry(
@@ -3388,7 +3542,9 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
             | RuntimeErrorCodeV1::ContextBudgetExceeded
             | RuntimeErrorCodeV1::ModelRequestTooLarge
             | RuntimeErrorCodeV1::ModelUnavailable
-            | RuntimeErrorCodeV1::ModelProviderFailure,
+            | RuntimeErrorCodeV1::ModelProviderFailure
+            // An output-plane refusal; the control plane never sends it.
+            | RuntimeErrorCodeV1::ResultRefused,
         )
         | None => {
             return ControlSemanticError::InvalidInput(

@@ -339,7 +339,33 @@ func validateIndexIngestCommand(command *runtimev1.WorkerCommandV1, config comma
 		len(model) > 256 || len(model) > config.MaxStringBytes || strings.ContainsAny(model, "\x00\r\n") {
 		return ErrMalformedWorkerCommand
 	}
+	// The index registry row the run writes: absent on the Python path, a
+	// canonical lower-case UUID under the Rust indexing runtime.
+	if indexID := indexing.GetIndexId(); indexID != "" && !validCanonicalUUIDText(indexID) {
+		return ErrMalformedWorkerCommand
+	}
 	return nil
+}
+
+// validCanonicalUUIDText accepts exactly the 8-4-4-4-12 lower-case hex form.
+func validCanonicalUUIDText(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		switch index {
+		case 8, 13, 18, 23:
+			if character != '-' {
+				return false
+			}
+		default:
+			if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validDigestProto(digest *runtimev1.DigestV1, content []byte) bool {

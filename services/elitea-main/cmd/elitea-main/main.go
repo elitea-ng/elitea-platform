@@ -1003,6 +1003,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if currentConfigurationsConfig.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
 		return errors.New("ELITEA_CONFIGURATIONS_ENABLED requires an authenticated deployment")
 	}
+	// The optional runtime configuration is read here, ahead of the runtime
+	// itself, because one Configurations-side decision depends on it: under
+	// the Rust indexing runtime no project vector store is composed (below).
+	// Its validation against the Configurations flags stays where the runtime
+	// is composed.
+	runtimeConfig, err := runtimecomposition.ConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load optional runtime configuration: %w", err)
+	}
 	var currentConfigurationsRoot *runtimecomposition.CurrentConfigurationsRuntime
 	// The toolkit settings resolver the Inventory facade expands a source with.
 	// Nil where the Configurations runtime is not composed — a deployment with
@@ -1084,18 +1093,30 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// deliberately NOT used here: it keys off ELITEA_VAULT_MASTER_KEY_FILE,
 		// which no file under deploy/ sets, so it could not open the vault the
 		// handler had just created.
-		vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
-			pool,
-			v2secrets.NewHandler(pool),
-			logger,
-		)
-		if err != nil {
-			return fmt.Errorf("compose project vector-store provisioning: %w", err)
-		}
-		// Through the concrete value, and only when there IS one. See the
-		// declaration above for what a typed nil costs here.
-		if vectorStore != nil {
-			projectVectorStore = vectorStore
+		//
+		// NOT UNDER THE RUST INDEXING RUNTIME (ADR-0031 decision 5). A
+		// deployment that indexes natively keeps index metadata in the
+		// registry and vectors in elitea-vector; a created project needs no
+		// pgvector role, database or `pgvector_configuration`, and requiring
+		// a pgvector bootstrap would keep alive the per-project database the
+		// runtime retires. The provisioner then takes no vector store and
+		// skips its project_pgvector step.
+		if runtimeConfig.ProjectVectorStoreProvisioned() {
+			vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
+				pool,
+				v2secrets.NewHandler(pool),
+				logger,
+			)
+			if err != nil {
+				return fmt.Errorf("compose project vector-store provisioning: %w", err)
+			}
+			// Through the concrete value, and only when there IS one. See the
+			// declaration above for what a typed nil costs here.
+			if vectorStore != nil {
+				projectVectorStore = vectorStore
+			}
+		} else {
+			logger.Info("project vector store not provisioned: the Rust indexing runtime needs no per-project pgvector database (ADR-0031 decision 5)")
 		}
 		toolkitSettingsResolver, err := currentConfigurationsRoot.NewToolkitSettingsValidator(pool)
 		if err != nil {
@@ -1371,10 +1392,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		logger.Info("chat-config route enabled (ungated)")
 	}
 
-	runtimeConfig, err := runtimecomposition.ConfigFromEnv(os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("load optional runtime configuration: %w", err)
-	}
+	// runtimeConfig was read above, before the Configurations runtime, so the
+	// project vector-store decision could use it.
 	if runtimeConfig.Enabled && (principalValidator == nil || forwardedIdentityVerifier == nil) {
 		return errors.New("ELITEA_RUNTIME_ENABLED requires production authentication")
 	}
