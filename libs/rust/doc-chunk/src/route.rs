@@ -117,6 +117,8 @@ impl ProposalPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatisticalPlan {
     splits: Vec<String>,
+    /// Each split's token count, from the split step.
+    counts: Vec<usize>,
     settings: StatisticalSettings,
 }
 
@@ -139,7 +141,7 @@ impl StatisticalPlan {
     /// [`ChunkError::InvalidModelStep`] when the vectors do not fit the
     /// splits.
     pub fn chunks(&self, vectors: &[Vec<f32>]) -> Result<Vec<Chunk>, ChunkError> {
-        statistical::statistical_chunks(&self.splits, vectors, &self.settings)
+        statistical::statistical_chunks(&self.splits, &self.counts, vectors, &self.settings)
     }
 }
 
@@ -236,7 +238,7 @@ fn chunker_named(
     extension: &str,
     options: ChunkOptions,
 ) -> Result<Chunker, ChunkError> {
-    match name.trim().to_ascii_lowercase().as_str() {
+    match crate::config::normalize_chunker_name(name).as_str() {
         "markdown" => Ok(Chunker::Markdown),
         "text" => Ok(Chunker::Text),
         "json" => Ok(Chunker::Json),
@@ -434,8 +436,12 @@ pub fn plan_with(
         Chunker::Code => code_chunks(document_text, &extension, &params, &own)?,
         Chunker::Statistical => {
             let settings = StatisticalSettings::from_params(&params.model_steps);
-            let splits = statistical::split_text(document_text, &settings)?;
-            return Ok(ChunkPlan::Statistical(StatisticalPlan { splits, settings }));
+            let (splits, counts) = statistical::split_text(document_text, &settings)?;
+            return Ok(ChunkPlan::Statistical(StatisticalPlan {
+                splits,
+                counts,
+                settings,
+            }));
         }
         Chunker::Proposal => {
             let size = positive(params.model_steps.max_doc_tokens)

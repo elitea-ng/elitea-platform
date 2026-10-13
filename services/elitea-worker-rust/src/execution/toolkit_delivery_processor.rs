@@ -557,7 +557,12 @@ where
         // both entries whenever the toolkit resolves a model.
         // Fetched only when the run selects a chunker that calls a model: a
         // run that never does is not failed by an entry it would not read.
-        let wants_chat = crate::indexing::inputs::needs_chat_model(tool_parameters.as_bytes());
+        // Parsed once for the claim; the run reuses it. Unreadable arguments
+        // fetch nothing and the run reports them.
+        let parsed = crate::indexing::inputs::ParsedArgs::parse(tool_parameters.as_bytes()).ok();
+        let wants_chat = parsed
+            .as_ref()
+            .is_some_and(crate::indexing::inputs::ParsedArgs::needs_chat_model);
         let llm_model = match index.llm_model_entry_id.as_str() {
             entry_id if wants_chat && !entry_id.is_empty() => {
                 Some(self.fetch_entry(execution, lease, entry_id).await?)
@@ -580,6 +585,7 @@ where
         Ok(IndexInputs {
             toolkit_configuration,
             tool_parameters,
+            parsed,
             embedding_binding,
             llm_model,
             llm_configuration,
@@ -641,6 +647,7 @@ where
             command: index,
             toolkit_configuration: inputs.toolkit_configuration.as_bytes(),
             tool_parameters: inputs.tool_parameters.as_bytes(),
+            parsed: inputs.parsed.as_ref(),
             embedding_binding: inputs
                 .embedding_binding
                 .as_ref()
@@ -1233,6 +1240,8 @@ where
 struct IndexInputs {
     toolkit_configuration: MaterializedInput,
     tool_parameters: MaterializedInput,
+    /// `tool_parameters` parsed once, when they are readable.
+    parsed: Option<crate::indexing::inputs::ParsedArgs>,
     embedding_binding: Option<MaterializedInput>,
     llm_model: Option<MaterializedInput>,
     llm_configuration: Option<MaterializedInput>,

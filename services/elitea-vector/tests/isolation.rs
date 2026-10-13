@@ -1319,6 +1319,69 @@ async fn a_forged_project_field_is_refused() {
 
 // ── updates and deletes ─────────────────────────────────────────────────────
 
+/// Point ids carry the chunk type for every type, and are never recomputed to
+/// find existing points: a document is replaced by a delete on its key and a
+/// fresh upsert, an unchanged one is left alone. Points under a different id
+/// rule coexist with new ones.
+#[tokio::test(flavor = "multi_thread")]
+async fn chunks_of_one_passage_are_separate_points_and_replacement_is_by_filter() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    let typed = |key: &str, chunk_type: &str| {
+        let mut point = Harness::point(key, chunk_type, [1.0, 0.0, 0.0, 0.0]);
+        chunk_type.clone_into(&mut point.chunk_type);
+        point.chunk_id = "3".to_owned();
+        point
+    };
+    let before = h.truth(PROJECT_A).await;
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![
+            typed("p-doc", "document"),
+            typed("p-doc", "title"),
+            typed("p-doc", "summary"),
+            typed("p-doc", "anything-else"),
+            typed("p-other", "document"),
+        ],
+    )
+    .await
+    .expect("upsert");
+    assert_eq!(
+        h.truth(PROJECT_A).await,
+        before + 5,
+        "five chunks, five points"
+    );
+
+    // Replace p-doc: delete by filter, upsert fewer chunks. p-other is not
+    // rewritten and stays.
+    h.worker
+        .delete(with_token(
+            TOKEN_A,
+            pb::DeleteRequest {
+                project_id: 0,
+                space: None,
+                namespace: Some(Harness::namespace(NAMESPACE_A)),
+                selector: Some(pb::delete_request::Selector::Documents(pb::DocumentKeys {
+                    document_keys: vec!["p-doc".to_owned()],
+                })),
+            },
+        ))
+        .await
+        .expect("delete");
+    assert_eq!(h.truth(PROJECT_A).await, before + 1);
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![typed("p-doc", "document"), typed("p-doc", "title")],
+    )
+    .await
+    .expect("upsert");
+    assert_eq!(h.truth(PROJECT_A).await, before + 3);
+}
+
 #[tokio::test]
 async fn a_token_cannot_update_or_delete_another_projects_points() {
     let _ = require_qdrant!();

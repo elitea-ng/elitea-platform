@@ -204,6 +204,25 @@ refuses 'worker.indexingRuntime=rust needs main.runtime.enabled' \
   && ok "indexingRuntime=rust without index ingest dispatch is refused" \
   || bad "indexingRuntime=rust without index ingest dispatch is not refused"
 
+# The cap is validated: 0 must not silently become the default, and a
+# negative, fractional or non-numeric value is refused with the key's name.
+refuses 'worker.runtime.indexModelCallCap must be an integer' \
+  "${RUST[@]}" --set "worker.runtime.indexModelCallCap=0" \
+  && ok "indexModelCallCap=0 is refused" \
+  || bad "indexModelCallCap=0 is not refused"
+refuses 'worker.runtime.indexModelCallCap must be an integer' \
+  "${RUST[@]}" --set "worker.runtime.indexModelCallCap=-5" \
+  && ok "indexModelCallCap=-5 is refused" \
+  || bad "indexModelCallCap=-5 is not refused"
+refuses 'worker.runtime.indexModelCallCap must be an integer' \
+  "${RUST[@]}" --set "worker.runtime.indexModelCallCap=1.5" \
+  && ok "indexModelCallCap=1.5 is refused" \
+  || bad "indexModelCallCap=1.5 is not refused"
+refuses 'worker.runtime.indexModelCallCap must be an integer' \
+  "${RUST[@]}" --set-string "worker.runtime.indexModelCallCap=many" \
+  && ok "a non-numeric indexModelCallCap is refused" \
+  || bad "a non-numeric indexModelCallCap is not refused"
+
 echo
 RAN=$((PASS+FAIL))
 echo "indexing runtime render assertions: ${RAN} ran, ${PASS} passed, ${FAIL} failed"

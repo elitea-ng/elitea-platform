@@ -114,6 +114,9 @@ pub(crate) struct IndexRun<'a> {
     pub(crate) command: &'a IndexIngestCommandV1,
     pub(crate) toolkit_configuration: &'a [u8],
     pub(crate) tool_parameters: &'a [u8],
+    /// `tool_parameters` already parsed by the caller (once per claim). When
+    /// absent the run parses them itself.
+    pub(crate) parsed: Option<&'a inputs::ParsedArgs>,
     pub(crate) embedding_binding: Option<&'a [u8]>,
     /// `index.llm_model`: the chat model of the steps that call one, a JSON
     /// string. Absent, those steps skip their documents `no_model`.
@@ -285,8 +288,15 @@ pub(crate) async fn run_index(
 ) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
     let configuration = inputs::toolkit_configuration(run.toolkit_configuration)
         .map_err(|error| IndexRunFailure::InvalidInput(error.0))?;
-    let parameters = inputs::index_parameters(run.tool_parameters)
-        .map_err(|error| IndexRunFailure::InvalidInput(error.0))?;
+    let own;
+    let parsed = if let Some(parsed) = run.parsed {
+        parsed
+    } else {
+        own = inputs::ParsedArgs::parse(run.tool_parameters)
+            .map_err(|error| IndexRunFailure::InvalidInput(error.0))?;
+        &own
+    };
+    let parameters = parsed.parameters.clone();
     if run.command.index_id.is_empty() {
         // The command verifier refuses such a command as unsupported (it is
         // the Python runtime's); this is the defence behind it.
@@ -323,13 +333,14 @@ pub(crate) async fn run_index(
             "the vector store is not available to this run: the claim carries no project token for toolkit indexes",
         ));
     };
-    let chunking = match inputs::chunking_config(&parameters) {
-        Ok(chunking) => chunking,
+    let chunking = match &parsed.chunking {
+        Ok(chunking) => chunking.clone(),
         Err(error) => return Ok(failure(&parameters, &error.to_string())),
     };
-    // The chat model entries are read only when a chunker can call a model:
-    // a run that never does must not fail on them.
-    let chat = if chunking.needs_model_step() {
+    // The chat model entries are read only when a chunker uses the chat
+    // model (the proposal chunker): a statistical-only or `use_llm`-only run
+    // must not fail on entries it never uses.
+    let chat = if chunking.needs_chat_model() {
         chat_binding(runtime, &run)?
     } else {
         None

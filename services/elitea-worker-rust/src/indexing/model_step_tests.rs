@@ -200,6 +200,7 @@ async fn run_model_raw(
             command: &command(NS, expected),
             toolkit_configuration: &configuration(),
             tool_parameters: parameters,
+            parsed: None,
             embedding_binding: Some(&binding()),
             llm_model: model,
             llm_configuration: model.map(|_| settings.as_bytes()),
@@ -865,6 +866,105 @@ async fn the_chat_entries_are_read_only_when_a_chunker_calls_a_model() {
         }
         other => panic!("expected a clear refusal, got {other:?}"),
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn statistical_and_use_llm_only_runs_neither_fetch_nor_parse_the_chat_entries() {
+    let harness = harness(4, None).await;
+    let text = "lorem ipsum dolor sit amet. ".repeat(140);
+    // A malformed `llm_model` and `llm_configuration`: only the proposal
+    // chunker reads them.
+    let settings_bad = b"[not settings";
+    for config in [
+        json!({"chunking_tool": "statistical"}),
+        json!({"chunking_config": {".md": {"chunker": " Statistical "}}}),
+        json!({"chunking_config": {"use_llm": true}}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (n, config) = config;
+        FIXTURE_SOURCE.with(|slot| {
+            *slot.lock().expect("lock") = Some(vec![document(&format!("s{n}.md"), "v1", &text)]);
+        });
+        let now = || 1_700_000_000_000_i64;
+        let summary = run_index(
+            &harness.runtime,
+            IndexRun {
+                command: &command(NS, None),
+                toolkit_configuration: &configuration(),
+                tool_parameters: &parameters(false, config.clone()),
+                parsed: None,
+                embedding_binding: Some(&binding()),
+                llm_model: Some(b"{not a model name"),
+                llm_configuration: Some(settings_bad),
+                vector_token: Some(&harness.token),
+                context: &harness.context,
+                lease: &Always,
+                deadline_unix_millis: i64::MAX,
+                now_unix_millis: &now,
+            },
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{config}: {failure:?}"));
+        // `use_llm` alone is PR-B's vision step: its documents skip
+        // `needs_model` today; what matters here is the run is not refused.
+        let expected = u64::from(
+            config
+                .get("chunking_config")
+                .and_then(|c| c.get("use_llm"))
+                .is_none(),
+        );
+        assert_eq!(summary.indexed_documents, expected, "{config}: {summary:?}");
+    }
+    // The proposal chunker (any spelling) refuses the same entries clearly.
+    let result = run_model_raw(
+        &harness,
+        vec![document("p.md", "v1", "alpha text")],
+        None,
+        &parameters(false, json!({"chunking_tool": " Proposal"})),
+        Some(b"{not a model name"),
+        &Always,
+    )
+    .await;
+    assert!(
+        matches!(&result, Err(IndexRunFailure::InvalidInput(m)) if m.contains("llm model")),
+        "{result:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_statistical_success_resets_the_model_failure_streak() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|_, _| {
+        Reply::Fail(ErrorCategory::Unavailable, "model_gateway.unavailable")
+    });
+    with_chat(&mut harness, &chat);
+    let text = "lorem ipsum dolor sit amet. ".repeat(140);
+    // Four failing proposal documents, a statistical success, four more
+    // failures: nine failures, but never five in a row; a document with no
+    // model step (c.json) between neither counts nor resets.
+    let mut documents: Vec<Document> = (1..=4)
+        .map(|n| document(&format!("a{n}.md"), "v1", GUIDE))
+        .collect();
+    documents.push(document("b.txt", "v1", &text));
+    documents.push(document("bb.json", "v1", "{\"a\": 1}"));
+    documents.extend((1..=4).map(|n| document(&format!("c{n}.md"), "v1", GUIDE)));
+    let summary = run_model(
+        &harness,
+        documents,
+        None,
+        &parameters(
+            false,
+            json!({"chunking_config": {".md": {"chunker": "proposal"}, ".txt": {"chunker": "statistical"}}}),
+        ),
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.skipped.get("model_failed"), Some(&8), "{summary:?}");
+    assert_eq!(summary.indexed_documents, 2, "{summary:?}");
+    assert_eq!(chat.calls(), 24, "eight documents, three attempts each");
 }
 
 #[tokio::test(flavor = "multi_thread")]

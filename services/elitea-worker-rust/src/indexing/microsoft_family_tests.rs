@@ -268,6 +268,7 @@ impl Harness {
                 command: &command,
                 toolkit_configuration: &configuration,
                 tool_parameters: &parameters,
+                parsed: None,
                 embedding_binding: Some(&binding),
                 llm_model: None,
                 llm_configuration: None,

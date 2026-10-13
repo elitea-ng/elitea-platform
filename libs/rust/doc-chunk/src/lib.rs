@@ -37,7 +37,9 @@ mod route;
 mod statistical;
 mod tokens;
 
-pub use config::{ChunkParams, ChunkingConfig, ConfigError, ModelStepParams};
+pub use config::{
+    ChunkParams, ChunkingConfig, ConfigError, ModelStepParams, normalize_chunker_name,
+};
 pub use proposal::{
     AnalysisError, ChunkDetails, PROPOSAL_WINDOW_TOKENS, parse_chunk_analysis, proposal_chunks,
     proposal_system_prompt, proposal_user_message, split_windows,

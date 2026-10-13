@@ -13,8 +13,10 @@
 //!   - a retryable failure (429, 5xx, a timeout, the transport, an answer
 //!     that is not the requested JSON after its attempts) skips THAT
 //!     document as `model_failed`; nothing of its stored version changes, so
-//!     the next run retries it, and [`MAX_CONSECUTIVE_MODEL_FAILURES`] in a
-//!     row stop the run;
+//!     the next run retries it, and [`MAX_CONSECUTIVE_MODEL_FAILURES`] model-step
+//!     documents in a row stop the run (any model-step success, proposal or
+//!     statistical, resets the streak; documents with no model step and
+//!     `no_model` / `model_cap_exceeded` skips neither count nor reset);
 //!   - a refusal another attempt cannot cure (the credential, the project,
 //!     the budget, an unknown model, any other 4xx) stops the run, its
 //!     message carrying the gateway's stable error code;
@@ -58,8 +60,15 @@ use crate::transport::model_facade::{
 };
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
-/// Documents in a row skipped `model_failed` before the run stops: a model
-/// outage must not end as every document skipped.
+/// Model-step documents in a row whose model step failed (skipped
+/// `model_failed`) before the run stops: a model outage must not end as every
+/// document skipped.
+///
+/// The streak counts only documents that HAVE a model step. A model-step
+/// document whose step succeeds (proposal or statistical) resets it. A
+/// document without a model step, a `no_model` or `model_cap_exceeded` skip
+/// (no model call failed), and a statistical embeddings failure (the run's
+/// embedding-failure streak owns it) neither increment nor reset it.
 pub(crate) const MAX_CONSECUTIVE_MODEL_FAILURES: u32 = 5;
 /// Attempts per proposal window for a retryable failure or an unreadable
 /// answer.
@@ -320,7 +329,7 @@ impl ModelSteps {
         match outcome {
             Ok(answers) => match plan.chunks(&answers) {
                 Ok(chunks) => {
-                    self.consecutive_failures = 0;
+                    self.model_step_succeeded();
                     StepEnd::Chunks(chunks)
                 }
                 Err(error) => self.failed_document(&error.to_string()),
@@ -334,6 +343,11 @@ impl ModelSteps {
                 self.failed_document(&cause)
             }
         }
+    }
+
+    /// A model-step document whose step succeeded: the failure streak ends.
+    fn model_step_succeeded(&mut self) {
+        self.consecutive_failures = 0;
     }
 
     /// One document skipped `model_failed`, or the run stopped when that is
@@ -397,7 +411,10 @@ impl ModelSteps {
             }
         }
         match plan.chunks(&vectors) {
-            Ok(chunks) => StepEnd::Chunks(chunks),
+            Ok(chunks) => {
+                self.model_step_succeeded();
+                StepEnd::Chunks(chunks)
+            }
             // The model answered with vectors that do not fit its own
             // request: the embedding space is not trustworthy.
             Err(ChunkError::InvalidModelStep(reason)) => StepEnd::Stop(format!(

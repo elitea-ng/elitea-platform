@@ -108,6 +108,7 @@ pub(crate) fn split_ids(
 /// original, moved forward to the next character boundary when a token cuts a
 /// multi-byte character. The windows concatenate back to `text`; none holds a
 /// replacement character the text did not have. Empty text gives no window.
+#[cfg(test)]
 pub(crate) fn split_exact(
     text: &str,
     encoding: Encoding,
@@ -119,6 +120,19 @@ pub(crate) fn split_exact(
     split_ids_exact(text, &encode(text, encoding)?, encoding, size)
 }
 
+/// [`split_exact`] with each window's token count, taken from the one
+/// encoding pass (so the caller never tokenizes the windows again).
+pub(crate) fn split_exact_counted(
+    text: &str,
+    encoding: Encoding,
+    size: usize,
+) -> Result<(Vec<String>, Vec<usize>), ChunkError> {
+    if text.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    split_ids_exact_counted(text, &encode(text, encoding)?, encoding, size)
+}
+
 /// [`split_exact`] over ids already encoded from `text`.
 pub(crate) fn split_ids_exact(
     text: &str,
@@ -126,8 +140,18 @@ pub(crate) fn split_ids_exact(
     encoding: Encoding,
     size: usize,
 ) -> Result<Vec<String>, ChunkError> {
+    split_ids_exact_counted(text, ids, encoding, size).map(|(windows, _)| windows)
+}
+
+/// [`split_ids_exact`] with the token count of each window.
+pub(crate) fn split_ids_exact_counted(
+    text: &str,
+    ids: &[u32],
+    encoding: Encoding,
+    size: usize,
+) -> Result<(Vec<String>, Vec<usize>), ChunkError> {
     if ids.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let bpe = bpe(encoding)?;
     let mut ends = Vec::with_capacity(ids.len());
@@ -141,9 +165,12 @@ pub(crate) fn split_ids_exact(
     }
     if offset != text.len() {
         // The ids are not this text's (a caller error): the lossy windows.
-        return split_ids(ids, encoding, size, 0);
+        let windows = split_ids(ids, encoding, size, 0)?;
+        let counts = windows_of(ids.len(), size);
+        return Ok((windows, counts));
     }
     let mut out = Vec::new();
+    let mut counts = Vec::new();
     let mut start = 0_usize;
     for window in windows(ids.len(), size, 0) {
         let mut end = window.end.checked_sub(1).map_or(0, |last| ends[last]);
@@ -152,10 +179,19 @@ pub(crate) fn split_ids_exact(
         }
         if end > start {
             out.push(text[start..end].to_owned());
+            counts.push(window.len());
             start = end;
         }
     }
-    Ok(out)
+    Ok((out, counts))
+}
+
+/// The token count of each window over `length` tokens, no overlap.
+fn windows_of(length: usize, size: usize) -> Vec<usize> {
+    windows(length, size, 0)
+        .iter()
+        .map(ExactSizeIterator::len)
+        .collect()
 }
 
 #[cfg(test)]

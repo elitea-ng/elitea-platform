@@ -820,6 +820,16 @@ impl UpsertTarget {
             }
         }
         for (name, value) in [
+            ("chunk_id", &point.chunk_id),
+            ("chunk_type", &point.chunk_type),
+        ] {
+            if layout::has_control_character(value) {
+                return Err(Status::invalid_argument(format!(
+                    "{name} must not contain control characters"
+                )));
+            }
+        }
+        for (name, value) in [
             ("document_key", &point.document_key),
             ("document_version", &point.document_version),
             ("parent_id", &point.parent_id),
@@ -876,7 +886,8 @@ impl UpsertTarget {
             self.namespace,
             self.generation.as_deref(),
             &point.document_key,
-            &layout::identity_chunk_id(&point.chunk_id, &point.chunk_type),
+            &point.chunk_id,
+            &point.chunk_type,
         );
         Ok(PointStruct::new(id.to_string(), vectors, payload))
     }
@@ -1111,6 +1122,34 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_chunk_id_or_type_with_a_control_character_is_refused() {
+        let target = UpsertTarget {
+            project_id: 7,
+            source: "toolkit_index",
+            namespace_id: "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b".to_owned(),
+            namespace: uuid::Uuid::from_u128(1),
+            generation: None,
+            dimension: 2,
+        };
+        let point = |chunk_id: &str, chunk_type: &str| {
+            target.point(&pb::Point {
+                document_key: "d".to_owned(),
+                chunk_id: chunk_id.to_owned(),
+                chunk_type: chunk_type.to_owned(),
+                vector: vec![1.0, 0.0],
+                ..pb::Point::default()
+            })
+        };
+        assert!(point("3", "title").is_ok());
+        for bad in [point("3\u{1f}title", "document"), point("3", "ti\ntle")] {
+            assert_eq!(
+                bad.expect_err("refused").code(),
+                tonic::Code::InvalidArgument
+            );
+        }
     }
 
     #[test]

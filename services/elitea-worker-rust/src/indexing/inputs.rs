@@ -253,14 +253,39 @@ pub(crate) fn chunking_config(
     Ok(chunking)
 }
 
-/// Whether the `index_data` arguments select a chunker that calls a model
-/// (so the claim's chat model entries are worth fetching). Arguments that
-/// cannot be read answer no: the run refuses them itself.
-pub(crate) fn needs_chat_model(tool_parameters: &[u8]) -> bool {
-    index_parameters(tool_parameters)
-        .ok()
-        .and_then(|parameters| chunking_config(&parameters).ok())
-        .is_some_and(|chunking| chunking.needs_model_step())
+/// The `index_data` arguments, parsed once per claim: the typed parameters
+/// and the chunking config they select. The delivery processor parses to
+/// decide which entries to fetch and hands the same value to the run.
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedArgs {
+    pub(crate) parameters: IndexParameters,
+    /// The chunking config, or why it is unusable (the run reports that).
+    pub(crate) chunking: Result<elitea_doc_chunk::ChunkingConfig, elitea_doc_chunk::ConfigError>,
+}
+
+impl ParsedArgs {
+    /// # Errors
+    ///
+    /// The arguments are malformed ([`index_parameters`]).
+    pub(crate) fn parse(tool_parameters: &[u8]) -> Result<Self, InputError> {
+        let parameters = index_parameters(tool_parameters)?;
+        let chunking = chunking_config(&parameters);
+        Ok(Self {
+            parameters,
+            chunking,
+        })
+    }
+
+    /// Whether the run uses the chat model (`index.llm_model` and
+    /// `index.llm_configuration`): only the proposal chunker does today, so
+    /// a statistical-only or `use_llm`-only run neither fetches nor parses
+    /// those entries. Unreadable arguments answer no: the run refuses them
+    /// itself.
+    pub(crate) fn needs_chat_model(&self) -> bool {
+        self.chunking
+            .as_ref()
+            .is_ok_and(elitea_doc_chunk::ChunkingConfig::needs_chat_model)
+    }
 }
 
 /// The embedding model of the binding entry (`model_name`).
@@ -344,25 +369,26 @@ mod tests {
     }
 
     #[test]
-    fn only_a_model_chunker_makes_the_chat_entries_worth_fetching() {
-        let params = |extra: Value| {
+    fn only_the_proposal_chunker_makes_the_chat_entries_worth_fetching() {
+        let needs = |extra: Value| {
             let mut m = json!({"index_name": "n"});
             m.as_object_mut()
                 .unwrap()
                 .extend(extra.as_object().unwrap().clone());
-            m.to_string().into_bytes()
+            ParsedArgs::parse(m.to_string().as_bytes())
+                .unwrap()
+                .needs_chat_model()
         };
-        assert!(!needs_chat_model(&params(json!({}))));
-        assert!(!needs_chat_model(&params(
-            json!({"chunking_tool": "markdown"})
-        )));
-        assert!(needs_chat_model(&params(
-            json!({"chunking_tool": "proposal"})
-        )));
-        assert!(needs_chat_model(&params(
+        assert!(!needs(json!({})));
+        assert!(!needs(json!({"chunking_tool": "markdown"})));
+        assert!(needs(json!({"chunking_tool": "proposal"})));
+        assert!(needs(json!({"chunking_tool": " Proposal"})));
+        // Statistical embeds only; use_llm waits for the vision step.
+        assert!(!needs(
             json!({"chunking_config": {".md": {"chunker": "statistical"}}})
-        )));
-        assert!(!needs_chat_model(b"not json"));
+        ));
+        assert!(!needs(json!({"chunking_config": {"use_llm": true}})));
+        assert!(ParsedArgs::parse(b"not json").is_err());
     }
 
     #[test]

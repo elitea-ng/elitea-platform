@@ -146,6 +146,7 @@ async fn run(
             command: &command(NS, expected),
             toolkit_configuration: configuration.to_string().as_bytes(),
             tool_parameters: parameters.to_string().as_bytes(),
+            parsed: None,
             embedding_binding: Some(&binding()),
             llm_model: None,
             llm_configuration: None,

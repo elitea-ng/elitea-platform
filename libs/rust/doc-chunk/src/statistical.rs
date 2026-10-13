@@ -97,29 +97,38 @@ impl StatisticalSettings {
 
 /// `text` as the statistical chunker's splits: cl100k windows of
 /// `split_tokens`, no overlap, each an exact slice of `text` (a split never
-/// cuts a character; the splits concatenate back to the text). Empty text
-/// gives none.
+/// cuts a character; the splits concatenate back to the text), with each
+/// split's token count from the same encoding pass. Empty text gives none.
 ///
 /// # Errors
 /// [`ChunkError::Tokenizer`] if the encoding is unavailable.
 pub(crate) fn split_text(
     text: &str,
     settings: &StatisticalSettings,
-) -> Result<Vec<String>, ChunkError> {
-    tokens::split_exact(text, Encoding::Cl100k, settings.split_tokens)
+) -> Result<(Vec<String>, Vec<usize>), ChunkError> {
+    tokens::split_exact_counted(text, Encoding::Cl100k, settings.split_tokens)
 }
 
-/// The chunks of `splits` given their embedding `vectors` (one per split, in
-/// order, one dimension).
+/// The chunks of `splits` given their token `counts` (from the split step)
+/// and embedding `vectors` (one per split, in order, one dimension). No text
+/// is tokenized here.
 ///
 /// # Errors
-/// [`ChunkError::InvalidModelStep`] when the vectors do not match the
-/// splits; [`ChunkError::Tokenizer`] if the encoding is unavailable.
+/// [`ChunkError::InvalidModelStep`] when the counts or vectors do not match
+/// the splits.
 pub fn statistical_chunks(
     splits: &[String],
+    counts: &[usize],
     vectors: &[Vec<f32>],
     settings: &StatisticalSettings,
 ) -> Result<Vec<Chunk>, ChunkError> {
+    if counts.len() != splits.len() {
+        return Err(ChunkError::InvalidModelStep(format!(
+            "{} token counts for {} splits",
+            counts.len(),
+            splits.len()
+        )));
+    }
     if vectors.len() != splits.len() {
         return Err(ChunkError::InvalidModelStep(format!(
             "{} vectors for {} splits",
@@ -134,18 +143,14 @@ pub fn statistical_chunks(
             "the vectors differ in dimension".to_owned(),
         ));
     }
-    let mut counts = Vec::with_capacity(splits.len());
-    for split in splits {
-        counts.push(tokens::encode(split, Encoding::Cl100k)?.len());
-    }
     let similarities = similarity_scores(vectors, settings.window_size);
     let threshold = if settings.dynamic_threshold && !similarities.is_empty() {
-        optimal_threshold(&counts, &similarities, settings)
+        optimal_threshold(counts, &similarities, settings)
     } else {
         settings.score_threshold
     };
     let breaks = split_indices(&similarities, threshold);
-    let groups = group(splits, &counts, &breaks, settings);
+    let groups = group(splits, counts, &breaks, settings);
     Ok(groups
         .into_iter()
         .enumerate()
@@ -303,6 +308,19 @@ fn group(
 mod tests {
     use super::*;
 
+    /// `statistical_chunks` with the counts a split step would give.
+    fn chunks_of(
+        splits: &[String],
+        vectors: &[Vec<f32>],
+        settings: &StatisticalSettings,
+    ) -> Result<Vec<Chunk>, ChunkError> {
+        let counts: Vec<usize> = splits
+            .iter()
+            .map(|s| tokens::encode(s, Encoding::Cl100k).unwrap().len())
+            .collect();
+        statistical_chunks(splits, &counts, vectors, settings)
+    }
+
     /// Splits of `n` tokens each ("w w w …" is one token per word).
     fn splits(sizes: &[usize]) -> Vec<String> {
         sizes.iter().map(|n| vec!["w"; *n].join(" ")).collect()
@@ -324,7 +342,7 @@ mod tests {
             min_split_tokens: 100,
             ..StatisticalSettings::default()
         };
-        let chunks = statistical_chunks(&text, &vectors, &settings).unwrap();
+        let chunks = chunks_of(&text, &vectors, &settings).unwrap();
         // Break before split 3 (similarity 0): 180 tokens is in [100, 300).
         let counts: Vec<_> = chunks
             .iter()
@@ -345,14 +363,41 @@ mod tests {
             split_tokens: 7,
             ..StatisticalSettings::default()
         };
-        let splits = split_text(&text, &settings).unwrap();
+        let (splits, _) = split_text(&text, &settings).unwrap();
         assert!(splits.len() > 3);
         assert_eq!(splits.concat(), text);
         assert!(splits.iter().all(|s| !s.contains('\u{FFFD}')));
         let vectors: Vec<Vec<f32>> = (0..splits.len()).map(|i| unit(i % 2, 2)).collect();
-        let chunks = statistical_chunks(&splits, &vectors, &settings).unwrap();
+        let chunks = chunks_of(&splits, &vectors, &settings).unwrap();
         let rejoined: String = chunks.iter().map(|c| c.text.as_str()).collect();
         assert_eq!(rejoined, text, "no space inserted between splits");
+    }
+
+    #[test]
+    fn the_split_step_hands_over_each_splits_token_count() {
+        let text = "alpha beta gamma delta epsilon zeta eta theta. ".repeat(40);
+        let settings = StatisticalSettings {
+            split_tokens: 11,
+            ..StatisticalSettings::default()
+        };
+        let (splits, counts) = split_text(&text, &settings).unwrap();
+        assert_eq!(splits.len(), counts.len());
+        let whole = tokens::encode(&text, Encoding::Cl100k).unwrap().len();
+        assert_eq!(counts.iter().sum::<usize>(), whole, "one pass, no loss");
+        assert!(counts.iter().all(|n| (1..=11).contains(n)));
+        // The chunker reads these counts: a mismatched list is refused, and
+        // the token metadata is the counts' sum.
+        let vectors: Vec<Vec<f32>> = (0..splits.len()).map(|_| unit(0, 2)).collect();
+        assert!(matches!(
+            statistical_chunks(&splits, &counts[1..], &vectors, &settings),
+            Err(ChunkError::InvalidModelStep(_))
+        ));
+        let chunks = statistical_chunks(&splits, &counts, &vectors, &settings).unwrap();
+        let total: u64 = chunks
+            .iter()
+            .map(|c| c.metadata["chunk_token_count"].as_u64().unwrap())
+            .sum();
+        assert_eq!(total, u64::try_from(whole).unwrap());
     }
 
     #[test]
@@ -360,7 +405,7 @@ mod tests {
         // 70 splits, past the SDK's 64-split batch: no carried-over copy.
         let text = splits(&[40; 70]);
         let vectors: Vec<Vec<f32>> = (0..70).map(|i| unit(i % 3, 3)).collect();
-        let chunks = statistical_chunks(&text, &vectors, &StatisticalSettings::default()).unwrap();
+        let chunks = chunks_of(&text, &vectors, &StatisticalSettings::default()).unwrap();
         let joined = chunks.iter().map(|c| c.text.as_str()).collect::<String>();
         assert_eq!(joined, text.concat());
         let total: usize = chunks
@@ -378,7 +423,7 @@ mod tests {
             dynamic_threshold: false,
             ..StatisticalSettings::default()
         };
-        let chunks = statistical_chunks(&text, &vectors, &settings).unwrap();
+        let chunks = chunks_of(&text, &vectors, &settings).unwrap();
         for chunk in &chunks[..chunks.len() - 1] {
             assert!(chunk.metadata["chunk_token_count"].as_u64().unwrap() <= 300);
         }
@@ -390,7 +435,7 @@ mod tests {
         let vectors: Vec<Vec<f32>> = (0..20_u8)
             .map(|i| vec![1.0, f32::from(i % 4) * 0.7, f32::from(i % 7) * 0.3])
             .collect();
-        let chunks = statistical_chunks(&text, &vectors, &StatisticalSettings::default()).unwrap();
+        let chunks = chunks_of(&text, &vectors, &StatisticalSettings::default()).unwrap();
         assert!(!chunks.is_empty());
         let joined = chunks.iter().map(|c| c.text.as_str()).collect::<String>();
         assert_eq!(joined, text.concat());
@@ -399,11 +444,10 @@ mod tests {
     #[test]
     fn one_split_is_one_chunk_and_no_split_is_none() {
         let text = splits(&[10]);
-        let one =
-            statistical_chunks(&text, &[unit(0, 2)], &StatisticalSettings::default()).unwrap();
+        let one = chunks_of(&text, &[unit(0, 2)], &StatisticalSettings::default()).unwrap();
         assert_eq!(one.len(), 1);
         assert!(
-            statistical_chunks(&[], &[], &StatisticalSettings::default())
+            chunks_of(&[], &[], &StatisticalSettings::default())
                 .unwrap()
                 .is_empty()
         );
@@ -414,11 +458,11 @@ mod tests {
         let text = splits(&[10, 10]);
         let s = StatisticalSettings::default();
         assert!(matches!(
-            statistical_chunks(&text, &[unit(0, 2)], &s),
+            chunks_of(&text, &[unit(0, 2)], &s),
             Err(ChunkError::InvalidModelStep(_))
         ));
         assert!(matches!(
-            statistical_chunks(&text, &[unit(0, 2), unit(0, 3)], &s),
+            chunks_of(&text, &[unit(0, 2), unit(0, 3)], &s),
             Err(ChunkError::InvalidModelStep(_))
         ));
     }
