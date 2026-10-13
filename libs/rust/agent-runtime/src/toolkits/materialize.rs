@@ -42,6 +42,8 @@ use super::families::index_tools::{
     build_index_toolset, is_index_family, selection_is_index_only,
 };
 use super::families::jira;
+#[cfg(feature = "toolkit-pptx")]
+use super::families::pptx;
 use super::families::qtest;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
@@ -549,6 +551,11 @@ async fn materialize(
             .map_err(|error| artifact_toolset_materialization_error(error.code()))?;
         return Ok((Arc::new(toolset), DelegatedAuthorizationCatalog::default()));
     }
+    #[cfg(feature = "toolkit-pptx")]
+    if reference.tool_type() == "pptx" {
+        let toolset = materialize_pptx(name, settings, policy, artifacts)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
     if matches!(
         reference.tool_type(),
         "aha" | "bigquery" | "bitbucket" | "carrier" | "confluence" | "figma" | "gitlab" | "jira"
@@ -1004,6 +1011,46 @@ const fn unsupported_toolkit() -> ToolsetMaterializationError {
 
 const fn resource_exhausted() -> ToolsetMaterializationError {
     ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::ResourceExhausted)
+}
+
+/// The `pptx` family (ADR-0032 P3). Like `artifact`, its authority is the
+/// live claim: the Office host rides on the artifact authority. A path that
+/// lends none (the desktop until P6) skips the toolkit as unsupported.
+#[cfg(feature = "toolkit-pptx")]
+fn materialize_pptx(
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let authority = artifacts.ok_or_else(unsupported_toolkit)?;
+    let config = pptx::config::PptxToolkitConfig::parse(settings)
+        .map_err(|error| pptx_config_materialization_error(error.code()))?;
+    let toolset = pptx::tools::build_pptx_toolset(name, &config, policy, authority)
+        .map_err(|error| pptx_toolset_materialization_error(error.code()))?
+        .ok_or_else(unsupported_toolkit)?;
+    Ok(Arc::new(toolset))
+}
+
+#[cfg(feature = "toolkit-pptx")]
+const fn pptx_config_materialization_error(
+    code: pptx::config::PptxConfigErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        pptx::config::PptxConfigErrorCode::InvalidConfiguration => invalid_configuration(),
+        pptx::config::PptxConfigErrorCode::ResourceExhausted => resource_exhausted(),
+    }
+}
+
+#[cfg(feature = "toolkit-pptx")]
+const fn pptx_toolset_materialization_error(
+    code: pptx::tools::PptxToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        pptx::tools::PptxToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        pptx::tools::PptxToolsetErrorCode::InvalidConfiguration
+        | pptx::tools::PptxToolsetErrorCode::InvalidDefinition => invalid_configuration(),
+    }
 }
 
 const fn artifact_config_materialization_error(

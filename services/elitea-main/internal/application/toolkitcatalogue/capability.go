@@ -121,6 +121,12 @@ var pythonVerifiedImportKeys = []string{
 // `materialize_zephyr_rest` and `materialize_test_management`, plus the three
 // types dispatched by direct comparison (`artifact`, `openapi`, `sharepoint`).
 //
+// `pptx` (ADR-0032 P3) is a claim-scoped family like `artifact`: it
+// materialises only where the Office host is lent (the ordinary agent path and a
+// pipeline's nodes of a worker built with the `toolkit-pptx` feature, which the cloud worker
+// enables and the desktop host does not), and it serves the SDK's two tools
+// plus nineteen of its own, so no per-tool list is needed here.
+//
 // `artifact` (#906) is the odd one: it materialises only where the live
 // execution claim is in scope (the ordinary agent path and a root pipeline's
 // direct and LLM nodes), because its authority is that claim rather than a
@@ -159,6 +165,7 @@ var rustNativeToolTypes = []string{
 	"keycloak",
 	"openapi",
 	"postman",
+	"pptx",
 	"qtest",
 	"rally",
 	"report_portal",

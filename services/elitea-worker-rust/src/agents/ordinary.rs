@@ -55,6 +55,7 @@ use crate::transport::model_facade::{
     BoundModelFacade, ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
     ModelReasoningEffort,
 };
+use crate::transport::office_host::{ClaimOfficeHost, OfficeRuntime};
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
@@ -77,6 +78,9 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// (ADR-0030 I1); `None` on a deployment without a `vector_target`,
     /// where the indexing families carry no index tools.
     index_runtime: Option<Arc<IndexIngestRuntime>>,
+    /// The platform object client the Office families (`pptx`) read and write
+    /// documents with (ADR-0032); `None` leaves them out as unsupported.
+    office_runtime: Option<Arc<OfficeRuntime>>,
 }
 
 /// Shared provider/session dependencies; constructing them never starts Runner.
@@ -112,7 +116,19 @@ impl OrdinaryNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             sessions: NativeSessionBackend::invocation_local(),
             index_runtime: None,
+            office_runtime: None,
         }
+    }
+
+    /// Lend the Office runtime, so a `pptx` toolkit reads and writes its
+    /// documents under the claim's credential (ADR-0032 P3).
+    #[must_use]
+    pub(crate) fn with_office_runtime(
+        mut self,
+        office_runtime: Option<Arc<OfficeRuntime>>,
+    ) -> Self {
+        self.office_runtime = office_runtime;
+        self
     }
 
     /// Lend the indexing runtime, so the indexing families serve the index
@@ -323,7 +339,15 @@ impl OrdinaryNativeAgentAssembler {
             Arc::clone(&self.platform),
             Arc::clone(runtime_context),
         ));
-        let artifact_authority = ArtifactToolAuthority::new(Arc::clone(&platform_writer));
+        let mut artifact_authority = ArtifactToolAuthority::new(Arc::clone(&platform_writer));
+        // The Office host (ADR-0032) rides on the artifact authority, built
+        // only when the snapshot has a `pptx` toolkit: it mints a credential
+        // and binds nothing until a tool calls the model.
+        if snapshot_carries_office_family(tool_snapshot)
+            && let Some(office) = self.office_host(&context, profile)
+        {
+            artifact_authority = artifact_authority.with_office(office);
+        }
         // The index tools (ADR-0030 I1) act under the same claim: its vector
         // token, its redeemed context for the query embedding, and a chat
         // model bound on the agent's own model for the step-back tools. The
@@ -503,6 +527,33 @@ impl OrdinaryNativeAgentAssembler {
             Some(model),
             runtime_context.index_removal_binding(),
         ))))
+    }
+
+    /// The Office host for this claim, or `None` (logged) when the worker has
+    /// no Office runtime or the credential does not fit the object API: the
+    /// toolkit is then skipped as unsupported.
+    fn office_host(
+        &self,
+        context: &Arc<ClaimScopedEliteaContext>,
+        profile: &super::assembly::OrdinaryNoToolProfile,
+    ) -> Option<Arc<dyn elitea_agent_runtime::toolkits::OfficeToolHost>> {
+        let runtime = self.office_runtime.as_ref()?;
+        let bearer = context.model_facade_token();
+        let model = LazyStepbackModel::new(self.stepback_model_binder(profile, context));
+        let host = ClaimOfficeHost::new(
+            Arc::clone(runtime),
+            &bearer,
+            &context.resource_project_id().to_string(),
+            model,
+        );
+        if let Ok(host) = host {
+            return Some(Arc::new(host));
+        }
+        tracing::warn!(
+            event = "office_host_unavailable",
+            "the Office families are left out: the object API client could not be built"
+        );
+        None
     }
 
     /// A second binding of the agent's model, with no instruction and no
@@ -775,6 +826,13 @@ struct DirectToolsets {
 /// and building the sensitive-tool and delegated-authorization catalogs from
 /// THOSE names keeps the three in agreement; building either catalog from the
 /// published name would leave a renamed tool silently unguarded.
+/// Whether the snapshot has a toolkit of the Office families (ADR-0032).
+pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
+    snapshot.iter().any(|reference| {
+        reference.kind() == FrozenToolKind::Configured && reference.tool_type() == "pptx"
+    })
+}
+
 /// Whether any configured I1 indexing toolkit in the snapshot carries Main's
 /// frozen index catalog — the only case the index tools' host is worth
 /// building (ADR-0030 I1).

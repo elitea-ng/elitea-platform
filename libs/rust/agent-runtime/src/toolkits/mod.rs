@@ -115,6 +115,8 @@ mod openapi_tests;
 mod policy_tests;
 #[cfg(test)]
 mod postman_tests;
+#[cfg(all(test, feature = "toolkit-pptx"))]
+mod pptx_tests;
 #[cfg(test)]
 mod qtest_tests;
 #[cfg(test)]
@@ -175,6 +177,10 @@ pub use families::index_tools::{
     INDEXES_KEY, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,
     SharedIndexCatalog, is_index_family, is_sdk_index_tool_name,
+};
+pub use families::office_host::{
+    MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, OfficeModelRequest,
+    OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
 };
 pub use materialize::{
     ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,

@@ -372,6 +372,10 @@ pub(crate) struct PipelineNativeAgentAssembler {
     /// The index tools' vector client and embeddings route (ADR-0030 I1);
     /// `None` on a deployment without a `vector_target`.
     index_runtime: Option<Arc<IndexIngestRuntime>>,
+    /// The platform object client the Office families (`pptx`) use (ADR-0032).
+    /// A pipeline binds no chat model to a tool, so the Office tools that call
+    /// a model refuse here with a sentence; the rest work.
+    office_runtime: Option<Arc<crate::transport::office_host::OfficeRuntime>>,
 }
 
 impl PipelineNativeAgentAssembler {
@@ -380,6 +384,16 @@ impl PipelineNativeAgentAssembler {
         sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
     ) -> Self {
         self.sandbox = sandbox;
+        self
+    }
+
+    /// Lend the Office runtime (ADR-0032 P3).
+    #[must_use]
+    pub(crate) fn with_office_runtime(
+        mut self,
+        office_runtime: Option<Arc<crate::transport::office_host::OfficeRuntime>>,
+    ) -> Self {
+        self.office_runtime = office_runtime;
         self
     }
 
@@ -411,6 +425,7 @@ impl PipelineNativeAgentAssembler {
             model_facade: Some(model_facade),
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             index_runtime: None,
+            office_runtime: None,
         }
     }
 
@@ -432,6 +447,7 @@ impl PipelineNativeAgentAssembler {
             model_facade: None,
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             index_runtime: None,
+            office_runtime: None,
         }
     }
 
@@ -491,7 +507,11 @@ impl PipelineNativeAgentAssembler {
         // that calls an index tool on a toolkit carrying a catalog (the query
         // embedding, ADR-0030 I1 — review round 1).
         let calls_index_tool = pipeline_calls_index_tool(profile.definition(), &toolsets);
-        let context = if has_llm_nodes || has_application_nodes || calls_index_tool {
+        // A `pptx` toolkit reads and writes documents under the claim's
+        // credential, so its nodes need the redeemed context too (ADR-0032).
+        let has_office = self.office_runtime.is_some()
+            && super::ordinary::snapshot_carries_office_family(&toolsets);
+        let context = if has_llm_nodes || has_application_nodes || calls_index_tool || has_office {
             let platform = self
                 .platform
                 .as_ref()
@@ -522,10 +542,29 @@ impl PipelineNativeAgentAssembler {
         // model calls it mid-run, after assembly. Without it the family is
         // skipped and every node on an attached artifact toolkit is refused.
         let artifacts = self.platform.as_ref().map(|platform| {
-            ArtifactToolAuthority::new(Arc::new(ClaimPlatformWriter::new(
+            let authority = ArtifactToolAuthority::new(Arc::new(ClaimPlatformWriter::new(
                 Arc::clone(platform),
                 Arc::clone(runtime_context),
-            )))
+            )));
+            // The Office host (ADR-0032): objects under the claim's credential.
+            // No chat model is bound in a pipeline, so `complete` refuses with
+            // a fixed reason and `fill_template` / `translate_presentation`
+            // answer with a sentence saying so; every other pptx tool works.
+            match (has_office, self.office_runtime.as_ref(), context.as_ref()) {
+                (true, Some(runtime), Some(context)) => {
+                    let host = crate::transport::office_host::ClaimOfficeHost::new(
+                        Arc::clone(runtime),
+                        &context.model_facade_token(),
+                        &context.resource_project_id().to_string(),
+                        crate::indexing::tools::LazyStepbackModel::unbound(),
+                    );
+                    match host {
+                        Ok(host) => authority.with_office(Arc::new(host)),
+                        Err(_) => authority,
+                    }
+                }
+                _ => authority,
+            }
         });
         // The index tools (ADR-0030 I1) need the redeemed context for the
         // query embedding; the reason it is missing travels with the

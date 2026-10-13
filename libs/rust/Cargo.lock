@@ -1567,12 +1567,14 @@ dependencies = [
  "adk-runner",
  "adk-session",
  "adk-tool",
+ "aho-corasick",
  "async-stream",
  "async-trait",
  "base64 0.23.1",
  "bytes",
  "chrono",
  "elitea-connectors",
+ "elitea-office-core",
  "fancy-regex 0.18.0",
  "futures",
  "hmac 0.13.0",
@@ -9001,8 +9003,6 @@ dependencies = [
 [[package]]
 name = "zavora-slide"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16dd3c2289cc7b520b53f4f7158fedf58cf242371145841686401fd6ee3fa7a8"
 dependencies = [
  "png 0.17.16",
  "serde",
@@ -9047,8 +9047,6 @@ dependencies = [
 [[package]]
 name = "zavora-slide-pdf"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25c5d8cd4ff4c3e74815b22dee18cbe308e081eeafe5bc045a5eb277a6b8847d"
 dependencies = [
  "pdf-writer 0.12.1",
  "svg2pdf",
@@ -9060,8 +9058,6 @@ dependencies = [
 [[package]]
 name = "zavora-slide-render"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "897be0dd207ce289a43f3e9497a084f9bdc6f30cad1672b22fa18e25359647a6"
 dependencies = [
  "base64 0.22.1",
  "fontdb",

@@ -512,3 +512,62 @@ func TestCurrentToolkitSchemaSnapshotRetainsExactJSONNumbers(t *testing.T) {
 		t.Fatalf("numeric schema value=%#v", limit)
 	}
 }
+
+// The Rust-only tools of the pptx family (ADR-0032 P3) are merged into the
+// pinned snapshot, so the toolkit editor lists them with the SDK's two.
+func TestPinnedSnapshotListsTheRustOnlyPptxTools(t *testing.T) {
+	t.Parallel()
+
+	snapshot, err := LoadPinnedCurrentToolkitSchemaSnapshot()
+	if err != nil {
+		t.Fatalf("load pinned snapshot: %v", err)
+	}
+	schemas, found, err := snapshot.ToolkitArgumentSchemas("pptx")
+	if err != nil || !found {
+		t.Fatalf("pptx schemas: found=%v err=%v", found, err)
+	}
+	if len(schemas) != 21 {
+		t.Fatalf("pptx lists %d tools, want the SDK's 2 and 19 more", len(schemas))
+	}
+	for _, name := range []string{
+		"fill_template", "translate_presentation", "list_placeholders", "replace_placeholders",
+		"create_presentation", "add_slide", "delete_slide", "move_slide", "set_title", "set_text",
+		"add_bullets", "add_table", "set_table_cell", "add_chart", "add_image", "set_notes",
+		"apply_theme", "render_preview", "design_check", "to_markdown", "export_pdf",
+	} {
+		schema, ok := schemas[name]
+		if !ok {
+			t.Errorf("tool %s is not listed", name)
+			continue
+		}
+		if schema["type"] != "object" || schema["title"] == nil {
+			t.Errorf("tool %s has no pydantic-shaped schema: %v", name, schema)
+		}
+	}
+	// The unmerged loader is the SDK alone.
+	plain, err := LoadCurrentToolkitSchemaSnapshot(pinnedCurrentToolkitSchemaSnapshotJSON)
+	if err != nil {
+		t.Fatalf("load plain: %v", err)
+	}
+	sdk, _, _ := plain.ToolkitArgumentSchemas("pptx")
+	if len(sdk) != 2 {
+		t.Errorf("the SDK declares %d pptx tools; the overlay assumes 2 (a collision must be resolved)", len(sdk))
+	}
+}
+
+func TestRustOnlyToolsAreRefusedWhenTheyShadowOrMisname(t *testing.T) {
+	t.Parallel()
+
+	for name, overlay := range map[string]string{
+		"an SDK tool":     `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{"pptx":{"fill_template":{"type":"object"}}}}`,
+		"an unknown type": `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{"nope":{"x":{"type":"object"}}}}`,
+		"a wrong version": `{"schema_version":"v0","types":{}}`,
+		"an extra field":  `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{},"x":1}`,
+		"a null schema":   `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{"pptx":{"x":null}}}`,
+	} {
+		if _, err := loadCurrentToolkitSchemaSnapshot(
+			pinnedCurrentToolkitSchemaSnapshotJSON, []byte(overlay)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}

@@ -270,14 +270,14 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 	// platform's own storage under the live execution claim, so the type is
 	// creatable under the rust worker instead of withheld.
 	for _, toolkitType := range []string{
-		"github", "openapi", "sharepoint", "sql", "artifact", "bitbucket", "testrail", "qtest",
+		"github", "openapi", "sharepoint", "sql", "artifact", "bitbucket", "testrail", "qtest", "pptx",
 	} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); unavailable {
 			t.Errorf("%s is a native family and is withheld", toolkitType)
 		}
 	}
-	for _, toolkitType := range []string{"pptx", "localgit", "delta_lake"} {
+	for _, toolkitType := range []string{"localgit", "delta_lake"} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
 			t.Errorf("%s has no native family and is offered as creatable", toolkitType)
@@ -609,5 +609,57 @@ func TestAPartialRustFamilyNamesItsUnservedTools(t *testing.T) {
 	}
 	if _, present := metadataOf(t, body, "slack")["unavailable_tools"]; present {
 		t.Fatal("a family without a tool list serves every tool")
+	}
+}
+
+// The editor's tool list is the keys of properties.selected_tools.args_schemas:
+// the pptx type serves the SDK's two tools and the Rust worker's nineteen.
+func TestPptxCatalogueListsTheRustOnlyTools(t *testing.T) {
+	t.Parallel()
+
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
+	properties, _ := typeSchemaOf(t, body, "pptx")["properties"].(map[string]any)
+	selected, _ := properties["selected_tools"].(map[string]any)
+	schemas, _ := selected["args_schemas"].(map[string]any)
+	if len(schemas) != 21 {
+		t.Fatalf("pptx lists %d tools, want 21", len(schemas))
+	}
+	for _, name := range []string{"fill_template", "translate_presentation", "add_slide", "export_pdf"} {
+		if _, ok := schemas[name]; !ok {
+			t.Errorf("%s is missing from the pptx tool list", name)
+		}
+	}
+	// Grouped for display like any other tool: add_* writes, to_markdown reads.
+	if groups, ok := selected["tool_groups"].(map[string]any); ok {
+		if groups["add_slide"] == nil || groups["to_markdown"] == nil {
+			t.Errorf("the new tools carry no group: %v", groups)
+		}
+	}
+}
+
+// The Rust-only tools are offered only where the Rust worker serves them: the
+// Python deployment marks the nineteen unavailable (the metadata mechanism a
+// partial family uses), the Rust deployment marks none.
+func TestPptxRustOnlyToolsAreWithheldOnAPythonDeployment(t *testing.T) {
+	t.Parallel()
+
+	unavailable := func(implementation string) []any {
+		body := getToolkitTypeCatalogue(t, catalogueOptions(t, implementation)...)
+		list, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any)
+		return list
+	}
+	python := unavailable("python")
+	if len(python) != 19 {
+		t.Fatalf("python deployment withholds %d pptx tools, want the 19 Rust-only ones: %v", len(python), python)
+	}
+	for _, sdk := range []string{"fill_template", "translate_presentation"} {
+		for _, name := range python {
+			if name == sdk {
+				t.Errorf("the SDK tool %s must stay available on python", sdk)
+			}
+		}
+	}
+	if rust := unavailable("rust"); len(rust) != 0 {
+		t.Fatalf("rust deployment withholds pptx tools: %v", rust)
 	}
 }

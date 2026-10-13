@@ -11,6 +11,9 @@ mod input_content_tests;
 pub(crate) mod keepalive;
 pub(crate) mod model_facade;
 pub mod nats_jetstream;
+pub(crate) mod office_host;
+#[cfg(test)]
+pub(crate) mod office_host_tests;
 pub(crate) mod openai_compatible_facade;
 #[cfg(test)]
 mod openai_compatible_facade_tests;
