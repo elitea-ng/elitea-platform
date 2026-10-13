@@ -55,7 +55,8 @@ use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use elitea_doc_extract::{
-    DocumentError, DocumentLimits, EXTRACTION_STACK_BYTES, cooperative_timeout, document_types,
+    DocumentError, DocumentLimits, EXTRACTION_STACK_BYTES, ImageLimits,
+    ImagesSkipped as ImagesDropped, cooperative_timeout, document_types,
     extract_document_on_this_thread, is_document_type,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
@@ -64,8 +65,9 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::pb::document_extract_service_server::DocumentExtractService;
 use crate::pb::{
-    CapabilitiesRequest, CapabilitiesResponse, ExtractHeader, ExtractLimits, ExtractRequest,
-    ExtractResponse, ExtractSkip, ExtractedText, SkipReason, extract_request, extract_response,
+    CapabilitiesRequest, CapabilitiesResponse, EmbeddedImage, ExtractHeader, ExtractImages,
+    ExtractLimits, ExtractRequest, ExtractResponse, ExtractSkip, ExtractedText, ImagesSkipped,
+    SkipReason, extract_request, extract_response,
 };
 
 /// The grace between the decision to exit and the exit itself: long enough
@@ -144,6 +146,79 @@ impl Caps {
             max_pages: u32::try_from(self.max_pages).unwrap_or(u32::MAX),
             max_output_bytes: self.max_output_bytes,
             timeout_millis: millis(self.timeout),
+        }
+    }
+}
+
+/// The caps a request's embedded-picture bounds are lowered to (ADR-0030 I4
+/// part C). Pictures are returned only when the request asks
+/// ([`ExtractHeader::images`]); these are what an ask cannot exceed.
+///
+/// MEMORY, what is bounded and what is not. A returned picture is held three
+/// times at the worst (the parser's copy, the response's copy, the encoded
+/// message): `3 * max_total_bytes` per in-flight document. For a DOCX or
+/// PPTX the parser's own hold on the package's media is bounded BEFORE it
+/// runs: the media of the package are counted from its central directory and
+/// a document whose media outweigh four times these caps (in count or in
+/// declared bytes) gives no picture at all (counted `too_many` /
+/// `too_large`). For a PDF the parser decodes every page's pictures with no
+/// document budget and cannot stop early, so its pictures are read only for
+/// a PDF of at most `PDF_PICTURE_MAX_PAGES` pages (a first, text-only pass
+/// gives the count), one picture a page; a longer one gives its text alone
+/// (counted). The parser has no byte bound of its own, so the figure takes
+/// each picture at the per-picture bound. The defaults' per-slot figure is
+/// [`crate::config::Config::picture_memory`], which a test holds under the
+/// default limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageCaps {
+    /// Pictures returned for one document.
+    pub max_images: u32,
+    /// Bytes of one picture.
+    pub max_image_bytes: u64,
+    /// Bytes of all returned pictures of one document.
+    pub max_total_bytes: u64,
+}
+
+impl Default for ImageCaps {
+    fn default() -> Self {
+        Self {
+            max_images: 24,
+            max_image_bytes: 5 << 20,
+            max_total_bytes: 12 << 20,
+        }
+    }
+}
+
+impl ImageCaps {
+    /// The bounds of one request: each field of `asked` lowered to this cap,
+    /// 0 meaning the cap itself.
+    #[must_use]
+    pub fn apply(&self, asked: &ExtractImages) -> ImageCaps {
+        let bound = |value: u64, cap: u64| if value == 0 { cap } else { value.min(cap) };
+        ImageCaps {
+            max_images: u32::try_from(bound(
+                u64::from(asked.max_images),
+                u64::from(self.max_images),
+            ))
+            .unwrap_or(self.max_images),
+            max_image_bytes: bound(asked.max_image_bytes, self.max_image_bytes),
+            max_total_bytes: bound(asked.max_total_bytes, self.max_total_bytes),
+        }
+    }
+
+    fn wire(&self) -> ExtractImages {
+        ExtractImages {
+            max_images: self.max_images,
+            max_image_bytes: self.max_image_bytes,
+            max_total_bytes: self.max_total_bytes,
+        }
+    }
+
+    fn limits(&self) -> ImageLimits {
+        ImageLimits {
+            max_images: usize::try_from(self.max_images).unwrap_or(usize::MAX),
+            max_image_bytes: usize::try_from(self.max_image_bytes).unwrap_or(usize::MAX),
+            max_total_bytes: usize::try_from(self.max_total_bytes).unwrap_or(usize::MAX),
         }
     }
 }
@@ -344,6 +419,7 @@ struct Hooks {
 /// The service.
 pub struct Extractor {
     caps: Caps,
+    image_caps: ImageCaps,
     capacity: Capacity,
     /// The peer uids served; every other peer is `PERMISSION_DENIED`.
     peer_uids: BTreeSet<u32>,
@@ -382,6 +458,7 @@ impl Extractor {
         };
         Self {
             caps,
+            image_caps: ImageCaps::default(),
             capacity,
             peer_uids,
             own_uid: own_uid(),
@@ -393,6 +470,13 @@ impl Extractor {
             #[cfg(test)]
             hooks: Hooks::default(),
         }
+    }
+
+    /// The same service with other caps on the pictures it returns.
+    #[must_use]
+    pub fn with_image_caps(mut self, image_caps: ImageCaps) -> Self {
+        self.image_caps = image_caps;
+        self
     }
 
     /// Extractions that outran their timeout, or lost their request, and
@@ -550,6 +634,12 @@ impl Extractor {
             max_content_bytes: usize::try_from(limits.max_input_bytes.max(limits.max_output_bytes))
                 .unwrap_or(usize::MAX),
             timeout: limits.timeout,
+            // Asked for by the header, lowered to the caps; absent, no
+            // picture is read at all.
+            images: header
+                .images
+                .as_ref()
+                .map(|asked| self.image_caps.apply(asked).limits()),
         };
         let ledger = OverrunLedger::new(Arc::clone(&self.overruns));
         let thread_ledger = Arc::clone(&ledger);
@@ -643,10 +733,7 @@ impl Extractor {
                         ),
                     ))
                 } else {
-                    Ok(ExtractedText {
-                        text: text.text,
-                        extractor: text.extractor.to_owned(),
-                    })
+                    Ok(wire_text(text))
                 }
             }
             Err(DocumentError::Extractor(detail)) => {
@@ -705,6 +792,33 @@ impl Watch<'_> {
 impl Drop for Watch<'_> {
     fn drop(&mut self) {
         self.abandon("lost its request (cancelled, or past the transport's deadline)");
+    }
+}
+
+/// The wire form of an extracted document. Pictures are absent unless the
+/// request asked, and `images_skipped` unless something was dropped.
+fn wire_text(text: elitea_doc_extract::DocumentText) -> ExtractedText {
+    let dropped = text.images_skipped;
+    ExtractedText {
+        text: text.text,
+        extractor: text.extractor.to_owned(),
+        images: text
+            .images
+            .into_iter()
+            .map(|image| EmbeddedImage {
+                data: image.data.into(),
+                media_type: image.media_type.to_owned(),
+                ordinal: image.ordinal,
+                text_offset: image.text_offset as u64,
+                page: image.page.unwrap_or(0),
+                name: image.name.unwrap_or_default(),
+            })
+            .collect(),
+        images_skipped: (dropped != ImagesDropped::default()).then_some(ImagesSkipped {
+            too_many: dropped.too_many,
+            too_large: dropped.too_large,
+            unsupported: dropped.unsupported,
+        }),
     }
 }
 
@@ -787,6 +901,10 @@ impl DocumentExtractService for Extractor {
                 filename = %header.filename,
                 content_type = %header.content_type,
                 text_bytes = text.text.len(),
+                images = text.images.len(),
+                images_skipped = text
+                    .images_skipped
+                    .map_or(0, |s| s.too_many + s.too_large + s.unsupported),
                 elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 "extracted"
             ),
@@ -819,6 +937,7 @@ impl DocumentExtractService for Extractor {
             stream_idle_millis: millis(self.capacity.stream_idle),
             busy: u32::try_from(self.busy()).unwrap_or(u32::MAX),
             overruns: u32::try_from(self.overruns()).unwrap_or(u32::MAX),
+            image_limits: Some(self.image_caps.wire()),
         }))
     }
 }
@@ -998,6 +1117,7 @@ mod tests {
             content_type: "application/pdf".to_owned(),
             content_length: 0,
             limits: None,
+            images: None,
         }
     }
 

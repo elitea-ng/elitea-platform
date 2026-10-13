@@ -843,7 +843,72 @@ log-safety child process), the prompt digests in `doc-chunk/src/vision.rs`.
 | Reply text is the document; blank reply becomes `[No readable text detected by LLM]`; chunked with the markdown chunker at `max_tokens` 512 / `token_overlap` 10 (loader kwargs, overridable per extension); chunk metadata `processing_method: llm` (a single chunk keeps the base document's metadata without `chunk_id`) | Same text, placeholder and chunker settings; every chunk, single or not, carries `chunk_id`, `chunk_type` and `processing_method: llm`. `original_dimensions` / `scaled` are not recorded | Uniform chunk metadata with the other chunkers |
 | `ImageDescriptionCache`: in-memory LRU of 500 per toolkit instance, key md5(bytes) + md5(prompt), blank descriptions not cached | A per-run LRU of 500 in the run's `ModelSteps` (`Runner` field), key sha256(bytes) + sha256(prompt) + model name; blank descriptions and descriptions over 32 KiB are not cached. A hit makes no call and is not charged against the run's model-call cap | Per run, not per toolkit instance: the worker has no instance that outlives a run; across runs the pipeline's version skip already avoids re-describing an unchanged file. The key adds the model so a model change inside a run (it cannot happen today) never serves another model's text |
 | A failed vision call raises and the document is lost or the whole load fails | The policy is the proposal chunker's for what is shared (three attempts, every attempt charged against `index_model_call_cap`, liveness before each attempt and retry wait, one shared call helper), but an image NEVER stops or fails a run for a reason of its own, and never feeds or resets the proposal failure streak. Stops the run: only the credential (`unauthorized`), the project (`forbidden`) and the budget (`budget_exhausted` family, `resource_exhausted`). Skips the image: a retryable failure after its attempts `model_failed`; the gateway's generic rejection (a text-only model, a provider 400 for one picture) `vision_refused`; `request_too_large` / `event_too_large` `too_large`; the model cannot be bound `no_model` (warned once, the rest of the run's images skip without asking); no chat model `no_model`; the call cap exhausted `model_cap_exceeded` (the next run resumes). Images have their own budget INSIDE the cap: at most half of `index_model_call_cap` (rounded down, at least one when the cap is at least one), every attempt counted; a spent image budget skips the remaining images `model_cap_exceeded`, so a proposal/statistical document always has at least half of the cap, and proposal calls keep the full cap minus what was actually spent. Three `vision_refused` in a row mark the run's model as text-only (warned once, naming it): the rest of the images are skipped `vision_refused` without a call; a success resets the streak. The cheap checks run before the expensive ones (chat model, sha256 of the original bytes and the cache, the image budget, and only then the decode and resize), so no picture is decoded for a run with no model, a cache hit or a spent budget. A fit that outlives its 30 s wait is skipped `extract_timeout`; the decode keeps its permit until it really ends, so at most two decodes run at once even after timeouts A reply cut by `max_tokens` is KEPT (SDK parity) with a warning. Image bytes and descriptions are never logged (only the facade's error code) | An unknown model reaches the worker as the gateway's generic rejection, so it reads as `vision_refused` per image (one call each) rather than a stop |
-| Images embedded in PDF / DOCX / PPTX (`extract_images`, off by default) and connector `process_images` (ADO wiki/boards, Confluence `bins_with_llm`) | **Not ported** (PR-C, awaiting the owner's go/no-go): `use_llm` on a non-image extension is ignored with a warning. OneNote (`include_onenote`) stays refused: it needs a delegated user token as well as descriptions | — |
+| Images embedded in PDF / DOCX / PPTX (`extract_images`, off by default) | Ported by PR-C, below | — |
+| Connector `process_images` (ADO wiki/boards, Confluence `bins_with_llm`) | **Not ported**: those settings are accepted and ignored. OneNote (`include_onenote`) stays refused: it needs a delegated user token as well as descriptions | — |
 
 Follow-ups: SVG only if a font-free renderer that fetches nothing is
-accepted; PR-C.
+accepted.
+
+## ADR-0030 I4 (PR-C): pictures embedded in PDF, DOCX and PPTX, 2026-10-13
+
+The pictures inside a PDF, DOCX or PPTX are described by the chat model and
+the descriptions are written into the document's text before it is chunked
+(SDK `EliteAPDFLoader.read_pdf_page`, `EliteAPowerPointLoader.read_pptx_slide`,
+`EliteADocxMammothLoader.__handle_image` / `__postprocess_original_md`,
+`utils.perform_llm_prediction_for_image_bytes`, pinned `1b335d5`). HTML, XML
+and spreadsheets are NOT in this step: the SDK's loaders for them describe no
+picture (the Excel loader only counts them).
+
+The extraction sidecar carries the pictures (`elitea.extract.v1`:
+`ExtractHeader.images` asks, `ExtractedText.images` / `images_skipped`
+answer; `services/elitea-doc-extractor`, `libs/rust/doc-extract`). A request
+that does not ask reads no picture; one that asks gets the same text as one
+that does not (measured: the placeholders stay on, because turning xberg's
+placeholders off drops DOCX's own `[Image: ...]` lines). The pictures are
+the package's own bytes (the extractor decodes nothing it returns; a PDF's
+come from the parser as PNG), recognised by their magic bytes, bounded in
+count and bytes, each with a byte offset into the text where its description
+belongs. Planning is pure and model-free (`elitea_doc_chunk::plan_embedded`,
+`EmbeddedVisionPlan::inline`); the worker's `prepare` task returns
+`Prepare::Embedded` and the run's loop describes the pictures, inlines
+the descriptions and chunks (`pipeline.rs::finish_embedded`), each picture
+through `ModelSteps::describe_one`, the one path an image FILE takes.
+Proving tests: `services/elitea-doc-extractor/tests/socket.rs` (generated PDF,
+DOCX and PPTX with one or two pictures: positions, pass-through bytes, caps,
+oversized, too many, unsupported, text invariance),
+`libs/rust/doc-extract` (`anchors`), `libs/rust/doc-chunk/src/embedded.rs`
+(the SDK's blocks byte for byte), `src/indexing/embedded_picture_tests.rs`
+(a whole run), `src/transport/extractor_client.rs` (`pictures_of`).
+
+| SDK behaviour | Rust | Deliberate difference |
+| --- | --- | --- |
+| `use_llm` is OFF for documents (`DEFAULT_ALLOWED_WITH_LLM`); `extract_images` is False for PDF and PPTX and True for DOCX (whose handler transcribes with an llm, else writes `Transcript is not available`) | Per-extension opt-in: a PDF, DOCX or PPTX is described only when the extension's own `use_llm` (else the top-level one) is true; the default is OFF. `use_llm` false asks the sidecar for no picture at all, makes no call and changes nothing in the text. The prompt, `use_default_prompt` follow the image-file step (extension's own block; a `prompt` without `use_default_prompt` is honoured) | The SDK's DOCX transcribes whenever an llm is bound; here DOCX is opt-in like the other two so the three types behave alike and a deployment that never asks pays nothing |
+| PDF: after each page's text, `\n**Image Transcript:**\n<d>\n--------------------\n` per picture | The same block at the end of the picture's page (the page located in the sidecar's text) | — |
+| PPTX: the same block at the picture shape's place among the slide's shapes | The same block at the END of the slide's text | The sidecar's plain text has no shape order to put a block by |
+| DOCX: `\n**Image Transcript:**\nImage: <file name>, <d>\n` where mammoth printed the picture; the second copy of the same bytes in the document writes `Image: <name> [already transcribed, see above]` | The same blocks. The block follows the picture's own `[Image: ...]` line (DOCX prints it for every picture); the file name is the package's (`image1.png`, else `image_<n>`); a repeat within a document is the same back-reference, and it is written only when the first copy WAS described | The SDK writes the back-reference even when the first copy failed (it then points at nothing); here a failed first copy leaves the second to try again |
+| A picture that fails to describe is skipped (PDF, PPTX) or written as `Transcript is not available` (DOCX) | The text simply has no description at that place, for all three; the summary's message names the count by reason (`Embedded pictures not described: 2 no_model, 1 too_large.`). It is not a skipped document and does not make the run `PARTLY_INDEXED` | No placeholder text is indexed for an image nobody described |
+| A blank description is written as an empty block (PDF, PPTX) | The SDK's placeholder sentence `[No readable text detected by LLM]` (as for an image file), so a DOCX back-reference always points at a transcript that was written | The placeholder keeps the block, and the parity with the image-file path |
+| Every picture is sent, in the original bytes | At most 20 pictures per document, 5 MiB each, 12 MiB together (the worker's ask; the sidecar's caps `ELITEA_EXTRACTOR_MAX_IMAGES` 24 / `_MAX_IMAGE_BYTES` / `_MAX_IMAGE_TOTAL_BYTES` lower it). Over a bound or not PNG/JPEG/GIF/WebP/BMP by its bytes (SVG, TIFF, EMF, masks): counted `too_many_pictures` / `too_large` / `unsupported_type`, not described. A picture over the gateway's 256 KiB inline bound is downscaled exactly as an image file is | The first 20 by document order win |
+| `ImageDescriptionCache` (md5 + prompt) | The run's cache of the image-file step (sha256 + prompt + model): a picture repeated in a document or across documents costs one call; a hit is not charged | — |
+| No budget beyond the provider's | The image budget of the image-file step: pictures of all kinds together use at most half of `index_model_call_cap`; three `vision_refused` in a row mark the model text-only for the rest of the run; only the credential, the project and the budget stop the run | — |
+| Descriptions are computed whenever the document is loaded | The document's version is unchanged by the setting: switching `use_llm` on (or changing the prompt or model) re-describes only documents that change or a `clean_index` run | Same as every chunking setting |
+| Pictures are described one after another | A document's distinct pictures are described four at a time, results applied in document order; the cap and the image budget are charged atomically; identical bytes in one document are one call | — |
+| (no SDK equivalent) | A picture skipped for a reason another run cures (`model_failed`, `model_cap_exceeded`, `extract_timeout`) still indexes the document, stored under `<source version>#pictures-pending-<n>` (n = the consecutive run, 1 to 3); the next run finds it changed and prepares it again; once every picture is described or skipped for a final reason (`no_model`, `vision_refused`, `reply_unusable`, `too_large`, `unsupported_type`, sidecar limits), or the document has carried the mark for 3 runs in a row, the plain source version is stored. Only retryable gateway errors, a spent call cap and timeouts are transient; a reply the model declines (safety stop) or one over the size bound is final. Connectors are told the source version, never the mark | The SDK re-describes on every load; here an unchanged document costs nothing |
+| (no SDK equivalent) | With no chat model, or a model that refuses images, a document's pictures are not requested from the sidecar at all (counted in the message as `Embedded pictures not requested for documents: N no_model`) | — |
+| Key without a file extension | Planned by the media type the source delivered it as (`application/pdf` is `.pdf`) | — |
+
+Memory in the sidecar: a returned picture is held about three times (the
+parser's copy, the response's copy, the encoded message). The defaults cost
+at most 144 MiB per slot on top of the document (a DOCX/PPTX: the media the
+parser may hold, four times the total bound; a PDF: 8 pages x 2 pictures at
+the per-picture bound, its own bytes again and its text three times), held
+under a quarter of the default container limit by a config test that fails
+if a default grows past it. The parser reads a picture into memory before
+the caps can drop it, so the extractor bounds the work first: a DOCX/PPTX
+whose media outweigh four times the caps (counted from the zip's central
+directory) gives no picture; xberg decodes the pictures of every page of a
+PDF with no way to stop early, so a PDF is read twice, text first, and its
+pictures are read only for a PDF of at most 8 pages (a longer one, or an
+image-only one, gives its text and no picture, counted `too_many`). A
+document with no text and pictures (a scan of at most 8 pages) is indexed
+from the pictures' descriptions.

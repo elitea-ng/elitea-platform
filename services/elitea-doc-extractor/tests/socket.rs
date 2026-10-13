@@ -15,12 +15,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use elitea_doc_extract::PDF_PICTURE_MAX_PAGES;
 use elitea_doc_extractor::pb::document_extract_service_server::DocumentExtractServiceServer;
 use elitea_doc_extractor::pb::{
-    ExtractHeader, ExtractLimits, ExtractRequest, ExtractResponse, SkipReason, extract_request,
-    extract_response,
+    ExtractHeader, ExtractImages, ExtractLimits, ExtractRequest, ExtractResponse, ExtractedText,
+    SkipReason, extract_request, extract_response,
 };
-use elitea_doc_extractor::service::{Capacity, Caps, Exhausted, Extractor, outer_timeout};
+use elitea_doc_extractor::service::{
+    Capacity, Caps, Exhausted, Extractor, ImageCaps, outer_timeout,
+};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Server};
@@ -95,6 +98,9 @@ const DOCX: &str = "application/vnd.openxmlformats-officedocument.wordprocessing
 const XLSX: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const PPTX: &str = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
+mod support;
+use support::{Block, big_png, docx_with, pdf_with_pictures, png, pptx_with};
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 /// Counts the exhaustion notices instead of exiting.
@@ -157,6 +163,17 @@ fn serve_delayed(
     peer_uids: BTreeSet<u32>,
     delay: Duration,
 ) -> Served {
+    serve_full(caps, capacity, peer_uids, delay, ImageCaps::default())
+}
+
+/// [`serve_delayed`] with the caps on returned pictures.
+fn serve_full(
+    caps: Caps,
+    capacity: Capacity,
+    peer_uids: BTreeSet<u32>,
+    delay: Duration,
+    image_caps: ImageCaps,
+) -> Served {
     let n = NEXT.fetch_add(1, Ordering::SeqCst);
     // A short path: macOS caps a socket path at 104 bytes.
     let socket = std::env::temp_dir().join(format!("dx-{}-{n}.sock", std::process::id()));
@@ -169,7 +186,8 @@ fn serve_delayed(
             peer_uids,
             Arc::clone(&exhausted) as Arc<dyn Exhausted>,
         )
-        .with_extraction_delay(delay),
+        .with_extraction_delay(delay)
+        .with_image_caps(image_caps),
     );
     let (stop, stopped) = oneshot::channel::<()>();
     tokio::spawn(
@@ -195,6 +213,7 @@ fn header(filename: &str, content_type: &str, length: usize) -> ExtractHeader {
         content_type: content_type.to_owned(),
         content_length: length as u64,
         limits: None,
+        images: None,
     }
 }
 
@@ -1164,4 +1183,422 @@ async fn a_stream_that_goes_quiet_is_a_deadline() {
         .expect_err("refused");
     assert_eq!(status.code(), tonic::Code::DeadlineExceeded, "{status}");
     drop(sender);
+}
+
+// ── embedded pictures (ADR-0030 I4 part C) ──────────────────────────────────
+
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+fn asking(max_images: u32, max_image_bytes: u64, max_total_bytes: u64) -> ExtractImages {
+    ExtractImages {
+        max_images,
+        max_image_bytes,
+        max_total_bytes,
+    }
+}
+
+/// The document's answer, asking for pictures as `images` says.
+async fn extracted(
+    served: &Served,
+    name: &str,
+    mime: &str,
+    bytes: Vec<u8>,
+    images: Option<ExtractImages>,
+) -> ExtractedText {
+    let mut head = header(name, mime, bytes.len());
+    head.images = images;
+    match client::extract(served.channel.clone(), head, bytes)
+        .await
+        .unwrap_or_else(|status| panic!("{name}: {status}"))
+        .outcome
+    {
+        Some(extract_response::Outcome::Text(text)) => text,
+        other => panic!("{name}: expected text, got {other:?}"),
+    }
+}
+
+/// A DOCX with a picture between each pair of sentences.
+fn three_pictures(images: &[Vec<u8>]) -> Vec<u8> {
+    docx_with(
+        &[
+            Block::Text("Before the first picture."),
+            Block::Picture(""),
+            Block::Text("Between pictures."),
+            Block::Picture("a chart"),
+            Block::Text("Between again."),
+            Block::Picture("a third"),
+            Block::Text("After the pictures."),
+        ],
+        images,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_docx_picture_is_anchored_right_after_its_own_line_and_its_bytes_pass_through() {
+    let served = serve(Caps::default(), 2);
+    let (red, green) = (png([255, 0, 0]), png([0, 255, 0]));
+    let bytes = docx_with(
+        &[
+            Block::Text("Before the first picture."),
+            Block::Picture(""),
+            Block::Text("Between pictures."),
+            Block::Picture("a chart"),
+            Block::Text("After the pictures."),
+        ],
+        &[red.clone(), green.clone()],
+    );
+    let text = extracted(&served, "pics.docx", DOCX, bytes, Some(asking(0, 0, 0))).await;
+    assert_eq!(text.images.len(), 2, "{:?}", text.images_skipped);
+    let (first, second) = (&text.images[0], &text.images[1]);
+    let before = |image: &elitea_doc_extractor::pb::EmbeddedImage| {
+        text.text[..usize::try_from(image.text_offset).expect("offset")].to_owned()
+    };
+    // The picture's own line is the anchor; the description goes after it.
+    assert_eq!(
+        before(first),
+        "Before the first picture.\n\n[Image: Picture 1]"
+    );
+    assert_eq!(
+        before(second),
+        "Before the first picture.\n\n[Image: Picture 1]\n\nBetween pictures.\n\n[Image: a chart]"
+    );
+    // Bytes are the package's own: nothing was decoded or re-encoded.
+    assert_eq!(first.data.as_ref(), red.as_slice());
+    assert_eq!(second.data.as_ref(), green.as_slice());
+    assert_eq!(
+        (first.media_type.as_str(), second.media_type.as_str()),
+        ("image/png", "image/png")
+    );
+    assert_eq!(
+        (first.name.as_str(), second.name.as_str()),
+        ("image1.png", "image2.png")
+    );
+    assert!(first.ordinal < second.ordinal);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pptx_and_pdf_pictures_are_anchored_at_the_end_of_their_page() {
+    let served = serve(Caps::default(), 2);
+    let blue = png([0, 0, 255]);
+    let slides = pptx_with(
+        &[("Slide one", true), ("Slide two", false)],
+        std::slice::from_ref(&blue),
+    );
+    let text = extracted(&served, "deck.pptx", PPTX, slides, Some(asking(0, 0, 0))).await;
+    assert_eq!(text.images.len(), 1, "{:?}", text.images_skipped);
+    let image = &text.images[0];
+    assert_eq!(image.page, 1);
+    assert_eq!(
+        &text.text[..usize::try_from(image.text_offset).expect("offset")],
+        "Slide one\n\nSlide one tail"
+    );
+    assert_eq!(image.data.as_ref(), blue.as_slice());
+
+    let pdf = pdf_with_pictures(&[("Page one", true), ("Page two", false)]);
+    let text = extracted(
+        &served,
+        "paper.pdf",
+        "application/pdf",
+        pdf,
+        Some(asking(0, 0, 0)),
+    )
+    .await;
+    assert_eq!(text.images.len(), 1, "{:?}", text.images_skipped);
+    let image = &text.images[0];
+    assert_eq!(image.page, 1);
+    assert_eq!(
+        &text.text[..usize::try_from(image.text_offset).expect("offset")],
+        "Page one before\n\nPage one after"
+    );
+    // The parser hands a PDF picture over as an image file it wrote.
+    assert_eq!(image.media_type, "image/png");
+    assert!(image.data.starts_with(PNG_SIGNATURE));
+    assert!(image.name.is_empty(), "{:?}", image.name);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asking_for_pictures_never_changes_the_text_and_not_asking_reads_none() {
+    let served = serve(Caps::default(), 2);
+    let cases: [(&str, &str, Vec<u8>); 3] = [
+        (
+            "a.docx",
+            DOCX,
+            three_pictures(&[png([1, 2, 3]), png([4, 5, 6]), png([7, 8, 9])]),
+        ),
+        (
+            "b.pptx",
+            PPTX,
+            pptx_with(
+                &[("One", true), ("Two", true)],
+                &[png([1, 1, 1]), png([2, 2, 2])],
+            ),
+        ),
+        (
+            "c.pdf",
+            "application/pdf",
+            pdf_with_pictures(&[("One", true), ("Two", true)]),
+        ),
+    ];
+    for (name, mime, bytes) in cases {
+        let plain = extracted(&served, name, mime, bytes.clone(), None).await;
+        assert!(plain.images.is_empty(), "{name}");
+        assert!(
+            plain.images_skipped.is_none(),
+            "{name}: {:?}",
+            plain.images_skipped
+        );
+        let asked = extracted(&served, name, mime, bytes, Some(asking(0, 0, 0))).await;
+        assert!(!asked.images.is_empty(), "{name}");
+        assert_eq!(
+            asked.text, plain.text,
+            "{name}: the text is the same either way"
+        );
+    }
+    // A format without pictures answers an ask with none, not an error.
+    let sheet = xlsx(&["Refund window", "thirty days"]);
+    let text = extracted(&served, "s.xlsx", XLSX, sheet, Some(asking(0, 0, 0))).await;
+    assert!(text.images.is_empty());
+    let none = docx(&["No pictures here."]);
+    let text = extracted(&served, "n.docx", DOCX, none, Some(asking(0, 0, 0))).await;
+    assert!(text.images.is_empty());
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_picture_bounds_count_what_they_drop() {
+    let served = serve(Caps::default(), 2);
+    let small = png([9, 9, 9]);
+    let small_len = small.len() as u64;
+    let three = || three_pictures(&[small.clone(), small.clone(), small.clone()]);
+
+    // Too many: the first two are kept, in document order.
+    let text = extracted(&served, "m.docx", DOCX, three(), Some(asking(2, 0, 0))).await;
+    assert_eq!(text.images.len(), 2);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 1);
+    assert!(text.images[0].ordinal < text.images[1].ordinal);
+
+    // One picture over the per-picture bound; the others still come.
+    let big = big_png([1, 2, 3], 6000);
+    let mixed = three_pictures(&[small.clone(), big, small.clone()]);
+    let text = extracted(&served, "b.docx", DOCX, mixed, Some(asking(0, 1000, 0))).await;
+    assert_eq!(text.images.len(), 2);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_large, 1);
+    assert!(text.images.iter().all(|image| image.data.len() <= 1000));
+
+    // The total bound: the first fits, the next two would cross it.
+    let text = extracted(
+        &served,
+        "t.docx",
+        DOCX,
+        three(),
+        Some(asking(0, 0, small_len + 10)),
+    )
+    .await;
+    assert_eq!(text.images.len(), 1);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_large, 2);
+
+    // A picture no model takes (SVG) and one that is not an image at all.
+    let odd = three_pictures(&[
+        small.clone(),
+        b"<svg xmlns='x'/>".to_vec(),
+        b"junk".to_vec(),
+    ]);
+    let text = extracted(&served, "u.docx", DOCX, odd, Some(asking(0, 0, 0))).await;
+    assert_eq!(text.images.len(), 1);
+    assert_eq!(text.images_skipped.unwrap_or_default().unsupported, 2);
+}
+
+/// A DOCX of `count` pictures, each its own paragraph.
+fn many_pictures(count: usize, image: &[u8]) -> Vec<u8> {
+    let mut blocks = vec![Block::Text("Before the pictures.")];
+    blocks.extend((0..count).map(|_| Block::Picture("")));
+    blocks.push(Block::Text("After the pictures."));
+    docx_with(&blocks, &vec![image.to_vec(); count])
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_package_whose_media_outweigh_the_work_bound_gives_its_text_and_no_picture() {
+    let served = serve(Caps::default(), 2);
+    let small = png([3, 3, 3]);
+    let small_len = small.len() as u64;
+    // Work bound: four times the asked count. 8 media for 2 pictures are
+    // still read (2 kept, 6 counted); 9 are not read at all.
+    let text = extracted(
+        &served,
+        "eight.docx",
+        DOCX,
+        many_pictures(8, &small),
+        Some(asking(2, 0, 0)),
+    )
+    .await;
+    assert_eq!(text.images.len(), 2);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 6);
+    let text = extracted(
+        &served,
+        "nine.docx",
+        DOCX,
+        many_pictures(9, &small),
+        Some(asking(2, 0, 0)),
+    )
+    .await;
+    assert!(text.images.is_empty(), "no picture is read from it");
+    assert!(text.text.contains("Before the pictures."), "{}", text.text);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 9);
+
+    // The same for the declared bytes: five pictures of `small_len` weigh
+    // more than four times a total bound of `small_len`.
+    let text = extracted(
+        &served,
+        "heavy.docx",
+        DOCX,
+        many_pictures(5, &small),
+        Some(asking(0, 0, small_len)),
+    )
+    .await;
+    assert!(text.images.is_empty());
+    assert_eq!(text.images_skipped.unwrap_or_default().too_large, 5);
+
+    // PPTX: media under `ppt/media` are counted the same way.
+    let slides: Vec<(&str, bool)> = (0..9).map(|_| ("Slide", true)).collect();
+    let deck = pptx_with(&slides, &vec![small.clone(); 9]);
+    let text = extracted(&served, "deck.pptx", PPTX, deck, Some(asking(2, 0, 0))).await;
+    assert!(text.images.is_empty());
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 9);
+    assert!(text.text.contains("Slide"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pdf_with_a_picture_on_every_page_returns_the_bound_and_counts_the_rest() {
+    let served = serve(Caps::default(), 2);
+    let pages: Vec<(&str, bool)> = (0..PDF_PICTURE_MAX_PAGES).map(|_| ("Page", true)).collect();
+    let text = extracted(
+        &served,
+        "short.pdf",
+        "application/pdf",
+        pdf_with_pictures(&pages),
+        Some(asking(5, 0, 0)),
+    )
+    .await;
+    assert_eq!(text.images.len(), 5);
+    let returned: usize = text.images.iter().map(|image| image.data.len()).sum();
+    assert!(returned as u64 <= ImageCaps::default().max_total_bytes);
+    assert_eq!(
+        text.images_skipped.unwrap_or_default().too_many,
+        u32::try_from(PDF_PICTURE_MAX_PAGES).expect("small") - 5
+    );
+    // Document order: the first five pages.
+    let pages: Vec<u32> = text.images.iter().map(|image| image.page).collect();
+    assert_eq!(pages, vec![1, 2, 3, 4, 5]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pdf_over_the_page_bound_gives_its_text_and_no_picture_counted() {
+    // The parser decodes every page's pictures with no way to stop early:
+    // a longer PDF is not given to it for pictures at all.
+    let served = serve(Caps::default(), 2);
+    let pages: Vec<(&str, bool)> = (0..=PDF_PICTURE_MAX_PAGES)
+        .map(|_| ("Page", true))
+        .collect();
+    let bytes = pdf_with_pictures(&pages);
+    let plain = extracted(&served, "long.pdf", "application/pdf", bytes.clone(), None).await;
+    let text = extracted(
+        &served,
+        "long.pdf",
+        "application/pdf",
+        bytes,
+        Some(asking(0, 0, 0)),
+    )
+    .await;
+    assert!(text.images.is_empty());
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 1);
+    assert_eq!(text.text, plain.text, "the text is the plain pass's");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_of_pictures_alone_is_returned_with_them_and_without_them_is_empty() {
+    let served = serve(Caps::default(), 2);
+    let blue = png([0, 0, 255]);
+    // Image-only PDF (a scan) and image-only deck: no text, one picture each.
+    let scan = pdf_with_pictures(&[("", true), ("", true)]);
+    let text = extracted(
+        &served,
+        "scan.pdf",
+        "application/pdf",
+        scan.clone(),
+        Some(asking(0, 0, 0)),
+    )
+    .await;
+    assert!(text.text.trim().is_empty(), "{:?}", text.text);
+    assert_eq!(text.images.len(), 2, "{:?}", text.images_skipped);
+    assert!(text.images.iter().all(|image| image.text_offset == 0));
+    let deck = pptx_with(&[("", true)], std::slice::from_ref(&blue));
+    let text = extracted(
+        &served,
+        "deck.pptx",
+        PPTX,
+        deck.clone(),
+        Some(asking(0, 0, 0)),
+    )
+    .await;
+    assert!(text.text.trim().is_empty(), "{:?}", text.text);
+    assert_eq!(text.images.len(), 1, "{:?}", text.images_skipped);
+    assert_eq!(text.images[0].data.as_ref(), blue.as_slice());
+
+    // Not asked for: nothing to index, as before.
+    for (name, mime, bytes) in [
+        ("scan.pdf", "application/pdf", scan),
+        ("deck.pptx", PPTX, deck),
+    ] {
+        let mut head = header(name, mime, bytes.len());
+        head.images = None;
+        let response = client::extract(served.channel.clone(), head, bytes)
+            .await
+            .unwrap_or_else(|status| panic!("{name}: {status}"));
+        let (reason, _) = skip_of(response);
+        assert_eq!(reason, SkipReason::Empty, "{name}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_is_lowered_to_the_extractors_picture_caps_which_capabilities_states() {
+    let caps = ImageCaps {
+        max_images: 1,
+        max_image_bytes: 4000,
+        max_total_bytes: 4000,
+    };
+    let served = serve_full(
+        Caps::default(),
+        capacity(2),
+        BTreeSet::from([own_uid()]),
+        Duration::ZERO,
+        caps,
+    );
+    let advertised = client::capabilities(served.channel.clone())
+        .await
+        .expect("capabilities")
+        .image_limits
+        .expect("image limits");
+    assert_eq!(
+        (
+            advertised.max_images,
+            advertised.max_image_bytes,
+            advertised.max_total_bytes
+        ),
+        (1, 4000, 4000)
+    );
+    let small = png([5, 5, 5]);
+    let two = || three_pictures(&[small.clone(), small.clone(), small.clone()]);
+    // Zero asks for the cap; more than the cap is lowered to it.
+    for ask in [Some(asking(0, 0, 0)), Some(asking(99, 1 << 30, 1 << 30))] {
+        let text = extracted(&served, "c.docx", DOCX, two(), ask).await;
+        assert_eq!(text.images.len(), 1);
+        assert_eq!(text.images_skipped.unwrap_or_default().too_many, 2);
+    }
+    // A picture over the extractor's own per-picture cap is dropped even
+    // when the request would take it.
+    let big = three_pictures(&[big_png([1, 2, 3], 6000)]);
+    let text = extracted(&served, "d.docx", DOCX, big, Some(asking(0, 1 << 30, 0))).await;
+    assert!(text.images.is_empty());
+    assert_eq!(text.images_skipped.unwrap_or_default().too_large, 1);
 }

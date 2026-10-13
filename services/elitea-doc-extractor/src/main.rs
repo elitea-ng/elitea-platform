@@ -164,6 +164,9 @@ async fn serve() -> ExitCode {
         max_pages = config.caps.max_pages,
         max_output_bytes = config.caps.max_output_bytes,
         timeout_ms = u64::try_from(config.caps.timeout.as_millis()).unwrap_or(u64::MAX),
+        max_images = config.images.max_images,
+        max_image_bytes = config.images.max_image_bytes,
+        max_image_total_bytes = config.images.max_total_bytes,
         concurrency = config.capacity.concurrency,
         slot_wait_ms = u64::try_from(config.capacity.slot_wait.as_millis()).unwrap_or(u64::MAX),
         peer_uids = ?config.peer_uids,
@@ -174,7 +177,8 @@ async fn serve() -> ExitCode {
         config.capacity,
         config.peer_uids,
         Arc::new(ExitProcess),
-    );
+    )
+    .with_image_caps(config.images);
     let served = Server::builder()
         .add_service(
             DocumentExtractServiceServer::new(service).max_decoding_message_size(MAX_MESSAGE_BYTES),

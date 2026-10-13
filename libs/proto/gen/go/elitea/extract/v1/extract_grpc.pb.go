@@ -30,6 +30,14 @@
 // the worker records in the run's summary. Anything that is not a statement
 // about the document (a malformed stream, no capacity, an internal failure)
 // is a gRPC status, which the worker reports as `extract_failed`.
+//
+// EMBEDDED PICTURES (ADR-0030 I4 part C). A request may ask for the pictures
+// embedded in a PDF, DOCX or PPTX (`ExtractHeader.images`); the answer then
+// carries them as bounded blobs beside the text, each with the byte offset in
+// the text where its description belongs. The text itself is exactly what an
+// extraction that did not ask would give: the pictures never add a marker to
+// it. A request that does not ask reads no picture at all. The bytes are the
+// document's own, passed through; the extractor decodes nothing it returns.
 
 package extractv1
 

@@ -7,6 +7,9 @@
 //! | `ELITEA_EXTRACTOR_MAX_INPUT_BYTES` | the most bytes accepted for one document; a request's own limit is lowered to it | `52428800` (50 MiB) |
 //! | `ELITEA_EXTRACTOR_MAX_PAGES` | the most pages read from a paged format | `1000` |
 //! | `ELITEA_EXTRACTOR_MAX_OUTPUT_BYTES` | the most text returned for one document | `20971520` (20 MiB) |
+//! | `ELITEA_EXTRACTOR_MAX_IMAGES` | the most embedded pictures returned for one document that asks for them (`ExtractHeader.images`); a request's own figure is lowered to it | `24` |
+//! | `ELITEA_EXTRACTOR_MAX_IMAGE_BYTES` | the most bytes of one returned picture | `5242880` (5 MiB) |
+//! | `ELITEA_EXTRACTOR_MAX_IMAGE_TOTAL_BYTES` | the most bytes of all the pictures returned for one document | `12582912` (12 MiB) |
 //! | `ELITEA_EXTRACTOR_TIMEOUT_MILLIS` | the longest one extraction may run after its bytes arrived; rounded UP to whole seconds for the parser, which the request then waits for plus a short grace | `120000` |
 //! | `ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS` | the longest wait for the next chunk of a document | `30000` |
 //! | `ELITEA_EXTRACTOR_CONCURRENCY` | documents extracted at once; not below the worker's own document concurrency (4), so a worker that keeps that many in flight never waits | `4` |
@@ -32,7 +35,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::service::{Capacity, Caps, own_uid};
+use crate::service::{Capacity, Caps, ImageCaps, own_uid};
 
 /// Bytes of memory the extractor is assumed to need per byte of input, at
 /// the worst. The document is held ONCE (the bytes read off the stream move
@@ -65,6 +68,8 @@ impl std::error::Error for ConfigError {}
 pub struct Config {
     pub socket: PathBuf,
     pub caps: Caps,
+    /// What a request for embedded pictures is lowered to.
+    pub images: ImageCaps,
     pub capacity: Capacity,
     /// The uids served (`SO_PEERCRED`); the worker's.
     pub peer_uids: BTreeSet<u32>,
@@ -76,6 +81,7 @@ impl Config {
     ///
     /// # Errors
     /// [`ConfigError`] naming the first invalid variable.
+    #[allow(clippy::too_many_lines, reason = "one flat list of variables")]
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let get = |name: &str| lookup(name).filter(|value| !value.trim().is_empty());
         let number = |name: &str, default: u64| -> Result<u64, ConfigError> {
@@ -89,6 +95,7 @@ impl Config {
             })
         };
         let defaults = Caps::default();
+        let image_defaults = ImageCaps::default();
         let socket = PathBuf::from(
             get("ELITEA_EXTRACTOR_SOCKET")
                 .unwrap_or_else(|| "/run/elitea-extract/extractor.sock".to_owned()),
@@ -146,8 +153,24 @@ impl Config {
                 "ELITEA_EXTRACTOR_PEER_UIDS must name at least one uid".to_owned(),
             ));
         }
+        let max_images = u32::try_from(number(
+            "ELITEA_EXTRACTOR_MAX_IMAGES",
+            u64::from(image_defaults.max_images),
+        )?)
+        .map_err(|_| ConfigError("ELITEA_EXTRACTOR_MAX_IMAGES is too large".to_owned()))?;
         Ok(Self {
             socket,
+            images: ImageCaps {
+                max_images,
+                max_image_bytes: number(
+                    "ELITEA_EXTRACTOR_MAX_IMAGE_BYTES",
+                    image_defaults.max_image_bytes,
+                )?,
+                max_total_bytes: number(
+                    "ELITEA_EXTRACTOR_MAX_IMAGE_TOTAL_BYTES",
+                    image_defaults.max_total_bytes,
+                )?,
+            },
             caps: Caps {
                 max_input_bytes: number(
                     "ELITEA_EXTRACTOR_MAX_INPUT_BYTES",
@@ -185,6 +208,50 @@ impl Config {
             return Some(fitted);
         }
         None
+    }
+
+    /// The memory the pictures of every slot can hold at once, at the worst
+    /// the picture bounds allow. Per slot, the larger of the two shapes plus
+    /// the three copies of what is returned (the parser's, the response's,
+    /// the encoded message):
+    ///
+    /// * a DOCX or PPTX: the media the parser may hold, `MEDIA_WORK_FACTOR`
+    ///   (4) times the total bound (the work bound it is let in on);
+    /// * a PDF: the parser decodes every page's pictures with no document
+    ///   budget and cannot be stopped early, so what it holds is bounded by
+    ///   how many pages it is let read (`PDF_PICTURE_MAX_PAGES`), the
+    ///   pictures it keeps per page (the cap, 1, plus the one more it keeps
+    ///   to show an overflow) and the bytes of one picture, taken at the
+    ///   per-picture bound (the parser has no byte bound of its own: a
+    ///   picture over it is dropped only after it was held); plus the PDF's
+    ///   own bytes a second time (the second pass reads the document again)
+    ///   and the text three times over (the page layout, the first pass's
+    ///   copy kept as the fallback).
+    #[must_use]
+    pub fn picture_memory(&self) -> u64 {
+        use elitea_doc_extract::{
+            MEDIA_WORK_FACTOR, PDF_PICTURE_MAX_INPUT_BYTES, PDF_PICTURE_MAX_PAGES,
+            PDF_PICTURE_MAX_TEXT_BYTES, PDF_PICTURES_PER_PAGE,
+        };
+        let concurrency = u64::try_from(self.capacity.concurrency.max(1)).unwrap_or(1);
+        let as_u64 = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+        let office = self
+            .images
+            .max_total_bytes
+            .saturating_mul(as_u64(MEDIA_WORK_FACTOR));
+        let kept_pictures = as_u64(PDF_PICTURE_MAX_PAGES * (PDF_PICTURES_PER_PAGE + 1));
+        let pdf = kept_pictures
+            .saturating_mul(self.images.max_image_bytes)
+            .saturating_add(
+                self.caps
+                    .max_input_bytes
+                    .min(as_u64(PDF_PICTURE_MAX_INPUT_BYTES)),
+            )
+            .saturating_add(as_u64(PDF_PICTURE_MAX_TEXT_BYTES).saturating_mul(3));
+        office
+            .max(pdf)
+            .saturating_add(self.images.max_total_bytes.saturating_mul(3))
+            .saturating_mul(concurrency)
     }
 
     /// The smallest container memory limit under which [`Config::fit_memory`]
@@ -225,6 +292,21 @@ mod tests {
             PathBuf::from("/run/elitea-extract/extractor.sock")
         );
         assert_eq!(config.caps, Caps::default());
+        assert_eq!(config.images, ImageCaps::default());
+        // The pictures of EVERY slot fit in the quarter of the default
+        // container limit that is neither the input fit's half nor the
+        // parser's own overhead. If a default grows past it, this fails.
+        assert!(
+            config.picture_memory() <= config.memory_limit_for_caps() / 4,
+            "{} > {}",
+            config.picture_memory(),
+            config.memory_limit_for_caps() / 4
+        );
+        // And the figure is the real one, the PDF shape being the larger at
+        // the defaults: slots x (8 pages x 2 pictures x 5 MiB held by the
+        // parser + the PDF's bytes again (16 MiB) + the text three times
+        // (3 x 4 MiB) + the three copies of what is returned (3 x 12 MiB)).
+        assert_eq!(config.picture_memory(), (4 * (80 + 16 + 12 + 36)) << 20);
         assert_eq!(config.capacity, Capacity::default());
         assert_eq!(config.capacity.concurrency, 4);
         assert_eq!(config.capacity.slot_wait, Duration::from_mins(10));
@@ -253,8 +335,19 @@ mod tests {
             ("ELITEA_EXTRACTOR_STREAM_IDLE_MILLIS", "250"),
             ("ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS", "4000"),
             ("ELITEA_EXTRACTOR_CONCURRENCY", "3"),
+            ("ELITEA_EXTRACTOR_MAX_IMAGES", "5"),
+            ("ELITEA_EXTRACTOR_MAX_IMAGE_BYTES", "600"),
+            ("ELITEA_EXTRACTOR_MAX_IMAGE_TOTAL_BYTES", "900"),
         ])
         .expect("config");
+        assert_eq!(
+            config.images,
+            ImageCaps {
+                max_images: 5,
+                max_image_bytes: 600,
+                max_total_bytes: 900
+            }
+        );
         assert_eq!(config.caps.max_input_bytes, 1024);
         assert_eq!(config.caps.max_pages, 7);
         assert_eq!(config.caps.max_output_bytes, 2048);
@@ -264,6 +357,10 @@ mod tests {
         assert_eq!(config.capacity.concurrency, 3);
         let error = config_error(&[("ELITEA_EXTRACTOR_MAX_PAGES", "0")]);
         assert!(error.0.contains("ELITEA_EXTRACTOR_MAX_PAGES"), "{error}");
+        let error = config_error(&[("ELITEA_EXTRACTOR_MAX_IMAGES", "0")]);
+        assert!(error.0.contains("MAX_IMAGES"), "{error}");
+        let error = config_error(&[("ELITEA_EXTRACTOR_MAX_IMAGES", "99999999999")]);
+        assert!(error.0.contains("MAX_IMAGES"), "{error}");
         let error = config_error(&[("ELITEA_EXTRACTOR_CONCURRENCY", "65")]);
         assert!(error.0.contains("CONCURRENCY"), "{error}");
         let error = config_error(&[("ELITEA_EXTRACTOR_SOCKET", "relative.sock")]);
